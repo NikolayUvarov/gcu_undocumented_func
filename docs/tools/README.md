@@ -297,7 +297,7 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
 
 `camera [-z WxH] [-r fps] [-s still.bmp] [-t seconds video.avi]` works through the video gateway `video_gw` (`idl/video.wit`).
 
-- **Consent.** The gateway's only client is the shell's. It lends it in slot 24 to a program that asks for `REQUEST_CAMERA`, and only after the user answers yes to `CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)`. It asks every time. A refused program runs without a camera: `camera` says so and exits with 1.
+- **Who gets the camera.** The gateway's only client is the shell's. It lends it in slot 24 to a program that asks for `REQUEST_CAMERA`, without a question: starting the program is the user's request. The camera mark shows while a stream is open. A script must declare `camera`. A program started without the client says so: `camera` exits with 1.
 - **The stream.** One task owns a camera at a time. Frames come at the requested rate, each with its number and the time it was taken, into a buffer `camera` lends for each read. The gateway logs every open and close with who asked.
 - **The camera mark.** While a stream is open, the compositor draws a green camera mark left of the capture dot. It is drawn on the framebuffer only, so no program can hide it and no capture holds it.
 - **What `camera` does:**
@@ -306,6 +306,24 @@ Its own commands (issue u006), done with what it holds: `ps` (the task table fro
   - with `-t`, records an AVI of Motion JPEG frames (the encoder of `record`).
   - Defaults: 320 × 240 at 10 frames a second.
 - **Sources.** There is no camera driver yet: UVC over `usb_host` is the next step of 158. With `video/synthetic` on the boot disk, the gateway serves a moving test pattern instead: eight colour bars moving left 4 pixels a frame, and the frame number in the bottom rows. The QEMU `vfs` suite checks the still against it pixel for pixel.
+
+### 4.13 `check`, `bench`, `kbench` — checks and measurements (main task 176)
+
+Three console programs of the crate `bench/`.
+
+- **Where they run.** In the shell, and in `wm` from the menu (as `console <name>`).
+- **Choosing groups.** With group names after the program, only those groups run.
+- **Help.** Each answers the help keys (`-h`, `/?`, `--help`).
+- **What they show.** A table of at most 79 columns on the screen (box lines, bars in eighths of a cell, ✓ ✗ ○), then a summary.
+- **The log.** The full log goes to `log:<name>NNNN.txt`, NNNN being this boot's number, or to `ram:<name>-NNN.txt` when there is no log volume. It holds the same table, then every detail. The last line on the screen names the file.
+
+| Program | What it does | Groups |
+|---|---|---|
+| `check` | a self-test of what is done; each check ✓ passes, ✗ fails with the reason or ○ is skipped with the reason; the exit status is 1 if any failed | `kernel` (clocks, memory and its quota, capability rights and revocation, a second process, IPC with a lent page), `security` (a read of the kernel's memory, a write to the program's own code and a read of address 0 must be stopped by a fault; the boot's launch record; hardware random numbers), `clock` (the RTC's date and advance, the monotonic counter, sleeps not shorter than asked), `files` (round trips on `ram:` and in `data/`, the log volume, the volumes' consistency, every program accepted by the loader), `services` (each boot service from `init`'s list), `devices` (each PCI function and its driver), `sound` (the device, a short tone, the microphone's level), `network` (with a flow grant: the address, the gateway, a name) |
+| `kbench` | the kernel's performance: the median with a bar on a log scale, the minimum and the 99th percentile; `--quick` runs a tenth of the repetitions | `syscall`, `ipc` (a call and its reply between two processes, with and without a lent page), `caps`, `memory`, `timer`, `process` (start and exit) |
+| `bench` | the components' performance in the same table, with the rates under it | `files` (2 MiB written and read, a small file's life, on `ram:`, `data/`, `log:`), `services` (round trips to `vfs_server`, `sysmon`, `rtc`, the loader, `audio_gw`), `crypto` (SHA-256), `camera` (frame intervals from the first camera) |
+
+These are measurements of one machine in one configuration, not proofs (MC-12.1, 12.2). The QEMU suite `bench` runs all three on x86 and aarch64. There, every check of `check` passes or is skipped with its reason; a sleep is never shorter than asked since 000-KRN-0065.
 
 ## 5. Phases
 

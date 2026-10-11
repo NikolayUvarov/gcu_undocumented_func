@@ -55,13 +55,30 @@ pub fn counter(width: usize, height: usize, at: impl Fn(usize, usize) -> u32) ->
 pub fn yuy2_to_rgb(source: &[u8], out: &mut [u32]) -> usize {
     let mut written = 0;
     for (quad, pair) in source.chunks_exact(4).zip(out.chunks_exact_mut(2)) {
-        let (u, v) = (quad[1] as i32 - 128, quad[3] as i32 - 128);
         for (luma, p) in [quad[0], quad[2]].into_iter().zip(pair.iter_mut()) {
-            let c = 298 * (luma as i32 - 16);
-            let clamp = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u32;
-            *p = clamp(c + 409 * v) << 16 | clamp(c - 100 * u - 208 * v) << 8 | clamp(c + 516 * u);
+            *p = yuv(luma, quad[1], quad[3]);
             written += 1;
         }
     }
     written
+}
+
+/// A YUY2 picture of `width` × `height` into `out_width` × `out_height` pixels, each the nearest one (a camera's frame
+/// size to the size a program asked for); pixels the source lacks are black.
+pub fn yuy2_scaled(source: &[u8], width: usize, height: usize, out: &mut [u32], out_width: usize, out_height: usize) {
+    for (y, row) in out.chunks_exact_mut(out_width).take(out_height).enumerate() {
+        let line = y * height / out_height * width;
+        for (x, p) in row.iter_mut().enumerate() {
+            let column = x * width / out_width;
+            let at = (line + (column & !1)) * 2;
+            *p = match source.get(at..at + 4) { Some(q) => yuv(if column & 1 == 0 { q[0] } else { q[2] }, q[1], q[3]), None => 0 };
+        }
+    }
+}
+
+// One pixel from its luma and its pair's chroma (BT.601 limited range).
+fn yuv(luma: u8, u: u8, v: u8) -> u32 {
+    let (c, u, v) = (298 * (luma as i32 - 16), u as i32 - 128, v as i32 - 128);
+    let clamp = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u32;
+    clamp(c + 409 * v) << 16 | clamp(c - 100 * u - 208 * v) << 8 | clamp(c + 516 * u)
 }

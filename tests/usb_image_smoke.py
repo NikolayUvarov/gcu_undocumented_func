@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Verify the packaged files, then boot the actual RAW image as a USB device (x86_64, or aarch64 with --arch aarch64)."""
 import argparse
+import datetime
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -12,8 +14,11 @@ import tempfile
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, qemu_path, read_payloads
+from scripts.make_usb_image import ARCHES, LOG_SECTORS, ROOT, check_image, find_qemu_img, pack, qemu_path, read_payloads, slots
 import qemu_smoke
+sys.path.insert(0, str(ROOT / "scripts"))
+import release as release_tool  # noqa: E402
+import sign_manifest  # noqa: E402
 from qemu_smoke import MTOOLS_ENV, VM, files_check, fsck_volume, heap_used, require, task_rows
 
 
@@ -40,8 +45,116 @@ def main():
     shutil.copyfile(args.image, booted)
     try:
         run(args, booted)
+        slots_check(args, work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def slots_check(args, work):
+    """351-UPD-0016: the same build packed as `make_usb_image.py --slots --channel` packs it, with a channel of release 1
+    naming its manifest, signed with the public test release key the updater is built with: it boots from slot A,
+    vfs_server's update zone is slot B, and the updater knows the running version."""
+    payloads = read_payloads(ROOT / ARCHES[args.arch]["root"], args.arch)
+    expires = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    body = release_tool.channel_bytes("stable", 1, 1, expires, {args.arch: hashlib.sha256(payloads["MANIFEST"]).hexdigest()})
+    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    image = work / "slots.img"
+    pack(slots(payloads, args.arch, channel), image, find_qemu_img(os.environ.get("QEMU_IMG")), args.arch)
+    vm = VM(args, qemu_path(image, args.qemu), usb=True, snapshot=False)
+    try:
+        require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
+        require(vm.service_logs("vfs_server", "UPDATE ZONE"), "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE")
+        require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 1; THE NEWER RECORD: SLOT A CONFIRMED")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        log = Path(tempfile.gettempdir()) / f"mind-core-usb-slots{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
+        log.write_text(vm.log)
+    print(f"PASS ({args.arch}): the image packed with slots boots from slot A; the update zone is slot B; the updater reads "
+          "the running version from the release channel kept in slot A", flush=True)
+
+
+def debug_mode(vm, name):
+    # 211-KRN-0053: with log:debug.txt the loader gives programs a log client, so what uptime prints reaches this boot's
+    # log file; without it, a program's lines stay on its console.
+    require(vm.command("run uptime"), "up ")
+    require(vm.command("write log:debug.txt on"), "WROTE")
+    require(vm.command("run uptime"), "up ")
+    for _ in range(20):
+        saved = vm.command(f"cat log:{name}", raw=True)
+        if re.search(r"uptime\(\d+\) up \d", saved):
+            break
+        time.sleep(.5)
+    assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
+    assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
+    require(saved, "DEBUG MODE ON (log:debug.txt)")
+    require(vm.command("rm log:debug.txt"), "OK")
+
+
+def unplugged(vm, booted, name):
+    # 211-KRN-0050: with the boot disk unplugged, a program on it is refused soon, with the reason, and the shell answers;
+    # plugged in again, programs start again. memmap was not run before, so none of it is in vfs_server's cache.
+    # Only the shell's built-in commands from here until the disk is back: dmesg is a program on the disk.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    started = time.monotonic()
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")  # the command's own wait is 8 s
+    took = time.monotonic() - started
+    require(vm.command("ps"), "shell")
+    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
+    print(f"unplugged: run memmap refused in {took:.1f} s")
+    vm.hmp(f"drive_add 0 if=none,id=usbdisk2,format=raw,file={booted}")
+    vm.hmp("device_add usb-storage,drive=usbdisk2,id=usbstick")
+    for _ in range(40):  # vfs_server asks the drive again after its quiet time
+        time.sleep(2)
+        if "NAME=memmap" in vm.command("run memmap &"):
+            break
+    else:
+        raise AssertionError("memmap does not start after the disk is plugged in again")
+    require(vm.service_logs("vfs_server", "DRIVE ANSWERS AGAIN"), "DRIVE ANSWERS AGAIN")
+    require(vm.command("sync"), "OK")
+    # The records of the time without the disk reach this boot's log once it is back (the journal kept them).
+    for _ in range(40):
+        saved = vm.command(f"cat log:{name}", raw=True)
+        if "DRIVE ANSWERS AGAIN" in saved:
+            break
+        time.sleep(1)
+    require(saved, "DRIVE DOES NOT ANSWER")
+    time.sleep(3)  # the journal's save after the replug, flushed
+    # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
+    # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
+    # not answer, finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail. The new
+    # stick gets another device ID: QEMU may not have let go of the old one yet.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
+    other = booted.with_name(booted.stem + "-other" + booted.suffix)
+    shutil.copyfile(booted, other)
+    data = bytearray(other.read_bytes())
+    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
+    assert manifests, "no boot manifest found in the image"
+    for m in manifests:
+        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
+    other.write_bytes(data)
+    assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    before = hashlib.sha256(other.read_bytes()).hexdigest()
+    for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    for _ in range(40):  # vfs_server asks the drive again after its quiet time
+        time.sleep(2)
+        vm.command("ls log:", raw=True)
+        log = vm.service_logs("vfs_server")
+        if "ANOTHER MEDIUM" in log:
+            break
+    require(log, "CAME BACK WITH ANOTHER MEDIUM")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    vm.command("sync")
+    time.sleep(3)
+    assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
+    other.unlink()
 
 
 def run(args, booted):
@@ -104,6 +217,8 @@ def run(args, booted):
         require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
         require(vm.command("sync"), "OK")
         time.sleep(3)  # the journal's last save, flushed
+        debug_mode(vm, name)
+        unplugged(vm, booted, name)
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-image{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
@@ -117,9 +232,24 @@ def run(args, booted):
     read = lambda file: subprocess.run(["mtype", "-i", f"{booted}@@{start * 512}", f"::{file}"], check=True, capture_output=True, env=MTOOLS_ENV).stdout
     require(read(name).decode(errors="replace"), "LOG-PARTITION-CHECK")
     assert read("note.txt") == b"written on MIND CORE\n", read("note.txt")
+    # The hardware report (174-KRN-0038): this boot's beside its system log, and the firmware's ACPI tables.
+    report = read(f"hw{name[4:8]}.txt").decode(errors="replace")
+    for section in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "Memory map (the firmware's)", "ACPI tables", "PCI functions", "The kernel's choices", "Kernel lines", "MIND CORE KERNEL: INIT STARTED"):
+        assert section in report, (section, report[:2000])
+    assert re.search(r"USB controller", report), report
+    # 550-KRN-0070: no function a driver was not granted masters the bus, bridges and display controllers aside.
+    functions = re.findall(r"class ([0-9A-F]{6}) .*? command ([0-9A-F]{4}) status [0-9A-F]{4}(.*)", report)
+    assert functions, report[:3000]
+    masters = [(c, cmd, note) for c, cmd, note in functions if int(cmd, 16) & 4 and "granted" not in note and c[:2] not in ("03", "06")]
+    assert not masters, masters
+    for table in ("FACP", "DSDT", "APIC"):
+        data = read(f"acpi/{table}.bin")
+        assert data[:4] == table.encode() and len(data) == struct.unpack_from("<I", data, 4)[0], (table, len(data))
+    assert read("acpi/RSDP.bin").startswith(b"RSD PTR ")
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
-          "VFS over xHCI USB mass storage through usb_host; the boot's system log and a file on the log partition, read on the host")
+          "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
+          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":

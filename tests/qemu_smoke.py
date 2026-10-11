@@ -36,9 +36,10 @@ import sign_manifest  # noqa: E402
 import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
+import release as release_tool  # noqa: E402
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -60,7 +61,7 @@ def to_ordinal(text):
 
 
 class VM:
-    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None):
+    def __init__(self, args, disk, usb=False, rtc="localtime", audio=None, ahci=False, raw=False, snapshot=True, prompt=True, extra=(), reboot=False, tablet=False, usb_input=False, decoy=None, audio_card="AC97"):
         # `disk` is a directory served as a virtual FAT disk, or with `raw` (always for USB) a disk image; without
         # `snapshot` writes reach the image. `tablet`: a VirtIO tablet, driven through the QMP socket (`tablet_at`).
         # Monitor commands go through the QMP socket too (`hmp`): typed into the monitor on the serial line, its echo
@@ -82,7 +83,7 @@ class VM:
         filename = disk.replace(",", ",,")
         source = f"format=raw,file={filename}" if usb or raw else f"format=raw,file=fat:{filename}"
         storage = (["-drive", f"{source},if=none,id=usbdisk",
-                    "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1"]
+                    "-device", "qemu-xhci", "-device", "usb-storage,drive=usbdisk,bootindex=1,id=usbstick"]
                    if usb else ["-drive", f"{source},if=none,id=sata",
                                 "-device", "ahci,id=ahci", "-device", "ide-hd,drive=sata,bus=ahci.0"]
                    if ahci else ["-drive", f"{source},if=none,id=nvm", "-device", "nvme,serial=mind,drive=nvm"]
@@ -106,7 +107,8 @@ class VM:
              *(["-snapshot"] if snapshot else []), "-m", getattr(args, "memory", None) or "512", "-smp", f"{args.cpus},sockets=1,cores={args.cpus},threads=1",
              "-serial", "mon:stdio", "-display", "none", "-rtc", f"base={rtc}", *([] if reboot else ["-no-reboot"]), *extra,
              *(["-cpu", model] if (model := getattr(args, "cpu_model", None)) and "-cpu" not in extra else []),
-             *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}", "-device", "AC97,audiodev=snd0"] if audio else [])],
+             *(["-audiodev", "none,id=snd0" if audio == "none" else f"wav,id=snd0,path={audio}",
+                *(["-device", "intel-hda", "-device", "hda-duplex,audiodev=snd0"] if audio_card == "HDA" else ["-device", "AC97,audiodev=snd0"])] if audio else [])],
             cwd=ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         )
         self.queue = queue.Queue()
@@ -602,6 +604,19 @@ def ram_above_4g(vm):
     print(f"PASS: {frames >> 20} MiB in the frame pool, {high >> 20} MiB of it above 4 GiB; a 144 MiB heap from the highest range written and read back", flush=True)
 
 
+def hardware_report_check(vm):
+    """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
+    and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
+    log = ""
+    for _ in range(60):
+        log += vm.command("logs 1", raw=True)
+        if "[INIT] HARDWARE REPORT" in log:
+            break
+        time.sleep(.5)
+    size = re.search(r"\[INIT\] HARDWARE REPORT: NO LOG VOLUME, NOT WRITTEN \((\d+) BYTES\)", log)
+    assert size and int(size[1]) > 4000, log[-2000:]
+
+
 def normal_suite(vm):
     # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
     assert "gpio" not in vm.services()
@@ -612,6 +627,7 @@ def normal_suite(vm):
         tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",
                          ANSI.sub("", vm.log).replace("\r", ""))
         assert tick and ("pit=off" not in (getattr(vm.args, "machine", None) or "")) == ("NOT COUNTING" not in tick[0]), vm.log[-3000:]
+    hardware_report_check(vm)
     baseline = heap_used(vm)
     require(vm.command("list"), "clock")
     require(vm.command("run clock &"), "PID=1 NAME=clock BACKGROUND")
@@ -769,6 +785,10 @@ def normal_suite(vm):
         applications_until_memory_ends(vm, others=len(holders))
         for pid in holders:
             vm.command(f"kill {pid}")
+    # 211-KRN-0044: init's first line names the branch and commit built (02_build.sh). Last: dmesg takes a PID.
+    log = vm.command("dmesg -s init", raw=True)
+    built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
+    assert built and built[1] != "UNKNOWN", log[-1500:]
 
 
 def keys_suite(vm):
@@ -1215,6 +1235,144 @@ def tools_suite(vm):
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
     monitors_check(vm)
+
+
+# kbench's rows (176-KRN-0062), by group; `check` and `bench` follow the same table.
+KBENCH_ROWS = {"syscall": ["uptime (empty call)", "monotonic clock read", "task alive?"],
+               "ipc": ["call and reply", "… with a lent page"],
+               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop"],
+               "memory": ["a page: take and free", "1 MiB take+touch+free"],
+               "timer": ["sleep 1 ms", "sleep 10 ms"],
+               "process": ["start (the loader)", "start to running", "exit to gone"]}
+DURATION = re.compile(r"([\d.]+) (ns|µs|ms|s)")
+
+
+def nanoseconds(text):
+    value, unit = DURATION.fullmatch(text.strip()).groups()
+    return float(value) * {"ns": 1, "µs": 1e3, "ms": 1e6, "s": 1e9}[unit]
+
+
+def bench_rows(output, names):
+    """Each named row of a measuring table: (median, min, p99) in ns."""
+    rows = {}
+    for name in names:
+        row = re.search(r"│   " + re.escape(name) + r" *│ *([\d.]+ \S+) │[^│]*│ *([\d.]+ \S+) │ *([\d.]+ \S+) │", output)
+        assert row, f"no row {name!r}: {output[-3000:]}"
+        rows[name] = tuple(nanoseconds(row[k]) for k in (1, 2, 3))
+        assert rows[name][1] <= rows[name][0] <= rows[name][2], (name, rows[name])
+    return rows
+
+
+def tool_log(vm, output, tool):
+    """The path of the full log the tool named on its last line, and the log's text."""
+    path = re.search(rf"full log: ((?:log:{tool}\d{{4}}(?:-\d)?|ram:{tool}-\d{{3}})\.txt)", output)
+    assert path, output[-2000:]
+    vm.send(f"cat {path[1]}\n")
+    return path[1], vm.expect("MIND> ", timeout=60, after=f"cat {path[1]}\n")
+
+
+def kbench_check(vm):
+    """kbench: every group's rows with plausible orders of magnitude, its summary and its log; one group alone; an unknown
+    group refused."""
+    vm.send("kbench --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="kbench --quick\n")
+    assert "kbench — the kernel's performance" in output and re.search(r"[1-9]\d* of \d+ processors online", output), output[:2000]
+    rows = bench_rows(output, [name for names in KBENCH_ROWS.values() for name in names])
+    count = sum(map(len, KBENCH_ROWS.values()))
+    require(output, f"kbench: {count} measurements, 0 failed")
+    assert rows["uptime (empty call)"][0] < 10_000, rows
+    assert rows["call and reply"][0] < 1_000_000, rows
+    # A sleep is never shorter than asked and at most a tick longer, give or take QEMU's timing (000-KRN-0065).
+    assert "shorter than asked" not in output, output[-3000:]
+    assert rows["sleep 1 ms"][1] >= 1e6 and rows["sleep 10 ms"][1] >= 10e6 and rows["sleep 10 ms"][0] <= 40e6, rows
+    # The 1 ms tick on x86 (000-KRN-0083): a sleep of 1 ms no longer waits for a 10 ms tick.
+    assert vm.arch != "x86_64" or rows["sleep 1 ms"][0] < 8e6, rows
+    assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
+    assert width <= 79, width
+    path, log = tool_log(vm, output, "kbench")
+    for name in rows:
+        require(log, f"{name} (")
+    assert log.count("    min ") >= 2 * count and ".. " in log, log[-2000:]
+    print(f"PASS: kbench: {count} measurements in a table of {width} columns (system call {rows['uptime (empty call)'][0]:.0f} ns, "
+          f"IPC round trip {rows['call and reply'][0] / 1000:.1f} µs, sleep 10 ms {rows['sleep 10 ms'][0] / 1e6:.1f} ms, process start "
+          f"{rows['start to running'][0] / 1e6:.1f} ms), log {path}", flush=True)
+    output = vm.command("kbench ipc --quick")
+    bench_rows(output, KBENCH_ROWS["ipc"])
+    require(output, "kbench: 2 measurements, 0 failed")
+    assert "System calls" not in output, output
+    require(vm.command("kbench nosuch"), "kbench: no group nosuch")
+    print("PASS: kbench ipc runs one group; an unknown group is refused", flush=True)
+
+
+# The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
+# a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
+CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
+               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
+
+
+def check_tool_check(vm):
+    """check: every group's rows, the summary, the log, and its failures named; one group alone; an unknown group refused."""
+    vm.send("check\n")
+    output = vm.expect("MIND> ", timeout=600, after="check\n")
+    rows = {name.strip(): (mark, detail.strip()) for mark, name, detail in CHECK_ROW.findall(output.replace("\r", ""))}
+    for name in CHECKS_PASS:
+        assert rows.get(name, ("?",))[0] == "✓", (name, rows.get(name), output[-4000:])
+    failed = [name for name, (mark, _) in rows.items() if mark == "✗"]
+    assert not failed, (failed, output[-4000:])
+    assert all(detail for mark, detail in rows.values() if mark == "○"), rows
+    summary = re.search(r"check: (\d+) passed, (\d+) failed, (\d+) skipped \((\d+) checks\)", output)
+    assert summary and int(summary[4]) == len(rows) and int(summary[2]) == len(failed), (summary and summary[0], len(rows), failed)
+    width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
+    assert width <= 79, width
+    path, log = tool_log(vm, output, "check")
+    require(log, "PASS kernel memory unreadable: the read faulted; the program was stopped")
+    require(log, "== Boot services")
+    skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
+    print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
+          f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    output = vm.command("check kernel")
+    assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
+    require(vm.command("check nosuch"), "check: no group nosuch")
+    print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
+
+
+# bench's rows that every suite machine has (176-KRN-0064); data/ and log: are skipped where the disk has neither, the
+# camera is the gateway's synthetic source, audio_gw runs on x86 only.
+BENCH_ROWS = ["ram: write 2 MiB", "ram: read 2 MiB", "ram: 1 KiB file cycle", "vfs_server: attributes", "sysmon: memory figures",
+              "rtc: the time", "loader: inspect", "SHA-256 of 4 MiB", "SHA-256 of 64 bytes"]
+
+
+def bench_tool_check(vm):
+    """bench: files, service round trips, hashing and the synthetic camera's frames; skipped rows name their reason."""
+    vm.send("bench --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="bench --quick\n")
+    rows = bench_rows(output, BENCH_ROWS)
+    frames = re.search(r"│   frame interval (\d+)x(\d+) +│ *([\d.]+ \S+) │", output)
+    assert frames and 1e6 < nanoseconds(frames[3]) < 2e9, output[-3000:]
+    skipped = re.findall(r"│   (.+?) +│  skipped │ (.+?) +│", output)
+    assert all(why for _, why in skipped), skipped
+    summary = re.search(r"bench: (\d+) measurements, 0 failed", output)
+    assert summary and int(summary[1]) >= len(BENCH_ROWS) + 1, output[-2000:]
+    rates = re.search(r"ram: write ([\d.]+ \S+/s), read ([\d.]+ \S+/s)", output)
+    sha = re.search(r"SHA-256 at ([\d.]+ \S+/s)", output)
+    assert rates and sha, output[-2000:]
+    path, log = tool_log(vm, output, "bench")
+    for name in BENCH_ROWS:
+        require(log, f"{name} (")
+    print(f"PASS: bench: {summary[1]} measurements (ram: write {rates[1]}, read {rates[2]}; SHA-256 {sha[1]}; synthetic camera "
+          f"{frames[1]}x{frames[2]}, frame interval {frames[3]}; skipped: {', '.join(f'{n} ({w})' for n, w in skipped)}), log {path}", flush=True)
+    require(vm.command("bench nosuch"), "bench: no group nosuch")
+
+
+def bench_suite(vm):
+    """176: the utilities that check the system and measure it, from the shell."""
+    check_tool_check(vm)
+    kbench_check(vm)
+    bench_tool_check(vm)
 
 
 def table_row(screen, pattern):
@@ -1805,7 +1963,7 @@ def busy_suite(vm):
     require(vm.command("kill 1"), "KILLED PID=1")
     vm.command("kill 2")
     assert heap_used(vm) == baseline
-    print(f"PASS: timer preemption of a non-yielding {'register' if vm.arch == 'aarch64' else 'SIMD'} loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
+    print(f"PASS: timer preemption of a non-yielding SIMD loop; responsive shell, clocks and kill; top shows the loop at ~100 % of its CPU; CPU budget per period; "
           f"without one the loop takes {share:.2f} of the time other tasks leave its CPU ({wall:.2f} of the wall clock)", flush=True)
 
 
@@ -1813,13 +1971,21 @@ def avx_expected(vm, fixture=None):
     """With a CPU model that has AVX (--cpu-model max) every CPU saves AVX state and the busy fixture uses AVX."""
     cpus = vm.command("cpus")
     model = getattr(vm.args, "cpu_model", None)
-    if vm.arch == "aarch64":  # soft-float: no FP state is saved
-        assert len(re.findall(r"FPU=NONE", cpus)) == vm.cpus, cpus
+    if vm.arch == "aarch64":  # every task's V0-V31, FPCR and FPSR are saved (250-KRN-0056)
+        assert len(re.findall(r"FPU=FP/SIMD", cpus)) == vm.cpus, cpus
+        assert fixture is None or "CALLS, FP/SIMD" in fixture, fixture
     elif model == "max":
         assert len(re.findall(r"FPU=XSAVE\+AVX", cpus)) == vm.cpus, cpus
         assert fixture is None or "CALLS, AVX" in fixture, fixture
     elif model is None:
         assert len(re.findall(r"FPU=FXSAVE", cpus)) == vm.cpus, cpus
+    if vm.arch != "aarch64":
+        # 174-KRN-0037: the area holds the enabled components; the padded test kernel's is AMX's size.
+        state = re.search(r"VECTOR STATE: (XSAVE|FXSAVE), XCR0 0x([0-9A-F]+), (\d+) BYTES A TASK", vm.log)
+        assert state, vm.log[-3000:]
+        assert state[1] == ("XSAVE" if model == "max" else "FXSAVE") or model not in (None, "max"), state[0]
+        padded = "xsave-pad" in (getattr(vm.args, "kernel", None) or "")
+        assert (int(state[3]) >= 11 * 1024) == padded, (state[0], padded)
 
 
 def smp_suite(vm):
@@ -1827,6 +1993,7 @@ def smp_suite(vm):
     cpus = vm.command("cpus")
     assert len(re.findall(r"ONLINE=true", cpus)) == vm.cpus, cpus
     avx_expected(vm)
+    protection_check(vm)
     # Two non-yielding SIMD loops per core force real preemption on every CPU.
     count = min(vm.cpus * 2, 8)
     for pid in range(1, count + 1):
@@ -1929,17 +2096,44 @@ def isolation_suite(vm):
         rows, faults = task_rows(vm), vm.command("faults")
         assert not any(pid + n in rows for n in range(1, children + 1)), (key, rows)
         return pid, faults
-    for key, children, done in [("q", 5, "QUEUE ORDER OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK")]:
+    for key, children, done in [("q", 5, "QUEUE ORDER OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK"), ("a", 1, "BADGE RIGHT OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
     # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).
     pid, faults = family("x", 1, "LEASE REVOKED")
     assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
+    # 000-KRN-0039: SGDT from a program faults (#GP) where UMIP is on.
+    names = protection_check(vm)
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("U\n")
+    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    if "UMIP" in names:
+        faults = vm.command("faults")
+        assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR=13 ", faults), faults
+    else:
+        require(output, "SGDT ALLOWED")
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print("PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+
+
+def protection_check(vm):
+    """000-KRN-0039: what the kernel turned on against reaching programs' pages, as the CPU model offers it. The
+    protection-test kernel reads and jumps into a program's page once: SMAP and SMEP must stop both."""
+    line = re.search(r"MIND CORE KERNEL: PROTECTION: ([A-Z ]+?)\r?\n", vm.log)
+    assert line, vm.log[-2000:]
+    names, model = line[1].split(), getattr(vm.args, "cpu_model", None)
+    if vm.arch == "aarch64":
+        assert names == ["PXN", "PAN"], line[0]  # -cpu max has PAN (ARMv8.1)
+    elif model in (None, "max"):
+        assert names == (["SMEP", "SMAP", "UMIP"] if model == "max" else ["NONE"]), line[0]
+    if "protection" in (getattr(vm.args, "kernel", None) or ""):
+        require(vm.log, "PROTECTION TEST: READ OF A PROGRAM'S PAGE FAULTED, FETCH FROM IT FAULTED")
+    return names
 
 
 def memory_suite(vm):
@@ -2432,11 +2626,30 @@ def ahci_suite(vm):
     print("PASS: AHCI driver in ring 3 (MMIO + DMA capabilities), VFS mounted from SATA, file reads, restart after device quiesce", flush=True)
 
 
+def reader_badges_check(vm):
+    """351-UPD-0008: the clients of vfs_server init lends are badged, readers BADGE_READER (5), and a program gets
+    loader's; a badge is set once, so none can be badged for a private directory or the update zone."""
+    real = vm.services()
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+    clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
+    task = int(re.search(r"^(\d+) clock ", vm.command("ps", raw=True), re.M)[1])  # its real PID: ps's rows are not translated
+    for name, pid in [*((n, real[n]) for n in ("loader", "tls", "video_gw") if n in real), ("clock", task)]:
+        held = vm.command(f"stat caps {pid}", raw=True)
+        found = re.search(r"^SLOT=3 GEN=\d+ KIND=1 RIGHTS=\d+ SIZE=0 BADGE=(\d+) EP=(\d+)", held, re.M)
+        assert found and found[1] == "5" and servers.get(int(found[2])) == real["vfs_server"], (name, held)
+    vm.command(f"kill {clock}")
+    print(f"PASS: the vfs_server clients init lends carry the reader's badge: {', '.join(n for n in ('loader', 'tls', 'video_gw') if n in real)} and a program loader started", flush=True)
+
+
 def blockstore_check(vm):
     """300-KRN-0001 (requested by the storage track): init starts the block store over a RAM disk of its own (ramdisk#1)
     and gives the shell a client with the get, put and publish badges in SLOT_BLOCKSTORE (25)."""
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    # `logs` drains: the index's line, printed before READY, is read in the same output.
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
+    # The index is sized from the medium (251-STO-0013): the least, 4681 slots for 4096 blocks, on 8 MiB.
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     real = vm.services()
     assert "ramdisk#1" in real, real
     caps = vm.command(f"stat caps {real['shell']}", raw=True)
@@ -2463,7 +2676,10 @@ def store_suite(vm):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
-    require(vm.service_logs("blockstore", ready), ready)
+    logs = vm.service_logs("blockstore", ready)
+    require(logs, ready)
+    # 251-STO-0013: the index sized from the medium, its capacity what stat gives.
+    require(logs, "[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS")
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
@@ -3063,11 +3279,15 @@ def services_suite(vm):
     output = vm.command("uptime --help")
     require(output, "NAME=uptime FOREGROUND")
     require(output, "uptime — uptime, load averages")
+    # Every help key gives the same text (000-KRN-0066).
+    for key in ("-h", "-help", "/help", "/h", "/?", "-?", "--HELP"):
+        require(vm.command(f"uptime {key}"), "uptime — uptime, load averages")
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
     blockstore_check(vm)
     escrow_check(vm)
+    reader_badges_check(vm)
     # Final recovery boundary: without init the system stops instead of running unsupervised.
     vm.send(f"kill {vm.services()['init']}\n", raw=True)
     vm.expect("INIT EXITED: SYSTEM HALTED")
@@ -3239,17 +3459,12 @@ def video_pattern(sequence, x, y, width, height):
 
 
 def camera_check(vm):
-    """camera (issue 158) on the synthetic source: the shell asks before lending the camera, a refused program runs
-    without it; a still and 3 s of video; the camera mark while the stream is open, gone after it."""
-    def ask(command, answer):
-        vm.send(command + "\n")
-        vm.expect("CAMERA ASKS FOR THE CAMERA. ALLOW? (Y/N)")
-        vm.send_bytes(answer)
-    ask("camera -s data/cam.bmp", b"n")
-    require(vm.expect("SHELL RESUMED."), "camera: no camera was granted")
-    time.sleep(.2); vm.collect(); vm.output = ""
-    ask("camera -s data/cam.bmp", b"y")
-    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", vm.expect("SHELL RESUMED.", timeout=30))
+    """camera (issue 158) on the synthetic source: the shell lends the camera without a question (the program's start is
+    the request); a still and 3 s of video; the camera mark while the stream is open, gone after it."""
+    vm.send("camera -s data/cam.bmp\n")
+    taken = vm.expect("SHELL RESUMED.", timeout=30)
+    assert "ALLOW?" not in taken, taken
+    still = re.search(r"\[CAMERA\] STILL data/cam.bmp: 320X240, FRAME (\d+), (\d+) BYTES", taken)
     assert still, vm.log[-2000:]
     time.sleep(.2); vm.collect(); vm.output = ""
     def stalled(*report):
@@ -3264,7 +3479,7 @@ def camera_check(vm):
         path = r"camera|video_gw|vfs_server|compositor|nvme|ata|ahci|ramdisk|rtc|logd|sysmon"
         waits = [vm.command(f"stat {pid}", raw=True) for pid in re.findall(rf"^(\d+) (?:{path}) ", ps, re.M)]
         raise AssertionError(report + (ps, waits, vm.service_logs("video_gw")))
-    ask("camera -r 10 -t 3 data/cam.avi", b"y")
+    vm.send("camera -r 10 -t 3 data/cam.avi\n")
     vm.expect("[CAMERA] OPENED test pattern 320X240 AT 10/S")
     opened = time.monotonic()
     time.sleep(1)
@@ -3298,7 +3513,7 @@ def camera_check(vm):
     require(logged_lines, "[VIDEO] SYNTHETIC SOURCE: video/synthetic on the boot disk")
     assert len(re.findall(r"\[VIDEO\] PID \d+ OPENED test pattern 320x240 AT 10/S", logged_lines)) == 2, logged_lines
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: camera: the shell asks first and a refused program runs without the camera; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
+    print("PASS: camera: lent by the shell without a question; a still and 3 s of video of the test pattern; the camera mark while the stream is open", flush=True)
     return int(still[1]), (int(video[4]), int(video[1]))
 
 
@@ -3465,13 +3680,11 @@ def vfs_suite(args):
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
-            # Power off (issue 203): PSCI SYSTEM_OFF ends QEMU on aarch64; x86 has no ACPI sleep states yet.
-            if vm.arch == "aarch64":
-                vm.send("reboot -f --off\n")
-                vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF", timeout=30)
-                vm.process.wait(timeout=30)
-            else:
-                require(vm.command("reboot -f --off"), "ERROR: POWER OFF REFUSED")
+            # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
+            require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+            vm.send("reboot -f --off\n")
+            vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+            vm.process.wait(timeout=30)
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
@@ -3485,10 +3698,21 @@ def vfs_suite(args):
 def disks_check(args, boot, temp):
     """251-KRN-0031: a model disk and a store disk next to the boot disk each reach their own service: the blank VirtIO
     disk the block store (init routes it by its first sector), the FAT32 disk labelled MIND MODELS vfs_server as models:,
-    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks."""
+    and the boot volume mounts as before. On aarch64, where the boot disk is VirtIO too, that is three VirtIO disks.
+    251-STO-0014: the model disk's models go into the store, are read back by name, and survive the store's restart."""
     models, store = temp / "models-disk.img", temp / "store-disk.img"
-    (temp / "models-tree").mkdir()
-    (temp / "models-tree" / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+    # Two models as scripts/models.py lists them (251-STO-0014): one whole, one whose file differs from its SHA-256.
+    tree = temp / "models-tree"
+    files = {"asr-test": {"am/encoder.int8.onnx": bytes(range(256)) * 160 + b"tail", "tokens.txt": "ёлка 1\n".encode() * 50},
+             "tts-bad": {"voice.bin": b"not the voice the manifest names"}}
+    entries = []
+    for model_id, model_files in files.items():
+        for path, data in model_files.items():
+            (tree / model_id / path).parent.mkdir(parents=True, exist_ok=True)
+            (tree / model_id / path).write_bytes(data)
+        entries.append({"id": model_id, "role": "asr", "licence": "MIT", "terms": "Тест: для проверки.",
+                        "files": [{"path": p, "size": len(d), "sha256": hashlib.sha256(d if model_id != "tts-bad" else b"other").hexdigest()} for p, d in model_files.items()]})
+    (tree / "MANIFEST.json").write_text(json.dumps({"format": 1, "models": entries}, ensure_ascii=False, indent=1), encoding="utf-8")
     subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(models), str(temp / "models-tree")], check=True, capture_output=True)
     with store.open("wb") as f:
         f.truncate(8 << 20)  # the store formats it at start: about 10 s on aarch64 (polled VirtIO under TCG) for 8 MiB
@@ -3502,12 +3726,43 @@ def disks_check(args, boot, temp):
         require(mounted, f"[VFS] MOUNTED FAT16 FROM {BOOT_DRIVE} AT LBA 2048")
         require(mounted, "[VFS] THE BOOT VOLUME:")
         require(mounted, "[VFS] MOUNTED FAT32 FROM VIRTIO AS MODELS:")
-        assert re.search(r"^models: +MIND MODELS +FAT32 ", vm.command("df"), re.M), vm.log[-2000:]
+        # The first df counts the 256 MiB FAT32 volume's free clusters, a FAT sector at a time since 251-KRN-0072 (it took
+        # 2.2 to 9.6 s on aarch64 under TCG one cluster at a time): within a command's 8 s, the time printed.
+        started = time.monotonic()
+        listing = vm.command("df")
+        assert re.search(r"^models: +MIND MODELS +FAT32 ", listing, re.M), vm.log[-2000:]
+        print(f"NOTE: the first df (a 256 MiB FAT32 volume's free clusters counted) took {time.monotonic() - started:.2f} s", flush=True)
         for _ in range(60):
             if "[BLOCKSTORE] READY" in vm.command("dmesg -s blockstore", raw=True):
                 break
             time.sleep(2)
         assert re.search(r"SECTORS=\d+/16384", vm.command("blocks stat", raw=True)), vm.log[-2000:]
+        # The models into the store: the parser service reads MANIFEST.json, each file is checked as it is read.
+        vm.send("blocks models import\n")
+        out = vm.expect("MIND> ", timeout=240, after="blocks models import\n")
+        encoder, tokens = files["asr-test"]["am/encoder.int8.onnx"], files["asr-test"]["tokens.txt"]
+        require(out, f"IMPORTED asr-test: 2 FILES, {len(encoder) + len(tokens)} BYTES, OBJECT ")
+        require(out, "AS models/asr-test VERSION 1")
+        require(out, "blocks: models: models:tts-bad/voice.bin is not as the manifest says (32 bytes read of 32): tts-bad not imported")
+        require(vm.command("blocks resolve models/tts-bad", raw=True), "blocks: resolve models/tts-bad: NotFound")
+
+        def get_back(path, data):
+            vm.send(f"blocks models get asr-test {path} ram:got.bin\n")
+            require(vm.expect("MIND> ", timeout=120, after=f"blocks models get asr-test {path} ram:got.bin\n"),
+                    f"GOT {path} OF models/asr-test: {len(data)} BYTES, SHA-256 {hashlib.sha256(data).hexdigest()}")
+            require(vm.command("sha256 ram:got.bin"), f"{hashlib.sha256(data).hexdigest()}  ram:got.bin")
+        get_back("am/encoder.int8.onnx", encoder)
+        get_back("tokens.txt", tokens)
+        # A restarted store finds the model again on its disk.
+        pid = vm.services()["blockstore"]
+        require(vm.command(f"kill {pid}", raw=True), f"KILLED PID={pid}")
+        for _ in range(60):
+            if vm.services().get("blockstore", pid) != pid and "BLOCKS=" in vm.command("blocks stat", raw=True):
+                break
+            time.sleep(2)
+        get_back("tokens.txt", tokens)
+        print(f"PASS: models in the block store: a model disk's model imported as one object named models/asr-test, its files read back "
+              f"by name with their SHA-256 (also after the store restarted), a model whose file differs from the manifest not named", flush=True)
     finally:
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-disks-{args.cpus}cpu.log").write_text(vm.log)
@@ -3855,6 +4110,177 @@ def block_suite(args, block_elf):
     print("PASS: block write: badged client of ATA, AHCI and USB drivers writes, flushes and reads back; the raw image holds the sectors; the file system is intact", flush=True)
 
 
+def updater_suite(args, updater_elf):
+    """The updater's authorities (351-KRN-0022): a raw FAT image boots with the test stand-in for the updater, which
+    reports the slots init filled (and no others) and what each authority does; when the shell makes data/reboot, it asks
+    init to restart the machine, and init flushes the volumes, stops the services and resets (QEMU exits: -no-reboot).
+    vfs_server writes directories through today, so the image shows the restart left the volume whole, not the flush."""
+    if not raw_tools():
+        print("SKIP: updater suite needs mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-updater-", dir=ROOT / IMAGE) as temp:
+        policy = b"# the updater may reach the release server\nupdater 10.0.2.2 tcp 8443 3600 1048576\n"
+        image, start, fs_sectors = raw_fat_image(Path(temp), {"updater.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        part = f"{image}@@{start * 512}"
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            # Its own endpoint, the clock, the file system, init (badged for reboot), the log every service has, the
+            # flow grant, TLS, the firmware privilege, the parser; nothing else.
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
+            for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
+                require(vm.command(command), answer)
+            vm.process.wait(timeout=60)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-{args.cpus}cpu.log").write_text(vm.log)
+        fsck_volume(image, start, fs_sectors)
+        listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
+        assert "kept" in listing and "reboot" in listing, listing
+    print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+    # A policy broker that never answers (the stand-in in its place receives nothing) on a machine without a network
+    # card, as the MacBook Pro's boot of 2026-10-11: init gives up after its limit, and the updater and the shell start
+    # (000-KRN-0075).
+    with tempfile.TemporaryDirectory(prefix="smoke-silent-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"updater.elf": updater_elf, "netpolicy.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-nic", "none"])
+        try:
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("init", "[INIT] STARTED shell")
+            for line in ["[INIT] updater: THE POLICY BROKER DID NOT ANSWER IN 10 S", "[INIT] updater: NO NETWORK GRANT", "[INIT] STARTED shell"]:
+                require(log, line)
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and " 18:" not in held[1] and " 3:1" in held[1], report  # no flow grant (slot 18); its file client
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-silent-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
+
+
+def update_suite(args):
+    """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
+    and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
+    20 s. Between runs the host changes what the server holds: an expired channel, one with a bad signature, one naming
+    an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
+    version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
+    booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
+    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
+    arch = args.arch
+    # The build as release 5; the same files signed again with other build inputs as release 6.
+    volume = temp / "release5"
+    (volume / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    sign_manifest.sign_volume(volume)
+    newer = temp / "release6"
+    shutil.copytree(volume, newer)
+    commit, toolchain, locks = sign_manifest.build_inputs()
+    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
+    server = temp / "server"
+    release_tool.publish(release_tool.stage(5, temp / "staged5", {arch: volume}), server)
+    kept = (server / "channels/stable").read_bytes()
+    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server)
+    good = (server / "channels/stable").read_bytes()
+    manifest6 = (newer / "MANIFEST").read_bytes()
+    boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
+    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+
+    def channel(version, minimum, expires):
+        body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
+        return body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    signature = good.index(b"ed25519 ") + 8
+    forged = good[:signature] + (b"1" if good[signature:signature + 1] == b"0" else b"0") + good[signature + 1:]
+    certificates = temp / "tls"
+    certificates.mkdir()
+    _certificates(certificates)
+    https = serve_release.serve(server, certificates / "server.pem", certificates / "server.key")
+    port = https.server_address[1]
+    # The image: release 5 in slot A, confirmed, with its channel; the policy's flow and update.txt at the root.
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout)
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
+    (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
+                                       "channel stable\nautomatic apply\nevery 20\ntries 3\n")
+    image = boot_slots.Image.create(temp / "update.img", layout)
+    first = boot_slots.records(image.path)
+    (server / "channels/stable").write_bytes(channel(6, 5, "2020-01-01T00:00:00Z"))
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+
+    def logged(line, timeout):
+        # The updater's lines, read with dmesg: the shell holds the serial line. A kernel line on the serial line can
+        # land inside the command's echo (the trial's confirmation does); that read is then made again.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                continue
+            if line in log:
+                return log
+            time.sleep(2)
+        raise AssertionError((line, log[-3000:]))
+    try:
+        log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
+        require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        (server / "channels/stable").write_bytes(forged)
+        logged("[UPDATER] CHECK: REFUSED: Signature", 60)
+        (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
+        logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        # Version 6 as published, but the first of its boot files changed on the server.
+        (server / "channels/stable").write_bytes(good)
+        blob = server / "blobs" / boot_files[0][1]
+        original = blob.read_bytes()
+        blob.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+        log = logged("[UPDATER] FETCH: REFUSED: Digest", 300)
+        require(log, f"[UPDATER] FETCH: {boot_files[0][0]} IS NOT AS THE MANIFEST LISTS IT")
+        assert "[UPDATER] RECORD" not in log, log
+        # As published, the largest boot file cut midway: fetched, checked, applied, and the machine restarted. The
+        # updater's lines of this boot go with it: the serial line, the server and the records show what it did.
+        blob.write_bytes(original)
+        cut = (newer / largest[0]).stat().st_size // 2
+        https.cuts[f"/blobs/{largest[1]}"] = cut
+        vm.collect(); vm.output = ""
+        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
+                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+            require(out, line)
+        blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
+        assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
+        # Past the kernel's deadline (120 s) the trial outlived it: the updater confirms B, then finds nothing newer.
+        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK", 240)
+        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        https.shutdown()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert first[0]["sequence"] == 1 and first[1] is None, first
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
+          "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
+          "restart and confirmed on the disk by the updater past the kernel's deadline; the file system is consistent", flush=True)
+
+
 def tone_power(samples, rate, start, hz):
     """How much of `hz` the 40 ms of `samples` from `start` hold."""
     window = samples[start:start + int(rate * 0.04)]
@@ -3943,6 +4369,79 @@ def speech_wav(phrases=SPEECH):
     pcm = struct.pack(f"<{len(frames)}h", *frames)
     header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, 2, 48000, 48000 * 4, 4, 16)
     return header + b"data" + struct.pack("<I", len(pcm)) + pcm, starts
+
+
+def ehci_suite(args):
+    """211-DRV-0004, 0017, 0018: usb_host's EHCI driver, as on an Intel Mac: a high-speed keyboard on QEMU's usb-ehci
+    with a tablet on xHCI, then the other way round. The keys arrive both times (the trackpad commit's queues once
+    overflowed usb_host's stack as it set up EHCI, which QEMU's other suites, without EHCI, did not see)."""
+    import copy
+    pc = copy.copy(args)
+    pc.machine = "pc,i8042=off"
+    for name, extra in (("on EHCI", ["-device", "qemu-xhci,id=xhci", "-device", "usb-tablet,bus=xhci.0", "-device", "usb-ehci,id=ehci", "-device", "usb-kbd,bus=ehci.0,usb_version=2"]),
+                        ("on xHCI", ["-device", "qemu-xhci,id=xhci", "-device", "usb-kbd,bus=xhci.0", "-device", "usb-ehci,id=ehci", "-device", "usb-tablet,bus=ehci.0,usb_version=2"])):
+        vm = VM(pc, IMAGE, extra=extra)
+        try:
+            host = vm.command("dmesg -s usb_host", raw=True)
+            require(host, "[USB] EHCI 0: 6 PORTS")
+            require(host, "[USB] EHCI 0 0627:0001 ADDRESS 1 (HIGH SPEED)")
+            vm.send("run keys\n"); vm.expect("[KEYS] READY"); time.sleep(.3)
+            start = len(vm.log)
+            for key in ("a", "b", "c"):
+                vm.hmp(f"sendkey {key}"); time.sleep(.2)
+            time.sleep(.8); vm.collect()
+            got = re.findall(r"\[KEYS\] code=Char mods=- char=([abc])", vm.log[start:])
+            assert got == ["a", "b", "c"], (name, vm.log[start:])
+            vm.send_bytes(b"\x1b"); vm.expect("EXITED. SHELL RESUMED.")
+        finally:
+            vm.close()
+    print("PASS: EHCI: a keyboard on EHCI with a tablet on xHCI types, and the other way round", flush=True)
+
+
+def hda_suite(args):
+    """551-DRV-0010: Intel HD Audio in audio_gw. QEMU's intel-hda with a duplex codec (a line out and a line in): the
+    gateway finds the paths, beep's tones reach the wav backend through the output stream, and listen records a second
+    from the input stream (the "none" backend feeds silence at the real rate)."""
+    import wave
+    with tempfile.TemporaryDirectory(prefix="mind-hda-") as temp:
+        wav = Path(temp) / "hda.wav"
+        vm = VM(args, IMAGE, audio=str(wav), audio_card="HDA")
+        try:
+            ready = vm.service_logs("audio_gw", "[AUDIO] HDA READY")
+            found = re.search(r"\[AUDIO\] HDA READY: CODEC 0 ([0-9A-F]{4}):([0-9A-F]{4}) REVISION [0-9A-F]{8}; OUT PIN (0X[0-9A-F]+) \(LINE\) <- DAC (0X[0-9A-F]+); IN PIN (0X[0-9A-F]+) \(LINE\) -> ADC (0X[0-9A-F]+); 48000 HZ STEREO S16, 32 DMA BUFFERS, (INTERRUPTS|POLLED)", ready.upper())
+            assert found, ready
+            require(vm.command("run beep &"), "PID=1 NAME=beep BACKGROUND")
+            output = ""
+            for _ in range(60):
+                output += vm.command("logs 1")
+                if "[BEEP] DONE" in output:
+                    break
+                time.sleep(.2)
+            require(output, "[BEEP] DEVICE=true RATE=48000")
+            time.sleep(1.5)
+        finally:
+            vm.close()
+        with wave.open(str(wav)) as audio:
+            frames, rate = audio.readframes(audio.getnframes()), audio.getframerate()
+        left = struct.unpack(f"<{len(frames) // 2}h", frames)[0::2]
+        loud = [i for i, sample in enumerate(left) if sample]
+        assert loud, "HDA produced no audio"
+        beep_demo_tones(left, rate, loud[0])
+        vm = VM(args, IMAGE, audio="none", audio_card="HDA")
+        try:
+            require(vm.command("run listen 1 &"), "PID=1 NAME=listen BACKGROUND")
+            log = ""
+            for _ in range(60):
+                log += vm.command("logs 1")
+                if "[LISTEN] DONE" in log:
+                    break
+                time.sleep(.25)
+            require(log, "[LISTEN] RECORDED 48000 FRAMES (1000 MS)")
+            require(log, "[LISTEN] PLAYED BACK")
+        finally:
+            vm.close()
+    print(f"PASS: Intel HD Audio: codec {found[1]}:{found[2]}, line out {found[3]} <- DAC {found[4]}, line in {found[5]} -> ADC {found[6]} ({found[7].lower()}); "
+          "beep's tones through the output stream, a second recorded from the input stream", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -4296,9 +4795,16 @@ def download_check(args, disk):
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
+    # A release channel as release.py publishes it, and one with a space where its one encoding has none (351-NET-0011).
+    body = release_tool.channel_bytes("stable", 7, 5, "2026-11-08T00:00:00Z", {"x86_64": "ab" * 32, "aarch64": "0c" * 32})
+    channel = body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
+    (disk / "data" / "stable").write_bytes(channel)
+    (disk / "data" / "spaced").write_bytes(channel.replace(b'"version":7', b'"version": 7'))
     # TLS takes random bytes from RDRAND only.
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+    # The guest's clock on UTC: the certificates start at the host's UTC time, whatever the host's zone (351-KRN-0057).
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
+            extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
@@ -4340,6 +4846,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
+    release_metadata_check(vm)
 
 
 def _spki_pin(certificate):
@@ -4410,6 +4917,24 @@ def parser_check(vm, url):
     out = vm.command(f"download ram:again.bin {url}/small.bin")
     require(out, "DOWNLOAD: DONE 200000 BYTES")
     print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+
+
+def release_metadata_check(vm):
+    """351-NET-0011, 351-APP-0019: the parser service reads a release channel and the boot volume's own manifest for the
+    shell's `release`, which takes the answer only if it makes the file's bytes; a channel in another form is refused
+    there and logged."""
+    out = vm.command("release data/stable")
+    signed = (ROOT / vm.disk / "data" / "stable").read_bytes().index(b"\n") + 1
+    for line in ("CHANNEL stable: VERSION 7, MINIMUM 5, EXPIRES 2026-11-08T00:00:00Z", "aarch64 MANIFEST 0c0c0c0c0c0c0c0c...",
+                 "x86_64 MANIFEST abababababababab...", f"SIGNED: THE FIRST {signed} BYTES; THE ANSWER MAKES THE FILE"):
+        require(out, line)
+    text = (ROOT / vm.disk / "MANIFEST").read_text()
+    files = [line.split(" ")[1] for line in text.splitlines() if line.startswith("file ")]
+    require(vm.command("release MANIFEST"), f"MANIFEST: 5 HEADER LINES, {len(files)} FILES ({sum('/' not in f for f in files)} AT THE ROOT); THE ANSWER MAKES THE TEXT")
+    require(vm.command("release data/spaced"), "RELEASE: MALFORMED")
+    assert re.search(r"\[PARSE\] REFUSED A CHANNEL FOR PID \d+: MALFORMED \(\d+ BYTES\)", vm.command("dmesg -s parse")), vm.command("dmesg -s parse")
+    print(f"PASS: release metadata: the parser service reads a channel (2 architectures) and the boot manifest ({len(files)} files, over "
+          f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
 def net_suite(args, disk):
@@ -4809,10 +5334,12 @@ def tpm_check(args, cpu):
 
         def boot(tpm=None):
             # A swtpm for each boot, on the state directory of TPM `tpm`.
-            swtpm, extra = None, []
+            swtpm, extra, sockets = None, [], None
             if tpm:
                 (temp / tpm).mkdir(exist_ok=True)
-                socket_path = temp / f"{tpm}.sock"
+                # A UNIX socket's path is under 108 bytes: in a short directory of its own, not beside a deep checkout.
+                sockets = Path(tempfile.mkdtemp(prefix="tpm-", dir="/tmp"))
+                socket_path = sockets / f"{tpm}.sock"
                 swtpm = subprocess.Popen(["swtpm", "socket", "--tpm2", "--tpmstate", f"dir={temp / tpm}", "--ctrl", f"type=unixio,path={socket_path}", "--flags", "startup-clear"],
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 for _ in range(50):
@@ -4821,7 +5348,7 @@ def tpm_check(args, cpu):
                     time.sleep(.1)
                 extra = ["-chardev", f"socket,id=chrtpm,path={socket_path}", "-tpmdev", "emulator,id=tpm0,chardev=chrtpm", "-device", f"{device},tpmdev=tpm0"]
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, rtc="utc", extra=["-cpu", cpu, *extra])
-            vm.swtpm = swtpm
+            vm.swtpm, vm.sockets = swtpm, sockets
             log = vm.service_logs("keystore", "PUBLIC KEY")
             name = re.search(r"\[KEYSTORE\] DEVICE KEY READY: MIND ([0-9A-F]{8}) ", log)
             assert name, log
@@ -4831,6 +5358,8 @@ def tpm_check(args, cpu):
             vm.close()
             if vm.swtpm:
                 vm.swtpm.kill(); vm.swtpm.wait()
+            if vm.sockets:
+                shutil.rmtree(vm.sockets, ignore_errors=True)
 
         def stored(name):
             return subprocess.run(["mtype", "-i", part, f"::/system/keystore/{name}"], env=MTOOLS_ENV, capture_output=True).returncode == 0
@@ -4845,12 +5374,8 @@ def tpm_check(args, cpu):
         vm, log, sealed = boot("a")
         try:
             interface = "FIFO" if args.arch == "aarch64" else "CRB"
-            ready = vm.service_logs("tpm", "[TPM] ")
-            # The kernel's half (PLATFORM_TPM from the firmware's tables) is a request to the kernel track: until it
-            # lands the TPM service finds none, and only the path without a TPM above is checked.
-            if "[TPM] NO TPM" in ready:
-                print("SKIP: sealing by the TPM: the kernel does not hand out the TPM's registers yet (issues/requests-KRN.md); the key service without a TPM checked", flush=True)
-                return
+            # The kernel hands out the TPM's registers from the TPM2 table (x86) or the DSDT (aarch64) (351-KRN-0052).
+            ready = vm.service_logs("tpm", "[TPM] READY")
             require(ready, f"[TPM] READY: TPM 2.0 BY IBM, {interface} INTERFACE")
             require(log, "[KEYSTORE] DEVICE KEY FROM system/keystore/device.key SEALED BY THE TPM IN system/keystore/device.sealed; THE UNENCRYPTED COPY REMOVED")
             require(vm.command("tpm"), f"TPM 2.0 BY IBM, {interface} INTERFACE")
@@ -5524,6 +6049,23 @@ def store_disk_check(args, disk):
         finally:
             vm.close()
     print("PASS: a blank VirtIO disk becomes the block store's own (not vfs_server's), and an object put there is found after a reboot", flush=True)
+    # 251-KRN-0071: on a store disk of 8 GiB the index has every slot slots_for asks for (2^20, 56 MiB), not a halved number.
+    with tempfile.TemporaryDirectory(prefix="mind-store-") as temp:
+        big = Path(temp) / "store.img"
+        with big.open("wb") as f:
+            f.truncate(8 << 30)
+        vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=("-drive", f"format=raw,file={big},if=none,id=store", "-device", "virtio-blk-pci,drive=store"))
+        try:
+            index = ""
+            for _ in range(60):
+                index = vm.command("dmesg -s blockstore", raw=True)
+                if "INDEX:" in index:
+                    break
+                time.sleep(.5)
+            require(index, "[BLOCKSTORE] INDEX: 1048576 SLOTS (57344 KiB) FOR 16777216 SECTORS")
+        finally:
+            vm.close()
+    print("PASS: the block store's index on an 8 GiB disk has its 2^20 slots (its memory quota fits them)", flush=True)
 
 
 def efivar_check(args, disk):
@@ -5563,7 +6105,9 @@ def devicetree_suite(args, disk):
     """210-KRN-0029, for 210-APL-0002: QEMU virt without ACPI, where the firmware hands over a device tree instead; the
     bootloader passes its address in BootInfo and the kernel checks its header. The kernel has no console there until
     it reads the board from the tree, and init's services soon write over its lines on the screen, so the machine is
-    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen."""
+    stopped once the bootloader names the tree and run on in 10 ms steps until the kernel's line is on the screen. The
+    steps go through QMP itself: through the monitor's typing pace each let the machine run 110 ms, and a slow runner
+    passed the line between two looks (210-KRN-0055)."""
     if args.arch != "aarch64":
         print("SKIP: devicetree: OVMF on x86 hands over no device tree", flush=True)
         return
@@ -5574,21 +6118,44 @@ def devicetree_suite(args, disk):
         while not (loader := re.search(r"BOOT: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES", vm.log)) and time.monotonic() < deadline and vm.process.poll() is None:
             time.sleep(0.02)
             vm.collect()
-        vm.hmp("stop")
+        vm.qmp("stop")
         assert loader, vm.log[-3000:]
         kernel = None
         for _ in range(500):
             kernel = next((m for line in screen_text(vm) if (m := re.search(r"MIND CORE KERNEL: DEVICE TREE AT (0x[0-9a-f]+), (\d+) BYTES, VERSION (\d+)", line))), None)
             if kernel:
                 break
-            vm.hmp("cont")
+            vm.qmp("cont")
             time.sleep(0.01)
-            vm.hmp("stop")
+            vm.qmp("stop")
         assert kernel and kernel[1] == loader[1] and kernel[2] == loader[2] and int(kernel[3]) >= 16, (loader, kernel)
     finally:
         vm.close()
     print(f"PASS: devicetree: on virt without ACPI the bootloader passes the device tree at {loader[1]} ({loader[2]} bytes) "
           f"and the kernel finds an FDT header there (version {kernel[3]})", flush=True)
+
+
+def bar_move_check(args, disk):
+    """211-KRN-0021, with a kernel that packs the RTL8139's 256-byte register BAR into the SD host controller's page, as
+    Apple's firmware packs EHCI next to AHCI: granted, the BAR moves to a free page of its own, and the card's MAC
+    address reads there."""
+    with tempfile.TemporaryDirectory(prefix="mind-bar-") as temp:
+        volume = Path(temp) / "volume"
+        shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
+        (volume / "kernel.elf").write_bytes(Path(args.bar_kernel).read_bytes())
+        sign_manifest.sign_volume(volume)
+        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58"])
+        try:
+            out = vm.expect("READ THERE", timeout=60)
+            packed = re.search(r"PCI TEST: BAR 1 OF (\w+) PACKED AT ([0-9A-F]+), IN THE PAGE OF (\w+)", out)
+            moved = re.search(r"PCI: BAR 1 OF (\w+) MOVED FROM ([0-9A-F]+) TO ([0-9A-F]+): ITS PAGE HELD REGISTERS OF (\w+)", out)
+            granted = re.search(r"PCI TEST: GRANTED AT ([0-9A-F]+), MAC ([0-9A-F:]+) READ THERE", out)
+            assert packed and moved and granted, out[-3000:]
+            assert moved[2] == packed[2] and moved[4] == packed[3] and int(moved[3], 16) % 4096 == 0 and int(moved[3], 16) >> 12 != int(packed[2], 16) >> 12, out[-3000:]
+            assert granted[1] == moved[3] and granted[2] == "52:54:00:12:34:58", out[-3000:]
+        finally:
+            vm.close()
+    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there", flush=True)
 
 
 def trial_check(args, disk):
@@ -5655,8 +6222,10 @@ def boot_suite(args, disk):
             target.unlink()
         else:
             target.write_bytes(data)
-        # Signed again, so the bootloader gets past the manifest to the ELF it checks.
-        sign_manifest.sign_volume(disk)
+        # Signed again, so the bootloader gets past the manifest to the ELF it checks; a missing service is not, so the
+        # manifest still lists it (one it does not list may be absent, 351-KRN-0022).
+        if data is not None:
+            sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
         try:
             vm.expect(f"BOOT ERROR: {name}: {reason}", timeout=30)
@@ -5664,7 +6233,7 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(original)
     sign_manifest.sign_volume(disk)
-    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file", flush=True)
+    print("PASS: bootloader reports a corrupt kernel ELF (magic, truncated header, program headers) and a missing boot file the manifest lists", flush=True)
     # 350-UPD-0003: nothing is loaded that the signed manifest does not describe. A changed image, a changed manifest,
     # a manifest signed by another key or no signature: the bootloader names the file and stops.
     manifest, rtc = (disk / "MANIFEST").read_bytes(), (disk / "rtc.elf").read_bytes()
@@ -5697,6 +6266,8 @@ def boot_suite(args, disk):
             vfs = vm.command("dmesg -s vfs_server", raw=True)
             require(vfs, "[VFS] MOUNTED FAT16 FROM AHCI AT LBA 63")
             require(vfs, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+            # Booted from the volume's root, not a slot: nothing for an updater to fill (351-UPD-0008).
+            require(vfs, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")
             require(vm.command("ls"), "kernel.elf")
         finally:
             vm.close()
@@ -5728,11 +6299,22 @@ def boot_suite(args, disk):
     def boot_image(image, until):
         vm = VM(args, str(image), raw=True, snapshot=False, prompt=False)
         try:
-            return vm.expect(until, timeout=60)
+            service = {"[VFS]": "vfs_server", "[UPDATER-STUB]": "updater"}.get(until.split(" ")[0])
+            if not service:
+                return vm.expect(until, timeout=60)
+            # The shell holds the serial line, so a service's lines are read with dmesg once it is up.
+            output = vm.expect("MIND> ", timeout=90)
+            time.sleep(1); vm.collect(); vm.output = ""
+            for _ in range(30):
+                log = vm.command(f"dmesg -s {service}", raw=True)
+                if until in log:
+                    break
+                time.sleep(1)
+            return output + log
         finally:
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
-        boot_slots_check.run(boot_image, temp, disk, "x86")
+        boot_slots_check.run(boot_image, temp, disk, "x86", args.updater_elf)
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
@@ -5799,6 +6381,8 @@ def boot_suite(args, disk):
         print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
     if args.trial_kernel:
         trial_check(args, disk)
+    if args.bar_kernel:
+        bar_move_check(args, disk)
     store_disk_check(args, disk)
     efivar_check(args, disk)
 
@@ -5819,12 +6403,14 @@ def main():
     parser.add_argument("--isolation-elf", help="test-only ELF built from tests/isolation_app.rs")
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
+    parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
+    parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -5838,6 +6424,8 @@ def main():
         args.qemu, args.cpus = args.qemu or "qemu-system-aarch64", args.cpus or 4
         fixture = ROOT / IMAGE / "fixture-busy_app.elf"
         args.busy_elf = args.busy_elf or (str(fixture) if fixture.exists() else None)
+        fixture = ROOT / IMAGE / "fixture-updater.elf"
+        args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
@@ -5848,20 +6436,35 @@ def main():
         shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
         shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
         IMAGE = copy
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "bench", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
         suites.append("heap")
     if args.block_elf:
         suites.append("block")
+    if args.updater_elf:
+        suites.append("updater")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "bench", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
         if suite == "block":
             block_suite(args, args.block_elf)
+            continue
+        if suite == "updater":
+            updater_suite(args, args.updater_elf)
+            update_suite(args)
+            continue
+        if suite == "update":
+            update_suite(args)
+            continue
+        if suite == "ehci":
+            ehci_suite(args)
+            continue
+        if suite == "hda":
+            hda_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)
@@ -5896,6 +6499,9 @@ def main():
                 (disk / "data").mkdir(exist_ok=True)
                 for name, text in MSH_SCRIPTS.items():
                     (disk / "data" / name).write_text(text, encoding="utf-8")
+            if suite == "bench":
+                (disk / "video").mkdir()  # the video gateway's test pattern stands in for a camera (issue 158)
+                (disk / "video/synthetic").write_bytes(b"the video gateway's test pattern stands in for a camera\n")
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
@@ -5961,7 +6567,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

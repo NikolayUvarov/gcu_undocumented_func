@@ -1,0 +1,46 @@
+# 175-KRN-0048 — A case-only rename that fails keeps the file — done
+
+**Type:** kernel (`vfs_server`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) · **Constitution:** MC-4.4
+
+## Problem
+
+Audit finding A03 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)):
+- The `case_change` branch in `vfs_server/src/fat.rs` (line 678) unlinks the old entry before `link` writes the new one.
+- `link` needs `parts + 1` contiguous free slots, so the rename fails in three cases:
+  - a fragmented fixed root;
+  - a subdirectory that cannot grow on a full volume;
+  - an I/O error.
+
+  The file is then gone.
+
+## Plan
+
+- The slots for the new name are found, or the directory grown, before the old entry is removed. Or the new entry is written first and the old one removed after it.
+- On any failure the old name and its contents stay.
+- Tests in `tests/fat_host.rs`:
+  - mixed-case names that need more long-name slots, in a full root, a fragmented root and a full volume's subdirectory;
+  - a failed sector write.
+
+## Acceptance criteria
+
+A refused rename leaves the file under its old name with its contents, and `check()` consistent.
+
+## Resolution
+
+Done on 2026-10-09 by the kernel track, in `vfs_server/src/fat.rs`.
+
+- **New entry first.** `rename` writes the new entry before it removes the old one, for a change of case too. `link` is told the entry's own short name, so a change of case keeps the 8.3 alias.
+- **Rollback.**
+  - If `link` fails, the slots it wrote are freed again.
+  - If removing the old entry fails, the new entry is removed.
+  - `unlink_slots` gives slots their first byte back when a later slot's write fails.
+- **Tests (`tests/fat_host.rs`).**
+  - `a_refused_change_of_case_keeps_the_file`: a change of case refused for space in a full root, in a fragmented root (free slots, none next to another) and in a full volume's subdirectory. The file keeps its old name and contents, and the volume checks clean.
+  - `a_rename_that_fails_on_the_medium_keeps_one_name`: a change of case and a move under a long name, each sector write failing once. Exactly one entry is left, under the old name, with its contents.
+
+  Both fail on the old code.
+- **Not covered.** A power loss between the two steps of a rename leaves both entries, a cross-link that `fsck` repairs, rather than none (threat-model.md).
+
+## Related
+
+[066](../issues-done/066-vfs-v2-fat-write.done), `tests/fat_host.rs` (the case-change test).

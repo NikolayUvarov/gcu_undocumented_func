@@ -1,40 +1,47 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (4 requests waiting: the TPM's registers; three for 700, 2026-10-09) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-11, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-## The TPM's registers from the firmware's tables (`PLATFORM_TPM`)
+## A client of the updater for the shell
 
-**Recorded by:** the network and drivers tracks (the storage session), 2026-10-09, for [351-DRV-0015](351-DRV-0015-tpm-driver.md) and [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) and the tools track's `update` command (351-APP-0029, on its branch).
 
 ### Problem
 
-The TPM service `tpm` drives a TPM 2.0 and `keystore` seals the device key with it. Both are built and host-tested, and so is `init`'s part ([351-KRN-0043](../issues-done/351-KRN-0043-tpm-service-at-boot.done)): it starts `tpm` with `PLATFORM_MMIO, PLATFORM_TPM` (`common/abi.rs`, 0x30) in its slot 2.
+`updater` serves `idl/update.wit` 1.0 (`check`, `fetch`, `apply`, `rollback`, `status`), but no task holds a client of it: it acts only through the automatic policy in `update.txt`. The shell's static slots 1 to 31 are all named in `common/abi.rs` (`SLOT_DYNAMIC` is 32), so a slot for the client is an ABI question.
 
-But `platform::mmio(PLATFORM_TPM)` answers `NOT_FOUND` on both architectures, because the kernel does not read the TPM's place from the firmware. So `tpm` reports no TPM, and the key stays unencrypted (the interim).
+### Plan (a proposal; the kernel track decides)
 
-### Plan (a proposal; the kernel and porting tracks decide)
-
-- **x86** (`kernel/src/arch/x86_64/acpi.rs`, `platform.rs`): read the ACPI `TPM2` table: the control area's address at 40, the start method at 48.
-  - A CRB (7) has locality 0's registers in the control area's page. QEMU's `tpm-crb` puts the area at 0xFED40040.
-  - A FIFO (6) is at the PC Client profile's 0xFED40000.
-  - Hand out 4 KiB. Other start methods are not driven.
-- **aarch64** (`acpi.rs`, `aml.rs`, `board.rs`, `platform.rs`): QEMU's `tpm-tis-device` is a DSDT device `MSFT0101` whose static `_CRS` holds a `Memory32Fixed` window (0x5000). The pin controllers' scan in `aml.rs` finds it once it takes the ID; hand out the window's first 4 KiB. A `TPM2` table with a CRB (7) as on x86.
-- **Tests:**
-  - `tests/aml_host.rs`: the `MSFT0101` device beside a PL061.
-  - `tpm_check` in the `tls` suite (both architectures, `swtpm`) checks the sealing once this lands. Until then it skips that part and says why; remove the skip with this task.
-
-A sketch of all of it, about 70 lines, was run by the storage session on its machine: the whole chain (seal, a reboot, unseal, another TPM refused) passed on x86 with `tpm-crb` and on aarch64 with `tpm-tis-device`. It is not committed, because `kernel/src/arch/` is the porting track's. The storage session can send it on request.
+- A slot for the shell's client of `updater`, or another way for the shell to hold one.
+- `init` gives the shell an unbadged client (the updater checks no badge: every request ends in a check of signed releases, and `apply` and `rollback` ask the user through the shell's command).
+- The shell lends it to programs that ask for it, if the tools track wants `update` in `msh`.
 
 ### Acceptance criteria
 
-- With `-device tpm-crb` (x86) or `-device tpm-tis-device` (aarch64) and `swtpm`, `init` hands `tpm` the registers and `tpm` logs `READY`.
-- Without a TPM, `PLATFORM_TPM` answers `NOT_FOUND` as now.
+The shell holds a client of `updater` (`caps` shows it), and `status` answers through it.
 
-## Boot images and `init`'s grants for `effector` and `effector_gw` (700)
+## init says whether it confirmed a trial boot
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
+
+### Problem
+
+`init` confirms a healthy trial boot to the kernel (`BOOT_CONFIRM`, 351-KRN-0014), and the confirmed boot record is the updater's to write. The updater cannot ask whether the boot was confirmed. It waits until 5 s past the kernel's deadline (120 s): had the boot not been confirmed, the kernel would have restarted the machine by then. That is sound but slow. The other slot stays untouched for two minutes after every update, and the QEMU `update` check waits that long.
+
+### Plan (a proposal; the kernel track decides)
+
+- `init.wit` 1.4: `boot: func() -> result<boot, error>`, with the slot, whether it booted on trial and whether `init` confirmed it. Any client of `init` may call it, or only the `BADGE_REBOOT` one.
+- The updater asks for it every second while it waits, and keeps the deadline as the bound.
+
+### Acceptance criteria
+
+On a trial boot, the updater writes the confirmed record within a few seconds of `[INIT] TRIAL BOOT CONFIRMED`, and the `update` check passes.
+
+## Boot images and `init`'s grants for `effector` and `effector_gw` (750)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 
@@ -74,9 +81,9 @@ The list of boot images is part of the ABI, and each service's grants are an arm
 
 In QEMU, with both enabled, each service holds exactly the listed grants (the `isolation` suite's checks). With them disabled, neither starts.
 
-## A writable `vfs` client scoped to a service's directories (700)
+## A writable `vfs` client scoped to a service's directories (750)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 
@@ -97,9 +104,9 @@ It must not be able to write anywhere else on `data/`. A private directory in `s
 
 A service with a scoped write client creates, renames and flushes files under its directories, and is refused everywhere else, in a new `isolation` case.
 
-## A lifecycle client limited to named services (700)
+## A lifecycle client limited to named services (750)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 

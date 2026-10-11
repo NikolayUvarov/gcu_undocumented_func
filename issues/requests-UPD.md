@@ -4,9 +4,9 @@
 
 The update and provenance track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-## A client of `updater` for the Effector gateway (700)
+## A client of `updater` for the Effector gateway (750)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 
@@ -14,7 +14,7 @@ The Effector server asks an agent to update itself. On MIND Core that can only m
 
 ### Plan (a proposal; the update track decides)
 
-- `idl/update.wit` (351-UPD-0007) has a client badge for the gateway that may call `check`, `fetch`, `status` and, if `init`'s arm allows it, `apply`.
+- `idl/update.wit` 1.0 (351-UPD-0007, done) gets a client badge for the gateway that may call `check`, `fetch` and `status`, and `apply` and `rollback` only if `init`'s arm allows them; `init`'s part is a kernel task.
 - The badge cannot change the channel, the trusted keys or the minimum version. Those stay with the owner's configuration and the shell's `update` command.
 - `status` gives the versions of the running, staged, trial and last-known-good releases, and the last error, in a form the gateway can report.
 
@@ -22,13 +22,13 @@ The Effector server asks an agent to update itself. On MIND Core that can only m
 
 In the `updater` suite, a client with the gateway's badge checks, fetches and stages a test release. It is refused when it tries to change the channel. Without `apply` in its arm it cannot activate the release.
 
-## Signed application packages: format, key role, verification (700)
+## Signed application packages: format, key role, verification (750)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 
-The Effector server installs software by sending a package. MIND Core signs its system image, but it has no format for an application installed at run time, and no key role that may sign one. The loader does not verify applications (profile: "Not met"). The gateway (700-EFF-0008) must not install code on the strength of TLS alone (MC-9.2, MC-9.8).
+The Effector server installs software by sending a package. MIND Core signs its system image, but it has no format for an application installed at run time, and no key role that may sign one. The loader does not verify applications (profile: "Not met"). The gateway (750-EFF-0008) must not install code on the strength of TLS alone (MC-9.2, MC-9.8).
 
 ### Plan (a proposal; the update track decides)
 

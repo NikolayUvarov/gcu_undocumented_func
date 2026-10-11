@@ -11,16 +11,16 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 6, 0);
+pub const VERSION: (u8, u8, u8) = (1, 7, 0);
 const MAJOR: usize = 1;
 
-/// Why a launch session failed.
+/// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NotFound = 0, Invalid = 1, NoMemory = 2, Limit = 3, Busy = 4, Rights = 5, Sessions = 6 }
+pub enum Error { #[default] NotFound = 0, Invalid = 1, NoMemory = 2, Limit = 3, Busy = 4, Rights = 5, Sessions = 6, Unreadable = 7 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Invalid), 2 => Some(Self::NoMemory), 3 => Some(Self::Limit), 4 => Some(Self::Busy), 5 => Some(Self::Rights), 6 => Some(Self::Sessions), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NotFound), 1 => Some(Self::Invalid), 2 => Some(Self::NoMemory), 3 => Some(Self::Limit), 4 => Some(Self::Busy), 5 => Some(Self::Rights), 6 => Some(Self::Sessions), 7 => Some(Self::Unreadable), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;

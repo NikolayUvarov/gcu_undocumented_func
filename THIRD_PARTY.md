@@ -29,22 +29,22 @@ Everything else was written for this project, including the 8×8 bitmap font in 
 | `uefi` 0.27, `uefi-raw`, `uefi-macros` | `bootloader` | MPL-2.0 |
 | `linked_list_allocator` 0.10, `spinning_top`, `lock_api`, `scopeguard` | `kernel` | MIT OR Apache-2.0 |
 | `smoltcp` 0.14 (TCP/IP), `managed` 0.8 | `netstack` | 0BSD |
-| `heapless`, `hash32`, `stable_deref_trait`, `cfg-if`, `bitflags` 1.3 | `netstack` (through `smoltcp`); `cfg-if` also `tls`, `keystore` and `bootloader` (through the crypto crates) | MIT OR Apache-2.0 |
+| `heapless`, `hash32`, `stable_deref_trait`, `cfg-if`, `bitflags` 1.3 | `netstack` (through `smoltcp`); `cfg-if` also `tls`, `keystore`, `bootloader` and `updater` (through the crypto crates) | MIT OR Apache-2.0 |
 | `byteorder` | `netstack` (through `smoltcp`) | Unlicense OR MIT |
 | `rustls` 0.23 (TLS 1.3 client) | `tls` | Apache-2.0 OR ISC OR MIT |
 | `rustls-webpki` 0.103, `untrusted` 0.9 | `tls` (certificate verification, through `rustls`) | **ISC** ([text](LICENSES/ISC-webpki.txt)) |
 | `rustls-pki-types` | `tls` | MIT OR Apache-2.0 |
-| RustCrypto: `aead`, `aes`, `aes-gcm`, `chacha20`, `chacha20poly1305`, `poly1305`, `polyval`, `ghash`, `ctr`, `cipher`, `universal-hash`, `inout`, `sha2`, `hmac`, `hkdf`, `digest`, `block-buffer`, `crypto-common`, `p256`, `p384`, `ecdsa`, `elliptic-curve`, `primeorder`, `sec1`, `rfc6979`, `crypto-bigint`, `ff`, `group`, `base16ct`, `der`, `spki`, `pkcs1`, `pkcs8`, `const-oid`, `signature`, `ed25519`, `rsa`, `zeroize`, `opaque-debug`, `cpufeatures` | `tls`, `keystore`; `bootloader` (`sha2`, `digest`, `block-buffer`, `crypto-common`, `signature`, `ed25519`, `cpufeatures`: manifest verification, 350-UPD-0003) | MIT OR Apache-2.0 |
-| `curve25519-dalek` 4, `x25519-dalek` 2, `ed25519-dalek` 2, `subtle` 2 | `tls`, `keystore`; `bootloader` (`curve25519-dalek`, `ed25519-dalek`, `subtle`: manifest verification) | **BSD-3-Clause** ([text](LICENSES/BSD-3-Clause-dalek.txt)) |
+| RustCrypto: `aead`, `aes`, `aes-gcm`, `chacha20`, `chacha20poly1305`, `poly1305`, `polyval`, `ghash`, `ctr`, `cipher`, `universal-hash`, `inout`, `sha2`, `hmac`, `hkdf`, `digest`, `block-buffer`, `crypto-common`, `p256`, `p384`, `ecdsa`, `elliptic-curve`, `primeorder`, `sec1`, `rfc6979`, `crypto-bigint`, `ff`, `group`, `base16ct`, `der`, `spki`, `pkcs1`, `pkcs8`, `const-oid`, `signature`, `ed25519`, `rsa`, `zeroize`, `opaque-debug`, `cpufeatures` | `tls`, `keystore`; `bootloader` and `updater` (`sha2`, `digest`, `block-buffer`, `crypto-common`, `signature`, `ed25519`, `cpufeatures`: manifest verification, 350-UPD-0003; release verification, 351-UPD-0007) | MIT OR Apache-2.0 |
+| `curve25519-dalek` 4, `x25519-dalek` 2, `ed25519-dalek` 2, `subtle` 2 | `tls`, `keystore`; `bootloader` and `updater` (`curve25519-dalek`, `ed25519-dalek`, `subtle`: manifest and release verification) | **BSD-3-Clause** ([text](LICENSES/BSD-3-Clause-dalek.txt)) |
 | `num-bigint-dig`, `num-integer`, `num-iter`, `num-traits`, `rand`, `rand_chacha`, `rand_core`, `ppv-lite86`, `lazy_static`, `once_cell`, `smallvec`, `typenum`, `zerocopy` (also BSD-2-Clause) | `tls` (through `rsa` and `rustls`) | MIT OR Apache-2.0 |
-| `generic-array`, `spin`, `libm` | `tls` (through the RustCrypto crates and `rsa`); `generic-array` also `keystore` and `bootloader` | MIT |
-| `curve25519-dalek-derive`, `typenum` (also `tls` above); `fiat-crypto` (in the lock files, not compiled: only for the `fiat` backend; also BSD-1-Clause) | `tls`, `keystore`, `bootloader` (through `curve25519-dalek` and `generic-array`) | MIT OR Apache-2.0 |
+| `generic-array`, `spin`, `libm` | `tls` (through the RustCrypto crates and `rsa`); `generic-array` also `keystore`, `bootloader` and `updater` | MIT |
+| `curve25519-dalek-derive`, `typenum` (also `tls` above); `fiat-crypto` (in the lock files, not compiled: only for the `fiat` backend; also BSD-1-Clause) | `tls`, `keystore`, `bootloader`, `updater` (through `curve25519-dalek` and `generic-array`) | MIT OR Apache-2.0 |
 | `rustc_version`, `semver`, `version_check` | build time only (build scripts of `curve25519-dalek` and `generic-array`) | MIT OR Apache-2.0 |
 | `ucs2` 0.3 | `bootloader` (through `uefi`) | MPL-2.0 |
 | `log`, `bitflags`, `uguid`, `bit_field`, `ptr_meta` (MIT only) | `bootloader` (through `uefi`) | MIT OR Apache-2.0 |
 | `syn`, `quote`, `proc-macro2`, `unicode-ident` (also Unicode-3.0) | build time only (procedural macros of `uefi`) | MIT OR Apache-2.0 |
 
-`rsa` only verifies signatures with public keys in `tls`; the timing side channel of its private-key operations (RUSTSEC-2023-0071) does not apply. The BSD-3-Clause and ISC crates are compiled into `tls.elf` and `keystore.elf`, and the BSD-3-Clause `dalek` crates into the bootloader (`BOOTX64.EFI`, `BOOTAA64.EFI`), so a distributed boot image carries their notices (`LICENSES/`, which `scripts/make_usb_image.py` packages whole).
+`rsa` only verifies signatures with public keys in `tls`; the timing side channel of its private-key operations (RUSTSEC-2023-0071) does not apply. The BSD-3-Clause and ISC crates are compiled into `tls.elf` and `keystore.elf`, and the BSD-3-Clause `dalek` crates into the bootloader (`BOOTX64.EFI`, `BOOTAA64.EFI`) and `updater.elf`, so a distributed boot image carries their notices (`LICENSES/`, which `scripts/make_usb_image.py` packages whole).
 
 MPL-2.0 is a file-level copyleft: it applies to those crates' own files, not to MIND Core. The exact versions are pinned in each `Cargo.lock`.
 
@@ -57,6 +57,14 @@ Any free model may be used (the maintainer, 2026-10-08), so these licences diffe
 - some weights are under CC BY 4.0, which requires attribution wherever they go;
 - some models were trained on data licensed for non-commercial use only (for example GigaSpeech), and their `terms` say so;
 - a distribution of a model disk or of an image that includes models must keep each model's licence and terms.
+
+## Proprietary files (neither in this repository nor in any image)
+
+Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. It keeps them in `proprietary/`, the separate store for all such components in the working tree, which `.gitignore` excludes. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume. A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
+
+| Files | Needed by | Source | Script |
+|---|---|---|---|
+| Broadcom's 802.11 microcode for the BCM4331: `ucode29_mimo`, `ht0initvals29`, `ht0bsinitvals29` | `bcm_wifi` from its stage 2 ([550-DRV-0006](issues/550-DRV-0006-broadcom-wifi.md)) | Broadcom's `wl` 6.30.163.46 archive. Its first home (lwfinger.com) is gone, so it is fetched from the copy distributions use (github.com/minios-linux/b43-firmware) and checked against the SHA-256 nixpkgs publishes and the MD5 SlackBuilds publishes. `b43-fwcutter` extracts the files, and each is checked by its own SHA-256 | [`scripts/proprietary.sh`](scripts/proprietary.sh) `fetch`, then `copy` after the disk is written |
 
 ## Tools used at build or test time (not distributed)
 

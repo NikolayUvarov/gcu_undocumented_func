@@ -6,7 +6,7 @@ use crate::pcicfg::{read, write};
 pub struct Bar { pub base: u64, pub size: u64, pub io: bool }
 
 #[derive(Clone, Copy)]
-pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool }
+pub struct Device { pub class: u32, pub id: u32, pub bars: [Bar; 6], pub irq: u8, bus: u8, device: u8, function: u8, pub granted: bool, pub windows: [(u64, u64); 2], pub mastered_at_boot: bool }
 
 impl Device {
     /// PCI location as bus << 8 | device << 3 | function (observation only: configuration space stays the kernel's).
@@ -14,12 +14,14 @@ impl Device {
 }
 
 // BAR size is determined by writing all ones with decoding disabled; the command register is restored afterwards.
+// A bridge (header type 1) has two BARs: what follows them is its bus numbers and windows.
 unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     let mut result = [Bar::default(); 6];
+    let count = match (read(bus, device, function, 0x0C) >> 16) & 0x7F { 0 => 6, 1 => 2, _ => 0 };
     let command = read(bus, device, function, 0x04);
     write(bus, device, function, 0x04, command & !0x3);
     let mut index = 0;
-    while index < 6 {
+    while index < count {
         let offset = 0x10 + index as u8 * 4;
         let original = read(bus, device, function, offset);
         write(bus, device, function, offset, 0xFFFF_FFFF);
@@ -31,7 +33,7 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
         } else if mask != 0 {
             let wide = (original >> 1) & 3 == 2;
             let (mut base, mut size_mask) = ((original & 0xFFFF_FFF0) as u64, (mask & 0xFFFF_FFF0) as u64 | 0xFFFF_FFFF_0000_0000);
-            if wide && index < 5 {
+            if wide && index + 1 < count {
                 let high = read(bus, device, function, offset + 4);
                 write(bus, device, function, offset + 4, 0xFFFF_FFFF);
                 let high_mask = read(bus, device, function, offset + 4);
@@ -45,6 +47,19 @@ unsafe fn bars(bus: u8, device: u8, function: u8) -> [Bar; 6] {
     }
     write(bus, device, function, 0x04, command);
     result
+}
+
+// A bridge's memory windows (base, end): non-prefetchable and prefetchable; (0, 0) for one it does not forward.
+unsafe fn windows(bus: u8, device: u8, function: u8) -> [(u64, u64); 2] {
+    if (read(bus, device, function, 0x0C) >> 16) & 0x7F != 1 { return [(0, 0); 2]; }
+    let memory = read(bus, device, function, 0x20);
+    let (base, limit) = (((memory & 0xFFF0) as u64) << 16, ((memory >> 16 & 0xFFF0) as u64) << 16 | 0xF_FFFF);
+    let prefetch = read(bus, device, function, 0x24);
+    let wide = prefetch & 0xF == 1;
+    let high = |offset| if wide { (read(bus, device, function, offset) as u64) << 32 } else { 0 };
+    let (pbase, plimit) = (((prefetch & 0xFFF0) as u64) << 16 | high(0x28), ((prefetch >> 16 & 0xFFF0) as u64) << 16 | 0xF_FFFF | high(0x2C));
+    let window = |b: u64, l: u64| if l > b { (b, l + 1) } else { (0, 0) };
+    [window(base, limit), window(pbase, plimit)]
 }
 
 // Intel 7, 8 and 9 series chipsets (from 2012, Intel Macs among them) give their USB ports to the EHCI controllers
@@ -78,6 +93,46 @@ unsafe fn ehci_handoff(bus: u8, device: u8, function: u8, bar: Bar) {
         if released { "TAKEN FROM THE FIRMWARE" } else { "THE FIRMWARE DID NOT LET GO" }));
 }
 
+// The BCM4331 in Macs (550-KRN-0082): the firmware leaves its 802.11 core running, and cutting its bus mastering under
+// it leaves the core's agent with an operation pending that stops the machine at the core's first access. The core is
+// reset first, as Linux's early quirk does: through BAR0's second window, which the firmware points at the core's agent.
+const BCM4331: u32 = 0x4331_14E4;
+const BCM4331_AGENT: u32 = 0x1810_1000;
+unsafe fn bcm4331_stop_core(bus: u8, device: u8, function: u8, bar: Bar) {
+    let say = |what: core::fmt::Arguments| { let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: {:02X}:{:02X}.{} BCM4331: {}\n", bus, device, function, what)); };
+    if read(bus, device, function, 0x04) & 0x4 == 0 { return; } // not mastering: the core is not writing to memory
+    if bar.io || bar.base == 0 || bar.base + 0x2000 > crate::mmu::IDENTITY_END { say(format_args!("BAR0 NOT REACHABLE, 802.11 CORE NOT STOPPED")); return; }
+    if let Some(pm) = capability_at(bus, device, function, 0x01) {
+        if read(bus, device, function, pm + 4) & 3 != 0 { say(format_args!("NOT IN D0, 802.11 CORE LEFT AS IS")); return; }
+    }
+    let window = read(bus, device, function, 0xAC);
+    if window != BCM4331_AGENT { say(format_args!("BAR0 WINDOW 2 AT {:08X}, NOT THE 802.11 CORE'S AGENT: NOT STOPPED", window)); return; }
+    let command = read(bus, device, function, 0x04);
+    write(bus, device, function, 0x04, command | 0x2); // memory decoding, for the agent
+    let (control, status) = ((bar.base + 0x1800) as *mut u32, (bar.base + 0x1804) as *const u32);
+    let before = status.read_volatile();
+    for _ in 0..30 { if status.read_volatile() == 0 { break; } crate::clock::spin_us(10); }
+    control.write_volatile(1);
+    let _ = control.read_volatile();
+    crate::clock::spin_us(1);
+    control.write_volatile(0);
+    let _ = control.read_volatile();
+    crate::clock::spin_us(10);
+    let after = status.read_volatile();
+    write(bus, device, function, 0x04, command);
+    say(format_args!("802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF (RESET STATUS {:08X}, NOW {:08X})", before, after));
+}
+
+// Bus mastering the firmware left on is turned off until a driver is granted the function (550-KRN-0070): until then it
+// cannot reach memory. Bridges carry their devices' DMA and a display controller may scan out the boot screen: left as is.
+unsafe fn stop_mastering(bus: u8, device: u8, function: u8, class: u32) -> bool {
+    let command = read(bus, device, function, 0x04);
+    if command & 0x4 == 0 || matches!(class >> 16, 0x03 | 0x06) { return false; }
+    write(bus, device, function, 0x04, command & !0x4);
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: {:02X}:{:02X}.{} CLASS {:06X}: BUS MASTERING TURNED OFF UNTIL A DRIVER HAS IT\n", bus, device, function, class));
+    true
+}
+
 // All PCI functions with their class code, BARs and legacy IRQ line; decoding is not enabled here.
 pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
     let mut devices = alloc::vec::Vec::new();
@@ -94,11 +149,28 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 let bars = bars(bus, device, function);
                 if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
-                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false });
+                if id == BCM4331 { bcm4331_stop_core(bus, device, function, bars[0]); }
+                let mastered_at_boot = stop_mastering(bus, device, function, class);
+                devices.push(Device { class, id, bars, irq, bus, device, function, granted: false, windows: windows(bus, device, function), mastered_at_boot });
             }
         }
     }
     devices
+}
+
+// Moves memory BAR `index` to `base` (below 4 GiB) with decoding off; false if the device did not take it.
+pub unsafe fn move_bar(device: &mut Device, index: usize, base: u64) -> bool {
+    let (bus, dev, function, offset) = (device.bus, device.device, device.function, 0x10 + index as u8 * 4);
+    let command = read(bus, dev, function, 0x04);
+    write(bus, dev, function, 0x04, command & !0x2);
+    let original = read(bus, dev, function, offset);
+    write(bus, dev, function, offset, (base as u32 & 0xFFFF_FFF0) | (original & 0xF));
+    if (original >> 1) & 3 == 2 && index < 5 { write(bus, dev, function, offset + 4, (base >> 32) as u32); }
+    let taken = read(bus, dev, function, offset) & 0xFFFF_FFF0 == base as u32 & 0xFFFF_FFF0;
+    if !taken { write(bus, dev, function, offset, original); }
+    write(bus, dev, function, 0x04, command);
+    if taken { device.bars[index].base = base; }
+    taken
 }
 
 // Stops a device before its driver is restarted: no decoding, no bus mastering (no DMA).
@@ -116,18 +188,20 @@ pub unsafe fn enable(device: &Device) {
 /// A dword of the device's configuration space (offset < 256, aligned down to 4); reading has no side effects.
 pub unsafe fn config(device: &Device, offset: u8) -> u32 { read(device.bus, device.device, device.function, offset) }
 
-// Offset of the device's capability `id` in configuration space.
-unsafe fn capability(device: &Device, id: u8) -> Option<u8> {
-    if config(device, 0x04) >> 16 & 0x10 == 0 { return None; }
-    let mut at = config(device, 0x34) as u8 & 0xFC;
+// Offset of the function's capability `id` in configuration space.
+unsafe fn capability_at(bus: u8, device: u8, function: u8, id: u8) -> Option<u8> {
+    if read(bus, device, function, 0x04) >> 16 & 0x10 == 0 { return None; }
+    let mut at = read(bus, device, function, 0x34) as u8 & 0xFC;
     for _ in 0..48 {
         if at < 0x40 { return None; }
-        let header = config(device, at);
+        let header = read(bus, device, function, at);
         if header as u8 == id { return Some(at); }
         at = (header >> 8) as u8 & 0xFC;
     }
     None
 }
+
+unsafe fn capability(device: &Device, id: u8) -> Option<u8> { capability_at(device.bus, device.device, device.function, id) }
 
 /// Address of MSI-X table entry `entry` of the device (in a memory BAR below 4 GiB), or None.
 pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {

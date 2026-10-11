@@ -3,7 +3,7 @@
 #[path = "../bootloader/src/slots.rs"]
 mod slots;
 
-use slots::{crc32, plan, spent, Plan, Record, RECORD};
+use slots::{crc32, plan, spent, Plan, Record, RECORD, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
     Record { sequence, slot, fallback, tries, confirmed }
@@ -17,7 +17,7 @@ fn crc_is_zlibs() {
 
 #[test]
 fn a_record_round_trips() {
-    for r in [rec(1, b'A', 0, 0, true), rec(7, b'B', b'A', 3, false), rec(u64::MAX, b'B', b'B', 255, true)] {
+    for r in [rec(1, b'A', 0, 0, true), rec(7, b'B', b'A', 3, false), rec(SEQUENCE_LAST, b'B', b'B', 255, true)] {
         let data = r.encode();
         assert_eq!(data.len(), RECORD);
         assert_eq!(&data[..8], b"MINDBOOT");
@@ -98,4 +98,20 @@ fn a_trial_that_fails_is_spent() {
     let (file, record) = spent(p.write.unwrap());
     assert_eq!((file, record), (1, rec(4, b'B', b'A', 0, false)));
     assert_eq!(plan([Some(p.write.unwrap().1), Some(record)]).order, [b'A', 0]);
+}
+
+#[test]
+fn a_sequence_that_cannot_count_down_is_refused() {
+    // 351-UPD-0015 (from 351-ASR-0006's fuzzing): a trial writes one more and its failure one more again, so a record
+    // above SEQUENCE_LAST is refused and counts as missing; at the edge both writes are still newer.
+    for sequence in [SEQUENCE_LAST + 1, u64::MAX] {
+        assert_eq!(Record::parse(&rec(sequence, b'B', b'A', 3, false).encode()), None);
+        assert_eq!(plan([Some(rec(sequence, b'B', b'A', 3, false)), None]), plan([None, None]));
+        assert_eq!(plan([Some(rec(sequence, b'B', b'A', 3, false)), Some(rec(7, b'A', 0, 0, true))]).order, [b'A', 0]);
+    }
+    let edge = rec(SEQUENCE_LAST, b'B', b'A', 3, false);
+    assert_eq!(Record::parse(&edge.encode()), Some(edge));
+    let (file, written) = plan([Some(edge), None]).write.unwrap();
+    assert_eq!((file, written.sequence), (1, SEQUENCE_LAST + 1));
+    assert_eq!(spent((file, written)).1.sequence, u64::MAX);
 }

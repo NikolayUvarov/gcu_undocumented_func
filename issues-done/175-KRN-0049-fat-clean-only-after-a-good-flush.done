@@ -1,0 +1,49 @@
+# 175-KRN-0049 — A FAT volume reads clean only after a flush that succeeded — done
+
+**Type:** kernel (`vfs_server`) · **Owner:** `KRN` · **Priority:** P2 (the profile row narrowed now) · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) · **Constitution:** MC-4.8, MC-4.9, MC-12.3
+
+## Problem
+
+Audit finding A04 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)). The volume can read clean after unflushed or failed writes, in two ways and in the wrong order.
+- **A stale copy overwrites the dirty bit.** `set_fat_bytes` reads a FAT sector, then `write_sector` calls `changing()`, which writes the dirty bit into that same sector. The stale copy then overwrites it. This happens for the first FAT update after a flush in sector 0 of the first FAT (FAT16 clusters below 256, FAT32 below 128).
+- **The clean bit comes before the flush succeeds.** `flush()` sets it and clears `changed` before it knows whether `disk.flush()` succeeded.
+- **The order.** `disk.rs` writes back in LBA order, so FAT sector 0 with the clean bit reaches the medium before the data.
+
+## Plan
+
+- **Dirty first.** The dirty state reaches the medium, flushed by itself, before the first change of a dirty period.
+- **No stale overwrite.** The FAT sector that holds the bit is re-read after `changing()`, or the bit is applied in the cache.
+- **Clean last.** The clean bit is written only after a flush of everything else has succeeded, then flushed itself.
+- **On an error.** The volume stays dirty.
+- **Tests.** Fault injection at each barrier, then a remount: an incomplete write never reads as a clean shutdown.
+
+## Acceptance criteria
+
+- The tests above pass in `tests/fat_host.rs`.
+- The profile's FAT row states the dirty-until-flush guarantee again, with this test as its evidence.
+
+## Progress
+
+**2026-10-09:** the profile row is narrowed now (`docs/profile/evidence.md`, MC-12.3): the volume is not claimed to read dirty after every change until this task is done.
+
+## Resolution
+
+Done on 2026-10-09 by the kernel track, in `vfs_server/src/fat.rs`.
+
+- **Dirty first.** The first change after a flush marks FAT[1] dirty (and, on FAT32, FSInfo's count unknown) and flushes that mark by itself before the change is written. If the mark fails, the next change tries again.
+- **No stale overwrite.** `set_fat_bytes` marks the volume dirty before it reads a FAT sector. So FAT sector 0, read for a change, already holds the dirty bit.
+- **Clean last.** `flush` writes everything out, then the clean bit, flushed by itself.
+  - If either flush fails, the volume stays dirty and is marked again.
+  - A mark that failed half way, with one FAT copy written, is cleared by the next good flush (`dirtied`).
+- **Tests (`tests/fat_host.rs`).**
+  - The medium sits behind a model of `disk.rs`'s write-back cache, which applies writes in LBA order at a flush.
+  - `a_volume_reads_clean_only_after_a_good_flush` (FAT16 from `format`, FAT32 from `mkfs.fat`) cuts the power after every sector of a file's creation, write and flush, and makes each flush fail once. A volume that reads clean holds all of the change or none of it, and a failed flush leaves it dirty until a later one succeeds.
+  - `the_first_fat_change_keeps_the_dirty_bit` evicts the cache after the first FAT change and finds the volume dirty.
+
+  Both fail on the old code.
+- **The profile.** `docs/profile/evidence.md` states the guarantee again, with these tests as its evidence, on the cache model, not a device. `threat-model.md` says the same.
+- **The cost.** One more drive flush at the first change after a flush, and one at the flush.
+
+## Related
+
+`vfs_server/src/fat.rs`, `vfs_server/src/disk.rs`, `docs/profile/evidence.md`.

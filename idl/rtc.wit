@@ -1,9 +1,14 @@
 /// Calendar time from the CMOS RTC, a service separate from the monotonic clock (MC-5.6).
-package mind:rtc@1.1.0;
+package mind:rtc@1.2.0;
 
 interface rtc {
+    /// Why setting the clock failed (1.2): not the setting client, a time out of range, a clock that does not answer.
+    enum error { rights, invalid, unavailable }
     /// Seconds since midnight; none if the RTC cannot be read.
     now: func() -> option<u32>;
     /// Days since 2000-01-01 (the date of `now`); none if the RTC cannot be read (1.1).
     date: func() -> option<u32>;
+    /// Sets the clock to `date` (days since 2000-01-01, up to 2099-12-31) and `seconds` since midnight, without a time
+    /// zone; only the client with the setting badge (`mind::rtc::BADGE_SET`, the shell's) may (1.2, 211-KRN-0051).
+    set: func(date: u32, seconds: u32) -> result<_, error>;
 }

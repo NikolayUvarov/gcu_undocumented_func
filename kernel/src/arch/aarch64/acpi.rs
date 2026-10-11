@@ -23,8 +23,11 @@ unsafe fn table(address: u64) -> Option<&'static [u8]> { let header = bytes(addr
 // A device address the kernel can reach (its identity map), else 0: not used.
 fn mapped(address: u64) -> usize { if address != 0 && address < WINDOW { address as usize } else { 0 } }
 
+static RSDP: AtomicU64 = AtomicU64::new(0);
+
 /// Reads the MCFG (the segment-0 ECAM goes to PCI), the MADT, FADT, SPCR and GTDT through the XSDT.
 pub unsafe fn init(rsdp: u64) {
+    RSDP.store(rsdp, Ordering::Relaxed);
     let Some(root) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { serial_print("MIND CORE KERNEL: ACPI: NO RSDP\n"); return };
     let Some(list) = table(u64_at(root, 24)) else { return };
     // QEMU (`virt`): its PL011 and PL031, the SPCR naming the same UART.
@@ -90,6 +93,7 @@ pub unsafe fn init(rsdp: u64) {
                 }
             }
             // The generic timer: the virtual EL1 timer's GSIV at 64 (a PPI).
+            b"TPM2" => { if let Some(base) = crate::tpm2::registers(table, false).filter(|&b| b < WINDOW) { board::set(&board::TPM, base as usize); } }
             b"GTDT" if table.len() >= 68 => { let ppi = u32_at(table, 64) as usize; if (16..32).contains(&ppi) { board::set(&board::TIMER_PPI, ppi); } }
             // ARM_BOOT_ARCH at 129: bit 0 PSCI compliant, bit 1 PSCI through HVC.
             b"FACP" if table.len() >= 131 => SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed),
@@ -136,15 +140,17 @@ pub unsafe fn power_off() -> ! {
 // Pin controllers of a definition block: those with a window in the identity map. The BCM2711's GPIO, whose _CRS the
 // Raspberry Pi 4 firmware computes at run time, is taken at its fixed address only beside the BCM2711's GIC-400.
 unsafe fn pins(aml: &[u8]) {
-    use super::aml::Pins;
-    super::aml::pin_controllers(aml, |kind, window| {
+    use super::aml::Known;
+    super::aml::known_devices(aml, |kind, window| {
         let window = match (kind, window) {
             (_, Some((base, size))) if base != 0 && size != 0 && base.checked_add(size).is_some_and(|end| end <= WINDOW) => Some((base, size)),
-            (Pins::Bcm2711, None) if board::get(&board::GICD) == BCM2711_GICD => Some((BCM2711_GPIO, 0x1000)),
+            (Known::Bcm2711, None) if board::get(&board::GICD) == BCM2711_GICD => Some((BCM2711_GPIO, 0x1000)),
             _ => None,
         };
+        // The TPM: its first page, locality 0, unless the TPM2 table named a CRB already (351-KRN-0052).
+        if kind == Known::Tpm { if let Some((base, _)) = window { if board::get(&board::TPM) == 0 { board::set(&board::TPM, base as usize); } } return; }
         let Some((base, size)) = window else { serial_print("MIND CORE KERNEL: ACPI: A PIN CONTROLLER WITHOUT A READABLE WINDOW, NOT USED\n"); return };
-        let first = if kind == Pins::Bcm2711 { board::PINS_BCM2711 } else { 0 };
+        let first = if kind == Known::Bcm2711 { board::PINS_BCM2711 } else { 0 };
         let slots = &board::PINS[first..first + crate::abi::PLATFORM_PINS_MAX];
         if slots.iter().any(|s| board::get(&s[0]) == base as usize) { return; } // named in two blocks
         if let Some(slot) = slots.iter().find(|s| board::get(&s[0]) == 0) { board::set(&slot[0], base as usize); board::set(&slot[1], size as usize); }
@@ -162,4 +168,26 @@ fn report_pins() {
         let _ = writeln!(crate::PanicSerial, "MIND CORE KERNEL: PINS {} AT {:#x} ({} BYTES)\r", kind, board::get(base), board::get(size));
     }
     if !any { serial_print("MIND CORE KERNEL: PINS: NO PIN CONTROLLER IN THE ACPI TABLES\n"); }
+}
+
+/// The RSDP and every table the XSDT lists (itself first), with the DSDT and FACS the FADT points at, for the hardware
+/// report (174-KRN-0038).
+pub fn tables(mut each: impl FnMut(&'static [u8])) {
+    unsafe {
+        let Some(root) = bytes(RSDP.load(Ordering::Relaxed), 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2) else { return };
+        each(root);
+        let Some(list) = table(u64_at(root, 24)) else { return };
+        each(list);
+        for at in (36..list.len().saturating_sub(7)).step_by(8) {
+            let Some(found) = table(u64_at(list, at)) else { continue };
+            each(found);
+            if &found[..4] == b"FACP" {
+                let wide = |at: usize| if found.len() >= at + 8 { u64_at(found, at) } else { 0 };
+                for (x, legacy) in [(140, 40), (132, 36)] {
+                    let address = if wide(x) != 0 { wide(x) } else if found.len() >= legacy + 4 { u32_at(found, legacy) as u64 } else { 0 };
+                    if let Some(pointed) = table(address) { each(pointed); }
+                }
+            }
+        }
+    }
 }

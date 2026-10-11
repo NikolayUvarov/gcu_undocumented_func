@@ -1,12 +1,12 @@
 # 501 — The effector: tests on real hardware, driven by Effector
 
-**Type:** main task · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [700](700-effector-agent.md) (the agent: [700-EFF-0006](700-EFF-0006-session-service.md), [700-EFF-0007](700-EFF-0007-gateway-service.md)); [550](550-network-on-real-hardware.md) (the network on the MacBook Pro); `KRN`: the test account's spawn rights (below) · **Roadmap:** Assurance "evidence tied to configuration" · **Constitution:** MC-12.1, MC-12.2, MC-12.4, MC-12.9, MC-2.3, MC-10.2, MC-11.9
+**Type:** main task · **Owner:** `ASR` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [750](750-effector-agent.md) (the agent: [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [550](550-network-on-real-hardware.md) (the network on the MacBook Pro); `KRN`: the test account's spawn rights (below) · **Roadmap:** Assurance "evidence tied to configuration" · **Constitution:** MC-12.1, MC-12.2, MC-12.4, MC-12.9, MC-2.3, MC-10.2, MC-11.9
 
 Asked by the maintainer (2026-10-08): tests should run on real hardware without the maintainer typing them. Opened by the kernel session; the `ASR` track is open.
 
 **Revised at the maintainer's request (2026-10-09):** the test server is Effector, the maintainer's existing management system, for updates and tests on bare metal once the network (550) and the agent are ready. No server or protocol of our own is written. Two sessions revised this task the same day; this text joins both.
 
-**Reconciled the same day with main task [700](700-effector-agent.md)** (track `EFF`), which the maintainer opened for the agent itself: MIND Core managed from Effector, with software, updates, diagnostics and services. The agent, its contract and its runs against Effector are 700's. This task keeps what tests need on top of it: scripts run in a test account, and each run recorded per configuration.
+**Reconciled the same day with main task [750](750-effector-agent.md)** (track `EFF`), which the maintainer opened for the agent itself: MIND Core managed from Effector, with software, updates, diagnostics and services. The agent, its contract and its runs against Effector are 750's. This task keeps what tests need on top of it: scripts run in a test account, and each run recorded per configuration.
 
 ## Problem
 
@@ -32,13 +32,13 @@ Effector (`sst-test-deploy`) is the maintainer's project, outside this repositor
 | `software.install` | `deploy` |
 | `software.update_agent` | `update_agent` |
 
-The agent routes are not in the OpenAPI file. The subset MIND Core implements is fixed in [700-EFF-0001](700-EFF-0001-protocol-contract.md).
+The agent routes are not in the OpenAPI file. The subset MIND Core implements is fixed in [750-EFF-0001](750-EFF-0001-protocol-contract.md).
 
 **Trust today.** Its agents pin the server by the SHA-256 of its leaf certificate, with a second pin for rotation. They present a token the server gives the whole fleet. Effector does not yet accept an agent by a key of its own device; that is Effector's task 75, outside this repository.
 
 ## Design (proposed)
 
-**The agent is 700's:** `effector` speaks to the server, `effector_gw` acts on the machine within the owner's policy. It gives tests:
+**The agent is 750's:** `effector` speaks to the server, `effector_gw` acts on the machine within the owner's policy. It gives tests:
 - pinned HTTPS;
 - the device key ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), kept across boots) as a client certificate once Effector accepts it;
 - a heartbeat carrying the device key's fingerprint and the image's manifest hash (350);
@@ -66,7 +66,7 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 | Need | State |
 |---|---|
 | An HTTP client | `libmind::http` ([351-NET-0001](../issues-done/351-NET-0001-http-downloads.done)): one GET with `Range`, its head parsed by the `parse` service ([109](../issues-done/109-session-parsers.done)). No POST, no keep-alive; chunked bodies and redirects are refused ([requests-NET.md](requests-NET.md)) |
-| TLS for a program or service | `REQUEST_TLS`, the kernel's part ([351-KRN-0034](../issues-done/351-KRN-0034-a-tls-client-for-programs.done)); the shell lending its client is the tools track's (requests-APP). A service gets its TLS client from `init`, as `updater` will ([351-KRN-0022](351-KRN-0022-updater-grants.md), open) |
+| TLS for a program or service | `REQUEST_TLS`, the kernel's part ([351-KRN-0034](../issues-done/351-KRN-0034-a-tls-client-for-programs.done)); the shell lending its client is the tools track's (requests-APP). A service gets its TLS client from `init`, as `updater` does ([351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done)) |
 | HTTPS with a pinned server | [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), done: `tls.wit` 1.1 `connect-pinned` checks one SHA-256 of the server's public key (SPKI), no root store needed. Effector's agents pin the leaf certificate, current and next: either Effector also publishes SPKI pins (its task 75) or `tls` takes the leaf kind and a second pin ([requests-NET.md](requests-NET.md)) |
 | A client certificate | `tls` offers the device's Ed25519 certificate when the server asks (`tls/src/device.rs`) |
 | The device key across boots | [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), done: on the disk in `keystore`'s private directory; sealed by a TPM where there is one ([351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), waiting for the kernel's half) |
@@ -74,26 +74,26 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 | Parsing external input | the `parse` service and the authority map ([109](../issues-done/109-session-parsers.done), [docs/network/airlock.md](../docs/network/airlock.md)) |
 | Scripts with declared grants | `msh` and its `requires:` line ([docs/msh.md](../docs/msh.md)) |
 | A screenshot | [086](../issues-done/086-screenshot.done), done |
-| Updates | slots, boot records, the trial and the fallback ([351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done)); the `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) open |
+| Updates | slots, boot records, the trial and the fallback ([351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done)); the `updater` service, done: `idl/update.wit` 1.0 `check`, `fetch`, `apply`, `rollback`, `status`, its channel in `update.txt` ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)) |
 | The network on the MacBook Pro | [550](550-network-on-real-hardware.md), open; the USB Ethernet adapter first ([550-DRV-0005](550-DRV-0005-usb-ethernet.md)) |
-| JSON | nothing in the tree; [700-EFF-0004](700-EFF-0004-json.md) |
-| The agent itself | nothing yet; [700](700-effector-agent.md) |
+| JSON | nothing in the tree; [750-EFF-0004](750-EFF-0004-json.md) |
+| The agent itself | nothing yet; [750](750-effector-agent.md) |
 
 ## Plan: tasks
 
 | Task | Track | What |
 |---|---|---|
-| 501-ASR-0007 | `ASR` (open) | **Moved to 700 (2026-10-09), not written.** The profile of the protocol is [700-EFF-0001](700-EFF-0001-protocol-contract.md), its test server [700-EFF-0002](700-EFF-0002-test-server.md), JSON [700-EFF-0004](700-EFF-0004-json.md). The run against Effector's own server is [700-EFF-0012](700-EFF-0012-run-against-the-effector-server.md); Effector is a private project, so that run is made on the maintainer's machine, not in CI |
-| 501-ASR-0008 | `ASR` (open) | **Moved to 700, not written.** The agent service is [700-EFF-0006](700-EFF-0006-session-service.md) and [700-EFF-0007](700-EFF-0007-gateway-service.md) |
-| 501-ASR-0009 | `ASR` (open) | Test runs: `msh` scripts in a test account in `effector_gw`, under the policy. Also a host driver that queues the QEMU suites' checks through Effector's operator API and records each run with its configuration. Written when 700-EFF-0007 lands |
-| `init`'s grants for the test account (not numbered yet) | `KRN` | Spawn rights for the test account in `effector_gw`, numbered by the kernel track when 501-ASR-0009 needs them. The agent's own grants are 700's request in [requests-KRN.md](requests-KRN.md) |
+| 501-ASR-0007 | `ASR` (open) | **Moved to 750 (2026-10-09), not written.** The profile of the protocol is [750-EFF-0001](750-EFF-0001-protocol-contract.md), its test server [750-EFF-0002](750-EFF-0002-test-server.md), JSON [750-EFF-0004](750-EFF-0004-json.md). The run against Effector's own server is [750-EFF-0012](750-EFF-0012-run-against-the-effector-server.md); Effector is a private project, so that run is made on the maintainer's machine, not in CI |
+| 501-ASR-0008 | `ASR` (open) | **Moved to 750, not written.** The agent service is [750-EFF-0006](750-EFF-0006-session-service.md) and [750-EFF-0007](750-EFF-0007-gateway-service.md) |
+| 501-ASR-0009 | `ASR` (open) | Test runs: `msh` scripts in a test account in `effector_gw`, under the policy. Also a host driver that queues the QEMU suites' checks through Effector's operator API and records each run with its configuration. Written when 750-EFF-0007 lands |
+| `init`'s grants for the test account (not numbered yet) | `KRN` | Spawn rights for the test account in `effector_gw`, numbered by the kernel track when 501-ASR-0009 needs them. The agent's own grants are 750's request in [requests-KRN.md](requests-KRN.md) |
 | Effector's side | Effector | Its task 75: MIND Core as a platform of agents; agents accepted by device key, from a list; the actions MIND Core performs |
 
-501-ASR-0007 and 501-ASR-0008 were numbered on 2026-10-08 and moved to 700 on 2026-10-09 without files; their numbers are not reused.
+501-ASR-0007 and 501-ASR-0008 were numbered on 2026-10-08 and moved to 750 on 2026-10-09 without files; their numbers are not reused.
 
 ## Acceptance criteria
 
-- **In QEMU, against the [700-EFF-0002](700-EFF-0002-test-server.md) test server, and once against Effector's own server (700-EFF-0012):**
+- **In QEMU, against the [750-EFF-0002](750-EFF-0002-test-server.md) test server, and once against Effector's own server (750-EFF-0012):**
   - a `test.run` with an `msh` script runs in the test account;
   - its output, the log and a screenshot come back as the operation's results;
   - a test that uses a capability its script did not declare is refused;
@@ -103,4 +103,4 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 
 ## Related
 
-[700](700-effector-agent.md), [500](500-fuzzing-abi-and-idl.md), [350](350-signed-boot-images.md), [351](351-self-update.md), [550](550-network-on-real-hardware.md), [650](650-building-on-the-target.md) (builds through a server), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), `tests/qemu_smoke.py`, [docs/profile/evidence.md](../docs/profile/evidence.md), [docs/msh.md](../docs/msh.md).
+[750](750-effector-agent.md), [500](500-fuzzing-abi-and-idl.md), [350](350-signed-boot-images.md), [351](351-self-update.md), [550](550-network-on-real-hardware.md), [650](650-building-on-the-target.md) (builds through a server), [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), `tests/qemu_smoke.py`, [docs/profile/evidence.md](../docs/profile/evidence.md), [docs/msh.md](../docs/msh.md).

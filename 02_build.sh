@@ -2,6 +2,11 @@
 set -o pipefail
 
 BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The branch and commit built, for init's first line in the boot log (211-KRN-0044); "+CHANGES" when files differ.
+MIND_BUILD_BRANCH="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+MIND_BUILD_COMMIT="$(git -C "$BUILD_SCRIPT_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+[[ -n "$(git -C "$BUILD_SCRIPT_DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]] && MIND_BUILD_COMMIT+="+CHANGES"
+export MIND_BUILD_BRANCH MIND_BUILD_COMMIT
 # ARCH=aarch64 builds the aarch64 image instead (aarch64_root/, issue 204); arguments go to scripts/build_aarch64.sh.
 case "${ARCH:-x86_64}" in
     x86_64) ;;
@@ -82,6 +87,7 @@ USER_CRATES=(
     "tts:tts:tts.elf"
     "video_gw:video_gw:video_gw.elf"
     "virtio_net:virtio_net:virtio_net.elf"
+    "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
@@ -94,8 +100,12 @@ USER_CRATES=(
     "wintest:winmgr:winmgr.elf"
     "netbench:netbench:netbench.elf"
     "memtest:memtest:memtest.elf"
+    "bench:bench:bench.elf"
+    "bench:check:check.elf"
+    "bench:kbench:kbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
+    "updater:updater:updater.elf"
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"
@@ -135,6 +145,8 @@ USER_CRATES=(
 source "$BUILD_SCRIPT_DIR/scripts/build_jobs.sh"
 JOBS=$(build_jobs)
 JOB_LOGS="$LOG_DIR/build"
+STEP="installing the pinned toolchain (rust-toolchain.toml)"
+ensure_toolchain "$BUILD_SCRIPT_DIR"
 echo ">>> [1/2] Building the kernel, the services, the programs and the UEFI bootloader, $JOBS at a time (logs: $JOB_LOGS/)..."
 STEP="the cargo builds (the failed ones are named above; logs: $JOB_LOGS/)"
 declare -A SEEN=()

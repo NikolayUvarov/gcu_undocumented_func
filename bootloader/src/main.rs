@@ -287,8 +287,9 @@ fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Direct
                     *image = keep_program(services, data);
                     checked += 1;
                 }
-                // aarch64 boots with the services it has so far (issue 201); init leaves out the rest.
-                Err("file not found") if cfg!(target_arch = "aarch64") && name != "init.elf" => {}
+                // A service the signed manifest does not list may be absent (one of the other architecture, one not
+                // built yet such as the updater, 351-KRN-0022); init leaves it out. One it lists must be there.
+                Err("file not found") if name != "init.elf" && !manifest.names(name) => {}
                 Err(e) => return Err((name, e)),
             }
         }
@@ -381,6 +382,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
     show_text(&system_table);
     say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
+    // On a real machine, time to read what the firmware printed above this line before the loader's own lines push it
+    // out of the small text console (the MacBook Pro, 2026-10-09).
+    if bare_metal() {
+        say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", PHOTO_PAUSE_S));
+        system_table.boot_services().stall(PHOTO_PAUSE_S * 1_000_000);
+    }
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {

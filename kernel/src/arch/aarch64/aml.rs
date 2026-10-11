@@ -1,20 +1,20 @@
-// Pin controllers in the DSDT and SSDTs (issue 206): without an AML interpreter, a bounded scan for a device's
-// `Name (_HID, "<id>")` with a known pin controller ID, then the first memory window in the `Name (_CRS, Buffer)`
+// Pin controllers (issue 206) and the TPM (351-KRN-0052) in the DSDT and SSDTs: without an AML interpreter, a bounded
+// scan for a device's `Name (_HID, "<id>")` with a known ID, then the first memory window in the `Name (_CRS, Buffer)`
 // that follows it in the same device. A `_CRS` that is a method (the Raspberry Pi 4's EDK2 firmware patches the base at
 // run time) or anything else the scan cannot read gives the controller without a window. No allocation and no system
 // state: tests/aml_host.rs.
 
-/// The pin controllers the kernel knows by their ACPI hardware ID.
+/// The devices the kernel knows by their ACPI hardware ID: pin controllers and a TPM 2.0 (QEMU's tpm-tis-device).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pins { Bcm2711, Pl061 }
+pub enum Known { Bcm2711, Pl061, Tpm }
 
-const IDS: [(&[u8], Pins); 2] = [(b"BCM2845", Pins::Bcm2711), (b"ARMH0061", Pins::Pl061)];
+const IDS: [(&[u8], Known); 3] = [(b"BCM2845", Known::Bcm2711), (b"ARMH0061", Known::Pl061), (b"MSFT0101", Known::Tpm)];
 const NAME_OP: u8 = 0x08; const STRING_PREFIX: u8 = 0x0D; const BUFFER_OP: u8 = 0x11; const EXT_OP: u8 = 0x5B; const DEVICE_OP: u8 = 0x82;
 const SEARCH: usize = 1024; // how far after the _HID its _CRS may be
 
-/// Each known pin controller in `aml` (a definition block without its header): its kind and, if a static `_CRS`
-/// gives it, its register base and size.
-pub fn pin_controllers(aml: &[u8], mut found: impl FnMut(Pins, Option<(u64, u64)>)) {
+/// Each known device in `aml` (a definition block without its header): its kind and, if a static `_CRS` gives it,
+/// its register base and size.
+pub fn known_devices(aml: &[u8], mut found: impl FnMut(Known, Option<(u64, u64)>)) {
     let mut at = 0;
     while let Some(offset) = find(&aml[at..], &[NAME_OP, b'_', b'H', b'I', b'D', STRING_PREFIX]) {
         let start = at + offset + 6;

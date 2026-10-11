@@ -42,6 +42,9 @@ impl<'a> Manifest<'a> {
         Ok(())
     }
 
+    /// Whether the manifest lists a file `name` (one it does not list may be absent: a service not built).
+    pub fn names(&self, name: &str) -> bool { self.lines().any(|l| field(l, 0) == Some(b"file") && field(l, 1) == Some(name.as_bytes())) }
+
     /// The signing key's identity as the manifest names it.
     pub fn key(&self) -> &'a str {
         self.lines().find(|l| field(l, 0) == Some(b"key")).and_then(|l| field(l, 1)).and_then(|k| core::str::from_utf8(k).ok()).unwrap_or("?")

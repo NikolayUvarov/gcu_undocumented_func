@@ -4,13 +4,27 @@
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
 use crate::mem::Pages;
-use crate::sys::{Error, Result};
+use crate::sys::{Error as SysError, Result};
 use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:rtc";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
+
+/// Why setting the clock failed (1.2): not the setting client, a time out of range, a clock that does not answer.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Error { #[default] Rights = 0, Invalid = 1, Unavailable = 2 }
+impl Error {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Rights), 1 => Some(Self::Invalid), 2 => Some(Self::Unavailable), _ => None } }
+}
+impl Wire for Error {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
 
 /// Seconds since midnight; none if the RTC cannot be read.
 pub fn now(endpoint: Endpoint) -> Result<Option<u32>> {
@@ -28,11 +42,22 @@ pub fn date(endpoint: Endpoint) -> Result<Option<u32>> {
     Ok(if none { None } else { Some(wire::field(&reply, 0, 16, 32) as u32) })
 }
 
+/// Sets the clock to `date` (days since 2000-01-01, up to 2099-12-31) and `seconds` since midnight, without a time
+/// zone; only the client with the setting badge (`mind::rtc::BADGE_SET`, the shell's) may (1.2, 211-KRN-0051).
+pub fn set(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::result::Result<(), Error>> {
+    let words = [3 | MAJOR << 8 | ((date) as usize) << 16, ((seconds) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `rtc` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Now,
     Date,
+    Set { date: u32, seconds: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -50,6 +75,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Date, Call::words(request, cap)))
         }
+        3 => {
+            wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::Set { date: wire::field(&words, 0, 16, 32) as u32, seconds: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -61,4 +90,8 @@ pub fn reply_now(call: Call, value: Option<u32>) -> Result<()> {
 pub fn reply_date(call: Call, value: Option<u32>) -> Result<()> {
     let Some(value) = value else { return wire::reply_none(call) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_set(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

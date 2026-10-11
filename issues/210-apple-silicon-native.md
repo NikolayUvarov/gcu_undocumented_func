@@ -1,6 +1,6 @@
 # 210 — Apple Silicon Macs natively (M1 first)
 
-**Type:** porting (main task) · **Owner:** `APL` track (open) · **Priority:** P3 · **Status:** open · **Blocked by:** a Mac with M1 to test on (a person: [issues-human](../issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)); [205](205-aarch64-boards.md) (boards with UEFI first) · **Roadmap:** track H · **Constitution:** MC-1.5, MC-9.1, MC-12.1
+**Type:** porting (main task) · **Owner:** `APL` track (open) · **Priority:** P3 · **Status:** parked (2026-10-09: the `APL` track waits for a Mac whose boot chain may be changed; [TRACKS.md](../TRACKS.md)) · **Blocked by:** a Mac with M1 to test on (a person: [issues-human](../issues-human/README.md#4-a-mac-with-apple-silicon-to-test-on)); [205](205-aarch64-boards.md) (boards with UEFI first) · **Roadmap:** track H · **Constitution:** MC-1.5, MC-9.1, MC-12.1
 
 Requested by the user (2026-10-06), recorded by the tools track in the porting track's request file. Moved from `PRT` to the Apple Silicon track `APL` on 2026-10-08, at the maintainer's request ([TRACKS.md](../TRACKS.md)); the number stays. Its tasks are `210-APL-MMMM` (below). Running in a virtual machine on a Mac is main task [600](600-apple-silicon-mac-vm-host.md); the guide is [docs/apple-silicon.md](../docs/apple-silicon.md).
 
@@ -42,6 +42,10 @@ Today the user can run the aarch64 build in a virtual machine on such a Mac: `03
 | [210-APL-0014](210-APL-0014-own-first-stage-instead-of-m1n1.md) | 1, last: our own first stage started by iBoot, without m1n1 |
 
 Step 4 stays here until work on it starts.
+
+## Decision (2026-10-09)
+
+The maintainer parked the track. The goal is bare metal from a UEFI USB drive, without a virtual machine. Apple Silicon allows that only through m1n1 and U-Boot, set up once on the internal disk (Asahi's "UEFI environment only"); they exist for M1 to M3. The only Mac at hand is an M5. When an M1, M2 or M3 Mac whose boot chain may be changed is available, this task is retargeted to it. On M2 and later the interrupt controller is AIC2.
 
 ## Acceptance criteria
 

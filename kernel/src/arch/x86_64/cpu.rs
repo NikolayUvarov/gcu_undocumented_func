@@ -35,6 +35,9 @@ unsafe fn cpu(index: usize) -> *mut Cpu {
     core::ptr::addr_of_mut!(CPUS).cast::<Cpu>().add(index)
 }
 
+/// Whether the local APICs run in x2APIC mode (211-PRT-0002).
+pub fn x2apic() -> bool { X2APIC.load(Ordering::Relaxed) }
+
 pub fn id() -> usize {
     let apic = unsafe { if X2APIC.load(Ordering::Relaxed) { read(0x20) } else { read(0x20) >> 24 } } as usize;
     INDEX[apic & 255].load(Ordering::Relaxed) as usize
@@ -76,6 +79,10 @@ fn processors(info: &BootInfo) -> ([u32; MAX], usize) {
 }
 
 pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
+    let saved = crate::context::saved_state();
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: VECTOR STATE: {}, XCR0 {:#X}, {} BYTES A TASK\n",
+        if saved == 0 { "FXSAVE" } else { "XSAVE" }, saved, crate::context::area()));
+    let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PROTECTION: {}\n", crate::mmu::protection_names()));
     let (ids, count) = processors(info);
     COUNT.store(count, Ordering::Release);
     // Test-only: what many PCs' firmware does, x2APIC on before the kernel starts.
@@ -108,11 +115,13 @@ pub unsafe fn prepare(info: &BootInfo) -> Result<(), &'static str> {
             stack.ptr() as u64 + 64 * 1024,
         );
         core::mem::forget(stack);
+        // Each IST entry saves one vector area as large as the enabled components need (174-KRN-0037).
+        let ist_size = (16 * 1024 + crate::context::size()).div_ceil(4096) * 4096;
         for ist in 0..2 {
-            let stack = Region::task(16 * 1024, 16)?;
+            let stack = Region::task(ist_size, 16)?;
             core::ptr::write_unaligned(
                 c.tss.as_mut_ptr().add(36 + ist * 8).cast::<u64>(),
-                stack.ptr() as u64 + 16 * 1024,
+                (stack.ptr() as usize + ist_size) as u64,
             );
             core::mem::forget(stack);
         }
@@ -377,6 +386,11 @@ pub unsafe fn disable_interrupts() { asm!("cli"); }
 pub unsafe fn halt_here() -> ! { asm!("cli"); loop { asm!("hlt"); } }
 
 /// What the processor offers programs (BootInfo.cpu_features).
-pub fn features() -> u64 { if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) != 0 { crate::abi::FEATURE_ENTROPY } else { 0 } }
+pub fn features() -> u64 {
+    let entropy = if core::arch::x86_64::__cpuid(1).ecx & (1 << 30) != 0 { crate::abi::FEATURE_ENTROPY } else { 0 };
+    let saved = crate::context::saved_state();
+    let has = |group: u64, feature: u64| if group != 0 && saved & group == group { feature } else { 0 };
+    entropy | has(0b110, crate::abi::FEATURE_AVX) | has(crate::mmu::AVX512, crate::abi::FEATURE_AVX512) | has(crate::mmu::AMX, crate::abi::FEATURE_AMX)
+}
 /// Code was written to memory a task will execute: x86 keeps instruction fetches coherent.
 pub fn code_written() {}

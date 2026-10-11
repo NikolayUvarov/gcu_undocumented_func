@@ -31,7 +31,7 @@ not vulnerability severity scores. No P0 finding was established.
 
 Routing is advisory, not a claim to a track or a newly numbered implementation
 task. `TRACKS.md` does not assign `vfs_server`; the existing
-[351-UPD-0008](../issues/351-UPD-0008-update-zone-in-vfs.md) explicitly records
+[351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) explicitly records
 that ownership gap. A02–A04 need a maintainer-assigned owner. This audit does not
 silently assign VFS to STO or create tasks in another session's track.
 

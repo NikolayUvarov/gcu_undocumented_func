@@ -60,13 +60,13 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
 
-## HTTP for a service, a certificate pin and long-lived sessions (501, 700)
+## HTTP for a service, a certificate pin and long-lived sessions (501, 750)
 
-**Recorded by:** the maintainer's session for main task [501](501-effector.md), and the Effector agent track (EFF) for main task [700](700-effector-agent.md), both on 2026-10-09 at the maintainer's request; merged into one request the same day.
+**Recorded by:** the maintainer's session for main task [501](501-effector.md), and the Effector agent track (EFF) for main task [750](750-effector-agent.md), both on 2026-10-09 at the maintainer's request; merged into one request the same day.
 
 ### Problem
 
-The agent of 700, which 501's tests also use, talks to Effector, a server that already exists.
+The agent of 750, which 501's tests also use, talks to Effector, a server that already exists.
 
 **What Effector's protocol needs:**
 - it posts JSON with `Authorization: Bearer` (a heartbeat every second, acknowledgements, operation results);
@@ -103,16 +103,16 @@ The agent of 700, which 501's tests also use, talks to Effector, a server that a
 
 ### Acceptance criteria
 
-- **Over one TLS session** to the 700-EFF-0002 test server, in QEMU, a service:
+- **Over one TLS session** to the 750-EFF-0002 test server, in QEMU, a service:
   - posts a JSON body and reads a chunked response, then 100 more requests;
   - holds a 55-second stream to its end.
 - **Pins:** a server that matches neither pin is refused; one that matches the next pin is accepted.
 - **Names and dates:** a wrong name and an expired certificate are refused.
 - **An idle session:** a session left without traffic for ten minutes is then used.
 
-## JSON in the parser service (700, 501)
+## JSON in the parser service (750, 501)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 
@@ -121,18 +121,18 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 ### Plan (a proposal; the network track decides)
 
 - **A `json` call in `idl/parse.wit`** (a new minor version): bounded bytes in, a bounded typed tree out (objects, arrays, strings, integers, booleans, null), with stated limits on depth, members and string length.
-- **The parser itself:** the `mind::json` library of [700-EFF-0004](700-EFF-0004-json.md), so the service and host tests share one implementation.
+- **The parser itself:** the `mind::json` library of [750-EFF-0004](750-EFF-0004-json.md), so the service and host tests share one implementation.
 - **The client** still checks the typed tree against what it asked for (MC-11.5).
 
 ### Acceptance criteria
 
 - `parse` turns a valid Effector command into its typed tree.
 - It refuses malformed, too deep and too large input, and logs the refusal with the client's PID.
-- The authority map gains the row for the agent's stage when 700-EFF-0006 lands.
+- The authority map gains the row for the agent's stage when 750-EFF-0006 lands.
 
-## A flow for a long-running service (700)
+## A flow for a long-running service (750)
 
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [700](700-effector-agent.md) at the maintainer's request.
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
 
 ### Problem
 

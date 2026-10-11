@@ -1,11 +1,11 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits.
-package mind:loader@1.6.0;
+package mind:loader@1.7.0;
 
 interface loader {
-    /// Why a launch session failed.
-    enum error { not-found, invalid, no-memory, limit, busy, rights, sessions }
+    /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
+    enum error { not-found, invalid, no-memory, limit, busy, rights, sessions, unreadable }
     /// A program file in the root of the boot disk.
     record program {
         name: string<16>,

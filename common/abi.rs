@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 31;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 33;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "bcm_wifi", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "bcm_wifi.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -34,10 +34,12 @@ const fn channel(value: u32, mask: u32) -> u32 {
 }
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
 // ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
-// BOOT_CONFIRM ends a trial. The bootloader writes it into BootInfo, the kernel stops on another one, writes its own
-// into every task's BootInfo, and libmind refuses to run a program built for another one. Fields up to abi_version
-// keep their places across versions, so each side finds the other's version where it expects it.
-pub const ABI_VERSION: u32 = 4;
+// BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058) and bcm_wifi is a 33rd boot image
+// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073). The bootloader writes it into BootInfo, the
+// kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
+// for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
+// where it expects it.
+pub const ABI_VERSION: u32 = 6;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, }
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
@@ -65,6 +67,9 @@ pub const TRIAL_DEADLINE_S: u32 = 120;
 #[derive(Clone, Copy, Default)] #[repr(C)] pub struct LaunchRecord { pub key: [u8; 16], pub test_key: u32, pub images: u32 }
 // BootInfo.cpu_features, set by the kernel in every task's copy: what the processor offers programs (issue 201).
 pub const FEATURE_ENTROPY: u64 = 1; // a hardware random number instruction (RDRAND, RNDR)
+pub const FEATURE_AVX: u64 = 2; // x86: AVX and AVX2 registers are saved per task (174-KRN-0037)
+pub const FEATURE_AVX512: u64 = 4; // x86: AVX-512's ZMM and opmask registers are saved per task
+pub const FEATURE_AMX: u64 = 8; // x86: AMX's tile configuration and tiles are saved per task
 #[derive(Clone, Copy)] #[repr(C)] pub struct SyscallMailbox { pub syscall_num: usize, pub arg1: usize, pub arg2: usize, pub result: usize, pub msg: [usize; 4], }
 impl SyscallMailbox { pub const EMPTY: Self = Self { syscall_num: 0, arg1: 0, arg2: 0, result: 0, msg: [0; 4] }; }
 
@@ -135,6 +140,8 @@ pub const SYSCALL_HALT: usize = 43;
 pub const SYSCALL_CLOCK: usize = 44;
 // Endpoint badges: CAP_MINT with msg[2] = badge (1..=BADGE_MAX) labels an endpoint capability once; its children keep
 // the badge and another one is refused. A receiver gets the badge of the capability the sender used in arg2 (0: none).
+// Setting a badge needs CAP_BADGE on the unbadged capability (ERR_INVALID without it, ABI 6, 000-KRN-0073); a badged
+// capability never carries it.
 pub const BADGE_MAX: usize = 0xFFFF;
 // CAP_MINT: arg1 = handle, arg2 = rights mask (endpoints and memory), msg[0] = offset, msg[1] = length (0: to the end) for port and
 // memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
@@ -206,12 +213,16 @@ pub const ERR_BUSY: usize = usize::MAX - 6; // e.g. the service is already runni
 pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
 pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
 pub const ERR_FOCUS: usize = usize::MAX - 9; // SPAWN_FOREGROUND from a task that does not have the focus (issue 160)
+pub const ERR_IO: usize = usize::MAX - 10; // services only: a drive did not answer or a medium could not be read (211-KRN-0050)
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
 pub const CAP_READ: u8 = 1 << 0; pub const CAP_WRITE: u8 = 1 << 1; pub const CAP_GRANT: u8 = 1 << 2;
 // Keeper: may mint children with CAP_READ without being able to receive itself (init keeps service endpoints this way).
 pub const CAP_KEEP: u8 = 1 << 3;
+// Badger: CAP_MINT may set a badge on a child (000-KRN-0073). A new endpoint carries it; a copy or child keeps it only
+// when the mask does, and a badged one never.
+pub const CAP_BADGE: u8 = 1 << 4;
 // Capability slots a task starts with; the table grows on demand up to CAP_SLOTS_MAX (issue 171), a bound on the
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
 pub const CAP_SLOTS: usize = 96;
@@ -294,8 +305,15 @@ pub const SLOT_FIRMWARE: usize = 27;
 pub const SLOT_PARSE: usize = 28;
 // The shell's client of the TPM service (idl/tpm.wit), without the seal badge: `tpm` shows the TPM (351-KRN-0043).
 pub const SLOT_TPM: usize = 29;
+// The shell's command endpoint (idl/shell.wit), lent for REQUEST_SHELL and passed by wm to console (ABI 5, 211-KRN-0058).
+pub const SLOT_SHELL: usize = 30;
+// A client of the clipboard service (idl/clipboard.wit), lent for REQUEST_CLIPBOARD (ABI 5, 211-KRN-0058).
+pub const SLOT_CLIPBOARD: usize = 31;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 30;
+pub const SLOT_DYNAMIC: usize = 32;
+// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own.
+pub const LAUNCH_SLOTS: [usize; 16] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK,
+    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
@@ -375,6 +393,8 @@ pub const PLATFORM_DMA: usize = 7; // bytes; 64 KiB aligned, kept by the kernel 
 pub const PLATFORM_PRIVILEGE: usize = 8; // CAP_KIND_INPUT, _DISPLAY, _SPAWN, _CONTROL, _RESTART or _OBSERVE; b = PRIVILEGE_ESCROW: in escrow (not _RESTART)
 pub const PRIVILEGE_ESCROW: usize = 1;
 pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: an interrupt line 16..31 the kernel aims the entry at
+pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the hardware report's text, built now (174-KRN-0038)
+pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
@@ -425,6 +445,14 @@ pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
     let signed = |value: u32, bits: u32| ((value << (32 - bits)) as i32) >> (32 - bits);
     (event_mods(event), signed(field & 0x1FF, 9), signed(field >> 9 & 0x1FF, 9), signed(field >> 18 & 0xF, 4))
 }
+// A relative pointer event's horizontal wheel (211-DRV-0018: a trackpad's three-finger swipe): bits 34-37 of the event,
+// signed, positive to the right, where an absolute event keeps its wheel. Zero in every event made before; consumers that
+// do not read it see an ordinary pointer event.
+pub fn pointer_scroll(buttons: u8, dx: i32, dy: i32, wheel: i32, across: i32) -> usize {
+    pointer_event(buttons, dx, dy, wheel) | (across.clamp(-8, 7) as usize & 0xF) << 34
+}
+/// The horizontal wheel steps of a relative pointer event (0 for an absolute one).
+pub fn pointer_across(event: usize) -> i32 { if event & POINTER_ABSOLUTE != 0 { 0 } else { (((event >> 34) & 0xF) as i32) << 28 >> 28 } }
 // An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
 // movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
 // kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
@@ -478,10 +506,11 @@ pub const SYSCALL_SCHED_SET: usize = 52;
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
 // With the platform privilege as arg1, msg[0] = device index: any device, without enabling it (init's inventory).
 pub const SYSCALL_DEVICE_CONFIG: usize = 54;
-// REBOOT (process control): stops all CPUs and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
+// REBOOT (process control, or the restart privilege: init, for a service that may ask it, 351-KRN-0022): stops all CPUs
+// and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
 // else the 8042 controller, else a triple fault; on aarch64 PSCI SYSTEM_RESET. arg1 = REBOOT_POWER_OFF turns the
-// machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
-// return when it works.
+// machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ACPI S5 from the DSDT, 000-KRN-0080, ERR_INVALID
+// when the tables name none). It does not return when it works.
 pub const SYSCALL_REBOOT: usize = 55;
 // BOOT_CONFIRM (platform privilege: init, before it drops it): the boot is good. On a trial boot the kernel no longer
 // restarts the machine at the deadline; writing the confirmed boot record is the updater's (351-UPD-0007, 0008).
@@ -526,7 +555,8 @@ pub const WAIT_SLEEP: u8 = 4; pub const WAIT_IRQ: u8 = 5; pub const WAIT_FLUSH: 
     pub kernel_bytes: u64, // the task record, context, mailbox, info and exit pages, page tables, the capability table: in the frame pool, charged to its payers (171-KRN-0032)
     pub memory_quota: u64, pub memory_used: u64, // private memory of the task and its live descendants (issue 150)
 }
-// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX), 0 with FXSAVE (issue 153).
+// `xsave`: the state components saved per task with XSAVE (XCR0: 1 x87, 2 SSE, 4 AVX, 0xE0 AVX-512, 0x60000 AMX), 0 with
+// FXSAVE (issue 153, 174-KRN-0037). On aarch64: 1, FP/SIMD (V0-V31, FPCR, FPSR; 250-KRN-0056).
 #[derive(Clone, Copy, Default, Debug)] #[repr(C)] pub struct StatCpu { pub apic_id: u32, pub online: u32, pub ticks: u64, pub busy_ns: u64, pub idle_ns: u64, pub interrupts: u64, pub switches: u64, pub current_pid: u64, pub xsave: u64 }
 // Task memory (bytes) by category, the kernel arena, the frame pool and the global limits. `largest_free` is searched for (trial allocations) only when
 // msg[1] = 1 asks for it, 0 otherwise; `shared` is memory of other owners mapped by tasks.

@@ -62,6 +62,8 @@ Open:
 
 The shell's log view and heartbeat ("UP n S") before the first key, and `usb_host`'s new log lines, are diagnostics added for this run.
 
+**2026-10-09: a pause after the loader's first line.** On the MacBook Pro the firmware's text console is a small window. Lines printed there before `MIND CORE BOOT: STARTED` held an error, and the loader's own lines pushed them out of sight at once. On a real machine (no hypervisor bit) the loader now pauses `PHOTO_PAUSE_S` (5 s) right after its first line, saying so, as it already did before leaving boot services. QEMU boots without either pause.
+
 ## Related
 
 [211](211-intel-pc-from-a-sata-ssd.md).

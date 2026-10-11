@@ -70,6 +70,11 @@ unsafe fn child(mb: *mut SyscallMailbox) {
         // Whether a capability came with the reply (a refused move delivers none).
         7 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 100 + got_cap, 0]) != 0 { fail(); },
         4 => if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [abi::SLOT_INIT, (abi::CAP_WRITE | abi::CAP_GRANT) as usize, 5, 0]) != 0 { fail(); },
+        // Badging the unbadged client we were given without the right to (000-KRN-0073): 8 when refused.
+        8 => {
+            let refused = ipc(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_INIT, abi::CAP_WRITE as usize, [0, 0, 0x44, 0]) == abi::ERR_INVALID;
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if refused { 8 } else { 9 }, 0]) != 0 { fail(); }
+        }
         _ => fail(),
     }
 }
@@ -82,10 +87,11 @@ unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
     call(mb, 3, message.as_ptr() as usize, message.len());
 }
 
-// The request note `mind::request!` writes: a block store client that may only get (REQUEST_BLOCKSTORE_READ, 300-KRN-0024).
+// The request note `mind::request!` writes: a block store client that may only get (REQUEST_BLOCKSTORE_READ, 300-KRN-0024)
+// and the shell's lifecycle client (REQUEST_LIFECYCLE), which may not restart the machine (351-KRN-0022).
 #[used]
 #[link_section = ".mind_request"]
-static MIND_REQUEST: [u8; 16] = [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', 0, 0x80, 0, 0, 0, 0, 0, 0];
+static MIND_REQUEST: [u8; 16] = [b'M', b'I', b'N', b'D', b'R', b'E', b'Q', b'1', 8, 0x80, 0, 0, 0, 0, 0, 0];
 
 #[no_mangle]
 #[link_section = ".text._start"]
@@ -163,6 +169,13 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
             b'u' => {
                 asm!("ud2");
             }
+            b'U' => {
+                // UMIP (000-KRN-0039): reading the GDT's address faults where the CPU has it.
+                let mut table = [0u8; 10];
+                asm!("sgdt [{}]", in(reg) table.as_mut_ptr());
+                print(mb, b"SGDT ALLOWED\r\n");
+                return;
+            }
             b'g' => {
                 let _ = core::ptr::read_volatile(0x80_0100_0000 as *const u8);
             }
@@ -229,7 +242,6 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     (abi::SYSCALL_HALT, 0, 0, abi::ERR_RIGHTS),
                     (abi::SYSCALL_TASK_LIST, 0, 0, abi::ERR_RIGHTS), // observation needs the observe privilege (MC-10.2)
                     (abi::SYSCALL_IPC_CALL, abi::SLOT_SYSINFO, 0, abi::ERR_INVALID), // sysmon only for programs that request it (loader sessions)
-                    (abi::SYSCALL_IPC_CALL, abi::SLOT_LIFECYCLE, 0, abi::ERR_INVALID),
                     (abi::SYSCALL_STAT, abi::STAT_TASKS, 0, abi::ERR_RIGHTS), // statistics need the observe privilege
                     (abi::SYSCALL_DEVICE_STATE, 0, abi::DEVICE_STOP, abi::ERR_RIGHTS), // stopping a device needs one of its BARs
                     (abi::SYSCALL_TASK_WATCH, 1, abi::SLOT_RTC, abi::ERR_RIGHTS), // only a lifecycle owner watches, on its own endpoint
@@ -241,6 +253,12 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 }
                 // It asked only to read the block store (its request note): the client lent is badged get alone (300-KRN-0024).
                 if call(mb, abi::SYSCALL_CAP_INFO, abi::SLOT_BLOCKSTORE, 0) != abi::CAP_KIND_ENDPOINT || (*mb).arg2 != 1 { fail(); }
+                // The lifecycle client is badged already, so it cannot be badged for reboot, and init refuses it reboot
+                // (init.wit 1.3 method 6; status 2, error case 3: denied) (351-KRN-0022).
+                (*mb).msg = [0, 0, 1, 0];
+                if call(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_LIFECYCLE, 0xFF) != abi::ERR_INVALID { fail(); }
+                (*mb).msg = [0, 0, 6 | 1 << 8, 0];
+                if call(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_LIFECYCLE, 0) != 0 || (*mb).msg[2] & 0xFF != 2 || (*mb).msg[3] != 3 { fail(); }
                 // MIND IDL: the rtc service checks requests against idl/rtc.wit (status 0x81 version, 0x80 invalid).
                 let rtc = |word: usize, extra: usize| { let raw = mb; (*raw).msg = [0, 0, word, extra]; if call(raw, abi::SYSCALL_IPC_CALL, abi::SLOT_RTC, 0) != 0 { usize::MAX } else { (*raw).msg[2] & 0xFF } };
                 if rtc(1 | 2 << 8, 0) != 0x81 || rtc(9 | 1 << 8, 0) != 0x80 || rtc(1 | 1 << 8 | 1 << 40, 0) != 0x80 || rtc(1 | 1 << 8, 1) != 0x80 || rtc(1 | 1 << 8, 0) > 1 {
@@ -338,7 +356,7 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 // A keeper (no read right) cannot receive but can mint a receiver of the same endpoint.
                 let keeper = mint(endpoints[0], (abi::CAP_KEEP | abi::CAP_WRITE) as usize, 0, 0);
                 let reader = mint(keeper, abi::CAP_READ as usize, 0, 0);
-                if rights(endpoints[0]) != (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_KEEP) as usize
+                if rights(endpoints[0]) != (abi::CAP_READ | abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_KEEP | abi::CAP_BADGE) as usize
                     || rights(keeper) != (abi::CAP_KEEP | abi::CAP_WRITE) as usize || rights(reader) != abi::CAP_READ as usize
                     || call(mb, abi::SYSCALL_IPC_RECV, keeper, 0) != abi::ERR_RIGHTS {
                     asm!("ud2", options(noreturn));
@@ -460,6 +478,25 @@ pub extern "sysv64" fn _start(_: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).arg2 != 0x42 { fail(); }
                 if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 6, 0]) != 0 { fail(); }
                 print(mb, b"BADGE OK\r\n");
+                return;
+            }
+            b'a' => {
+                // The right to badge (000-KRN-0073): a new endpoint has it; a client minted or granted without it cannot
+                // be badged, here or in a child; a badged child never carries it, whatever the mask.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let mint = |handle: usize, mask: u8, badge: usize| ipc(mb, abi::SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge, 0]);
+                let rights = |handle: usize| { call(mb, abi::SYSCALL_CAP_INFO, handle, 0); (*mb).msg[2] };
+                let client = mint(endpoint, abi::CAP_WRITE | abi::CAP_GRANT, 0);
+                let badger = mint(endpoint, abi::CAP_WRITE | abi::CAP_GRANT | abi::CAP_BADGE, 0);
+                let badged = mint(badger, abi::CAP_WRITE | abi::CAP_BADGE, 0x44);
+                if rights(endpoint) & abi::CAP_BADGE as usize == 0 || rights(client) != (abi::CAP_WRITE | abi::CAP_GRANT) as usize
+                    || mint(client, abi::CAP_WRITE, 0x44) != abi::ERR_INVALID || badged >= abi::ERR_FIRST || rights(badged) != abi::CAP_WRITE as usize {
+                    fail();
+                }
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 8, 0, 0);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 8 { fail(); }
+                print(mb, b"BADGE RIGHT OK\r\n");
                 return;
             }
             b'b' => {

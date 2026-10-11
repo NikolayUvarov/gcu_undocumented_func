@@ -2,7 +2,7 @@
 /// services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
 /// SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
 /// the shell cannot be stopped.
-package mind:init@1.2.0;
+package mind:init@1.3.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -26,4 +26,8 @@ interface init {
     restart: func(name: string<16>) -> result<u64, error>;
     /// Stops an application (a task that is not a boot service) (1.1).
     stop-task: func(pid: u64) -> result<_, error>;
+    /// Writes what the volumes cache, stops the services in reverse start order and resets the machine; the reply comes
+    /// first. Only a client badged `BADGE_REBOOT` (`mind::process`: the updater's) may ask; others get `denied` (1.3,
+    /// 351-KRN-0022).
+    reboot: func() -> result<_, error>;
 }

@@ -99,6 +99,8 @@ pub(crate) fn capture(bytes: &[u8]) {
         if len == 0 { continue; }
         let mut line = [0u8; LINE];
         line[..len].copy_from_slice(&c.line[..len]);
+        // A screen drawn with escape sequences (a text program in debug mode, 211-KRN-0053) is no line of the log.
+        if line[..len].contains(&0x1B) { continue; }
         if endpoint().is_some() { let _ = write(INFO, valid(&line[..len])); continue; }
         // No log yet: keep the line, dropping the oldest ones when the backlog is full.
         let need = len + 1;

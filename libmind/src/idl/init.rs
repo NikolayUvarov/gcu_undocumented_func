@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -110,6 +110,17 @@ pub fn stop_task(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<()
     Ok(Ok(()))
 }
 
+/// Writes what the volumes cache, stops the services in reverse start order and resets the machine; the reply comes
+/// first. Only a client badged `BADGE_REBOOT` (`mind::process`: the updater's) may ask; others get `denied` (1.3,
+/// 351-KRN-0022).
+pub fn reboot(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
+    let words = [6 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -118,6 +129,7 @@ pub enum Request {
     Stop { name: Text<16> },
     Restart { name: Text<16> },
     StopTask { pid: u64 },
+    Reboot,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -162,6 +174,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::StopTask { pid: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
         }
+        6 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Reboot, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -183,6 +199,10 @@ pub fn reply_restart(call: Call, value: core::result::Result<u64, Error>) -> Res
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_stop_task(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_reboot(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
 }

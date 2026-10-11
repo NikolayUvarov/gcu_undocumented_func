@@ -26,6 +26,8 @@ It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has 
 
 The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
+With `--slots` the kernel, the services and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
+
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
 ```bash
@@ -158,7 +160,8 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - how the disk was attached: internal SATA port, or USB adapter;
 - **the files of the `MIND LOG` partition.** Attach the disk to any computer and copy `BOOTNNNN.LOG` from it:
   - each file is one boot's system log, written every 2 seconds, so it reaches the last seconds before a hang;
-  - the kernel's own boot lines (`MIND CORE KERNEL: …`) are not in it yet; a photo shows them;
+  - `HWNNNN.TXT` beside it is the same boot's hardware report (174-KRN-0038): the CPU, the firmware's memory map and ACPI tables, every PCI function, and the kernel's own lines (`MIND CORE KERNEL: …`), those the screen lost included;
+  - the folder `ACPI` holds the firmware's ACPI tables as files (`DSDT.bin`, `FACP.bin`, …);
 - a photo of the screen where it stopped, or the output of `cpus`, `svc`, `stat devices` and `physmap` if the shell came up;
 - the serial output, if you had a COM1 cable.
 

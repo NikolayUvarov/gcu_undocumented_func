@@ -1,14 +1,18 @@
 #![no_std]
 #![no_main]
 // LEGACY: the CMOS RTC on ISA ports (docs/legacy.md); the PL031 of aarch64 `virt` is the other clock (issue 202).
-// Ring 3 RTC driver: answers CALL with the time since midnight and the date (idl/rtc.wit).
+// Ring 3 RTC driver: answers CALL with the time since midnight and the date, and sets them for the client with the
+// setting badge (idl/rtc.wit).
+mod cmos;
+use cmos::{decode_time, encode_date, encode_time};
 use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0};
 use mind::dev::{cap_info, Mmio, Ports};
 use mind::idl::{rtc, wire};
 use mind::ipc::Endpoint;
 
 const SECONDS: u8 = 0x00; const MINUTES: u8 = 0x02; const HOURS: u8 = 0x04; const DAY: u8 = 0x07; const MONTH: u8 = 0x08; const YEAR: u8 = 0x09;
-const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80;
+const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80; const SET: u8 = 0x80;
+const WEEKDAY: u8 = 0x06;
 
 // The update window (UIP, up to about 2 ms once a second) can cover several quick tries: after QUICK of them the
 // reads wait a tick, so a later try lands after the update.
@@ -48,22 +52,34 @@ fn read_date(cmos: Ports) -> Option<u32> {
     None
 }
 
-fn decode_time([seconds, minutes, hours, mode]: [u8; 4]) -> Option<usize> {
-    let decode = |value: u8| -> Option<u8> {
-        if mode & 0x04 != 0 { Some(value) } else if value & 0x0F <= 9 && value >> 4 <= 9 { Some((value >> 4) * 10 + (value & 0x0F)) } else { None }
-    };
-    let second = decode(seconds)?; let minute = decode(minutes)?; let mut hour = decode(hours & 0x7F)?;
-    if mode & 0x02 == 0 { if hour == 0 || hour > 12 { return None; } hour = hour % 12 + if hours & 0x80 != 0 { 12 } else { 0 }; } else if hours & 0x80 != 0 { return None; }
-    if second >= 60 || minute >= 60 || hour >= 24 { return None; }
-    Some(hour as usize * 3600 + minute as usize * 60 + second as usize)
-}
-
 // The device in SLOT_DEV0: CMOS ports, or the PL031's registers (RTCDR: seconds since 1970, UTC).
 enum Clock { Cmos(Ports), Pl031(Mmio) }
 const DAYS_1970_TO_2000: u32 = 10957;
 impl Clock {
     fn time(&self) -> Option<usize> { match self { Self::Cmos(cmos) => read_time(*cmos), Self::Pl031(rtc) => Some(rtc.read32(0) as usize % 86400) } }
     fn date(&self) -> Option<u32> { match self { Self::Cmos(cmos) => read_date(*cmos), Self::Pl031(rtc) => (rtc.read32(0) / 86400).checked_sub(DAYS_1970_TO_2000) } }
+    // The clock set to `date` (days since 2000-01-01) and `seconds` since midnight (211-KRN-0051).
+    fn set(&self, date: u32, seconds: u32) -> Result<(), rtc::Error> {
+        let civil = mind::rtc::civil_from_days(date);
+        match self {
+            Self::Cmos(cmos) => {
+                let read = |reg: u8| -> u8 { cmos.out8(0x70, reg); cmos.in8(0x71) };
+                let write = |reg: u8, value: u8| { cmos.out8(0x70, reg); cmos.out8(0x71, value) };
+                let mode = read(STATUS_B) & !SET;
+                let (Some(time), Some(day)) = (encode_time(mode, seconds), encode_date(mode, date, civil)) else { return Err(rtc::Error::Invalid) };
+                // SET holds the clock still while its registers change.
+                write(STATUS_B, mode | SET);
+                for (reg, value) in [(SECONDS, time[0]), (MINUTES, time[1]), (HOURS, time[2]), (WEEKDAY, day[0]), (DAY, day[1]), (MONTH, day[2]), (YEAR, day[3])] { write(reg, value); }
+                write(STATUS_B, mode);
+            }
+            Self::Pl031(rtc) => {
+                if seconds >= 86_400 { return Err(rtc::Error::Invalid); }
+                let since_1970 = (date as u64 + DAYS_1970_TO_2000 as u64) * 86_400 + seconds as u64;
+                rtc.write32(8, u32::try_from(since_1970).map_err(|_| rtc::Error::Invalid)?); // RTCLR
+            }
+        }
+        if self.date() == Some(date) { Ok(()) } else { Err(rtc::Error::Unavailable) }
+    }
 }
 
 mind::entry!(main);
@@ -75,6 +91,11 @@ fn main(_info: &'static BootInfo) {
         let _ = match rtc::decode(&request, 0) {
             Ok((rtc::Request::Now, call)) => rtc::reply_now(call, clock.time().map(|seconds| seconds as u32)),
             Ok((rtc::Request::Date, call)) => rtc::reply_date(call, clock.date()),
+            Ok((rtc::Request::Set { date, seconds }, call)) => {
+                let result = if request.badge & mind::rtc::BADGE_SET == 0 { Err(rtc::Error::Rights) } else { clock.set(date, seconds) };
+                if result.is_ok() { mind::println!("[RTC] SET BY PID {}", request.sender); }
+                rtc::reply_set(call, result)
+            }
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };

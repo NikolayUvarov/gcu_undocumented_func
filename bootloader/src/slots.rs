@@ -6,6 +6,8 @@ pub const RECORD: usize = 512;
 pub const MAGIC: &[u8; 8] = b"MINDBOOT";
 pub const FORMAT: u32 = 1;
 const CONFIRMED: u8 = 1;
+/// The largest sequence a record may hold (351-UPD-0015): a trial writes one more, and its failure one more again.
+pub const SEQUENCE_LAST: u64 = u64::MAX - 2;
 
 /// One boot record: which slot to boot, the slot to fall back to, the tries a trial has left, and whether the slot
 /// was confirmed. The record with the higher sequence number counts; a writer always overwrites the other one.
@@ -26,13 +28,15 @@ fn is_slot(slot: u8) -> bool { slot == b'A' || slot == b'B' }
 
 impl Record {
     /// The record in `data`, or None for anything else: another size, magic or format, a bad CRC (a torn write), an
-    /// unknown slot or flag.
+    /// unknown slot or flag, a sequence above `SEQUENCE_LAST`.
     pub fn parse(data: &[u8]) -> Option<Record> {
         if data.len() != RECORD || &data[..8] != MAGIC || data[8..12] != FORMAT.to_le_bytes() { return None; }
         if data[RECORD - 4..] != crc32(&data[..RECORD - 4]).to_le_bytes() { return None; }
         let (slot, fallback, tries, flags) = (data[20], data[21], data[22], data[23]);
         if !is_slot(slot) || !(fallback == 0 || is_slot(fallback)) || flags & !CONFIRMED != 0 || data[24..RECORD - 4].iter().any(|&b| b != 0) { return None; }
-        Some(Record { sequence: u64::from_le_bytes(data[12..20].try_into().ok()?), slot, fallback, tries, confirmed: flags & CONFIRMED != 0 })
+        let sequence = u64::from_le_bytes(data[12..20].try_into().ok()?);
+        if sequence > SEQUENCE_LAST { return None; }
+        Some(Record { sequence, slot, fallback, tries, confirmed: flags & CONFIRMED != 0 })
     }
 
     pub fn encode(&self) -> [u8; RECORD] {
@@ -61,6 +65,8 @@ pub struct Plan {
 }
 
 pub fn plan(records: [Option<Record>; 2]) -> Plan {
+    // A record that could not count down is as good as missing (parse refuses it too).
+    let records = records.map(|r| r.filter(|r| r.sequence <= SEQUENCE_LAST));
     let chosen = match records {
         [Some(a), Some(b)] => if b.sequence > a.sequence { 1 } else { 0 },
         [Some(_), None] => 0,

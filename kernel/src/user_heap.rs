@@ -55,13 +55,18 @@ impl Heap {
     }
 
     // Mappings of foreign memory count against their own quota and don't eat into the private heap.
-    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, device: bool, writable: bool, node: u64) -> Option<usize> {
+    pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, caching: crate::paging::Caching, writable: bool, node: u64) -> Option<usize> {
+        let device = caching == crate::paging::Caching::Device;
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
         if size > SHARED_MAX_BYTES - self.shared { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        if device { space.map_device(address, physical, size).ok()?; } else { space.map(address, physical, size, writable, false).ok()?; }
+        match caching {
+            crate::paging::Caching::Device => space.map_device(address, physical, size).ok()?,
+            crate::paging::Caching::WriteCombining => space.map_framebuffer(address, physical, size, writable).ok()?,
+            crate::paging::Caching::Memory => space.map(address, physical, size, writable, false).ok()?,
+        }
         self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device, device });
         self.shared += size;
         Some(address)
@@ -168,7 +173,7 @@ mod tests {
         let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
         let own = heap.allocate(&mut space, 4096).unwrap();
         let foreign = Region::new(8192, PAGE).unwrap();
-        let mapped = heap.map_shared(&mut space, foreign.ptr() as usize, 8192, false, false, 7).unwrap();
+        let mapped = heap.map_shared(&mut space, foreign.ptr() as usize, 8192, crate::paging::Caching::Memory, false, 7).unwrap();
         assert!(heap.shareable(own, 0).is_some());
         assert!(heap.shareable(mapped, 0).is_none(), "a mapping is not re-shareable");
         assert!(space.readable(mapped).is_some() && space.writable(mapped).is_none(), "read-only mapping");
@@ -176,7 +181,7 @@ mod tests {
         assert!(!heap.revoke(&mut space, &[8], true));
         assert!(heap.revoke(&mut space, &[7], false));
         assert!(space.readable(mapped).is_none() && !heap.made_from(7));
-        assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, false, true, 9).is_some(), "shared quota returned");
+        assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, crate::paging::Caching::Memory, true, 9).is_some(), "shared quota returned");
     }
 
     #[test]

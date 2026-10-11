@@ -63,6 +63,23 @@ fn request_flags(read: &mut dyn FnMut(usize, &mut [u8]) -> usize) -> (u32, u32) 
     (0, 0)
 }
 
+// Whether debug mode is on, asked at every launch; the log says when it changes.
+fn debug_mode() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    static SEEN: AtomicU8 = AtomicU8::new(0); // 0: not looked at yet, 1: off, 2: on
+    let on = mind::debug::check();
+    let now = if on { 2 } else { 1 };
+    let before = SEEN.swap(now, Ordering::Relaxed);
+    if before != now && (on || before != 0) {
+        mind::println!("[LOADER] DEBUG MODE {} ({}): {}", if on { "ON" } else { "OFF" }, mind::debug::FILE,
+                       if on { "WHAT PROGRAMS PRINT GOES TO THE SYSTEM LOG" } else { "PROGRAMS LOG AS BEFORE" });
+    }
+    on
+}
+
+// A file error as the loader reports it: a drive that does not answer stays ERR_IO, not an invalid program (211-KRN-0050).
+fn file_error(error: fs::Error) -> Error { if error == fs::Error::Io { Error::Other(ERR_IO) } else { error.into() } }
+
 // The program file of `name` and its task name; boot services and the kernel are not applications.
 fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     let mut path = FixedBuf::<64>::new();
@@ -70,7 +87,7 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     let task = task_name(path.as_bytes());
     // Services are started by init from bootloader images; the kernel itself is not runnable as a program.
     if task.as_bytes() == b"kernel" || BOOT_SERVICES.iter().any(|s| s.as_bytes() == task.as_bytes()) { return Err(Error::NotFound); }
-    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap())?, task))
+    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?, task))
 }
 
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
@@ -82,7 +99,7 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     let size = file.size();
     if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
     let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
-    if file.read_at(0, &mut image.as_mut_slice()[..size])? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
+    if file.read_at(0, &mut image.as_mut_slice()[..size]).map_err(file_error)? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
@@ -92,6 +109,9 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     grants[..5].copy_from_slice(&standard);
     let mut count = 5;
     for &(child, handle) in extra { grants[count] = grant_moved(child as usize, handle, u8::MAX); count += 1; }
+    // Debug mode (log:debug.txt, 211-KRN-0053): a program its launcher gave no log client gets a copy of the loader's,
+    // so what it prints reaches the system log and this boot's log file.
+    if debug_mode() && !extra.iter().any(|&(child, _)| child as usize == SLOT_LOG) && count < grants.len() { grants[count] = grant(SLOT_LOG, SLOT_LOG, client); count += 1; }
     // SPAWN takes `name\0arguments`.
     let mut text = [0u8; NAME_MAX + 1 + ARGS_MAX];
     let args = &args[..args.len().min(ARGS_MAX)];
@@ -147,9 +167,9 @@ impl Launcher {
         // client, its window broker client, where its output goes (issue 162), sysinfo, lifecycle control, the system log,
         // a flow grant, the compositor's client (what is on the screen, issue 165) or, by `grant-memory`, the read-only
         // surface of one window (issue u014), the pin controller's client (issue 207), the video gateway's (issue 158) or the
-        // TLS service's (351-KRN-0034).
+        // TLS service's (351-KRN-0034), the shell's command endpoint or the clipboard's (211-KRN-0058).
         // The standard grants (2..6) cannot be replaced.
-        if ![SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK, SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE].contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
+        if !LAUNCH_SLOTS.contains(&(slot as usize)) { return Err(loader::Error::Invalid); }
         self.keep(owner, id, slot)
     }
 
@@ -184,7 +204,8 @@ impl Launcher {
         if result.is_err() { session.drop_grants(); }
         result.map_err(|error| match error {
             Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory, Error::Rights => loader::Error::Rights,
-            Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_BUSY) => loader::Error::Busy, _ => loader::Error::Invalid,
+            Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_BUSY) => loader::Error::Busy, Error::Other(ERR_IO) => loader::Error::Unreadable,
+            _ => loader::Error::Invalid,
         })
     }
 
@@ -197,7 +218,7 @@ impl Launcher {
 
 // The raw request flags of program `name` (REQUEST_*).
 fn requests(name: &str) -> Result<u32, loader::Error> {
-    let (file, _) = open(name.as_bytes()).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })?;
+    let (file, _) = open(name.as_bytes()).map_err(|error| match error { Error::NotFound => loader::Error::NotFound, Error::Other(ERR_IO) => loader::Error::Unreadable, _ => loader::Error::Invalid })?;
     Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)).0)
 }
 

@@ -39,6 +39,8 @@ pub fn leaf(physical: u64, writable: bool, executable: bool, device: bool) -> u6
     physical | PAGE_DESC | AF | NG | PXN | AP_EL0 | if writable { 0 } else { AP_RO } | if executable { 0 } else { UXN }
         | if device { ATTR_DEVICE } else { ATTR_NORMAL | INNER_SHAREABLE }
 }
+/// A user page of a framebuffer: as other memory here (the x86 kernel makes it write-combining, 000-KRN-0081).
+pub fn write_combining(entry: u64) -> u64 { entry }
 pub fn user_table(entry: u64) -> bool { entry & 3 == TABLE }
 pub fn user_readable(entry: u64) -> bool { entry & 3 == PAGE_DESC && entry & AP_EL0 != 0 }
 pub fn user_writable(entry: u64) -> bool { user_readable(entry) && entry & AP_RO == 0 }

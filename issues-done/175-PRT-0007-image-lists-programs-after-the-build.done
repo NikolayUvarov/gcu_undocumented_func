@@ -1,0 +1,35 @@
+# 175-PRT-0007 — The USB image lists the programs after the build, not before it — done
+
+**Type:** porting (image scripts) · **Owner:** `PRT` · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [175](../issues/175-audit-2026-10-09.md) · **Constitution:** MC-12.1, MC-12.9
+
+## Problem
+
+Audit finding A01 ([audit](../issues-audit/2026-10-09-repository-audit.md), [assessment](../issues-audit/2026-10-09-repository-assessment.md)):
+- `scripts/make_usb_image.py` computes `APPLICATIONS` at import (line 29), before `main()` runs `02_build.sh` (lines 310–313). The x86 branch of `files()` reuses that list.
+- So a clean clone's `./04_make_usb_image.sh --force` packs only the boot services. On 2026-10-08 that is what happened with an image for the MacBook Pro.
+
+## Plan
+
+- `files()` lists the programs from the chosen source after the build has run.
+- A test packages a clean tree in one call, and again after a program is added. It checks the image against the build's own outputs, not against the packager's list.
+- `issues-audit/repro/build_repro.py` becomes that regression test.
+
+## Acceptance criteria
+
+- One `make_usb_image.py --force` call on a clean tree gives an image with every program the build made.
+- The test fails on the old code and passes on the new.
+
+## Resolution
+
+Done on 2026-10-09 by the kernel session, which owns `PRT`.
+
+- **The fix.** `scripts/make_usb_image.py` lists the applications in `files()`, from the directory it packs, when it is called after the build. The list taken at import (`APPLICATIONS`) is gone, so x86 and aarch64 now list them the same way.
+- **The regression test, `tests/usb_image_test.py`.**
+  - It runs the packager in a temporary tree whose `02_build.sh` is a stand-in making the kernel, the boot services and the programs named in `programs.txt`.
+  - One `--force` call on a clean tree must give an image holding everything that build made, checked byte for byte against the build's own outputs, not against the packager's list. So must the next call after a program is added.
+  - It fails on the old packager with `USB image is missing edit.elf` and passes on the new one. It runs among the host tests (`scripts/host_tests.sh`), and CI's build job now installs `qemu-utils` for it.
+- `issues-audit/repro/build_repro.py` stays as the audit's record of the defect. Its packaging part is what this test turns around.
+
+## Related
+
+[011](../issues-done/011-reproducible-toolchain.done), [211](../issues/211-intel-pc-from-a-sata-ssd.md).

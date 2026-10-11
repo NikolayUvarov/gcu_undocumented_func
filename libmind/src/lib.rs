@@ -18,6 +18,7 @@ pub mod checkpoint;
 pub mod cid;
 pub mod control;
 pub mod dag;
+pub mod debug;
 pub mod dev;
 pub mod fs;
 pub mod firmware;
@@ -37,6 +38,9 @@ pub mod mask;
 pub mod mem;
 pub mod network;
 pub mod parse;
+pub mod release;
+pub mod json;
+pub mod models;
 pub mod tpm;
 pub mod netring;
 pub mod output;
@@ -60,6 +64,8 @@ pub mod windowed;
 pub mod avi;
 #[cfg(feature = "alloc")]
 pub mod jpeg;
+#[cfg(feature = "alloc")]
+pub mod uvc;
 #[cfg(feature = "alloc")]
 pub mod script;
 #[cfg(feature = "alloc")]

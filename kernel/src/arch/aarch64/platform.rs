@@ -10,6 +10,7 @@ pub fn mmio(index: usize) -> Option<(usize, usize)> {
     let pins = |slot: usize| { let [base, size] = &board::PINS[slot]; (board::get(base), board::get(size).div_ceil(0x1000) * 0x1000) };
     let (base, size) = match index {
         crate::abi::PLATFORM_UART => (board::get(&board::UART), 0x1000), crate::abi::PLATFORM_RTC => (board::get(&board::RTC), 0x1000),
+        crate::abi::PLATFORM_TPM => (board::get(&board::TPM), 0x1000),
         n if (PLATFORM_PINS_PL061..PLATFORM_PINS_PL061 + PLATFORM_PINS_MAX).contains(&n) => pins(n - PLATFORM_PINS_PL061),
         n if (PLATFORM_PINS_BCM2711..PLATFORM_PINS_BCM2711 + PLATFORM_PINS_MAX).contains(&n) => pins(board::PINS_BCM2711 + n - PLATFORM_PINS_BCM2711),
         _ => (0, 0),

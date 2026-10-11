@@ -67,6 +67,7 @@ pub fn spawn(name: &str, grant: Option<(usize, u8)>) -> Result<u64> {
     let failed = |error: loader::Error| match error {
         loader::Error::NotFound => Error::NotFound, loader::Error::NoMemory => Error::NoMemory, loader::Error::Rights => Error::Rights,
         loader::Error::Limit => Error::Other(ERR_LIMIT), loader::Error::Busy | loader::Error::Sessions => Error::Other(ERR_BUSY), loader::Error::Invalid => Error::Invalid,
+        loader::Error::Unreadable => Error::Other(ERR_IO),
     };
     let endpoint = crate::ipc::Endpoint::LOADER;
     let session = loader::begin(endpoint, name, "")?.map_err(failed)?;
@@ -147,7 +148,7 @@ pub const REQUEST_SYSINFO: u32 = 2; // a sysmon client in SLOT_SYSINFO
 pub const REQUEST_FILE: u32 = 4; // the directory of the file named in the arguments (a client confined to it)
 pub const REQUEST_LIFECYCLE: u32 = 8; // service lifecycle control in SLOT_LIFECYCLE
 pub const REQUEST_LOG: u32 = 16; // the system log
-pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, data/), for fm
+pub const REQUEST_FILES: u32 = 32; // the user's files: everything the shell may change (ram:, log:, data/), for fm
 pub const REQUEST_NETWORK: u32 = 64; // a flow grant from the network policy broker in SLOT_NETWORK (issue 102)
 pub const REQUEST_AUTHORITY: u32 = 128; // the sysmon client with the authority badge in SLOT_SYSINFO: who holds what (issue 081)
 pub const REQUEST_WINDOW: u32 = 256; // a client of the window broker in SLOT_WINDOW: the program shows itself in a window (issue 157)
@@ -159,8 +160,13 @@ pub const REQUEST_CAMERA: u32 = 8192; // the video gateway's client in SLOT_CAME
 pub const REQUEST_BLOCKSTORE: u32 = 16384; // the shell's block store client in SLOT_BLOCKSTORE (300-KRN-0001)
 pub const REQUEST_BLOCKSTORE_READ: u32 = 32768; // a block store client that may only get, in SLOT_BLOCKSTORE (300-KRN-0024)
 pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in SLOT_FIRMWARE, lent once the user agreed (351-KRN-0027)
+/// The badge of init's lifecycle client that may ask `init.wit` `reboot` (the updater's, 351-KRN-0022).
+pub const BADGE_REBOOT: u16 = 1;
+/// The badge of the shell's lifecycle client: set, so no copy of it can be badged for `reboot` (a badge is set once).
+pub const BADGE_LIFECYCLE: u16 = 2;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
+pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).
@@ -184,8 +190,15 @@ pub const fn about_note<const N: usize>(text: &str) -> [u8; N] {
     out
 }
 
+/// The arguments every program takes as a request for its help (000-KRN-0066): the same keys everywhere.
+pub const HELP_KEYS: [&str; 7] = ["--help", "-help", "-h", "/help", "/h", "/?", "-?"];
+
+/// Whether `args` (a program's whole argument text) asks for its help.
+pub fn asks_help(args: &str) -> bool { HELP_KEYS.iter().any(|key| args.trim().eq_ignore_ascii_case(key)) }
+
 /// What the program does: the first line `name — what it does` (`list -l` shows it), then how to run it and its keys.
-/// The first statement of `main`: with the argument `--help` the program prints the text and exits. The text is also
+/// The first statement of `main`: with a help key alone (`HELP_KEYS`: --help, -h, /?, …) the program prints the text and
+/// exits. The text is also
 /// kept in the program file (`.mind_about`; the linker script keeps it), where the shell's `help <program>` reads it
 /// without starting the program (`section`).
 #[macro_export]
@@ -195,7 +208,7 @@ macro_rules! about {
         #[used]
         #[link_section = ".mind_about"]
         static MIND_ABOUT: [u8; MIND_ABOUT_TEXT.len()] = $crate::process::about_note::<{ MIND_ABOUT_TEXT.len() }>(MIND_ABOUT_TEXT);
-        if $crate::process::args_str().trim() == "--help" { $crate::println!("{}", MIND_ABOUT_TEXT); $crate::process::exit(); }
+        if $crate::process::asks_help($crate::process::args_str()) { $crate::println!("{}", MIND_ABOUT_TEXT); $crate::process::exit(); }
     }};
 }
 

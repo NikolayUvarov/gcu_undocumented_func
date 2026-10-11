@@ -2,6 +2,7 @@ use crate::abi::*;
 use crate::input::{Events, Queue};
 use crate::memory::{Frames, Region};
 use crate::task_state::{self, State};
+use crate::task_table::Table;
 use crate::{context, cpu, elf, interrupts, paging, pci, platform, port, serial_write_byte};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -11,7 +12,7 @@ mod stat;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 128; // the endpoint table's first size; it grows on demand (issue 171)
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
-const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
+const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP | CAP_BADGE;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
@@ -117,28 +118,6 @@ struct IrqBinding { ep: usize, slot: usize, pid: u64, pending: bool, unacked: bo
 #[derive(Clone, Copy)]
 struct Listener { key: u16, mods: u8, slot: usize, pid: u64, down: bool }
 const LISTEN_MODS: u8 = MOD_SHIFT | MOD_CTRL | MOD_ALT;
-// The task table (issue 171): chunks of 32 slots added as needed and dropped when empty at the end. A task never moves:
-// the system call path holds raw pointers to tasks while the table may grow.
-const CHUNK: usize = 32;
-struct Table<T> { chunks: Vec<alloc::boxed::Box<[Option<T>]>> }
-impl<T> Table<T> {
-    fn new() -> Self { let mut table = Self { chunks: Vec::new() }; assert!(table.grow(), "task table"); table }
-    fn grow(&mut self) -> bool {
-        let mut chunk = Vec::new();
-        if self.chunks.try_reserve(1).is_err() || chunk.try_reserve_exact(CHUNK).is_err() { return false; }
-        for _ in 0..CHUNK { chunk.push(None); }
-        self.chunks.push(chunk.into_boxed_slice()); true
-    }
-    // Drops empty chunks at the end, keeping the first.
-    fn shrink(&mut self) { while self.chunks.len() > 1 && self.chunks.last().unwrap().iter().all(Option::is_none) { self.chunks.pop(); } }
-    fn len(&self) -> usize { self.chunks.len() * CHUNK }
-    fn iter(&self) -> impl Iterator<Item = &Option<T>> { self.chunks.iter().flat_map(|c| c.iter()) }
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut Option<T>> { self.chunks.iter_mut().flat_map(|c| c.iter_mut()) }
-    fn ptr(&mut self, index: usize) -> *mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] }
-}
-impl<T> core::ops::Index<usize> for Table<T> { type Output = Option<T>; fn index(&self, index: usize) -> &Option<T> { &self.chunks[index / CHUNK][index % CHUNK] } }
-impl<T> core::ops::IndexMut<usize> for Table<T> { fn index_mut(&mut self, index: usize) -> &mut Option<T> { &mut self.chunks[index / CHUNK][index % CHUNK] } }
-
 struct Scheduler {
     boot: BootInfo, tasks: Table<TaskBox>, current: [usize; cpu::MAX], idle_sp: [usize; cpu::MAX],
     faults: [Option<FaultInfo>; 16], fault_cursor: usize, next_pid: u64,
@@ -160,6 +139,7 @@ struct Scheduler {
     reserve: usize, // frame pool bytes application-band tasks may not take (MEMORY_RESERVE, issue 169)
     composited: usize, // screen the compositor already holds a capability for
     next_node: u64, // capability identities are never reused
+    next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -217,7 +197,9 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX }); }
+    #[cfg(feature = "bar-move-test")]
+    unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
 }
 
@@ -278,6 +260,23 @@ impl Scheduler {
         for other in 0..count {
             if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
         }
+    }
+    // Sleeps and IPC deadlines end on the boot CPU's tick, every millisecond, the source of every other (000-KRN-0083);
+    // the tasks are looked at only once the earliest is due. Idle CPUs whose tasks that makes ready get a wake IPI (issue
+    // 171); `every`, at a time slice's end, also finds the tasks whose budget period ended.
+    fn timers(&mut self, cpu: usize, every: bool) {
+        let (now, ns) = (interrupts::milliseconds(), crate::clock::now_ns());
+        if ns >= self.next_wake {
+            self.next_wake = u64::MAX;
+            for task in self.tasks.iter_mut().flatten() {
+                let State::Sleeping(deadline) = task.state else { continue };
+                task.state.wake(ns);
+                if task.state == State::Ready { self.readied.mark(task.cpu); } else { self.next_wake = self.next_wake.min(deadline); }
+            }
+        }
+        if now >= self.next_expiry { self.expire(now); }
+        self.wake_idle(cpu, every);
+        crate::trial::check(now);
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
     // delegated.
@@ -417,14 +416,21 @@ impl Scheduler {
         for child in self.tasks.iter_mut().flatten() { if child.payer == Some((slot, pid)) { child.payer = payer; } }
         let task = self.tasks[slot].as_mut().unwrap(); task.payer = None; task.memory_tree = 0;
     }
-    // Uptime at which an IPC with this handle word times out (0: never).
-    fn deadline(word: usize) -> u64 { match word >> IPC_TIMEOUT_SHIFT { 0 => 0, ms => (interrupts::milliseconds() + ms as u64).max(1) } }
+    // Uptime at which an IPC with this handle word times out (0: never), up to a millisecond early: drivers poll with it
+    // (usb_hid's 10 ms), unlike SYSCALL_WAIT (000-KRN-0065).
+    fn deadline(&mut self, word: usize) -> u64 {
+        let at = match word >> IPC_TIMEOUT_SHIFT { 0 => return 0, ms => (interrupts::milliseconds() + ms as u64).max(1) };
+        self.next_expiry = self.next_expiry.min(at);
+        at
+    }
     // Fails blocked IPC whose deadline passed (MC-2.13): no message is half-delivered and no reply can reach a new call.
     fn expire(&mut self, now: u64) -> bool {
         let mut woken = false;
+        self.next_expiry = u64::MAX;
         for slot in 1..self.tasks.len() {
             let Some(task) = self.tasks[slot].as_mut() else { continue };
-            if task.deadline == 0 || now < task.deadline || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            if task.deadline == 0 || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            if now < task.deadline { self.next_expiry = self.next_expiry.min(task.deadline); continue; }
             // A late reply finds the caller no longer waiting for this call number and fails with ERR_PEER.
             if let State::BlockedSend(ep) | State::BlockedRecv(ep) = task.state { self.accounting.endpoint[ep].timeouts += 1; }
             let task = self.tasks[slot].as_mut().unwrap();
@@ -607,6 +613,62 @@ impl Scheduler {
         }
     }
 
+    // `bytes` in frames of their own, as a read-only memory object (kept for the system's life: asked for once a boot).
+    fn copy_out(bytes: &[u8]) -> Result<Capability, usize> {
+        let size = bytes.len().max(1).next_multiple_of(4096);
+        let region = Region::task(size, 4096).map_err(|_| ERR_NO_MEMORY)?;
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), region.ptr(), bytes.len()); }
+        let base = region.ptr() as usize;
+        core::mem::forget(region);
+        Ok(Capability::Memory(base, size, CAP_READ))
+    }
+
+    // Another kind of device with memory registers in the pages of `bar` of device `a`.
+    fn page_sharer(&self, a: usize, bar: pci::Bar) -> Option<usize> {
+        let (start, end, class) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096), self.devices[a].class);
+        self.devices.iter().enumerate().position(|(i, d)| i != a && d.class != class && d.bars.iter().any(|x| !x.io && x.size != 0 && x.base < end && x.base + x.size > start))
+    }
+
+    // Test-only (211-KRN-0021): the RTL8139's 256-byte register BAR is packed into the page of the SD host controller's,
+    // as Apple's firmware packs EHCI next to AHCI; granted, it must move to a page of its own and answer there.
+    #[cfg(feature = "bar-move-test")]
+    fn bar_move_test(&mut self) {
+        let say = |text: core::fmt::Arguments| { let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, text); };
+        let (Some(nic), Some(sd)) = (self.devices.iter().position(|d| d.id == 0x8139_10EC), self.devices.iter().position(|d| d.class == 0x08_05_01)) else {
+            return say(format_args!("MIND CORE KERNEL: PCI TEST: NO RTL8139 AND SD HOST CONTROLLER\n"));
+        };
+        let packed = self.devices[sd].bars[0].base + 0x800;
+        if !unsafe { pci::move_bar(&mut self.devices[nic], 1, packed) } { return say(format_args!("MIND CORE KERNEL: PCI TEST: THE BAR WAS NOT PACKED\n")); }
+        say(format_args!("MIND CORE KERNEL: PCI TEST: BAR 1 OF {:06X} PACKED AT {:X}, IN THE PAGE OF {:06X}\n", self.devices[nic].location(), packed, self.devices[sd].location()));
+        match self.platform_cap(PLATFORM_DEVICE_BAR, nic, 1) {
+            Ok(Capability::Mmio(base, _)) => {
+                let mac: [u8; 6] = core::array::from_fn(|i| unsafe { core::ptr::read_volatile((base + i) as *const u8) });
+                say(format_args!("MIND CORE KERNEL: PCI TEST: GRANTED AT {:X}, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} READ THERE\n", base, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
+            }
+            Ok(_) => say(format_args!("MIND CORE KERNEL: PCI TEST: NOT A REGISTER CAPABILITY\n")),
+            Err(code) => say(format_args!("MIND CORE KERNEL: PCI TEST: REFUSED ({:X})\n", code)),
+        }
+    }
+
+    // A free 4 KiB page for a BAR moved off a shared one (211-KRN-0021): within the span the firmware gave bus 0's
+    // devices (decoded to PCI), below the fixed ranges at 0xFEC0_0000, clear of every BAR, bridge window, the ECAM and
+    // every range of the firmware's memory map.
+    fn free_page(&self) -> Option<u64> {
+        let below = |x: &pci::Bar| !x.io && x.size != 0 && x.base != 0 && x.base + x.size <= 1 << 32;
+        let bus0 = || self.devices.iter().filter(|d| d.location() >> 8 == 0 && d.class >> 8 != 0x0604).flat_map(|d| d.bars).filter(below);
+        let (low, high) = (bus0().map(|x| x.base).min()? & !0xFFF, bus0().map(|x| x.base + x.size).max()?.min(0xFEC0_0000));
+        let mut page = low;
+        while page + 4096 <= high {
+            let end = page + 4096;
+            let taken = self.devices.iter().flat_map(|d| d.bars.into_iter().filter(|x| !x.io && x.size != 0).map(|x| (x.base, x.base + x.size)).chain(d.windows))
+                .chain(crate::pcicfg::ecam())
+                .chain((0..self.boot.memory_map_len).map(|i| unsafe { *self.boot.memory_map.add(i) }).map(|r| (r.start as u64, r.start as u64 + r.pages as u64 * 4096)))
+                .filter(|&(from, to)| to > from && from < end && to > page).map(|(_, to)| to).max();
+            match taken { None => return Some(page), Some(to) => page = to.next_multiple_of(4096) }
+        }
+        None
+    }
+
     // The PCI function with a BAR covering physical (or port) address `base`.
     fn device_at(&self, base: u64) -> Option<&pci::Device> { self.devices.iter().find(|d| d.bars.iter().any(|bar| bar.size != 0 && base >= bar.base && base < bar.base + bar.size)) }
 
@@ -625,11 +687,22 @@ impl Scheduler {
                 Ok(Capability::Mmio(base, bytes))
             }
             PLATFORM_DEVICE_BAR => {
-                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
+                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let mut bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
                 if bar.io { unsafe { pci::enable(&device); } return Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)); }
-                // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI, 211-KRN-0021):
-                // other kinds of device there go to no other driver once this one is granted, nor this one after theirs.
+                // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI next to AHCI,
+                // 211-KRN-0021): such a BAR moves to a free page first. If none is free, other kinds of device there go
+                // to no other driver once this one is granted, nor this one after theirs.
+                if let Some(other) = self.page_sharer(a, bar).filter(|_| !device.granted && bar.size < 4096 && bar.base + bar.size <= 1 << 32) {
+                    let other = self.devices[other].location();
+                    if let Some(page) = self.free_page() {
+                        let from = bar.base;
+                        if unsafe { pci::move_bar(&mut self.devices[a], b, page) } {
+                            bar.base = page;
+                            let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} MOVED FROM {:X} TO {:X}: ITS PAGE HELD REGISTERS OF {:06X}\n", b, device.location(), from, page, other));
+                        }
+                    }
+                }
                 let (start, end) = (bar.base & !0xFFF, (bar.base + bar.size).next_multiple_of(4096));
                 let mut sharers = self.devices.iter().enumerate().filter(|&(i, d)| i != a && d.class != device.class
                     && d.bars.iter().any(|b| !b.io && b.size != 0 && b.base < end && b.base + b.size > start));
@@ -662,6 +735,9 @@ impl Scheduler {
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
             PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
+            // The hardware report and the ACPI tables, as read-only copies in frames of their own (174-KRN-0038).
+            PLATFORM_REPORT => Self::copy_out(&crate::report::build(&self.boot, &self.devices)),
+            PLATFORM_ACPI_TABLE => Self::copy_out(crate::report::acpi_table(a).ok_or(ERR_NOT_FOUND)?),
             PLATFORM_DMA => {
                 // 64 KiB aligned so a driver's data buffer does not cross a DMA boundary.
                 let bytes = a.checked_next_multiple_of(4096).filter(|&n| n > 0).ok_or(ERR_INVALID)?;
@@ -686,7 +762,7 @@ impl Scheduler {
         let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
         let elf = elf::Image::parse(file)?;
         let screen_bytes = if has_screen { frame_bytes(&self.boot) } else { 0 };
-        if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes + core::mem::size_of::<Task>() + 3 * 4096 + context::SIZE) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
+        if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes + core::mem::size_of::<Task>() + 3 * 4096 + context::size()) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
         let mut image = Region::task(elf.size.div_ceil(4096) * 4096, 4096)?; let entry = elf.load(image.bytes_mut(), paging::USER_IMAGE)?;
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
@@ -700,7 +776,7 @@ impl Scheduler {
         space.map(paging::USER_STACK, stack.ptr() as usize, stack.len(), true, false)?;
         if let Some(screen) = &screen { space.map(paging::USER_SCREEN, screen.ptr() as usize, screen.len(), true, false)?; }
         space.map(paging::USER_INFO, abi.ptr() as usize, 4096, false, false)?; space.map(paging::USER_MAILBOX, abi.ptr() as usize + 4096, 4096, true, false)?; space.map(paging::USER_EXIT, exit.ptr() as usize, 4096, false, true)?;
-        let context = Region::task(context::SIZE, 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
+        let context = Region::task(context::size(), 64)?; let sp = context.ptr() as usize; unsafe { context::initial(sp, entry, user_sp); }
         // Applications are balanced by per-CPU application count: sleeping services don't skew the balance.
         let cpu = (0..cpu::COUNT.load(Ordering::Acquire)).filter(|&i| cpu::ONLINE[i].load(Ordering::Acquire)).min_by_key(|&i| { self.tasks.iter().flatten().filter(|t| t.cpu == i && t.state != State::Exited && t.service == service).count() }).unwrap_or(0);
         // The fixed slots from the grants, then free kernel-allocated ones; the table grows later as needed (issue 171).
@@ -788,8 +864,12 @@ impl Scheduler {
             (offset % align == 0 && length % align == 0 && length > 0 && offset.checked_add(length)? <= size).then_some((base + offset, length))
         };
         match cap {
-            // A badge is set once (MC-3.4): a child of a badged capability keeps it.
-            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old == 0 || old as usize == badge)).then(|| Capability::Endpoint(id, (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8, if old != 0 { old } else { badge as u16 })),
+            // A badge is set once (MC-3.4), only with CAP_BADGE (000-KRN-0073): a child of a badged capability keeps it.
+            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old as usize == badge || (old == 0 && rights & CAP_BADGE != 0))).then(|| {
+                let badge = if old != 0 { old } else { badge as u16 };
+                let rights = (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8;
+                Capability::Endpoint(id, if badge != 0 { rights & !CAP_BADGE } else { rights }, badge)
+            }),
             Capability::IoPorts(base, count) => range(base as usize, count as usize, 1).map(|(b, c)| Capability::IoPorts(b as u16, c as u16)),
             Capability::Memory(base, size, rights) => {
                 // Without grant only a read-only child: the writable owner stays unique.
@@ -873,8 +953,8 @@ impl Scheduler {
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
         self.accounting.endpoint[ep].messages += 1;
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
-        self.send_seq += 1; let seq = self.send_seq;
-        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = Self::deadline(request.arg2);
+        self.send_seq += 1; let seq = self.send_seq; let deadline = self.deadline(request.arg2);
+        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = deadline;
         if let Some(receiver) = receiver {
             self.deliver(slot, receiver);
             if !call { return Ok(None); }
@@ -892,7 +972,8 @@ impl Scheduler {
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
-        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg2);
+        let deadline = self.deadline(request.arg2);
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = deadline;
         Ok(Some(self.select(sp, cpu)))
     }
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
@@ -989,7 +1070,9 @@ impl Scheduler {
         let observation = matches!(request.syscall_num, SYSCALL_TASK_LIST | SYSCALL_CPU_INFO | SYSCALL_KERNEL_HEAP | SYSCALL_FAULTS | SYSCALL_STAT);
         // A lifecycle owner ends its own descendants without process control (issue 170: init supervises without it).
         let descendant = request.syscall_num == SYSCALL_TASK_KILL && self.find(request.arg1 as u64).is_some_and(|target| self.descends_from(target, slot));
-        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) && !descendant { return Err(ERR_RIGHTS); }
+        // The restart privilege (init's) may reset the machine too, when a service with the right asks it (351-KRN-0022).
+        let reset = request.syscall_num == SYSCALL_REBOOT && self.holds(slot, Capability::Restart);
+        if !self.holds(slot, Capability::Control) && !(observation && self.holds(slot, Capability::Observe)) && !descendant && !reset { return Err(ERR_RIGHTS); }
         let task_slot = |s: &Self, pid: usize| if pid == 0 { Some(slot) } else { s.find(pid as u64) };
         match request.syscall_num {
             SYSCALL_STAT => self.stat(slot, request),
@@ -1088,6 +1171,7 @@ impl Scheduler {
         self.settle_kernel(slot);
         let tasks: *mut Table<TaskBox> = &mut self.tasks; let task = (*(*tasks).ptr(slot)).as_mut().unwrap(); task.calls += 1;
         #[cfg(feature = "panic-test")] if request.syscall_num == SYSCALL_LOG { panic!("panic test"); }
+        #[cfg(all(feature = "protection-test", target_arch = "x86_64"))] if request.syscall_num == SYSCALL_LOG { crate::arch::report::probe::run(); }
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
             // The legacy byte of the next event that has one (events without a byte are skipped).
@@ -1129,10 +1213,13 @@ impl Scheduler {
                 }
             },
             SYSCALL_WAIT => {
-                let now = interrupts::milliseconds(); let duration = request.arg1.min(60_000).div_ceil(10).max(1) as u64 * 10;
+                // The deadline in monotonic nanoseconds plus the clock's resolution (a tick where it counts ticks): never
+                // shorter than asked, woken on the first tick after it, a millisecond at most (000-KRN-0065, 000-KRN-0083).
+                let now = interrupts::milliseconds(); let duration = request.arg1.clamp(1, 60_000) as u64 * 1_000_000;
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), now as usize);
-                task.state = if task.input.is_empty() { State::Sleeping(now.wrapping_add(duration)) } else { State::Ready };
-                task.dirty = true; return self.select(sp, cpu);
+                let deadline = crate::clock::now_ns() + duration + crate::clock::resolution_ns();
+                task.state = if task.input.is_empty() { State::Sleeping(deadline) } else { State::Ready };
+                task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::room(task)) {
@@ -1254,17 +1341,22 @@ impl Scheduler {
             SYSCALL_MEM_MAP => {
                 // The mapping remembers the capability's node: revoking that capability unmaps it.
                 let (cap, node) = (self.cap(slot, request.arg1), self.index(slot, request.arg1).map_or(0, |i| task.nodes[i].id));
-                let (physical, size, writable, device) = match cap {
-                    Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 => (physical, size, rights & CAP_WRITE != 0, false),
-                    Some(Capability::Dma(physical, size)) => (physical, size, true, false),
-                    Some(Capability::Mmio(physical, size)) => (physical, size, true, true),
-                    _ => (0, 0, false, false),
+                // The boot framebuffer, or a part of it, is mapped write-combining (000-KRN-0081).
+                let (fb, fb_bytes) = (self.boot.fb_ptr as usize, frame_bytes(&self.boot));
+                let screen = |physical: usize, size: usize| fb != 0 && physical >= fb && physical.saturating_add(size) <= fb + fb_bytes;
+                let (physical, size, writable, caching) = match cap {
+                    Some(Capability::Memory(physical, size, rights)) if rights & CAP_READ != 0 =>
+                        (physical, size, rights & CAP_WRITE != 0, if screen(physical, size) { paging::Caching::WriteCombining } else { paging::Caching::Memory }),
+                    Some(Capability::Dma(physical, size)) => (physical, size, true, paging::Caching::Memory),
+                    Some(Capability::Mmio(physical, size)) => (physical, size, true, paging::Caching::Device),
+                    _ => (0, 0, false, paging::Caching::Memory),
                 };
+                let device = caching == paging::Caching::Device;
                 // Registers that start inside a page: the page is mapped, the address of the first register returned.
                 let within = if device { physical % 4096 } else { 0 };
                 if size == 0 { Err(ERR_RIGHTS) } else {
                     core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), size); // mapping size for the client
-                    task.heap.map_shared(&mut task.space, physical - within, size + within, device, writable, node).map(|address| address + within).ok_or(ERR_NO_MEMORY)
+                    task.heap.map_shared(&mut task.space, physical - within, size + within, caching, writable, node).map(|address| address + within).ok_or(ERR_NO_MEMORY)
                 }
             }
             SYSCALL_MEM_PHYS => match self.cap(slot, request.arg1) { Some(Capability::Dma(physical, _)) => Ok(physical), _ => Err(ERR_RIGHTS) },
@@ -1426,6 +1518,8 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
         let event = context::event(sp);
         match event {
             Event::Stop => cpu::halt_here(),
+            // A checked read of a register the CPU may not have (the hardware report) resumes as "absent".
+            Event::KernelFault { pc, .. } if crate::arch::report::resume_after_fault(pc).is_some() => { context::resume_at(sp, crate::arch::report::resume_after_fault(pc).unwrap()); return sp; }
             Event::KernelFault { code, pc, error } => { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error); cpu::halt_all(); }
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
@@ -1434,11 +1528,11 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             let s = scheduler(); let slot = s.current[cpu]; s.accounting.interrupts[cpu] += 1;
             let next = (|| match event {
                 Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
+                // The boot CPU's tick within a time slice: the running task goes on.
+                Event::Clock => { if cpu == 0 { s.timers(cpu, false); } sp }
                 Event::Tick => {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
-                    // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
-                    // tasks that makes ready get a wake IPI (issue 171).
-                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); s.wake_idle(cpu, true); crate::trial::check(now); }
+                    if cpu == 0 { s.timers(cpu, true); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }

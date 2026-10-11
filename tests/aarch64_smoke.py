@@ -8,7 +8,9 @@ Needs `scripts/build_aarch64.sh --fixtures` first, qemu-system-aarch64 and AAVMF
 import argparse
 import atexit
 import re
+import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,9 +27,10 @@ CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined
 
 
 def boot(args, disk, until, timeout=90, decoy=None, raw=False):
-    """Boots QEMU on `disk` and returns the console output once `until` appears (or the timeout passes). AAVMF under
-    TCG now and then stalls before it loads the bootloader; a boot that shows no kernel line is tried once more.
-    `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012). `raw`: `disk` is a disk image."""
+    """Boots QEMU on `disk` and returns the console output once `until` appears, or every line of a tuple (or the
+    timeout passes). AAVMF under TCG now and then stalls before it loads the bootloader; a boot that shows no kernel
+    line is tried once more. `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012). `raw`:
+    `disk` is a disk image, as every boot volume here is (000-KRN-0067)."""
     output = boot_once(args, disk, until, timeout, decoy, raw)
     if "MIND CORE KERNEL" not in output and "BdsDxe: starting" not in output:
         print("NOTE: the firmware stalled before loading the bootloader; booting again", flush=True)
@@ -53,7 +56,7 @@ def boot_once(args, disk, until, timeout, decoy=None, raw=False):
             ready, _, _ = select.select([process.stdout], [], [], 0.2)
             if ready:
                 output += process.stdout.read() or b""
-            if settle is None and until.encode() in output:
+            if settle is None and all(line.encode() in output for line in ((until,) if isinstance(until, str) else until)):
                 settle = time.monotonic() + 1
     finally:
         process.kill()
@@ -65,11 +68,31 @@ def boot_once(args, disk, until, timeout, decoy=None, raw=False):
 def disk_with(rtc=None):
     disk = Path(tempfile.mkdtemp()) / "root"
     atexit.register(shutil.rmtree, disk.parent, True)  # a copy of the build: removed when the test ends
-    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf"))
+    # Leftovers of an interrupted suite run (smoke-*, screen dumps) stay out: a big extra tree upsets QEMU 8.2.2's vvfat.
+    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf", "smoke-*", "*.ppm"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
     sign_manifest.sign_volume(disk)  # signed as the build signs it (350-UPD-0002)
     return disk
+
+
+def image_of(disk, megabytes=64, start=63):
+    """A raw disk image holding the files of `disk`: an MBR with the signature and partition start QEMU's vvfat gave
+    (the checks name them) and one FAT16 partition. QEMU's vvfat (`fat:rw:`) aborted on the guest's writes
+    (000-KRN-0067): the test checks the system, not QEMU's directory emulation."""
+    path = disk.with_name(disk.name + ".img")
+    sectors = (megabytes << 20) // 512 - start
+    with path.open("wb") as f:
+        f.truncate(megabytes << 20)
+        mbr = bytearray(512)
+        mbr[440:444] = bytes.fromhex("FAFD1ABE")  # disk signature BE1AFDFA
+        mbr[446:462] = struct.pack("<B3sB3sII", 0x80, b"\xfe\xff\xff", 0x0E, b"\xfe\xff\xff", start, sectors)
+        mbr[510:512] = b"\x55\xaa"
+        f.write(mbr)
+    subprocess.run(["mkfs.fat", "-F", "16", "--offset", str(start), "-h", str(start), str(path), str(sectors // 2)], check=True, capture_output=True)
+    subprocess.run(["mcopy", "-s", "-i", f"{path}@@{start * 512}", *[str(p) for p in sorted(disk.iterdir())], "::"], check=True,
+                   capture_output=True, env=dict(os.environ, MTOOLS_SKIP_CHECK="1"))
+    return path
 
 
 def require(text, fragment):
@@ -84,7 +107,8 @@ def main():
     args = parser.parse_args()
     log = Path(tempfile.gettempdir()) / "mind-core-aarch64.log"
 
-    output = boot(args, disk_with(), "[INIT] READY")
+    # The block store's READY may come after init's (it mounts its RAM disk meanwhile): both are waited for.
+    output = boot(args, image_of(disk_with()), ("[INIT] READY", "[BLOCKSTORE] READY"), raw=True)
     log.write_text(output)
     for line in ("MIND CORE BOOT: USING GOP ", "MIND CORE BOOT: 1 CPUS; EXITING BOOT SERVICES",  # 211-KRN-0016
                  "MIND CORE KERNEL: INIT STARTED", "[INIT] STARTED logd", "[LOGD] READY", "[INIT] STARTED loader", "[LOADER] READY",
@@ -108,7 +132,7 @@ def main():
     decoy = Path(tempfile.mkdtemp()) / "decoy"
     atexit.register(shutil.rmtree, decoy.parent, True)
     (decoy / "EFI/APPLE").mkdir(parents=True)
-    output = boot(args, disk_with(), "[INIT] READY", decoy=decoy)
+    output = boot(args, image_of(disk_with()), "[INIT] READY", decoy=decoy, raw=True)
     with log.open("a") as file:
         file.write(f"\n=== decoy disk first\n{output}")
     require(output, "[INIT] READY")
@@ -118,16 +142,19 @@ def main():
     require(output, "BOOT: VOLUME MBR PARTITION 1 AT LBA 63")
     require(output, "[VFS] MOUNTED FAT16 FROM VIRTIO AT LBA 63")
     require(output, "[VFS] THE BOOT VOLUME: MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63, AND THE MANIFEST THE BOOTLOADER VERIFIED")
+    require(output, "[VFS] NO UPDATE ZONE: THE SYSTEM DID NOT BOOT FROM A SLOT")  # 351-UPD-0008
     print("PASS: aarch64 bootloader reads its own volume when the firmware lists another disk's FAT volume first; "
           "vfs_server mounts that volume from the second VirtIO disk", flush=True)
 
     # 351-UPD-0006: slots A and B on a raw disk, where the bootloader counts a trial's tries and falls back.
     slots = Path(tempfile.mkdtemp(prefix="mind-slots-"))
     atexit.register(shutil.rmtree, slots, True)
-    boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64")
+    updater = BUILD / "fixture-updater.elf"  # scripts/build_aarch64.sh --fixtures
+    boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64",
+                         updater if updater.exists() else None)
 
     for case, code in CASES.items():
-        output = boot(args, disk_with(case), "QUARANTINED", timeout=120)
+        output = boot(args, image_of(disk_with(case)), "QUARANTINED", timeout=120, raw=True)
         with log.open("a") as file:
             file.write(f"\n=== {case}\n{output}")
         require(output, "[FAULTTEST] RUNNING")

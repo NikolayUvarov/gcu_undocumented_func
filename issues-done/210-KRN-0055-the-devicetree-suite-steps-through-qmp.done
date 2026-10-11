@@ -1,0 +1,29 @@
+# 210-KRN-0055 — The `devicetree` suite steps the machine through QMP, not at the monitor's typing pace — done
+
+**Type:** test · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-12.1 (evidence that holds on the configuration it claims)
+
+## Problem
+
+The storage session and the tools track both reported it in their `requests-KRN.md`, 2026-10-09. The `devicetree` suite of [210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done) failed on CI runners in "aarch64 (programs, shell and four CPUs)": 2 of 5 runs of the tools branch, and one of the storage branch. Each time `kernel` was None after 500 steps.
+
+- **What the suite does.** It stops the machine once the bootloader prints `BOOT: DEVICE TREE AT …`, then runs it on in steps of `cont`, 10 ms, `stop`. It looks for the kernel's `MIND CORE KERNEL: DEVICE TREE AT …` on the screen between steps.
+- **Why the steps were long.** `vm.hmp()` waits 10 ms a byte of the command, as typing into the monitor did. So a step let the machine run about 110 ms, and the first stop came as late.
+- **What the storage session measured.** The line stays on the screen about 450 ms before init's services scroll it off. A slow runner passed it between two looks.
+
+## Plan
+
+The storage session's proposal: the suite stops and continues the machine with QMP's own `stop` and `cont` (`vm.qmp`), so a step runs 11–20 ms. What it asserts is unchanged.
+
+## Acceptance criteria
+
+The suite passes on aarch64 as before, and its steps no longer go through the monitor's typing pace.
+
+## Resolution
+
+- **The change.** `devicetree_suite` (`tests/qemu_smoke.py`) stops the machine with `vm.qmp("stop")` and steps it with `vm.qmp("cont")`, 10 ms, `vm.qmp("stop")`, in place of `vm.hmp`. QMP's own commands are sent at once; only the monitor's text commands keep the typing pace.
+- **What it checks.** The same as before: the kernel's line names the tree the bootloader named.
+- **Evidence.** The aarch64 gate's "programs, shell and four CPUs" group runs the suite, in the gate of the commit that carries this.
+
+## Related
+
+[210-KRN-0029](../issues-done/210-KRN-0029-device-tree-in-bootinfo.done).

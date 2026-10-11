@@ -2,8 +2,9 @@
 #![no_main]
 // blocks: the block store from the shell (300-STO-0003, docs/storage). Puts a file or a test pattern as an object
 // (mind::dag), reads one back with every block checked, publishes, resolves and removes names, changes several at
-// once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store. A console program: it asks the shell for the store's client
-// (REQUEST_BLOCKSTORE) and the user's files (REQUEST_FILES).
+// once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store, and imports a model disk's
+// speech models (251-STO-0014, models.rs). A console program: it asks the shell for the store's client (REQUEST_BLOCKSTORE),
+// the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json).
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
 use mind::cid::{Cid, Codec};
 use mind::dag::{self, Blocks, Builder, CHUNK};
@@ -12,7 +13,9 @@ use mind::idl::blockstore::{self, Error, Update};
 use mind::idl::codec::{List, Text};
 use mind::ipc::Endpoint;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE);
+mod models;
+
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_BLOCKSTORE | REQUEST_PARSE);
 
 const STORE: Endpoint = Endpoint(SLOT_BLOCKSTORE);
 
@@ -106,7 +109,7 @@ fn snapshot<'a>(words: impl Iterator<Item = &'a str>) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -116,6 +119,7 @@ fn main(_info: &'static BootInfo) {
     match rest.next() {
         Some("commit") => return commit(rest),
         Some("snapshot") => return snapshot(rest),
+        Some("models") => return models::command(rest, builder, buffer, data, &mut remote),
         _ => {}
     }
     match (words.next(), words.next(), words.next(), words.next()) {
@@ -262,6 +266,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks]"),
+        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>"),
     }
 }

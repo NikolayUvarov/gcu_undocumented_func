@@ -137,13 +137,13 @@ pub fn flush() {
 /// Sleeps up to `ms`, ending early when the manager queues input, asks for another size or closes the window; returns
 /// the time slept. Draws in a pixel window are published first.
 pub fn wait(ms: usize) -> usize {
-    let start = crate::time::uptime_ms();
+    let start = crate::time::monotonic_ns(); // not the tick's uptime, so a wait is never short (000-KRN-0065)
     flush();
     let Some(surface) = surface() else { return crate::sys::call(SYSCALL_WAIT, ms, 0) };
     let waker = WAKER.load(Ordering::Acquire);
     loop {
         look(&surface);
-        let elapsed = crate::time::uptime_ms() - start;
+        let elapsed = (crate::time::monotonic_ns().saturating_sub(start) / 1_000_000) as usize;
         if surface.queued() > 0 || resize_pending() || elapsed >= ms { return elapsed; }
         let slice = (ms - elapsed).min(SLICE_MS).max(1);
         if waker == 0 { crate::sys::call(SYSCALL_WAIT, slice, 0); continue; }

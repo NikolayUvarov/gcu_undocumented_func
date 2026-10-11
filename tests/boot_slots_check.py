@@ -5,10 +5,13 @@ On a raw disk image with both slots and the bootloader of the build:
 - staged again and not confirmed, it gives way to slot A at the next boot;
 - a trial slot with a damaged service is not loaded: A boots and B has no tries left;
 - a newer record torn by a cut write is ignored for the older one;
-- the file system is consistent after the bootloader's writes.
+- the file system is consistent after the bootloader's writes;
+- vfs_server's update zone is the slot that did not boot (351-UPD-0008);
+- with the updater's test stand-in on the volume, init's client of vfs_server badged for the update zone fills the slot
+  that did not boot and writes a boot record whole in place, and nothing else (351-KRN-0022).
 
-`boot(image, until)` boots the image and returns the console output up to `until`. Init's confirmation is 351-KRN-0014:
-the host writes the confirmed record here, as the updater will.
+`boot(image, until)` boots the image and returns the console output up to `until`; the volume has no keystore
+(`quiet_volume`). Init's confirmation is 351-KRN-0014: the host writes the confirmed record here, as the updater will.
 """
 import shutil
 import subprocess
@@ -17,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import boot_slots  # noqa: E402
+import sign_manifest  # noqa: E402
 
 STARTED = "MIND CORE KERNEL: INIT STARTED"
 
@@ -34,13 +38,27 @@ def fsck(image):
     assert check.returncode == 0 and "Dirty bit" not in check.stdout + check.stderr, check.stdout + check.stderr
 
 
-def run(boot, temp, volume, label):
+def quiet_volume(volume, out, updater=None):
+    """A copy of the volume without keystore, which stores a new device key at the first boot: a boot stopped in that
+    write would leave the file system torn, and the checks stop boots early. With `updater`, the stand-in as
+    `updater.elf`. Signed again."""
+    shutil.copytree(volume, out)
+    (out / "keystore.elf").unlink(missing_ok=True)
+    if updater:
+        shutil.copyfile(updater, out / "updater.elf")
+    sign_manifest.sign_volume(out)
+    return out
+
+
+def run(boot, temp, volume, label, updater=None):
     temp = Path(temp)
-    image = boot_slots.Image.create(temp / "slots.img", boot_slots.layout(volume, temp / "slots", both=True))
+    source = quiet_volume(volume, temp / "volume")
+    image = boot_slots.Image.create(temp / "slots.img", boot_slots.layout(source, temp / "slots", both=True))
+    shutil.rmtree(source)
     shutil.rmtree(temp / "slots")
 
-    def booted(slot, *lines, trial=False):
-        out = boot(image.path, STARTED).replace("\r", "")
+    def booted(slot, *lines, trial=False, until=STARTED):
+        out = boot(image.path, until).replace("\r", "")
         for line in (f"BOOT: SLOT {slot} LOADED" + (" ON TRIAL" if trial else "\n"), *lines):
             assert line in out, (line, out[-3000:])
         assert STARTED in out and "BOOT ERROR" not in out, out[-3000:]
@@ -54,14 +72,18 @@ def run(boot, temp, volume, label):
     booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
     assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
-    booted("B", "SLOT B, CONFIRMED")
-    print(f"PASS ({label}): slot B boots on trial, its try counted on the disk first, and as confirmed once confirmed", flush=True)
+    zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
+    booted("B", "SLOT B, CONFIRMED", zone, until=zone)
+    print(f"PASS ({label}): slot B boots on trial, its try counted on the disk first, and as confirmed once confirmed; "
+          "vfs_server's update zone is then slot A", flush=True)
 
     # Staged again and never confirmed: the next boot falls back to A.
     boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("B", trial=True)
-    booted("A", "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT")
-    print(f"PASS ({label}): an unconfirmed trial of slot B falls back to slot A at the next boot", flush=True)
+    zone = "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
+    booted("A", "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", zone, until=zone)
+    print(f"PASS ({label}): an unconfirmed trial of slot B falls back to slot A at the next boot, and the update zone is "
+          "slot B again", flush=True)
 
     # A trial slot with a damaged service: not loaded, A boots, and B is left with no tries.
     rtc = image.read("MIND/B/rtc.elf")
@@ -81,3 +103,27 @@ def run(boot, temp, volume, label):
     print(f"PASS ({label}): a boot record torn by a cut write is ignored for the other one", flush=True)
     fsck(image)
     print(f"PASS ({label}): the boot volume's file system is consistent after the bootloader's writes to the records", flush=True)
+    if updater:
+        update_zone(boot, temp, volume, label, updater)
+    else:
+        print(f"SKIP ({label}): the update zone's client: no test stand-in for the updater was built", flush=True)
+
+
+def update_zone(boot, temp, volume, label, updater):
+    """The volume with the stand-in as `updater.elf`, signed again and laid out in slots; slot A boots, so B is the
+    zone. The stand-in tries each case at start and logs the outcomes in one line."""
+    source = quiet_volume(volume, temp / "zone-volume", updater)
+    image = boot_slots.Image.create(temp / "zone.img", boot_slots.layout(source, temp / "zone-slots", both=True))
+    shutil.rmtree(source)
+    shutil.rmtree(temp / "zone-slots")
+    record = image.read(boot_slots.FILES[0])
+    out = boot(image.path, "[UPDATER-STUB] ZONE").replace("\r", "")
+    line = ("[UPDATER-STUB] ZONE MIND/B: STUB.TXT WRITTEN; MIND/BOOT0 WHOLE WRITTEN, A PART INVALID, MADE AGAIN DENIED; "
+            "MIND/A DENIED; EFI DENIED; MIND DENIED")
+    assert line in out, out[-3000:]
+    assert image.read("MIND/B/STUB.TXT") == b"STAGED BY THE UPDATER'S STAND-IN\n"
+    assert image.read(boot_slots.FILES[0]) == record
+    fsck(image)
+    print(f"PASS ({label}): the updater's client of vfs_server fills the slot that did not boot and writes a boot record "
+          "whole in place; the running slot, EFI, a new file in MIND, part of a record and a record made afresh are "
+          "refused", flush=True)
