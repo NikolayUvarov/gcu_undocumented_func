@@ -1,0 +1,48 @@
+# 550-KRN-0082 — The BCM4331's 802.11 core stopped before its bus mastering is turned off
+
+**Type:** kernel (`kernel/src/pci.rs`, the arch clocks) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+
+## Problem
+
+The drivers track's request (2026-10-11, from the MacBook Pro): since [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), the kernel turns off the BCM4331's bus mastering at enumeration. The 802.11 core that the firmware left running is still writing what it receives to memory at that moment.
+
+The core's agent then reports a pending backplane operation (reset status `00000002`) for the rest of the boot:
+
+- every boot built with 550-KRN-0070 read `00000002` before `bcm_wifi` did anything, and the two built without it read `00000000`;
+- an SMC reset does not change it;
+- a reset pulse from `bcm_wifi` does not clear it, and the first access to a register of the core then stops the machine ([550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), step 2, twice).
+
+Wi-Fi is blocked by this.
+
+## Plan
+
+- **Stop the core first.** For `14E4:4331` in `pci::enumerate`, before `stop_mastering`, and only while bus mastering is still on, the core is stopped as Linux's early quirk for the AirPort card does:
+  - map BAR0 (16 KiB) through the kernel's identity map;
+  - wait up to 300 µs (30 × 10 µs) for the agent's reset status (BAR0 + 0x1000 + 0x804) to read 0;
+  - write 1 to its reset control (+0x800) and read it back, wait 1 µs;
+  - write 0 and read it back, wait 10 µs.
+- **Then turn bus mastering off,** as now.
+- **Guards, each logged.** The card is left alone, and the log says so, when:
+  - BAR0 is not a memory BAR within the identity map;
+  - the function is not in D0;
+  - BAR0's second window (configuration offset 0xAC) does not point at the core's agent (`18101000`, as the firmware leaves it).
+
+  Memory decoding is turned on for the access and restored afterwards.
+- **Delays before the tick.** Enumeration runs before the tick and the clock calibration. `clock::spin_us` waits at least the time asked:
+  - x86 uses the ACPI PM timer, bounded by the TSC counted as at most 10 GHz, so a PM timer that does not count still ends;
+  - aarch64 uses the generic counter.
+- **The log line.** `PCI: 04:00.0 BCM4331: 802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF (RESET STATUS xxxxxxxx, NOW xxxxxxxx)`.
+- **`bcm_wifi` keeps its own pulse.** A core already idle takes a second one without harm.
+
+## Acceptance criteria
+
+- On the MacBook Pro:
+  - `bcm_wifi`'s first line about the core reads reset status `00000000`;
+  - bus mastering is still turned off at boot;
+  - the machine boots as before;
+  - the kernel's line above is in the log.
+- In QEMU, which has no BCM4331, every suite runs as before.
+
+## Related
+
+[550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), [550-DRV-0006](550-DRV-0006-broadcom-wifi.md).

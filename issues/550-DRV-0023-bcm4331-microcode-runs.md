@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; skipped until `init` gives the file access) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("The BCM4331's 802.11 core stopped before its bus mastering is turned off") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; skipped until `init` gives the file access) · **Blocked by:** [550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md) · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -22,7 +22,7 @@ The facts come from published register descriptions (the b43 specifications) and
 
 On the MacBook Pro, one boot logs the microcode's size and SHA-256, the PHY and radio versions, and either the microcode's revision and patch level, or the interrupt reason it saw instead. The core is in reset afterwards, and the machine runs on as before. This is evidence for this machine only (MC-12.1), not of Wi-Fi working.
 
-**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel (a request in [requests-KRN.md](requests-KRN.md)): stop the core with a reset pulse first, then turn bus mastering off.
+**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel ([550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md)): stop the core with a reset pulse first, then turn bus mastering off.
 
 ## Related
 

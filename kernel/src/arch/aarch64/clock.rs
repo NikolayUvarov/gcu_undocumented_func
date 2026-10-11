@@ -10,3 +10,8 @@ pub fn tsc_hz() -> u64 { frequency() }
 pub fn resolution_ns() -> u64 { (1_000_000_000 / frequency()).max(1) }
 pub fn now_ns() -> u64 { (count() as u128 * 1_000_000_000 / frequency() as u128) as u64 }
 pub fn cycles() -> u64 { count() }
+/// Waits at least `us` microseconds; usable before the tick runs.
+pub fn spin_us(us: u64) {
+    let end = count() + (us as u128 * frequency() as u128).div_ceil(1_000_000) as u64 + 1;
+    while count() < end { core::hint::spin_loop(); }
+}
