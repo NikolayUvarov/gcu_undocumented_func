@@ -44,5 +44,5 @@ Today a frozen machine stays frozen until the user holds the power button. The n
 - [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md) (the freezes)
 - [173-KRN-0036](173-KRN-0036-safe-start.md) (a safe start on a key)
 - [174](174-full-use-of-pc-hardware.md) (the IOMMU)
-- [000-KRN-0075](000-KRN-0075-init-waits-for-every-service-with-a-limit.md)
+- [000-KRN-0075](../issues-done/000-KRN-0075-init-waits-for-every-service-with-a-limit.done)
 - [000-KRN-0077](000-KRN-0077-interrupt-storms-contained.md)

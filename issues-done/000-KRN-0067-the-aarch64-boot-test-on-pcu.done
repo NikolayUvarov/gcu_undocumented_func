@@ -1,6 +1,6 @@
-# 000-KRN-0067 — The aarch64 boot test passes on PCU
+# 000-KRN-0067 — The aarch64 boot test passes on PCU — done
 
-**Type:** CI · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (the test boots FAT images; PCU's run left) · **Blocked by:** — · **Roadmap:** track A (CI) · **Constitution:** MC-12.1
+**Type:** CI · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-11) · **Blocked by:** — · **Roadmap:** track A (CI) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -39,6 +39,23 @@ On 2026-10-10 the maintainer decided that the aarch64 part of a gate runs on the
 - **FAT images.** `tests/aarch64_smoke.py` boots every system disk from a raw FAT16 image made of the build with `mkfs.fat` and `mcopy` (`image_of`). The image has the MBR signature and partition start that vvfat gave, so the checks keep their numbers. vvfat serves only the read-only decoy disk, which the guest does not write.
 - **Two lines waited for.** The first boot waits for both `[INIT] READY` and `[BLOCKSTORE] READY`. The block store mounts its RAM disk meanwhile and may print its line after init's. The storage session measured it 0.4 s ahead on its machine. This was the tools track's request on `fast-test`.
 
+## Resolution
+
+In `main` through cf0283f, step 2 of the plan.
+
+**What changed.**
+- **FAT images.** `tests/aarch64_smoke.py` boots every system disk from a raw FAT16 image of the build, made with `mkfs.fat` and `mcopy` (`image_of`). The image has the MBR signature and partition start that vvfat gave, so the checks keep their numbers.
+- **vvfat.** It serves only the read-only decoy disk, which the guest does not write.
+- **Two lines waited for.** The first boot waits for both `[INIT] READY` and `[BLOCKSTORE] READY`. This was the tools track's request; the storage session measured the block store's line about 0.4 s ahead of init's, but it may come after.
+
+**Evidence.** "aarch64: boot and fault containment" passed:
+- on PCU in 106 s (cf0283f, in that commit's gate);
+- on the kernel session's machine in 99 s (567ac62).
+
+`docs/effector.md` and `docs/effector_RU.md`, section 4, now run the group on PCU with the others.
+
+**Not looked into.** Step 1 (which write breaks vvfat): the test no longer depends on it.
+
 ## Related
 
-`docs/effector.md` (EN, RU) section 4; [176](176-test-and-performance-utilities.md) (the measurements that led to running aarch64 on PCU).
+`docs/effector.md` (EN, RU) section 4; [176](../issues/176-test-and-performance-utilities.md) (the measurements that led to running aarch64 on PCU).
