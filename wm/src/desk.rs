@@ -531,8 +531,8 @@ impl Wm {
                     Outcome::Stay => Action::Redraw,
                     Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
-                    // Settings closes: the keys go to the shell's window, where the shell asks.
-                    Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
+                    // The shell sets the clock at once (000-APP-0060): Settings stay open and show the outcome.
+                    Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
                 };
             }
             Mode::Normal => {}
@@ -637,7 +637,7 @@ impl Wm {
                 Outcome::Stay => Action::Redraw,
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
-                Outcome::SetClock { date, seconds } => { self.mode = Mode::Normal; Action::SetClock { date, seconds } }
+                Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
             };
         }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.

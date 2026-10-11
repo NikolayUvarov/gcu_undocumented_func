@@ -6302,69 +6302,56 @@ def wm_suite(vm):
         time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
         return counts
 
-    def clock_from_settings():
-        # The date and time page (000-APP-0055): the year one on, set through the shell once agreed in its window, shown
-        # on the page; then back. The shell waits for the answer in its window, so the question is read on the screen.
-        shell_ids = set(shell_re.findall("".join(seen)))
-        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+    def screen_has(text):
+        # `text` on the screen within 6 s; the screen.
+        for _ in range(20):
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(canon(text) in row for row in screen):
+                return screen
+        raise AssertionError((text, screen))
 
+    def clock_from_settings():
+        # The date and time page (000-APP-0055): the year one on, set by the shell at once for wm (000-APP-0060: no
+        # question and no window of the shell's), shown on the page, which stays open; then back.
         def page():
             keys("alt-s", text="MODE=SETTINGS")
             keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
+            return shown_year()
+
+        def shown_year(want=None):
+            # The page's clock line, read from the screen (`want`: until it shows that year).
+            screen = []
             for _ in range(20):
                 time.sleep(.3)
-                shown = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen_text(vm)))
+                screen = screen_text(vm)
                 vm.serial(enter=False)
-                if shown:
-                    return int(shown[1])
-            raise AssertionError(screen_text(vm))
+                found = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen))
+                if found and (want is None or int(found[1]) == want):
+                    return int(found[1])
+            raise AssertionError((want, screen))
 
         def set_year(step):
             known = {m[0] for m in windows_re.findall("".join(seen))}
             year = page()
             keys("right" if step > 0 else "left")
             keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
-            vm.hmp("sendkey ret")
-            vm.serial(enter=False)
-            screen = []
-            for _ in range(40):
-                time.sleep(.3)
-                screen = screen_text(vm)
-                vm.serial(enter=False)
-                if any(canon("RUN IT? (Y/N)") in row for row in screen):
-                    break
-            else:
-                raise AssertionError(screen)
-            assert any(canon(f"date set {year + step:04}-") in row for row in screen), screen
-            vm.hmp("sendkey y")
-            vm.serial(enter=False)
+            keys("ret", text=f"[WM] SET CLOCK {year + step:04}-")
             until(f'THE SHELL RAN "date set {year + step:04}-')
-            for _ in range(100):
-                wait(lines=0)
-                asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
-                if asking:
-                    break
-                time.sleep(.1)
-            while state()[1] != asking[-1]:
-                wait()
-            # The shell's date shows it too: typed in the window the shell asked in.
-            vm.send_bytes(b"date\r")
-            wait(lines=5)
-            for _ in range(30):
-                time.sleep(.3)
-                rows = inside(asking[-1])
-                if any(canon(f"{year + step:04}-") in row and canon("(RTC, NO TIME ZONE)") in row for row in rows):
-                    break
-            else:
-                raise AssertionError(rows)
-            close_shell(asking[-1])
-            assert page() == year + step
+            assert re.search(rf'THE SHELL RAN "date set {year + step:04}-[^"]*" AT ONCE', "".join(seen)), "".join(seen)[-2000:]
+            assert re.search(rf"\[WM\] SET CLOCK {year + step:04}-\S+ \S+: The clock is set to", "".join(seen)), "".join(seen)[-2000:]
+            assert shown_year(year + step) == year + step
+            screen_has("The clock is set to")
+            assert last_state().startswith("MODE=SETTINGS"), last_state()
+            assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
             keys("esc", text="MODE=NORMAL")
             return year
 
         year = set_year(1)
         set_year(-1)
-        print(f"PASS: wm settings: the date page set the year to {year + 1} and back through the shell, agreed in its window; the shell's date and the page show it", flush=True)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back at once through the shell, with no question "
+              "and no window of the shell's; the page stayed open and showed it", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
@@ -6477,16 +6464,7 @@ def wm_suite(vm):
     def settings_react():
         # 000-APP-0056: each row of Settings' background page changes and is changed back (Left steps back, Enter ticks a
         # box again), and the image's file with nothing typed says what to do; each page to read says so on Enter; Enter
-        # on a field of the date page asks the shell to set the clock, and no keeps it.
-        def screen_has(text):
-            for _ in range(20):
-                time.sleep(.3)
-                screen = screen_text(vm)
-                vm.serial(enter=False)
-                if any(canon(text) in row for row in screen):
-                    return screen
-            raise AssertionError((text, screen))
-
+        # on a field of the date page sets the clock at once.
         kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
         rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"]
         keys("alt-s", text="MODE=SETTINGS")
@@ -6511,41 +6489,27 @@ def wm_suite(vm):
             screen_has(f"{page}: a page to read; nothing is set here yet")
         keys("up", "up", "up", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
-        # Enter on each field sets the clock to the fields too: the shell asks in its window, and no keeps the clock.
-        shell_ids = set(shell_re.findall("".join(seen)))
-        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+        # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
+        # stays as it was; no window of the shell's opens, and Settings stay open on the field.
+        known = {m[0] for m in windows_re.findall("".join(seen))}
         fields = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds"]
         for index, field in enumerate(fields):
             if index:
-                keys("alt-s", text="MODE=SETTINGS")
-                keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
-                keys(*["down"] * index, text=f"SETTINGS=Date and time:{field}")
-            known = {m[0] for m in windows_re.findall("".join(seen))}
-            declined = "".join(seen).count('THE SHELL DECLINED "date set ')
-            vm.hmp("sendkey ret")
-            vm.serial(enter=False)
-            screen = screen_has("RUN IT? (Y/N)")
-            assert any(canon("date set ") in row for row in screen), (field, screen)
-            vm.hmp("sendkey n")
-            vm.serial(enter=False)
+                keys("down", text=f"SETTINGS=Date and time:{field}")
+            ran = "".join(seen).count('THE SHELL RAN "date set ')
+            keys("ret", text="[WM] SET CLOCK ")
+            assert re.search(r"\[WM\] SET CLOCK \S+ \S+: The clock is set to", seen[-1]), (field, seen[-1])
             deadline = time.monotonic() + 20
-            while "".join(seen).count('THE SHELL DECLINED "date set ') <= declined:
+            while "".join(seen).count('THE SHELL RAN "date set ') <= ran:
                 assert time.monotonic() < deadline, (field, "".join(seen)[-2000:])
                 time.sleep(.1)
                 wait(lines=0)
-            asking = []
-            for _ in range(100):
-                wait(lines=0)
-                asking = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
-                if asking:
-                    break
-                time.sleep(.1)
-            while state()[1] != asking[-1]:
-                wait()
-            close_shell(asking[-1])
+            assert last_state().startswith(f"MODE=SETTINGS") and last_state().split("SETTINGS=", 2)[-1].startswith(f"Date and time:{field}"), (field, last_state())
+        assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
+        keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
               "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
-              "six fields asked the shell, where no kept the clock", flush=True)
+              "six fields set the clock at once, with no window of the shell's", flush=True)
 
     def console_joined(console):
         # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
