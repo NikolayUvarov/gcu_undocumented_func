@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (run only on request, step by step; the core's agent reports a pending operation since stage 1b's first reset) · **Blocked by:** [550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md) · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (blocked: the core's agent reports a pending operation from boot, see the cause below) · **Blocked by:** a request in [requests-KRN.md](requests-KRN.md) ("The BCM4331's 802.11 core stopped before its bus mastering is turned off") · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -48,7 +48,7 @@ Since then:
 
 Since then, on request only, stage 2 first reads two registers of the core as the pulse left it (nothing else changed), then goes on through the enable with the status logged, not obeyed. The last step in the log tells which access stops the machine, if one does.
 
-**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel ([550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md)): stop the core with a reset pulse first, then turn bus mastering off.
+**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel (a request in [requests-KRN.md](requests-KRN.md)): stop the core with a reset pulse first, then turn bus mastering off.
 
 ## Related
 
