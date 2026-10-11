@@ -6313,13 +6313,25 @@ def wm_suite(vm):
         # at that cell, and data/wm.conf keeps it; then back to 100% and auto.
         require("".join(seen), "[WM] SCALE 100% (AUTO): CELLS OF 8X16 PIXELS ON 1280X800")
         before = state()[2]
-        keys("alt-s", text="MODE=SETTINGS")
+        # With a window in front, its title leaves the top bar no room for Settings: they are in more ▼'s menu, which a
+        # click opens; a click on their entry opens them, as Alt+S does.
+        bar = screen_has("more ▼")[0]
+        point(bar.index(canon("more ▼")) + 1, 0)
+        mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "MORE", mode
+        rows = screen_has("Alt+S settings")
+        y = next(i for i, row in enumerate(rows) if i > 0 and canon("Alt+S settings") in row)
+        point(rows[y].index(canon("Alt+S settings")) + 2, y)
+        mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "SETTINGS", mode
+        print("PASS: wm top bar: with a window in front, Settings are in more ▼'s menu, opened by a click, and a click on "
+              "their entry opens them", flush=True)
         keys(*["down"] * 5, text="SETTINGS=Screen")
         keys("ret", text="SETTINGS=Screen:Scale")
         screen_has("Scale       < auto (100%) >")
-        keys("right", text="; scale = 100; SAVED")
+        keys("right", text="; scale = 100; pointer = auto; pointer-colour = white; SAVED")
         keys("right", text="[WM] SCALE 150%: CELLS OF 12X24 PIXELS, 106X33 OF THEM")
-        require("".join(seen), "; scale = 150; SAVED")
+        require("".join(seen), "; scale = 150; pointer = auto; pointer-colour = white; SAVED")
         wait(lines=0)
         after = state()[2]
         for id, (x, y, w, h) in before.items():
@@ -6332,13 +6344,13 @@ def wm_suite(vm):
             time.sleep(.3)
             rows = screen_text(vm, (12, 24))
             vm.serial(enter=False)
-            if any(canon("Scale       < 150% >") in row for row in rows) and canon("│ settings ") in rows[0]:
+            if any(canon("Scale       < 150% >") in row for row in rows) and canon("│ more ▼ ") in rows[0]:
                 break
         else:
             raise AssertionError(rows)
         assert len(rows) == 33 and len(rows[0]) == 106, (len(rows), len(rows[0]))
         keys("left", text="[WM] SCALE 100%: CELLS OF 8X16 PIXELS, 160X50 OF THEM")
-        keys("left", text="; scale = auto; SAVED")
+        keys("left", text="; scale = auto; pointer = auto; pointer-colour = white; SAVED")
         screen_has("Scale       < auto (100%) >")
         print("PASS: wm scale: auto gives 100% on 1280 × 800; Settings' screen page set 150% (12 × 24 cells, 106 × 33 of "
               "them, the frames in the same share of the screen, the text read at that cell, kept in data/wm.conf), then "

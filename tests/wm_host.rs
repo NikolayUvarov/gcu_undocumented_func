@@ -1219,14 +1219,31 @@ fn every_entry_of_the_menu_reacts() {
 #[test]
 fn every_item_of_the_top_bar_and_every_alt_key_reacts() {
     // What a click did: an action for main, a dialog or mode of wm, the windows changed, or a line on the status line.
+    // An item the bar has no room for is reached through `more ▼`'s menu (000-APP-0061).
+    let click = |wm: &mut Wm, x: usize, y: usize| { let action = wm.pointer(x, y, 1, 0); wm.pointer(x, y, 0, 0); action };
     for windows in [0, 1, 4] {
-        for (at, _, item) in desk::bar_items(160) {
+        let make = || {
             let mut wm = Wm::new(160, 50);
             if windows == 4 { wm.desk = desk_of_four(); }
             if windows == 1 { wm.desk.add(text(1, "fm")); }
+            wm
+        };
+        let (items, moved) = make().top_bar();
+        assert_eq!(moved.is_empty(), windows == 0, "{:?}", moved);
+        let reach: Vec<(desk::Bar, Option<usize>)> = items.iter().filter(|i| i.2 != desk::Bar::More).map(|i| (i.2, None)).chain(moved.iter().enumerate().map(|(row, &b)| (b, Some(row)))).collect();
+        assert_eq!(reach.len(), 12);
+        for (item, row) in reach {
+            let mut wm = make();
             let before = wm.desk.status();
-            let action = wm.pointer(at + 1, 0, 1, 0);
-            wm.pointer(at + 1, 0, 0, 0);
+            let action = match row {
+                None => { let at = items.iter().find(|i| i.2 == item).unwrap().0; click(&mut wm, at + 1, 0) }
+                Some(row) => {
+                    let more = items.iter().find(|i| i.2 == desk::Bar::More).unwrap().0;
+                    click(&mut wm, more + 1, 0);
+                    let area = wm.more_area().unwrap();
+                    click(&mut wm, area.x + 2, area.y + 1 + row)
+                }
+            };
             let reacted = action != Action::Redraw || !wm.status().starts_with("MODE=NORMAL") || wm.notice.is_some() || wm.desk.status() != before;
             assert!(reacted, "{:?} with {} windows: {}", item, windows, wm.status());
             if windows == 0 && matches!(item, desk::Bar::Next | desk::Bar::Move | desk::Bar::Close | desk::Bar::Full) {
@@ -1520,32 +1537,64 @@ fn the_pointer_has_a_size_and_a_colour() {
     assert!(wm.status().contains("SETTINGS=Screen:Colour"), "{}", wm.status());
 }
 
-// The top bar on a grid of larger cells (000-APP-0061): at 160 cells each item shows its key; narrower, its word
-// alone, and Settings, where the scale is set, is always there, last.
+// The top bar without room for every item (000-APP-0061: a grid of larger cells, the title of the window in front):
+// the items with a key leave first, from the right, into `more ▼`'s menu, which does what they do.
 #[test]
-fn the_top_bar_keeps_settings_on_a_narrow_grid() {
-    let full = desk::bar_items(160);
-    assert_eq!(full.len(), 12);
-    assert_eq!(desk::bar_label(160, desk::Bar::Settings), "Alt+S settings");
-    for cols in [106, 92, 84] {
-        let items = desk::bar_items(cols);
-        let &(at, width, last) = items.last().unwrap();
-        assert_eq!(last, desk::Bar::Settings, "{}", cols);
-        assert!(at + width <= cols, "{}", cols);
-        assert_eq!(desk::bar_label(cols, desk::Bar::Settings), "settings");
-        assert_eq!(desk::bar_label(cols, desk::Bar::Next), "next");
-    }
-    assert_eq!(desk::bar_items(106).len(), 12, "every item's word fits 106 cells");
-    assert!(desk::bar_items(84).len() < 12, "84 cells: the last but Settings left out");
-    // Drawn and clicked: the word is on the bar, a click on it opens Settings.
+fn the_top_bar_folds_into_more() {
+    use desk::Bar;
+    let (items, moved) = desk::bar_layout(160, 0);
+    assert!(items.len() == 12 && moved.is_empty() && items[11] == (144, 16, Bar::Settings), "{:?}", items);
+    let (items, moved) = desk::bar_layout(160, 7);
+    assert_eq!((items.last().copied(), moved), (Some((144, 8, Bar::More)), Vec::from([Bar::Settings])), "a title of 7 cells");
+    let (items, moved) = desk::bar_layout(106, 0);
+    assert_eq!(moved, [Bar::Leave, Bar::List, Bar::Full, Bar::Fit, Bar::Settings]);
+    assert_eq!(items.iter().map(|i| i.2).collect::<Vec<_>>(), [Bar::Programs, Bar::Next, Bar::Programs, Bar::Run, Bar::Move, Bar::Close, Bar::Help, Bar::More]);
+    assert_eq!(items.last().copied(), Some((89, 8, Bar::More)));
+    let (items, moved) = desk::bar_layout(84, 0);
+    assert!(moved.contains(&Bar::Help) && items.last().unwrap().0 + items.last().unwrap().1 <= 84, "{:?} {:?}", items, moved);
+    // Drawn: the items that fit, `more ▼`, and the title at the right.
+    let draw = |wm: &mut Wm, cols: usize| {
+        let mut cells = vec![Cell::BLANK; cols * 33];
+        let mut grid = Grid::new(&mut cells, cols, 33);
+        wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+        (0..33).map(|y| (0..cols).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>()
+    };
     let mut wm = Wm::new(106, 33);
-    let mut cells = vec![Cell::BLANK; 106 * 33];
-    let mut grid = Grid::new(&mut cells, 106, 33);
-    wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
-    let bar: String = (0..106).map(|x| grid.get(x, 0).ch).collect();
-    assert!(bar.contains("│ programs │") && bar.trim_end().ends_with("│ settings"), "{}", bar);
-    let (at, _, _) = *desk::bar_items(106).last().unwrap();
-    wm.pointer(at + 2, 0, 1, 0);
-    wm.pointer(at + 2, 0, 0, 0);
-    assert!(matches!(wm.mode, Mode::Settings(_)), "{}", wm.status());
+    wm.desk.add(text(1, "clock"));
+    let screen = draw(&mut wm, 106);
+    assert!(screen[0].starts_with(" wm │ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ more ▼ ") && screen[0].ends_with(" clock "), "{}", screen[0]);
+    // A click on it opens its menu under it; ↓ and Enter do the item, as its key does.
+    let click = |wm: &mut Wm, x: usize, y: usize| { let action = wm.pointer(x, y, 1, 0); wm.pointer(x, y, 0, 0); action };
+    click(&mut wm, 92, 0);
+    assert!(wm.status().starts_with("MODE=MORE") && wm.status().contains("MORE=Alt+Q leave"), "{}", wm.status());
+    let screen = draw(&mut wm, 106);
+    for (row, label) in ["Alt+Q leave", "Alt+L windows", "Alt+F full", "Alt+0 fit", "Alt+S settings"].iter().enumerate() {
+        assert!(screen[2 + row].contains(&format!("│ {}", label)), "{}: {}", label, screen[2 + row]);
+    }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().contains("MORE=Alt+S settings"), "{}", wm.status());
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    // A click on its item does it; Alt+L closes the menu and does its own; Esc and a click elsewhere close it.
+    click(&mut wm, 92, 0);
+    let area = wm.more_area().unwrap();
+    click(&mut wm, area.x + 3, area.y + 2);
+    assert!(wm.status().starts_with("MODE=LIST"), "Alt+L windows from the menu: {}", wm.status());
+    wm.key(key(KEY_ESC));
+    click(&mut wm, 92, 0);
+    wm.key(alt_char('s'));
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    click(&mut wm, 92, 0);
+    wm.key(key(KEY_ESC));
+    assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
+    click(&mut wm, 92, 0);
+    click(&mut wm, 50, 20);
+    assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
+    // At 160 cells the title leaves no room for Settings: it is in the menu, not under the title.
+    let mut wm = Wm::new(160, 33);
+    wm.desk.add(text(1, "fm"));
+    let screen = draw(&mut wm, 160);
+    assert!(screen[0].contains("│ Alt+0 fit │ more ▼ ") && screen[0].ends_with(" fm ") && !screen[0].contains("settings"), "{}", screen[0]);
 }
