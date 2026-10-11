@@ -358,7 +358,6 @@ fn blit(screen: &Screen, origin: (usize, usize), cell: (usize, usize), owner: &[
 }
 
 // The mouse pointer: an arrow, black outline (X) and white inside (W).
-const ARROW: [&[u8; 8]; 12] = [b"X       ", b"XX      ", b"XWX     ", b"XWWX    ", b"XWWWX   ", b"XWWWWX  ", b"XWWWWWX ", b"XWWWWWWX", b"XWWWXXXX", b"XWXWX   ", b"XX XWX  ", b"    XX  "];
 
 // A whole file of at most `limit` bytes from the user's files.
 fn read_file(path: &str, limit: usize) -> Option<Vec<u8>> {
@@ -402,15 +401,19 @@ fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: us
     }
 }
 
-// The pointer's size in pixels at a cell of `cell`: the arrow's 8 × 12 grows with the cell's 8 × 16.
-fn arrow_size(cell: (usize, usize)) -> (usize, usize) { (cell.0, cell.1 * 12 / 16) }
+// The pointer's size and colour as the log says them: `[WM] POINTER SIZE 200% (AUTO): 16X24 PIXELS, WHITE`.
+fn pointer_line(config: &Config, scale: u16) -> String {
+    let percent = wm::pointer::percent(config.pointer, scale);
+    let (w, h) = wm::pointer::size(percent);
+    let colour = wm::pointer::COLOURS.get(config.pointer_colour).map_or("white", |c| c.0);
+    format!("[WM] POINTER SIZE {}%{}: {}X{} PIXELS, {}", percent, if config.pointer.is_none() { " (AUTO)" } else { "" }, w, h, colour.to_uppercase())
+}
 
-fn draw_pointer(screen: &Screen, x: usize, y: usize, cell: (usize, usize)) {
-    let (w, h) = arrow_size(cell);
-    for row in 0..h {
-        let line = ARROW[row * 12 / h];
-        for col in 0..w {
-            match line[col * 8 / w] { b'X' => screen.pixel(x + col, y + row, 0), b'W' => screen.pixel(x + col, y + row, 0xFFFFFF), _ => {} }
+// The pointer at (x, y), `size` pixels large in colour `colour` (000-APP-0061).
+fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colour: usize) {
+    for row in 0..size.1 {
+        for col in 0..size.0 {
+            if let Some(color) = wm::pointer::pixel(size, colour, col, row) { screen.pixel(x + col, y + row, color); }
         }
     }
 }
@@ -436,6 +439,7 @@ fn main(info: &'static BootInfo) {
     let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
     (manager.wm.pixels, manager.wm.scale, backdrop.zoom) = (pixels, scale, scale as usize);
     mind::println!("[WM] SCALE {}%{}: CELLS OF {}X{} PIXELS ON {}X{}", scale, if backdrop.config.scale.is_none() { " (AUTO)" } else { "" }, cell.0, cell.1, pixels.0, pixels.1);
+    mind::println!("{}", pointer_line(&backdrop.config, scale));
     if let Some(problem) = problem { mind::println!("[WM] {}", problem); manager.wm.notice = Some(problem); }
     manager.wm.desk.background = backdrop.shown();
     manager.wm.background = backdrop.config.clone();
@@ -462,7 +466,8 @@ fn main(info: &'static BootInfo) {
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
-    let mut shown_pointer: Option<(usize, usize)> = None;
+    // Where the pointer was drawn last, and its size then.
+    let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
@@ -551,12 +556,19 @@ fn main(info: &'static BootInfo) {
                 Action::Settings(config) => {
                     // Settings changed the background (000-APP-0048): used at once and kept in data/wm.conf.
                     let saved = save(&config);
+                    let pointer_before = (backdrop.config.pointer, backdrop.config.pointer_colour);
                     let problem = backdrop.change(config, &mut |file| read_file(file, 32 << 20));
                     manager.wm.background = backdrop.config.clone();
                     manager.wm.desk.background = backdrop.shown();
                     (next_pattern, next_info) = (0, 0);
                     mind::println!("[WM] SETTINGS {}{}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "), if saved { "; SAVED" } else { "; NOT SAVED" });
                     manager.wm.notice = Some(problem.unwrap_or_else(|| String::from(if saved { "Settings: the background is kept in data/wm.conf" } else { "Settings: the background could not be written to data/wm.conf" })));
+                    // A new size or colour of the pointer (000-APP-0061): drawn so from the next frame.
+                    if (backdrop.config.pointer, backdrop.config.pointer_colour) != pointer_before {
+                        mind::println!("{}", pointer_line(&backdrop.config, scale));
+                        let colour = wm::pointer::COLOURS.get(backdrop.config.pointer_colour).map_or("white", |c| c.0);
+                        manager.wm.notice = Some(format!("Settings: the pointer is {}% and {}, kept in data/wm.conf", wm::pointer::percent(backdrop.config.pointer, scale), colour));
+                    }
                     // A new scale (000-APP-0061): the grid is made anew at its cells, the frames keep their share of
                     // the screen, and everything is drawn again.
                     let wanted = wm::scale::resolve(backdrop.config.scale, pixels);
@@ -651,8 +663,7 @@ fn main(info: &'static BootInfo) {
             let (owner, cells) = owner;
             let mut touched = Vec::new();
             // The cells under the pointer drawn last time are drawn again (pixel windows: all of them below).
-            if let Some((sx, sy)) = shown_pointer.take() {
-                let (aw, ah) = arrow_size(cell);
+            if let Some((sx, sy, (aw, ah))) = shown_pointer.take() {
                 for cy in (sy.saturating_sub(y0) / cell.1)..=((sy + ah - 1).saturating_sub(y0) / cell.1) { for cx in (sx.saturating_sub(x0) / cell.0)..=((sx + aw - 1).saturating_sub(x0) / cell.0) { term.touch(cx, cy); touched.push(cy * term.cols() + cx); } }
                 relayout = true;
             }
@@ -669,11 +680,15 @@ fn main(info: &'static BootInfo) {
                 let (Some(index), Some(live)) = (manager.wm.desk.index(id), manager.live(id)) else { continue };
                 blit(&screen, (x0, y0), cell, &owner, cols, index, manager.wm.desk.content(id), &live.surface);
             }
-            if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py, cell); shown_pointer = Some((px, py)); }
+            if manager.wm.pointer.is_some() {
+                let size = wm::pointer::size(wm::pointer::percent(backdrop.config.pointer, scale));
+                draw_pointer(&screen, px, py, size, backdrop.config.pointer_colour);
+                shown_pointer = Some((px, py, size));
+            }
         } else if background_moved && !shown_background.is_empty() {
             // Nothing else changed: the background's cells only, and the pointer over them again.
             paint(&screen, (x0, y0), cell, term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
-            if let Some((sx, sy)) = shown_pointer { draw_pointer(&screen, sx, sy, cell); }
+            if let Some((sx, sy, size)) = shown_pointer { draw_pointer(&screen, sx, sy, size, backdrop.config.pointer_colour); }
         }
         mind::time::sleep(if busy { 5 } else { 30 });
     }

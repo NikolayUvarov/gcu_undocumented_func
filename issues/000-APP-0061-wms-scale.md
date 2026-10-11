@@ -1,8 +1,8 @@
-# 000-APP-0061 — `wm`'s scale: auto on each start, 100 to 600% from Settings
+# 000-APP-0061 — `wm`'s scale and pointer: auto on each start, 100 to 600% from Settings, the pointer's size and colour
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5, MC-12.3
 
-**Recorded by:** the maintainer, 2026-10-11: "Scaling wm's output. On high-resolution screens everything is tiny and hard to hit with a trackpad. Add scaling and its configuration to wm. The default is auto (pick a sensible scale on the first start); offer the user 100 150 200 250 300 400 (and higher if reasonable)."
+**Recorded by:** the maintainer, 2026-10-11: "Scaling wm's output. On high-resolution screens everything is tiny and hard to hit with a trackpad. Add scaling and its configuration to wm. The default is auto (pick a sensible scale on the first start); offer the user 100 150 200 250 300 400 (and higher if reasonable)." And then: "about the mouse pointer: its size and colour must change too."
 
 ## Problem
 
@@ -25,6 +25,15 @@
 
   A scale chosen on another screen that does not fit here falls back to auto.
 - **The log.** `wm` logs the scale it uses.
+- **The pointer.** Its size and colour are set on the same page and kept as `pointer` and `pointer-colour`:
+  - `auto`, the default, draws the 8 × 12 arrow at the scale;
+  - 100 to 800% draw it at that size whatever the scale;
+  - the colours are white (the default), black, yellow, orange, red, green, cyan and magenta, each with an edge that
+    shows on the desktop.
+
+  `wm` logs the size and colour at the start and after each change.
+- **The top bar.** Its items take 160 cells with their keys. On a narrower grid they show their words alone, and
+  Settings, where the scale is set, always stays last.
 
 ## Acceptance criteria
 
@@ -35,12 +44,16 @@
   - the configuration's `scale` key, read and written;
   - `Desk::rescale` keeping the frames' places and shares;
   - the Screen page's steps and its text;
-  - `Wm::rescale`.
+  - `Wm::rescale`;
+  - the pointer's sizes, colours and pixels, its keys in `data/wm.conf` and its rows on the Screen page;
+  - the top bar on 106, 92 and 84 cells, with Settings last and its click.
 - The QEMU `wm` suite (1280 × 800) checks:
   - `[WM] SCALE 100% (AUTO)` at the start;
   - from the Screen page, the steps auto → 100% → 150%, with the log line, a grid of 106 × 33 cells of 12 × 24 pixels read off the screen, and the frames keeping their share;
-  - the steps back to auto, each saved in `data/wm.conf`.
-- `docs/tools` (EN and RU) describe the scale and the `scale` key.
+  - the steps back to auto, each saved in `data/wm.conf`;
+  - the pointer set to 200% and yellow, its fill (108 pixels in a 12 × 18 box) read off the screen, then back to auto
+    and white.
+- `docs/tools` (EN and RU) describe the scale, the pointer and their keys.
 
 ## Related
 

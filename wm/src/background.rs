@@ -37,11 +37,14 @@ pub struct Config {
     pub time: bool, pub date: bool, pub cpu: bool, pub net: bool, pub place: Place,
     /// wm's scale in percent (000-APP-0061); None: `auto`, chosen from the screen at each start.
     pub scale: Option<u16>,
+    /// The pointer's size in percent of its 8 × 12 arrow, None: `auto`, at wm's scale; its colour, an index into
+    /// `crate::pointer::COLOURS` (000-APP-0061).
+    pub pointer: Option<u16>, pub pointer_colour: usize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, net: false, place: Place::BottomRight, scale: None }
+        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, net: false, place: Place::BottomRight, scale: None, pointer: None, pointer_colour: 0 }
     }
 }
 
@@ -49,8 +52,9 @@ impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
     /// `complexity = 1..5`, `info = 0..100`, `show = time, date, cpu, net` (or `none`),
-    /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`
-    /// (wm's, 000-APP-0061). What is not said stays the default; each
+    /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`,
+    /// `pointer = auto | 100 | 150 | … | 800`, `pointer-colour = white | black | yellow | …` (wm's, 000-APP-0061). What
+    /// is not said stays the default; each
     /// part not understood is named in the second value.
     pub fn parse(text: &str) -> (Self, Vec<String>) {
         let mut config = Self::default();
@@ -99,6 +103,17 @@ impl Config {
                             None => wrong("scale is auto, 100, 150, 200, 250, 300, 400, 500 or 600"),
                         },
                     },
+                    "pointer" => match value.trim_end_matches('%').trim_end() {
+                        "auto" => config.pointer = None,
+                        n => match n.parse::<u16>().ok().filter(|n| crate::pointer::SIZES.contains(n)) {
+                            Some(n) => config.pointer = Some(n),
+                            None => wrong("pointer is auto, 100, 150, 200, 250, 300, 400, 500, 600 or 800"),
+                        },
+                    },
+                    "pointer-colour" => match crate::pointer::COLOURS.iter().position(|c| c.0 == value) {
+                        Some(n) => config.pointer_colour = n,
+                        None => wrong("pointer-colour is white, black, yellow, orange, red, green, cyan or magenta"),
+                    },
                     _ => wrong(&format!("unknown key {}", key)),
                 }
             }
@@ -113,13 +128,19 @@ impl Config {
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
         let scale = self.scale.map_or(String::from("auto"), |s| format!("{}", s));
-        format!("# wm's desktop background (000-APP-0047, 000-APP-0050) and scale (000-APP-0061)\n\
+        let pointer = self.pointer.map_or(String::from("auto"), |s| format!("{}", s));
+        let colour = crate::pointer::COLOURS.get(self.pointer_colour).map_or("white", |c| c.0);
+        format!("# wm's desktop background (000-APP-0047, 000-APP-0050), scale and pointer (000-APP-0061)\n\
                  # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
                  # show = time, date, cpu, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
                  # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
-                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\nplace = {}\nscale = {}\n",
-                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") }, place, scale)
+                 # pointer = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 | 800 (percent of 8 x 12; auto: at the scale)\n\
+                 # pointer-colour = white | black | yellow | orange | red | green | cyan | magenta\n\
+                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\nplace = {}\nscale = {}\n\
+                 pointer = {}\npointer-colour = {}\n",
+                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") }, place, scale,
+                pointer, colour)
     }
 }
 
