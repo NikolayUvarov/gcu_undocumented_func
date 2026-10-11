@@ -53,6 +53,8 @@ pub struct Editor {
     pub menu: MenuBar<'static>,
     pub dialog: Option<Dialog>,
     pub notice: Option<String>,
+    /// Whether the notice says what was done (shown green: saved, replaced) rather than a problem (red).
+    pub done: bool,
     query: String,
     height: usize,
     width: usize,
@@ -72,7 +74,7 @@ impl Editor {
     pub fn new(text: Vec<u8>, path: &str, read_only: bool) -> Self {
         let notice = read_only.then(|| String::from(READ_ONLY));
         Self { buffer: Buffer::new(text), cursor: 0, anchor: None, goal: None, top: 0, left: 0, path: String::from(path), read_only, overwrite: false, tab: 4,
-               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0,
+               clipboard: Vec::new(), menu: MenuBar::new(&TITLES, &ITEMS), dialog: None, notice, done: false, query: String::new(), height: 20, width: 80, modifiers: 0, buttons: 0,
                syntax: syntax::for_path(path), colours: true, states: alloc::vec![State::Normal] }
     }
 
@@ -138,7 +140,7 @@ impl Editor {
 
     // Changes need a writable file.
     fn writable(&mut self) -> bool {
-        if self.read_only { self.notice = Some(String::from(READ_ONLY)); }
+        if self.read_only { (self.notice, self.done) = (Some(String::from(READ_ONLY)), false); }
         !self.read_only
     }
 
@@ -161,7 +163,7 @@ impl Editor {
         self.goal = None;
     }
 
-    fn too_large(&mut self) { self.notice = Some(String::from("The text would be larger than 8 MiB")); }
+    fn too_large(&mut self) { (self.notice, self.done) = (Some(String::from("The text would be larger than 8 MiB")), false); }
 
     /// Types `text` at the cursor (replacing the selection; in overwrite mode the character under the cursor).
     pub fn type_text(&mut self, text: &str) {
@@ -226,7 +228,7 @@ impl Editor {
         let from = self.selection().map_or(self.cursor, |(_, end)| end);
         match self.buffer.find(&self.query, from) {
             Some((start, end)) => { self.anchor = Some(start); self.cursor = end; self.goal = None; }
-            None => self.notice = Some(format!("Not found: {}", self.query)),
+            None => (self.notice, self.done) = (Some(format!("Not found: {}", self.query)), false),
         }
     }
 
@@ -234,12 +236,12 @@ impl Editor {
     pub fn saved(&mut self, path: &str, result: Result<usize, String>) {
         match result {
             Ok(bytes) => {
-                self.buffer.mark_saved(); self.path = String::from(path); self.read_only = false; self.notice = Some(format!("Saved {} bytes", bytes));
+                self.buffer.mark_saved(); self.path = String::from(path); self.read_only = false; (self.notice, self.done) = (Some(format!("Saved {} bytes", bytes)), true);
                 // Saved under another name: its extension may name another language.
                 let syntax = syntax::for_path(path);
                 if syntax.map(|l| l.name) != self.syntax.map(|l| l.name) { self.syntax = syntax; self.states.truncate(1); }
             }
-            Err(error) => self.notice = Some(format!("Not saved: {}", error)),
+            Err(error) => (self.notice, self.done) = (Some(format!("Not saved: {}", error)), false),
         }
     }
 
@@ -287,7 +289,7 @@ impl Editor {
                 Edit::Submit => {
                     match line.as_str().trim().parse::<usize>() {
                         Ok(n) if n >= 1 => { let at = self.buffer.line_start(n - 1); self.move_to(at, false, false); }
-                        _ => self.notice = Some(String::from("A line number, please")),
+                        _ => (self.notice, self.done) = (Some(String::from("A line number, please")), false),
                     }
                     false
                 }
@@ -305,7 +307,7 @@ impl Editor {
                         self.buffer.replace_all(&ranges, with.as_str().as_bytes());
                         self.query = needle;
                         self.cursor = self.cursor.min(self.buffer.len()); self.anchor = None;
-                        self.notice = Some(format!("Replaced {}", ranges.len()));
+                        (self.notice, self.done) = (Some(format!("Replaced {}", ranges.len())), true);
                         false
                     }
                     Edit::Cancel => false,
@@ -494,7 +496,7 @@ impl Editor {
         grid.text_max(1, 0, name, w.saturating_sub(state_width + 2), theme.status);
         fkey_bar(grid, h - 1, KEYS.labels(self.modifiers), theme);
         // A notice covers the key bar until the next key, unless a modifier is held to see what the keys do.
-        if let Some(notice) = self.notice.as_ref().filter(|_| self.modifiers == 0) { grid.text_padded(0, h - 1, notice, w, theme.error); }
+        if let Some(notice) = self.notice.as_ref().filter(|_| self.modifiers == 0) { grid.text_padded(0, h - 1, notice, w, if self.done { theme.ok } else { theme.error }); }
         if self.menu.open { self.menu.draw(grid, 0, theme); }
         let cursor = Some((column - self.left, 1 + line - self.top));
         match self.dialog.as_mut() {

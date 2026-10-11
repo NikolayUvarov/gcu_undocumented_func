@@ -133,6 +133,24 @@ const FILES_ITEMS: [&str; 11] = ["View  F3", "Edit  F4", "New file  Shift+F4", "
 const COMMAND_ITEMS: [&str; 2] = ["Find file  Alt+F7", "Swap panels  Ctrl+U"];
 const OPTION_ITEMS: [&str; 1] = ["Hidden and system files  Ctrl+H"];
 const MENU_ITEMS: [&[&str]; 5] = [&PANEL_ITEMS, &FILES_ITEMS, &COMMAND_ITEMS, &OPTION_ITEMS, &PANEL_ITEMS];
+/// The boot disk's directory the user may write in (docs/profile/threat-model.md: the user's files client writes on
+/// ram:, log: and in data/ of the boot disk).
+pub const DATA: &str = "data";
+
+/// `path` is on the boot disk outside data/, where nothing may be written (000-APP-0062).
+pub fn outside_data(path: &str) -> bool {
+    let (volume, rest) = panel::volume(path);
+    volume.is_empty() && !inside(&rest.to_lowercase(), DATA)
+}
+
+/// Where F7 makes `typed` from a panel at `here` (000-APP-0062): a relative name typed on the boot disk outside data/
+/// goes into data/, since nothing else there may be written; the second value says so.
+pub fn mkdir_target(here: &str, typed: &str) -> (String, bool) {
+    let path = resolve(here, typed);
+    let relative = panel::volume(typed.trim()).0.is_empty() && !typed.trim().starts_with('/');
+    if relative && outside_data(&path) { (resolve(DATA, typed), true) } else { (path, false) }
+}
+
 const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "", "View", "Edit", "Copy", "RenMov", "Mkdir", "Delete", "PullDn", "Quit"],
                                          shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["LPanel", "RPanel", "Name", "Ext", "Time", "Size", "", "", "", ""],
                                          alt: ["Left", "Right", "", "", "", "", "Find", "", "", ""] };
@@ -857,12 +875,13 @@ impl<'b> Fm<'b> {
                 Edit::Submit => {
                     let typed = String::from(line.as_str().trim());
                     if !typed.is_empty() {
-                        let path = resolve(&self.panels[self.active].path, &typed);
+                        let (path, into_data) = mkdir_target(&self.panels[self.active].path, &typed);
                         match disk.mkdir(&path) {
                             Ok(()) => {
+                                if into_data { self.notice = Some(format!("Made {}: on the boot disk only data/ may be written", display(&path))); }
                                 if let Err(failure) = disk.flush(&path) { self.notice = Some(format!("{}: not written to disk: {}", display(&path), failure.text())); }
-                                // The cursor goes to the new directory, or to the one it was made in.
-                                let here = self.panels[self.active].path.clone();
+                                // The cursor goes to the new directory, or to the one it was made in (data/ when it went there).
+                                let here = if into_data { String::from(DATA) } else { self.panels[self.active].path.clone() };
                                 let below = if is_root(&here) { panel::volume(&path).1 } else { path.get(here.len() + 1..).unwrap_or("") };
                                 let focus = (inside(&path, &here) && !path.eq_ignore_ascii_case(&here)).then(|| String::from(below.split('/').next().unwrap_or("")));
                                 self.load(self.active, &here, focus.as_deref(), disk);
@@ -1173,7 +1192,9 @@ impl<'b> Fm<'b> {
                 let prompt = format!("{} {} to (A:/..., ram:/...):", if *op == Op::Copy { "Copy" } else { "Move or rename" }, what);
                 Some(input_dialog(grid, if *op == Op::Copy { "Copy" } else { "Move" }, &prompt, line, 64, theme))
             }
-            Some(Dialog::Mkdir { line }) => Some(input_dialog(grid, "Make directory", "Name (parents are made too):", line, 50, theme)),
+            Some(Dialog::Mkdir { line }) => Some(if outside_data(&self.panels[self.active].path) {
+                input_dialog(grid, "Make directory", "Only data/ may be written here: a name is made in A:/data/", line, 64, theme)
+            } else { input_dialog(grid, "Make directory", "Name (parents are made too):", line, 50, theme) }),
             Some(Dialog::NewFile { line }) => Some(input_dialog(grid, "Edit new file", "Name:", line, 50, theme)),
             Some(Dialog::Delete { job, count, selected }) => {
                 let lines = [format!("Delete {} {}", count, if *count == 1 { "entry" } else { "entries" }), format!("({} files and directories in all)?", job.steps.len())];

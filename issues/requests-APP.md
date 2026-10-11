@@ -55,23 +55,6 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
 
-## `files` reads the kernel from the slot that booted (351-UPD-0016)
-
-**Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
-
-### Problem
-
-`files` reads `kernel.elf` and the bootloader to show that whole files come back through `vfs_server` (`files/src/main.rs`). On an image made with `make_usb_image.py --slots` the kernel is in `MIND/A/kernel.elf` (or `MIND/B/` after an update), not at the root, so `files` reports `OPEN kernel.elf FAILED` there. The QEMU checks do not run `files` on such an image yet.
-
-### Plan (a proposal; the tools track decides)
-
-- Read `kernel.elf` from the root when it is there, else from `MIND/A` or `MIND/B`: the slot that booted is in `BootInfo` (`boot_slot.slot`).
-- Say which one was read.
-
-### Acceptance criteria
-
-On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.
-
 ## `poweroff` and `shutdown`, and a menu entry to turn the machine off (000-KRN-0080)
 
 **Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off".
@@ -126,3 +109,48 @@ All told, `wm` runs at about 5–11 frames a second, unevenly.
 ### Acceptance criteria
 
 On the MacBook Pro with 000-KRN-0081, the moving background runs evenly at full contrast. `wm` records the time a frame takes; the `wm` suite reads it in QEMU.
+
+## `files` reads the kernel from the slot that booted (351-UPD-0016)
+
+**Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
+
+### Problem
+
+`files` reads `kernel.elf` and the bootloader to show that whole files come back through `vfs_server` (`files/src/main.rs`). On an image made with `make_usb_image.py --slots` the kernel is in `MIND/A/kernel.elf` (or `MIND/B/` after an update), not at the root, so `files` reports `OPEN kernel.elf FAILED` there. The QEMU checks do not run `files` on such an image yet.
+
+### Plan (a proposal; the tools track decides)
+
+- Read `kernel.elf` from the root when it is there, else from `MIND/A` or `MIND/B`: the slot that booted is in `BootInfo` (`boot_slot.slot`).
+- Say which one was read.
+
+### Acceptance criteria
+
+On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.
+
+## The shell's `effector` command: setup, policy, status (750)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+The Effector agent is off by default, and only the owner may turn it on and say what the server may do. Only the shell can write to `data/`, so the owner's commands for the agent belong in the shell.
+
+### Plan (a proposal; the tools track decides)
+
+- `effector setup URL PIN [NEXT-PIN]`:
+  - writes the server's address and certificate pins to `data/effector/`;
+  - reads the token from the console without echoing it;
+  - asks for confirmation and shows what it wrote, except the token.
+- `effector policy show | edit | allow <line> | deny <line>`: the policy of 750-EFF-0003, with confirmation for anything that widens it.
+- `effector enable | disable`: through `svc enable`/`disable` (173) for both services; disabling also revokes the session.
+- `effector status`:
+  - connected or not;
+  - the server and its pin;
+  - the last heartbeat accepted;
+  - the operations in flight;
+  - the last audit lines.
+- The same commands in `msh` under `requires: lifecycle`, and help in `docs/tools/`.
+
+### Acceptance criteria
+
+In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.

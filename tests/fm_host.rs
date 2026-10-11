@@ -766,10 +766,19 @@ fn copy_move_mkdir_delete() {
     run(&mut fm, &mut disk);
     assert!(disk.file("ram:papers/old/notes.md").is_some() && disk.file("ram:docs/notes.txt").is_none());
     assert_eq!(fm.panels[1].current().unwrap().name, "papers");
-    // F7: a directory on the boot disk only in data/.
+    // F7: a directory on the boot disk only in data/. Outside it the dialog says so and a name goes into data/
+    // (000-APP-0062); a path naming the root is refused.
     fm.key(code(KEY_TAB), &mut disk);
     fm.key(f(7), &mut disk);
+    assert!(draw(&mut fm, 100, 30).iter().any(|l| l.contains("Only data/ may be written here: a name is made in A:/data/")));
     typed(&mut fm, &mut disk, "system");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(disk.is_dir("data/system") && !disk.is_dir("system"));
+    assert_eq!((fm.panels[0].path.as_str(), fm.panels[0].current().unwrap().name.as_str()), ("data", "system"));
+    assert_eq!(fm.notice.as_deref(), Some("Made A:/data/system: on the boot disk only data/ may be written"));
+    fm.load(0, "", None, &mut disk);
+    fm.key(f(7), &mut disk);
+    typed(&mut fm, &mut disk, "A:/system");
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram:, log: and data/ are writable)"));
     fm.key(f(7), &mut disk);
@@ -1316,4 +1325,21 @@ fn saving_keeps_other_staging_files() {
     assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), b"new original");
     assert!(disk.file("ram:notes/todo.txt.tmp1").is_none());
     assert_eq!(disk.file("ram:notes/todo.txt.tmp").unwrap(), b"unrelated valuable file");
+}
+
+// 000-APP-0062: where F7 makes a directory: a name typed on the boot disk outside data/ goes into data/; a path that
+// names a volume or the root stays as typed (and is refused there); ram:, log: and data/ are used as they are.
+#[test]
+fn a_new_directory_outside_data_goes_into_data() {
+    use fm::{mkdir_target, outside_data};
+    assert!(outside_data("") && outside_data("EFI") && outside_data("database") && !outside_data("data") && !outside_data("data/x"));
+    assert!(!outside_data("ram:") && !outside_data("log:x") && !outside_data("models:"));
+    assert_eq!(mkdir_target("", "new"), (String::from("data/new"), true));
+    assert_eq!(mkdir_target("EFI/BOOT", "a/b"), (String::from("data/a/b"), true));
+    assert_eq!(mkdir_target("", "data/new"), (String::from("data/new"), false));
+    assert_eq!(mkdir_target("data", "new"), (String::from("data/new"), false));
+    assert_eq!(mkdir_target("", "A:/new"), (String::from("new"), false));
+    assert_eq!(mkdir_target("", "/new"), (String::from("new"), false));
+    assert_eq!(mkdir_target("ram:", "new"), (String::from("ram:new"), false));
+    assert_eq!(mkdir_target("", "ram:new"), (String::from("ram:new"), false));
 }

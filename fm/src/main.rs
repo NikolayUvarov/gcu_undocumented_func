@@ -168,7 +168,7 @@ impl Disk for Vfs {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:), the RAM disk (ram:) and, where mounted, log:, models:\nand the block store (store:: names as files, a copy there publishes one, a delete unpublishes it).\nUsage: fm [directory]\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one. The mouse: a click puts the cursor on an entry, a double click\nopens it, a right click marks it, the wheel scrolls, a click on the key bar presses that key.\nIt may change ram:, log: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
+    mind::about!("fm — file manager (Norton Commander keys): two panels over the boot disk (A:), the RAM disk (ram:) and, where mounted, log:, models:\nand the block store (store:: names as files, a copy there publishes one, a delete unpublishes it).\nUsage: fm [directory] (A:/data when it exists, else A:/; fm / for the root)\nEnter open or run, F3 view, F4 edit, Shift+F4 new file, F5 copy, F6 move or rename, F7 new directory, F8 delete,\nF9 menu, F1 keys, F10 or Esc quit; Tab other panel, Ins mark, Alt+F1/F2 volume, Alt+F7 find, Ctrl+F3-F6 sort.\nTyping goes to the command line: Enter runs it (cd, edit, view, a program with arguments). Ctrl+O hides the panels,\nCtrl+F1/F2 the left/right one, Ctrl+P the other one. The mouse: a click puts the cursor on an entry, a double click\nopens it, a right click marks it, the wheel scrolls, a click on the key bar presses that key.\nIt may change ram:, log: and data/; other files open read-only. Hold Shift, Ctrl or Alt to see what F1-F10 do with it.");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(mut term) = Terminal::open(info, "fm") else { return };
     let store = (mind::dev::cap_info(SLOT_BLOCKSTORE).0 == CAP_KIND_ENDPOINT).then(|| Volume::new(Remote));
@@ -176,8 +176,10 @@ fn main(info: &'static mind::BootInfo) {
     // The viewer's window lives as long as the program; the viewer gives it back when it closes.
     let window: &'static mut [u8] = Box::leak(alloc::vec![0u8; 64 * 1024].into_boxed_slice());
     let mut fm = Fm::new(window, &mut disk);
-    // `fm <directory>` opens the left panel there.
-    let start = mind::process::args_str().trim().trim_matches('/');
+    // `fm <directory>` opens the left panel there (`fm /` at the boot disk's root); `fm` alone in data/, where the user
+    // may write, when it exists (000-APP-0062).
+    let args = mind::process::args_str().trim();
+    let start = if args.is_empty() { if fs::Dir::open(fm::fm::DATA).is_ok() { fm::fm::DATA } else { "" } } else { args.trim_matches('/') };
     if !start.is_empty() { fm.load(0, start, None, &mut disk); }
     mind::println!("[FM] READY {}", fm.status());
     // The mouse (issue u001): on a screen the cell under it is shown inverted; in a window wm draws the pointer.

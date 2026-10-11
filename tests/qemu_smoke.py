@@ -1801,7 +1801,7 @@ def fm_check(vm):
         return status_line(vm, text)
     def poke(text):
         return keys(b"\x18", text)  # Ctrl+X: bound to nothing (a letter would go to the command line)
-    vm.send("fm\n")
+    vm.send("fm /\n")  # the root: fm alone opens in data/ when it exists (000-APP-0062)
     vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
     time.sleep(.3)
     screen = screen_text(vm)
@@ -4254,6 +4254,16 @@ def disk_check(vm):
     require(vm.expect("MIND> "), "бета")
     after = ram_free()
     assert copied < after <= before, (before, copied, after)  # only the new directory's cluster (512 bytes) is used
+    # Session 3 (000-APP-0062): fm alone opens in data/; F7 at the boot disk's root, where nothing may be written,
+    # makes the name in data/ and goes there.
+    vm.send("fm\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/data FULL")
+    keys(b"\r", "LEFT=/ FULL")  # the cursor starts on ".."
+    keys(f7, "DIALOG=MKDIR")
+    keys("плюс".encode(), "DIALOG=MKDIR")
+    keys(b"\r", "LEFT=/data FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=плюс ")
+    leave("[FM] DONE")
+    require(vm.command("ls data"), "плюс")
     # fsck: the boot disk has a broken chain (broken.txt), the RAM disk is clean; nothing is changed.
     output = vm.command("fsck")
     require(output, "ERRORS: lost clusters")
@@ -4262,7 +4272,7 @@ def disk_check(vm):
     assert re.search(r"ram: MIND RAM FAT16: 0 files, 1 directories; 1 clusters used, \d+ free\s+clean", output), output
     require(output, "fsck: 1 volume with errors (nothing was changed)")
     require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
-    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory (in data/ when typed at the root, where fm alone opens) and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
     # format (issue 083): only ram:, only with -y; the files are gone, the label is new, the volume works at once.
     require(vm.command("write ram:keep.txt kept"), "WROTE")
     require(vm.command("format ram: -l scratch"), "FORMAT: THIS ERASES ALL FILES ON ram: (NOTHING WAS CHANGED). TO GO ON: format ram: -l scratch -y")
@@ -6093,7 +6103,7 @@ def wm_suite(vm):
     seen.clear()  # the PIDs and windows below are the next wm's
     read[0] = len(vm.log)
 
-    vm.send("wm fm, clock, top\n")
+    vm.send("wm fm /, clock, top\n")  # fm at the root (alone it opens in data/, 000-APP-0062)
     out = wait()
     while len(windows_re.findall("".join(seen))) < 3:
         out = wait("[WM] WINDOW", lines=0)
@@ -6911,7 +6921,7 @@ def usb_suite(vm):
     got = typed(["w"], hold=1200)
     assert len([g for g in got if "char=w " in g]) >= 10, got
     # The tablet: a click on fm's first entry puts the cursor there.
-    vm.send("fm\n")
+    vm.send("fm /\n")
     vm.expect("[FM] READY")
     time.sleep(.3)
     start = len(vm.log)
@@ -6968,7 +6978,7 @@ def tablet_suite(vm, wav):
         return logged(vm, start, text)
 
     # fm on its own screen: a click puts the cursor on the entry under the host's pointer; 10 Quit in the corner ends it.
-    vm.send("fm\n")
+    vm.send("fm /\n")
     vm.expect("[FM] READY")
     time.sleep(.3)
     require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry

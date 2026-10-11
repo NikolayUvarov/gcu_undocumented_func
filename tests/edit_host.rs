@@ -315,6 +315,25 @@ fn read_only_refuses_changes() {
     assert_eq!(text(&e), "!boot file");
 }
 
+// 000-APP-0063: the line under the text is green for what was done (saved, replaced), red for a problem.
+#[test]
+fn a_save_is_green_and_a_failure_red() {
+    let mut e = Editor::new(Vec::new(), "ram:new.txt", false);
+    typed(&mut e, "text");
+    e.saved("ram:new.txt", Err(String::from("the disk is full")));
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Not saved") && cells[24 * 80].style == CLASSIC.error, "{}", screen[24]);
+    e.saved("ram:new.txt", Ok(4));
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Saved 4 bytes") && cells[24 * 80].style == CLASSIC.ok, "{}", screen[24]);
+    assert_ne!(CLASSIC.ok, CLASSIC.error);
+    e.key(f(7));
+    typed(&mut e, "нет");
+    e.key(enter());
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Not found") && cells[24 * 80].style == CLASSIC.error, "{}", screen[24]);
+}
+
 #[test]
 fn saving_quitting_and_dialogs() {
     let mut e = Editor::new(Vec::new(), "", false);
