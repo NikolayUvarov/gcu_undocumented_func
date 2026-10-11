@@ -4,7 +4,7 @@
 
 ## Problem
 
-[000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md) checks the medium when the drive answers again after `vfs_server` saw it not answer. If `vfs_server` asks nothing while the stick is out, it never sees that.
+[000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done) checks the medium when the drive answers again after `vfs_server` saw it not answer. If `vfs_server` asks nothing while the stick is out, it never sees that.
 
 `usb_storage` then claims the new stick inside the next request and runs that request on it. A write of the old system's cached sectors could reach another medium before anything is checked. In QEMU, `tests/usb_image_smoke.py` shows the check only once a `run` of a program makes `vfs_server` see the drive gone.
 
@@ -33,4 +33,4 @@
 
 ## Related
 
-[000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).
+[000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), [211-KRN-0050](211-KRN-0050-a-program-on-an-unplugged-disk-is-refused-at-once.md), [211-DRV-0019](../issues-done/211-DRV-0019-usb-storage-refusals-and-resets.done).

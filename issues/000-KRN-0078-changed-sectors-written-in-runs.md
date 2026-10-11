@@ -35,4 +35,4 @@ Eviction writes as `flush` does. A changed line about to be evicted is written t
 
 ## Related
 
-[176-KRN-0064](../issues-done/176-KRN-0064-bench.done) (the measurement), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md), [000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md).
+[176-KRN-0064](../issues-done/176-KRN-0064-bench.done) (the measurement), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md), [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done).

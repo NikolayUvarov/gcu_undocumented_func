@@ -52,7 +52,7 @@ So the real device behaved in a way the log cannot show:
 
 **2026-10-10, the local gate** (`claude/ASR-DRV` 5c5bfc0 and after): `tests/usb_image_smoke.py` fails at the first `sync` after the disk is plugged in again (`ERROR: SYNC: I/O ERROR`; a second `sync` says `OK`), in all five runs; on `main` it passed in all three. `usb_storage`'s new lines about the loss give the journal something to save while the drive is gone, and `vfs_server` reports that failed flush again at the next one. The change waits for the kernel track; the rest of the branch goes to `main` without it.
 
-**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [000-KRN-0079](../issues/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md)): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
+**2026-10-11, MacBook Pro** (the disk unplugged from a running system and plugged in again, see [000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done)): the log shows `DEVICE ON PORT 5 GONE`, `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `vfs_server`'s `DOES NOT ANSWER`, then `7825:A2A4 ON PORT 5`, `THE DEVICE IS BACK, THE SAME CAPACITY` and `ANSWERS AGAIN`. The disk had been written with another image meanwhile, which "the same capacity" cannot tell.
 
 ## Resolution
 
@@ -65,7 +65,7 @@ Evidence:
 - **QEMU** (`tests/usb_image_smoke.py`): `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `THE DEVICE IS BACK, THE SAME CAPACITY; IT WAS RESET …` around `device_del` and `device_add`; the log goes on, and `sync` answers `OK` after the return (with 211-KRN-0068).
 - **MacBook Pro**, two hot plugs (2026-10-09 on d3da6d0 and 2026-10-11): the adapter refused nothing and reported no reset; the loss and the return are in the log.
 
-The second run showed a limit: "the same capacity" cannot tell a disk rewritten elsewhere, which is [000-KRN-0079](../issues/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md), the kernel track's task made from the request.
+The second run showed a limit: "the same capacity" cannot tell a disk rewritten elsewhere, which is [000-KRN-0079](000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the kernel track's task made from the request.
 
 ## Related
 
