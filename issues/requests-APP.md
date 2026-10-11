@@ -643,3 +643,26 @@ Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MIN
 ### Acceptance criteria
 
 `caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
+
+## `poweroff` and `shutdown`, and a menu entry to turn the machine off (000-KRN-0080)
+
+**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off".
+
+### Problem
+
+`reboot --off` writes the caches, stops the services and turns the machine off. Since 000-KRN-0080 it does so on x86 too (ACPI S5), not only on aarch64. But:
+
+- nobody looks for it under `reboot`;
+- `wm`'s menu has no entry for it;
+- `help reboot` and `shell/src/power.rs` still say "aarch64 only".
+
+### Plan (a proposal; the tools track decides)
+
+- **In the shell and `console`.** `poweroff` and `shutdown` as names for `reboot --off`, with `-f` as there; `help` names them.
+- **In `wm`.** A "Turn off" entry next to the restart, asking for confirmation as the restart does.
+- **The help texts and `docs/tools` (EN, RU).** Turning off works on x86 and aarch64. Where the firmware names no S5, it says why.
+
+### Acceptance criteria
+
+- **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
+- **In `wm`.** The menu entry is there.

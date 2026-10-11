@@ -3678,13 +3678,11 @@ def vfs_suite(args):
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
-            # Power off (issue 203): PSCI SYSTEM_OFF ends QEMU on aarch64; x86 has no ACPI sleep states yet.
-            if vm.arch == "aarch64":
-                vm.send("reboot -f --off\n")
-                vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF", timeout=30)
-                vm.process.wait(timeout=30)
-            else:
-                require(vm.command("reboot -f --off"), "ERROR: POWER OFF REFUSED")
+            # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
+            require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+            vm.send("reboot -f --off\n")
+            vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+            vm.process.wait(timeout=30)
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
