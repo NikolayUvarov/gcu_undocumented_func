@@ -65,7 +65,7 @@ Evidence:
 - **QEMU** (`tests/usb_image_smoke.py`): `NO ANSWER TO READ`, `THE DEVICE IS GONE`, `THE DEVICE IS BACK, THE SAME CAPACITY; IT WAS RESET …` around `device_del` and `device_add`; the log goes on, and `sync` answers `OK` after the return (with 211-KRN-0068).
 - **MacBook Pro**, two hot plugs (2026-10-09 on d3da6d0 and 2026-10-11): the adapter refused nothing and reported no reset; the loss and the return are in the log.
 
-The second run showed a limit: "the same capacity" cannot tell a disk rewritten elsewhere, which is the kernel track's request in [requests-KRN.md](../issues/requests-KRN.md) ("A drive that comes back…").
+The second run showed a limit: "the same capacity" cannot tell a disk rewritten elsewhere, which is [000-KRN-0079](../issues/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.md), the kernel track's task made from the request.
 
 ## Related
 

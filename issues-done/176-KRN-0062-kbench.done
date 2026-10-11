@@ -1,6 +1,6 @@
-# 176-KRN-0062 — `kbench`: the kernel's performance on the screen and in a log
+# 176-KRN-0062 — `kbench`: the kernel's performance on the screen and in a log — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and run in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track A, main task [176](176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Roadmap:** track A, main task [176](../issues/176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -53,11 +53,38 @@ Nothing measures what the kernel's basic operations cost on a given machine, so 
   | the same with a lent page | 319 µs | — |
   | process start | 105–133 ms | 187 ms |
 - **Found on the way.**
-  - **Sleeps.** A sleep can be shorter than asked: up to a tick, because the deadline counts from the tick's start. This is [000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md).
+  - **Sleeps.** A sleep can be shorter than asked: up to a tick, because the deadline counts from the tick's start. This is [000-KRN-0065](../issues/000-KRN-0065-a-sleep-is-never-shorter-than-asked.md).
   - **Dropped endpoints.** A dropped endpoint counts against its creator's quota until the boot CPU's idle loop reclaims it (`reap`). Creating and dropping endpoints quickly reaches the limit; `kbench` waits 10 ms each time and says how often. On a machine whose boot CPU is never idle, they would not come back. That is worth a task if a real program meets it.
 
 Left: the MacBook Pro's numbers, recorded with the configuration (criterion 4).
 
+## Resolution
+
+Made as described under Progress: `bench/src/bin/kbench.rs` and the `bench` suite. The QEMU criteria (1–3) are met there.
+
+**Criterion 4: the MacBook Pro**, 2026-10-11. The machine: Intel Core i7-3615QM (Ivy Bridge, 4 cores, 8 threads), TSC 2294 MHz, 2880×1800. The build: `fast-test` 19b531ff8835, ABI 6. The run: `kbench --quick`, in `log:kbench0002.txt`.
+
+| measurement | median | min | p99 |
+|---|---|---|---|
+| empty system call (`UPTIME`) | 417 ns | 416 ns | 427 ns |
+| monotonic clock read | 476 ns | 476 ns | 477 ns |
+| IPC call and reply | 60.4 µs | 7.09 µs | 68.4 µs |
+| … with a lent page | 110 µs | 109 µs | 207 µs |
+| mint and drop | 9.72 µs | 9.45 µs | 13.6 µs |
+| mint and revoke | 33.7 µs | 33.0 µs | 42.5 µs |
+| endpoint create and drop | 15.1 µs | 11.2 µs | 74.7 µs |
+| a page taken and freed | 12.6 µs | 12.5 µs | 15.8 µs |
+| 1 MiB taken, touched and freed | 607 µs (1.60 GiB/s) | 604 µs | 615 µs |
+| sleep 1 ms | 9.99 ms | 1.67 ms | 10.0 ms |
+| sleep 10 ms | 20.0 ms | 19.9 ms | 20.0 ms |
+| process start (the loader) | 7.01 ms | 5.66 ms | 15.5 ms |
+| exit until the task is gone | 1.48 µs | 1.29 µs | 1.56 µs |
+
+These numbers hold for this machine and this build only (MC-12.1). Two findings became tasks:
+
+- sleeps waited for the 10 ms tick: [000-KRN-0083](../issues/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.md);
+- an IPC round trip between two CPUs took eight times the fastest one: [000-KRN-0084](../issues/000-KRN-0084-an-ipc-round-trip-between-two-cpus.md).
+
 ## Related
 
-[176-KRN-0063](176-KRN-0063-check.md), [176-KRN-0064](176-KRN-0064-bench.md).
+[176-KRN-0063](176-KRN-0063-check.done), [176-KRN-0064](176-KRN-0064-bench.done).

@@ -139,6 +139,7 @@ struct Scheduler {
     reserve: usize, // frame pool bytes application-band tasks may not take (MEMORY_RESERVE, issue 169)
     composited: usize, // screen the compositor already holds a capability for
     next_node: u64, // capability identities are never reused
+    next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -196,7 +197,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1 }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -259,6 +260,23 @@ impl Scheduler {
         for other in 0..count {
             if ready.has(other) && other != this && self.current[other] == 0 && !self.woken[other] { self.woken[other] = true; unsafe { cpu::wake(other); } }
         }
+    }
+    // Sleeps and IPC deadlines end on the boot CPU's tick, every millisecond, the source of every other (000-KRN-0083);
+    // the tasks are looked at only once the earliest is due. Idle CPUs whose tasks that makes ready get a wake IPI (issue
+    // 171); `every`, at a time slice's end, also finds the tasks whose budget period ended.
+    fn timers(&mut self, cpu: usize, every: bool) {
+        let (now, ns) = (interrupts::milliseconds(), crate::clock::now_ns());
+        if ns >= self.next_wake {
+            self.next_wake = u64::MAX;
+            for task in self.tasks.iter_mut().flatten() {
+                let State::Sleeping(deadline) = task.state else { continue };
+                task.state.wake(ns);
+                if task.state == State::Ready { self.readied.mark(task.cpu); } else { self.next_wake = self.next_wake.min(deadline); }
+            }
+        }
+        if now >= self.next_expiry { self.expire(now); }
+        self.wake_idle(cpu, every);
+        crate::trial::check(now);
     }
     // Quota use of the task in `slot` (MC-1.7, MC-5.1): tasks reserved by its live children and endpoints it created or
     // delegated.
@@ -398,15 +416,21 @@ impl Scheduler {
         for child in self.tasks.iter_mut().flatten() { if child.payer == Some((slot, pid)) { child.payer = payer; } }
         let task = self.tasks[slot].as_mut().unwrap(); task.payer = None; task.memory_tree = 0;
     }
-    // Uptime at which an IPC with this handle word times out (0: never). Counted from the tick's start, so up to a tick
-    // early: drivers poll with it once a tick (usb_hid's 10 ms), unlike SYSCALL_WAIT (000-KRN-0065).
-    fn deadline(word: usize) -> u64 { match word >> IPC_TIMEOUT_SHIFT { 0 => 0, ms => (interrupts::milliseconds() + ms as u64).max(1) } }
+    // Uptime at which an IPC with this handle word times out (0: never), up to a millisecond early: drivers poll with it
+    // (usb_hid's 10 ms), unlike SYSCALL_WAIT (000-KRN-0065).
+    fn deadline(&mut self, word: usize) -> u64 {
+        let at = match word >> IPC_TIMEOUT_SHIFT { 0 => return 0, ms => (interrupts::milliseconds() + ms as u64).max(1) };
+        self.next_expiry = self.next_expiry.min(at);
+        at
+    }
     // Fails blocked IPC whose deadline passed (MC-2.13): no message is half-delivered and no reply can reach a new call.
     fn expire(&mut self, now: u64) -> bool {
         let mut woken = false;
+        self.next_expiry = u64::MAX;
         for slot in 1..self.tasks.len() {
             let Some(task) = self.tasks[slot].as_mut() else { continue };
-            if task.deadline == 0 || now < task.deadline || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            if task.deadline == 0 || !matches!(task.state, State::BlockedSend(_) | State::BlockedRecv(_) | State::BlockedReply(_)) { continue; }
+            if now < task.deadline { self.next_expiry = self.next_expiry.min(task.deadline); continue; }
             // A late reply finds the caller no longer waiting for this call number and fails with ERR_PEER.
             if let State::BlockedSend(ep) | State::BlockedRecv(ep) = task.state { self.accounting.endpoint[ep].timeouts += 1; }
             let task = self.tasks[slot].as_mut().unwrap();
@@ -929,8 +953,8 @@ impl Scheduler {
         if self.copy_refused(slot, request.msg[0], request.msg[1]) { return Err(ERR_RIGHTS); }
         self.accounting.endpoint[ep].messages += 1;
         let cap = if rights & CAP_GRANT != 0 { self.transfer(slot, request.msg[0], request.msg[1]) } else { None };
-        self.send_seq += 1; let seq = self.send_seq;
-        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = Self::deadline(request.arg2);
+        self.send_seq += 1; let seq = self.send_seq; let deadline = self.deadline(request.arg2);
+        let task = self.tasks[slot].as_mut().unwrap(); task.pending_cap = cap; task.pending_call = call; task.pending_badge = badge; task.send_seq = seq; task.sends += 1; task.deadline = deadline;
         if let Some(receiver) = receiver {
             self.deliver(slot, receiver);
             if !call { return Ok(None); }
@@ -948,7 +972,8 @@ impl Scheduler {
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
-        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = Self::deadline(request.arg2);
+        let deadline = self.deadline(request.arg2);
+        let task = self.tasks[slot].as_mut().unwrap(); task.state = State::BlockedRecv(ep); task.dirty = true; task.deadline = deadline;
         Ok(Some(self.select(sp, cpu)))
     }
     // Reply to the last client or to the client from a saved reply capability (arg1 is its slot).
@@ -1189,12 +1214,12 @@ impl Scheduler {
             },
             SYSCALL_WAIT => {
                 // The deadline in monotonic nanoseconds plus the clock's resolution (a tick where it counts ticks): never
-                // shorter than asked, woken on the first tick after it (000-KRN-0065).
+                // shorter than asked, woken on the first tick after it, a millisecond at most (000-KRN-0065, 000-KRN-0083).
                 let now = interrupts::milliseconds(); let duration = request.arg1.clamp(1, 60_000) as u64 * 1_000_000;
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), now as usize);
                 let deadline = crate::clock::now_ns() + duration + crate::clock::resolution_ns();
                 task.state = if task.input.is_empty() { State::Sleeping(deadline) } else { State::Ready };
-                task.dirty = true; return self.select(sp, cpu);
+                task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
             SYSCALL_ENDPOINT_CREATE => match (self.new_endpoint(), Self::room(task)) {
@@ -1503,11 +1528,11 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             let s = scheduler(); let slot = s.current[cpu]; s.accounting.interrupts[cpu] += 1;
             let next = (|| match event {
                 Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
+                // The boot CPU's tick within a time slice: the running task goes on.
+                Event::Clock => { if cpu == 0 { s.timers(cpu, false); } sp }
                 Event::Tick => {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
-                    // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
-                    // tasks that makes ready get a wake IPI (issue 171).
-                    if cpu == 0 { let (now, ns) = (interrupts::milliseconds(), crate::clock::now_ns()); for task in s.tasks.iter_mut().flatten() { task.state.wake(ns); } s.expire(now); s.wake_idle(cpu, true); crate::trial::check(now); }
+                    if cpu == 0 { s.timers(cpu, true); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }

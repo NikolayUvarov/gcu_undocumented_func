@@ -182,7 +182,8 @@ pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
 pub enum Event {
     Stop, // another CPU stops this one
     KernelFault { code: u64, pc: u64, error: u64 },
-    Tick, // the timer, on the BSP or forwarded to this CPU
+    Tick, // a time slice's end: the timer on the BSP, or forwarded to this CPU
+    Clock, // the BSP's tick within a time slice: sleeps and deadlines only (000-KRN-0083)
     Irq(usize), // a device line 1-15 or an MSI-X vector (MSI_FIRST + n), already acknowledged at the controller
     Wake, // a CPU woke this one to reschedule
     Fault { code: u64, error: u64, pc: u64, address: u64 }, // the task faulted; `code` is the exception vector
@@ -199,7 +200,12 @@ pub unsafe fn event(sp: usize) -> Event {
         0x31 => Event::Stop,
         0..=31 if r[18] & 3 == 0 => Event::KernelFault { code: vector, pc: r[17], error: r[16] },
         0..=31 => Event::Fault { code: vector, error: r[16], pc: r[17], address: if vector == 14 { cpu::fault_address() } else { 0 } },
-        32 => { interrupts::advance(); if interrupts::tick_from_pit() { interrupts::pic_eoi(0); } cpu::eoi(); cpu::tick_others(); Event::Tick }
+        32 => {
+            let slice = interrupts::advance();
+            if interrupts::tick_from_pit() { interrupts::pic_eoi(0); }
+            cpu::eoi();
+            if slice { cpu::tick_others(); Event::Tick } else { Event::Clock }
+        }
         33..=47 => { let line = vector as u8 - 32; interrupts::set_irq_masked(line, true); interrupts::pic_eoi(line); cpu::eoi(); Event::Irq(line as usize) }
         0x40..=0x4F => { cpu::eoi(); Event::Irq(MSI_FIRST + vector as usize - 0x40) }
         48 => { cpu::eoi(); Event::Tick }

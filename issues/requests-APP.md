@@ -119,7 +119,7 @@ All told, `wm` runs at about 5–11 frames a second, unevenly.
 ### Plan (a proposal; the tools track decides)
 
 - **`paint()` by rows.** Runs of background cells are filled row by row with one loop for each unit size and no division: 5–10 ms instead of 50–90. A row helper in `libmind` (`Screen::span`, the core of `libmind`) can be asked of the kernel track.
-- **Pacing to a deadline.** Sleep until the next frame's deadline less one tick (10 ms), not a fixed 30 ms after the work. A finer phase, with interpolated sine values, moves every term every frame.
+- **Pacing to a deadline.** Sleep until the next frame's deadline, not a fixed 30 ms after the work: since 000-KRN-0083 a sleep ends within a millisecond of the time asked. A finer phase, with interpolated sine values, moves every term every frame.
 - **A cheaper pattern.** Per-column and per-row terms computed once a frame, and a table or incremental distances instead of the square root.
 - **Only what changed.** Cells whose colour did not change are not repainted. Mouse moves redraw the cursor's surroundings only.
 

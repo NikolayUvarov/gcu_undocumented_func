@@ -1,6 +1,6 @@
 # 000-KRN-0067 — The aarch64 boot test passes on PCU
 
-**Type:** CI · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track A (CI) · **Constitution:** MC-12.1
+**Type:** CI · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (the test boots FAT images; PCU's run left) · **Blocked by:** — · **Roadmap:** track A (CI) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -32,6 +32,12 @@ On 2026-10-10 the maintainer decided that the aarch64 part of a gate runs on the
 
 1. "aarch64: boot and fault containment" passes on PCU and on the kernel session's machine.
 2. `docs/effector.md`, section 4, no longer sends that group back to an agent's own machine.
+
+## Progress
+
+**2026-10-11.** Step 2 is done:
+- **FAT images.** `tests/aarch64_smoke.py` boots every system disk from a raw FAT16 image made of the build with `mkfs.fat` and `mcopy` (`image_of`). The image has the MBR signature and partition start that vvfat gave, so the checks keep their numbers. vvfat serves only the read-only decoy disk, which the guest does not write.
+- **Two lines waited for.** The first boot waits for both `[INIT] READY` and `[BLOCKSTORE] READY`. The block store mounts its RAM disk meanwhile and may print its line after init's. The storage session measured it 0.4 s ahead on its machine. This was the tools track's request on `fast-test`.
 
 ## Related
 

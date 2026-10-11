@@ -243,7 +243,7 @@ fn frequencies(out: &mut String, max: u32, intel: bool) {
     if max >= 0x16 { let r = cpuid(0x16, 0); if r.eax != 0 { let _ = writeln!(out, "  nominal           base {} MHz, maximum {} MHz, bus {} MHz", r.eax & 0xFFFF, r.ebx & 0xFFFF, r.ecx & 0xFFFF); } }
     let intel_msrs: &[(u32, &str)] = &[(0x17, "IA32_PLATFORM_ID"), (0x1B, "IA32_APIC_BASE"), (0x3A, "IA32_FEATURE_CONTROL"), (0xCE, "MSR_PLATFORM_INFO"), (0xE2, "MSR_PKG_CST_CONFIG_CONTROL"),
         (0x198, "IA32_PERF_STATUS"), (0x199, "IA32_PERF_CTL"), (0x19C, "IA32_THERM_STATUS"), (0x1A0, "IA32_MISC_ENABLE"), (0x1A2, "MSR_TEMPERATURE_TARGET"), (0x1AD, "MSR_TURBO_RATIO_LIMIT"),
-        (0x1B0, "IA32_ENERGY_PERF_BIAS"), (0x1B1, "IA32_PACKAGE_THERM_STATUS"), (0x606, "MSR_RAPL_POWER_UNIT"), (0x610, "MSR_PKG_POWER_LIMIT"), (0x614, "MSR_PKG_POWER_INFO"),
+        (0x1B0, "IA32_ENERGY_PERF_BIAS"), (0x1B1, "IA32_PACKAGE_THERM_STATUS"), (0x1FC, "MSR_POWER_CTL"), (0x606, "MSR_RAPL_POWER_UNIT"), (0x610, "MSR_PKG_POWER_LIMIT"), (0x614, "MSR_PKG_POWER_INFO"),
         (0x770, "IA32_PM_ENABLE"), (0x771, "IA32_HWP_CAPABILITIES"), (0x774, "IA32_HWP_REQUEST"), (0x10A, "IA32_ARCH_CAPABILITIES")];
     let amd_msrs: &[(u32, &str)] = &[(0x1B, "IA32_APIC_BASE"), (0xC001_0010, "SYS_CFG"), (0xC001_0015, "HWCR"), (0xC001_001A, "TOP_MEM"), (0xC001_001D, "TOP_MEM2"),
         (0xC001_0061, "P-STATE CURRENT LIMIT"), (0xC001_0062, "P-STATE CONTROL"), (0xC001_0063, "P-STATE STATUS"), (0xC001_0064, "P-STATE 0"), (0xC001_0065, "P-STATE 1"),

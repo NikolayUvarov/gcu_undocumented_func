@@ -67,3 +67,25 @@ The kernel session has set the Cirrus codec's amplifier GPIOs for Apple's machin
 ### Acceptance criteria
 
 The `audio` suite sets the volume to 50 % and the recorded tone's level falls by about 6 dB; a client without the badge is refused.
+
+## `usb_storage` reports a device that came back, rather than running the command on it (000-KRN-0079, 000-KRN-0085)
+
+**Recorded by:** the kernel track (KRN), 2026-10-11.
+
+### Problem
+
+Since 211-DRV-0019, a command that finds the device gone claims it again. If a device of the same capacity answers, the command runs on it (`THE DEVICE IS BACK, THE SAME CAPACITY`).
+
+Our images all have the same capacity, so that device may be a stick rewritten with another build. `vfs_server` checks the medium before it writes when it saw the drive not answer (000-KRN-0079). But it can make no request while the stick is out, for example when everything it needs is cached. Then the first request after the swap is run on the new stick, possibly a write of the old system's cached sectors, before anything can be checked.
+
+### Plan (a proposal; the drivers track decides)
+
+- When the device comes back, the command that found it is not run. It fails, and `usb_storage` reports the return to the client, so the client checks the medium first.
+- Libmind's block protocol carries the report (000-KRN-0085, the kernel track's part):
+  - `Driver::returned()` is read by `block::serve` before each request;
+  - a request after a return is answered "not found" and the client's buffer is dropped;
+  - a client that asks to check the medium learns of the return instead of having the request repeated.
+
+### Acceptance criteria
+
+In QEMU (`tests/usb_image_smoke.py`), the stick is swapped for a copy with another manifest while `vfs_server` makes no request. The copy is unchanged afterwards, and `vfs_server` logs `CAME BACK WITH ANOTHER MEDIUM`.

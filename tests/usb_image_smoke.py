@@ -122,10 +122,13 @@ def unplugged(vm, booted, name):
     require(saved, "DRIVE DOES NOT ANSWER")
     time.sleep(3)  # the journal's save after the replug, flushed
     # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
-    # same partition table and disk signature, another commit in the boot manifests. vfs_server finds it is not the
-    # stick it mounted: nothing it cached is written to it, its volumes fail.
+    # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
+    # not answer, finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail. The new
+    # stick gets another device ID: QEMU may not have let go of the old one yet.
     vm.hmp("device_del usbstick")
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
     other = booted.with_name(booted.stem + "-other" + booted.suffix)
     shutil.copyfile(booted, other)
     data = bytearray(other.read_bytes())
@@ -136,8 +139,10 @@ def unplugged(vm, booted, name):
     other.write_bytes(data)
     assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
     before = hashlib.sha256(other.read_bytes()).hexdigest()
-    vm.hmp(f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}")
-    vm.hmp("device_add usb-storage,drive=usbdisk3,id=usbstick")
+    for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
     for _ in range(40):  # vfs_server asks the drive again after its quiet time
         time.sleep(2)
         vm.command("ls log:", raw=True)

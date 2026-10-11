@@ -17,9 +17,13 @@ fn timer_ppi() -> u32 { super::board::get(&super::board::TIMER_PPI) as u32 }
 fn v2() -> bool { super::board::get(&super::board::GIC_VERSION) == 2 }
 fn gicc() -> usize { super::board::get(&super::board::GICC) }
 static V2M_SPI: AtomicU64 = AtomicU64::new(0); // GICv2m: the first SPI of its frame, and how many (bits 16-31); 0 unread
-const TICK_MS: u64 = 10;
+// The boot CPU's tick: every millisecond for the clock, sleeps and deadlines; every QUANTUM_MS also a time slice's end
+// on every CPU (000-KRN-0083).
+const TICK_MS: u64 = 1;
+const QUANTUM_MS: u64 = 10;
 static TICKS: AtomicU64 = AtomicU64::new(0);
 static TIMER_STEP: AtomicU64 = AtomicU64::new(0);
+static NEXT_TICK: AtomicU64 = AtomicU64::new(0); // the counter's value at the next tick
 // SGIs (software interrupts between CPUs, issue 203): stop, tick, wake.
 pub const SGI_STOP: u32 = 1; pub const SGI_TICK: u32 = 2; pub const SGI_WAKE: u32 = 3;
 
@@ -41,7 +45,12 @@ unsafe fn read32(address: usize) -> u32 { core::ptr::read_volatile(address as *c
 unsafe fn write64(address: usize, value: u64) { core::ptr::write_volatile(address as *mut u64, value) }
 unsafe fn read64(address: usize) -> u64 { core::ptr::read_volatile(address as *const u64) }
 
-pub fn advance() { TICKS.fetch_add(1, Ordering::Relaxed); }
+/// Counts `ticks` ticks; true when they end a time slice.
+pub fn advance(ticks: u64) -> bool {
+    let slice = QUANTUM_MS / TICK_MS;
+    let before = TICKS.fetch_add(ticks, Ordering::Relaxed);
+    before / slice != (before + ticks) / slice
+}
 pub fn milliseconds() -> u64 { TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS) }
 
 pub fn without<T>(f: impl FnOnce() -> T) -> T {
@@ -71,6 +80,8 @@ pub unsafe fn init() {
     load();
     let frequency: u64; asm!("mrs {}, cntfrq_el0", out(reg) frequency);
     TIMER_STEP.store(frequency * TICK_MS / 1000, Ordering::Release);
+    let now: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) now);
+    NEXT_TICK.store(now, Ordering::Relaxed);
     rearm();
     asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // enabled, not masked
 }
@@ -110,7 +121,16 @@ pub unsafe fn load() {
     asm!("msr icc_igrpen1_el1, {}", "isb", in(reg) 1u64);
 }
 
-unsafe fn rearm() { asm!("msr cntv_tval_el0, {}", in(reg) TIMER_STEP.load(Ordering::Relaxed)); }
+// The next tick a step after the last one, not after now; returns how many ticks passed (more than one when taken late).
+unsafe fn rearm() -> u64 {
+    let (step, now): (u64, u64) = (TIMER_STEP.load(Ordering::Relaxed).max(1), { let c: u64; asm!("isb", "mrs {}, cntvct_el0", out(reg) c); c });
+    let next = NEXT_TICK.load(Ordering::Relaxed);
+    let passed = if now >= next { (now - next) / step + 1 } else { 0 };
+    let next = next + passed * step;
+    NEXT_TICK.store(next, Ordering::Relaxed);
+    asm!("msr cntv_cval_el0, {}", in(reg) next);
+    passed
+}
 
 // MSI lines are edge-triggered LPIs: like MSI on x86 they are not masked at the controller.
 pub fn irq_masked(line: u8) -> bool {
@@ -135,7 +155,7 @@ pub unsafe fn acknowledge() -> Event {
     let v2m = V2M_SPI.load(Ordering::Relaxed);
     let (v2m_first, v2m_count) = (v2m as u32 & 0xFFFF, (v2m >> 16) as u32 & 0xFFFF);
     let event = match intid {
-        id if id == timer_ppi() => { rearm(); advance(); super::cpu::tick_others(); Event::Tick }
+        id if id == timer_ppi() => { if advance(rearm()) { super::cpu::tick_others(); Event::Tick } else { Event::Clock } }
         SGI_STOP => Event::Stop,
         SGI_TICK => Event::Tick,
         SGI_WAKE => Event::Wake,

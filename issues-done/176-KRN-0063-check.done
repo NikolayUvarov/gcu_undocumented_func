@@ -1,6 +1,6 @@
-# 176-KRN-0063 — `check`: a self-test of what is done, component by component
+# 176-KRN-0063 — `check`: a self-test of what is done, component by component — done
 
-**Type:** kernel and assurance · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and run in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** Assurance, main task [176](176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** kernel and assurance · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Roadmap:** Assurance, main task [176](../issues/176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -56,11 +56,39 @@ At the end a summary: how many passed, failed and were skipped. The exit status 
 - **QEMU** (the `bench` suite):
   - x86: 43 passed, 26 skipped, 1 failed;
   - aarch64: 48 passed, 20 skipped, 1 failed;
-  - the one failure is "sleeps last as asked": 10 of 20 sleeps of 10 ms were shorter ([000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md));
+  - the one failure is "sleeps last as asked": 10 of 20 sleeps of 10 ms were shorter ([000-KRN-0065](../issues/000-KRN-0065-a-sleep-is-never-shorter-than-asked.md));
   - the suite requires the kernel, security, clock, file and core service checks to pass, and accepts no other failure.
 
 Left: the MacBook Pro's run (criterion 4), and a policy line for the network group (the network track's file).
 
+## Resolution
+
+Made as described under Progress: `bench/src/bin/check.rs` and the `bench` suite. The QEMU criteria (1–3) are met there.
+
+**Criterion 4: the MacBook Pro**, 2026-10-11. The build: `fast-test` 19b531ff8835, ABI 6. The run: `check`, in `log:check0002.txt`.
+
+**62 passed, 0 failed, 31 skipped (93 checks), 11.8 s.**
+
+- **Kernel, security, clocks, files.** Every check passed:
+  - the three fault probes were stopped;
+  - the boot was checked: 34 images, the test key named;
+  - RDRAND is there;
+  - 20 sleeps of 10 ms, none shorter;
+  - the boot volume (105 files), `ram:` and `log:` are consistent;
+  - 51 programs were accepted by the loader.
+- **Boot services.** 26 run. Those for devices the machine lacks were skipped: PS/2, VirtIO, NVMe and GPIO.
+- **Devices.** The drivers held:
+  - the three USB controllers (`usb_host`);
+  - the HDA (`audio_gw`);
+  - SATA (`ahci`);
+  - the BCM4331 (`bcm_wifi`).
+
+  The rest, bridges and both GPUs among them, have no driver yet. Each is listed as skipped.
+- **Sound.** 48 kHz. The tone played, and the microphone gave samples (peak 123).
+- **Network.** Skipped: the shipped policy grants `check` no flow. The network track's file may add a line.
+
+This is evidence for this machine and this build only (MC-12.1).
+
 ## Related
 
-[176-KRN-0062](176-KRN-0062-kbench.md), [176-KRN-0064](176-KRN-0064-bench.md), the hardware report (174-KRN-0038).
+[176-KRN-0062](176-KRN-0062-kbench.done), [176-KRN-0064](176-KRN-0064-bench.done), the hardware report (174-KRN-0038).

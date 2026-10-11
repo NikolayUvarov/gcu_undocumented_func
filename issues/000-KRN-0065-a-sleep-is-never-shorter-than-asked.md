@@ -47,4 +47,4 @@ The cause is in `SYSCALL_WAIT` (`kernel/src/scheduler.rs`):
 
 ## Related
 
-[176-KRN-0062](176-KRN-0062-kbench.md) (the measurement), [211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done) (the tick).
+[176-KRN-0062](../issues-done/176-KRN-0062-kbench.done) (the measurement), [211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done) (the tick).
