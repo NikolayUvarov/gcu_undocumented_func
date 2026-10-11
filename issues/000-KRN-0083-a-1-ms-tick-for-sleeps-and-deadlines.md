@@ -45,4 +45,4 @@ The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pr
 
 ## Related
 
-[000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [176-KRN-0062](176-KRN-0062-kbench.md), [clocks.md](../docs/profile/clocks.md).
+[000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [clocks.md](../docs/profile/clocks.md).
