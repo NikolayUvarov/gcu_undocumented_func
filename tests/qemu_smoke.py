@@ -6518,7 +6518,10 @@ def main():
             for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
                 shutil.copyfile(ROOT / IMAGE / name, disk / name)
             shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
-            shutil.copytree(ROOT / IMAGE / "diag", disk / "diag")  # the runs on real hardware (176-KRN-0087)
+            if suite == "bench":
+                # The runs on real hardware (176-KRN-0087), where they are checked: elsewhere the disk stays as the
+                # suites know it (fm opens on the first directory).
+                shutil.copytree(ROOT / IMAGE / "diag", disk / "diag")
             if suite == "services":
                 # 12 KiB for cat: three times the console's queue (000-KRN-0030).
                 (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))
