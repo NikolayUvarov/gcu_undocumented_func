@@ -41,6 +41,8 @@ const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
+const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
+const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -125,7 +127,9 @@ impl Init {
         if !self.running(service_index("netpolicy")) { return None; }
         let client = ipc::mint_badged(self.keeper("netpolicy").ok()?, CLIENT, 0).ok()?;
         let broker = Endpoint(client);
-        let taken = netpolicy::prepare(broker, program).ok().and_then(|r| r.ok()).is_some_and(|badge| matches!(netpolicy::take(broker, badge, RECEIVED), Ok(Ok(()))));
+        let prepared = netpolicy::prepare(broker, program);
+        if matches!(prepared, Err(Error::Other(ERR_TIMEOUT))) { mind::println!("[INIT] {}: THE POLICY BROKER DID NOT ANSWER IN {} S", program, CALL_LIMIT_MS / 1000); }
+        let taken = prepared.ok().and_then(|r| r.ok()).is_some_and(|badge| matches!(netpolicy::take(broker, badge, RECEIVED), Ok(Ok(()))));
         let _ = ipc::drop_cap(client);
         if !taken { return None; }
         let slot = ipc::mint(RECEIVED, u8::MAX, 0, 0).ok();
@@ -143,7 +147,11 @@ impl Init {
             if !self.running(service_index(name)) { continue; }
             let Ok(keeper) = self.keeper(name) else { continue };
             let Ok(client) = ipc::mint_badged(keeper, CLIENT, 0) else { continue };
-            let first = mind::block::Device::open(Endpoint(client)).ok().and_then(|mut disk| disk.read(0, 1).ok().map(|s| (s.iter().all(|&b| b == 0), s.starts_with(b"MIND-STO"))));
+            let first = match mind::block::Device::open(Endpoint(client)) {
+                Ok(mut disk) => disk.read(0, 1).ok().map(|s| (s.iter().all(|&b| b == 0), s.starts_with(b"MIND-STO"))),
+                Err(Error::Other(ERR_TIMEOUT)) => { mind::println!("[INIT] {} DID NOT ANSWER IN {} S: NOT THE BLOCK STORE'S DISK", name, CALL_LIMIT_MS / 1000); None }
+                Err(_) => None,
+            };
             let _ = ipc::drop_cap(client);
             if let Some((blank, store)) = first.filter(|&(blank, store)| blank || store) {
                 mind::println!("[INIT] THE BLOCK STORE'S DISK: {} ({})", name, if blank { "BLANK" } else if store { "THE STORE'S" } else { "?" });
@@ -417,7 +425,7 @@ impl Init {
                 if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 match self.flow(&mut minted, "updater") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
-                    None => mind::println!("[INIT] updater: NO NETWORK GRANT (THE POLICY NAMES NOTHING FOR IT)"),
+                    None => mind::println!("[INIT] updater: NO NETWORK GRANT"),
                 }
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
@@ -643,9 +651,10 @@ impl Init {
     fn reboot(&mut self) -> ! {
         mind::println!("[INIT] RESTARTING THE MACHINE: THE VOLUMES WRITTEN, THE SERVICES STOPPED");
         if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, 0).map_err(Into::into)) {
-            for volume in ["", "ram", "log"] {
+            // A flush to a slow stick may take long: the mount's limit, not a call's.
+            wire::with_timeout(MOUNT_LIMIT_MS, || for volume in ["", "ram", "log"] {
                 if let Ok(Ok(handle)) = vfs::root(Endpoint(client), volume) { let _ = vfs::flush(Endpoint(client), handle); let _ = vfs::close(Endpoint(client), handle); }
-            }
+            });
             let _ = ipc::drop_cap(client);
         }
         let (mut order, mut count) = ([0usize; UNITS], 0);
@@ -691,7 +700,10 @@ fn bare_metal() -> bool {
 }
 
 mind::entry!(main);
-fn main(info: &'static BootInfo) {
+// A service that does not answer never stops the boot or the supervision of the others (000-KRN-0075).
+fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(info)) }
+
+fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
     let order = boot_order();
@@ -739,7 +751,7 @@ fn main(info: &'static BootInfo) {
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
     // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
     if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
-    let mounted = init.boot_volume_mounted();
+    let mounted = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
     } else if info.boot_slot.trial != 0 {

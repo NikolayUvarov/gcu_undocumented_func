@@ -101,7 +101,8 @@ pub fn call_receiving(endpoint: Endpoint, words: [usize; 2], cap: Option<(usize,
         Some((handle, true)) => Message::new(words[0], words[1]).with_cap_moved(handle, PASSED),
         Some((handle, false)) => Message::new(words[0], words[1]).with_cap(handle, PASSED),
     };
-    endpoint.call(&message, receive).map(|reply| (reply.data, reply.cap_received))
+    // Under `with_timeout` too, as calls with a buffer are (000-KRN-0075).
+    endpoint.call_timeout(&message, receive, TIMEOUT.load(core::sync::atomic::Ordering::Relaxed)).map(|reply| (reply.data, reply.cap_received))
 }
 
 /// Checks the reply of a capability result: None when the capability arrived with an empty ok reply, Some(code) for an
@@ -126,7 +127,7 @@ pub fn check_error(reply: &[usize; 2]) -> Result<()> {
 /// ends before the reply is read (revoke, MC-2.6): it cannot change the reply while the client decodes it.
 pub fn call_buffer(endpoint: Endpoint, method: usize, buffer: &Pages, length: usize) -> Result<[usize; 2]> {
     let cap = buffer.share()?;
-    let reply = endpoint.call(&Message::new(method | length << 16, 0).with_cap(cap, 0), 0);
+    let reply = endpoint.call_timeout(&Message::new(method | length << 16, 0).with_cap(cap, 0), 0, TIMEOUT.load(core::sync::atomic::Ordering::Relaxed));
     let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap);
     Ok(reply?.data)
 }
