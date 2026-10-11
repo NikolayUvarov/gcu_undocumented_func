@@ -1,0 +1,37 @@
+# Keeps github.com/NikolayUvarov/mind-core-os, the OS under its public name, a copy of this repository's main and tags
+# (the maintainer, 2026-10-11). Work happens here; the copy is only pushed to, never written to by hand, so a plain
+# push (no force) that fails says someone did. Without the MIRROR_SSH_KEY secret (a deploy key of mind-core-os with
+# write access) nothing is pushed.
+name: Mirror to mind-core-os
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'NikolayUvarov/gcu_undocumented_func'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Push main and the tags
+        env:
+          KEY: ${{ secrets.MIRROR_SSH_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then echo "MIRROR_SSH_KEY is not set: nothing pushed"; exit 0; fi
+          mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/mirror && chmod 600 ~/.ssh/mirror
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/mirror -o IdentitiesOnly=yes"
+          git push git@github.com:NikolayUvarov/mind-core-os.git refs/remotes/origin/main:refs/heads/main
+          git push git@github.com:NikolayUvarov/mind-core-os.git --tags
