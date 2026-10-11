@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (2 requests waiting, 2026-10-10; the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.md), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](000-KRN-0067-the-aarch64-boot-test-on-pcu.md))
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-10; the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.md), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](000-KRN-0067-the-aarch64-boot-test-on-pcu.md))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -56,3 +56,25 @@ One of these:
 ### Acceptance criteria
 
 In QEMU, `kbench` started from wm's menu ends within one row after its window is closed, and the kernel's log shows it. The wm suite's walk then closes the window without waiting, and `RUN_TO_END` is empty.
+
+## The aarch64 boot check waits for `[BLOCKSTORE] READY` on the serial line, and it no longer comes there
+
+**Recorded by:** the tools track (`APP`), 2026-10-11, from its local gate (the branch at b518d36 merged with `main` at dde9418).
+
+### Problem
+
+The group "aarch64: boot and fault containment" (`tests/aarch64_smoke.py`) fails on `main` itself (dde9418, built for aarch64 on its own):
+
+- It reads the serial line until `[INIT] READY` and then requires `[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0`.
+- Since 251-STO-0013 the block store first logs `[BLOCKSTORE] INDEX: 4681 SLOTS (255 KiB) FOR 16384 SECTORS`; its `READY` line never reaches the serial line, neither before `[INIT] READY` nor in 180 s of waiting for it (1 CPU and 4 CPUs alike, three runs).
+- In the QEMU suites on aarch64 the same `READY` line is there: the store suite reads it with `logs <blockstore's PID>`, and every store check passes.
+- Most likely the mount now ends after `init`'s `READY`, and lines printed after that do not go to the serial line in this test, which starts no shell. The vvfat crash (000-KRN-0067) may have hidden this in earlier gates, since it fails the same group.
+
+### Plan (a proposal; the kernel track decides)
+
+- Check the block store's `READY` where its output is kept rather than on the serial line, or wait for it before `[INIT] READY` is taken as the end of the boot.
+- If the line should reach the serial line, find why it does not since the index grows with the medium (with the storage track, `requests-STO.md` names this request).
+
+### Acceptance criteria
+
+The group passes on `main` and on a branch merged with it, with the block store's `READY` checked.
