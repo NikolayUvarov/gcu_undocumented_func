@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
 // Ring 3 driver for the MacBook Pro's Broadcom BCM4331 Wi-Fi (550-DRV-0006). Stage 1 (550-DRV-0020) reads the chip
-// behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) holds the
-// 802.11 core the firmware left running in reset, and frees the SPROM's pins while the SPROM is read. Stage 2
-// (550-DRV-0023) loads the microcode from the disk, starts it, reads its revision and puts the core back into reset.
+// behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) stops the
+// 802.11 core the firmware left running with a reset pulse, and frees the SPROM's pins while the SPROM is read. Stage 2
+// (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::{device_config, Mmio};
@@ -32,6 +32,8 @@ const SPROM_WORDS: usize = 220; // revision 8 and later: 440 bytes
 // Wrapper (agent) registers of an AI backplane core.
 const AI_IOCONTROL: usize = 0x408; const AI_IOSTATUS: usize = 0x500; const AI_RESET_CONTROL: usize = 0x800; const AI_RESET_STATUS: usize = 0x804;
 const RESET: u32 = 1;
+// The agent's error log: control, done, status, address low and high, id, user, flags.
+const AI_ERROR_LOG: [usize; 8] = [0x900, 0x904, 0x908, 0x90C, 0x910, 0x914, 0x918, 0x91C];
 
 // Wrapper I/O control bits of the 802.11 core.
 const IO_CLOCK: u32 = 1 << 0; const IO_FORCE_GATED: u32 = 1 << 1; const IO_PHY_CLOCK: u32 = 1 << 2; const IO_PHY_RESET: u32 = 1 << 3;
@@ -114,19 +116,8 @@ fn main(_info: &'static BootInfo) {
                                                  bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_RESET_STATUS));
     mind::println!("[BCM] CORE {} (WINDOW 1): IO CONTROL {:08X} (CLOCK {}), IO STATUS {:08X}, RESET {:08X} ({}), RESET STATUS {:08X}",
                    index, control, if control & 1 != 0 { "ON" } else { "OFF" }, status, reset, if reset & 1 != 0 { "IN RESET" } else { "RUNNING" }, reset_status);
-    // The firmware may leave the 802.11 core running, receiving into memory it no longer owns: held in reset until set up.
-    if index == CORE_80211 && reset & RESET == 0 {
-        // A reset the agent reports in progress ends first (up to 300 ms); the clock goes off once the core is held.
-        let settled = wait(&bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0);
-        if let Err(v) = settled { mind::println!("[BCM] RESET STATUS STAYS {:08X} AFTER 300 MS; THE CORE IS HELD IN RESET ANYWAY", v); }
-        bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
-        pause(&bar, 2);
-        bar.write32(WRAPPER + AI_IOCONTROL, IO_GMODE); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
-        mind::time::sleep(1);
-        let (now, io) = (bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
-        mind::println!("[BCM] THE 802.11 CORE WAS LEFT RUNNING BY THE FIRMWARE: {} (RESET {:08X}, IO CONTROL {:08X})",
-                       if now & RESET != 0 { "NOW HELD IN RESET" } else { "RESET DID NOT TAKE" }, now, io);
-    }
+    // The firmware may leave the 802.11 core running, receiving into memory it no longer owns: a reset pulse leaves it idle.
+    if index == CORE_80211 && reset & RESET == 0 { pulse(&bar, "THE 802.11 CORE WAS LEFT RUNNING BY THE FIRMWARE"); }
     mind::println!("[BCM] PCIE CORE: {:08X} {:08X} {:08X} {:08X}", bar.read32(PCIE), bar.read32(PCIE + 4), bar.read32(PCIE + 8), bar.read32(PCIE + 12));
     let _ = WINDOW;
 
@@ -172,10 +163,14 @@ fn sprom(bar: &Mmio, capabilities: u32) {
 fn pause(bar: &Mmio, n: usize) { for _ in 0..n { let _ = bar.read32(WRAPPER + AI_IOSTATUS); } }
 
 // Polls `register` until `done` holds, for up to `ms` milliseconds; the last value read.
-fn wait(bar: &Mmio, register: usize, ms: u32, done: impl Fn(u32) -> bool) -> Result<u32, u32> {
-    for _ in 0..ms { let v = bar.read32(register); if done(v) { return Ok(v); } mind::time::sleep(1); }
-    let v = bar.read32(register);
-    if done(v) { Ok(v) } else { Err(v) }
+fn wait(bar: &Mmio, register: usize, ms: usize, done: impl Fn(u32) -> bool) -> Result<u32, u32> {
+    let end = mind::time::uptime_ms() + ms;
+    loop {
+        let v = bar.read32(register);
+        if done(v) { return Ok(v); }
+        if mind::time::uptime_ms() >= end { return Err(v); }
+        pause(bar, 10);
+    }
 }
 
 // The 802.11 core's agent: readable whatever the core's state.
@@ -222,9 +217,19 @@ fn microcode(bar: &Mmio) {
     if size < 12 || image[0] != b'u' || image[1] != 1 || (size - 8) % 4 != 0 { mind::println!("[BCM] NOT A MICROCODE FILE OF VERSION 1 (TYPE {:02X}, VERSION {})", image.first().copied().unwrap_or(0), image.get(1).copied().unwrap_or(0)); return; }
     let words = image[8..].chunks_exact(4).map(|w| u32::from_be_bytes([w[0], w[1], w[2], w[3]]));
 
-    step(1, "THE CORE OUT OF RESET");
+    step(1, "THE AGENT'S ERROR LOG READ, THE CORE DISABLED AND ENABLED");
     wrapper(bar, "BEFORE");
-    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A RESET IS STILL IN PROGRESS, STAGE 2 NOT ATTEMPTED", v); return; }
+    let errors = AI_ERROR_LOG.map(|r| bar.read32(WRAPPER + r));
+    mind::println!("[BCM] AGENT READ AND WRITE IDS {:08X} {:08X}; ERROR LOG CONTROL {:08X}, DONE {:08X}, STATUS {:08X}, ADDRESS {:08X}{:08X}, ID {:08X}, USER {:08X}, FLAGS {:08X}; INTERRUPT STATUS {:08X}",
+                   bar.read32(WRAPPER + 0x808), bar.read32(WRAPPER + 0x80C), errors[0], errors[1], errors[2], errors[4], errors[3], errors[5], errors[6], errors[7], bar.read32(WRAPPER + 0xA00));
+    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A BACKPLANE OPERATION STILL PENDING, STAGE 2 NOT ATTEMPTED", v); return; }
+    // Disabled first if it runs: held in reset with its clock off.
+    if bar.read32(WRAPPER + AI_RESET_CONTROL) & RESET == 0 {
+        bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
+        pause(bar, 2);
+        bar.write32(WRAPPER + AI_IOCONTROL, IO_GMODE); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
+        pause(bar, 10);
+    }
     // The core out of reset with its clock forced, then running on its own clock, in G-mode.
     let flags = IO_GMODE;
     bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | IO_FORCE_GATED | flags); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
@@ -288,13 +293,19 @@ fn microcode(bar: &Mmio) {
     stop(bar)
 }
 
-// The core back into reset, with its clock off: nothing runs until a later stage sets it up.
-fn stop(bar: &Mmio) {
-    bar.write32(WRAPPER + AI_IOCONTROL, IO_CLOCK | IO_FORCE_GATED | IO_GMODE); let _ = bar.read32(WRAPPER + AI_IOCONTROL);
+// The core reset again: its microcode and state gone, idle until a later stage sets it up.
+fn stop(bar: &Mmio) { pulse(bar, "STAGE 2 DONE"); }
+
+// A reset pulse: pending backplane operations end first (up to 1 ms), then reset asserted, released and read back.
+fn pulse(bar: &Mmio, why: &str) {
+    let before = bar.read32(WRAPPER + AI_RESET_STATUS);
+    let settled = wait(bar, WRAPPER + AI_RESET_STATUS, 1, |v| v == 0).is_ok();
     bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
     pause(bar, 2);
-    bar.write32(WRAPPER + AI_IOCONTROL, IO_GMODE);
-    mind::println!("[BCM] THE 802.11 CORE IS BACK IN RESET (RESET {:08X}, IO CONTROL {:08X})", bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
+    bar.write32(WRAPPER + AI_RESET_CONTROL, 0); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);
+    pause(bar, 20);
+    mind::println!("[BCM] {}: RESET PULSED (RESET STATUS {:08X} BEFORE{}, {:08X} AFTER; RESET {:08X}, IO CONTROL {:08X})", why, before,
+                   if settled { "" } else { ", NOT CLEARED IN 1 MS" }, bar.read32(WRAPPER + AI_RESET_STATUS), bar.read32(WRAPPER + AI_RESET_CONTROL), bar.read32(WRAPPER + AI_IOCONTROL));
 }
 
 // Nothing is served yet: it stays, so init does not restart it.
