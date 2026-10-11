@@ -121,7 +121,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | Group | The kernel session's machine | PCU |
 |---|---|---|
 | build (aarch64) | 214 s | 248 s |
-| aarch64: boot and fault containment | 90 s | 8 s, failed: QEMU aborts in `vvfat` |
+| aarch64: boot and fault containment | 90 s | 8 s, failed: QEMU aborted in `vvfat` (106 s and passing since 000-KRN-0067) |
 | aarch64: programs, shell and four CPUs | 339 s | 394 s |
 | aarch64: files, network and TLS | 1121 s | 1819 s |
 | aarch64: RAM, ACPI and PCI above 4 GiB | 826 s | 1063 s |
@@ -139,10 +139,10 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
   4. **The logs.** Copy what you need into your track's directory in the same operation. The next run of anyone's `ci_local.sh` removes `/tmp/mind-core-*.log` and rewrites `/tmp/mind-ci-local`.
 - **The report** says where each part ran: "x86 part local; aarch64 part on PCU through Effector (Ubuntu 22.04, QEMU 8.2.x from qemu.org, AAVMF 2022.02)". Together they are one local gate in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of both parts passed on the same commit.
 - **In all, about 86 minutes on PCU** against 64 on the kernel session's machine, for the groups that pass.
-- **Known: "aarch64: boot and fault containment" fails on PCU.**
-  - QEMU's `vvfat` driver aborts as the guest writes its boot volume (`fat:rw:`), with `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
-  - It does so with QEMU 8.2.2 and 8.2.10 from qemu.org alike. The same test passes on the kernel session's machine under Ubuntu's 8.2.2, which carries no `vvfat` patch.
-  - The cause is being looked for in [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Until it is fixed, run that one group on your own machine.
+- **"aarch64: boot and fault containment" runs on PCU too** (since 2026-10-11, [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)).
+  - It used to fail there: QEMU's `vvfat` driver aborted as the guest wrote its boot volume (`fat:rw:`), with `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - The test now boots raw FAT images of the build, and `vvfat` serves only a read-only decoy disk. It passed on PCU in 106 s (cf0283f) and on the kernel session's machine.
+  - Run it in the aarch64 part with the other groups (step 3).
 
 ## 5. When something goes wrong
 
