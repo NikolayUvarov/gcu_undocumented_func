@@ -18,7 +18,7 @@ The analysis, from the code:
 - **PAT (every CPU, `mmu::enable_protection`).** The power-on default, but entry 1 (PWT alone) is write-combining. No page used PWT alone before.
 - **Mapping.** `paging::Caching` (memory, device, write-combining) replaces the device flag of the user mapping. `MEM_MAP` maps a memory capability that lies inside the boot framebuffer write-combining (`mmu::write_combining`: PWT on x86). On aarch64 it stays normal memory.
 - **The hardware report.** Under "Frequencies and power" it lists the MTRRs (the default type, the variable ranges) and the PAT. On the Mac it shows what type the firmware gave the framebuffer.
-- **`compositor`.** It copies only the visible width of each row, in groups of 8 pixels. A changed group is written whole, so the write-combining buffer sends it as one burst.
+- **`compositor`.** It compares and copies only the visible width of each row, pixel by pixel as before. A first version compared groups of 8 pixels as slices; in this `no_std` build that is a byte-wise `memcmp`, which made each frame several times dearer. On PCU's QEMU (aarch64, TCG) the compositor then held its CPU, and `kbench`'s sleeps of 10 ms took 50 ms. With the old compositor they took 19.7 ms, with this one as before.
 - **Not changed.** The kernel's identity map still maps the framebuffer as before: as write-back pages, so as the MTRRs say. The kernel writes it only before the compositor takes the screen, and for a fatal screen.
 - **Later (a KRN task).** Damage regions or an explicit "present" from the screen's owner, an ABI change, so the compositor stops copying half-drawn frames and scanning unchanged ones.
 
