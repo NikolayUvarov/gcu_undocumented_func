@@ -2247,6 +2247,27 @@ def isolation_suite(vm):
     pid, faults = family("x", 1, "LEASE REVOKED")
     assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
+    # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
+    # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
+    # copy runs from the top, so a screen caught during it may show the top newer.
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("F\n")
+    seen, until = [], time.monotonic() + 4
+    while time.monotonic() < until:
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        width, height = map(int, size.split())
+        def number(y):
+            r, g, b = pixels[(y * width + width // 2) * 3:][:3]
+            return r << 8 | g if b == 0x80 else None
+        top, bottom = number(height // 4), number(3 * height // 4)
+        if top and bottom:
+            seen.append((top, bottom))
+            assert bottom <= top, f"a frame copied while it was drawn: top {top}, bottom {bottom}; {seen}"
+    require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=20), "FRAMES DONE")
+    assert len({top for top, _ in seen}) >= 5, f"the frames did not reach the screen: {seen}"
+    print(f"PASS: the compositor copies whole frames: {len(seen)} screens, frames {seen[0][0]} to {seen[-1][0]}", flush=True)
+    time.sleep(.1); vm.collect(); vm.output = ""
     # 000-KRN-0039: SGDT from a program faults (#GP) where UMIP is on.
     names = protection_check(vm)
     vm.send("run app2\n")

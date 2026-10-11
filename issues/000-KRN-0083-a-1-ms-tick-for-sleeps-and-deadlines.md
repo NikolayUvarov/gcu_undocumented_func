@@ -1,6 +1,6 @@
 # 000-KRN-0083 — A 1 ms tick for the clock, sleeps and deadlines; time slices stay 10 ms
 
-**Type:** kernel (`kernel/src/arch/*/interrupts.rs`, `context.rs`, `scheduler.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the tests and the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-5.6, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/*/interrupts.rs`, `context.rs`, `scheduler.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested in QEMU and on the MacBook Pro; to close once in `main`) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-5.6, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -53,6 +53,15 @@ The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pr
 | sleep 10 ms | 21.1 ms | 10.6 ms | 27.9 ms |
 
 A sleep of 1 ms now ends in about 2 ms. A sleep of 10 ms still often took two slices here. The sleep ends on time, but the task woken on a CPU that runs another task waits for that task's 10 ms slice to end, as it always did. Preempting the running task for the one woken is the next step, if the MacBook Pro shows the same.
+
+**2026-10-11, the MacBook Pro** (build 8223d24, `kbench timer`, `kbench0001.txt`):
+
+| | median | shortest | longest |
+|---|---|---|---|
+| sleep 1 ms | 1.99 ms | 1.01 ms | 9.45 ms |
+| sleep 10 ms | 10.9 ms | 10.2 ms | 18.8 ms |
+
+Both medians are within the criteria (1–2 ms and 10–11 ms), and no sleep was shorter than asked. A few sleeps of 1 ms took up to 9.45 ms (10 of 100 over 4 ms): a task woken on a CPU that runs another waits for that one's time slice, as in QEMU.
 
 ## Related
 

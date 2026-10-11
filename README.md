@@ -1,4 +1,34 @@
-# MIND CORE
+# MIND Core OS — a capability-based microkernel operating system in Rust
+
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+![Language: Rust](https://img.shields.io/badge/language-Rust%20(no__std)-orange.svg)
+![Platforms: x86_64, aarch64](https://img.shields.io/badge/platforms-x86__64%20%7C%20aarch64-lightgrey.svg)
+![Boot: UEFI](https://img.shields.io/badge/boot-UEFI-green.svg)
+
+**MIND Core** is an operating system written from scratch in Rust (`no_std`). It is a capability-based microkernel: every driver and service, the file system and the network stack among them, runs as an isolated user-space task with only the capabilities it was granted. It boots with its own UEFI bootloader on x86_64 and aarch64 (ARM64) and uses every processor (SMP). It runs in QEMU and boots on real hardware, a MacBook Pro among them.
+
+MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
+
+**What is there today**, each part with its tests (details below):
+
+- **Kernel:** capabilities with derivation and revocation, synchronous IPC with lent pages, SMP scheduling with CPU budgets, a 1 ms tick on x86, memory quotas, SMEP, SMAP, UMIP and PAN.
+- **Boot and update:** its own UEFI bootloader, a signed boot manifest, A/B slots with a trial boot and fallback, reproducible builds, Secure Boot with our own keys (tested in QEMU).
+- **Drivers in user space:** AHCI (SATA), NVMe, VirtIO (block, network, input), xHCI and EHCI USB (keyboards, mice, storage, a UVC camera), Intel HDA sound, PS/2, TPM 2.0.
+- **Network:** a TCP/IP stack in user space with DHCP and DNS, a TLS 1.3 client, HTTPS downloads, a network policy that grants flows.
+- **Storage:** FAT12/16/32 with writes, a content-addressed block store (Merkle DAG), checkpoints.
+- **User space:** a shell with its own script language (msh), a window manager, a file manager, an editor, text-to-speech and voice commands, system monitors.
+- **Assurance:** a [Constitution](constitution/EN/MIND_CORE_Constitution_v1.6.md) of numbered requirements; QEMU test suites on x86_64 and aarch64; TLA+ models checked with TLC.
+
+**Quick start** (Ubuntu or WSL; details in [How to Build and Run](#how-to-build-and-run)):
+
+```bash
+sudo scripts/setup_build_env.sh                     # Ubuntu or WSL: QEMU, OVMF, the tools, Rust's pinned nightly
+./02_build.sh && ./03_run_qemu.sh                   # x86_64 in QEMU
+ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64 (ARM64) in QEMU
+./04_make_usb_image.sh                              # a USB image for real hardware
+```
+
+### Why "MIND Core"
 
 The Minds of the Culture's spaceships — the ultra-powerful AIs controlling General Contact Units and Orbitals — must reside somewhere. No matter how multidimensional and advanced their hardware substrate may be, at a fundamental level, any computing architecture needs two basic things to wake up and become self-aware: a bootloader and an operating system.
 
@@ -112,7 +142,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8); `Key::latin()` gives letter commands in either layout |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
-| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull` (and `_frame`, `compositor_release`), `cap_info` — for drivers |
 | `keyboard` | the keyboard service (`idl/keyboard.wit`) and key delivery over the PS/2 decoder, shared by `ps2_kbd`, `virtio_input` and `usb_hid` |
 | `hid`, `usb` | USB HID reports (boot keyboards to PS/2 codes with key repeat, report descriptors of mice and tablets); a class driver's client of `usb_host` (`idl/usb.wit`: badges, the interface description, the lent buffer) |
 | `uvc` | USB video class (issue 158, with `alloc`): a camera's descriptors (formats, frame sizes, intervals, the streaming interface's alternate settings), the probe and commit controls, the choice of a YUY2 frame size, rate and setting, and frames assembled from payloads |
@@ -635,7 +665,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 52 | SCHED_SET | PID, budget µs; msg[0] = period µs, msg[1] = band or `BAND_KEEP` → 0 — lifecycle owner or process control (band changes: control/platform/restart) |
 | 51 | STAT | class, buffer; msg[0] = capacity, msg[1] = PID for VMAP/CAPS → records written (header: version, record size, count, total) — observe or control privilege; classes TASKS, CPUS, MEMORY, PHYSMAP, VMAP, CAPS, ENDPOINTS, IRQS, DEVICES (`common/abi.rs`) |
 | 50 | READ_INPUT | → next input event word of the focused task (key, modifiers, pressed, character, legacy byte; see `common/abi.rs`), 0 if none |
-| 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
+| 21 | COMPOSITOR_PULL | slot, mode → 0 unchanged, 1 dirty, 2 new screen in slot; in frame mode 3 while the focused task draws, and on 1 the task waits until the copy is released (000-KRN-0086) — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |
