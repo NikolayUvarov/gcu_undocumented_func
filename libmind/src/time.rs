@@ -1,7 +1,7 @@
 use crate::abi::*;
 use crate::sys::call;
 
-/// Sleeps up to `ms` milliseconds (10 ms granularity); input wakes the active program (in a window: the keys the
+/// Sleeps `ms` milliseconds, ending on the first 10 ms tick after them (000-KRN-0065); input wakes the active program (in a window: the keys the
 /// window manager queues, issue 088). Returns the time slept.
 pub fn sleep(ms: usize) -> usize { if crate::windowed::active() { crate::windowed::wait(ms) } else { call(SYSCALL_WAIT, ms, 0) } }
 pub fn uptime_ms() -> usize { call(SYSCALL_UPTIME, 0, 0) }
