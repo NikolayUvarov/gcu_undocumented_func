@@ -1,6 +1,6 @@
 # 000-KRN-0088 — `mind-core-os`: a copy of this repository under the OS's own name, kept up to date from `main`
 
-**Type:** repository and CI (`scripts/mirror_showcase.sh`, `.github/workflows/mirror.yml`, README) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (both repositories made, `main` copied once by hand; the deploy key waits for the maintainer) · **Blocked by:** the maintainer's steps below · **Roadmap:** — · **Constitution:** —
+**Type:** repository and CI (`scripts/mirror_showcase.sh`, `.github/workflows/mirror.yml`, README) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (both repositories made, `main` copied once by hand; the token for the workflow waits for the maintainer) · **Blocked by:** the maintainer's steps below · **Roadmap:** — · **Constitution:** —
 
 ## Problem
 
@@ -23,13 +23,13 @@ The decision:
 - **The workflow `.github/workflows/mirror.yml`:**
   - looks once a day and runs the script with `--every-hours 48`: the showcase changes at most every 48 hours, and only when something changed (the maintainer, 2026-10-11);
   - run by hand (Actions → Run workflow), it copies any change at once;
-  - it pushes with a deploy key, the secret `MIRROR_SSH_KEY`; without the secret it copies nothing and does not fail;
+  - it pushes with the secret `MIRROR_TOKEN` (a fine-grained token that may write only to `mind-core-os`) or `MIRROR_SSH_KEY` (a deploy key of `mind-core-os`); without either it copies nothing and does not fail. The maintainer's own SSH key is not used: GitHub refuses a key of an account as a deploy key, and in a secret it would let any workflow change write to every repository of the account;
   - in the showcase itself it does not run.
 - **Agents' branches and `fast-test`** are not copied. What reaches `main` has passed the gate, so the copy holds only gated work.
 - **The maintainer's steps** (the GitHub app may not create repositories: "403 Resource not accessible by integration"):
   1. create `mind-core-os`, public and empty, and `mind-core`, public;
   2. give the Claude GitHub app access to both;
-  3. make an ed25519 key pair. The public key goes to `mind-core-os` as a deploy key with write access, the private key to this repository's Actions secret `MIRROR_SSH_KEY`.
+  3. a fine-grained token for `mind-core-os` alone (Contents: read and write), kept as this repository's Actions secret `MIRROR_TOKEN`; or else a deploy key, the secret `MIRROR_SSH_KEY`.
 - **Then the kernel session:**
   - pushes `main` and the tags to `mind-core-os` once;
   - names both repositories in README.md;

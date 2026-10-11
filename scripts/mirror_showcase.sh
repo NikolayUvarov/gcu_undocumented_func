@@ -31,7 +31,7 @@ fi
 if ((hours > 0)); then
     last=${MIRROR_LAST_PUSH:-}
     if [[ -z $last ]]; then
-        repo=$(sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##' <<<"$TARGET")
+        repo=$(sed -E 's#^(https://([^@/]*@)?github\.com/|git@github\.com:)##; s#\.git$##' <<<"$TARGET")
         auth=(); [[ -n ${GITHUB_TOKEN:-} ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
         last=$(curl -fsS "${auth[@]}" "https://api.github.com/repos/$repo" | python3 -c 'import json, sys; print(json.load(sys.stdin)["pushed_at"])')
     fi
@@ -43,4 +43,4 @@ if ((hours > 0)); then
 fi
 "${git[@]}" push -q "$TARGET" refs/mirror/main:refs/heads/main
 "${git[@]}" push -q "$TARGET" --tags
-echo "mirror: $TARGET has main at ${main:0:7} and $("${git[@]}" tag | wc -l) tags"
+echo "mirror: $(sed -E 's#//[^@/]*@#//#' <<<"$TARGET") has main at ${main:0:7} and $("${git[@]}" tag | wc -l) tags"  # no credentials in the log
