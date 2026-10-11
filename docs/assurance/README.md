@@ -37,7 +37,7 @@ Bounds: three CPUs, the revoker on one. Result: no error for x86 ([`RevokeFlush.
 
 [`tests/idl_fuzz_host.rs`](../../tests/idl_fuzz_host.rs) is a host test with a fixed seed (`0x5000A5A00001`) and 50 000 inputs per target. It runs the generated decoders of `libmind/src/idl/` unchanged:
 
-- **Every interface's receiver `decode`** (24 interfaces) gets messages built from the shape of its generated source (its methods, buffer sizes and reply room), random words, any capability kind, calls and non-calls, and buffer requests mutated from those it accepted. Every message must:
+- **Every interface's receiver `decode`** (25 interfaces) gets messages built from the shape of its generated source (its methods, buffer sizes and reply room), random words, any capability kind, calls and non-calls, and buffer requests mutated from those it accepted. Every message must:
   - not panic;
   - release a received capability, whether the message is accepted or refused (MC-2.12);
   - decode the same way twice.

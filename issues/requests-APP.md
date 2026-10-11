@@ -29,7 +29,7 @@ The RTC service's load does not grow by 10 calls a second with each clock.
 
 ### Problem
 
-The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will have an interface (`idl/update.wit`) but no command.
+The `updater` service ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)) will have an interface (`idl/update.wit`) but no command.
 
 ### Plan (a proposal; the tools track decides)
 
@@ -691,10 +691,27 @@ All told, `wm` runs at about 5–11 frames a second, unevenly.
 ### Plan (a proposal; the tools track decides)
 
 - **`paint()` by rows.** Runs of background cells are filled row by row with one loop for each unit size and no division: 5–10 ms instead of 50–90. A row helper in `libmind` (`Screen::span`, the core of `libmind`) can be asked of the kernel track.
-- **Pacing to a deadline.** Sleep until the next frame's deadline less one tick (10 ms), not a fixed 30 ms after the work. A finer phase, with interpolated sine values, moves every term every frame.
+- **Pacing to a deadline.** Sleep until the next frame's deadline, not a fixed 30 ms after the work: since 000-KRN-0083 a sleep ends within a millisecond of the time asked. A finer phase, with interpolated sine values, moves every term every frame.
 - **A cheaper pattern.** Per-column and per-row terms computed once a frame, and a table or incremental distances instead of the square root.
 - **Only what changed.** Cells whose colour did not change are not repainted. Mouse moves redraw the cursor's surroundings only.
 
 ### Acceptance criteria
 
 On the MacBook Pro with 000-KRN-0081, the moving background runs evenly at full contrast. `wm` records the time a frame takes; the `wm` suite reads it in QEMU.
+
+## `files` reads the kernel from the slot that booted (351-UPD-0016)
+
+**Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
+
+### Problem
+
+`files` reads `kernel.elf` and the bootloader to show that whole files come back through `vfs_server` (`files/src/main.rs`). On an image made with `make_usb_image.py --slots` the kernel is in `MIND/A/kernel.elf` (or `MIND/B/` after an update), not at the root, so `files` reports `OPEN kernel.elf FAILED` there. The QEMU checks do not run `files` on such an image yet.
+
+### Plan (a proposal; the tools track decides)
+
+- Read `kernel.elf` from the root when it is there, else from `MIND/A` or `MIND/B`: the slot that booted is in `BootInfo` (`boot_slot.slot`).
+- Say which one was read.
+
+### Acceptance criteria
+
+On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.

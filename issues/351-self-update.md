@@ -57,7 +57,7 @@ Nothing of it exists (survey of 2026-10-08):
 | [351-UPD-0005](../issues-done/351-UPD-0005-release-and-publish.done) | `UPD` | Release bundle and server layout; `scripts/publish_release.py` signs and uploads over SSH; a test server for CI |
 | [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) | `UPD` (`vfs_server` has no owner) | An update zone: a badge that may write only the inactive slot and the boot records |
 | [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [351-NET-0003](../issues-done/351-NET-0003-names-in-the-network-policy.done) | `NET` | A streaming GET with resume into a file (`mind::http`, `download`); HTTPS for programs and the update server's trust (root store or pinned key); names in `netpolicy` |
-| [351-UPD-0007](351-UPD-0007-updater-service.md) | `UPD` | The `updater` service: check the channel, verify, fetch into the inactive slot, verify every file, write the trial record, ask to restart, report |
+| [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) | `UPD` | The `updater` service: check the channel, verify, fetch into the inactive slot, verify every file, write the trial record, ask to restart, report |
 | `requests-APP.md`: `update` | `APP` | `update check / fetch / apply / status / rollback` in the shell and `msh`, with a confirmation |
 
 **Phase 3 — SSH.**

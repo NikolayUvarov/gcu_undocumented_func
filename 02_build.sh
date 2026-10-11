@@ -105,6 +105,7 @@ USER_CRATES=(
     "bench:kbench:kbench.elf"
     "keystore:keystore:keystore.elf"
     "tls:tls:tls.elf"
+    "updater:updater:updater.elf"
     "sysmon:sysmon:sysmon.elf"
     "say:say:say.elf"
     "listen:listen:listen.elf"

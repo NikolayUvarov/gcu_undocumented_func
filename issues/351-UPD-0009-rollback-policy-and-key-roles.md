@@ -1,6 +1,6 @@
 # 351-UPD-0009 — Rollback policy, metadata expiry, key roles and rotation
 
-**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0007](351-UPD-0007-updater-service.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
+**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** — ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), done) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 

@@ -1,6 +1,6 @@
 # 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; skipped until `init` gives the file access) · **Blocked by:** [550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md) · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (blocked: the core's agent reports a pending operation from boot, see the cause below) · **Blocked by:** [550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md) · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -21,6 +21,32 @@ The facts come from published register descriptions (the b43 specifications) and
 ## Acceptance criteria
 
 On the MacBook Pro, one boot logs the microcode's size and SHA-256, the PHY and radio versions, and either the microcode's revision and patch level, or the interrupt reason it saw instead. The core is in reset afterwards, and the machine runs on as before. This is evidence for this machine only (MC-12.1), not of Wi-Fi working.
+
+## Progress
+
+**2026-10-11, MacBook Pro** (`fast-test` with 550-KRN-0061's file access): the machine stopped. Stage 1b's lines end at 5.81 s; `vfs_server` mounted the boot volume at 6.96 s, so the microcode file could be read only then; the last saved line is 7.04 s, and the journal saves every 2 s. So the stop came between about 7 and 9 s, while stage 2 enabled the core. Which step did it is not known.
+
+Since then:
+- stage 2 runs only when `data/wifitest.txt` exists on the boot volume, so an ordinary boot does not run it;
+- each step is logged and then waited for 3 s, longer than the journal's save period, so a stop leaves its step as the last line.
+
+**2026-10-11, MacBook Pro, on request** (`data/wifitest.txt`): the file was read (43224 bytes, the expected SHA-256) and step 1, the core out of reset, passed. The machine stopped in step 2, the first access to a register of the core itself after the reset. In both boots that stopped, the agent's reset status read `00000002` before `bcm_wifi` did anything; in the boot that ran (stage 1b only) it read `00000000`. Stage 1b had asserted the reset without waiting for that status to clear.
+
+Since then:
+- stage 1b waits up to 300 ms for the reset status to clear before it asserts the reset, and turns the core's clock off once the core is held;
+- stage 2 does not release the reset while the status is not clear, and logs the agent's registers before and after;
+- stage 1 also logs ChipCommon's clock control, the PMU's registers and the PCI Express link's power state (reads only).
+
+**2026-10-11, MacBook Pro, on request, after those changes:** the machine ran on. The reset status stayed `00000002` (the wait meant as 300 ms took 3 s: a 1 ms sleep lasts about 10 ms), and stage 2 refused to release the reset, as meant. Read as "a backplane operation still pending", that status explains the stops: an access to the core's own registers does not complete while it is set. It read `00000000` in the first two runs, before stage 1b's first reset, and `00000002` in every boot since, a forced power-off included: the card seems to keep it on standby power. Linux stops this card on such Macs with a reset pulse (pending operations given up to 300 µs, the reset asserted and released at once), not by holding the core in reset.
+
+Since then:
+- stage 1b pulses the reset the same way, and logs the status before and after;
+- waits run by the clock, not by counted sleeps;
+- stage 2 logs the agent's error log first, disables the core if it runs, and still does not release the reset while the status is set.
+
+**2026-10-11, MacBook Pro, on request, with the reset pulse:** the machine ran on. The status read `00000002` before the pulse and after it; the agent's error log read all zeros; stage 2 refused as meant. Whether the status really blocks the core's registers is not known: it was set in every boot so far that touched them.
+
+Since then, on request only, stage 2 first reads two registers of the core as the pulse left it (nothing else changed), then goes on through the enable with the status logged, not obeyed. The last step in the log tells which access stops the machine, if one does.
 
 **2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel ([550-KRN-0082](550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.md)): stop the core with a reset pulse first, then turn bus mastering off.
 
