@@ -29,6 +29,10 @@ The maintainer (2026-10-11): there is no shutdown, and it is needed while the sy
 - **QEMU.** On x86 (OVMF), `reboot -f --off` logs `POWER OFF VIA ACPI S5` and QEMU exits; on aarch64 as before.
 - **The MacBook Pro.** `reboot --off` turns it off. Alternatively, the boot log names why it cannot: no S5 found, or a halt with the message.
 
+## Progress
+
+**2026-10-11, MacBook Pro** (`fast-test` efe17aa, `hw0001.txt`): the kernel logged `ACPI: S5 FOUND, POWER OFF POSSIBLE`. Left: `reboot --off` turning the machine off.
+
 ## Related
 
 [issue 084](../issues-done/084-reboot.done) (`reboot`), [issue 203](../issues-done/203-aarch64-smp-and-power.done) (PSCI), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (a clean shutdown clears the mark of an unfinished run).

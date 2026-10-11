@@ -30,6 +30,13 @@ The analysis, from the code:
   - The moving background redraws visibly faster than with 0b890f6.
   - With the tools track's part, it no longer stutters at full contrast.
 
+## Progress
+
+**2026-10-11, MacBook Pro** (`fast-test` efe17aa, `hw0001.txt`):
+- **The PAT.** It reads `0007040600070106`, so entry 1 is write-combining.
+- **The framebuffer's range.** The framebuffer at 0x90020000 lies in variable MTRR 2 (0x90000000, 256 MiB, UC). With an MTRR of UC and a PAT of WC, the CPU uses WC (Intel SDM, vol. 3A, 12.5.2.2), so the compositor's writes are now combined.
+- **Left.** Whether the moving background runs evenly is the maintainer's to judge, together with 000-KRN-0083's tick.
+
 ## Related
 
 [174](174-full-use-of-pc-hardware.md), [211-KRN-0018](../issues-done/211-KRN-0018-the-compositors-quota-fits-the-screen.done).

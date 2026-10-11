@@ -1,6 +1,6 @@
 # 550-KRN-0082 — The BCM4331's 802.11 core stopped before its bus mastering is turned off
 
-**Type:** kernel (`kernel/src/pci.rs`, the arch clocks) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/pci.rs`, the arch clocks) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (met on the MacBook Pro; in its gate for `main`) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -42,6 +42,15 @@ Wi-Fi is blocked by this.
   - the machine boots as before;
   - the kernel's line above is in the log.
 - In QEMU, which has no BCM4331, every suite runs as before.
+
+## Progress
+
+**2026-10-11, MacBook Pro** (`fast-test` efe17aa, `hw0001.txt` and `boot0001.log`): the acceptance criteria are met on this machine:
+- the kernel logged `PCI: 04:00.0 BCM4331: 802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF (RESET STATUS 00000000, NOW 00000000)`, then `BUS MASTERING TURNED OFF` as before;
+- `bcm_wifi`'s first line about the core reads `RESET STATUS 00000000`, and its own pulse left it at `00000000`; every boot with 550-KRN-0070 alone had read `00000002`;
+- the machine booted to `wm`.
+
+This is evidence for this machine and build only (MC-12.1). The task closes once the change reaches `main`.
 
 ## Related
 
