@@ -49,7 +49,7 @@ The Settings page "Date and time" (000-APP-0048, `wm/src/settings.rs`) only show
   - the local gate's host tests and every x86 QEMU group passed (2026-10-10).
 - **Left:** the maintainer sets the clock from `wm` on the MacBook Pro.
 
-**2026-10-11.** At the maintainer's request the shell no longer asks: it sets the clock at once for the window manager it started, and Settings stay open ([000-APP-0060](000-APP-0060-the-clock-from-wms-settings-at-once.md)).
+**2026-10-11.** At the maintainer's request the shell no longer asks: it sets the clock at once for the window manager it started, and Settings stay open ([000-APP-0060](../issues-done/000-APP-0060-the-clock-from-wms-settings-at-once.done)).
 
 ## Related
 
