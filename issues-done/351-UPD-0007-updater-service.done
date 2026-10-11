@@ -39,7 +39,7 @@ Something on the device has to turn a published release into a staged, verified 
 | [351-UPD-0008](../issues-done/351-UPD-0008-update-zone-in-vfs.done) | `UPD` | The update zone in `vfs_server` | done (2026-10-10) |
 | [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) | `KRN` | `updater` as a boot service with its grants, the update zone's badge included | done (2026-10-10) |
 | this task | `UPD` | The service itself, `idl/update.wit` 1.0, on top of those | done (2026-10-10) |
-| [351-UPD-0016](../issues/351-UPD-0016-images-with-slots.md) | `UPD` | Images with slots: `make_usb_image.py` puts the build in slot A | open (split off) |
+| [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done) | `UPD` | Images with slots: `make_usb_image.py` puts the build in slot A | open (split off) |
 | [351-KRN-0074](351-KRN-0074-the-updater-reads-through-the-parser.done) | `KRN` | `init` lends the updater the parser | done (2026-10-10) |
 | 351-APP-0029 (on the tools branch) | `APP` | The shell's `update` command | open |
 
@@ -87,5 +87,5 @@ Against the acceptance criteria:
 - `rollback` and `status` have not run on the platform, and a directory source is not tested in QEMU.
 
 Split off:
-- images with slots: [351-UPD-0016](../issues/351-UPD-0016-images-with-slots.md);
+- images with slots: [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done);
 - `init` telling the updater of its confirmation: a request in [requests-KRN.md](../issues/requests-KRN.md).

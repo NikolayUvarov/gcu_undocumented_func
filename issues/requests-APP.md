@@ -54,3 +54,20 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
+
+## `files` reads the kernel from the slot that booted (351-UPD-0016)
+
+**Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
+
+### Problem
+
+`files` reads `kernel.elf` and the bootloader to show that whole files come back through `vfs_server` (`files/src/main.rs`). On an image made with `make_usb_image.py --slots` the kernel is in `MIND/A/kernel.elf` (or `MIND/B/` after an update), not at the root, so `files` reports `OPEN kernel.elf FAILED` there. The QEMU checks do not run `files` on such an image yet.
+
+### Plan (a proposal; the tools track decides)
+
+- Read `kernel.elf` from the root when it is there, else from `MIND/A` or `MIND/B`: the slot that booted is in `BootInfo` (`boot_slot.slot`).
+- Say which one was read.
+
+### Acceptance criteria
+
+On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.

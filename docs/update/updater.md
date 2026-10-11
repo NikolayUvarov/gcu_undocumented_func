@@ -89,5 +89,5 @@ tries 3                                   # tries of a trial boot for an automat
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).
 - **Applications in the slots** ([slots.md](slots.md)).
-- **Images built with slots** ([351-UPD-0016](../../issues/351-UPD-0016-images-with-slots.md)).
+- **Slot images by default.** `make_usb_image.py --slots` makes an image the updater can update ([write-disk.md](../write-disk.md), 351-UPD-0016); without the option an image boots from its root and has no slot to fill.
 - **The clock.** Expiry is only as good as the system clock, and the updater has no second source of time.

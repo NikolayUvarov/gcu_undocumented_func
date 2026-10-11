@@ -87,6 +87,7 @@ The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each
   - that every single flipped bit is refused;
   - the choice between two records.
 - Host tests (`tests/vfs_zone_host.rs`) cover the update zone: what the updater's badge and every other badge may change below the boot root, and that a record write changes exactly one sector of the volume.
+- A USB image made with `make_usb_image.py --slots --channel` boots from slot A, `vfs_server` names slot B as the update zone, and the updater reads the running version from the channel kept in slot A (`tests/usb_image_smoke.py`, x86).
 - The updater itself moves a slot volume from release 5 in slot A to release 6 in slot B: fetched over HTTPS, booted on trial through `init`'s restart and confirmed on the disk past the kernel's deadline; refused releases leave the records as they were (the `update` check, x86 and aarch64, [updater.md](updater.md)). Its records are host-tested against the bootloader's choice (`tests/updater_host.rs`).
 
 The suites with a root volume show that a volume without records boots as before.
@@ -96,5 +97,5 @@ The suites with a root volume show that a volume without records boots as before
 - **A confirmation the updater is told of.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The updater learns of the confirmation only by outliving the deadline, so the record reaches the disk about two minutes after the boot ([updater.md](updater.md)).
 - **Applications in the slots.** They stay at the root, shared, so a fallback runs the newer applications on the older kernel. Moving them needs the loader to know the booted slot (with 351-KRN-0014).
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.
-- **Images built with slots** ([351-UPD-0016](../../issues/351-UPD-0016-images-with-slots.md)).
+- **Slot images by default.** `make_usb_image.py` lays the build out in slots only with `--slots` ([write-disk.md](../write-disk.md)); `files` still reads the kernel at the root ([requests-APP.md](../../issues/requests-APP.md)).
 - **A cut during the bootloader's own write, on real media** (351-ASR-0005).
