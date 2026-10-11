@@ -109,6 +109,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [000-APP-0052](000-APP-0052-voice-control-as-a-service.md) | Voice control as a service one can turn on (requested by KRN) | `APP` | P2 | `svc enable` (173) for the boot part; the MacBook Pro's microphone (551-DRV-0010) | track G |
 | [000-APP-0053](000-APP-0053-hear-shows-what-it-heard.md) | `hear` shows what it heard, for the operator (requested by KRN) | `APP` | P2 | — | track G |
 | [000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) | The date and the time set from `wm`'s Settings (requested by KRN) | `APP` | P1 | — | track G |
+| [000-APP-0060](000-APP-0060-the-clock-from-wms-settings-at-once.md) | The clock set from `wm`'s Settings at once, without the shell's question or window (the maintainer's request) | `APP` | P1 | — | track G |
 | [211-APP-0057](211-APP-0057-top-and-free-show-the-machines-memory.md) | `top` and `free` show the machine's memory, not only the kernel's arena (requested by KRN) | `APP` | P2 | — | track G |
 | [174-APP-0058](174-APP-0058-cpus-names-avx512-and-amx.md) | `cpus` names AVX-512 and AMX after `XSAVE+AVX` (requested by KRN; a machine with AVX-512 left) | `APP` | P2 | — | track H |
 | [211-APP-0046](211-APP-0046-a-window-back-to-its-contents-size.md) | A window back to its content's size in `wm`: the size it opened at kept, Alt+0 and a double click on the title (requested by KRN for 158 and 211) | `APP` | P2 | — | track G |

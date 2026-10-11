@@ -1127,12 +1127,14 @@ fn the_date_page_sets_the_clock_through_the_shell() {
     assert_eq!(s.fields, [2027, 2, 30, 14, 5, 31], "changed fields stay");
     assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
     assert!(draw_wm(&mut wm).iter().any(|row| row.contains("2027-02-30 14:05:31 is not a time the clock takes")));
-    // Day 28, then the button: the clock is asked for, and Settings closes (the shell asks in its window).
+    // Day 28, then the button: the clock is set at once, and Settings stay open to show it (000-APP-0060).
     for ch in "28".chars() { wm.key(chr(ch)); }
     for _ in 0..4 { wm.key(key(KEY_DOWN)); }
     assert!(wm.status().ends_with(":Set the clock"), "{}", wm.status());
     assert_eq!(wm.key(key(KEY_ENTER)), Action::SetClock { date: 9920, seconds: 14 * 3600 + 5 * 60 + 31 });
-    assert!(wm.status().starts_with("MODE=NORMAL"));
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("Setting the clock to 2027-02-28 14:05:31")));
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("[ Set the clock ]  at once, through the shell")));
     // Without the shell's commands it says so instead.
     let mut alone = Wm::new(160, 50);
     alone.key(alt_char('s'));

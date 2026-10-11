@@ -36,13 +36,11 @@ const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// How long wm waits for the shell to answer its menu's Shell item, and for a question the shell asks the user in its
-// window (the answer comes later: wm passes the keys).
+// How long wm waits for the shell to answer its menu's Shell item and to set the clock.
 const SHELL_MS: u32 = 2000;
-const ASK_MS: u32 = 300;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
-// How long after asking the shell to set the clock the background reads the RTC each second (000-APP-0055).
+// How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
 const FRESH_MS: usize = 120_000;
 
 // A window wm shows: its lease of the surface, the program's wake endpoint, what was last drawn.
@@ -513,22 +511,26 @@ fn main(info: &'static BootInfo) {
                 }
                 Action::CloseAll => { manager.close_all(); mind::println!("[WM] DONE"); return; }
                 Action::SetClock { date, seconds } => {
-                    // The shell sets the clock once the user agrees in its window (000-APP-0055): wm brings the
-                    // window to the front, asks, and stops waiting soon; the page shows the clock as it then is.
+                    // The shell sets the clock at once for wm, which it started (000-APP-0060): no question, no window
+                    // of its own; Settings stay open and show the clock as it now is.
                     let (y, mo, d) = mind::rtc::civil_from_days(date);
                     let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
-                        if let Ok(Ok(id)) = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL))) { shell_window = Some(id); }
-                        match mind::idl::wire::with_timeout(ASK_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
                             Ok(Ok(())) => format!("The clock is set to {}", when),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
+                            Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
                             Ok(Err(error)) => format!("The clock is not set ({:?})", error),
-                            Err(_) => format!("Answer the shell in its window (Y or N): set the clock to {}?", when),
+                            Err(_) => String::from("The clock is not set: the shell does not answer"),
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
-                    // The user answers in the shell's window when they like: the background reads the RTC anew for a while.
+                    // The background reads the RTC anew for a while, and the page at once.
                     fresh_clock = mind::time::uptime_ms() + FRESH_MS;
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                        settings.message = Some(text.clone());
+                    }
                     manager.wm.notice = Some(text);
                     last_sync = 0;
                 }

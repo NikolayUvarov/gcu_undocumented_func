@@ -2,7 +2,7 @@
 //! What a window manager and its console ask of the shell (211-APP-0044). The shell alone holds the operator's
 //! authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 //! (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
-//! asks the user in its own window before one that changes the machine.
+//! asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -61,8 +61,9 @@ pub fn run(endpoint: Endpoint, line: &str, out: &mut [u8]) -> Result<core::resul
 }
 
 /// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
-/// does, once the user agrees in the shell's window (1.2, 000-APP-0055: wm's Settings). A word call, so a caller
-/// may stop waiting while the shell asks (`mind::idl::wire::with_timeout`) and see the clock change.
+/// does (1.2, 000-APP-0055: wm's Settings). For the window manager the shell started, at once: setting it in its
+/// Settings is the user's choice (1.3, 000-APP-0060). For any other client, once the user agrees in the shell's
+/// window; a word call, so such a caller may stop waiting while the shell asks (`mind::idl::wire::with_timeout`).
 pub fn set_clock(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::result::Result<(), Error>> {
     let words = [3 | MAJOR << 8 | ((date) as usize) << 16, ((seconds) as usize) << 0];
     let reply = wire::call(endpoint, words, None)?;

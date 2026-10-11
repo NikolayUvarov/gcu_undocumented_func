@@ -1,6 +1,6 @@
 //! `wm`'s Settings (000-APP-0048): one window for what can be configured, opened from the top bar or with Alt+S. Its
 //! first page is the desktop background (000-APP-0047, 000-APP-0050), kept in `data/wm.conf`. The date and time page
-//! sets the clock through the shell, which asks the user in its own window first (000-APP-0055). The other system pages
+//! sets the clock through the shell, at once and without a question (000-APP-0055, 000-APP-0060). The other system pages
 //! are to read and say where each setting is made. Every row and page answers Enter and a click: it changes, or a line
 //! says why not (000-APP-0056). Host-tested in tests/wm_host.rs.
 use crate::background::{Config, Picture, Place, COMPLEXITY, PATTERNS};
@@ -95,7 +95,7 @@ impl Settings {
         Outcome::Stay
     }
 
-    // Enter: the clock set to the fields, once they make a time and the shell can be asked.
+    // Enter: the clock set to the fields, once they make a time and wm holds the shell's commands.
     fn set(&mut self) -> Outcome {
         self.typed = None;
         let [year, month, day, h, m, s] = self.fields;
@@ -107,7 +107,7 @@ impl Settings {
             self.message = Some(String::from("wm holds no shell's commands, so it cannot set the clock: date set in the shell's window"));
             return Outcome::Stay;
         }
-        self.message = Some(format!("Asked the shell to set {:04}-{:02}-{:02} {:02}:{:02}:{:02}: answer it in its window", year, month, day, h, m, s));
+        self.message = Some(format!("Setting the clock to {:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, h, m, s));
         self.edited = false;
         Outcome::SetClock { date, seconds: h * 3600 + m * 60 + s }
     }
@@ -278,7 +278,7 @@ impl Settings {
             grid.text_max(x, inner.y, &format!("The clock (it keeps no time zone): {}", now), w, theme.dialog);
             for (i, name) in CLOCK_ROWS.iter().enumerate() {
                 let chosen = !self.on_pages && self.clock_row == i;
-                let line = if i == SET { format!("[ {} ]  the shell asks you to agree in its window", name) } else {
+                let line = if i == SET { format!("[ {} ]  at once, through the shell", name) } else {
                     format!("{:<11} < {:0width$} >", name, self.fields[i], width = FIELDS[i].2 as usize)
                 };
                 grid.text_padded(x, inner.y + 1 + i, &line, w, if chosen { theme.selected } else { theme.dialog });

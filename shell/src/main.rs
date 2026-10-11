@@ -89,6 +89,7 @@ struct Shell {
     window: Option<mind::windowed::Window>, room: (usize, usize), // the shell's window, and the cells it has memory for (the screen's)
     windowed: Option<u64>, // the program the window's session last started in a window of its own
     commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044), made at the first lend
+    managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
@@ -224,17 +225,25 @@ impl Shell {
                     let _ = commands::reply_window(call, result);
                 }
                 commands::Request::SetClock { date, seconds } => {
-                    // As `date set` from a client: asked in the shell's window first (000-APP-0055, wm's Settings).
+                    // The window manager the shell started sets it at once: its Settings are the user's choice
+                    // (000-APP-0060). Any other client, as `date set` from a client: asked in the shell's window first.
                     let (year, month, day) = mind::rtc::civil_from_days(date);
                     let line = alloc::format!("date set {:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, seconds / 3600, seconds / 60 % 60, seconds % 60);
-                    let result = if seconds >= 86_400 || mind::rtc::days_from_civil(year, month, day) != Some(date) { Err(commands::Error::Invalid) } else {
+                    let manager = self.managers.contains(&message.sender);
+                    let result = if seconds >= 86_400 || mind::rtc::days_from_civil(year, month, day) != Some(date) { Err(commands::Error::Invalid) } else if manager {
+                        match mind::idl::rtc::set(Endpoint::RTC, date, seconds) {
+                            Ok(Ok(())) => Ok(()),
+                            Ok(Err(mind::idl::rtc::Error::Invalid)) => Err(commands::Error::Invalid),
+                            Ok(Err(_)) | Err(_) => Err(commands::Error::Unavailable),
+                        }
+                    } else {
                         self.client_line(&line, message.sender).and_then(|out| {
                             let out = core::str::from_utf8(&out).unwrap_or("");
                             if out.contains("CLOCK SET") { Ok(()) } else if out.contains("NOT AVAILABLE") { Err(commands::Error::Unavailable) } else { Err(commands::Error::Invalid) }
                         })
                     };
                     let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
-                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line));
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
                     let _ = commands::reply_set_clock(call, result);
                 }
                 commands::Request::Run { line } => {
@@ -571,6 +580,12 @@ impl Shell {
         } else { loader::commit(Endpoint::LOADER, session)? };
         let pid = committed.map_err(failed)?;
         if let Some(badge) = network { net::bind(badge, pid); }
+        // A window manager with the shell's commands: its Settings set the clock at once (000-APP-0060). PIDs are never
+        // reused, so an ended one names no other program.
+        if window_manager && commands {
+            self.managers.retain(|&old| mind::process::alive(old));
+            self.managers.push(pid);
+        }
         self.windowed = in_window.then_some(pid);
         Ok(pid)
     }
@@ -976,7 +991,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; SESSIONS], active: 0, shown: 0, window: None, room, windowed: None, commands: None, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, window: None, room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), script: None, log_next: None, beat: (0, u64::MAX) })
 }
 
