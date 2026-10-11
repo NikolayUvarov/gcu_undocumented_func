@@ -17,6 +17,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice"
 source "$ROOT/scripts/build_jobs.sh"
 JOBS=$(build_jobs)
 LOGS="$ROOT/code_handoff/build-aarch64"
+ensure_toolchain "$ROOT" || exit 1
 echo ">>> Building the bootloader, the kernel, the services and the programs for aarch64, $JOBS at a time (logs: $LOGS/)..."
 declare -A SEEN=()
 for entry in "${CRATES[@]}"; do

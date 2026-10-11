@@ -29,7 +29,7 @@ The RTC service's load does not grow by 10 calls a second with each clock.
 
 ### Problem
 
-The `updater` service ([351-UPD-0007](351-UPD-0007-updater-service.md)) will have an interface (`idl/update.wit`) but no command.
+The `updater` service ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)) will have an interface (`idl/update.wit`) but no command.
 
 ### Plan (a proposal; the tools track decides)
 
@@ -626,3 +626,37 @@ An entry that does nothing on Enter or a click leaves the user guessing whether 
 
 - The `wm` suite opens each menu entry and each Settings row and finds its reaction.
 - No entry is silent.
+
+## `caps` and `monitor` show the badge right (000-KRN-0073)
+
+**Recorded by:** the kernel track (KRN), 2026-10-10.
+
+### Problem
+
+Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MINT` sets a badge only from a capability that has it (000-KRN-0073). The shell's `caps` (`shell/src/observe.rs`) and `monitor`'s IPC view (`monitor/src/ipc.rs`) print four letters, `rwgk`, so they do not show it.
+
+### Plan (a proposal; the tools track decides)
+
+- A fifth letter, `b`, after `k` in both.
+- The shell suite's check of a client's rights (`RIGHTS=-wg-` in `tests/qemu_smoke.py`) gets the fifth place.
+
+### Acceptance criteria
+
+`caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
+
+## `files` reads the kernel from the slot that booted (351-UPD-0016)
+
+**Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
+
+### Problem
+
+`files` reads `kernel.elf` and the bootloader to show that whole files come back through `vfs_server` (`files/src/main.rs`). On an image made with `make_usb_image.py --slots` the kernel is in `MIND/A/kernel.elf` (or `MIND/B/` after an update), not at the root, so `files` reports `OPEN kernel.elf FAILED` there. The QEMU checks do not run `files` on such an image yet.
+
+### Plan (a proposal; the tools track decides)
+
+- Read `kernel.elf` from the root when it is there, else from `MIND/A` or `MIND/B`: the slot that booted is in `BootInfo` (`boot_slot.slot`).
+- Say which one was read.
+
+### Acceptance criteria
+
+On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.

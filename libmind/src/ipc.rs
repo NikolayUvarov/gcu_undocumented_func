@@ -104,7 +104,7 @@ pub fn mint(handle: usize, mask: u8, offset: usize, length: usize) -> Result<usi
 }
 
 /// Endpoint capability with narrower rights and a badge (1..=BADGE_MAX) the server sees in `Received::badge`; a badge
-/// is set once and kept by every child.
+/// is set once and kept by every child, and only from a handle with `CAP_BADGE` (000-KRN-0073).
 pub fn mint_badged(handle: usize, mask: u8, badge: u16) -> Result<usize> {
     check(syscall(SYSCALL_CAP_MINT, handle, mask as usize, [0, 0, badge as usize, 0]).result)
 }

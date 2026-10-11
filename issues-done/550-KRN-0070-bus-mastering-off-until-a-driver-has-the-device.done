@@ -1,0 +1,53 @@
+# 550-KRN-0070 — Bus mastering off at boot until a driver has the device — done
+
+**Type:** kernel · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-11) · **Blocked by:** — · **Roadmap:** tracks A, D (main task [550](../issues/550-network-on-real-hardware.md)) · **Constitution:** MC-1.5, MC-6.3
+
+## Problem
+
+The drivers track's request, from the MacBook Pro's run of 550-DRV-0020:
+
+- **What the kernel did.** It turned bus mastering on when it granted a device's resource to a driver (`pci::enable`) and off before a driver was restarted (`pci::quiesce`). Every other function's command register stayed as the firmware left it.
+- **What the firmware leaves on the MacBook Pro.** The BCM4331 has bus mastering on and its 802.11 core running.
+- **The window.** `bcm_wifi` holds that core in reset only about 5 s into the boot. Until then, and for any device that no driver is given, a device the firmware left running may write to memory.
+- **What else could stop it.** The profile declares no IOMMU (MC-1.5), so nothing does.
+
+## Plan
+
+- **At enumeration.** `pci::enumerate` clears bus mastering (command bit 2) on every function the firmware left it on. It logs each one: `MIND CORE KERNEL: PCI: bb:dd.f CLASS cccccc: BUS MASTERING TURNED OFF UNTIL A DRIVER HAS IT`.
+- **Left as they are:**
+  - bridges (class 06), which carry their devices' DMA;
+  - display controllers (class 03), which may scan out the boot screen from memory.
+- **When a driver gets the function.** `pci::enable` turns bus mastering on again, as before.
+- **The hardware report** marks each function it was turned off on: "(bus mastering, on at boot, turned off)".
+
+## Acceptance criteria
+
+1. **QEMU.**
+   - The `x86: USB image` group reads this boot's hardware report from the log volume.
+   - In that report no function that was not granted to a driver has bus mastering on, bridges and display controllers aside.
+   - The drivers work as before (the gate's suites).
+2. **The MacBook Pro.** The maintainer's run shows the same in `hw*.txt`. The BCM4331 is off until `bcm_wifi` starts.
+
+## Progress
+
+**2026-10-10: made, and run in QEMU x86 (`usb_image_smoke.py`).**
+- Bus mastering was turned off on three functions: the IDE controller, the e1000, which has no driver, and the xHCI controller, which `usb_host` then gets.
+- The report's check passes.
+
+**2026-10-10: gated.** In main with e2f2b1c. Host and x86 ran locally; aarch64 ran on PCU through Effector, except the boot group, which ran locally (000-KRN-0067).
+
+**Still exposed: display controllers.** Their bus mastering stays as the firmware left it, because turning it off could blank the boot screen. That is safe only once a display driver owns the device, or once the MacBook Pro shows the screen survives it.
+
+## Resolution
+
+- **What was done.** At enumeration the kernel turns off bus mastering that the firmware left on, on every function but bridges and display controllers, until a driver has the device (`stop_mastering` in `kernel/src/pci.rs`). The hardware report notes "(bus mastering, on at boot, turned off)".
+- **Evidence.**
+  - **QEMU x86.** The `x86: USB image` group reads this boot's hardware report from the log volume and finds no ungranted function with bus mastering on, bridges and display controllers aside. Gated with e2f2b1c: host and x86 locally, aarch64 on PCU through Effector, the boot group locally.
+  - **The MacBook Pro.** Build fast-test 2bceac7, `log:hw0001.txt` of 2026-10-11:
+    - the kernel turned bus mastering off on seven functions: 00:16.0 (MEI), 00:1A.0 and 00:1D.0 (EHCI), 00:1F.2 (AHCI), 03:00.1 (the SD controller), 04:00.0 (the BCM4331) and 07:00.0;
+    - when the report was made, the functions with bus mastering on were the bridges, the two display controllers and those granted to a driver (xHCI, both EHCI, HDA, AHCI, and the BCM4331 once `bcm_wifi` had it).
+- **What is left.** Display controllers keep the bus mastering the firmware left. That is safe only once a display driver owns the device. An IOMMU confining each device's DMA is main task 174's.
+
+## Related
+
+[550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), 174-KRN-0043 (VT-d).

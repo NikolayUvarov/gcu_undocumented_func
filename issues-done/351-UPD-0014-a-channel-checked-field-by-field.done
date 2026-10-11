@@ -1,0 +1,39 @@
+# 351-UPD-0014 — A signed channel read field by field, never raising — done
+
+**Type:** update (tools) · **Owner:** `UPD` track (worked by the storage session) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.4, MC-11.11, MC-12.2
+
+From the assurance track's request in requests-UPD.md (2026-10-09), a finding of [351-ASR-0006](../issues/351-ASR-0006-update-threat-model.md)'s fuzzing.
+
+## Problem
+
+`scripts/release.py`'s `check` promises None or a reason. A channel file signed with the release key whose body was not what `publish` writes made it raise instead. Anyone can sign such a file with the public test key. The fuzzer `tests/update_fuzz_test.py` (on `claude/351-ASR-0006-update-threats`) met seven kinds: `UnicodeDecodeError`, `JSONDecodeError`, `KeyError`, `TypeError`, `AttributeError`, `ValueError` and `ReleaseError`. Nothing was accepted that should not be, but a checker should answer with the reason, and the device's parser follows the same format.
+
+## Plan
+
+One function, `channel_from(body, name)`, answers a channel or a reason, with the rules of the device's parser (`mind::release::parse_channel`):
+- the body is UTF-8 JSON (deep nesting included), with exactly the five fields;
+- `channel` is a word of at most 32 characters and the one asked for;
+- `version` and `minimum` are integers with 1 ≤ minimum ≤ version < 2^64;
+- `expires` is a real time in its one format;
+- `manifests` names 1 to 4 architectures, each a word of at most 16 characters, with 64 lower-case hex digits each;
+- finally, the body is the one encoding.
+
+`check` uses it after the signature; `publish` uses it for the channel already on the server.
+
+## Acceptance criteria
+
+`tests/update_fuzz_test.py` passes: every signed channel gets None or a reason, and none raises.
+
+## Resolution
+
+`channel_from` is in `scripts/release.py`, and `check` and `publish` use it. `tests/release_test.py` adds `test_a_signed_channel_of_another_shape_gets_a_reason`: a body of each of the seven kinds, and the edges (`2^64`, a `true` version, an empty or upper-case manifest, 30 February, another channel), signed with the release key, each answered with its reason.
+
+The assurance track's `tests/update_fuzz_test.py`, run here from its branch:
+- the fixed seed `0x351A0006`, 3 000 inputs: 0 kinds of exception;
+- seed 12345, 5 000 inputs: passed.
+
+That is evidence of those inputs, not a proof. `docs/update/publishing.md` 0.2 (and `_RU`) says what `check` reads.
+
+## Related
+
+[351-ASR-0006](../issues/351-ASR-0006-update-threat-model.md), [351-UPD-0005](351-UPD-0005-release-and-publish.done), [351-UPD-0013](351-UPD-0013-release-metadata-in-libmind.done) (the device's reader).

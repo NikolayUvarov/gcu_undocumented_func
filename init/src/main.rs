@@ -23,7 +23,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
+    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0; a read-only VFS client (its microcode)", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -39,6 +39,7 @@ const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
+const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
@@ -100,12 +101,13 @@ impl Init {
     fn running(&self, index: usize) -> bool { self.pids[index] != 0 && mind::process::alive(self.pids[index]) }
 
     // Keeper of the endpoint of service `name`, created on first use and kept across restarts, so clients granted
-    // earlier reach the restarted server; while no server runs, sends fail with ERR_PEER.
+    // earlier reach the restarted server; while no server runs, sends fail with ERR_PEER. It alone may badge clients:
+    // what init hands out lacks CAP_BADGE unless the grant names it (000-KRN-0073).
     fn keeper(&mut self, name: &str) -> Result<usize> {
         let index = service_index(name);
         if let Some(slot) = self.keepers[index] { return Ok(slot); }
         let root = Endpoint::create()?.0;
-        let keeper = ipc::mint(root, CAP_KEEP | CAP_WRITE | CAP_GRANT, 0, 0);
+        let keeper = ipc::mint(root, CAP_KEEP | CAP_WRITE | CAP_GRANT | CAP_BADGE, 0, 0);
         let _ = ipc::drop_cap(root);
         let keeper = keeper?;
         self.keepers[index] = Some(keeper);
@@ -294,6 +296,8 @@ impl Init {
                     .or_else(|| (0..8).map_while(|nth| platform::find_device(0x02_80_00, 0xFF_FF_FF, nth).ok()).find(broadcom)).ok_or(Error::NotFound)?;
                 self.devices[index] = Some(device);
                 grants.add(SLOT_DEV0, Self::bar(&mut minted, device, 0, CAP_KIND_MMIO)?, 0);
+                // A reader's client of vfs_server for the microcode in data/firmware/b43/ (550-KRN-0061), badged so no other badge can be set on it.
+                if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
             }
             "nvme" => {
                 // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.
@@ -312,7 +316,8 @@ impl Init {
             }
             "vfs_server" => {
                 // VFS sees only block devices whose drivers are actually running; it alone may write to them (B.6).
-                grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL);
+                // It badges the file clients it hands out (idl/vfs.wit), so its endpoint keeps the right to (000-KRN-0073).
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "vfs_server")?, ALL | CAP_BADGE);
                 let mut slot = SLOT_BLOCK_FIRST;
                 let store = self.store_disk(); // the block store's own disk: never a file system's (Appendix B.6)
                 for driver in ["ata", "ahci", "usb_storage", "virtio_blk", "virtio_blk#1", "virtio_blk#2", "nvme"] {
@@ -330,11 +335,12 @@ impl Init {
                 if let Some(slot) = bcm2711 { grants.add(SLOT_DEV0, slot, 0); }
                 if let Some(slot) = pl061 { grants.add(SLOT_DEV1, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                self.lend(&mut grants, SLOT_VFS, "vfs_server")?; // hwdocs/ on the boot disk
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); // hwdocs/ on the boot disk
             }
             "loader" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "loader")?, ALL);
-                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                // Its client of vfs_server, badged for reading, goes to every program it loads.
+                self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, 4, "audio_gw")?; grants.add(5, minted.privilege(CAP_KIND_SPAWN)?, 0);
                 self.lend(&mut grants, 6, "tts")?;
             }
@@ -365,7 +371,7 @@ impl Init {
             // usb_host's client for cameras (UVC interfaces only).
             "video_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
-                self.lend(&mut grants, SLOT_VFS, "vfs_server")?; self.lend(&mut grants, SLOT_DEV0, "compositor")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); self.lend(&mut grants, SLOT_DEV0, "compositor")?;
                 if self.running(service_index("usb_host")) { grants.add(SLOT_DEV1, self.badged(&mut minted, "usb_host", mind::usb::BADGE_VIDEO)?, CLIENT); }
             }
             // The stack holds only a client of the card driver (B.6): frames, no device.
@@ -373,12 +379,12 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL);
                 self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; self.lend(&mut grants, SLOT_DEV1, "virtio_net#1")?; // one client per card
             }
-            // The broker mints flow grants from an unbadged stack client (which itself may open nothing), registers them
-            // through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge opens its
-            // private directory for the policy as changed (108, 108-KRN-0041).
+            // The broker mints flow grants from an unbadged stack client that may badge (which itself may open nothing),
+            // registers them through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge
+            // opens its private directory for the policy as changed (108, 108-KRN-0041, 000-KRN-0073).
             "netpolicy" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netpolicy")?, ALL);
-                self.lend(&mut grants, 2, "netstack")?;
+                grants.copy(2, self.keeper("netstack")?, CLIENT | CAP_BADGE);
                 grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_NETPOLICY)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "netstack", mind::network::BADGE_POLICY)?, CLIENT);
             }
@@ -398,14 +404,17 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_KEYSTORE)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "tpm", mind::tpm::BADGE_SEAL)?, CLIENT); // seals the device key (351-NET-0006)
             }
-            // The updater (351-KRN-0022): the clock and a read-only view of the boot disk; TLS over the flow the policy
-            // gives "updater" (made here and kept for restarts: the policy's term bounds it); a lifecycle client of init
-            // that may ask for a restart of the machine; the firmware's boot variables. The update zone comes with
-            // 351-UPD-0008.
+            // The updater (351-KRN-0022): the clock and the boot disk, read-only but for the update zone (351-UPD-0008:
+            // the slot that did not boot, the boot records in place); TLS over the flow the policy gives "updater" (made
+            // here and kept for restarts: the policy's term bounds it); a lifecycle client of init that may ask for a
+            // restart of the machine; the firmware's boot variables.
             "updater" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "updater")?, ALL);
-                self.lend(&mut grants, SLOT_RTC, "rtc")?; self.lend(&mut grants, SLOT_VFS, "vfs_server")?;
+                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT);
                 if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
+                // The parser reads the channels and manifests it fetches: it parses none itself (351-UPD-0007).
+                if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 match self.flow(&mut minted, "updater") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
                     None => mind::println!("[INIT] updater: NO NETWORK GRANT (THE POLICY NAMES NOTHING FOR IT)"),
@@ -416,7 +425,7 @@ impl Init {
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
-                self.lend(&mut grants, 2, "rtc")?; self.lend(&mut grants, 3, "vfs_server")?;
+                self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
             }
             "virtio_net" => {
@@ -495,6 +504,8 @@ impl Init {
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
+            // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
+            "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
             // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
             // MacBook Pro's Retina panel, 211-PRT-0004).
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
@@ -512,7 +523,8 @@ impl Init {
         let mut grants = plan.grants; let mut receiver = None;
         if let Some(keeper) = self.keepers[index] {
             for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == SLOT_SERVICE) {
-                let slot = ipc::mint(keeper, ALL, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, ALL); receiver = Some(slot);
+                let rights = g.rights; // ALL, with CAP_BADGE for a server that badges its own clients
+                let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, rights); receiver = Some(slot);
             }
         }
         let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)

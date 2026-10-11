@@ -1,113 +1,91 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (5 requests waiting, 2026-10-10; the TPM's registers became [351-KRN-0052](351-KRN-0052-tpm-registers-from-the-firmware.md), `bcm_wifi` as a boot service [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done), and the tools track's `SLOT_SHELL` and `SLOT_CLIPBOARD` from its branch [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.md)) · **Recorded by:** the tools track (APP), 2026-10-06
+**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-11; the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](000-KRN-0067-the-aarch64-boot-test-on-pcu.md))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
-## The IDL fuzzer in CI's host tests (500-ASR-0001)
+## A drive that comes back is checked to hold the same volumes before anything is written (211-DRV-0019)
 
-**Recorded by:** the assurance track (`ASR`), 2026-10-09, for [500-ASR-0001](500-ASR-0001-idl-decoder-fuzzing.md).
-
-### Problem
-
-`tests/idl_fuzz_host.rs` fuzzes every generated IDL decoder with a fixed seed: 24 receivers and 82 types, 50 000 inputs per target, about 4 s. It is not in CI's host tests yet, and the CI files are the kernel track's.
-
-### Plan (a proposal; the kernel track decides)
-
-- Add `idl_fuzz` to the list of host tests in `.github/workflows/ci.yml` (the step "Host tests") and in `scripts/ci_local.sh` (`host_tests`), built like the others: `rustc --edition=2021 --test tests/idl_fuzz_host.rs`.
-- If 175-KRN-0046 changes how the host tests fail, the line follows that.
-
-### Acceptance criteria
-
-CI runs the test on every push, and a finding fails the host-test step.
-
-## The pinned toolchain installed once before the parallel build (000-KRN-0020)
-
-**Recorded by:** the assurance and drivers session (`ASR`, `DRV`), 2026-10-09, after the maintainer's build of `fast-test` failed.
+**Recorded by:** the drivers track (`DRV`), 2026-10-11, from the MacBook Pro.
 
 ### Problem
 
-`rust-toolchain.toml` gained `components = ["rust-src"]` (e5a34c2, 250-APP-0020). On a machine with `nightly-2026-10-02` but without that component, `02_build.sh` starts every crate's cargo at once (000-KRN-0020). Each cargo asks rustup to add `rust-src`, and the downloads race on one file:
+The maintainer unplugged the boot disk from a running MacBook Pro (717 s into the boot), wrote a new image onto it on another computer, and plugged it into the same running system again (1109 s). `usb_storage` logged `THE DEVICE IS BACK, THE SAME CAPACITY` and `vfs_server` `THE USB DRIVE ANSWERS AGAIN`. The old system then wrote its journal into the new image's log volume (`LOG:boot0001.log`, 681 bytes, on a disk whose log volume the image had just made empty).
 
-```
-error: component download failed for rust-src: could not rename 'downloaded' file from
-'~/.rustup/downloads/7da4d…partial' to '…': No such file or directory (os error 2)
-```
+This time the new boot volume's 98 files still match the build, and the next boot ran. But `vfs_server` kept the old volumes' FAT state and up to 64 cached sectors, so it can write the old state over a different file system.
 
-All 70 crates fail, and the build reports them as failures of the code. A single `rustup component add rust-src --toolchain nightly-2026-10-02` fixed it.
+`usb_storage` cannot tell such a disk from the one it had: our images have the same capacity, the same MBR disk ID (`BE1AFDFA`) and the same partitions, and their FAT serials are fixed. What differs is the volumes' contents, which `vfs_server` knows (211-KRN-0012: the boot volume is identified by the manifest the bootloader verified).
 
 ### Plan (a proposal; the kernel track decides)
 
-- Before the parallel step, `02_build.sh` runs `rustup toolchain install` once in the repository. It reads `rust-toolchain.toml` and installs the channel, the components and the targets. A failure stops the build with that message.
-- `01_prepare_env.sh` does the same, so the two cannot disagree.
+- When a drive answers again after it did not, `vfs_server` reads each mounted volume's boot sector and its first FAT sector again, before any write. For the boot volume it also checks the manifest.
+- If they differ from what it holds, it drops that volume's cached sectors and marks the volume gone (`ERR_IO`, the log says so). The new medium is mounted as new, or not at all until the next boot, as the track prefers.
+- `usb_storage` (`DRV`) keeps reporting what it sees: `THE DEVICE IS BACK, THE SAME CAPACITY` stays true and says nothing about the contents.
 
 ### Acceptance criteria
 
-On a machine whose rustup lacks a component the toolchain file names, `02_build.sh` installs it once and the build succeeds. A failed install is reported as such, not as 70 failed crates.
+In QEMU, `device_del` of the USB boot disk, its image replaced by another build's, then `device_add`: nothing from the old system's cache is written to the new image (`fsck.fat` clean, the new files unchanged), and the log says the volume changed. The same disk plugged in again unchanged still works as now (211-KRN-0050's test).
 
-## Bus mastering off at boot until a driver is granted the device (550-DRV-0022)
+## The BCM4331's 802.11 core stopped before its bus mastering is turned off (550-KRN-0070, 550-DRV-0023)
 
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, from the MacBook Pro's run of [550-DRV-0020](../issues-done/550-DRV-0020-bcm4331-read-only-probe.done).
+**Recorded by:** the drivers track (`DRV`), 2026-10-11, from the MacBook Pro. The drivers track asked for 550-KRN-0070; this is its side effect.
 
 ### Problem
 
-The kernel turns bus mastering on when it grants a device's resource to a driver (`pci::enable`) and off before a driver is restarted (`pci::quiesce`). It leaves every other function's command register as the firmware set it. On the MacBook Pro the firmware leaves the BCM4331 with bus mastering on and its 802.11 core running (command `0006` in `hw0001.txt`). `bcm_wifi` now holds that core in reset when it starts ([550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done)), about 5 s into the boot. Until then, and for any device no driver is given, a device the firmware left running may write to memory. The profile declares no IOMMU (MC-1.5), so nothing else stops it.
+Since 550-KRN-0070, the kernel turns off the BCM4331's bus mastering at enumeration (`PCI: 04:00.0 CLASS 028000: BUS MASTERING TURNED OFF UNTIL A DRIVER HAS IT` in `hw0003.txt`), while the 802.11 core the firmware left running is still writing what it receives to memory. The core's agent then reports a pending backplane operation (reset status `00000002`) for the rest of the boot:
+
+- every boot built with 550-KRN-0070 (from `fast-test` 221f5ab on) read `00000002` before `bcm_wifi` did anything; the two built without it (a00618b, b4e22f8) read `00000000`;
+- an SMC reset does not change it: it is made anew at each boot;
+- a reset pulse does not clear it; and while it is set, the first access to a register of the core stops the machine (550-DRV-0023, step 2, twice).
+
+So the card cannot be brought up: Wi-Fi is blocked by this.
 
 ### Plan (a proposal; the kernel track decides)
 
-- At PCI enumeration, clear bus mastering (command bit 2) on every function except the bridges, and log the ones that had it on.
-- `pci::enable` turns it on when a driver is granted the device, as now.
+Stop the core first, with bus mastering still on, the way Linux does on these Macs (its early quirk for the AirPort card), then turn bus mastering off as now. For `14E4:4331`, in `pci::enumerate` before `stop_mastering`:
+
+- map BAR0 (16 KiB) for a moment; the core's agent is at BAR0+0x1000 (window 2, as the firmware leaves it; `bcm_wifi` logs `18101000`);
+- wait up to 300 µs for the agent's reset status (+0x804) to read 0;
+- write 1 to its reset control (+0x800), read it back, wait 1 µs, write 0, read it back, wait 10 µs;
+- then clear bus mastering.
+
+`bcm_wifi` keeps its own pulse; a core already idle takes a second one without harm.
 
 ### Acceptance criteria
 
-On QEMU and on the MacBook Pro, the hardware report shows bus mastering off for every function no driver was granted, and the drivers work as before.
+On the MacBook Pro, `bcm_wifi`'s first line about the core reads reset status `00000000`, with bus mastering turned off at boot as now. The machine boots as before.
 
-## A failed flush is reported again by the next one (211-DRV-0019)
+## A client of the updater for the shell
 
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, from the local gate of `claude/ASR-DRV` (211-DRV-0019).
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) and the tools track's `update` command (351-APP-0029, on its branch).
 
 ### Problem
 
-In `vfs_server/src/disk.rs`, a flush whose write fails sets `failed` and returns false. The next flush takes `failed` and returns false again, even when it writes every changed sector and the drive empties its cache.
-
-`tests/usb_image_smoke.py` (211-KRN-0050) runs `sync` right after the boot disk is plugged in again and expects `OK`. With 211-DRV-0019's `usb_storage` it gave `ERROR: SYNC: I/O ERROR` there in all five local runs, and a second `sync` gave `OK`. On `main` the first `sync` said `OK` in all three. With debug lines added for the run (not committed):
-
-- 15.54 s: the disk is gone;
-- 19.53 s: `vfs_server` says the drive does not answer;
-- 19.54 s: the journal's save flushes, and its write of LBA 1032193 (the log volume's FAT) fails in the quiet window;
-- 30.99 s: the disk is back;
-- 31.27 s: the test's `sync` reports that earlier failure.
-
-In `main`'s run with the same debug lines, no flush write failed during the outage. Most likely `usb_storage`'s new log lines about the loss are what give the journal's save something to flush then.
+`updater` serves `idl/update.wit` 1.0 (`check`, `fetch`, `apply`, `rollback`, `status`), but no task holds a client of it: it acts only through the automatic policy in `update.txt`. The shell's static slots 1 to 31 are all named in `common/abi.rs` (`SLOT_DYNAMIC` is 32), so a slot for the client is an ABI question.
 
 ### Plan (a proposal; the kernel track decides)
 
-- A flush that fails reports it once and does not set `failed`: its changed sectors stay changed and the next flush writes them.
-- `failed` stays for what only a later flush can report: a changed sector whose write failed when it was evicted.
+- A slot for the shell's client of `updater`, or another way for the shell to hold one.
+- `init` gives the shell an unbadged client (the updater checks no badge: every request ends in a check of signed releases, and `apply` and `rollback` ask the user through the shell's command).
+- The shell lends it to programs that ask for it, if the tools track wants `update` in `msh`.
 
 ### Acceptance criteria
 
-`tests/usb_image_smoke.py` passes with 211-DRV-0019's `usb_storage` (branch `claude/ASR-DRV`): the first `sync` after the disk is back says `OK`. A flush whose own write fails still reports it.
+The shell holds a client of `updater` (`caps` shows it), and `status` answers through it.
 
-## `bcm_wifi` reads its microcode: a read-only VFS client (550-DRV-0023)
+## init says whether it confirmed a trial boot
 
-**Recorded by:** the drivers track (`DRV`), 2026-10-10, for [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), stage 2 of the MacBook Pro's Wi-Fi.
+**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 
 ### Problem
 
-Stage 2 of `bcm_wifi` loads Broadcom's microcode into the BCM4331's 802.11 core. The maintainer's build copies it onto the written disk under `data/firmware/b43/` (AGENTS.md section 3, `scripts/proprietary.sh`), never into the image. `init` gives `bcm_wifi` BAR0 only (550-KRN-0059 on `fast-test`), so it cannot read the file.
+`init` confirms a healthy trial boot to the kernel (`BOOT_CONFIRM`, 351-KRN-0014), and the confirmed boot record is the updater's to write. The updater cannot ask whether the boot was confirmed. It waits until 5 s past the kernel's deadline (120 s): had the boot not been confirmed, the kernel would have restarted the machine by then. That is sound but slow. The other slot stays untouched for two minutes after every update, and the QEMU `update` check waits that long.
 
 ### Plan (a proposal; the kernel track decides)
 
-In `init`'s `bcm_wifi` arm, the same read-only client `gpio` gets for `hwdocs/`:
-
-```rust
-grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
-```
-
-`vfs_server` starts before `bcm_wifi` (PIDs 12 and 18 on the MacBook Pro). Nothing else is needed for stage 2: the microcode goes through the core's registers, without DMA or an interrupt.
+- `init.wit` 1.4: `boot: func() -> result<boot, error>`, with the slot, whether it booted on trial and whether `init` confirmed it. Any client of `init` may call it, or only the `BADGE_REBOOT` one.
+- The updater asks for it every second while it waits, and keeps the deadline as the bound.
 
 ### Acceptance criteria
 
-On the MacBook Pro, `bcm_wifi` opens `data/firmware/b43/ucode29_mimo.fw` and logs its size. Without the file it logs that it is missing and runs on. It cannot write anywhere or open a private directory.
-
+On a trial boot, the updater writes the confirmed record within a few seconds of `[INIT] TRIAL BOOT CONFIRMED`, and the `update` check passes.

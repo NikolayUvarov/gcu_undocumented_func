@@ -122,6 +122,25 @@ The maintainer ran `fast-test` bc681376b8d8 on the MacBook Pro (`log:boot0001.lo
   - The kernel track's part is `SLOT_SHELL`.
 - **Still to see on the Mac:** the picture in a window (after the request above), the camera mark, and `camera -s still.bmp`.
 
+## The second run on the Mac (2026-10-10): jerky in a `wm` window, fixed
+
+`fast-test` a00618b, `camera` from `wm` (its own pixel window, 1920×1200):
+
+- **The stream was clean.**
+  - Over 73 s the USB side counted 358 705 packets, none with errors, dropped or late.
+  - `video_gw` assembled 875 whole frames, none broken: about 12 a second. The camera slows below its 15/s in dim light.
+  - `camera` read 737, its 10 a second.
+- **The picture was jerky:** it ran, stopped, and went on.
+  - The cause: `camera` drew each frame into its pixel window but did not publish it (`mind::windowed::flush`).
+  - So `wm` showed the window only when something else redrew it: the pointer, another window.
+  - On the shell's screen there is no window, so it ran smoothly.
+- **The fix.** `camera` publishes each frame as it draws it. The function does nothing without a window.
+- **Resizing.** The maintainer asked the picture to follow the window's size. It kept its 320×240: cut off in a smaller window, small in a corner of a larger one.
+  - `camera` now takes the size `wm` gives (`mind::windowed::pixels_resized`) and scales each frame to fit the window whole, its aspect kept, centred on black.
+  - At the window's first size (the stream's) the frame is copied pixel for pixel.
+  - On the shell's screen it stays at its own size, centred, as before. That leaves the camera mark's corner free, and spares a Retina screen 5 million pixels a frame.
+  - A way back to the content's size is `wm`'s: requested from the tools track in `requests-APP.md`.
+
 ## Acceptance criteria
 
 - **QEMU** (CI, synthetic source):

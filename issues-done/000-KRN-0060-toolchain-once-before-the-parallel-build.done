@@ -1,0 +1,47 @@
+# 000-KRN-0060 — The pinned toolchain installed once before the parallel build — done
+
+**Type:** CI / build · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-10) · **Blocked by:** — · **Roadmap:** — (the build) · **Constitution:** MC-12.2 (a failure reported for what it is)
+
+## Problem
+
+This is the request of the assurance and drivers session in `requests-KRN.md` (2026-10-09), after the maintainer's build of `fast-test` failed.
+
+`02_build.sh` and `scripts/build_aarch64.sh` start every crate's cargo at once (000-KRN-0020). On a machine whose rustup lacks a component or target that `rust-toolchain.toml` names, each cargo asks rustup for it, and the downloads race on one file:
+
+```
+error: component download failed for rust-src: could not rename 'downloaded' file …
+```
+
+All 70 crates then fail, and the build reports them as failures of the code.
+
+## Plan
+
+- **`ensure_toolchain` in `scripts/build_jobs.sh`**, called by both builds before the parallel step. It reads the channel, the components and the targets from `rust-toolchain.toml`.
+  - It compares them with `rustup component list --installed`, which reads the installed toolchain and fetches nothing.
+  - Only when something is missing does it run `rustup toolchain install <channel> --profile minimal` with the missing components and targets, once.
+  - A failure stops the build with that message, as its own step.
+- **No unconditional `rustup toolchain install` in each build:** rustup would fetch the channel's manifest every time, and a build without the network would fail.
+- **`01_prepare_env.sh`** keeps its `rustup toolchain install`, which reads the same file, so the two cannot disagree.
+
+## Acceptance criteria
+
+1. **With everything installed:** the builds print nothing more and fetch nothing.
+2. **With a component or target missing:** one `rustup toolchain install` names exactly what is missing, before any cargo starts, and the build goes on.
+3. **A failed install:** the build stops at the step "installing the pinned toolchain", not with 70 failed crates.
+4. **Evidence:**
+   - a test of the function with a stand-in `rustup` (the four cases above, and the real toolchain all there);
+   - the x86 and aarch64 builds, which run the function.
+
+## Resolution
+
+- **What was done.** `ensure_toolchain` (`scripts/build_jobs.sh`) runs before the parallel build. `02_build.sh` and `scripts/build_aarch64.sh` call it.
+  - It compares the components and targets in `rust-toolchain.toml` with `rustup component list --installed`; nothing is fetched for this.
+  - Only when something is missing does it run one `rustup toolchain install` that names exactly that.
+  - A failure stops the build at its own step, "installing the pinned toolchain".
+- **Evidence.**
+  - A stand-in `rustup` covered five cases: a component missing, a target missing, the toolchain absent, the install failing, and everything there. This was run by hand, not kept as a test.
+  - The real toolchain was silent in every build since: the local gate's x86 and aarch64 builds of 7222bed on the kernel session's machine, and the aarch64 build on PCU through Effector.
+
+## Related
+
+[000-KRN-0020](../issues/000-KRN-0020-parallel-build.md) (the parallel build), [requests-KRN.md](../issues/requests-KRN.md).

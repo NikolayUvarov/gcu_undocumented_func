@@ -12,7 +12,7 @@ mod stat;
 const STACK_SIZE: usize = 64 * 1024;
 const ENDPOINTS: usize = 128; // the endpoint table's first size; it grows on demand (issue 171)
 const FIRST_ENDPOINT: usize = 1; // endpoint 0 is never handed out
-const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP;
+const ENDPOINT_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP | CAP_BADGE;
 const MEMORY_ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const GRANT_BYTES: usize = core::mem::size_of::<Grant>();
 const RECEIVE_MASK: usize = (1 << IPC_TIMEOUT_SHIFT) - 1; // arg2 of IPC: the receive slot below the timeout (issue 172)
@@ -398,7 +398,8 @@ impl Scheduler {
         for child in self.tasks.iter_mut().flatten() { if child.payer == Some((slot, pid)) { child.payer = payer; } }
         let task = self.tasks[slot].as_mut().unwrap(); task.payer = None; task.memory_tree = 0;
     }
-    // Uptime at which an IPC with this handle word times out (0: never).
+    // Uptime at which an IPC with this handle word times out (0: never). Counted from the tick's start, so up to a tick
+    // early: drivers poll with it once a tick (usb_hid's 10 ms), unlike SYSCALL_WAIT (000-KRN-0065).
     fn deadline(word: usize) -> u64 { match word >> IPC_TIMEOUT_SHIFT { 0 => 0, ms => (interrupts::milliseconds() + ms as u64).max(1) } }
     // Fails blocked IPC whose deadline passed (MC-2.13): no message is half-delivered and no reply can reach a new call.
     fn expire(&mut self, now: u64) -> bool {
@@ -839,8 +840,12 @@ impl Scheduler {
             (offset % align == 0 && length % align == 0 && length > 0 && offset.checked_add(length)? <= size).then_some((base + offset, length))
         };
         match cap {
-            // A badge is set once (MC-3.4): a child of a badged capability keeps it.
-            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old == 0 || old as usize == badge)).then(|| Capability::Endpoint(id, (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8, if old != 0 { old } else { badge as u16 })),
+            // A badge is set once (MC-3.4), only with CAP_BADGE (000-KRN-0073): a child of a badged capability keeps it.
+            Capability::Endpoint(id, rights, old) => (badge <= BADGE_MAX && (badge == 0 || old as usize == badge || (old == 0 && rights & CAP_BADGE != 0))).then(|| {
+                let badge = if old != 0 { old } else { badge as u16 };
+                let rights = (rights | if rights & CAP_KEEP != 0 { CAP_READ } else { 0 }) & mask as u8;
+                Capability::Endpoint(id, if badge != 0 { rights & !CAP_BADGE } else { rights }, badge)
+            }),
             Capability::IoPorts(base, count) => range(base as usize, count as usize, 1).map(|(b, c)| Capability::IoPorts(b as u16, c as u16)),
             Capability::Memory(base, size, rights) => {
                 // Without grant only a read-only child: the writable owner stays unique.
@@ -1183,9 +1188,12 @@ impl Scheduler {
                 }
             },
             SYSCALL_WAIT => {
-                let now = interrupts::milliseconds(); let duration = request.arg1.min(60_000).div_ceil(10).max(1) as u64 * 10;
+                // The deadline in monotonic nanoseconds plus the clock's resolution (a tick where it counts ticks): never
+                // shorter than asked, woken on the first tick after it (000-KRN-0065).
+                let now = interrupts::milliseconds(); let duration = request.arg1.clamp(1, 60_000) as u64 * 1_000_000;
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), now as usize);
-                task.state = if task.input.is_empty() { State::Sleeping(now.wrapping_add(duration)) } else { State::Ready };
+                let deadline = crate::clock::now_ns() + duration + crate::clock::resolution_ns();
+                task.state = if task.input.is_empty() { State::Sleeping(deadline) } else { State::Ready };
                 task.dirty = true; return self.select(sp, cpu);
             }
             SYSCALL_EXIT => { self.terminate(slot, true, EXIT_NORMAL | (request.arg1 & 0xFF_FFFF) << 8); return self.select(sp, cpu); }
@@ -1494,7 +1502,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                     cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed);
                     // Sleeps and IPC deadlines end on the boot CPU's tick, the source of every other; idle CPUs whose
                     // tasks that makes ready get a wake IPI (issue 171).
-                    if cpu == 0 { let now = interrupts::milliseconds(); for task in s.tasks.iter_mut().flatten() { task.state.wake(now); } s.expire(now); s.wake_idle(cpu, true); crate::trial::check(now); }
+                    if cpu == 0 { let (now, ns) = (interrupts::milliseconds(), crate::clock::now_ns()); for task in s.tasks.iter_mut().flatten() { task.state.wake(ns); } s.expire(now); s.wake_idle(cpu, true); crate::trial::check(now); }
                     if slot == 0 && cpu == 0 { return sp; } if slot != 0 { let t = s.tasks[slot].as_mut().unwrap(); t.ticks += 1; t.dirty = true; }
                     s.select(sp, cpu)
                 }
