@@ -1,6 +1,6 @@
 # 000-KRN-0075 — init waits for the policy broker with a limit
 
-**Type:** kernel (`init`) · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3 (a failed service is contained), MC-2.13 (bounded waits)
+**Type:** kernel (`init`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; being tested) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3 (a failed service is contained), MC-2.13 (bounded waits)
 
 ## Problem
 
