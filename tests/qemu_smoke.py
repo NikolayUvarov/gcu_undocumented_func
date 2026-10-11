@@ -340,9 +340,9 @@ def screen_text(vm, cell=(8, 16)):
             found = " " if len(colours) == 1 else "?"
             for fg in colours if len(colours) == 2 else ():
                 bits = tuple(sum(0x80 >> c for c in range(8) if row[c] == fg) for row in rows)
-                ch = lookup.get(bits)
-                if ch is not None:
-                    found = ch
+                glyph = lookup.get(bits)
+                if glyph is not None:
+                    found = glyph
                     break
             line.append(found)
         lines.append("".join(line))
