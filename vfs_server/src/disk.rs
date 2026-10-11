@@ -12,17 +12,21 @@ const LINES: usize = 64;
 const READ_AHEAD: usize = 32;
 const SLOW_MS: u64 = 1000; // a failure that took this long: the drive does not answer (unplugged), not a bad sector
 const QUIET_MS: u64 = 10_000; // then requests fail at once for this long, before the drive is asked again (211-KRN-0050)
+const IDENTITY: usize = 256; // at most this many sectors read while mounting are kept, by hash, as the medium's identity
 
-// `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted, and
-// `replaced`: the drive came back with another medium (000-KRN-0079).
-pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, replaced: bool }
+// `silent_until`: until when the drive is not asked, after it did not answer. `first`: sector 0 as mounted; `identity`:
+// the sectors read while mounting (the boot manifest's among them), by hash, until `mounted`; `replaced`: the drive came
+// back with another medium (000-KRN-0079).
+pub struct Disk { device: Device, tags: [u32; LINES], dirty: [bool; LINES], cache: Pages, next: usize, failed: bool, silent_until: u64, first: Option<[u8; SECTOR]>, identity: alloc::vec::Vec<(u32, [u8; 32])>, recording: bool, replaced: bool }
 
 impl Disk {
     pub fn new(mut device: Device) -> Option<Self> {
         let first = device.read(0, 1).ok().and_then(|data| data.get(..SECTOR).map(|s| { let mut sector = [0u8; SECTOR]; sector.copy_from_slice(s); sector }));
-        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, replaced: false })
+        Some(Self { device, tags: [u32::MAX; LINES], dirty: [false; LINES], cache: Pages::new(LINES * SECTOR)?, next: 0, failed: false, silent_until: 0, first, identity: alloc::vec::Vec::new(), recording: true, replaced: false })
     }
     pub fn kind(&self) -> usize { self.device.kind() }
+    /// The volumes are mounted: sectors read from now on are not part of the medium's identity.
+    pub fn mounted(&mut self) { self.recording = false; }
 
     // A drive that did not answer is not asked again for QUIET_MS: requests fail at once instead of each waiting for the
     // drive's own timeout (an unplugged USB disk, 211-KRN-0050). Cached sectors are still read.
@@ -30,11 +34,12 @@ impl Disk {
     // Runs one request to the drive and notes whether it answered.
     fn ask<T>(&mut self, request: impl FnOnce(&mut Device) -> Option<T>) -> Option<T> {
         if self.quiet() || self.replaced { return None; }
-        // Back after it did not answer: sector 0 read and the medium compared before anything is asked of it.
+        // Back after it did not answer: the medium compared before anything is asked of it; a read that fails there
+        // means the drive still does not answer.
         if self.silent_until != 0 {
-            if self.device.read(0, 1).is_err() { self.silent_until = mind::time::uptime_ms() as u64 + QUIET_MS; return None; }
+            let Some(same) = self.same_medium() else { self.silent_until = mind::time::uptime_ms() as u64 + QUIET_MS; return None };
             self.silent_until = 0;
-            if !self.same_medium() { return None; }
+            if !same { return None; }
             mind::println!("[VFS] THE {} DRIVE ANSWERS AGAIN", crate::device_name(self.device.kind()));
         }
         let start = mind::time::uptime_ms() as u64;
@@ -50,23 +55,31 @@ impl Disk {
     fn line(&self, index: usize) -> &[u8] { &self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR] }
 
     // A drive back after it did not answer may hold another medium: a stick rewritten elsewhere and put back, or another
-    // one (000-KRN-0079). Sector 0 and every unchanged cached sector must read as before; otherwise nothing cached is
-    // written to it, its volumes fail from now on, and the log says so.
-    fn same_medium(&mut self) -> bool {
-        let mut checks: alloc::vec::Vec<(u32, [u8; SECTOR])> = self.first.iter().map(|s| (0u32, *s)).collect();
-        for index in (0..LINES).filter(|&i| self.tags[i] != u32::MAX && !self.dirty[i]) {
-            let mut sector = [0u8; SECTOR];
-            sector.copy_from_slice(self.line(index));
-            checks.push((self.tags[index], sector));
+    // one (000-KRN-0079). Sector 0, the identity's sectors and every unchanged cached sector must read as before;
+    // otherwise nothing cached is written to it, its volumes fail from now on, and the log says so. None: a read failed.
+    fn same_medium(&mut self) -> Option<bool> {
+        let mut checks: alloc::vec::Vec<(u32, [u8; 32])> = self.first.iter().map(|s| (0u32, mind::sha256::digest(s))).collect();
+        checks.extend(self.identity.iter().copied());
+        for index in (0..LINES).filter(|&i| self.tags[i] != u32::MAX && !self.dirty[i]) { checks.push((self.tags[index], mind::sha256::digest(self.line(index)))); }
+        checks.sort_unstable_by_key(|&(lba, _)| lba);
+        checks.dedup_by_key(|&mut (lba, _)| lba);
+        let mut same = true;
+        for (lba, before) in &checks {
+            let now = self.device.read(*lba as u64, 1).ok()?;
+            if now.get(..SECTOR).map(mind::sha256::digest) != Some(*before) { same = false; break; }
         }
-        let same = checks.iter().all(|(lba, before)| self.device.read(*lba as u64, 1).ok().is_some_and(|now| now.get(..SECTOR) == Some(&before[..])));
         if !same {
             let lost = self.dirty.iter().filter(|&&d| d).count();
             self.discard();
             self.replaced = true;
             mind::println!("[VFS] THE {} DRIVE CAME BACK WITH ANOTHER MEDIUM: ITS VOLUMES ARE CLOSED, {} CHANGED SECTORS OF THE OLD ONE NOT WRITTEN TO IT", crate::device_name(self.device.kind()), lost);
         }
-        same
+        Some(same)
+    }
+
+    // A sector read while mounting joins the identity; one this system writes leaves it (the medium may not hold it yet).
+    fn note_read(&mut self, lba: u32, data: &[u8; SECTOR]) {
+        if self.recording && self.identity.len() < IDENTITY && !self.identity.iter().any(|&(at, _)| at == lba) { self.identity.push((lba, mind::sha256::digest(data))); }
     }
 
     // A line to fill: the next one round robin; a changed one is written out first, with every other changed line.
@@ -100,7 +113,7 @@ impl Disk {
 impl Sectors for Disk {
     fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool {
         if self.replaced { return false; }
-        if let Some(index) = self.tags.iter().position(|&tag| tag == lba) { out.copy_from_slice(self.line(index)); return true; }
+        if let Some(index) = self.tags.iter().position(|&tag| tag == lba) { out.copy_from_slice(self.line(index)); if !self.dirty[index] { self.note_read(lba, out); } return true; }
         // Read ahead only sectors that are not cached (a cached copy may be newer than the disk).
         let mut count = READ_AHEAD.min((self.device.sectors().saturating_sub(lba as u64)) as usize);
         if let Some(cached) = (1..count).find(|&i| self.tags.contains(&(lba + i as u32))) { count = cached; }
@@ -113,6 +126,7 @@ impl Sectors for Disk {
         let Some(got) = self.ask(read) else { return false };
         if got == 0 { return false; }
         out.copy_from_slice(&sectors[0]);
+        self.note_read(lba, out);
         for (i, sector) in sectors[..got].iter().enumerate() {
             let Some(index) = self.victim() else { return i > 0 };
             self.tags[index] = lba + i as u32;
@@ -123,6 +137,7 @@ impl Sectors for Disk {
 
     fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool {
         if self.replaced { return false; }
+        self.identity.retain(|&(at, _)| at != lba);
         let index = match self.tags.iter().position(|&tag| tag == lba) { Some(index) => index, None => match self.victim() { Some(index) => index, None => return false } };
         self.tags[index] = lba;
         self.cache.as_mut_slice()[index * SECTOR..(index + 1) * SECTOR].copy_from_slice(data);
@@ -150,6 +165,7 @@ pub struct Shared(Rc<RefCell<Disk>>);
 impl Shared {
     pub fn new(disk: Disk) -> Self { Self(Rc::new(RefCell::new(disk))) }
     pub fn kind(&self) -> usize { self.0.borrow().kind() }
+    pub fn mounted(&self) { self.0.borrow_mut().mounted() }
 }
 
 impl Sectors for Shared {

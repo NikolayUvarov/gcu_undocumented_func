@@ -492,6 +492,8 @@ fn main(info: &'static BootInfo) {
                 volumes.push(Mounted { name: "log", volume: log });
                 break;
             }
+            // What was read so far, the manifest's sectors among them, tells this medium from another (000-KRN-0079).
+            disk.mounted();
             boot_slot = Some(slot);
             break 'disks;
         }
@@ -504,6 +506,7 @@ fn main(info: &'static BootInfo) {
         let Some(disk) = mind::block::Device::open(Endpoint(slot)).ok().and_then(Disk::new).map(Shared::new) else { continue };
         let Ok(volume) = Volume::mount(disk) else { continue };
         if volume.label() != MODELS_LABEL { continue; }
+        volume.disk.mounted();
         mind::println!("[VFS] MOUNTED FAT{} FROM {} AS MODELS: ({} MB, READ-ONLY)", volume.bits(), device_name(volume.disk.kind()), volume.total_bytes() >> 20);
         volumes.push(Mounted { name: "models", volume });
         break;

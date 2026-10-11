@@ -92,14 +92,20 @@ def unplugged(vm, booted, name):
         time.sleep(1)
     require(saved, "DRIVE DOES NOT ANSWER")
     time.sleep(3)  # the journal's save after the replug, flushed
-    # 000-KRN-0079: another medium in its place, as a stick rewritten elsewhere and put back (here its disk signature
-    # differs). vfs_server finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail.
+    # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
+    # same partition table and disk signature, another commit in the boot manifests. vfs_server finds it is not the
+    # stick it mounted: nothing it cached is written to it, its volumes fail.
     vm.hmp("device_del usbstick")
     require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
     other = booted.with_name(booted.stem + "-other" + booted.suffix)
     shutil.copyfile(booted, other)
-    with other.open("r+b") as image:
-        image.seek(440); image.write(b"\x5a\xa5\x5a\xa5")
+    data = bytearray(other.read_bytes())
+    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
+    assert manifests, "no boot manifest found in the image"
+    for m in manifests:
+        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
+    other.write_bytes(data)
+    assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
     before = hashlib.sha256(other.read_bytes()).hexdigest()
     vm.hmp(f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}")
     vm.hmp("device_add usb-storage,drive=usbdisk3,id=usbstick")
