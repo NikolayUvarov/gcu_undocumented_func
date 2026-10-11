@@ -1285,6 +1285,8 @@ def kbench_check(vm):
     # A sleep is never shorter than asked and at most a tick longer, give or take QEMU's timing (000-KRN-0065).
     assert "shorter than asked" not in output, output[-3000:]
     assert rows["sleep 1 ms"][1] >= 1e6 and rows["sleep 10 ms"][1] >= 10e6 and rows["sleep 10 ms"][0] <= 40e6, rows
+    # The 1 ms tick (000-KRN-0083): a sleep of 1 ms no longer waits for a 10 ms tick.
+    assert rows["sleep 1 ms"][0] < 8e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
     width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
