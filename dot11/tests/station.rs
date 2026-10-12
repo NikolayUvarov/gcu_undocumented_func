@@ -3,11 +3,12 @@
 //! and what makes the station refuse, fail or join again.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
-use dot11::station::{Out, Reason, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
+use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
 use dot11::Error;
 use wpa::authenticator::{Authenticator, FRAME_MAX as EAPOL_MAX};
 use wpa::ccmp;
 use wpa::eapol::Gtk;
+use wpa::handshake::Pairwise;
 use wpa::keys;
 
 const OWN: Mac = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
@@ -176,13 +177,23 @@ impl Ap {
     }
 }
 
-/// The station, the access point and the air between them, with the station's clock.
-struct Air { station: Station, ap: Ap, now: u64, channel: u8, tx: Vec<u8>, rx: Vec<u8>, delivered: Vec<Vec<u8>>, sent: Vec<(Vec<u8>, u8)> }
+/// A key service that keeps a network's PMK and answers each handshake's keys (550-NET-0024), or none.
+struct Service { pmk: [u8; 32], asked: usize, refuse: bool }
+
+impl Pairwise for Service {
+    fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<keys::Ptk> {
+        self.asked += 1;
+        (!self.refuse).then(|| keys::ptk(&self.pmk, ap, own, anonce, snonce))
+    }
+}
+
+/// The station, the access point and the air between them, with the station's clock and its key service.
+struct Air { station: Station, ap: Ap, now: u64, channel: u8, tx: Vec<u8>, rx: Vec<u8>, delivered: Vec<Vec<u8>>, sent: Vec<(Vec<u8>, u8)>, service: Service }
 
 impl Air {
     fn new(ap: Ap) -> Self {
         Air { station: Station::new(OWN, &CHANNELS), ap, now: 1000, channel: 0, tx: vec![0; FRAME_MAX], rx: vec![0; ETHERNET_MAX],
-              delivered: Vec::new(), sent: Vec::new() }
+              delivered: Vec::new(), sent: Vec::new(), service: Service { pmk: keys::pmk(PASSPHRASE, SSID).unwrap(), asked: 0, refuse: false } }
     }
     fn apply(&mut self, out: Out) {
         if let Some(channel) = out.channel { self.channel = channel; }
@@ -195,7 +206,7 @@ impl Air {
     }
     fn hear(&mut self, f: &[u8]) -> Result<(), Error> {
         let mut out = Out::default();
-        let result = self.station.receive(f, self.channel, 48, self.now, &[0x42; 32], &mut out, &mut self.tx, &mut self.rx);
+        let result = self.station.receive(f, self.channel, 48, self.now, &[0x42; 32], &mut self.service, &mut out, &mut self.tx, &mut self.rx);
         self.apply(out);
         result
     }
@@ -224,7 +235,7 @@ fn wpa2() -> Ap { Ap::new(Some(scan::own_rsne().to_vec())) }
 fn joined() -> Air {
     let mut air = Air::new(wpa2());
     air.scan();
-    let pmk = keys::pmk(PASSPHRASE, SSID);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
     air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
     assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
     air
@@ -321,7 +332,7 @@ fn group_rekey_and_rate_control() {
 fn a_wrong_passphrase_fails_the_handshake() {
     let mut air = Air::new(wpa2());
     air.scan();
-    let wrong = keys::pmk(b"incorrect horse", SSID);
+    let wrong = keys::pmk(b"incorrect horse", SSID).map(Secret::Pmk);
     air.run(|s, now, out, tx| s.join(SSID, wrong, now, out, tx)).unwrap();
     assert_eq!(air.station.state(), State::Joining);
     air.wait(HANDSHAKE_MS + 20);
@@ -334,7 +345,7 @@ fn a_wrong_passphrase_fails_the_handshake() {
 
 #[test]
 fn silence_refusal_and_a_downgrade_fail_the_join() {
-    let pmk = keys::pmk(PASSPHRASE, SSID);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
     let mut air = Air::new(wpa2());
     air.scan();
     air.ap.silent = true;
@@ -390,6 +401,38 @@ fn a_lost_network_is_joined_again() {
     assert_eq!(air.station.state(), State::Joined);
     air.wait(SILENCE_MS + 20);
     assert_eq!(air.station.reason(), Reason::Lost);
+}
+
+#[test]
+fn a_kept_network_takes_its_keys_from_the_key_service() {
+    let mut air = Air::new(wpa2());
+    air.scan();
+    air.run(|s, now, out, tx| s.join(SSID, Some(Secret::Kept), now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+    assert_eq!(air.service.asked, 1);
+    // Data under the keys it was given.
+    let echo = air.ap.data(&OWN, &BSSID, 0x0800, b"kept", true);
+    air.hear(&echo).unwrap();
+    assert_eq!(air.delivered.len(), 1);
+
+    // A handshake frame in the clear once the keys are installed is a forgery: dropped, the service not asked.
+    let mut m = [0u8; EAPOL_MAX];
+    let len = Authenticator::new(air.ap.pmk, BSSID, OWN, &scan::own_rsne(), [0x5A; 32]).unwrap().message_1(&mut m).unwrap();
+    let forged = air.ap.data(&OWN, &BSSID, ETHERTYPE_EAPOL, &m[..len], false);
+    assert_eq!(air.hear(&forged), Err(Error::Unexpected));
+    assert_eq!((air.station.state(), air.service.asked), (State::Joined, 1));
+
+    // Joining again after a loss asks again; a service that gives no keys ends the join.
+    let mut deauth = air.ap.header(frame::DEAUTHENTICATION, &OWN);
+    deauth.extend_from_slice(&[7, 0]);
+    air.ap.tk = None;
+    air.ap.confirmed = false;
+    air.hear(&deauth).unwrap();
+    air.service.refuse = true;
+    air.wait(REJOIN_MS + 20);
+    assert_eq!((air.station.state(), air.station.reason(), air.service.asked), (State::Failed, Reason::Refused, 2));
+    assert_eq!(air.sent.last().unwrap().0[0], frame::DEAUTHENTICATION << 4);
+    assert!(!air.ap.confirmed);
 }
 
 #[test]

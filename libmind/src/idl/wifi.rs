@@ -118,8 +118,9 @@ pub fn scan(endpoint: Endpoint) -> Result<core::result::Result<List<Network, 32>
 }
 
 /// Starts joining the strongest access point of `ssid` from the last scan (`status` follows). `passphrase` empty for
-/// an open network or one the station remembers. `remember` keeps the network's key through `keystore`, never in a
-/// file (MC-11.9). The passphrase is never answered back. Change badge only.
+/// an open network or one the station remembers. `remember` has `keystore` keep the network's key (550-NET-0024): it
+/// alone holds it, and the station gets each handshake's keys from it (MC-11.9); `unsupported` when it cannot. The
+/// passphrase is never answered back. Change badge only.
 pub fn join(endpoint: Endpoint, ssid: &[u8], passphrase: &str, remember: bool) -> Result<core::result::Result<(), Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {

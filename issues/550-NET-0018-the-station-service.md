@@ -41,7 +41,7 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
 
 ## Related
 
-[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
+[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (remembered networks).
 
 ## Progress (2026-10-12)
 

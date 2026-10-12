@@ -32,4 +32,6 @@ pub enum Error {
     Replay,
     /// The access point's RSN element in the handshake is not the advertised one: the station left.
     Downgrade,
+    /// The key service gave no keys for the handshake (550-NET-0024): the station left.
+    NoKey,
 }

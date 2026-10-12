@@ -2,12 +2,14 @@
 #![no_main]
 // The 802.11 station (550-NET-0018): drives `dot11` over a radio's idl/wlanhw.wit client (slot 2) and serves its own
 // endpoint, idl/net.wit to the network stack (a client without BADGE_WIFI) and idl/wifi.wit to clients with BADGE_WIFI.
-// It holds the radio and nothing else that can act (MC-2.3); a passphrase becomes a PMK at once and is not kept.
+// It holds the radio and nothing else that can act (MC-2.3); a passphrase becomes a PMK at once and is not kept. A
+// network to remember goes to `keystore` (slot 3, BADGE_KEY_STATION, 550-NET-0024), which keeps its PMK and answers
+// each handshake's keys: the station holds no PMK of a remembered network (MC-11.9).
 use dot11::scan::{Bss, Security};
-use dot11::station::{Out, Reason, State, Station, ETHERNET_MAX, FRAME_MAX};
+use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
-use mind::idl::{net, wifi, wire, wlanhw};
+use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BADGE_COUNTERS, BADGE_WIFI, BADGE_WIFI_CHANGE};
 
@@ -15,6 +17,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 const RADIO: Endpoint = Endpoint(2);
+const KEYSTORE: Endpoint = Endpoint(3);
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 10;
 // Frames taken from the radio per poll, received Ethernet frames kept for the stack, parked `wait` calls.
@@ -26,6 +29,25 @@ const RADIO_HEADER: usize = 8;
 
 fn mac(value: u64) -> [u8; 6] { let b = value.to_be_bytes(); [b[2], b[3], b[4], b[5], b[6], b[7]] }
 fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
+
+// Overwrites a copy of key material.
+fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
+
+// A remembered network's keys, one handshake at a time, from `keystore` (its SSID).
+struct Kept([u8; 32], usize);
+
+impl wpa::handshake::Pairwise for Kept {
+    fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<wpa::keys::Ptk> {
+        let mut keys = match keystore::wifi_keys(KEYSTORE, &self.0[..self.1], mac64(ap), mac64(own), anonce, snonce) { Ok(Ok(keys)) => keys, _ => return None };
+        let k = keys.as_slice();
+        let ptk = (k.len() == 48).then(|| wpa::keys::Ptk { kck: k[..16].try_into().unwrap(), kek: k[16..32].try_into().unwrap(), tk: k[32..].try_into().unwrap() });
+        unsafe { core::ptr::write_volatile(&mut keys, List::default()) };
+        ptk
+    }
+}
+
+// The names `keystore` keeps networks for (none without its client).
+fn remembered() -> List<keystore::WifiNetwork, 16> { match keystore::wifi_networks(KEYSTORE) { Ok(Ok(list)) => list, _ => List::default() } }
 
 // Received Ethernet frames for the stack, oldest first (on the heap: 48 KiB would not fit the 64 KiB stack).
 struct Queue { frames: Vec<u8>, lens: [usize; QUEUE], head: usize, count: usize }
@@ -97,7 +119,9 @@ impl Wlan {
             let mut random = [0u8; 32];
             if frame_len > 0 && frame[0] & 0x0C == 0x08 && !mind::random::fill(&mut random) { continue; }
             let mut out = Out::default();
-            let _ = self.station.receive(&frame[..frame_len], channel, weakness, now, &random, &mut out, &mut self.tx, &mut self.rx);
+            let mut kept = Kept([0; 32], 0);
+            if let Some(bss) = self.station.network() { kept.1 = bss.ssid().len(); kept.0[..kept.1].copy_from_slice(bss.ssid()); }
+            let _ = self.station.receive(&frame[..frame_len], channel, weakness, now, &random, &mut kept, &mut out, &mut self.tx, &mut self.rx);
             self.apply(out);
         }
         let mut out = Out::default();
@@ -112,8 +136,13 @@ impl Wlan {
     }
 
     fn networks(&self) -> List<wifi::Network, 32> {
+        let kept = remembered();
         let mut list = List::default();
-        for bss in self.station.networks().iter() { list.push(network(bss)); }
+        for bss in self.station.networks().iter() {
+            let mut n = network(bss);
+            n.remembered = kept.as_slice().iter().any(|k| k.ssid.as_slice() == bss.ssid());
+            list.push(n);
+        }
         list
     }
 
@@ -196,25 +225,45 @@ impl Wlan {
                 mind::println!("[WLAN] LEFT THE NETWORK");
                 wifi::reply_leave(call, Ok(()))
             }
-            // Nothing is remembered until keystore keeps keys for the station (550-NET-0018).
-            wifi::Request::Forget { .. } => wifi::reply_forget(call, Ok(false)),
+            wifi::Request::Forget { ssid } => {
+                let forgotten = match keystore::wifi_forget(KEYSTORE, ssid.as_slice()) { Ok(Ok(found)) => Ok(found), _ => Err(wifi::Error::Unsupported) };
+                if forgotten == Ok(true) { mind::println!("[WLAN] FORGOT {}", Name(ssid.as_slice())); }
+                wifi::reply_forget(call, forgotten)
+            }
         };
     }
 
+    // A WPA2 network's key: a remembered one stays in keystore; a passphrase to remember goes there, and its PMK is
+    // dropped here once kept; one not to remember stays here as a PMK for this join and its rejoins.
+    fn secret(ssid: &[u8], passphrase: &str, remember: bool) -> Result<Secret, wifi::Error> {
+        if passphrase.is_empty() {
+            let kept = remembered().as_slice().iter().any(|k| k.ssid.as_slice() == ssid);
+            return if kept && !remember { Ok(Secret::Kept) } else { Err(wifi::Error::Invalid) };
+        }
+        let bytes = passphrase.as_bytes();
+        let mut pmk = wpa::keys::psk_hex(bytes).or_else(|| wpa::keys::pmk(bytes, ssid)).ok_or(wifi::Error::Invalid)?;
+        if !remember { return Ok(Secret::Pmk(pmk)); }
+        let kept = keystore::wifi_remember(KEYSTORE, ssid, &pmk);
+        wipe(&mut pmk);
+        match kept {
+            Ok(Ok(())) => { mind::println!("[WLAN] {} REMEMBERED BY KEYSTORE", Name(ssid)); Ok(Secret::Kept) }
+            other => { mind::println!("[WLAN] {} NOT REMEMBERED: {:?}", Name(ssid), other.map_err(|_| ())); Err(wifi::Error::Unsupported) }
+        }
+    }
+
     fn join(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
-        if remember { return Err(wifi::Error::Unsupported); }
         let bss = self.station.networks().best(ssid).copied();
-        let pmk = match bss.map(|b| b.security) {
+        let secret = match bss.map(|b| b.security) {
             Some(Security::Wpa2) => {
                 // Without RDRAND there is no SNonce to trust: fail closed (issue 103).
                 if !mind::random::available() { mind::println!("[WLAN] NO {}: WPA2 REFUSED", mind::random::SOURCE); return Err(wifi::Error::Unsupported); }
-                let bytes = passphrase.as_bytes();
-                Some(wpa::keys::psk_hex(bytes).or_else(|| wpa::keys::pmk(bytes, ssid)).ok_or(wifi::Error::Invalid)?)
+                Some(Self::secret(ssid, passphrase, remember)?)
             }
+            // An open network has no key to remember.
             _ => None,
         };
         let mut out = Out::default();
-        let joined = self.station.join(ssid, pmk, now, &mut out, &mut self.tx);
+        let joined = self.station.join(ssid, secret, now, &mut out, &mut self.tx);
         self.apply(out);
         match joined {
             Ok(()) => { mind::println!("[WLAN] JOINING {} ON CHANNEL {}", Name(ssid), bss.map_or(0, |b| b.channel)); Ok(()) }

@@ -4,7 +4,8 @@
 use aes_kw::KekAes128;
 use wpa::ccmp::{self, Replay};
 use wpa::eapol::{self, Gtk, ACK, ENCRYPTED, INSTALL, MIC, PAIRWISE, SECURE, VERSION_SHA1_AES};
-use wpa::handshake::{Supplicant, REPLY_MAX};
+use wpa::handshake::{Pairwise, Supplicant, REPLY_MAX};
+use wpa::kept::{self, Kept};
 use wpa::keys;
 use wpa::Error;
 
@@ -188,24 +189,25 @@ impl Authenticator {
     }
 }
 
-fn station() -> (Supplicant, Authenticator) {
+// The supplicant, the access point, and the PMK both hold.
+fn station() -> (Supplicant, Authenticator, [u8; 32]) {
     let pmk = keys::pmk(b"ThisIsAPassword", b"ThisIsASSID").unwrap();
-    (Supplicant::new(pmk, SPA, AA, &RSNE, &RSNE).unwrap(), Authenticator { pmk, replay: 0, ptk: None })
+    (Supplicant::new(SPA, AA, &RSNE, &RSNE).unwrap(), Authenticator { pmk, replay: 0, ptk: None }, pmk)
 }
 
 #[test]
 fn four_way_and_group_handshakes() {
-    let (mut supplicant, mut ap) = station();
+    let (mut supplicant, mut ap, mut pmk) = station();
     let mut out = [0u8; REPLY_MAX];
     let gtk = Gtk { id: 1, key: [0x5a; 16] };
 
-    let step = supplicant.receive(&ap.message_1(), &snonce(), &mut out).unwrap();
+    let step = supplicant.receive(&ap.message_1(), &snonce(), &mut pmk, &mut out).unwrap();
     assert!(step.pairwise.is_none() && step.group.is_none());
     ap.take_message_2(&out[..step.reply]);
     let tk = ap.ptk.as_ref().unwrap().tk;
 
     let message_3 = ap.message_3(&RSNE, &gtk);
-    let step = supplicant.receive(&message_3, &[0; 32], &mut out).unwrap();
+    let step = supplicant.receive(&message_3, &[0; 32], &mut pmk, &mut out).unwrap();
     assert_eq!(step.pairwise, Some(tk));
     assert_eq!(step.group, Some((gtk, [9, 0, 0, 0, 0, 0, 0, 0])));
     let message_4 = eapol::parse(&out[..step.reply]).unwrap();
@@ -215,21 +217,21 @@ fn four_way_and_group_handshakes() {
     assert!(eapol::verify(&ap.ptk.as_ref().unwrap().kck, &out[..step.reply], &message_4));
 
     // The same message 3 again: a replay, dropped.
-    assert_eq!(supplicant.receive(&message_3, &[0; 32], &mut out).unwrap_err(), Error::Replay);
+    assert_eq!(supplicant.receive(&message_3, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Replay);
     // A retransmitted message 3 (a higher counter) is answered, but its keys are not handed out again.
-    let step = supplicant.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut out).unwrap();
+    let step = supplicant.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut pmk, &mut out).unwrap();
     assert!(step.reply > 0 && step.pairwise.is_none() && step.group.is_none());
 
     // A new GTK through the group key handshake, once.
     let new = Gtk { id: 2, key: [0xa5; 16] };
     let group = ap.group(&new);
-    let step = supplicant.receive(&group, &[0; 32], &mut out).unwrap();
+    let step = supplicant.receive(&group, &[0; 32], &mut pmk, &mut out).unwrap();
     assert_eq!(step.group, Some((new, [3, 1, 0, 0, 0, 0, 0, 0])));
     let reply = eapol::parse(&out[..step.reply]).unwrap();
     assert_eq!(reply.info, VERSION_SHA1_AES | MIC | SECURE);
     assert!(eapol::verify(&ap.ptk.as_ref().unwrap().kck, &out[..step.reply], &reply));
-    assert_eq!(supplicant.receive(&group, &[0; 32], &mut out).unwrap_err(), Error::Replay);
-    let step = supplicant.receive(&ap.group(&new), &[0; 32], &mut out).unwrap();
+    assert_eq!(supplicant.receive(&group, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Replay);
+    let step = supplicant.receive(&ap.group(&new), &[0; 32], &mut pmk, &mut out).unwrap();
     assert!(step.reply > 0 && step.group.is_none());
 }
 
@@ -239,47 +241,127 @@ fn handshake_refusals() {
     let gtk = Gtk { id: 1, key: [0x5a; 16] };
 
     // Message 3 before message 1, and a group message before the 4-way handshake.
-    let (mut supplicant, mut ap) = station();
+    let (mut supplicant, mut ap, mut pmk) = station();
     let message_1 = ap.message_1();
     let mut other = [0u8; REPLY_MAX];
-    let step = supplicant.receive(&message_1, &snonce(), &mut other).unwrap();
+    let step = supplicant.receive(&message_1, &snonce(), &mut pmk, &mut other).unwrap();
     ap.take_message_2(&other[..step.reply]);
-    let (mut fresh, _) = station();
-    assert_eq!(fresh.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut out).unwrap_err(), Error::Unexpected);
-    assert_eq!(fresh.receive(&ap.group(&gtk), &[0; 32], &mut out).unwrap_err(), Error::Unexpected);
+    let (mut fresh, _, _) = station();
+    assert_eq!(fresh.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Unexpected);
+    assert_eq!(fresh.receive(&ap.group(&gtk), &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Unexpected);
 
     // A wrong MIC, then an RSN element other than the advertised one (a downgrade).
     let mut bad = ap.message_3(&RSNE, &gtk);
     bad[eapol::HEADER + 80] ^= 1;
-    assert_eq!(supplicant.receive(&bad, &[0; 32], &mut out).unwrap_err(), Error::Mic);
+    assert_eq!(supplicant.receive(&bad, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Mic);
     let mut weaker = RSNE;
     weaker[13] = 2; // TKIP pairwise
-    assert_eq!(supplicant.receive(&ap.message_3(&weaker, &gtk), &[0; 32], &mut out).unwrap_err(), Error::Downgrade);
+    assert_eq!(supplicant.receive(&ap.message_3(&weaker, &gtk), &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Downgrade);
     assert!(supplicant.ptk().is_none());
 
     // Message 3 with another ANonce than message 1's.
     let data = ap.key_data(&RSNE, &gtk);
     let other_nonce = ap.signed(VERSION_SHA1_AES | PAIRWISE | ACK | MIC | INSTALL | SECURE | ENCRYPTED, &[1; 32], &data, [0; 8]);
-    assert_eq!(supplicant.receive(&other_nonce, &[0; 32], &mut out).unwrap_err(), Error::Unexpected);
+    assert_eq!(supplicant.receive(&other_nonce, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Unexpected);
 
     // Without the encrypted key data bit, and a frame from the station's side (no Ack).
     let plain = ap.signed(VERSION_SHA1_AES | PAIRWISE | ACK | MIC | INSTALL | SECURE, &anonce(), &data, [0; 8]);
-    assert_eq!(supplicant.receive(&plain, &[0; 32], &mut out).unwrap_err(), Error::Malformed);
+    assert_eq!(supplicant.receive(&plain, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Malformed);
     let mut no_ack = message_1.clone();
     no_ack[6] &= !(ACK as u8);
-    assert_eq!(supplicant.receive(&no_ack, &[0; 32], &mut out).unwrap_err(), Error::Unexpected);
+    assert_eq!(supplicant.receive(&no_ack, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Unexpected);
 
     // Truncated frames and a key data length beyond the body.
     for len in [0, 4, 50, eapol::FIXED - 1] {
-        assert_eq!(supplicant.receive(&message_1[..len.min(message_1.len())], &[0; 32], &mut out).unwrap_err(), Error::Malformed);
+        assert_eq!(supplicant.receive(&message_1[..len.min(message_1.len())], &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Malformed);
     }
     let mut long = message_1.clone();
     long[eapol::FIXED - 1] = 8;
-    assert_eq!(supplicant.receive(&long, &[0; 32], &mut out).unwrap_err(), Error::Malformed);
+    assert_eq!(supplicant.receive(&long, &[0; 32], &mut pmk, &mut out).unwrap_err(), Error::Malformed);
 
     // The good message 3 still completes the handshake after all that.
-    let step = supplicant.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut out).unwrap();
+    let step = supplicant.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut pmk, &mut out).unwrap();
     assert!(step.pairwise.is_some());
+}
+
+// A key service as the station sees it (550-NET-0024): it keeps the PMK and answers each handshake's keys, or none.
+struct Service { pmk: [u8; 32], asked: usize, refuse: bool }
+
+impl Pairwise for Service {
+    fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<keys::Ptk> {
+        self.asked += 1;
+        (!self.refuse).then(|| keys::ptk(&self.pmk, ap, own, anonce, snonce))
+    }
+}
+
+#[test]
+fn keys_from_a_key_service() {
+    let (mut supplicant, mut ap, pmk) = station();
+    let mut service = Service { pmk, asked: 0, refuse: false };
+    let mut out = [0u8; REPLY_MAX];
+    let gtk = Gtk { id: 1, key: [0x5a; 16] };
+    let message_1 = ap.message_1();
+    let step = supplicant.receive(&message_1, &snonce(), &mut service, &mut out).unwrap();
+    ap.take_message_2(&out[..step.reply]);
+    // The same message 1 again keeps its keys: the service is asked once.
+    supplicant.receive(&message_1, &[7; 32], &mut service, &mut out).unwrap();
+    assert_eq!(service.asked, 1);
+    let step = supplicant.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut service, &mut out).unwrap();
+    assert_eq!(step.pairwise, Some(ap.ptk.as_ref().unwrap().tk));
+
+    // A service that gives no keys: message 1 is not answered, and nothing is installed.
+    let (mut refused, mut other, pmk) = station();
+    let mut service = Service { pmk, asked: 0, refuse: true };
+    assert_eq!(refused.receive(&other.message_1(), &snonce(), &mut service, &mut out).unwrap_err(), Error::NoKey);
+    // Its message 3 (made with the keys of the first) finds no handshake under way.
+    assert_eq!(refused.receive(&ap.message_3(&RSNE, &gtk), &[0; 32], &mut service, &mut out).unwrap_err(), Error::Unexpected);
+    assert!(refused.ptk().is_none() && service.asked == 1);
+}
+
+#[test]
+fn kept_networks() {
+    let kek = [0x4b; 32];
+    let mut networks = Kept::default();
+    networks.put(b"home", &[1; 32]).unwrap();
+    networks.put(b"work", &[2; 32]).unwrap();
+    networks.put(b"home", &[3; 32]).unwrap(); // in place of the first
+    assert_eq!(networks.put(b"", &[4; 32]).unwrap_err(), Error::Malformed);
+    assert_eq!(networks.put(&[b'x'; 33], &[4; 32]).unwrap_err(), Error::Malformed);
+    assert_eq!(networks.names().collect::<Vec<_>>(), [&b"home"[..], &b"work"[..]]);
+
+    let mut file = [0u8; kept::FILE_MAX];
+    let len = networks.encode(&kek, &mut file);
+    assert_eq!(len, kept::MAGIC.len() + 1 + 2 * kept::RECORD);
+    // Neither a name nor a PMK is in the file as it is.
+    assert!(!file[..len].windows(4).any(|w| w == b"home" || w == b"work"));
+    assert!(!file[..len].windows(32).any(|w| w == [3; 32] || w == [2; 32]));
+    let read = Kept::decode(&file[..len], &kek).unwrap();
+    assert_eq!(read.get(b"home"), Some(&[3; 32]));
+    assert_eq!(read.get(b"work"), Some(&[2; 32]));
+    assert_eq!(read.get(b"cafe"), None);
+
+    // Another key, a changed byte, a cut file, another magic, and two records of one name.
+    assert_eq!(Kept::decode(&file[..len], &[0x4c; 32]).err(), Some(Error::KeyData));
+    let mut changed = file;
+    changed[len - 1] ^= 1;
+    assert_eq!(Kept::decode(&changed[..len], &kek).err(), Some(Error::KeyData));
+    assert_eq!(Kept::decode(&file[..len - 1], &kek).err(), Some(Error::Malformed));
+    assert_eq!(Kept::decode(b"MINDWIF0\0", &kek).err(), Some(Error::Malformed));
+    let record = kept::MAGIC.len() + 1;
+    let mut twice = file;
+    twice.copy_within(record..record + kept::RECORD, record + kept::RECORD);
+    assert_eq!(Kept::decode(&twice[..len], &kek).err(), Some(Error::Malformed));
+
+    // Forgetting, and the bound.
+    let mut networks = read;
+    assert!(networks.remove(b"home") && !networks.remove(b"home"));
+    let len = networks.encode(&kek, &mut file);
+    assert_eq!(Kept::decode(&file[..len], &kek).unwrap().names().collect::<Vec<_>>(), [&b"work"[..]]);
+    for i in 1..kept::NETWORKS { networks.put(format!("net {}", i).as_bytes(), &[i as u8; 32]).unwrap(); }
+    assert_eq!(networks.put(b"one more", &[0; 32]).unwrap_err(), Error::Space);
+    let len = networks.encode(&kek, &mut file);
+    assert_eq!(len, kept::FILE_MAX);
+    assert_eq!(Kept::decode(&file[..len], &kek).unwrap().names().count(), kept::NETWORKS);
 }
 
 #[test]

@@ -14,8 +14,18 @@ pub const REPLY_MAX: usize = eapol::FIXED + RSNE_MAX;
 #[derive(Debug, Default)]
 pub struct Step { pub reply: usize, pub pairwise: Option<[u8; 16]>, pub group: Option<(Gtk, [u8; 8])> }
 
+/// Where a handshake's PTK comes from (550-NET-0024): the PMK itself, or a key service that keeps the PMK and hands
+/// out only each handshake's keys (MC-11.9). None: no keys, and message 1 is not answered.
+pub trait Pairwise {
+    fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<Ptk>;
+}
+
+/// A PMK the station holds itself.
+impl Pairwise for [u8; 32] {
+    fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<Ptk> { Some(keys::ptk(self, ap, own, anonce, snonce)) }
+}
+
 pub struct Supplicant {
-    pmk: [u8; 32],
     own: [u8; 6],
     ap: [u8; 6],
     /// The RSN element the station sent in its association request, and the one the access point advertised.
@@ -41,8 +51,8 @@ fn kept(element: &[u8]) -> Result<([u8; RSNE_MAX], usize), Error> {
 impl Supplicant {
     /// A handshake with access point `ap`: `own_rsne` is the RSN element of the association request, `ap_rsne` the one of
     /// its beacon or probe response.
-    pub fn new(pmk: [u8; 32], own: [u8; 6], ap: [u8; 6], own_rsne: &[u8], ap_rsne: &[u8]) -> Result<Self, Error> {
-        Ok(Supplicant { pmk, own, ap, own_rsne: kept(own_rsne)?, ap_rsne: kept(ap_rsne)?, replay: None, anonce: None, snonce: [0; 32],
+    pub fn new(own: [u8; 6], ap: [u8; 6], own_rsne: &[u8], ap_rsne: &[u8]) -> Result<Self, Error> {
+        Ok(Supplicant { own, ap, own_rsne: kept(own_rsne)?, ap_rsne: kept(ap_rsne)?, replay: None, anonce: None, snonce: [0; 32],
                         tptk: None, ptk: None, installed_gtk: None })
     }
 
@@ -50,13 +60,13 @@ impl Supplicant {
     pub fn ptk(&self) -> Option<&Ptk> { self.ptk.as_ref() }
 
     /// Takes one EAPOL-Key frame from the access point; `random` is a fresh 32-byte value, used as the SNonce when the
-    /// frame is a new message 1. The answer, if any, is in `out[..step.reply]`.
-    pub fn receive(&mut self, frame: &[u8], random: &[u8; 32], out: &mut [u8; REPLY_MAX]) -> Result<Step, Error> {
+    /// frame is a new message 1, whose PTK comes from `keys`. The answer, if any, is in `out[..step.reply]`.
+    pub fn receive(&mut self, frame: &[u8], random: &[u8; 32], keys: &mut dyn Pairwise, out: &mut [u8; REPLY_MAX]) -> Result<Step, Error> {
         let key = eapol::parse(frame)?;
         if key.info & ACK == 0 || key.info & (eapol::REQUEST | eapol::ERROR) != 0 { return Err(Error::Unexpected); }
         if self.replay.is_some_and(|last| key.replay <= last) { return Err(Error::Replay); }
         match (key.info & PAIRWISE != 0, key.info & MIC != 0) {
-            (true, false) => self.message_1(&key, random, out),
+            (true, false) => self.message_1(&key, random, keys, out),
             (true, true) => self.message_3(frame, &key, out),
             (false, true) => self.group(frame, &key, out),
             (false, false) => Err(Error::Unexpected),
@@ -64,12 +74,19 @@ impl Supplicant {
     }
 
     // Message 1: the ANonce; answered with the SNonce and the station's RSN element, under a MIC of the new PTK.
-    fn message_1(&mut self, key: &Key, random: &[u8; 32], out: &mut [u8; REPLY_MAX]) -> Result<Step, Error> {
+    fn message_1(&mut self, key: &Key, random: &[u8; 32], keys: &mut dyn Pairwise, out: &mut [u8; REPLY_MAX]) -> Result<Step, Error> {
         if key.info & (INSTALL | ENCRYPTED) != 0 { return Err(Error::Malformed); }
-        // A repeated message 1 with the same ANonce keeps the SNonce, so a late message 3 for it still verifies.
-        if self.anonce != Some(key.nonce) { self.snonce = *random; }
-        self.anonce = Some(key.nonce);
-        let ptk = keys::ptk(&self.pmk, &self.ap, &self.own, &key.nonce, &self.snonce);
+        // A repeated message 1 with the same ANonce keeps the SNonce and its keys, so a late message 3 for it still
+        // verifies and the key service is not asked again.
+        let ptk = match &self.tptk {
+            Some(ptk) if self.anonce == Some(key.nonce) => ptk.clone(),
+            _ => {
+                let ptk = keys.ptk(&self.ap, &self.own, &key.nonce, random).ok_or(Error::NoKey)?;
+                self.snonce = *random;
+                self.anonce = Some(key.nonce);
+                ptk
+            }
+        };
         let len = eapol::write(out, key.version, VERSION_SHA1_AES | PAIRWISE | MIC, key.replay, &self.snonce, &self.own_rsne.0[..self.own_rsne.1])?;
         eapol::sign(&ptk.kck, &mut out[..len])?;
         // Not the replay counter's floor yet: message 1 has no MIC, so it may be forged (12.7.6.2).

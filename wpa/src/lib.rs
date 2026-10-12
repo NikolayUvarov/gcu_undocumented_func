@@ -9,6 +9,7 @@ pub mod authenticator;
 pub mod ccmp;
 pub mod eapol;
 pub mod handshake;
+pub mod kept;
 pub mod keys;
 
 /// Why a frame was not taken. The station drops the frame; `Downgrade` also ends the association (12.7.6.4).
@@ -26,6 +27,8 @@ pub enum Error {
     KeyData,
     /// The access point's RSN element in message 3 is not the one it advertised.
     Downgrade,
-    /// The output buffer is too small.
+    /// The output buffer is too small, or no room is left.
     Space,
+    /// The key service gave no keys for the handshake (550-NET-0024).
+    NoKey,
 }

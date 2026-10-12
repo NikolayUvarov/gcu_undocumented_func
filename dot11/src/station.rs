@@ -7,7 +7,7 @@ use crate::scan::{self, Bss, List, Security};
 use crate::Error;
 use wpa::ccmp::{self, Replay};
 use wpa::eapol::Gtk;
-use wpa::handshake::{Supplicant, REPLY_MAX};
+use wpa::handshake::{Pairwise, Supplicant, REPLY_MAX};
 
 pub const FRAME_MAX: usize = 2346;
 pub const ETHERNET_MAX: usize = 1514;
@@ -47,7 +47,12 @@ pub fn may_probe(channel: u8) -> bool { (1..=11).contains(&channel) }
 enum Step { Authenticating, Associating, Handshake }
 
 #[derive(Clone, Copy)]
-struct Join { bss: Bss, pmk: Option<[u8; 32]>, step: Step, tries: u8, deadline: u64, answered: bool }
+struct Join { bss: Bss, secret: Option<Secret>, step: Step, tries: u8, deadline: u64, answered: bool }
+
+/// The key of a WPA2-PSK network (550-NET-0024): a PMK the station holds, or one a key service keeps, which answers
+/// each handshake's keys through the `Pairwise` the caller passes to `receive`.
+#[derive(Clone, Copy)]
+pub enum Secret { Pmk([u8; 32]), Kept }
 
 struct Keys { tk: [u8; 16], pn: u64, replay: Replay, groups: [Option<(Gtk, Replay)>; 4] }
 
@@ -120,8 +125,8 @@ impl Station {
         Ok(())
     }
 
-    /// Starts joining the strongest access point of `ssid` from the last scan; `pmk` for a WPA2 network.
-    pub fn join(&mut self, ssid: &[u8], pmk: Option<[u8; 32]>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
+    /// Starts joining the strongest access point of `ssid` from the last scan; `secret` for a WPA2 network.
+    pub fn join(&mut self, ssid: &[u8], secret: Option<Secret>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         if self.state == State::Scanning { return Err(Error::Busy); }
         let named = self.list.iter().any(|b| b.ssid() == ssid);
         let Some(bss) = self.list.best(ssid).copied() else {
@@ -129,19 +134,19 @@ impl Station {
             self.fail(reason);
             return Err(error);
         };
-        if bss.security == Security::Wpa2 && pmk.is_none() { return Err(Error::Invalid); }
+        if bss.security == Security::Wpa2 && secret.is_none() { return Err(Error::Invalid); }
         if matches!(self.state, State::Joined | State::Joining) { self.leave(out, tx); }
-        self.start(bss, pmk, now, out, tx)
+        self.start(bss, secret, now, out, tx)
     }
 
-    fn start(&mut self, bss: Bss, pmk: Option<[u8; 32]>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
+    fn start(&mut self, bss: Bss, secret: Option<Secret>, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         self.supplicant = None;
         self.keys = None;
         self.rejoin = None;
         self.state = State::Joining;
         out.channel = Some(bss.channel);
         out.filter = Some(Filter { all_beacons: false, bssid: bss.bssid });
-        self.join = Some(Join { bss, pmk: pmk.filter(|_| bss.security == Security::Wpa2), step: Step::Authenticating, tries: 0,
+        self.join = Some(Join { bss, secret: secret.filter(|_| bss.security == Security::Wpa2), step: Step::Authenticating, tries: 0,
                                 deadline: 0, answered: false });
         self.retry(now, out, tx)
     }
@@ -203,7 +208,7 @@ impl Station {
             if now < at { return Ok(()); }
             let Some(join) = self.join else { self.rejoin = None; return Ok(()) };
             let reason = self.reason;
-            self.start(join.bss, join.pmk, now, out, tx)?;
+            self.start(join.bss, join.secret, now, out, tx)?;
             self.reason = reason;
             return Ok(());
         }
@@ -231,9 +236,10 @@ impl Station {
     }
 
     /// Takes a received frame (FCS already checked), heard on `channel` with `weakness` (minus dBm). `random` is fresh
-    /// for a new SNonce. A data frame for the system comes back in `rx` (`out.deliver`).
-    pub fn receive(&mut self, frame: &[u8], channel: u8, weakness: u8, now: u64, random: &[u8; 32], out: &mut Out, tx: &mut [u8],
-                   rx: &mut [u8]) -> Result<(), Error> {
+    /// for a new SNonce; `kept` answers the handshake's keys of a network joined with `Secret::Kept`. A data frame for
+    /// the system comes back in `rx` (`out.deliver`).
+    pub fn receive(&mut self, frame: &[u8], channel: u8, weakness: u8, now: u64, random: &[u8; 32], kept: &mut dyn Pairwise, out: &mut Out,
+                   tx: &mut [u8], rx: &mut [u8]) -> Result<(), Error> {
         let h = frame::header(frame)?;
         if h.kind == TYPE_MANAGEMENT && (h.subtype == BEACON || h.subtype == PROBE_RESPONSE) {
             if let Some(bss) = scan::describe(frame, &h, channel, weakness, now) {
@@ -245,7 +251,7 @@ impl Station {
         let Some(join) = self.join else { return Err(Error::Unexpected) };
         if h.a2 != join.bss.bssid || (h.a1 != self.own && !(h.kind == TYPE_DATA && frame::group(&h.a1))) { return Err(Error::Unexpected); }
         self.heard = now;
-        if h.kind == TYPE_MANAGEMENT { self.management(frame, &h, join, now, out, tx) } else { self.data(frame, &h, random, out, tx, rx) }
+        if h.kind == TYPE_MANAGEMENT { self.management(frame, &h, join, now, out, tx) } else { self.data(frame, &h, random, kept, out, tx, rx) }
     }
 
     fn management(&mut self, frame: &[u8], h: &Header, join: Join, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
@@ -261,12 +267,12 @@ impl Station {
             ASSOCIATION_RESPONSE if self.state == State::Joining && join.step == Step::Associating => {
                 if field(2)? != 0 { self.fail(Reason::Refused); return Ok(()); }
                 self.take_rates(&body[6..]);
-                match join.pmk {
+                match join.secret {
                     None => { self.state = State::Joined; self.reason = Reason::None; }
-                    Some(pmk) => {
+                    Some(_) => {
                         let rsne = scan::own_rsne();
                         let theirs = join.bss.rsne().ok_or(Error::Malformed)?;
-                        self.supplicant = Some(Supplicant::new(pmk, self.own, join.bss.bssid, &rsne, theirs).map_err(|_| Error::Malformed)?);
+                        self.supplicant = Some(Supplicant::new(self.own, join.bss.bssid, &rsne, theirs).map_err(|_| Error::Malformed)?);
                         if let Some(j) = self.join.as_mut() { j.step = Step::Handshake; j.deadline = now + HANDSHAKE_MS; }
                     }
                 }
@@ -324,7 +330,7 @@ impl Station {
         }
     }
 
-    fn data(&mut self, frame: &[u8], h: &Header, random: &[u8; 32], out: &mut Out, tx: &mut [u8], rx: &mut [u8]) -> Result<(), Error> {
+    fn data(&mut self, frame: &[u8], h: &Header, random: &[u8; 32], kept: &mut dyn Pairwise, out: &mut Out, tx: &mut [u8], rx: &mut [u8]) -> Result<(), Error> {
         // Only frames from the distribution system, with a body (not null frames), and not the station's own group frames
         // that the access point sends back.
         if h.flags & (TO_DS | FROM_DS) != FROM_DS || h.subtype & 4 != 0 || h.a3 == self.own { return Ok(()); }
@@ -348,22 +354,28 @@ impl Station {
             frame::to_ethernet(frame, h, rx)?
         };
         if ethertype == ETHERTYPE_EAPOL {
+            // Once the keys are installed, handshake frames come under them: one in the clear is a forgery.
+            if self.keys.is_some() && !protected { return Err(Error::Unexpected); }
             let mut key = [0u8; ETHERNET_MAX];
             key[..len - 14].copy_from_slice(&rx[14..len]);
-            return self.eapol(&key[..len - 14], random, out, tx);
+            return self.eapol(&key[..len - 14], random, kept, out, tx);
         }
         // A protected network passes nothing in the clear, and nothing before its keys.
-        let open = self.join.is_some_and(|j| j.pmk.is_none());
+        let open = self.join.is_some_and(|j| j.secret.is_none());
         if self.state != State::Joined || (!open && !protected) { return Ok(()); }
         out.deliver = Some(len);
         Ok(())
     }
 
-    fn eapol(&mut self, key: &[u8], random: &[u8; 32], out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
+    fn eapol(&mut self, key: &[u8], random: &[u8; 32], kept: &mut dyn Pairwise, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         let supplicant = self.supplicant.as_mut().ok_or(Error::Unexpected)?;
         let mut reply = [0u8; REPLY_MAX];
-        let step = match supplicant.receive(key, random, &mut reply) {
+        let mut held = match self.join.and_then(|j| j.secret) { Some(Secret::Pmk(pmk)) => Some(pmk), _ => None };
+        let keys: &mut dyn Pairwise = match held.as_mut() { Some(pmk) => pmk, None => kept };
+        let step = match supplicant.receive(key, random, keys, &mut reply) {
             Ok(step) => step,
+            // The key service gave no keys (it no longer keeps the network, or its budget is spent): the join ends.
+            Err(wpa::Error::NoKey) => { self.leave(out, tx); self.fail(Reason::Refused); return Err(Error::NoKey); }
             Err(wpa::Error::Downgrade) => { self.leave(out, tx); self.fail(Reason::Refused); return Err(Error::Downgrade); }
             Err(wpa::Error::Replay) => return Err(Error::Replay),
             Err(wpa::Error::Mic) => return Err(Error::Integrity),
