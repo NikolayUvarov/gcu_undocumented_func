@@ -3,17 +3,20 @@
 //! asked); the link's state at the top. Only the drawing and the keys: the program gives it a `Station`, the host test
 //! the stand-in (tests/wifi_host.rs).
 use crate::keys::{Code, Key};
-use crate::station::{check, dotted, Link, Network, Refusal, Security, Station};
+use crate::station::{check, mac, rate, shown, Link, Network, Refusal, Security, Station};
 use crate::tui::widgets::{Edit, InputLine, LINE_MAX};
 use crate::tui::{Grid, Line, Theme};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// A row of the list: a network's name (empty: hidden), its strongest access point's signal and channel, how many
-/// access points share the name, its protection, and whether the station remembers it.
+/// A row of the list: a network's name as sent (empty: hidden), its strongest access point's signal (minus dBm, 0
+/// unknown) and channel, how many access points share the name, its protection, and whether the station remembers it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Row { pub ssid: String, pub signal: i8, pub channel: u8, pub points: usize, pub security: Security, pub remembered: bool }
+pub struct Row { pub ssid: Vec<u8>, pub weakness: u8, pub channel: u8, pub points: usize, pub security: Security, pub remembered: bool }
+
+// The order of signals, strongest first; an unknown one (0) last.
+fn rank(weakness: u8) -> u8 { if weakness == 0 { u8::MAX } else { weakness } }
 
 /// The rows of a scan: one a name, the strongest first; hidden networks last, each a row.
 pub fn rows(networks: &[Network]) -> Vec<Row> {
@@ -23,22 +26,25 @@ pub fn rows(networks: &[Network]) -> Vec<Row> {
             Some(r) => {
                 r.points += 1;
                 r.remembered |= n.remembered;
-                if n.signal > r.signal { (r.signal, r.channel, r.security) = (n.signal, n.channel, n.security); }
+                if rank(n.weakness) < rank(r.weakness) { (r.weakness, r.channel, r.security) = (n.weakness, n.channel, n.security); }
             }
-            None => rows.push(Row { ssid: n.ssid.clone(), signal: n.signal, channel: n.channel, points: 1, security: n.security, remembered: n.remembered }),
+            None => rows.push(Row { ssid: n.ssid.clone(), weakness: n.weakness, channel: n.channel, points: 1, security: n.security, remembered: n.remembered }),
         }
     }
-    rows.sort_by(|a, b| a.ssid.is_empty().cmp(&b.ssid.is_empty()).then(b.signal.cmp(&a.signal)));
+    rows.sort_by(|a, b| a.ssid.is_empty().cmp(&b.ssid.is_empty()).then(rank(a.weakness).cmp(&rank(b.weakness))));
     rows
 }
 
-/// Bars of signal, 0 to 4, from dBm.
-pub fn bars(signal: i8) -> usize {
-    match signal { s if s >= -55 => 4, s if s >= -67 => 3, s if s >= -75 => 2, s if s >= -85 => 1, _ => 0 }
+/// Bars of signal, 0 to 4, from minus dBm (0 unknown: none).
+pub fn bars(weakness: u8) -> usize {
+    match weakness { 0 => 0, w if w <= 55 => 4, w if w <= 67 => 3, w if w <= 75 => 2, w if w <= 85 => 1, _ => 0 }
 }
 
+// A signal as dBm, or ? when unknown.
+fn dbm(weakness: u8) -> String { if weakness == 0 { String::from("?") } else { format!("-{}", weakness) } }
+
 /// The list, or the passphrase being typed for a network.
-pub enum Mode { List, Passphrase { ssid: String, security: Security, line: InputLine, remember: bool, problem: Option<&'static str> } }
+pub enum Mode { List, Passphrase { ssid: Vec<u8>, security: Security, line: InputLine, remember: bool, problem: Option<&'static str> } }
 
 pub enum Flow { Quit, Continue }
 
@@ -53,6 +59,8 @@ pub struct Wifi {
     pub problem: Option<String>,
     /// With the stand-in station (`--demo`): the title says so.
     pub demo: bool,
+    // Remembering was asked and the station answered that it does not remember networks: said when joined.
+    unkept: bool,
 }
 
 // The line's bytes overwritten before it is emptied: a passphrase does not stay in memory after use.
@@ -63,7 +71,7 @@ fn wipe(line: &mut InputLine) {
 
 impl Wifi {
     pub fn new(demo: bool) -> Self {
-        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo }
+        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo, unkept: false }
     }
 
     fn refused(&mut self, refusal: Refusal) {
@@ -86,14 +94,18 @@ impl Wifi {
         }
     }
 
-    /// The link's state; a line when joining ends.
+    /// The link's state; a line when joining ends or the link goes.
     pub fn poll(&mut self, station: &mut dyn Station) {
         match station.status() {
             Ok(link) => {
                 if link != self.link {
                     match &link {
-                        Link::Joined { ssid, address, .. } => self.notice = format!("Joined {}{}", ssid, if *address == 0 { String::from(", waiting for an address") } else { format!(": {}", dotted(*address)) }),
-                        Link::Failed { ssid, reason } => self.notice = format!("{} not joined: {}", ssid, reason.text()),
+                        Link::Joined { ssid, .. } => {
+                            self.notice = format!("Joined {}{}", shown(ssid), if self.unkept { ": the station does not remember networks yet, so it did not keep the passphrase" } else { "" });
+                            self.unkept = false;
+                        }
+                        Link::Failed { ssid, reason } => self.notice = format!("{} not joined: {}", shown(ssid), reason.text()),
+                        Link::Lost { ssid } => self.notice = format!("The link to {} was lost: the station is joining it again", shown(ssid)),
                         _ => {}
                     }
                     // A remembered network shows its mark at once.
@@ -105,30 +117,31 @@ impl Wifi {
         }
     }
 
-    // Joining `ssid`, with the station's answer as the line.
-    fn join(&mut self, station: &mut dyn Station, ssid: &str, passphrase: Option<&str>, remember: bool) {
-        match station.join(ssid, passphrase, remember) {
-            Ok(()) => { self.notice = format!("Joining {}…", ssid); self.poll(station); }
-            Err(refusal) => self.refused(refusal),
+    // Joining `ssid`, with the station's answer as the line; a station that does not remember is asked again without.
+    fn join(&mut self, station: &mut dyn Station, ssid: &[u8], passphrase: &str, remember: bool) {
+        let mut answer = station.join(ssid, passphrase, remember);
+        self.unkept = remember && answer == Err(Refusal::Unsupported);
+        if self.unkept { answer = station.join(ssid, passphrase, false); }
+        match answer {
+            Ok(()) => { self.notice = format!("Joining {}…", shown(ssid)); self.poll(station); }
+            Err(refusal) => { self.unkept = false; self.refused(refusal) }
         }
     }
 
     /// A key: ↑↓ choose, Enter joins, r scans again, f forgets, d leaves, q or Esc ends; while a passphrase is typed,
     /// Tab ticks "remember", Enter joins, Esc goes back.
     pub fn key(&mut self, key: Key, station: &mut dyn Station) -> Flow {
-        if let Mode::Passphrase { ssid, security, line, remember, problem } = &mut self.mode {
+        if let Mode::Passphrase { security, line, remember, problem, .. } = &mut self.mode {
             match key.code() {
                 Code::Tab => *remember = !*remember,
                 _ => match line.key(key) {
                     Edit::Cancel => { wipe(line); self.mode = Mode::List; self.notice = String::from("Not joined"); }
                     Edit::Submit => match check(*security, line.as_str()) {
                         Err(why) => *problem = Some(why),
-                        Ok(()) => {
-                            let (name, typed, keep) = (ssid.clone(), String::from(line.as_str()), *remember);
-                            wipe(line);
-                            self.mode = Mode::List;
-                            self.join(station, &name, Some(&typed), keep);
-                        }
+                        Ok(()) => if let Mode::Passphrase { ssid, mut line, remember, .. } = core::mem::replace(&mut self.mode, Mode::List) {
+                            self.join(station, &ssid, line.as_str(), remember);
+                            wipe(&mut line);
+                        },
                     },
                     Edit::Changed => *problem = None,
                     _ => {}
@@ -146,12 +159,13 @@ impl Wifi {
             Code::F(5) => { self.refresh(station); self.notice = format!("{} networks", self.rows.len()); }
             Code::Enter => {
                 let Some(row) = self.rows.get(self.selected).cloned() else { return Flow::Continue };
+                let name = shown(&row.ssid);
                 if row.ssid.is_empty() { self.notice = String::from("A hidden network: joining one by its name is not done yet"); return Flow::Continue; }
-                if matches!(&self.link, Link::Joined { ssid, .. } if *ssid == row.ssid) { self.notice = format!("{} is joined already (d leaves it)", row.ssid); return Flow::Continue; }
-                if matches!(row.security, Security::Wep | Security::Enterprise) {
-                    self.notice = format!("{}: {}", row.ssid, check(row.security, "").err().unwrap_or("not joined"));
+                if matches!(&self.link, Link::Joined { ssid, .. } if *ssid == row.ssid) { self.notice = format!("{} is joined already (d leaves it)", name); return Flow::Continue; }
+                if !matches!(row.security, Security::Open | Security::Wpa2) {
+                    self.notice = format!("{}: {}", name, check(row.security, "").err().unwrap_or("not joined"));
                 } else if row.security == Security::Open || row.remembered {
-                    self.join(station, &row.ssid, None, false);
+                    self.join(station, &row.ssid, "", false);
                 } else {
                     self.mode = Mode::Passphrase { ssid: row.ssid, security: row.security, line: InputLine::new(), remember: true, problem: None };
                 }
@@ -163,8 +177,9 @@ impl Wifi {
                 Some('f') => {
                     let Some(ssid) = self.rows.get(self.selected).map(|r| r.ssid.clone()) else { return Flow::Continue };
                     match station.forget(&ssid) {
-                        Ok(true) => { self.notice = format!("{} forgotten: its passphrase is gone from the station", ssid); self.refresh(station); self.poll(station); }
-                        Ok(false) => self.notice = format!("{} is not remembered", ssid),
+                        Ok(true) => { self.notice = format!("{} forgotten: its key is gone from the station", shown(&ssid)); self.refresh(station); self.poll(station); }
+                        Ok(false) => self.notice = format!("{} is not remembered", shown(&ssid)),
+                        Err(Refusal::Unsupported) => self.notice = String::from("The station does not remember networks yet"),
                         Err(r) => self.refused(r),
                     }
                 }
@@ -178,12 +193,15 @@ impl Wifi {
     pub fn status(&self) -> String {
         let link = match &self.link {
             Link::Off => String::from("OFF"),
-            Link::Joining { ssid } => format!("JOINING {}", ssid),
-            Link::Joined { ssid, address, .. } => format!("JOINED {} {}", ssid, dotted(*address)),
-            Link::Failed { ssid, reason } => format!("FAILED {} {:?}", ssid, reason),
+            Link::Scanning => String::from("SCANNING"),
+            Link::Joining { ssid } => format!("JOINING {}", shown(ssid)),
+            Link::Joined { ssid, bssid, .. } => format!("JOINED {} {}", shown(ssid), mac(*bssid)),
+            Link::Lost { ssid } => format!("LOST {}", shown(ssid)),
+            Link::Failed { ssid, reason } => format!("FAILED {} {:?}", shown(ssid), reason),
         };
-        let mode = match &self.mode { Mode::List => String::from("LIST"), Mode::Passphrase { ssid, remember, .. } => format!("PASSPHRASE {} REMEMBER={}", ssid, remember) }; // never the passphrase or its length
-        format!("MODE={} ROWS={} AT={} LINK={}", mode, self.rows.len(), self.rows.get(self.selected).map_or("-", |r| if r.ssid.is_empty() { "(hidden)" } else { r.ssid.as_str() }), link)
+        let mode = match &self.mode { Mode::List => String::from("LIST"), Mode::Passphrase { ssid, remember, .. } => format!("PASSPHRASE {} REMEMBER={}", shown(ssid), remember) }; // never the passphrase or its length
+        let at = self.rows.get(self.selected).map_or(String::from("-"), |r| if r.ssid.is_empty() { String::from("(hidden)") } else { shown(&r.ssid) });
+        format!("MODE={} ROWS={} AT={} LINK={}", mode, self.rows.len(), at, link)
     }
 
     /// Draws the screen; returns where the text cursor is (in the passphrase's field).
@@ -202,22 +220,27 @@ impl Wifi {
         }
         let link = match &self.link {
             Link::Off => String::from("Not joined to a network"),
-            Link::Joining { ssid } => format!("Joining {}…", ssid),
-            Link::Joined { ssid, address, signal } => format!("Joined {} ({} dBm), address {}", ssid, signal, if *address == 0 { String::from("not yet") } else { dotted(*address) }),
-            Link::Failed { ssid, reason } => format!("{} not joined: {}", ssid, reason.text()),
+            Link::Scanning => String::from("Scanning…"),
+            Link::Joining { ssid } => format!("Joining {}…", shown(ssid)),
+            Link::Joined { ssid, bssid, channel, weakness, rate: units } => {
+                format!("Joined {}: {} dBm, channel {}, {} Mb/s, access point {}", shown(ssid), dbm(*weakness), channel, rate(*units), mac(*bssid))
+            }
+            Link::Lost { ssid } => format!("The link to {} was lost: joining it again…", shown(ssid)),
+            Link::Failed { ssid, reason } => format!("{} not joined: {}", shown(ssid), reason.text()),
         };
-        grid.text_max(2, 1, &link, w, if matches!(self.link, Link::Failed { .. }) { theme.error } else { theme.header });
-        grid.text_max(2, 3, &format!("{:<32} {:<6} {:>7} {:>3} {:<10} {}", "NETWORK", "SIGNAL", "DBM", "CH", "SECURITY", ""), w, theme.dim);
+        grid.text_max(2, 1, &link, w, if matches!(self.link, Link::Failed { .. } | Link::Lost { .. }) { theme.error } else { theme.header });
+        if let Link::Joined { .. } = self.link { grid.text_max(2, 2, "The address is the network stack's: ip shows it", w, theme.dim); }
+        grid.text_max(2, 3, &format!("{:<32} {:<6} {:>5} {:>3} {:<10} {}", "NETWORK", "SIGNAL", "DBM", "CH", "SECURITY", ""), w, theme.dim);
         let top = 4;
         let room = rows.saturating_sub(top + 4);
         let first = self.selected.saturating_sub(room.saturating_sub(1));
         for (i, row) in self.rows.iter().enumerate().skip(first).take(room) {
             let joined = matches!(&self.link, Link::Joined { ssid, .. } if !row.ssid.is_empty() && *ssid == row.ssid);
-            let name = if row.ssid.is_empty() { String::from("(hidden network)") } else { row.ssid.clone() };
-            let strength: String = (0..4).map(|b| if b < bars(row.signal) { '█' } else { '░' }).collect();
-            let marks = [(joined, "joined"), (row.remembered, "remembered"), (row.points > 1, "")].iter().filter(|(on, text)| *on && !text.is_empty()).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
+            let name: String = if row.ssid.is_empty() { String::from("(hidden network)") } else { shown(&row.ssid).chars().take(32).collect() };
+            let strength: String = (0..4).map(|b| if b < bars(row.weakness) { '█' } else { '░' }).collect();
+            let marks = [(joined, "joined"), (row.remembered, "remembered")].iter().filter(|(on, _)| *on).map(|(_, t)| *t).collect::<Vec<_>>().join(", ");
             let points = if row.points > 1 { format!(" ({} access points)", row.points) } else { String::new() };
-            let line = format!("{:<32} {:<6} {:>7} {:>3} {:<10} {}{}", name, strength, row.signal, row.channel, row.security.name(), marks, points);
+            let line = format!("{:<32} {:<6} {:>5} {:>3} {:<10} {}{}", name, strength, dbm(row.weakness), row.channel, row.security.name(), marks, points);
             let style = if i == self.selected { theme.selected } else if joined { theme.accent } else { theme.panel };
             grid.text_padded(2, top + i - first, &line, w, style);
         }
@@ -228,7 +251,7 @@ impl Wifi {
             let (bx, by) = ((cols - bw) / 2, (rows.saturating_sub(bh)) / 2);
             let r = crate::tui::Rect::new(bx, by, bw, bh);
             grid.fill(r, ' ', theme.dialog);
-            grid.frame_titled(r, Line::Double, &format!(" {} ({}) ", ssid, security.name()), theme.dialog_frame, theme.dialog_frame);
+            grid.frame_titled(r, Line::Double, &format!(" {} ({}) ", shown(ssid), security.name()), theme.dialog_frame, theme.dialog_frame);
             grid.text_max(bx + 2, by + 1, "Passphrase (not shown as it is typed):", bw - 4, theme.dialog);
             let typed: String = core::iter::repeat('•').take(line.as_str().chars().count()).collect();
             grid.text_padded(bx + 2, by + 2, &typed, bw - 4, theme.input);
@@ -242,15 +265,4 @@ impl Wifi {
         grid.text_max(2, rows.saturating_sub(2), help, w, theme.dim);
         cursor
     }
-}
-
-/// What `wifi list` prints: a line a network.
-pub fn table(rows: &[Row]) -> String {
-    let mut out = format!("{:<32} {:>4} {:>3} {:<10} {}\n", "NETWORK", "DBM", "CH", "SECURITY", "ACCESS POINTS");
-    for row in rows {
-        let name = if row.ssid.is_empty() { "(hidden network)" } else { row.ssid.as_str() };
-        out.push_str(&format!("{:<32} {:>4} {:>3} {:<10} {}{}\n", name, row.signal, row.channel, row.security.name(), row.points, if row.remembered { "  remembered" } else { "" }));
-    }
-    out.push_str(&format!("{} networks", rows.len()));
-    out
 }

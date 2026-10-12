@@ -1099,8 +1099,8 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
-    # wifi (550-APP-0033): without the 802.11 station it says so; with --demo, against the stand-in station, Enter on
-    # MIND-Lab asks for its passphrase, which shows as dots only, and joins.
+    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
+    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
     vm.send("wifi\n")
     vm.expect("NO STATION", after="[WIFI] READY")
     time.sleep(.3)
@@ -1111,7 +1111,7 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     vm.send("wifi --demo\n")
-    vm.expect("MODE=LIST ROWS=7 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
+    vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
     vm.send_bytes(b"\r")
     vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
     vm.send_bytes(b"correct horse")
@@ -1123,7 +1123,7 @@ def shell_suite(vm):
             break
     assert any(canon("•" * 13) in row for row in screen) and not any("horse" in row for row in screen), screen
     vm.send_bytes(b"\r")
-    vm.expect("LINK=JOINED MIND-Lab 10.0.0.42")
+    vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
     vm.send_bytes(b"q")
     vm.expect("SHELL RESUMED.")
