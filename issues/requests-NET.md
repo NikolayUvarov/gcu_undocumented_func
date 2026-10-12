@@ -252,6 +252,22 @@ The driver keeps no 802.11 state beyond the filter and the channel: authenticati
 
 `NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
 
+## A notice: 109-NET-0010 is done by the kernel track (109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
+
+### What was done
+
+The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy`, and they reach `main` through the gate:
+
+- **109-KRN-0096 (the loader starts a helper):** `idl/loader.wit` 1.8 gains `helper(parse, served)`. The loader starts a copy of `parse` whose only capability is the caller's endpoint, with a bounded quota and a per-owner limit.
+- **109-NET-0010 itself:** `parse --session` answers on that endpoint alone and ends when its client does or after 30 s idle; `mind::parse::Session` owns such a copy, and `download` uses one, falling back to the shared service. The `net` suite's `session_parsers_check` shows two downloads with a parser each.
+
+### What is asked of the network track
+
+- **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
+- **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
 ## `idl/wifi.wit`: what `wifi` needs of the station (550-APP-0033)
 
 **Recorded by:** the tools track (APP), 2026-10-12, at the maintainer's word ("do the tools track's part of the network and Wi-Fi configuration"), for the Wi-Fi configuration interface that "An 802.11 station and WPA2-PSK" above proposes.
