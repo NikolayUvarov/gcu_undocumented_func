@@ -36,4 +36,4 @@ The kernel could aim only MSI-X entries (`PLATFORM_DEVICE_MSIX`), and the BCM433
 
 ## Related
 
-[550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md), [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), [docs/api/README.md](../docs/api/README.md).
+[550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md), [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), [docs/api/README.md](../docs/api/README.md).
