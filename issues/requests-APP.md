@@ -134,7 +134,7 @@ In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite see
 
 ## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
 
-**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md)) was run by its path.
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](../issues-done/176-KRN-0087-runs-on-real-hardware.done)) was run by its path.
 
 ### Problem
 
@@ -241,3 +241,37 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **In the `tools` suite**, the key writes a BMP to `data/media/` with the screen as it was, no shell in it.
 - **`record -s 2 -t 3`** writes an AVI whose frames are half the screen's size.
 - **On the MacBook Pro**, the maintainer takes a picture and a 30 s recording without the shell in them.
+
+## Redirection and pipes in the shell and in `msh` (the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12. The kernel's part, a text input for programs, is [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md).
+
+### Problem
+
+The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s battery > file.txt` fails, as does `dmesg | grep BATTERY`.
+
+### Plan (a proposal; the tools track decides)
+
+- **`cmd > file` and `cmd >> file`:**
+  - a command of the shell's own writes what it would print;
+  - a program's output is read from its console queue (`SYSCALL_CONSOLE_READ`), as the shell reads it for the screen, and written to the file;
+  - the file is written through the shell's file client: `ram:`, `data/`, `log:`.
+  - This needs nothing from the kernel and can come first.
+- **`cmd < file` and `a | b`**, on [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md):
+  - the shell starts `b` with an input queue;
+  - it copies `a`'s output (or the file) into it, waiting when it is full, and closes it when `a` ends;
+  - `b`'s output goes to the screen, a file or the next `|`;
+  - Esc stops the whole line;
+  - the line's result is the last command's.
+- **Tools read their input when no file is named:** `grep`, `sha256`, `cat`, `find`, `view`.
+- **`msh`:** the same `>`, `>>`, `<` and `|` in a command's words, and a command's output as a value (`let text = output(dmesg -s battery)`).
+- **The help screen, `docs/msh.md` and `docs/tools`** (EN, RU).
+
+### Acceptance criteria
+
+- **In the `tools` suite:**
+  - `ls data > ram:l.txt`, then `cat ram:l.txt` shows the listing, and `>>` adds to it;
+  - `dmesg | grep SHELL` prints only matching lines;
+  - `cat log:boot0001.log | sha256` equals `sha256 log:boot0001.log`;
+  - 100 KiB through `|` arrive whole.
+- **On the MacBook Pro**, `dmesg -s battery > data/battery.txt` leaves the file on the stick.

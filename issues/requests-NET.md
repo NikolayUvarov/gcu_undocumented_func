@@ -229,6 +229,29 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 
 The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
 
+## The raw-frame interface between `bcm_wifi` and the station (550-DRV-0027)
+
+**Recorded by:** the drivers track (`DRV`), 2026-10-12, for the station of "An 802.11 station and WPA2-PSK" above.
+
+### Problem
+
+On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](550-DRV-0026-bcm4331-transmits.md)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
+
+### Plan (a proposal; the network track decides)
+
+`idl/wlanhw.wit` 1.0, served by `bcm_wifi`, used by `wlan` only:
+- `info` → MAC address, supported channels;
+- `set-channel(channel)`; `set-filter(all-beacons, bssid, own-address)`;
+- `send(frame, rate)` → transmit status (acknowledged or not, retries);
+- `receive` → frames from a shared buffer, each with signal (dBm), channel, rate and the FCS already checked;
+- later, `set-key`/`clear-key` for the chip's CCMP, only if the station wants it.
+
+The driver keeps no 802.11 state beyond the filter and the channel: authentication, association, scanning policy, keys and rates are the station's.
+
+### Acceptance criteria
+
+`NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
+
 ## `idl/wifi.wit`: what `wifi` needs of the station (550-APP-0033)
 
 **Recorded by:** the tools track (APP), 2026-10-12, at the maintainer's word ("do the tools track's part of the network and Wi-Fi configuration"), for the Wi-Fi configuration interface that "An 802.11 station and WPA2-PSK" above proposes.
