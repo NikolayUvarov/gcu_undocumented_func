@@ -2,7 +2,7 @@
 
 **Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — for the interface and the service; `KRN` for starting it and lending its clients ([requests-KRN.md](requests-KRN.md), "The Wi-Fi station in the boot services") · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
 
-The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](550-NET-0017-the-stations-logic.md).
+The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done).
 
 ## Problem
 

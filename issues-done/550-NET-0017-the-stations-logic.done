@@ -1,8 +1,8 @@
-# 550-NET-0017 — The 802.11 station's logic, host-tested
+# 550-NET-0017 — The 802.11 station's logic, host-tested — done
 
-**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.11, MC-12.2
+**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.11, MC-12.2
 
-The second part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK", 2026-10-08), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) (the keys, the handshakes and CCMP). The station service `wlan` that drives it over `idl/wlanhw.wit` is the next task.
+The second part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK", 2026-10-08), after [550-NET-0016](550-NET-0016-wpa2-psk-library.done) (the keys, the handshakes and CCMP). The station service `wlan` that drives it over `idl/wlanhw.wit` is the next task.
 
 ## Problem
 
@@ -60,4 +60,12 @@ What this does not show: a real access point and radio. Those come with the stat
 
 ## Related
 
-[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`, which proposes `idl/wifi.wit`).
+[550-NET-0012](550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md) (`wifi`, which proposes `idl/wifi.wit`).
+
+## Resolution
+
+- **The crate `dot11/`** (7c39d18), as planned: `frame`, `scan` and `station`, with `wpa::authenticator` for the access point's side. It has no libmind, no allocation and no I/O.
+- **Tested on the host:** `dot11/tests/station.rs`, which `scripts/host_tests.sh` runs with Cargo. Its 9 tests pass against a simulated access point on channel 6 and cover every point of the acceptance criteria: the scan, joining and data, a group rekey, the rates, the failed joins, an open network, a lost network, the networks it does not join and malformed frames.
+- **Builds** for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`, with `--cfg aes_force_soft` as every user of `aes` in the tree (the station service `wlan` sets it in its `.cargo/config.toml`).
+- **What the radio does itself,** from the drivers track for `bcm_wifi` (2026-10-12): the microcode writes the sequence numbers over the station's, and CCMP's AAD masks that field, so a protected frame stays valid; legacy CCK and OFDM rates only, which is what the rate control picks from.
+- **Not shown,** as the criteria say: a real access point and radio. They come with the station service ([550-NET-0018](../issues/550-NET-0018-the-station-service.md)), `bcm_wifi` (550-DRV-0027) and the MacBook Pro's run.
