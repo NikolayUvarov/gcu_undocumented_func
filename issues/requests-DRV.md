@@ -89,3 +89,10 @@ Our images all have the same capacity, so that device may be a stick rewritten w
 ### Acceptance criteria
 
 In QEMU (`tests/usb_image_smoke.py`), the stick is swapped for a copy with another manifest while `vfs_server` makes no request. The copy is unchanged afterwards, and `vfs_server` logs `CAME BACK WITH ANOTHER MEDIUM`.
+
+## Display output over several monitors (177; the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, for main task [177](177-display-output.md).
+
+The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is steps 3a–3c (`virtio-gpu` first, testable in QEMU with two outputs; then Intel's display engine from its PRMs; then AMD), 4 and 5. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
+
