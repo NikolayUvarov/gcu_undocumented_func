@@ -4,10 +4,12 @@
 // behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) stops the
 // 802.11 core the firmware left running with a reset pulse, and frees the SPROM's pins while the SPROM is read. Stage 2
 // (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
+// Stage 3 sets up the radio; the radio module keeps it running for the station (550-DRV-0027), and stage 4 tests it.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
 use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 
+mod radio;
 mod stage3;
 mod stage4;
 mod tables;
@@ -307,7 +309,10 @@ fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
             mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
             let core = stage3::Core::new(bar);
             match mac {
-                Some(mac) => if stage3::run(&core, mac) { stage4::run(&core, mac) },
+                Some(mac) => if stage3::run(&core, mac) {
+                    // The service's endpoint comes with init's start of the station (550-DRV-0027); until then the radio stops.
+                    if let Some(radio) = stage4::run(&core, mac) { mind::println!("[BCM] NO STATION TO SERVE YET: THE RADIO STOPS"); radio.stop(); }
+                },
                 None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
             }
         }
