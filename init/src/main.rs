@@ -22,7 +22,7 @@ const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
 const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
     "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "spawn privilege", "AC97 ports and IRQ; DMA",
+    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)", "spawn privilege", "AC97 ports and IRQ; DMA",
     "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0; a read-only VFS client (its microcode)", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
     "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
     "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
@@ -77,9 +77,10 @@ impl Grants {
     fn add(&mut self, child: usize, own: usize, rights: u8) { self.list[self.count] = grant(child, own, rights); self.count += 1; }
     fn copy(&mut self, child: usize, own: usize, rights: u8) { self.add(child, own, rights); }
 }
-// How a service was started: its grants (over capabilities init keeps), spawn flags and quota.
+// How a service was started: its grants (over capabilities init keeps), spawn flags, quota and arguments.
 #[derive(Clone, Copy)]
-struct Plan { grants: Grants, flags: usize, quota: Quota }
+struct Plan { grants: Grants, flags: usize, quota: Quota, args: ([u8; ARGS_KEPT], usize) }
+const ARGS_KEPT: usize = 24;
 
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
@@ -215,6 +216,7 @@ impl Init {
         let mut minted = Minted::new();
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
+        let mut args = mind::util::FixedBuf::<ARGS_KEPT>::new();
         match BOOT_SERVICES[image] {
             // LEGACY: CMOS RTC (ISA ports), PS/2 keyboard controller and primary IDE channel below (docs/legacy.md).
             "rtc" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "rtc")?, ALL); grants.add(SLOT_DEV0, minted.clock()?, 0); }
@@ -403,6 +405,15 @@ impl Init {
                 if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
+            // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports, and
+            // the SMBus host's base from the DSDT as an argument.
+            "battery" => {
+                let (command, data, base) = hardware::battery_place().ok_or(Error::NotFound)?;
+                grants.add(SLOT_DEV0, minted.ports(command as usize, 1)?, 0);
+                grants.add(SLOT_DEV1, minted.ports(data as usize, 1)?, 0);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+                let _ = core::fmt::Write::write_fmt(&mut args, format_args!("smbus=0x{:02x}", base));
+            }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
             // The key service makes the device key itself (RDRAND), needs the date for its certificate, and keeps the key
@@ -484,6 +495,7 @@ impl Init {
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
                 self.lend(&mut grants, SLOT_PARSE, "parse")?;
                 self.lend(&mut grants, SLOT_TPM, "tpm")?;
+                if self.running(service_index("battery")) { self.lend(&mut grants, SLOT_BATTERY, "battery")?; }
                 self.lend(&mut grants, SLOT_TLS, "tls")?;
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
@@ -519,7 +531,9 @@ impl Init {
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
             _ => Quota::default(),
         };
-        let plan = Plan { grants, flags, quota };
+        let mut kept = ([0u8; ARGS_KEPT], args.as_str().len());
+        kept.0[..kept.1].copy_from_slice(args.as_str().as_bytes());
+        let plan = Plan { grants, flags, quota, args: kept };
         let pid = self.spawn(index, plan)?;
         minted.count = 0; // kept for restarts
         self.plans[index] = Some(plan);
@@ -535,7 +549,13 @@ impl Init {
                 let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, rights); receiver = Some(slot);
             }
         }
-        let pid = mind::process::spawn_raw(name.as_bytes(), Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
+        // `name\0arguments` where the plan has arguments.
+        let (args, count) = plan.args;
+        let mut text = [0u8; 64];
+        let length = if count == 0 { name.len() } else { name.len() + 1 + count };
+        text[..name.len()].copy_from_slice(name.as_bytes());
+        if count > 0 { text[name.len() + 1..length].copy_from_slice(&args[..count]); }
+        let pid = mind::process::spawn_raw(&text[..length], Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
             .inspect_err(|_| { if let Some(slot) = receiver { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         self.starts[index] += 1;

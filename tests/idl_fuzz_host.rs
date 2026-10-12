@@ -77,6 +77,7 @@ mod idl {
     #[path = "../../libmind/src/idl/codec.rs"] pub mod codec;
     #[path = "../../libmind/src/idl/wire.rs"] pub mod wire;
     #[path = "../../libmind/src/idl/audio.rs"] pub mod audio;
+    #[path = "../../libmind/src/idl/battery.rs"] pub mod battery;
     #[path = "../../libmind/src/idl/block.rs"] pub mod block;
     #[path = "../../libmind/src/idl/blockstore.rs"] pub mod blockstore;
     #[path = "../../libmind/src/idl/display.rs"] pub mod display;
@@ -347,7 +348,7 @@ fn scribble() {
 #[test]
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
-        owned!(audio), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
+        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
         owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(window),
@@ -412,6 +413,7 @@ macro_rules! types {
     };
 }
 types! {
+    battery: Error Status;
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update;
     display: Error Mode;
     gpio: Kind Pull Error Controller Pin;

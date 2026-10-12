@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -659,10 +659,13 @@ def hardware_report_check(vm):
 
 
 def normal_suite(vm):
-    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
-    assert "gpio" not in vm.services()
+    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207). No ECDT either:
+    # no embedded controller, so no battery service (211-PRT-0008).
+    services = vm.services()
+    assert "gpio" not in services and "battery" not in services, services
     if vm.arch == "aarch64":
         require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        require(vm.log, "[INIT] battery NOT STARTED: NO DEVICE")
     else:
         # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
         tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",

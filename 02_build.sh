@@ -82,6 +82,7 @@ USER_CRATES=(
     "blocks:blocks:blocks.elf"
     "tally:tally:tally.elf"
     "gpio:gpio:gpio.elf"
+    "battery:battery:battery.elf"
     "loader:loader:loader.elf"
     "audio_gw:audio_gw:audio_gw.elf"
     "tts:tts:tts.elf"
