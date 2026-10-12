@@ -34,7 +34,7 @@ pub const INFO: (u8, u8) = (0, 100);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub picture: Picture, pub pattern: Pattern, pub speed: u8, pub contrast: u8, pub complexity: u8, pub info: u8,
-    pub time: bool, pub date: bool, pub cpu: bool, pub net: bool, pub place: Place,
+    pub time: bool, pub date: bool, pub cpu: bool, pub memory: bool, pub net: bool, pub place: Place,
     /// wm's scale in percent (000-APP-0061); None: `auto`, chosen from the screen at each start.
     pub scale: Option<u16>,
     /// The pointer's size in percent of its 8 × 12 arrow, None: `auto`, at wm's scale; its colour, an index into
@@ -44,14 +44,15 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, net: false, place: Place::BottomRight, scale: None, pointer: None, pointer_colour: 0 }
+        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, memory: true, net: false, place: Place::BottomRight, scale: None, pointer: None, pointer_colour: 0 }
     }
 }
 
 impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
-    /// `complexity = 1..5`, `info = 0..100`, `show = time, date, cpu, net` (or `none`),
+    /// `complexity = 1..5`, `info = 0..100`, `show = time, date, cpu, memory, net` (or `none`; a file that never names
+    /// `memory`, written before it could be chosen, shows it, 000-APP-0064),
     /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`,
     /// `pointer = auto | 100 | 150 | … | 800`, `pointer-colour = white | black | yellow | …` (wm's, 000-APP-0061). What
     /// is not said stays the default; each
@@ -59,6 +60,7 @@ impl Config {
     pub fn parse(text: &str) -> (Self, Vec<String>) {
         let mut config = Self::default();
         let mut problems = Vec::new();
+        let mut none = false; // `show = none`: nothing shown, the memory neither
         let number = |value: &str, (lo, hi): (u8, u8)| value.trim_end_matches('%').trim_end().parse::<u8>().ok().filter(|n| (lo..=hi).contains(n));
         for (index, line) in text.lines().enumerate() {
             let line = line.split('#').next().unwrap_or("");
@@ -87,9 +89,12 @@ impl Config {
                     "info" => match number(value, INFO) { Some(n) => config.info = n, None => wrong("info (its brightness) is 0 to 100") },
                     "show" => {
                         let words: Vec<&str> = value.split(',').map(str::trim).filter(|w| !w.is_empty()).collect();
-                        match words.iter().find(|w| !["time", "date", "cpu", "net", "none"].contains(w)) {
-                            Some(word) => wrong(&format!("show takes time, date, cpu, net or none, not {}", word)),
-                            None => [config.time, config.date, config.cpu, config.net] = ["time", "date", "cpu", "net"].map(|name| words.contains(&name)),
+                        match words.iter().find(|w| !["time", "date", "cpu", "memory", "net", "none"].contains(w)) {
+                            Some(word) => wrong(&format!("show takes time, date, cpu, memory, net or none, not {}", word)),
+                            None => {
+                                [config.time, config.date, config.cpu, config.memory, config.net] = ["time", "date", "cpu", "memory", "net"].map(|name| words.contains(&name));
+                                none = words.contains(&"none");
+                            }
                         }
                     }
                     "place" => match PLACES.iter().find(|p| p.0 == value) {
@@ -118,13 +123,15 @@ impl Config {
                 }
             }
         }
+        // `show` from before `memory` could be chosen (000-APP-0064): the memory shown, as the default does.
+        if !none && !text.contains("memory") { config.memory = true; }
         (config, problems)
     }
 
     /// The configuration as `parse` reads it back.
     pub fn format(&self) -> String {
         let picture = match &self.picture { Picture::None => String::from("none"), Picture::Abstract => String::from("abstract"), Picture::Image(file) => format!("image {}", file) };
-        let shown: Vec<&str> = [(self.time, "time"), (self.date, "date"), (self.cpu, "cpu"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
+        let shown: Vec<&str> = [(self.time, "time"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
         let scale = self.scale.map_or(String::from("auto"), |s| format!("{}", s));
@@ -133,7 +140,7 @@ impl Config {
         format!("# wm's desktop background (000-APP-0047, 000-APP-0050), scale and pointer (000-APP-0061)\n\
                  # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
-                 # show = time, date, cpu, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
+                 # show = time, date, cpu, memory, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
                  # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
                  # pointer = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 | 800 (percent of 8 x 12; auto: at the scale)\n\
                  # pointer-colour = white | black | yellow | orange | red | green | cyan | magenta\n\
@@ -357,9 +364,24 @@ pub fn cover(data: &[u8], frame: &mut [u32], width: usize, height: usize) -> Res
 }
 
 /// What is drawn over the picture: the seconds since midnight, the date (year, month, day), the CPU load of the last
-/// samples (percent, oldest first) and a line about the network.
+/// samples (percent, oldest first), the free memory in bytes (000-APP-0064) and a line about the network.
 #[derive(Clone, Copy, Default)]
-pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub net: Option<&'a str> }
+pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub net: Option<&'a str> }
+
+// The lines' widths in glyphs: the time with seconds, the date, the memory's line at most, the network's.
+const TIME: usize = 8;
+const DATE: usize = 10;
+const MEMORY: usize = 18;
+const NET: usize = 24;
+
+/// The memory's line: `MEM 336 MiB FREE`, in GiB with a tenth from 10 GiB on; at most `MEMORY` glyphs.
+pub fn memory_line(free: Option<u64>) -> String {
+    match free {
+        Some(bytes) if bytes >= 10 << 30 => format!("MEM {}.{} GiB FREE", bytes >> 30, (bytes % (1 << 30)) * 10 >> 30),
+        Some(bytes) => format!("MEM {} MiB FREE", bytes >> 20),
+        None => String::from("MEM - FREE"),
+    }
+}
 
 /// A glyph of the 8 × 16 font: its rows, the leftmost pixel in the top bit.
 pub type Glyph<'a> = &'a dyn Fn(char) -> [u8; 16];
@@ -388,17 +410,18 @@ fn text(frame: &mut [u32], width: usize, height: usize, x: usize, y: usize, text
 /// `zoom` (percent, 000-APP-0061): its rectangle (x, y, w, h), and the scales of the time's and the other lines'
 /// glyphs. None when it shows nothing.
 pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: usize) -> Option<((usize, usize, usize, usize), usize, usize)> {
-    if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.net) { return None; }
+    if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.memory || config.net) { return None; }
     let unit = unit.max(1);
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit;
     let (big, small, gap) = (z(6).max(1), z(2).max(1), z(8));
     let mut w = 0;
     let mut h = 0;
     let mut add = |line_w: usize, line_h: usize| { w = w.max(line_w); h += if h > 0 { gap } else { 0 } + line_h; };
-    if config.time { add(5 * 8 * big, 16 * big); }
-    if config.date { add(10 * 8 * small, 16 * small); }
-    if config.cpu { add(5 * 8 * big, 16 * small + gap / 2 + z(48)); }
-    if config.net { add(24 * 8 * small, 16 * small); }
+    if config.time { add(TIME * 8 * big, 16 * big); }
+    if config.date { add(DATE * 8 * small, 16 * small); }
+    if config.cpu { add(TIME * 8 * big, 16 * small + gap / 2 + z(48)); }
+    if config.memory { add(MEMORY * 8 * small, 16 * small); }
+    if config.net { add(NET * 8 * small, 16 * small); }
     // Two cells from the edges: clear of the top bar and the status line.
     let (mx, my) = (z(32), z(32));
     if w + 2 * mx > width || h + 2 * my > height { return None; }
@@ -407,33 +430,31 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: u
     Some(((x, y, w, h), big, small))
 }
 
-/// Draws the information `config` asks for over `frame`, at its place.
+/// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
+/// (000-APP-0064).
 #[allow(clippy::too_many_arguments)]
 pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom: usize, config: &Config, info: &Info, glyph: Glyph) {
-    let Some(((x, mut y, w, _), big, small)) = layout(config, width, height, unit, zoom) else { return };
+    let Some(((x, mut y, _, _), big, small)) = layout(config, width, height, unit, zoom) else { return };
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit.max(1);
     let gap = z(8);
     let (colour, graph, shadow) = ink(config.info);
     let ink = (colour, shadow);
-    // Each line right-aligned in the block on the right, left-aligned elsewhere.
-    let right = matches!(config.place, Place::TopRight | Place::BottomRight);
-    let start = |line_w: usize| if right { x + w - line_w } else { x };
     if config.time {
-        let line = match info.seconds { Some(s) => format!("{:02}:{:02}", s / 3600 % 24, s / 60 % 60), None => String::from("--:--") };
-        text(frame, width, height, start(5 * 8 * big), y, &line, big, ink, glyph);
+        let line = match info.seconds { Some(s) => format!("{:02}:{:02}:{:02}", s / 3600 % 24, s / 60 % 60, s % 60), None => String::from("--:--:--") };
+        text(frame, width, height, x, y, &line, big, ink, glyph);
         y += 16 * big + gap;
     }
     if config.date {
         let line = match info.date { Some((year, month, day)) => format!("{:04}-{:02}-{:02}", year, month, day), None => String::from("----------") };
-        text(frame, width, height, start(10 * 8 * small), y, &line, small, ink, glyph);
+        text(frame, width, height, x, y, &line, small, ink, glyph);
         y += 16 * small + gap;
     }
     if config.cpu {
-        let graph_w = 5 * 8 * big;
+        let graph_w = TIME * 8 * big;
         let label = match info.cpu.last() { Some(p) => format!("CPU {:3}%", p), None => String::from("CPU    -") };
-        text(frame, width, height, start(graph_w), y, &label, small, ink, glyph);
+        text(frame, width, height, x, y, &label, small, ink, glyph);
         y += 16 * small + gap / 2;
-        let (gx, gh) = (start(graph_w), z(48));
+        let (gx, gh) = (x, z(48));
         // A bar a sample, the newest at the right; a line along the bottom.
         let samples = &info.cpu[info.cpu.len().saturating_sub(CPU_SAMPLES)..];
         let bar = (graph_w / CPU_SAMPLES).max(1);
@@ -445,9 +466,13 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
         for px in gx..gx + graph_w { if px < width && y + gh < height { frame[(y + gh) * width + px] = colour; } }
         y += gh + gap;
     }
+    if config.memory {
+        text(frame, width, height, x, y, &memory_line(info.free), small, ink, glyph);
+        y += 16 * small + gap;
+    }
     if config.net {
         let line = info.net.unwrap_or("NET: NO COUNTERS");
-        text(frame, width, height, start(24 * 8 * small), y, line, small, ink, glyph);
+        text(frame, width, height, x, y, line, small, ink, glyph);
     }
 }
 

@@ -744,7 +744,7 @@ fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 fn the_background_configuration_is_read_and_written() {
     assert_eq!(Config::parse("").0, Config::default());
     let d = Config::default();
-    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.net, d.place), (Picture::Abstract, true, true, true, false, Place::BottomRight));
+    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.memory, d.net, d.place), (Picture::Abstract, true, true, true, true, false, Place::BottomRight));
     assert_eq!((d.pattern, d.speed, d.contrast, d.complexity, d.info), (Pattern::Waves, 1, 20, 2, 30));
     let (c, problems) = Config::parse("# a comment\nbackground = image data/sky.bmp\nshow = cpu, time\nplace = top-left  # here\n");
     assert!(problems.is_empty(), "{:?}", problems);
@@ -752,6 +752,14 @@ fn the_background_configuration_is_read_and_written() {
     assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
     assert_eq!(Config::parse("background = none").0.picture, Picture::None);
     assert_eq!(Config::parse("show = none").0.time, false);
+    // The free memory (000-APP-0064): `memory` among `show`'s words; a file that never names it, written before it
+    // could be chosen, shows it; `none` hides it too.
+    assert!(c.memory, "an old show line");
+    assert!(!Config::parse("show = none").0.memory);
+    assert!(Config::parse("show = time, memory").0.memory);
+    let off = Config { memory: false, ..Config::default() };
+    assert!(off.format().contains("show = time, date, cpu\n") && !Config::parse(&off.format()).0.memory, "{}", off.format());
+    assert!(Config::default().format().contains("show = time, date, cpu, memory\n"));
     // The pattern, its speed, contrast and complexity, the information's brightness; parts of a line between `;`.
     let (c, problems) = Config::parse("pattern = blobs; speed = 20 ; contrast = 45%\ncomplexity = 5; info = 0  # hidden");
     assert!(problems.is_empty(), "{:?}", problems);
@@ -953,24 +961,40 @@ fn the_information_has_its_place() {
     }
     // Nothing to show, or no room: no block.
     assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1, 100).is_none());
-    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&Config { time: false, date: false, cpu: false, memory: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
     assert!(layout(&c, 200, 120, 1, 100).is_none());
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
-    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1, 100).unwrap();
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), net: None }, &glyph);
+    let ((bx, by, bw, bh), big, small) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
     let (text, graph, _) = ink(c.info);
     assert!(frame.iter().filter(|&&p| p == text).count() > 500);
     assert!(frame.contains(&graph));
+    // One column (000-APP-0064): in the bottom right corner too, each line's text starts in the block's first glyph cell;
+    // the time has its seconds, eight glyphs; the free memory has its line under the CPU graph.
+    let gap = 8;
+    let bands = [("time", by, 16 * big, big), ("date", by + 16 * big + gap, 16 * small, small),
+                 ("cpu", by + 16 * big + gap + 16 * small + gap, 16 * small, small),
+                 ("memory", by + 16 * big + gap + 16 * small + gap + 16 * small + gap / 2 + 48 + gap, 16 * small, small)];
+    for (name, top, tall, scale) in bands {
+        let frame = &frame;
+        let lit: Vec<usize> = (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| frame[py * fw + px] == text)).collect();
+        let first = *lit.iter().min().unwrap_or_else(|| panic!("{}: nothing drawn", name));
+        assert!(first >= bx && first < bx + 8 * scale, "{} starts at {}, the block at {}", name, first, bx);
+        if name == "time" { assert!(*lit.iter().max().unwrap() >= bx + 7 * 8 * big, "the seconds"); }
+    }
+    assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
+    assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
+    assert_eq!(background::memory_line(None), "MEM - FREE");
     // Paler than it was (0x7890A8), brighter with `info`, and gone at 0.
     let blue = |p: u32| p & 0xFF;
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, net: None }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -1063,10 +1087,15 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     // The time off, the place moved, an image's file typed.
     wm.key(key(KEY_DOWN));
     assert!(wm.status().ends_with(":Time"), "{}", wm.status());
-    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu), other => panic!("{:?}", other) }
-    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu && c.memory), other => panic!("{:?}", other) }
+    for _ in 0..3 { wm.key(key(KEY_DOWN)); }
+    // The free memory (000-APP-0064): its own box.
+    assert!(wm.status().ends_with(":Free memory"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.memory && c.cpu), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.memory), other => panic!("{:?}", other) }
+    for _ in 0..2 { wm.key(key(KEY_DOWN)); }
     match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
-    for _ in 0..10 { wm.key(key(KEY_UP)); }
+    for _ in 0..11 { wm.key(key(KEY_UP)); }
     assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
     for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
@@ -1469,7 +1498,7 @@ fn the_scale_follows_the_screen_and_settings() {
     wm.rescale(180, 56, 200);
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
-    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 17));
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 18));
 }
 
 // The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from

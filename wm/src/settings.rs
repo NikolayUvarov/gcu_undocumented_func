@@ -12,9 +12,9 @@ use alloc::{format, string::String, vec::Vec};
 
 pub const PAGES: [&str; 6] = ["Background", "Keyboard", "Date and time", "Network", "Sound", "Screen"];
 /// The background page's rows.
-pub const ROWS: [&str; 12] = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"];
+pub const ROWS: [&str; 13] = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Free memory", "Network", "Place"];
 // The rows ← and → step through (the others: the file typed, and boxes ticked).
-const STEPPED: [usize; 7] = [0, 2, 3, 4, 5, 6, 11];
+const STEPPED: [usize; 7] = [0, 2, 3, 4, 5, 6, 12];
 const FILE: usize = 1;
 const PLACES: [Place; 5] = [Place::TopLeft, Place::TopRight, Place::Center, Place::BottomLeft, Place::BottomRight];
 // The speeds offered; the percentages go in fives.
@@ -29,7 +29,7 @@ const SET: usize = 6;
 // Each field's range and digits.
 const FIELDS: [(u32, u32, u32); 6] = [(2000, 2099, 4), (1, 12, 2), (1, 31, 2), (0, 23, 2), (0, 59, 2), (0, 59, 2)];
 const WIDTH: usize = 84;
-const HEIGHT: usize = 17;
+const HEIGHT: usize = 18;
 const LIST: usize = 17; // the pages' column
 
 /// The window's state: the page, the row on it, whether the keys move in the pages' list, and the image's file as typed.
@@ -188,8 +188,9 @@ impl Settings {
             7 => c.time = !c.time,
             8 => c.date = !c.date,
             9 => c.cpu = !c.cpu,
-            10 => c.net = !c.net,
-            11 => c.place = PLACES[cycle(PLACES.iter().position(|p| *p == c.place).unwrap_or(4), PLACES.len())],
+            10 => c.memory = !c.memory,
+            11 => c.net = !c.net,
+            12 => c.place = PLACES[cycle(PLACES.iter().position(|p| *p == c.place).unwrap_or(4), PLACES.len())],
             _ => return None,
         }
         (c != *config).then_some(c)
@@ -317,9 +318,9 @@ impl Settings {
         Vec::from([(ROWS[0], format!("< {} >", picture)), (ROWS[1], String::from(self.file.as_str())), (ROWS[2], format!("< {} >", pattern)),
                    (ROWS[3], format!("< {} >  1 slow (for work) to 50 fast (for a show)", config.speed)), (ROWS[4], format!("< {}% >", config.contrast)),
                    (ROWS[5], format!("< {} >  1 to 5: more waves, rings, curtains, blobs", config.complexity)),
-                   (ROWS[6], format!("< {}% >  of the time, the date and the CPU load", config.info)),
-                   (ROWS[7], check(config.time)), (ROWS[8], check(config.date)), (ROWS[9], check(config.cpu)),
-                   (ROWS[10], format!("{} (no counters yet)", check(config.net).as_str())), (ROWS[11], format!("< {} >", place))])
+                   (ROWS[6], format!("< {}% >  of what is shown over the picture", config.info)),
+                   (ROWS[7], format!("{} with the seconds", check(config.time))), (ROWS[8], check(config.date)), (ROWS[9], check(config.cpu)),
+                   (ROWS[10], check(config.memory)), (ROWS[11], format!("{} (no counters yet)", check(config.net).as_str())), (ROWS[12], format!("< {} >", place))])
     }
 
     /// Draws the window; returns where the text cursor is (on the image file's row while it is chosen).

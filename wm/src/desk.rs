@@ -444,7 +444,7 @@ pub const HELP: [&str; 20] = [
     "Alt+P or a right click on the desktop — the programs by category: a click or Enter starts one",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
-    "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU)",
+    "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU, the memory)",
     "The items of the top bar can be clicked instead of their keys (\"wm\": the programs; those with no room: in more ▼)",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
     "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
