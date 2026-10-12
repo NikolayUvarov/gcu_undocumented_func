@@ -157,7 +157,7 @@ In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite see
 
 ## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
 
-**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md)) was run by its path.
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](../issues-done/176-KRN-0087-runs-on-real-hardware.done)) was run by its path.
 
 ### Problem
 
