@@ -1,6 +1,6 @@
-# 000-KRN-0080 — Power off on x86 PCs: ACPI S5
+# 000-KRN-0080 — Power off on x86 PCs: ACPI S5 — done
 
-**Type:** kernel (`PRT` lines, `kernel/src/arch/x86_64/acpi.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the tests left) · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-6.1
+**Type:** kernel (`PRT` lines, `kernel/src/arch/x86_64/acpi.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Roadmap:** track H · **Constitution:** MC-6.1
 
 ## Problem
 
@@ -33,6 +33,13 @@ The maintainer (2026-10-11): there is no shutdown, and it is needed while the sy
 
 **2026-10-11, MacBook Pro** (`fast-test` efe17aa, `hw0001.txt`): the kernel logged `ACPI: S5 FOUND, POWER OFF POSSIBLE`. Left: `reboot --off` turning the machine off.
 
+## Resolution
+
+- **The kernel** (`kernel/src/arch/x86_64/acpi.rs`) reads the PM1 control blocks, `SMI_CMD` and the DSDT's `\_S5` at boot and logs whether power off is possible. `REBOOT_POWER_OFF` stops the other CPUs, turns ACPI mode on if needed and writes SLP_TYP with SLP_EN; a machine still on is halted with a message.
+- **QEMU**: the `vfs` suite runs `reboot -f --off` and checks `POWER OFF VIA ACPI S5` on x86 (`PSCI SYSTEM_OFF` on aarch64) and that QEMU ends. It passed in the gate on both.
+- **The MacBook Pro**: the hardware report of `fast-test` efe17aa logged `ACPI: S5 FOUND`, and on 2026-10-12 (`fast-test` c548a85) the maintainer reported that `reboot --off` turned the machine off.
+- **Left to the tools track**: `poweroff` and `shutdown` as names for `reboot --off`, and a menu entry in `wm` ([requests-APP.md](../issues/requests-APP.md), asked again by the maintainer on 2026-10-12).
+
 ## Related
 
-[issue 084](../issues-done/084-reboot.done) (`reboot`), [issue 203](../issues-done/203-aarch64-smp-and-power.done) (PSCI), [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (a clean shutdown clears the mark of an unfinished run).
+[issue 084](084-reboot.done) (`reboot`), [issue 203](203-aarch64-smp-and-power.done) (PSCI), [000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (a clean shutdown clears the mark of an unfinished run).
