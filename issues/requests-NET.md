@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](750-NET-0019-http-for-services.md) and [750-NET-0020](750-NET-0020-tls-with-two-pins.md), JSON in the parser service [750-NET-0021](750-NET-0021-json-in-the-parser-service.md), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](750-NET-0019-http-for-services.md) and [750-NET-0020](750-NET-0020-tls-with-two-pins.md), JSON in the parser service [750-NET-0021](750-NET-0021-json-in-the-parser-service.md), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -75,21 +75,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## The stack's third card in slot 4 (550-KRN-0097, for 550-NET-0018)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, answering "The Wi-Fi station in the boot services" (requests-KRN.md on the network branch).
-
-### What the kernel track prepared
-
-550-KRN-0097, built and passing the `net` suite on the network branch's 40ba302 merged with the kernel branch; it reaches `main` once 550-NET-0017 and 550-NET-0018 are there:
-
-- `init` starts `wlansim` (where a test puts it) and `wlan` when a radio runs, and lends the radio's client to `wlan` alone, in slot 2;
-- `netstack` gets `wlan`'s client without a badge in **slot 4**;
-- the shell gets `wlan`'s client with `BADGE_WIFI_CHANGE` in `SLOT_WIFI`: 33, a launch slot, so `SLOT_DYNAMIC` moves to 34 (ABI 9), with `REQUEST_WIFI` = `1 << 22`;
-- the `net` suite puts the `wlansim` fixture on its disk as `wlansim.elf` (`--wlansim-elf`, or where `scripts/x86_fixtures.sh` and `build_aarch64.sh --fixtures` build it) and checks these grants with `stat caps`.
-
-### What is asked of the network track
-
-- **`netstack`:** read slot 4 as its third card (`CARDS` = 3). Slot 4 is empty without the station, as slot 3 is without a second card.
-- **The `net` suite:** with the station up, `netstack` finds three cards, and a join to `MIND-TEST` gets 10.0.3.15.

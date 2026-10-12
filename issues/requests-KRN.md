@@ -264,6 +264,10 @@ The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/
 
 In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
 
+### Progress (2026-10-12)
+
+The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the network branch, `netstack` now reads slot 4 as its third card (`CARDS` = 3), and `wlansim`'s network moved to 10.0.4.0/24 (the station's lease 10.0.4.15, its gateway 10.0.4.1), apart from the second card's 10.0.3.0/24 in the same suite. The join check of the `net` suite comes from the network track once 550-KRN-0097 is on `main`.
+
 ## The right to badge the shell's TLS client (351-NET-0022)
 
 **Recorded by:** the network track (`NET`), 2026-10-12, for [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md).
