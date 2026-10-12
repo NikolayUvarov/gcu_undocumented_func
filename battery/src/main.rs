@@ -2,8 +2,9 @@
 #![no_main]
 // Ring 3 battery service (211-PRT-0008): the Smart Battery System behind the ACPI embedded controller (mind::battery),
 // behind idl/battery.wit. init gives it the controller's command/status port (SLOT_DEV0) and data port (SLOT_DEV1) from
-// the ECDT, and the SMBus host's base from ACPI0001's `_EC` as `smbus=0xNN`. It only reads: every 5 s, and at once for a
-// client when the last reading is older. Changes of the power source, of the charge by 5 %, and errors go to the log.
+// the ECDT, the SMBus host's base from ACPI0001's `_EC` as `smbus=0xNN`, and the AC adapter's bit in the controller's
+// space as `ac=0xNN.B` where the tables name it. It only reads: every 5 s, and at once for a client when the last reading
+// is older. Changes of the power source, of the charge by 5 %, and errors go to the log.
 use core::fmt::Write;
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
 use mind::battery::{self as sbs, Ec, Smbus, SmbusError, State};
@@ -31,6 +32,13 @@ impl sbs::Ports for EcPorts {
 fn smbus_base() -> Option<u8> {
     let value = mind::process::args_str().split_whitespace().find_map(|word| word.strip_prefix("smbus="))?;
     u8::from_str_radix(value.trim_start_matches("0x"), 16).ok()
+}
+
+// `ac=0x60.1` among the arguments: the adapter's byte and bit in the controller's space.
+fn ac_bit() -> Option<(u8, u8)> {
+    let value = mind::process::args_str().split_whitespace().find_map(|word| word.strip_prefix("ac="))?;
+    let (byte, bit) = value.split_once('.')?;
+    Some((u8::from_str_radix(byte.trim_start_matches("0x"), 16).ok()?, bit.parse().ok().filter(|&b: &u8| b < 8)?))
 }
 
 // A Smart Battery Data string (a block read), or "?".
@@ -73,8 +81,9 @@ fn main(_info: &'static BootInfo) {
     // Fitted: the manager says so, or, without a manager, the battery answers.
     let fitted = sbs::fitted(&mut bus);
     let with_charger = sbs::charger(&mut bus).is_some();
+    let ac = ac_bit();
     let (mut name, mut maker, mut chemistry) = ([0u8; 32], [0u8; 32], [0u8; 32]);
-    let first = sbs::read(&mut bus, with_charger);
+    let first = sbs::read(&mut bus, with_charger, ac);
     let present = fitted.unwrap_or(first.is_ok()) && first.is_ok();
     if present {
         let n = text(&mut bus, sbs::DEVICE_NAME, &mut name);
@@ -82,10 +91,16 @@ fn main(_info: &'static BootInfo) {
         let c = text(&mut bus, sbs::CHEMISTRY, &mut chemistry);
         let design_mv = bus.read_word(sbs::BATTERY, sbs::DESIGN_VOLTAGE).unwrap_or(0);
         let state = first.map(|r| r.state()).unwrap_or_default();
+        let mut source = FixedBuf::<96>::new();
+        let _ = match (with_charger, ac) {
+            (true, _) => write!(source, "ANSWERS: THE SOURCE FROM IT"),
+            (false, Some((byte, bit))) => write!(source, "NONE: THE SOURCE FROM THE CONTROLLER'S {:02X} BIT {} (THE ADAPTER'S _PSR)", byte, bit),
+            (false, None) => write!(source, "NONE: THE SOURCE FROM THE BATTERY'S STATUS"),
+        };
         mind::println!("[BATTERY] {} {} ({}): DESIGN {} {}, {} MV; MANAGER {}, CHARGER {}", core::str::from_utf8(&maker[..m]).unwrap_or("?"),
                        core::str::from_utf8(&name[..n]).unwrap_or("?"), core::str::from_utf8(&chemistry[..c]).unwrap_or("?"), state.design,
                        if state.tens_of_mwh { "X 10 MWH" } else { "MAH" }, design_mv, if fitted.is_some() { "ANSWERS" } else { "NONE" },
-                       if with_charger { "ANSWERS" } else { "NONE: THE SOURCE FROM THE BATTERY'S STATUS" });
+                       source.as_str());
     } else {
         mind::println!("[BATTERY] NO BATTERY: MANAGER {:?}, BATTERY {:?}", fitted, first.err());
     }
@@ -110,7 +125,7 @@ fn main(_info: &'static BootInfo) {
         let request = Endpoint::SERVICE.recv_timeout(RECEIVED, wait);
         // Due, or a client asked after the period: read again first.
         if present && mind::time::uptime_ms() as u64 >= read_at + PERIOD_MS {
-            last = sbs::read(&mut bus, with_charger).map(|r| r.state());
+            last = sbs::read(&mut bus, with_charger, ac).map(|r| r.state());
             read_at = mind::time::uptime_ms() as u64;
         }
         let Ok(request) = request else { continue };
