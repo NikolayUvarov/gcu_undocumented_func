@@ -62,7 +62,8 @@ impl Source for Fake {
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
         Ok(Memory { arena: 64 << 20, used: 16 << 20, free: 48 << 20, images: 1 << 20, screens: 8 << 20, heaps: 4 << 20, objects_limit: 16 << 20, dma_limit: 8 << 20,
-                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535, ..Memory::default() })
+                    tasks: self.tasks.len() as u32, endpoints: 8, largest_free: 40 << 20, page_tables: 1 << 20, shared: 2 << 20, tasks_limit: 65535, endpoints_limit: 65535,
+                    frames: 7768 << 20, frames_free: 7679 << 20, ..Memory::default() })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> { Ok(self.ranges.clone()) }
     fn endpoints(&mut self) -> Result<Vec<EndpointInfo>, Problem> { Ok(self.endpoints.clone()) }
@@ -218,6 +219,10 @@ fn sorting_filter_and_tree_keep_the_selection() {
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("  └ busy")), "{:#?}", screen);
     assert!(top.status().contains("TREE=1"), "{}", top.status());
+    // The machine's memory first, the frame pool the programs use; then the kernel's arena (211-APP-0057).
+    let mem = screen.iter().position(|l| l.starts_with(" Mem  [")).expect("the memory line");
+    assert!(screen[mem].contains("89.0M/7.5G used, 7.4G free"), "{}", screen[mem]);
+    assert!(screen[mem + 1].starts_with(" Kern [") && screen[mem + 1].contains("kernel arena 16.0M/64.0M used, largest free 40.0M"), "{}", screen[mem + 1]);
 }
 
 #[test]
@@ -239,6 +244,7 @@ fn details_window_and_keys() {
     assert!(lines.iter().any(|l| l.contains("4 regions, 76.0K mapped")), "the guard page is not mapped: {:?}", lines);
     assert!(lines.iter().any(|l| l == "Endpoints (slot→index): 2→6"), "{:?}", lines);
     assert!(lines.iter().any(|l| l.ends_with(", kernel 40.0K")), "{:?}", lines);
+    assert!(lines.iter().any(|l| l == "CPU budget: no limit; band system"), "{:?}", lines);
     let screen = draw(&mut top, 100, 30);
     assert!(screen.iter().any(|l| l.contains("Task 5")), "{:#?}", screen);
     assert_eq!(top.key(chr('x'), &mut source), Flow::Ignored, "other keys wait while the window is open");
@@ -318,7 +324,28 @@ fn columns_fit_the_screen() {
         assert!(used <= width || columns.len() <= 5, "{} {:?}", width, columns);
         for name in ["PID", "NAME", "%CPU"] { assert!(columns.iter().any(|c| c.0 == name), "{} lacks {}", width, name); }
     }
-    assert_eq!(top::Top::columns(159).len(), 13);
+    assert_eq!(top::Top::columns(159).len(), 14);
+}
+
+#[test]
+fn cpu_budgets() {
+    // The budget `budget` in the shell sets (scheduling contexts, C7): in the table and in a task's details.
+    assert_eq!(text::budget(0, 0, false), "-");
+    assert_eq!(text::budget(20_000_000, 100_000_000, false), "20/100");
+    assert_eq!(text::budget(2_500_000, 10_000_000, true), "2.5/10*", "spent: it waits for its next period");
+    assert_eq!(text::budget_line(20_000_000, 100_000_000, 1, false), "CPU budget: 20 ms per 100 ms (20.0% of a CPU); band application");
+    assert_eq!(text::budget_line(20_000_000, 100_000_000, 1, true), "CPU budget: 20 ms per 100 ms (20.0% of a CPU); band application; spent: waits for its next period");
+    let mut source = system();
+    let budgeted = source.tasks.iter_mut().find(|t| t.pid == 5).unwrap();
+    (budgeted.budget_ns, budgeted.period_ns, budgeted.throttled) = (20_000_000, 100_000_000, true);
+    let mut top = top::Top::new();
+    top.refresh(&mut source).unwrap();
+    let screen = draw(&mut top, 159, 30);
+    let header = screen.iter().find(|l| l.contains("PPID")).unwrap();
+    assert!(header.trim_end().ends_with("BUDGET"), "{}", header);
+    let row = screen.iter().find(|l| l.contains(" loader ")).unwrap();
+    assert!(row.trim_end().ends_with("20/100*"), "{}", row);
+    assert!(screen.iter().find(|l| l.contains(" init ")).unwrap().trim_end().ends_with(" -"));
 }
 
 fn physmap() -> Vec<Range> {
@@ -449,8 +476,8 @@ fn root_quota_in_the_endpoint_column() {
     top.refresh(&mut source).unwrap();
     let screen = draw(&mut top, 160, 30);
     let init = screen.iter().find(|l| l.contains(" init ")).unwrap();
-    assert!(init.trim_end().ends_with(" 65302") && !init.contains("65535"), "{:?}", init);
-    assert!(screen.iter().any(|l| l.contains(" busy ") && l.trim_end().ends_with(" 0/4")), "{:#?}", screen);
+    assert!(init.contains(" 65302 ") && !init.contains("65535"), "{:?}", init); // BUDGET comes after EP
+    assert!(screen.iter().any(|l| l.contains(" busy ") && l.contains(" 0/4 ")), "{:#?}", screen);
 }
 
 #[test]
@@ -466,7 +493,7 @@ fn every_cpu() {
     for cpu in 0..16 { assert!(screen.iter().any(|l| l.contains(&format!("CPU{} ", cpu))), "CPU{}: {:#?}", cpu, screen); }
     assert!(screen.iter().any(|l| l.contains("CPU15 [") && l.contains("15.0%")), "{:#?}", screen);
     let header = screen.iter().position(|l| l.contains("PID") && l.contains("NAME")).unwrap();
-    assert!(header <= 2 + 8 + 2, "8 rows of two bars: {:#?}", screen);
+    assert!(header <= 2 + 8 + 3, "8 rows of two bars, the memory's two lines: {:#?}", screen);
     // 64 CPUs on 100 columns: four to a row, 8 rows; the last row sums up the CPUs that do not fit.
     source.cpus = cpus(64, |i| if i == 63 { 900 } else { 100 }, |i| if i == 63 { 100 } else { 900 });
     let mut top = top::Top::new();
@@ -585,8 +612,11 @@ fn ipc_endpoints_and_holders() {
     assert_eq!(source.holder_requests, [2]);
     let screen = draw(&mut view, 120, 20);
     assert!(screen.iter().any(|l| l.contains("Endpoint 2: 2 holders")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("loader (PID 5)                1  rwg-    —")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("shell (PID 7)                 5  -wg-    0x2")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("loader (PID 5)                1  rwg--   —")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("shell (PID 7)                 5  -wg--   0x2")), "{:#?}", screen);
+    // The fifth right, b: may set a badge (ABI 6, 000-KRN-0073).
+    assert_eq!(ipc::rights((CAP_READ | CAP_WRITE | CAP_GRANT | CAP_KEEP | CAP_BADGE) as u32), "rwgkb");
+    assert_eq!(ipc::rights((CAP_WRITE | CAP_BADGE) as u32), "-w--b");
     assert_eq!(view.key(code(KEY_ESC), &mut source), Flow::Redraw);
     assert!(view.holders.is_none());
     view.key(chr('2'), &mut source);
@@ -627,7 +657,7 @@ fn caps_tree_and_revoke() {
     assert!(tool.status().starts_with("VIEW=TASK PID=7 SLOTS=2 ENTRIES=8 ROOTS=5 SELECTED=7:10 KIND=endpoint REVOKE=- DENIED=0"), "{}", tool.status());
     let screen = draw(&mut tool, 120, 20);
     assert!(screen.iter().any(|l| l.contains("shell (PID 7): 2 capabilities")), "{:#?}", screen);
-    assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg-  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
+    assert!(screen.iter().any(|l| l.contains("slot 10  endpoint rwg--  badge 0x1    EP 9") && l.contains("init (PID 1) slot 3")), "{:#?}", screen);
     assert!(screen.iter().any(|l| l.contains("slot 11") && l.contains("kernel")), "a parent that is gone: {:#?}", screen);
     // Enter: what a revoke of the shell's copy removes (top's copy).
     assert_eq!(tool.key(code(KEY_ENTER), &mut source), Flow::Redraw);

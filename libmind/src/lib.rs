@@ -53,6 +53,7 @@ pub mod sha256;
 pub mod stat;
 pub mod sys;
 pub mod time;
+pub mod wallclock;
 pub mod tts;
 pub mod tui;
 pub mod usb;
@@ -65,6 +66,12 @@ pub mod avi;
 #[cfg(feature = "alloc")]
 pub mod jpeg;
 #[cfg(feature = "alloc")]
+pub mod jpegdec;
+#[cfg(feature = "alloc")]
+pub mod inflate;
+#[cfg(feature = "alloc")]
+pub mod png;
+#[cfg(feature = "alloc")]
 pub mod uvc;
 #[cfg(feature = "alloc")]
 pub mod script;
@@ -72,6 +79,10 @@ pub mod script;
 pub mod pattern;
 #[cfg(feature = "alloc")]
 pub mod voice;
+#[cfg(feature = "alloc")]
+pub mod nn;
+#[cfg(feature = "alloc")]
+pub mod model_file;
 pub mod virtio;
 #[doc(hidden)]
 pub mod rt;

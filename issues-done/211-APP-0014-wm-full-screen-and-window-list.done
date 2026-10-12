@@ -1,0 +1,55 @@
+# 211-APP-0014 — `wm`: full screen for a window (Alt+F) and a list of the windows (Alt+L) — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H · **Constitution:** MC-12.1
+
+## Problem
+
+Two requests that the kernel track recorded for the maintainer after the first run on a MacBook Pro ([requests-APP.md](../issues/requests-APP.md), 2026-10-08):
+
+- **Full screen.** `Alt+Enter` maximizes a window within the desktop, and its frame and the top bar stay. The maintainer asked for a key that gives a window the whole screen, and a way back to where it was.
+- **A window list.** `Alt+Tab` steps through the windows one by one. A hidden or covered window can be found only by stepping.
+
+## Plan
+
+- **`Alt+F`** toggles full screen for the window in front.
+  - Its content covers the whole screen, without the frame, the top bar or the status line. A pixel window draws at the screen's pixels, and a text window gets the whole cell grid.
+  - Its frame is kept as it was, so `Alt+F` again gives back that frame, whether it was floating, maximized or snapped.
+  - Full screen belongs to the window while it is in front. `Alt+Tab` shows the desktop with the next window in front, and the window is full again when it comes back.
+  - Moving, snapping or maximizing it ends full screen first.
+- **`Alt+L`**, or the top bar's `Alt+L windows`, opens a list of the windows in the order they opened.
+  - Each entry has the title, the program's PID and the state: in front, hidden (every cell under windows in front of it), behind, maximized or full screen.
+  - Arrows and `Enter`, or a click, bring the chosen window to the front. `Alt+W` closes the selected one, and `Esc` leaves.
+  - The list is drawn from the windows wm has, so it follows windows that open and close. When the selected window closes, the one now at its place is selected.
+- The help screen and the top bar name both keys. On a screen narrower than 131 cells the bar has no room for `Alt+F full`, and the key still works.
+- `Esc` held down as a way back, which the request offered, is not done: the same key restores.
+
+## Acceptance criteria
+
+- **Host tests** (`tests/wm_host.rs`):
+  - full screen for a pixel window and a text window: every cell is the window's content, the frame is kept, and the program is asked for the new size;
+  - `Alt+Tab` from full screen and back;
+  - snapping a full-screen window ends full screen;
+  - the list's lines, keys, clicks, the top bar item, `Alt+W`, and a window that closes while the list is shown.
+- **The QEMU `wm` suite:**
+  - the clock's pixels and `top`'s cells fill the screen without the bars, and `Alt+Tab` and `Alt+F` give the frames back;
+  - the list shows fm, clock and top with their PIDs, and brings the second to the front by keys and by a click;
+  - a window closed with `Alt+W` from the list leaves it.
+
+## Resolution
+
+- **[`wm/src/desk.rs`](../wm/src/desk.rs):**
+  - `Win::full`;
+  - `Desk::full_screen`, `content`, `toggle_full`, `covered` and `listing`;
+  - `Mode::List` and its keys, clicks and dialog;
+  - the bar items `Alt+L windows` and `Alt+F full`;
+  - the help lines.
+- **[`wm/src/main.rs`](../wm/src/main.rs):** a window's wanted size and its pixels follow `Desk::content`; the `--help` text names both keys.
+- **Docs:** [`docs/tools/README.md`](../docs/tools/README.md) and [`README_RU.md`](../docs/tools/README_RU.md) §4.9, and [`README.md`](../README.md).
+- **Tests:**
+  - `tests/wm_host.rs`: `full_screen_and_back` and `the_window_list`. The bar test now has nine items.
+  - `tests/qemu_smoke.py`: `full_screen_and_list` in the `wm` suite.
+- **Run on this host (x86, 4 CPUs):** the 15 `wm` host tests and the QEMU `wm` suite passed.
+
+## Related
+
+[088](088-text-window-manager.done), [u002](u002-restore-and-unsnap-windows.done), [u008](u008-clickable-top-bar.done), [211](../issues/211-intel-pc-from-a-sata-ssd.md).

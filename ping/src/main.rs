@@ -13,7 +13,8 @@ const BACKGROUND: u32 = 0x00111111;
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("ping — IPC demo client: lends pong a page with a string for one call (pong starts it).\nUsage: run pong   (the shell's ping <host> is the network ping)");
-    let Some(screen) = Screen::new(info) else { return };
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen).
+    let Some(screen) = Screen::new(mind::windowed::pixels(info, 600, 240, "ping")) else { return };
     screen.clear(BACKGROUND);
     screen.text(40, 40, b"[ PING / CLIENT ]", 1, 0x00FF0000, None);
     let mut shared = Pages::new(4096).expect("ALLOC FAILED");
@@ -26,11 +27,22 @@ fn main(info: &'static BootInfo) {
         let bytes = shared.as_mut_slice(); bytes[..text.as_bytes().len()].copy_from_slice(text.as_bytes()); bytes[text.as_bytes().len()] = 0;
         screen.text(40, 100, b"CALLING SERVER WITH MEMORY CAP", 1, 0x00FFFFFF, None);
         let lent = mind::ipc::mint(cap, mind::abi::CAP_READ, 0, 0).expect("MEM MINT FAILED");
-        let reply = server.call(&Message::new(counter, 0).with_cap(lent, 0), 0);
+        // The first call waits 2 s: without pong (ping from wm's menu) nothing answers.
+        let message = Message::new(counter, 0).with_cap(lent, 0);
+        let reply = if counter == 1000 { server.call_timeout(&message, 0, 2000) } else { server.call(&message, 0) };
         let _ = mind::ipc::revoke(cap);
         match reply {
             Ok(reply) if reply.data[0] == counter => { screen.text(40, 160, b"SERVER CONFIRMED RECEIPT!", 1, 0x0000FF00, None); mind::println!("[PING] ACK {}", counter); }
-            _ => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
+            Ok(_) => screen.text(40, 160, b"CALL ERROR", 1, 0x00FF0000, None),
+            // No server at all (ping from wm's menu): ping ends, saying why (000-APP-0056: not left running unseen).
+            Err(error) if counter == 1000 => { mind::println!("[PING] NO SERVER ({:?}): ping is started by pong (run pong)", error); mind::process::exit_with(1); }
+            // The server ended: ping, woken with the error, says so for 5 s on its screen and then ends too.
+            Err(error) => {
+                screen.text(40, 160, b"SERVER GONE: PING ENDS IN 5 S", 1, 0x00FF0000, None);
+                mind::println!("[PING] SERVER GONE ({:?}): ping ends in 5 s", error);
+                mind::input::wait_or_exit(5000);
+                mind::process::exit_with(1);
+            }
         }
         mind::input::wait_or_exit(1500);
     }

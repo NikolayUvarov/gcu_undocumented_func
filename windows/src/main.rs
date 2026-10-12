@@ -93,14 +93,19 @@ impl Broker {
         if self.manager.is_some_and(|pid| !mind::process::alive(pid)) { self.detach("ENDED"); }
         while let Some(index) = self.windows.iter().position(|w| !w.ended && !mind::process::alive(w.owner)) {
             mind::println!("[WINDOWS] WINDOW {} ENDED WITH PID {}", self.windows[index].id, self.windows[index].owner);
-            if self.manager.is_none() { self.end(index); continue; }
-            // The manager keeps its lease until it lists the windows again; the program's goes now.
-            let w = &mut self.windows[index];
-            w.ended = true;
-            let _ = ipc::revoke(w.program);
-            if let Some(waker) = w.waker.take() { let _ = ipc::revoke(waker); let _ = ipc::drop_cap(waker); }
-            self.generation += 1;
+            self.retire(index);
         }
+    }
+
+    // Window `index` goes, its program ended or removed it: at once with no manager; with one, the manager keeps its
+    // lease until it lists the windows again (211-APP-0040: the shell removes its window while wm draws it).
+    fn retire(&mut self, index: usize) {
+        if self.manager.is_none() { return self.end(index); }
+        let w = &mut self.windows[index];
+        w.ended = true;
+        let _ = ipc::revoke(w.program);
+        if let Some(waker) = w.waker.take() { let _ = ipc::revoke(waker); let _ = ipc::drop_cap(waker); }
+        self.generation += 1;
     }
 
     fn info(w: &Window) -> Info {
@@ -126,7 +131,7 @@ impl Broker {
                 api::reply_wake(call, result)
             }
             Request::Remove { window } => {
-                let result = match self.index(window) { Some(i) if self.windows[i].owner == pid => { self.end(i); Ok(()) } Some(_) => Err(Error::Denied), None => Err(Error::NotFound) };
+                let result = match self.index(window) { Some(i) if self.windows[i].owner == pid => { self.retire(i); Ok(()) } Some(_) => Err(Error::Denied), None => Err(Error::NotFound) };
                 api::reply_remove(call, result)
             }
             Request::Attach => {

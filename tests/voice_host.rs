@@ -160,6 +160,12 @@ fn decibels() {
     assert_eq!(front::dbfs(903 - 64), -6);
     assert_eq!(front::dbfs(903 - 65), -7);
     assert_eq!(front::dbfs(0), -90);
+    // The level meter (000-APP-0053): a full-scale square is 0 dBFS at its peak and in RMS, a sine 3 dB less in RMS.
+    assert_eq!(front::meter(&[32_767, -32_767, 32_767, -32_767]), (0, 0));
+    let sine: Vec<i16> = (0..1600).map(|i| (16_384.0 * (i as f64 * 2.0 * std::f64::consts::PI / 32.0).sin()) as i16).collect();
+    assert_eq!(front::meter(&sine), (-6, -9));
+    assert_eq!(front::meter(&[0; 160]), (-90, -90));
+    assert_eq!(front::meter(&[]), (-90, -90));
 }
 
 // ---- Speech ----
@@ -414,6 +420,30 @@ fn rejects_phrases_outside_the_grammar() {
 }
 
 #[test]
+fn the_closest_phrases_for_the_operator() {
+    // 000-APP-0053: hear shows the three best phrases with their confidence, the best first and the decoded one at the
+    // head; a refusal says why, and the detector's threshold stands 9 dB above its noise floor (never below -50 dBFS).
+    let r = recognizer();
+    let samples = noisy("открой файлы", 122, 100, 7);
+    let (heard, candidates) = r.recognize_ranked(&samples, &|_| true, 3).unwrap();
+    assert_eq!(candidates.len(), 3);
+    assert_eq!(candidates[0], (heard.decoded.phrase, heard.decoded.confidence()));
+    assert!(candidates.windows(2).all(|pair| pair[0].1 >= pair[1].1), "{:?}", candidates);
+    assert_eq!(r.grammar.phrases[candidates[0].0].text, "открой файлы");
+    assert!(heard.accepted && r.refusal(&heard.decoded).is_none());
+    assert_eq!(r.recognize(&samples), Some(heard), "recognize decides as recognize_ranked does");
+    let outside = r.recognize_ranked(&noisy("сегодня хорошая погода", 122, 100, 8), &|_| true, 3).unwrap().0;
+    assert_eq!(outside.accepted, r.refusal(&outside.decoded).is_none());
+    let mut detector = Detector::new();
+    detector.push(&vec![0i16; 16_000], &mut |_| {});
+    assert_eq!((detector.floor_dbfs(), detector.threshold_dbfs()), (-90, -50), "digital silence: the -50 dBFS bound");
+    let quiet: Vec<i16> = (0..16_000).map(|i| if i % 2 == 0 { 300 } else { -300 }).collect();
+    let mut detector = Detector::new();
+    detector.push(&quiet, &mut |_| {});
+    assert_eq!(detector.threshold_dbfs() - detector.floor_dbfs(), 9, "{} {}", detector.floor_dbfs(), detector.threshold_dbfs());
+}
+
+#[test]
 fn a_confirmation_hears_only_yes_or_no() {
     // The shell's questions (issue 079) take a closed grammar — yes, no, cancel — and a command is no answer.
     let r = recognizer();
@@ -439,4 +469,29 @@ fn recognition_of_8_seconds_takes_under_a_second() {
     let took = started.elapsed();
     println!("8 s recognized in {:?} ({} frames)", took, heard.decoded.frames);
     if !cfg!(debug_assertions) { assert!(took.as_secs_f64() < 1.0, "{:?}", took); }
+}
+
+// 252-APP-0041: tts upsamples 16 -> 48 kHz with mind::voice's filter, kept as a table: the same coefficients and the
+// same samples; a 6 kHz tone keeps its level and its image at 10 kHz is gone (linear interpolation: -4 dB, -20 dB).
+#[test]
+fn tts_upsamples_with_the_voice_filter() {
+    let mut resampler = Resampler::between(16_000, 48_000, 1);
+    assert_eq!(resampler.coefficients(), &dsp::UPSAMPLE[..]);
+    let input: Vec<i16> = (0..4000).map(|i| ((i * 7919 % 20011) as i32 - 10005) as i16).chain(tone(16_000, 1, 1234.0, 20000.0, 50)).collect();
+    let mut expected = Vec::new();
+    resampler.process(&input, &mut expected);
+    let mut upsampler = dsp::Upsampler::new();
+    let got: Vec<i16> = input.iter().flat_map(|&s| upsampler.run(s)).collect();
+    assert_eq!(got, expected);
+    let mut upsampler = dsp::Upsampler::new();
+    let six: Vec<i16> = tone(16_000, 1, 6000.0, 16000.0, 200).iter().flat_map(|&s| upsampler.run(s)).collect();
+    let steady = &six[48 * 20..];
+    let level = |hz: f64| {
+        let (mut re, mut im) = (0.0, 0.0);
+        for (n, &s) in steady.iter().enumerate() { let w = 2.0 * std::f64::consts::PI * hz * n as f64 / 48_000.0; re += s as f64 * w.cos(); im += s as f64 * w.sin(); }
+        2.0 * (re * re + im * im).sqrt() / steady.len() as f64
+    };
+    let (tone_level, image) = (level(6000.0), level(10_000.0));
+    assert!((tone_level / 16000.0 - 1.0).abs() < 0.02, "6 kHz at {:.0} of 16000", tone_level);
+    assert!(20.0 * (image / tone_level).log10() < -70.0, "the 10 kHz image at {:.1} dB", 20.0 * (image / tone_level).log10());
 }

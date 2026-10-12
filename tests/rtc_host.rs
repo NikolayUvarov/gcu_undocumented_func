@@ -2,6 +2,10 @@
 #[allow(dead_code)]
 mod ipc { #[derive(Clone, Copy)] pub struct Endpoint(pub usize); impl Endpoint { pub const RTC: Endpoint = Endpoint(2); } }
 mod idl { pub mod rtc { pub fn now(_: crate::ipc::Endpoint) -> Result<Option<u32>, ()> { Ok(None) } pub fn date(_: crate::ipc::Endpoint) -> Result<Option<u32>, ()> { Ok(None) } } }
+mod time { pub fn monotonic_ns() -> u64 { 0 } }
+#[path = "../libmind/src/wallclock.rs"]
+#[allow(dead_code)]
+mod wallclock;
 #[path = "../libmind/src/rtc.rs"]
 #[allow(dead_code)]
 mod rtc;
@@ -46,4 +50,16 @@ fn cmos_date_registers() {
     assert_eq!(cmos::encode_date(0x04, days, (2026, 10, 9)), Some([6, 9, 10, 26]));
     assert_eq!(cmos::encode_date(0x00, 0, (2000, 1, 1)), Some([7, 0x01, 0x01, 0x00])); // a Saturday
     assert_eq!(cmos::encode_date(0x00, 36_525, (2100, 1, 1)), None); // two digits of year: 2000-2099 only
+}
+
+// 211-APP-0042: `date set YYYY-MM-DD HH:MM[:SS]`, as rtc.wit 1.2 `set` takes it.
+#[test]
+fn a_setting_is_parsed() {
+    assert_eq!(rtc::parse_setting("2026-10-09 14:30"), Some((rtc::days_from_civil(2026, 10, 9).unwrap(), 14 * 3600 + 30 * 60)));
+    assert_eq!(rtc::parse_setting(" 2000-01-01   00:00:00 "), Some((0, 0)));
+    assert_eq!(rtc::parse_setting("2099-12-31 23:59:59"), Some((rtc::days_from_civil(2099, 12, 31).unwrap(), 86_399)));
+    for wrong in ["2100-01-01 00:00", "1999-12-31 23:59", "2026-02-29 10:00", "2026-13-01 10:00", "2026-10-09 24:00", "2026-10-09 10:60", "2026-10-09 10:00:60",
+                  "2026-10-09", "26-10-09 10:00", "2026-1-9 10:00", "2026-10-09 10:00 x", "2026/10/09 10:00", "2026-10-09 10.00", "2026-10-09 1:00", ""] {
+        assert_eq!(rtc::parse_setting(wrong), None, "{:?}", wrong);
+    }
 }

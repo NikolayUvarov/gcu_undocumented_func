@@ -36,4 +36,4 @@ Not in this task:
 
 ## Related
 
-[211-PRT-0006](211-PRT-0006-log-partition-in-the-image.md), issue 066 (FAT writing), [requests-APP.md](requests-APP.md) (`log:` in the shell's help and in `fm`).
+[211-PRT-0006](211-PRT-0006-log-partition-in-the-image.md), issue 066 (FAT writing), [211-APP-0013](../issues-done/211-APP-0013-log-volume-and-efivar-in-the-tools.done) (`log:` in the shell's help, `fm`, `df` and `fsck`).

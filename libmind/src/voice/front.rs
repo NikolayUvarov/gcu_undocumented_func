@@ -142,18 +142,22 @@ pub struct Resampler {
 }
 
 impl Resampler {
-    pub fn new(rate: u32, channels: usize) -> Self {
-        let rate = rate.max(1);
-        let common = gcd(RATE, rate);
-        let (up, down) = ((RATE / common) as usize, (rate / common) as usize);
+    pub fn new(rate: u32, channels: usize) -> Self { Self::between(rate, RATE, channels) }
+
+    /// From `rate` to `to` (mono out), cut just below the lower of the two Nyquist frequencies (252: a voice's
+    /// 22.05 kHz to the gateway's 48 kHz).
+    pub fn between(rate: u32, to: u32, channels: usize) -> Self {
+        let (rate, to) = (rate.max(1), to.max(1));
+        let common = gcd(to, rate);
+        let (up, down) = ((to / common) as usize, (rate / common) as usize);
         let channels = channels.max(1);
         if up == 1 && down == 1 {
             return Self { channels, up, down, taps: 1, coefficients: vec![ONE as i32], history: vec![0; 2], write: 0, position: 0 };
         }
         // Taps per phase: the transition band is about 2.2 kHz wide at every input rate.
-        let taps = if rate > RATE { (96 * rate as usize).div_ceil(48_000).max(32) } else { 32 };
+        let taps = if rate > to { (96 * rate as usize).div_ceil(48_000).max(32) } else { 32 };
         let length = up * taps;
-        let cutoff = 0.5 * 0.9375 * rate.min(RATE) as f64 / (rate as f64 * up as f64); // cycles per upsampled sample
+        let cutoff = 0.5 * 0.9375 * rate.min(to) as f64 / (rate as f64 * up as f64); // cycles per upsampled sample
         let center = (length - 1) as f64 / 2.0;
         let norm = bessel_i0(BETA);
         let mut prototype = vec![0f64; length];
@@ -180,6 +184,9 @@ impl Resampler {
 
     /// The input is already at 16 kHz: samples are only downmixed, not filtered.
     pub fn passthrough(&self) -> bool { self.up == 1 && self.down == 1 }
+
+    /// The filter in Q16, phase after phase, oldest input first in each (`tts` keeps 16 → 48 kHz as a table).
+    pub fn coefficients(&self) -> &[i32] { &self.coefficients }
 
     /// Converts whole frames of interleaved `input` and appends the 16 kHz mono samples to `out`.
     pub fn process(&mut self, input: &[i16], out: &mut Vec<i16>) {
@@ -271,6 +278,14 @@ pub fn decibels(energy: u64) -> i32 {
 /// Decibels relative to full scale (rounded, negative) of a level in tenths.
 pub fn dbfs(level: i32) -> i32 { let tenths = level - FULL_SCALE; (tenths + if tenths < 0 { -5 } else { 5 }) / 10 }
 
+/// The peak and the RMS of samples in dBFS, as a level meter shows them (000-APP-0053); digital silence is -90.
+pub fn meter(samples: &[i16]) -> (i32, i32) {
+    if samples.is_empty() { return (dbfs(0), dbfs(0)); }
+    let peak = samples.iter().map(|&s| (s as i32).unsigned_abs() as u64).max().unwrap_or(0);
+    let square = samples.iter().map(|&s| (s as i64 * s as i64) as u64).sum::<u64>() / samples.len() as u64;
+    (dbfs(decibels(peak * peak)), dbfs(decibels(square)))
+}
+
 /// A stretch of speech: where it starts in the stream, its 16 kHz mono samples and its level (dBFS of the mean square
 /// of its voiced frames).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -321,6 +336,10 @@ impl Detector {
 
     /// The current noise floor in dBFS.
     pub fn floor_dbfs(&self) -> i32 { dbfs((self.floor.unwrap_or(0) / FLOOR_SCALE) as i32) }
+
+    /// The level that starts speech now, in dBFS: 9 dB above the noise floor, and never below -50 dBFS (a quieter
+    /// frame that hisses counts from 4 dB above the floor).
+    pub fn threshold_dbfs(&self) -> i32 { dbfs((self.floor.unwrap_or(0) / FLOOR_SCALE + VOICED_ABOVE).max(QUIETEST) as i32) }
 
     /// An utterance is in progress.
     pub fn speaking(&self) -> bool { self.speaking }

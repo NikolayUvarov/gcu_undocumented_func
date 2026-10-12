@@ -1,0 +1,80 @@
+# 000-APP-0056 — Every entry of `wm`'s menu and Settings reacts — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-10) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+
+Numbered on 2026-10-10 from `requests-APP.md`, where the kernel track recorded it.
+
+**Recorded by:** the kernel track (KRN), 2026-10-10, at the maintainer's request: "all commands in `wm`'s menu must react adequately."
+
+## Problem
+
+An entry that does nothing on Enter or a click leaves the user guessing whether the system hung. The date page above is one case, and others may be like it.
+
+## Plan
+
+- **An audit.** Go through every menu entry, every Settings page and row, and the right-click menu. Each must do one of these on Enter and on a click:
+  - open its program (in a window, or in `console` for a console program);
+  - change its setting visibly;
+  - say why it cannot (the device is missing, the program is not on the disk).
+- **The `wm` suite** walks them all. For each entry it checks that something visible happened: a window, a line in `console`, a changed row, or the reason.
+- **Text-only pages** say so in their title, or become settable as above.
+
+## Acceptance criteria
+
+- The `wm` suite opens each menu entry and each Settings row and finds its reaction.
+- No entry is silent.
+
+## Progress
+
+- **The audit** found these silent:
+  - the menu's `Looking for programs…` and `No programs found`;
+  - the top bar's next, move, close and full items, and their Alt keys, with no window (Alt+Tab with one);
+  - Enter on the system pages that are only to read;
+  - a background row that cannot change: the image's file not typed, a number at its end.
+
+  Program entries already said `Started …` or why not on the status line, and the date page's rows set the clock.
+- **Each of them now says why** on the status line or on its page:
+  - menu entries that start nothing carry their reason (`menu::Item::note`);
+  - `wm`'s window keys name the missing window;
+  - the pages to read begin with `To read:` and answer Enter and a click;
+  - a background row that stays says why under the rows.
+- **Host tests** (`tests/wm_host.rs`) walk every entry of the menus, every item of the top bar and the window keys, and every page and row of Settings, with Enter and with a click.
+- **The first run of the walk** (x86 QEMU, 2026-10-10): all 49 entries reacted and every Settings row did. But `say`, `listen` and `files` were still running at the suite's end. They and the old demos `ping`, `pong`, `app` and `app2` drew on the screen `BootInfo` gives. Under `wm` there is none, so they ran unseen and could not be closed.
+  - Each now opens a pixel window under `wm` (`mind::windowed::pixels`) and keeps the full screen in the shell.
+  - `say`, `files` and `listen` draw again at a new size. `listen` writes in its window why it recorded or played nothing.
+  - The walk now requires a window for every program an entry starts.
+- **The `wm` suite's walks** are written:
+  - `every_entry_reacts` starts each entry of the menu on the disk and closes its windows;
+  - `settings_react` changes each background row and back, presses Enter on each page to read, and on each of the date page's six fields, declining the clock set each asks for.
+
+## Resolution
+
+Every entry reacts, and the `wm` suite checks it:
+- **The menu.** The walk starts each of the 49 entries on the QEMU disk. 48 programs each open a window, their own or `console`'s, which is closed again; `Shell` opens the shell's window. Entries that start nothing say why on the status line.
+- **The top bar and the window keys.** With no window they say so; Alt+Tab with one window names it.
+- **Settings:**
+  - each background row changes and changes back, or says why it cannot;
+  - each page to read says so on Enter;
+  - Enter on each of the date page's six fields asks the shell to set the clock.
+
+**Silent entries found by the walk:**
+- programs that drew on a screen `wm` does not give, and ran unseen: `say`, `listen`, `files`, `ping`, `pong`, `app`, `app2`;
+- `view` with no file, which ended with status 0 before opening a window;
+- `ping`, left running after `pong` was closed.
+
+Each now opens a window, ends with a status `wm` keeps on view, or ends when its server is gone.
+
+**Where:**
+- code: `wm/src/{menu,desk,settings,main}.rs`, the programs above;
+- host tests: `tests/wm_host.rs`;
+- the `wm` suite: `every_entry_reacts`, `settings_react` in `tests/qemu_smoke.py`.
+
+The local gate's host tests and every x86 QEMU group (2026-10-10) passed with the walk.
+
+**After `main` brought `check`, `bench` and `kbench` (866b5bc).** The menu has 52 entries. Closing their `console` window does not end these three, and in the first run after the merge they went on measuring beside the rest of the walk, which then missed a key. The walk now waits for console's note `(kbench ended)` before it closes their window. Ending a console program with its console is requested from the kernel track (`requests-KRN.md`). The walk also waits for the state line that holds a new window, which may come after the window's own line. The wm suite passed with 52 entries (8965a70).
+
+**`ping` after its server.** `ping` ended at once on any failed call, but the services suite kills `pong` and expects its client to outlive it, woken with the error (the gate at 78bcda3 caught it; earlier runs passed by timing). `ping` now ends at once only when its first call finds no server (started from the menu without `pong`); when the server ends later, it says `SERVER GONE` on its screen and in its log for 5 s, then ends.
+
+## Related
+
+[requests-APP.md](../issues/requests-APP.md) (where it was recorded).

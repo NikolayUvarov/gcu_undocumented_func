@@ -1,0 +1,74 @@
+# 252-APP-0026 — The VITS voices in `mind::nn`: Piper and Vosk TTS 0.7 give onnxruntime's audio — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [252](../issues/252-neural-speech-synthesis.md) (step 4, VITS) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+Two of the chosen voices are VITS:
+
+- the compact Russian voice, Vosk TTS 0.7;
+- the English Piper voices.
+
+Both are ONNX graphs. A text encoder, a duration predictor, a flow and a HiFi-GAN decoder (an iSTFT head in Vosk TTS) run in one graph. The dictation work left an interpreter of the operators the speech recognizers use ([250-APP-0021](250-APP-0021-network-interpreter.done) to [0025](250-APP-0025-dictate-in-the-system.done)).
+
+Converting Piper's `en_US-lessac-high` showed what was missing:
+
+- string attributes (`Pad`'s mode);
+- sixteen operators.
+
+## Plan
+
+- **The network file:** attributes of kind 6, a string (its UTF-8 bytes). `convert.py` writes them and `mind::nn` reads them (`Node::text`).
+- **Operators** (`libmind/src/nn/extra.rs`, the rest in `ops.rs`, opset 15):
+  - `Pad`: constant (row by row), reflect, edge; negative pads cut.
+  - `Split`: given sizes, or equal parts.
+  - `Less`, `LessOrEqual`, `And`, `Or`, `Xor`, `Not`.
+  - `NonZero`, `GatherND`, `CumSum` (exclusive, reverse).
+  - `LeakyRelu`, `Erf` (series below 2, else erfc's continued fraction, about 1e-15), `Softplus` (as onnxruntime computes it), `Sqrt`, `Ceil`, `Floor`.
+  - `RandomNormalLike`: Box–Muller over xorshift with a fixed seed, so a voice says a sentence the same way each time.
+  - `ConvTranspose` in one dimension: one product x^T·w per group, then col2im.
+- **Speed** (the HiFi-GAN decoder is nearly all of the time):
+  - im2col copies whole runs of an input row instead of one element at a time;
+  - blocks of at least 256 columns, up to 4 MiB;
+  - the f32 product packs each 256×16 block of B into one run, blocks k by 256, and has 4- and 2-row kernels for the rows left over.
+- **The comparison:**
+  - `scripts/voice_tts/vits_reference.py` makes onnxruntime's audio with the noise scales at 0, and optionally every value.
+  - Piper's phonemes come through piper-phonemize (espeak-ng, GPL-3.0, on the host only); Vosk TTS's come from vosk-tts.
+  - `vits_against_onnxruntime` in `tests/nn_host.rs` compares the audio and, with a dump, finds the first value that departs.
+
+## Acceptance criteria
+
+- **CI** (`tests/nn_host.rs`, `tests/fbank_host.rs`):
+  - every new operator against values worked out by hand;
+  - `ConvTranspose` against its definition, with strides, padding, dilation and groups;
+  - `Erf` to 1e-14;
+  - a convolution whose padding is wider than its input.
+- **By hand:** the audio of both voices equals onnxruntime's within 1e-3 of its peak.
+
+## Resolution
+
+- **Measured on this host** (one thread, AVX2, a shared Xeon):
+
+  | Voice | Sentence | Audio | Largest difference (of peak) | SNR | Time | onnxruntime, one thread (252) |
+  |---|---|---|---|---|---|---|
+  | Piper `en_US-lessac-high` (114 MB, fp32) | "The quick brown fox jumps over the lazy dog." | 2.50 s | 4.1·10⁻⁵ (of 0.70) | 92.6 dB | 3.0–3.8 s | 0.73 of real time |
+  | Vosk TTS 0.7, speaker 3 (146 MB) | «Привет! Это проверка русского синтеза речи в системе.» | 3.44 s | 5.5·10⁻⁵ (of 0.47) | 89.6 dB | 1.0 s | 0.06 of real time |
+
+  Only the random noise differs from onnxruntime's values, and it is multiplied by 0 here.
+- **Where the time goes:**
+  - The decoder's convolutions take 80 % of the time; the products there reach 21–36 GMAC/s with AVX2.
+  - onnxruntime is faster on this host. MLAS convolves with AVX-512 here, and our AVX2 code runs at half its peak.
+  - The two models are not equal in cost: Piper "high" upsamples to the sample rate through four HiFi-GAN stages, while Vosk TTS ends in an iSTFT.
+- **Code:**
+  - [`libmind/src/nn/extra.rs`](../libmind/src/nn/extra.rs) (new), [`ops.rs`](../libmind/src/nn/ops.rs), [`gemm.rs`](../libmind/src/nn/gemm.rs), [`mod.rs`](../libmind/src/nn/mod.rs);
+  - [`libmind/src/voice/math.rs`](../libmind/src/voice/math.rs);
+  - [`scripts/voice_dictate/convert.py`](../scripts/voice_dictate/convert.py), [`scripts/voice_tts/vits_reference.py`](../scripts/voice_tts/vits_reference.py).
+- **Not done here:**
+  - the phonemes in the system (step 3);
+  - a voice speaking in the system (step 5);
+  - AVX-512 and NEON products;
+  - CER of our audio on the 24 sentences.
+
+## Related
+
+[252](../issues/252-neural-speech-synthesis.md), [250-APP-0022](250-APP-0022-fast-products.done), [scripts/voice_tts](../scripts/voice_tts/README.md).

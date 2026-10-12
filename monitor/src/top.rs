@@ -163,6 +163,7 @@ impl Top {
         let endpoints: Vec<String> = details.caps.iter().filter(|c| c.kind as usize == CAP_KIND_ENDPOINT && c.endpoint != 0).map(|c| format!("{}→{}", c.slot, c.endpoint)).collect();
         if !endpoints.is_empty() { lines.push(format!("Endpoints (slot→index): {}", endpoints.join(" "))); }
         lines.push(format!("Quotas: tasks {}/{}, endpoints {}/{}", t.used_tasks, t.quota_tasks, t.used_endpoints, t.quota_endpoints));
+        lines.push(text::budget_line(t.budget_ns, t.period_ns, t.band, t.throttled));
         lines
     }
 
@@ -202,23 +203,33 @@ impl Top {
             grid.text_max(1, 2 + rows - 1, &format!("CPU{}–{}: {}%, the busiest CPU{} {}%", shown, n - 1, text::permille(mean), shown + busiest, text::permille(most as u32)),
                           w.saturating_sub(2), theme.header);
         }
+        // The machine's memory the kernel gives programs (the frame pool), then the kernel's own arena (211-APP-0057).
         let y = 2 + rows;
         let m = &self.memory;
-        grid.text(1, y, "Mem", theme.header);
         let bar = (w / 3).max(10);
+        let marked = Style::new(theme.marked.fg, theme.panel.bg);
+        grid.text(1, y, "Mem", theme.header);
         grid.put(6, y, '[', theme.dim);
-        grid.bar(7, y, bar, m.used, m.arena.max(1), Style::new(theme.marked.fg, theme.panel.bg), empty);
+        grid.bar(7, y, bar, m.frames - m.frames_free.min(m.frames), m.frames.max(1), marked, empty);
         grid.put(7 + bar, y, ']', theme.dim);
-        grid.text(9 + bar, y, &format!("{}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
-                                         m.tasks, m.endpoints), theme.panel);
-        y + 2
+        let memory = if m.frames == 0 { String::from("not known: sysmon gives no frame pool (sysinfo before 4.1)") }
+            else { format!("{}/{} used, {} free: programs, their screens, heaps and objects", text::size(m.frames - m.frames_free.min(m.frames)), text::size(m.frames), text::size(m.frames_free)) };
+        grid.text(9 + bar, y, &memory, theme.panel);
+        grid.text(1, y + 1, "Kern", theme.header);
+        grid.put(6, y + 1, '[', theme.dim);
+        grid.bar(7, y + 1, bar, m.used, m.arena.max(1), marked, empty);
+        grid.put(7 + bar, y + 1, ']', theme.dim);
+        grid.text(9 + bar, y + 1, &format!("kernel arena {}/{} used, largest free {}, tasks {}, endpoints {}", text::size(m.used), text::size(m.arena), text::size(m.largest_free),
+                                             m.tasks, m.endpoints), theme.panel);
+        y + 3
     }
 
     /// Columns that fit in `width` cells: name, width, right-aligned. Lower-priority columns are dropped first.
     pub fn columns(width: usize) -> Vec<(&'static str, usize, bool)> {
         // (title, width, right-aligned, priority: higher stays longer)
-        const ALL: [(&str, usize, bool, u8); 13] = [("PID", 5, true, 9), ("PPID", 5, true, 3), ("NAME", 16, false, 9), ("STATE", 5, false, 8), ("CPU", 3, true, 5),
-            ("%CPU", 5, true, 9), ("TIME", 9, true, 7), ("SYSC/s", 7, true, 6), ("MEM", 7, true, 7), ("HEAP", 7, true, 4), ("SHARED", 7, true, 2), ("CAPS", 4, true, 3), ("EP", 5, true, 1)];
+        const ALL: [(&str, usize, bool, u8); 14] = [("PID", 5, true, 9), ("PPID", 5, true, 3), ("NAME", 16, false, 9), ("STATE", 5, false, 8), ("CPU", 3, true, 5),
+            ("%CPU", 5, true, 9), ("TIME", 9, true, 7), ("SYSC/s", 7, true, 6), ("MEM", 7, true, 7), ("HEAP", 7, true, 4), ("SHARED", 7, true, 2), ("CAPS", 4, true, 3), ("EP", 5, true, 1),
+            ("BUDGET", 9, true, 5)];
         let mut keep = 0u8;
         loop {
             let used: usize = ALL.iter().filter(|c| c.3 > keep).map(|c| c.1 + 1).sum();
@@ -234,7 +245,7 @@ impl Top {
             "NAME" => { let mut name = String::new(); for _ in 1..depth { name.push_str("  "); } if depth > 0 { name.push_str("└ "); } name.push_str(&task.name); name }
             "STATE" => String::from(text::state(task.state)), "CPU" => format!("{}", task.cpu), "%CPU" => text::permille(usage.cpu),
             "TIME" => text::cpu_time(task.run_ns), "SYSC/s" => text::count(usage.syscalls), "MEM" => text::size(task.memory()), "HEAP" => text::size(task.heap),
-            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "EP" => if task.quota_endpoints >= 10_000 { format!("{}", task.used_endpoints) } else { format!("{}/{}", task.used_endpoints, task.quota_endpoints) }, // init's and loader's quotas of 65 535 and 65 279 (issue 171) do not fit the column
+            "SHARED" => text::size(task.shared), "CAPS" => format!("{}", task.caps), "BUDGET" => text::budget(task.budget_ns, task.period_ns, task.throttled), "EP" => if task.quota_endpoints >= 10_000 { format!("{}", task.used_endpoints) } else { format!("{}/{}", task.used_endpoints, task.quota_endpoints) }, // init's and loader's quotas of 65 535 and 65 279 (issue 171) do not fit the column
             _ => String::new(),
         }
     }

@@ -3,10 +3,12 @@
 // Command shell in ring 3: text console on its own screen and the serial line, commands over process control, loader and init.
 // It owns the focus: programs it brings to the foreground get the keyboard, and focus returns to it on exit or Ctrl+Z.
 // Four consoles (issue 155), switched with Ctrl+Alt+F1…F4 whatever program has the focus: each its own text, line,
-// history and programs; the serial line belongs to the first.
+// history and programs; the serial line belongs to the first. A fifth session has a window of the shell's own in a
+// window manager, opened with Ctrl+Alt+F5 or from the manager's menu (211-APP-0040, 211-APP-0045, 211-APP-0044).
 extern crate alloc;
 
 mod bmp;
+mod clients;
 mod console;
 mod files;
 mod keymap;
@@ -16,6 +18,7 @@ mod observe;
 mod power;
 mod programs;
 mod release;
+mod ring;
 mod screenshot;
 mod tpm;
 mod voicectl;
@@ -25,7 +28,7 @@ use core::fmt::Write;
 use mind::abi::*;
 use mind::control::{self, Notice};
 use mind::dev::{input_key, Uart};
-use mind::idl::{init as idl_init, loader};
+use mind::idl::{init as idl_init, loader, shell as commands};
 use mind::input::{Code, Key};
 use mind::tui::widgets::{Edit, History, InputLine};
 use mind::ipc::Endpoint;
@@ -35,7 +38,7 @@ use mind::script::Interpreter;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time\n- free: kernel memory by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC\n- ls [path], cat <file>: files (ram: is the RAM disk)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC; date set YYYY-MM-DD HH:MM[:SS]: set the clock (it keeps no time zone)\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off]: write cached files to the disks, stop the services (not with -f) and restart the machine (--off: turn it off)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): THE SHELL'S OWN WINDOW, TITLED SHELL; IT TAKES EVERY COMMAND BUT FG (REBOOT AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const BOOT_LOG_LINES: usize = 24;
@@ -44,9 +47,17 @@ const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
 const SCOPE_RECEIVE: usize = 11;
+// Where a capability sent with a request of the shell's commands (idl/shell.wit) would arrive, to be dropped: a fixed
+// slot the shell holds nothing in.
+const COMMANDS_RECEIVE: usize = SLOT_SHELL;
+// What a client gets back of a command's output: its end.
+const ANSWER_MAX: usize = 7000;
 
 const CONSOLES: usize = 4;
 const LABELS: [&str; CONSOLES] = [" CONSOLE 1 ", " CONSOLE 2 ", " CONSOLE 3 ", " CONSOLE 4 "];
+// The session in the shell's window (211-APP-0040), after the consoles.
+const WINDOW: usize = CONSOLES;
+const SESSIONS: usize = CONSOLES + 1;
 const OWNERS: usize = 32;
 
 // A console the shell keeps aside while another is active (issue 155): its text, input line, history and programs.
@@ -73,8 +84,12 @@ struct Shell {
     console: Option<u64>, // console program running in the shell
     names: [[u8; NAME_MAX]; NAMES], name_lens: [usize; NAMES], name_count: usize, // program names for completion
     voice: voicectl::Voice,
-    parked: [Option<Parked>; CONSOLES], // the other consoles (None: the active one, or not opened yet)
+    parked: [Option<Parked>; SESSIONS], // the other consoles and the window's session (None: the active one, or not opened yet)
     active: usize, shown: usize, // the console the shell works in now, and the one on the screen
+    window: Option<mind::windowed::Window>, room: (usize, usize), // the shell's window, and the cells it has memory for (the screen's)
+    windowed: Option<u64>, // the program the window's session last started in a window of its own
+    commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044), made at the first lend
+    managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
@@ -100,6 +115,7 @@ fn error_text(error: Error, service: bool) -> &'static str {
         Error::Other(ERR_BUSY) => "SERVICE ALREADY RUNNING",
         Error::Other(ERR_LIMIT) => "TASK LIMIT REACHED (QUOTA)",
         Error::Other(ERR_IO) => "CANNOT READ THE PROGRAM: ITS DISK DOES NOT ANSWER (UNPLUGGED?)",
+        Error::Other(ERR_FOCUS) => "A WINDOW MANAGER STARTS FROM A CONSOLE (CTRL+ALT+F1…F4), NOT FROM THE SHELL'S WINDOW",
         Error::NotFound if service => "SERVICE NOT AVAILABLE ON THIS MACHINE",
         Error::NotFound => "UNKNOWN PROGRAM. TYPE LIST TO SEE PROGRAMS.",
         Error::Invalid if service => "SERVICES TAKE NO ARGUMENTS",
@@ -167,6 +183,145 @@ impl Shell {
         self.note(format_args!("CONSOLE {} SHOWN{}", index + 1, if program.is_some() { " (ITS PROGRAM HAS THE KEYBOARD)" } else { "" }));
     }
 
+    // The shell's window (211-APP-0040), opened only when the user asks, with Ctrl+Alt+F5 (211-APP-0045) or from the
+    // window manager's menu (211-APP-0044): a session of its own, which the manager shows as it shows a program's window
+    // and passes keys to. Its id in the broker, also when it was open already.
+    fn open_window(&mut self) -> Result<u32, commands::Error> {
+        self.tend_window(); // a window the manager closed goes first
+        if let Some(window) = &self.window { let id = window.id(); self.note(format_args!("THE SHELL'S WINDOW IS OPEN")); return Ok(id); }
+        let window = mind::windowed::Window::open(Endpoint(SLOT_WINDOWS), SCOPE_RECEIVE, mind::window::Kind::Text, self.room, (80, 25), "shell").ok_or(commands::Error::Unavailable)?;
+        let term = mind::tui::Terminal::in_window(window.surface(), self.room).and_then(|term| Console::in_window(term, self.room.0)).ok_or(commands::Error::NoMemory)?;
+        let session = Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default() }).ok_or(commands::Error::NoMemory)?;
+        let id = window.id();
+        self.parked[WINDOW] = Some(session);
+        self.window = Some(window);
+        let back = self.active;
+        self.activate(WINDOW);
+        let _ = writeln!(self.term, "THE SHELL'S WINDOW: EVERY COMMAND BUT FG, ON THE SHELL'S AUTHORITY; PROGRAMS OPEN IN WINDOWS. HELP: COMMANDS.");
+        self.prompt();
+        self.activate(back);
+        self.note(format_args!("THE SHELL'S WINDOW OPENED"));
+        Ok(id)
+    }
+
+    // A client of the shell's commands for a program that asks for it (REQUEST_SHELL): the endpoint is made the first
+    // time; the caller lends the client and drops it.
+    fn commands_client(&mut self) -> Result<usize, Error> {
+        let endpoint = match self.commands { Some(endpoint) => endpoint, None => { let endpoint = Endpoint::create()?; self.commands = Some(endpoint); endpoint } };
+        mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) // grant: `run`'s buffer travels with the call
+    }
+
+    // The requests to the shell's commands that came (idl/shell.wit 1.0: the window), answered at once.
+    fn serve_commands(&mut self, wait_ms: u32) {
+        let Some(endpoint) = self.commands else { return };
+        let mut wait = wait_ms;
+        while let Ok(message) = endpoint.recv_timeout(COMMANDS_RECEIVE, wait.max(1)) {
+            wait = 1;
+            let (request, call) = match commands::decode(&message, COMMANDS_RECEIVE) { Ok(decoded) => decoded, Err(reason) => { let _ = mind::idl::wire::reject(reason); continue; } };
+            match request {
+                commands::Request::Window => {
+                    let result = self.open_window();
+                    self.note(format_args!("THE WINDOW MANAGER ASKED FOR THE SHELL'S WINDOW: {}", if result.is_ok() { "SHOWN" } else { "NOT OPENED" }));
+                    let _ = commands::reply_window(call, result);
+                }
+                commands::Request::SetClock { date, seconds } => {
+                    // The window manager the shell started sets it at once: its Settings are the user's choice
+                    // (000-APP-0060). Any other client, as `date set` from a client: asked in the shell's window first.
+                    let (year, month, day) = mind::rtc::civil_from_days(date);
+                    let line = alloc::format!("date set {:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, seconds / 3600, seconds / 60 % 60, seconds % 60);
+                    let manager = self.managers.contains(&message.sender);
+                    let result = if seconds >= 86_400 || mind::rtc::days_from_civil(year, month, day) != Some(date) { Err(commands::Error::Invalid) } else if manager {
+                        match mind::idl::rtc::set(Endpoint::RTC, date, seconds) {
+                            Ok(Ok(())) => Ok(()),
+                            Ok(Err(mind::idl::rtc::Error::Invalid)) => Err(commands::Error::Invalid),
+                            Ok(Err(_)) | Err(_) => Err(commands::Error::Unavailable),
+                        }
+                    } else {
+                        self.client_line(&line, message.sender).and_then(|out| {
+                            let out = core::str::from_utf8(&out).unwrap_or("");
+                            if out.contains("CLOCK SET") { Ok(()) } else if out.contains("NOT AVAILABLE") { Err(commands::Error::Unavailable) } else { Err(commands::Error::Invalid) }
+                        })
+                    };
+                    let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
+                    let _ = commands::reply_set_clock(call, result);
+                }
+                commands::Request::Run { line } => {
+                    let result = self.client_line(line.as_str(), message.sender);
+                    let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    let answer = result.as_ref().map(|bytes| { let mut from = bytes.len().saturating_sub(ANSWER_MAX); while from < bytes.len() && bytes[from] & 0xC0 == 0x80 { from += 1; } &bytes[from..] });
+                    let _ = commands::reply_run(call, answer.map_err(|e| *e));
+                }
+            }
+        }
+    }
+
+    // A command line from a client of the shell's commands (`console` in a window manager, 211-APP-0044), run on the
+    // shell's authority as if typed: what it printed. One that changes the machine runs in the shell's window, shown as
+    // typed there with the client's PID, once the user agrees (reboot and stop ask themselves).
+    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> {
+        let line = line.trim();
+        let word = line.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+        let taken = clients::taken(line);
+        if taken == clients::Taken::Refused { return Err(commands::Error::Refused); }
+        if taken == clients::Taken::Now {
+            let outer = self.term.capture.replace(alloc::vec::Vec::new());
+            self.command(line.as_bytes());
+            return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
+        }
+        self.note(format_args!("FOR PID {} THE SHELL ASKS IN ITS WINDOW: \"{}\"", client, line));
+        self.open_window()?;
+        let back = self.active;
+        self.activate(WINDOW);
+        if self.console.is_some() { self.activate(back); return Err(commands::Error::Busy); }
+        let _ = writeln!(self.term, "{}    (ASKED BY PID {} THROUGH THE SHELL'S COMMANDS)", line, client);
+        let agreed = matches!(word.as_str(), "reboot" | "stop") || msh::ask(self, "RUN IT?");
+        let result = if agreed {
+            self.term.tee = true;
+            let outer = self.term.capture.replace(alloc::vec::Vec::new());
+            self.command(line.as_bytes());
+            self.term.tee = false;
+            Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default())
+        } else { Err(commands::Error::Declined) };
+        self.prompt();
+        self.activate(back);
+        result
+    }
+
+    // The shell's window between keys: the keys and wheel the manager queued, its size, its close; drawn whatever
+    // console is on the screen. Closed, it goes with its session.
+    fn tend_window(&mut self) {
+        let Some(closed) = self.window.as_ref().map(mind::windowed::Window::closed) else { return };
+        let back = if self.active == WINDOW { self.shown } else { self.active };
+        if closed {
+            self.activate(back);
+            self.parked[WINDOW] = None;
+            self.window = None;
+            return self.note(format_args!("THE SHELL'S WINDOW CLOSED"));
+        }
+        self.activate(WINDOW);
+        while let Some(word) = self.window.as_ref().and_then(mind::windowed::Window::event) {
+            if mind::abi::event_key(word) == KEY_POINTER {
+                let wheel = mind::abi::pointer_absolute_fields(word).map_or(0, |(_, _, _, wheel)| wheel);
+                if wheel != 0 { self.term.scroll(wheel < 0); } // away from the user: back
+            } else if let Some(key) = Key::from_event(word) {
+                if self.focused.is_none() { self.key(key); }
+            }
+        }
+        let cursor = (self.focused.is_none() && self.console.is_none()).then(|| self.cursor());
+        self.term.render(cursor);
+        self.activate(back);
+    }
+
+    /// A key for the active session: in the shell's window from the keys its manager queued, else from the keyboard.
+    pub(crate) fn next_key(&mut self) -> Option<Key> {
+        if self.active != WINDOW { return mind::input::read_key(); }
+        let window = self.window.as_ref()?;
+        while let Some(word) = window.event() { if let Some(key) = Key::from_event(word) { return Some(key); } }
+        None
+    }
+
     // A line on the serial line that belongs to no console (which console is shown).
     fn note(&mut self, text: core::fmt::Arguments) {
         let Some(uart) = &self.serial else { return };
@@ -215,7 +370,7 @@ impl Shell {
     // The console whose foreground program `pid` is (the one shown when none).
     fn console_of(&self, pid: u64) -> usize {
         if self.focused == Some(pid) { return self.active; }
-        (0..CONSOLES).find(|&i| self.parked[i].as_ref().is_some_and(|p| unsafe { (*p.session).focused } == Some(pid))).unwrap_or(self.shown)
+        (0..SESSIONS).find(|&i| self.parked[i].as_ref().is_some_and(|p| unsafe { (*p.session).focused } == Some(pid))).unwrap_or(self.shown)
     }
 
     fn owner(&self, pid: u64) -> Option<usize> { self.owners.iter().find(|o| o.0 == pid).map(|o| o.1 as usize) }
@@ -347,12 +502,20 @@ impl Shell {
         let authority = requests & mind::process::REQUEST_AUTHORITY != 0;
         // A window manager gets the window broker's manager client, a program in a window a plain client (issue 157).
         let window_manager = requests & mind::process::REQUEST_WINDOW_MANAGER != 0;
-        let window = requests & mind::process::REQUEST_WINDOW != 0 && !window_manager;
+        // From the shell's window a program that is not a console one opens a window of its own, as one `wm` starts
+        // does; a window manager starts from a console (211-APP-0040).
+        if window_manager && self.active == WINDOW { return Err(Error::Other(ERR_FOCUS)); }
+        let in_window = self.active == WINDOW && !needs.console && !mind::process::console_run(requests, args);
+        let window = (requests & mind::process::REQUEST_WINDOW != 0 || in_window) && !window_manager;
         let display = requests & mind::process::REQUEST_DISPLAY != 0;
         // A program a script starts gets only what the script declared (issue 094); it runs without the rest.
         let granted = |word: &str| self.script.as_ref().is_none_or(|words| words.iter().any(|w| w == word));
         // The pin controller service's control client, where the board has one (issue 207).
         let gpio = requests & mind::process::REQUEST_GPIO != 0 && mind::dev::cap_info(SLOT_GPIO).0 != 0 && granted("gpio");
+        // The shell's commands (idl/shell.wit, 211-APP-0044): for a window manager, which opens the shell's window from its
+        // menu and passes them on to console, and for what the shell's window starts; that is, where the shell's window
+        // can ask before a command that changes the machine.
+        let commands = requests & mind::process::REQUEST_SHELL != 0 && (window_manager || self.active == WINDOW) && granted("shell");
         // The block store client (300-KRN-0001), where the store runs.
         let blockstore = requests & mind::process::REQUEST_BLOCKSTORE != 0 && mind::dev::cap_info(SLOT_BLOCKSTORE).0 != 0 && granted("blockstore");
         // A program that asks only to read gets the client with the get badge alone, in the same slot (300-KRN-0024).
@@ -365,7 +528,9 @@ impl Shell {
         let network_wanted = requests & mind::process::REQUEST_NETWORK != 0 && granted("network");
         // The TLS service's client (351-APP-0017), lent only with a flow grant: without a flow it reaches nothing.
         let tls = network_wanted && requests & mind::process::REQUEST_TLS != 0 && mind::dev::cap_info(SLOT_TLS).0 != 0 && granted("tls");
-        let firmware_granted = granted("firmware");
+        // `--help` only prints the program's text (mind::about!): nothing to ask the user for (211-APP-0013).
+        let help = args.trim() == "--help";
+        let firmware_granted = granted("firmware") && !help;
         // The camera for a program that asks for it: starting it is the user's request, so nothing more is asked (the
         // maintainer, 2026-10-09); the camera mark shows while a stream is open, and a script must have declared it.
         let camera = requests & mind::process::REQUEST_CAMERA != 0 && mind::dev::cap_info(SLOT_CAMERA).0 != 0 && granted("camera");
@@ -404,12 +569,24 @@ impl Shell {
         if tls && network.is_some() {
             if let Ok(Err(error)) | Err(error) = lend(SLOT_TLS, SLOT_TLS) { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
         }
+        // Last, and not needed to start: a launch session holds 5 grants (requests-KRN.md); without it the program
+        // runs, as from a console.
+        if commands {
+            if let Ok(client) = self.commands_client() { let _ = lend(SLOT_SHELL, client); let _ = mind::ipc::drop_cap(client); } // the loader holds its copy
+        }
         // In front only from the console shown; refused (`rights`) when the shell is not in front: started as before.
         let committed = if front && self.active == self.shown {
             match loader::commit_in_front(Endpoint::LOADER, session)? { Err(loader::Error::Rights) => loader::commit(Endpoint::LOADER, session)?, other => other }
         } else { loader::commit(Endpoint::LOADER, session)? };
         let pid = committed.map_err(failed)?;
         if let Some(badge) = network { net::bind(badge, pid); }
+        // A window manager with the shell's commands: its Settings set the clock at once (000-APP-0060). PIDs are never
+        // reused, so an ended one names no other program.
+        if window_manager && commands {
+            self.managers.retain(|&old| mind::process::alive(old));
+            self.managers.push(pid);
+        }
+        self.windowed = in_window.then_some(pid);
         Ok(pid)
     }
 
@@ -423,22 +600,25 @@ impl Shell {
         let stem = if file.len() > 4 && file[file.len() - 4..].eq_ignore_ascii_case(b".elf") { &file[..file.len() - 4] } else { file };
         let _ = write!(self.term, "STARTED PID={} NAME=", pid);
         match task { Some(t) => { let _ = write!(self.term, "{}", label(&t.name)); } None => for &b in stem { self.term.print_char(b.to_ascii_lowercase()); } }
-        let _ = writeln!(self.term, " {}", if background { "BACKGROUND" } else { "FOREGROUND" });
+        // Started from the shell's window in a window of its own: the window's session goes on (211-APP-0040).
+        let windowed = self.windowed.take() == Some(pid);
+        let _ = writeln!(self.term, " {}", if windowed { "IN A WINDOW" } else if background { "BACKGROUND" } else { "FOREGROUND" });
         self.owners[self.next_owner] = (pid, self.active as u8);
         self.next_owner = (self.next_owner + 1) % OWNERS;
-        if background { return; }
+        if background || windowed { return; }
         match task {
+            Some(t) if t.screen != 0 && self.active == WINDOW => {} // behind the manager: `fg` from a console
             Some(t) if t.screen != 0 => { let _ = self.focus(pid, true); }
             Some(t) if t.service != 0 => {}
             _ => self.console = Some(pid),
         }
     }
 
-    // `<program> --help`: a console program prints its own text into the shell; one with a screen would print it out
-    // of sight — it exits before it is in front, and its output goes with it — so the shell shows the same text from
-    // the program's file instead of starting it.
+    // `<program> --help` (or another help key, 000-APP-0054): a console program prints its own text into the shell; one
+    // with a screen would print it out of sight — it exits before it is in front, and its output goes with it — so the
+    // shell shows the same text from the program's file instead of starting it.
     fn help_instead(&mut self, name: &[u8], args: &[u8]) -> bool {
-        if args != b"--help" { return false; }
+        if !mind::process::asks_help(core::str::from_utf8(args).unwrap_or("")) { return false; }
         let Ok(name) = core::str::from_utf8(name) else { return false };
         let console = loader::inspect_requests(Endpoint::LOADER, name).ok().and_then(Result::ok).is_some_and(|r| r & mind::process::REQUEST_CONSOLE != 0);
         !console && programs::show_about(&mut self.term, name)
@@ -472,6 +652,8 @@ impl Shell {
         if cmd.is_empty() { return; }
         // msh (issue 094): its statements at the prompt, `msh` and script files.
         if msh::is_statement(line) { return msh::statement(self, line); }
+        // `<command> <help key>` (000-APP-0054): the command's lines of `help`, as every program answers the same keys.
+        if mind::process::asks_help(core::str::from_utf8(args).unwrap_or("")) && programs::is_command(cmd, HELP) { return programs::help(&mut self.term, cmd, HELP); }
         if is(b"msh") { return msh::command(self, args); }
         if msh::is_script(cmd) { return msh::command(self, line); }
         if is(b"run") || is(b"boot") {
@@ -512,6 +694,7 @@ impl Shell {
             let missing = |error: Error| if error == Error::NotFound { "NO SUCH PID" } else { "SERVICE HAS NO SCREEN" };
             if is(b"fg") {
                 if pid == self.own { return self.report("THIS IS THE SHELL"); }
+                if self.active == WINDOW { return self.report("FG WORKS IN A CONSOLE (CTRL+ALT+F1…F4): THE SHELL'S WINDOW HAS NO SCREEN TO GIVE"); }
                 match self.focus(pid, false) {
                     Ok(()) => { let _ = writeln!(self.term, "FOREGROUND PID={} (CTRL+Z: SHELL, ESC: EXIT)", pid); }
                     Err(error) => self.report(missing(error)),
@@ -529,7 +712,8 @@ impl Shell {
                     Err(error) => self.report(missing(error)),
                 }
             }
-        } else if !args.is_empty() && [&b"cpus"[..], b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"time", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c)) {
+        } else if !args.is_empty() && [&b"cpus"[..], b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"time", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints"].iter().any(|c| is(c))
+                  && !(is(b"date") && args.split(|&b| b == b' ').next() == Some(&b"set"[..])) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
             if args.is_empty() { let _ = write!(self.term, "{}", HELP); } else { programs::help(&mut self.term, args, HELP); }
@@ -573,6 +757,8 @@ impl Shell {
         } else if is(b"clear") {
             self.term.clear();
         } else if is(b"reboot") {
+            // Keys in the shell's window come through the window manager: it asks first.
+            if self.active == WINDOW && !msh::ask(self, "RESTART THE MACHINE?") { return; }
             power::reboot(&mut self.term, args);
         } else if is(b"voice") {
             self.voice_command(args);
@@ -581,10 +767,22 @@ impl Shell {
         } else if is(b"screenshot") {
             screenshot::command(&mut self.term, args, SCOPE_RECEIVE);
         } else if is(b"stop") {
+            if self.active == WINDOW && !msh::ask(self, "HALT THE SYSTEM?") { return; }
             files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");
             control::halt();
         } else if is(b"date") {
+            // `date set`: the shell's rtc client carries the setting badge (rtc.wit 1.2, 211-APP-0042).
+            if let Some(setting) = args.strip_prefix(b"set") {
+                let text = core::str::from_utf8(setting).unwrap_or("");
+                let Some((days, seconds)) = mind::rtc::parse_setting(text) else { self.report("USAGE: DATE SET YYYY-MM-DD HH:MM[:SS] (2000-01-01 TO 2099-12-31)"); return; };
+                match mind::idl::rtc::set(Endpoint::RTC, days, seconds) {
+                    Ok(Ok(())) => { let _ = writeln!(self.term, "CLOCK SET. IT KEEPS NO TIME ZONE: THIS IS THE TIME IT SHOWS."); }
+                    Ok(Err(mind::idl::rtc::Error::Rights)) => { self.report("ONLY THE SHELL'S RTC CLIENT MAY SET THE CLOCK"); return; }
+                    Ok(Err(mind::idl::rtc::Error::Invalid)) => { self.report("THE CLOCK REFUSED THAT TIME"); return; }
+                    Ok(Err(mind::idl::rtc::Error::Unavailable)) | Err(_) => { self.report("RTC NOT AVAILABLE"); return; }
+                }
+            }
             // Calendar time from the rtc service (idl/rtc.wit 1.1), without a time zone.
             match (mind::rtc::date(), mind::rtc::seconds_since_midnight()) {
                 (Some((y, m, d)), Some(s)) => { let _ = writeln!(self.term, "DATE: {:04}-{:02}-{:02} {:02}:{:02}:{:02} (RTC, NO TIME ZONE)", y, m, d, s / 3600, s / 60 % 60, s % 60); }
@@ -789,11 +987,11 @@ impl Events {
 
 // The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
 #[inline(never)]
-fn new_shell(term: Console, own: u64) -> alloc::boxed::Box<Shell> {
+fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box<Shell> {
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; CONSOLES], active: 0, shown: 0, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, window: None, room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), script: None, log_next: None, beat: (0, u64::MAX) })
 }
 
@@ -801,9 +999,12 @@ mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     let own = control::focus(0, false).unwrap_or(0);
-    let mut shell = new_shell(term, own);
-    // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN).
-    for index in 0..CONSOLES { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
+    // The shell's window has memory for the screen's cells, as a program's window has (`Terminal::open`).
+    let room = ((info.width / 8).clamp(1, mind::window::MAX_COLUMNS), (info.height / 16).clamp(1, mind::window::MAX_ROWS));
+    let mut shell = new_shell(term, own, room);
+    // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN);
+    // Ctrl+Alt+F5 opens the shell's window (211-APP-0040, 211-APP-0045).
+    for index in 0..SESSIONS { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
@@ -815,7 +1016,8 @@ fn main(info: &'static BootInfo) {
     let mut vt = Vt::new();
     let mut events = Events::new();
     loop {
-        for index in 0..CONSOLES { if shell.activate(index) { shell.tend(); } }
+        for index in 0..SESSIONS { if shell.activate(index) { shell.tend(); } }
+        shell.tend_window();
         // What happened to the program with the keyboard: it is the foreground program of the console shown.
         while let Some(notice) = control::notice() {
             let pid = match notice { Notice::Exited(pid) | Notice::Background(pid) => pid, Notice::Front(pid) => { shell.add_front(pid); continue; } };
@@ -845,6 +1047,7 @@ fn main(info: &'static BootInfo) {
             shell.log_next = None;
             match key.code() {
                 Code::F(n @ 1..=4) if key.ctrl() && key.alt() => shell.show(n as usize - 1),
+                Code::F(5) if key.ctrl() && key.alt() => { let _ = shell.open_window(); }
                 _ if shell.focused.is_none() => shell.key(key),
                 Code::F(12) => { shell.voice_key(key); }
                 _ => {}
@@ -852,12 +1055,14 @@ fn main(info: &'static BootInfo) {
         }
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
         shell.term.render(cursor);
-        // Wait for the next tick, or for the voice program's call.
+        // Wait for the next tick, or for the voice program's call or the window manager's.
         match shell.voice.endpoint {
             Some(endpoint) => {
                 if let Ok(request) = endpoint.recv_timeout(voicectl::VOICE_RECEIVE, 10) { shell.voice_message(&request); }
                 shell.voice_check();
+                shell.serve_commands(1);
             }
+            None if shell.commands.is_some() => shell.serve_commands(10),
             None => { let _ = mind::time::sleep(10); }
         }
     }

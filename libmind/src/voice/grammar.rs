@@ -102,13 +102,25 @@ impl Grammar {
 
     /// `decode` among the phrases `keep` chooses (a closed grammar, such as yes or no for a confirmation).
     pub fn decode_where(&self, scores: &[i32], classes: usize, silence: u16, keep: &dyn Fn(&Phrase) -> bool) -> Option<Decoded> {
+        self.best(&self.rank_where(scores, classes, silence, keep), scores.len() / classes)
+    }
+
+    /// The phrases `keep` chooses with their scores, the best first; empty without frames (000-APP-0053: what `hear`
+    /// shows as the candidates).
+    pub fn rank_where(&self, scores: &[i32], classes: usize, silence: u16, keep: &dyn Fn(&Phrase) -> bool) -> Vec<(usize, i32)> {
         let frames = scores.len() / classes;
+        if frames == 0 { return Vec::new(); }
         let mut results: Vec<(usize, i32)> = self.phrases.iter().enumerate().filter(|(_, p)| keep(p)).map(|(i, p)| (i, viterbi(&states(&p.tokens, silence), scores, classes, frames))).collect();
-        if frames == 0 || results.is_empty() { return None; }
         results.sort_by(|a, b| b.1.cmp(&a.1));
-        let (best, score) = results[0];
+        results
+    }
+
+    /// The decoding of `ranked` (from `rank_where`) over `frames` frames: its best phrase and the best one meaning
+    /// something else.
+    pub fn best(&self, ranked: &[(usize, i32)], frames: usize) -> Option<Decoded> {
+        let &(best, score) = ranked.first()?;
         let same = |i: usize| self.phrases[i].intent == self.phrases[best].intent && self.phrases[i].slots == self.phrases[best].slots;
-        let second = results.iter().find(|&&(i, _)| !same(i)).copied();
+        let second = ranked.iter().find(|&&(i, _)| !same(i)).copied();
         Some(Decoded { phrase: best, score, frames, second })
     }
 }
@@ -124,7 +136,13 @@ impl Decoded {
     /// How much better the best phrase fits than the best one meaning something else, per frame (1/256 nats).
     pub fn margin(&self) -> i32 { self.second.map_or(i32::MAX, |(_, s)| ((self.score as i64 - s as i64) / self.frames.max(1) as i64) as i32) }
     /// Confidence in per mille: e^(-deficit).
-    pub fn confidence(&self) -> u32 { (1000.0 * super::features::exp(-(self.deficit() as f64) / 256.0) + 0.5) as u32 }
+    pub fn confidence(&self) -> u32 { confidence(self.score, self.frames) }
+}
+
+/// A phrase's confidence in per mille from its score over `frames` frames: e^(-mean deficit).
+pub fn confidence(score: i32, frames: usize) -> u32 {
+    let deficit = (-(score as i64) / frames.max(1) as i64) as i32;
+    (1000.0 * super::features::exp(-(deficit as f64) / 256.0) + 0.5) as u32
 }
 
 /// A state of a phrase's chain: its class, whether it may stay (self-loop) and whether it may be skipped.

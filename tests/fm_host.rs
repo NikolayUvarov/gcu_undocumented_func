@@ -24,6 +24,14 @@ mod editor;
 mod panel;
 #[path = "../fm/src/fm.rs"]
 mod fm;
+#[path = "../libmind/src/sha256.rs"]
+mod sha256;
+#[path = "../libmind/src/cid.rs"]
+mod cid;
+#[path = "../libmind/src/dag.rs"]
+mod dag;
+#[path = "../fm/src/store.rs"]
+mod store;
 
 use abi::*;
 use fm::{Disk, Failure, Fm, Outcome, Place, Sink, Started, VolumeInfo, DOUBLE_CLICK_MS};
@@ -65,13 +73,14 @@ impl Sink for MemSink {
     }
 }
 
-struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String> }
+struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String>,
+             log: Vec<String>, fail_flushes: usize, pass_flushes: usize } // removals and flushes in order; flushes that fail after those that pass
 
 const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new() };
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0 };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
         for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
                                     ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
@@ -131,6 +140,7 @@ impl Disk for Mem {
         Ok(())
     }
     fn remove(&mut self, path: &str) -> Result<(), Failure> {
+        self.log.push(format!("remove {}", path));
         if !Self::allowed(path) { return Err(Failure::Denied); }
         if let Some(i) = self.files.iter().position(|f| f.0.eq_ignore_ascii_case(path)) {
             let (name, bytes, _, _) = self.files.remove(i);
@@ -155,10 +165,18 @@ impl Disk for Mem {
     }
     fn writable(&mut self, path: &str) -> bool { Self::allowed(path) && self.file(path).is_some() }
     fn volume(&mut self, path: &str) -> Option<VolumeInfo> {
+        if path.starts_with("models:") { return None; } // no model disk
         Some(if path.starts_with("ram:") { VolumeInfo { label: "MIND RAM".into(), fat_bits: 16, bytes: RAM, free: self.space.get() } }
+             else if path.starts_with("log:") { VolumeInfo { label: "MIND LOG".into(), fat_bits: 16, bytes: 16 << 20, free: 15 << 20 } }
              else { VolumeInfo { label: "MINDTEST".into(), fat_bits: 16, bytes: 60 << 20, free: 50 << 20 } })
     }
-    fn flush(&mut self, _path: &str) { self.flushes += 1; }
+    fn flush(&mut self, path: &str) -> Result<(), Failure> {
+        self.flushes += 1;
+        self.log.push(format!("flush {}", panel::volume(path).0));
+        if self.pass_flushes > 0 { self.pass_flushes -= 1; return Ok(()); }
+        if self.fail_flushes > 0 { self.fail_flushes -= 1; return Err(Failure::Other("I/O error".into())); }
+        Ok(())
+    }
 }
 
 fn chr(ch: char) -> Key { Key(event(0, ch as u32, 0)) }
@@ -364,6 +382,8 @@ fn quick_view_info_find_and_menu() {
     fm.key(alt_f(1), &mut disk);
     let screen = draw(&mut fm, 100, 30);
     assert!(screen_has(&screen, "A: boot disk MINDTEST") && screen_has(&screen, "ram: RAM disk MIND RAM FAT16: 64 KiB, 64 KiB free"), "{:#?}", screen);
+    // log: where it is mounted; models: not, without a model disk (211-APP-0013).
+    assert!(screen_has(&screen, "log: boot logs MIND LOG") && !screen_has(&screen, "models:"), "{:#?}", screen);
     fm.key(code(KEY_ENTER), &mut disk);
     assert_eq!(fm.panels[0].path, "");
     // A missing directory leaves the panel as it is, with the error shown.
@@ -668,11 +688,11 @@ fn the_mouse_in_panels_viewer_and_key_bar() {
 
 fn shift_f(n: u16) -> Key { Key(event(KEY_F1 + n - 1, 0, MOD_SHIFT)) }
 fn alt_f2() -> Key { alt_f(2) }
-fn typed(fm: &mut Fm, disk: &mut Mem, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
-fn clear_line(fm: &mut Fm, disk: &mut Mem) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
+fn typed(fm: &mut Fm, disk: &mut dyn Disk, text: &str) { for ch in text.chars() { fm.key(chr(ch), disk); } }
+fn clear_line(fm: &mut Fm, disk: &mut dyn Disk) { for _ in 0..40 { fm.key(code(KEY_BACKSPACE), disk); } }
 
 // Runs the job until it ends or waits for an answer; returns the number of slices.
-fn run(fm: &mut Fm, disk: &mut Mem) -> usize {
+fn run(fm: &mut Fm, disk: &mut dyn Disk) -> usize {
     let mut slices = 0;
     while fm.busy() { fm.work(disk); slices += 1; assert!(slices < 10_000, "the job does not end"); }
     slices
@@ -746,12 +766,21 @@ fn copy_move_mkdir_delete() {
     run(&mut fm, &mut disk);
     assert!(disk.file("ram:papers/old/notes.md").is_some() && disk.file("ram:docs/notes.txt").is_none());
     assert_eq!(fm.panels[1].current().unwrap().name, "papers");
-    // F7: a directory on the boot disk only in data/.
+    // F7: a directory on the boot disk only in data/. Outside it the dialog says so and a name goes into data/
+    // (000-APP-0062); a path naming the root is refused.
     fm.key(code(KEY_TAB), &mut disk);
     fm.key(f(7), &mut disk);
+    assert!(draw(&mut fm, 100, 30).iter().any(|l| l.contains("Only data/ may be written here: a name is made in A:/data/")));
     typed(&mut fm, &mut disk, "system");
     fm.key(code(KEY_ENTER), &mut disk);
-    assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram: and data/ are writable)"));
+    assert!(disk.is_dir("data/system") && !disk.is_dir("system"));
+    assert_eq!((fm.panels[0].path.as_str(), fm.panels[0].current().unwrap().name.as_str()), ("data", "system"));
+    assert_eq!(fm.notice.as_deref(), Some("Made A:/data/system: on the boot disk only data/ may be written"));
+    fm.load(0, "", None, &mut disk);
+    fm.key(f(7), &mut disk);
+    typed(&mut fm, &mut disk, "A:/system");
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert_eq!(fm.notice.as_deref(), Some("Cannot make A:/system: denied (only ram:, log: and data/ are writable)"));
     fm.key(f(7), &mut disk);
     typed(&mut fm, &mut disk, "data/inbox");
     fm.key(code(KEY_ENTER), &mut disk);
@@ -824,6 +853,7 @@ fn failures_space_and_stopping() {
     assert!(fm.status().contains(":FAILED"));
     fm.key(code(KEY_RIGHT), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk); // the copy's flush, then the end
     assert!(fm.job.is_none());
     assert!(disk.file("ram:half.bin").is_none(), "the partial copy is removed");
     assert_eq!(disk.space.get(), RAM);
@@ -861,7 +891,7 @@ fn failures_space_and_stopping() {
     fm.key(f(5), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk);
     fm.key(code(KEY_ENTER), &mut disk); // overwrite the partial copy left by Stop
-    assert_eq!(run(&mut fm, &mut disk), 4, "64 KiB a slice");
+    assert_eq!(run(&mut fm, &mut disk), 5, "64 KiB a slice, then the flush of the target");
     assert_eq!(disk.file("ram:big.bin").unwrap(), vec![7u8; 200 * 1024]);
 }
 
@@ -991,4 +1021,325 @@ fn the_mouse_in_menus_and_the_editor() {
     fm.key(code(KEY_ENTER), &mut disk);
     assert!(fm.editor.is_none());
     assert_eq!(disk.file("data/notes.txt").unwrap(), b"one\ntwo\n", "not saved");
+}
+
+fn names(panel: &Panel) -> Vec<String> { panel.items.iter().map(|e| e.name.clone()).collect() }
+
+// The block store in memory (300-APP-0038): blocks by CID, names with their versions, the owner's pins; `listing`:
+// whether it can list its names (blockstore.wit 1.3 cannot).
+#[derive(Default)]
+struct StoreInner { blocks: std::collections::HashMap<cid::Cid, Vec<u8>>, names: std::collections::BTreeMap<String, (u64, cid::Cid)>, pins: Vec<cid::Cid>, listing: bool, commits: usize }
+#[derive(Clone, Default)]
+struct FakeStore(Rc<RefCell<StoreInner>>);
+
+impl dag::Blocks for FakeStore {
+    fn put(&mut self, codec: cid::Codec, data: &[u8]) -> Result<cid::Cid, dag::Error> {
+        let cid = cid::Cid::of(codec, data);
+        self.0.borrow_mut().blocks.insert(cid, data.to_vec());
+        Ok(cid)
+    }
+    fn get(&mut self, cid: &cid::Cid, out: &mut [u8]) -> Result<usize, dag::Error> {
+        let inner = self.0.borrow();
+        let data = inner.blocks.get(cid).ok_or(dag::Error::NotFound)?;
+        out[..data.len()].copy_from_slice(data);
+        Ok(data.len())
+    }
+    fn has(&mut self, cid: &cid::Cid) -> Result<bool, dag::Error> { Ok(self.0.borrow().blocks.contains_key(cid)) }
+}
+
+impl store::Store for FakeStore {
+    fn resolve(&mut self, name: &str) -> Result<Option<(u64, cid::Cid)>, String> { Ok(self.0.borrow().names.get(name).copied()) }
+    fn publish(&mut self, name: &str, expected: u64, root: &cid::Cid) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        let current = inner.names.get(name).map_or(0, |n| n.0);
+        if current != expected { return Err(Failure::Other("Conflict".into())); }
+        inner.names.insert(name.into(), (current + 1, *root));
+        Ok(())
+    }
+    fn unpublish(&mut self, name: &str, expected: u64) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        if inner.names.get(name).map(|n| n.0) != Some(expected) { return Err(Failure::Other("Conflict".into())); }
+        inner.names.remove(name);
+        Ok(())
+    }
+    fn commit(&mut self, updates: &[(&str, u64, Option<cid::Cid>)]) -> Result<(), Failure> {
+        let mut inner = self.0.borrow_mut();
+        if updates.iter().any(|(name, expected, _)| inner.names.get(*name).map_or(0, |n| n.0) != *expected) { return Err(Failure::Other("Conflict".into())); }
+        for (name, expected, root) in updates {
+            match root { Some(root) => { inner.names.insert((*name).into(), (expected + 1, *root)); } None => { inner.names.remove(*name); } }
+        }
+        inner.commits += 1;
+        Ok(())
+    }
+    fn pins(&mut self) -> Result<Vec<(cid::Cid, u64)>, String> {
+        let inner = self.0.borrow();
+        Ok(inner.pins.iter().map(|cid| (*cid, inner.blocks.get(cid).map_or(0, |b| b.len() as u64))).collect())
+    }
+    fn stats(&mut self) -> Result<(u64, u64, u32), String> { let inner = self.0.borrow(); Ok((1 + inner.blocks.len() as u64 * 2, 16384, inner.names.len() as u32)) }
+    fn names(&mut self) -> Option<Vec<String>> { let inner = self.0.borrow(); inner.listing.then(|| inner.names.keys().cloned().collect()) }
+}
+
+impl FakeStore {
+    // An object's bytes, read back with every block checked.
+    fn read(&self, name: &str) -> Option<Vec<u8>> {
+        let root = self.0.borrow().names.get(name)?.1;
+        let mut blocks = self.clone();
+        let mut buffer = [0u8; dag::CHUNK];
+        let size = dag::size(&mut blocks, &root, &mut buffer).ok()?;
+        let mut out = vec![0u8; size as usize];
+        dag::read_at(&mut blocks, &root, 0, &mut out, &mut buffer).ok()?;
+        Some(out)
+    }
+    fn add(&self, name: &str, bytes: &[u8]) -> cid::Cid {
+        let mut blocks = self.clone();
+        let mut builder = Box::new(dag::Builder::new());
+        builder.write(&mut blocks, bytes).unwrap();
+        let (root, _) = builder.finish(&mut blocks).unwrap();
+        if !name.is_empty() { self.0.borrow_mut().names.insert(name.into(), (1, root)); }
+        root
+    }
+}
+
+#[test]
+fn the_block_store_panel() {
+    // 300-APP-0038: store: beside the disks; a copy there publishes a name, F3 reads an object back with every block
+    // checked, F6 renames in one commit, F8 unpublishes; names fm has not seen show once the store can list them.
+    let fake = FakeStore::default();
+    fake.add("models/vosk.txt", b"vosk model");
+    let pinned = fake.add("", b"pinned bytes");
+    fake.0.borrow_mut().pins.push(pinned);
+    let mut disk = store::WithStore { disk: Mem::sample(), store: Some(store::Volume::new(fake.clone())) };
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    // The volume menu offers it with its sectors and names.
+    fm.key(alt_f(2), &mut disk);
+    let screen = draw(&mut fm, 130, 30);
+    assert!(screen_has(&screen, "store: block store 1 names: 8192 KiB, 8189 KiB free"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
+    // Without a list of names, the root has the pins only; a name opened once is listed then.
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins"]);
+    assert!(disk.open("store:models/vosk.txt").is_some());
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins", "models"]);
+    fm.load(1, "store:.pins", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), ["..", &format!("{}", pinned)]);
+    // F5: readme.txt and a file of three chunks from A: to store:, published under their names.
+    let big: Vec<u8> = (0..40_000u32).map(|i| (i * 31 + 7) as u8).collect();
+    disk.disk.add_file("big.bin", &big);
+    fm.load(0, "", None, &mut disk);
+    fm.load(1, "store:", None, &mut disk);
+    for name in ["readme.txt", "big.bin"] {
+        fm.panels[0].arrange(Some(name));
+        fm.key(f(5), &mut disk);
+        let screen = draw(&mut fm, 100, 30);
+        assert!(screen_has(&screen, &format!("Copy {} to", name)) && screen_has(&screen, "store:/"), "{:#?}", screen);
+        fm.key(code(KEY_ENTER), &mut disk);
+        run(&mut fm, &mut disk);
+        assert!(fm.notice.as_deref().unwrap_or("").starts_with("Copied 1 of 1"), "{:?}", fm.notice);
+    }
+    assert_eq!(fake.read("readme.txt").unwrap(), "Hello\nПривет, мир\n".as_bytes());
+    assert_eq!(fake.read("big.bin").unwrap(), big);
+    assert_eq!(names(&fm.panels[1]), [".pins", "models", "big.bin", "readme.txt"]);
+    // F3 views an object; a copy back to ram: is the same bytes.
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("readme.txt"));
+    fm.key(f(3), &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Привет, мир"), "{:#?}", screen);
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.load(0, "ram:", None, &mut disk);
+    fm.panels[1].arrange(Some("big.bin"));
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.disk.file("ram:big.bin").unwrap(), big);
+    // F6 renames in the store: the new name and the old one's removal in one commit.
+    fm.panels[1].arrange(Some("readme.txt"));
+    fm.key(f(6), &mut disk);
+    clear_line(&mut fm, &mut disk);
+    typed(&mut fm, &mut disk, "docs/readme.txt");
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(fake.0.borrow().commits, 1);
+    assert!(fake.read("readme.txt").is_none() && fake.read("docs/readme.txt").is_some());
+    // A name the store does not take is refused, and the object is not stored.
+    fm.load(0, "", None, &mut disk);
+    disk.disk.add_file("файл.txt", b"x");
+    fm.load(0, "", None, &mut disk);
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[0].arrange(Some("файл.txt"));
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "a name in the store is 1 to 64 of A-Z a-z 0-9 . _ / -"), "{:#?}", screen);
+    // F8 unpublishes; with a list of names the store shows all of them.
+    fm.key(code(KEY_ESC), &mut disk);
+    fm.key(code(KEY_TAB), &mut disk);
+    fm.panels[1].arrange(Some("big.bin"));
+    fm.key(f(8), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fake.read("big.bin").is_none());
+    fake.0.borrow_mut().names.insert("other/seen-by-none".into(), (1, pinned));
+    fake.0.borrow_mut().listing = true;
+    fm.load(1, "store:", None, &mut disk);
+    assert_eq!(names(&fm.panels[1]), [".pins", "docs", "models", "other"]);
+    assert!(!disk.writable("store:docs/readme.txt"), "objects are never changed in place");
+}
+
+// 175-APP-0036 (audit A08): a move removes no source before its target's volume is flushed; a flush that fails keeps
+// the sources and says so. The audit's probe (issues-audit/repro/fm_repro.py) with its assertion turned around.
+#[test]
+fn a_move_keeps_its_source_until_the_target_is_on_its_medium() {
+    let order = |disk: &Mem, a: &str, b: &str| -> bool {
+        let at = |what: &str| disk.log.iter().position(|l| l == what).unwrap_or_else(|| panic!("{} not in {:?}", what, disk.log));
+        at(a) < at(b)
+    };
+    let mut disk = Mem::sample();
+    disk.dirs.push("data".into());
+    disk.add_file("data/audit-source.txt", b"original");
+    disk.add_file("data/second.txt", b"second");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.load(0, "data", Some("audit-source.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:audit-source.txt").unwrap(), b"original");
+    assert!(disk.file("data/audit-source.txt").is_none());
+    assert!(order(&disk, "flush ram:", "remove data/audit-source.txt"), "{:?}", disk.log);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Moved 2 of 2"), "{:?}", fm.notice);
+    // Two files: both copied, the target flushed once, then both sources removed.
+    disk.add_file("data/first.txt", b"first");
+    disk.log.clear();
+    fm.load(0, "data", Some("first.txt"), &mut disk);
+    fm.key(code(KEY_INSERT), &mut disk);
+    fm.load(0, "data", Some("second.txt"), &mut disk);
+    fm.key(code(KEY_INSERT), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert_eq!(disk.file("ram:first.txt").unwrap(), b"first");
+    assert_eq!(disk.file("ram:second.txt").unwrap(), b"second");
+    assert!(disk.file("data/first.txt").is_none() && disk.file("data/second.txt").is_none());
+    assert!(order(&disk, "flush ram:", "remove data/first.txt") && order(&disk, "flush ram:", "remove data/second.txt"), "{:?}", disk.log);
+    // The target's flush fails: the job stops at it; Retry flushes again and then the source goes.
+    disk.add_file("data/retry.txt", b"retry");
+    disk.fail_flushes = 1;
+    disk.log.clear();
+    fm.load(0, "data", Some("retry.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    assert!(disk.file("data/retry.txt").is_some(), "the source stays while the target's flush failed");
+    let screen = draw(&mut fm, 100, 30);
+    assert!(screen_has(&screen, "Write ram:") && screen_has(&screen, "I/O error"), "{:#?}", screen);
+    fm.key(code(KEY_ENTER), &mut disk); // Retry
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert!(disk.file("data/retry.txt").is_none() && disk.file("ram:retry.txt").is_some());
+    // It fails again and the user skips it: the copy stays, and so does the source.
+    disk.add_file("data/skip.txt", b"skip");
+    disk.fail_flushes = 1;
+    fm.load(0, "data", Some("skip.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk); // Skip
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert_eq!(disk.file("data/skip.txt").unwrap(), b"skip");
+    assert_eq!(disk.file("ram:skip.txt").unwrap(), b"skip");
+    assert!(fm.notice.as_deref().unwrap().contains("1 failed"), "{:?}", fm.notice);
+    // Abort keeps the source too.
+    disk.add_file("data/abort.txt", b"abort");
+    disk.fail_flushes = 1;
+    fm.load(0, "data", Some("abort.txt"), &mut disk);
+    fm.key(f(6), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk);
+    fm.key(code(KEY_RIGHT), &mut disk); // Abort
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(fm.job.is_none());
+    assert_eq!(disk.file("data/abort.txt").unwrap(), b"abort");
+    assert!(fm.notice.as_deref().unwrap().starts_with("Stopped:"), "{:?}", fm.notice);
+}
+
+// A copy's last flush that fails is said, not "Copied" alone (175-APP-0036).
+#[test]
+fn a_copy_says_when_it_is_not_on_its_medium() {
+    let mut disk = Mem::sample();
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    ram_panel(&mut fm, &mut disk);
+    fm.load(0, "", Some("readme.txt"), &mut disk);
+    disk.fail_flushes = 2; // the copy's own flush, then Retry's
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk); // Retry fails once more
+    run(&mut fm, &mut disk);
+    assert!(fm.status().contains(":FAILED"), "{}", fm.status());
+    fm.key(code(KEY_ENTER), &mut disk); // Retry succeeds
+    run(&mut fm, &mut disk);
+    assert!(fm.notice.as_deref().unwrap().starts_with("Copied 1 of 1"), "{:?}", fm.notice);
+    // The copy's own flush passes and the one at the end fails: the notice says so.
+    fm.load(0, "", Some("Zeta.TXT"), &mut disk);
+    disk.pass_flushes = 1;
+    disk.fail_flushes = 1;
+    fm.key(f(5), &mut disk);
+    fm.key(code(KEY_ENTER), &mut disk);
+    run(&mut fm, &mut disk);
+    assert!(fm.job.is_none());
+    assert!(fm.notice.as_deref().unwrap().contains("NOT WRITTEN TO DISK: I/O error"), "{:?}", fm.notice);
+}
+
+// 175-APP-0035 (audit A07): saving stages in a file of its own and leaves an existing `name.tmp` as it was; a failed
+// flush keeps the old text. The audit's probe with its assertion turned around.
+#[test]
+fn saving_keeps_other_staging_files() {
+    let mut disk = Mem::sample();
+    disk.dirs.push("ram:notes".into());
+    disk.add_file("ram:notes/todo.txt", b"original");
+    disk.add_file("ram:notes/todo.txt.tmp", b"unrelated valuable file");
+    let mut window = vec![0u8; 4096];
+    let mut fm = Fm::new(&mut window, &mut disk);
+    fm.load(0, "ram:notes", Some("todo.txt"), &mut disk);
+    fm.key(f(4), &mut disk);
+    typed(&mut fm, &mut disk, "new ");
+    fm.key(f(2), &mut disk);
+    assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), b"new original");
+    assert_eq!(disk.file("ram:notes/todo.txt.tmp").unwrap(), b"unrelated valuable file");
+    assert!(disk.file("ram:notes/todo.txt.tmp1").is_none(), "the save's own staging file is gone");
+    // The staging file does not reach its medium: the old text stays, and the staging file goes.
+    typed(&mut fm, &mut disk, "x");
+    disk.fail_flushes = 1;
+    fm.key(f(2), &mut disk);
+    assert_eq!(disk.file("ram:notes/todo.txt").unwrap(), b"new original");
+    assert!(disk.file("ram:notes/todo.txt.tmp1").is_none());
+    assert_eq!(disk.file("ram:notes/todo.txt.tmp").unwrap(), b"unrelated valuable file");
+}
+
+// 000-APP-0062: where F7 makes a directory: a name typed on the boot disk outside data/ goes into data/; a path that
+// names a volume or the root stays as typed (and is refused there); ram:, log: and data/ are used as they are.
+#[test]
+fn a_new_directory_outside_data_goes_into_data() {
+    use fm::{mkdir_target, outside_data};
+    assert!(outside_data("") && outside_data("EFI") && outside_data("database") && !outside_data("data") && !outside_data("data/x"));
+    assert!(!outside_data("ram:") && !outside_data("log:x") && !outside_data("models:"));
+    assert_eq!(mkdir_target("", "new"), (String::from("data/new"), true));
+    assert_eq!(mkdir_target("EFI/BOOT", "a/b"), (String::from("data/a/b"), true));
+    assert_eq!(mkdir_target("", "data/new"), (String::from("data/new"), false));
+    assert_eq!(mkdir_target("data", "new"), (String::from("data/new"), false));
+    assert_eq!(mkdir_target("", "A:/new"), (String::from("new"), false));
+    assert_eq!(mkdir_target("", "/new"), (String::from("new"), false));
+    assert_eq!(mkdir_target("ram:", "new"), (String::from("ram:new"), false));
+    assert_eq!(mkdir_target("", "ram:new"), (String::from("ram:new"), false));
 }

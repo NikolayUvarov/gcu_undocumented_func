@@ -24,7 +24,7 @@ impl Failure {
         match self {
             Failure::Exists => String::from("it already exists"),
             Failure::NotEmpty => String::from("the directory is not empty"),
-            Failure::Denied => String::from("denied (only ram: and data/ are writable)"),
+            Failure::Denied => String::from("denied (only ram:, log: and data/ are writable)"),
             Failure::NoSpace => String::from("the disk is full"),
             Failure::NotFound => String::from("not found"),
             Failure::Other(text) => text.clone(),
@@ -33,7 +33,11 @@ impl Failure {
 }
 
 /// A file being written; dropping it ends the write.
-pub trait Sink { fn write(&mut self, data: &[u8]) -> Result<(), Failure>; }
+pub trait Sink {
+    fn write(&mut self, data: &[u8]) -> Result<(), Failure>;
+    /// The last write is done: the block store publishes the object here (300-APP-0038).
+    fn finish(&mut self) -> Result<(), Failure> { Ok(()) }
+}
 
 /// A mounted volume as the information panel and the volume menu show it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -41,7 +45,7 @@ pub struct VolumeInfo { pub label: String, pub fat_bits: u8, pub bytes: u64, pub
 
 /// The file system as the file manager sees it. Paths name a volume first (`ram:docs`) or are on the boot disk.
 pub trait Disk {
-    /// Entries of a directory (`""` and `"ram:"` are the roots).
+    /// Entries of a directory (`""`, `"ram:"`, `"log:"` and `"models:"` are the roots).
     fn list(&mut self, path: &str) -> Result<Vec<Entry>, String>;
     /// A file to read.
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
@@ -59,8 +63,8 @@ pub trait Disk {
     fn writable(&mut self, path: &str) -> bool;
     /// The volume of a path.
     fn volume(&mut self, path: &str) -> Option<VolumeInfo>;
-    /// Writes what is cached for the volume of `path` to the disk.
-    fn flush(&mut self, path: &str);
+    /// Writes what is cached for the volume of `path` to its medium; an error means it may not be there (175-APP-0036).
+    fn flush(&mut self, path: &str) -> Result<(), Failure>;
 }
 
 /// Where a program fm started shows itself.
@@ -119,7 +123,8 @@ const OUTPUT_MAX: usize = 200; // lines of the command line's output kept
 const FIND_MAX: usize = 500;
 /// Bytes copied per step of a job (the screen and the keys are served between steps).
 pub const SLICE: usize = 64 * 1024;
-const VOLUMES: [(&str, &str); 2] = [("", "A: boot disk"), ("ram:", "ram: RAM disk")];
+// The boot disk and ram: always; log: and models: where they are mounted (211-APP-0013).
+const VOLUMES: [(&str, &str); 5] = [("", "A: boot disk"), ("ram:", "ram: RAM disk"), ("log:", "log: boot logs"), ("models:", "models: speech models"), ("store:", "store: block store")];
 
 const MENU_TITLES: [&str; 5] = ["Left", "Files", "Commands", "Options", "Right"];
 const PANEL_ITEMS: [&str; 11] = ["Brief", "Full", "Info", "Quick view", "Name", "Extension", "Time", "Size", "Reverse order", "Reread  Ctrl+R", "Volume  Alt+F1/F2"];
@@ -128,6 +133,24 @@ const FILES_ITEMS: [&str; 11] = ["View  F3", "Edit  F4", "New file  Shift+F4", "
 const COMMAND_ITEMS: [&str; 2] = ["Find file  Alt+F7", "Swap panels  Ctrl+U"];
 const OPTION_ITEMS: [&str; 1] = ["Hidden and system files  Ctrl+H"];
 const MENU_ITEMS: [&[&str]; 5] = [&PANEL_ITEMS, &FILES_ITEMS, &COMMAND_ITEMS, &OPTION_ITEMS, &PANEL_ITEMS];
+/// The boot disk's directory the user may write in (docs/profile/threat-model.md: the user's files client writes on
+/// ram:, log: and in data/ of the boot disk).
+pub const DATA: &str = "data";
+
+/// `path` is on the boot disk outside data/, where nothing may be written (000-APP-0062).
+pub fn outside_data(path: &str) -> bool {
+    let (volume, rest) = panel::volume(path);
+    volume.is_empty() && !inside(&rest.to_lowercase(), DATA)
+}
+
+/// Where F7 makes `typed` from a panel at `here` (000-APP-0062): a relative name typed on the boot disk outside data/
+/// goes into data/, since nothing else there may be written; the second value says so.
+pub fn mkdir_target(here: &str, typed: &str) -> (String, bool) {
+    let path = resolve(here, typed);
+    let relative = panel::volume(typed.trim()).0.is_empty() && !typed.trim().starts_with('/');
+    if relative && outside_data(&path) { (resolve(DATA, typed), true) } else { (path, false) }
+}
+
 const KEYS: KeyBars<'static> = KeyBars { plain: ["Help", "", "View", "Edit", "Copy", "RenMov", "Mkdir", "Delete", "PullDn", "Quit"],
                                          shift: ["", "", "", "New", "", "", "", "", "", ""], ctrl: ["LPanel", "RPanel", "Name", "Ext", "Time", "Size", "", "", "", ""],
                                          alt: ["Left", "Right", "", "", "", "", "Find", "", "", ""] };
@@ -150,7 +173,7 @@ const HELP: [&str; 19] = [
     "Mouse: click — cursor; double click — open; right click — mark;",
     "  wheel — move the cursor; a click on the key bar presses that key",
     "Programs started here open a window of their own under wm; on a screen they run in the",
-    "background (FG <pid> in the shell). Only ram: and data/ on the boot disk are writable.",
+    "background (FG <pid> in the shell). Only ram:, log: and data/ on the boot disk are writable.",
     "",
 ];
 
@@ -165,7 +188,7 @@ impl Op {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Step { MakeDir(String), Copy { from: String, to: String, size: u64 }, Remove(String), Rename { from: String, to: String } }
+enum Step { MakeDir(String), Copy { from: String, to: String, size: u64 }, Remove(String), Rename { from: String, to: String }, Flush(String) }
 
 impl Step {
     fn describe(&self) -> String {
@@ -174,6 +197,7 @@ impl Step {
             Step::Copy { from, to, .. } => format!("Copy {} to {}", display(from), display(to)),
             Step::Remove(path) => format!("Delete {}", display(path)),
             Step::Rename { from, to } => format!("Move {} to {}", display(from), display(to)),
+            Step::Flush(path) => format!("Write {} to its disk", display(path)),
         }
     }
 }
@@ -210,7 +234,9 @@ impl Job {
         Self { op, steps: Vec::new(), index: 0, copying: None, done: 0, total: 0, files: 0, skipped: 0, errors: 0, replace: true, failure: None, choice: 0,
                asking: false, kept: Vec::new(), sources: Vec::new(), target: None, focus: None, buffer: Vec::new() }
     }
-    pub fn steps(&self) -> usize { self.steps.len() }
+    /// The steps the user's entries take, and how many of them are behind: a flush is not one of them.
+    pub fn steps(&self) -> usize { self.steps.iter().filter(|s| !matches!(s, Step::Flush(_))).count() }
+    pub fn at(&self) -> usize { self.steps[..self.index.min(self.steps.len())].iter().filter(|s| !matches!(s, Step::Flush(_))).count() }
 
     // The steps for `from` (a file or a directory tree) copied to `to`.
     fn plan_copy(&mut self, from: &str, to: &str, entry: &Entry, disk: &mut dyn Disk, depth: usize) -> Result<(), String> {
@@ -248,6 +274,8 @@ impl Job {
                 if self.replace && disk.list(&to).is_err() { let _ = disk.remove(&to); } // an existing file is replaced
                 disk.rename(&from, &to).map(|_| true)
             }
+            // The copies are on the target's medium before any source is removed (175-APP-0036).
+            Step::Flush(path) => disk.flush(&path).map(|_| true),
             Step::Copy { from, to, size } => {
                 if self.copying.is_none() {
                     let source = disk.open(&from).ok_or(Failure::NotFound)?;
@@ -260,14 +288,14 @@ impl Job {
                 }
                 if self.buffer.is_empty() { self.buffer = vec![0u8; SLICE]; }
                 let copying = self.copying.as_mut().unwrap();
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 let want = ((copying.size - copying.offset) as usize).min(SLICE);
                 let got = copying.source.read(copying.offset, &mut self.buffer[..want]);
                 if got == 0 { return Err(Failure::Other(String::from("cannot read the file"))); }
                 copying.sink.write(&self.buffer[..got])?;
                 copying.offset += got as u64;
                 self.done += got as u64;
-                if copying.offset >= copying.size { self.copying = None; return Ok(true); }
+                if copying.offset >= copying.size { copying.sink.finish()?; self.copying = None; return Ok(true); }
                 Ok(false)
             }
         }
@@ -285,7 +313,7 @@ pub enum Dialog {
     Mask { select: bool, line: InputLine },
     Find { line: InputLine },
     Results { mask: String, found: Vec<String>, list: ListState },
-    Volume { side: usize, list: ListState, lines: Vec<String> },
+    Volume { side: usize, list: ListState, lines: Vec<String>, paths: Vec<&'static str> },
     /// F5 / F6: where to.
     Target { op: Op, line: InputLine, sources: Vec<(String, Entry)> },
     Mkdir { line: InputLine },
@@ -350,6 +378,7 @@ impl<'b> Fm<'b> {
         let (volume, _) = panel::volume(path);
         let name = VOLUMES.iter().find(|(v, _)| v.eq_ignore_ascii_case(volume)).map_or("?", |(_, name)| name);
         match disk.volume(path) {
+            Some(v) if v.fat_bits == 0 => format!("{} {}: {} KiB, {} KiB free", name, v.label, v.bytes / 1024, v.free / 1024),
             Some(v) => format!("{} {} FAT{}: {} KiB, {} KiB free", name, v.label, v.fat_bits, v.bytes / 1024, v.free / 1024),
             None => String::from(name),
         }
@@ -425,26 +454,38 @@ impl<'b> Fm<'b> {
         };
         let read_only = !new && !disk.writable(path);
         let mut editor = Editor::new(text, path, read_only);
-        // Where the user may write: ram: and data/ on the boot disk.
-        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: (Shift+F2 saves a copy there)")); }
+        // Where the user may write: ram:, log: and data/ on the boot disk.
+        if read_only { editor.notice = Some(String::from("READ-ONLY: on the boot disk only data/ may be changed, and ram: and log: (Shift+F2 saves a copy)")); }
         self.editor = Some(editor);
     }
 
-    // Saves the editor's text: `name.tmp` first, then it replaces the file (best effort on FAT).
+    // Saves the editor's text through a staging file of its own (`name.tmp`, else `name.tmp1`, … never one that exists,
+    // 175-APP-0035), flushed to its medium before the old file goes (175-APP-0036); then it replaces the file (best effort
+    // on FAT).
     fn save(path: &str, text: &[u8], disk: &mut dyn Disk) -> Result<usize, String> {
-        let temporary = format!("{}.tmp", path);
+        let mut staged = None;
+        for n in 0..100 {
+            let name = if n == 0 { format!("{}.tmp", path) } else { format!("{}.tmp{}", path, n) };
+            match disk.create(&name, false) {
+                Ok(sink) => { staged = Some((sink, name)); break; }
+                Err(Failure::Exists) => continue,
+                Err(failure) => return Err(failure.text()),
+            }
+        }
+        let Some((mut sink, temporary)) = staged else { return Err(format!("{}.tmp to {}.tmp99 all exist", display(path), display(path))) };
         let written = (|| -> Result<(), Failure> {
-            let mut sink = disk.create(&temporary, true)?;
             for chunk in text.chunks(SLICE) { sink.write(chunk)?; }
-            Ok(())
+            sink.finish()
         })();
+        drop(sink);
         if let Err(failure) = written { let _ = disk.remove(&temporary); return Err(failure.text()); }
+        if let Err(failure) = disk.flush(&temporary) { let _ = disk.remove(&temporary); return Err(format!("not written to disk: {}", failure.text())); }
         match disk.remove(path) {
             Ok(()) | Err(Failure::NotFound) => {}
             Err(failure) => { let _ = disk.remove(&temporary); return Err(failure.text()); }
         }
         disk.rename(&temporary, path).map_err(|f| format!("{} (the text is in {})", f.text(), display(&temporary)))?;
-        disk.flush(path);
+        disk.flush(path).map_err(|f| format!("not written to disk: {}", f.text()))?;
         Ok(text.len())
     }
 
@@ -518,9 +559,10 @@ impl<'b> Fm<'b> {
     }
 
     fn volume_dialog(&mut self, side: usize, disk: &mut dyn Disk) {
-        let lines = VOLUMES.iter().map(|(path, _)| Self::volume_line(path, disk)).collect();
-        let selected = VOLUMES.iter().position(|(v, _)| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
-        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines });
+        let paths: Vec<&'static str> = VOLUMES.iter().enumerate().filter(|(i, (path, _))| *i < 2 || disk.volume(path).is_some()).map(|(_, (path, _))| *path).collect();
+        let lines = paths.iter().map(|path| Self::volume_line(path, disk)).collect();
+        let selected = paths.iter().position(|v| v.eq_ignore_ascii_case(panel::volume(&self.panels[side].path).0)).unwrap_or(0);
+        self.dialog = Some(Dialog::Volume { side, list: ListState { selected, top: 0 }, lines, paths });
     }
 
     // F5 / F6: asks where to, with the other panel's directory filled in.
@@ -557,6 +599,7 @@ impl<'b> Fm<'b> {
             if let Err(error) = planned { self.notice = Some(error); return; }
             job.sources.push(from.clone());
         }
+        if job.steps.iter().any(|s| matches!(s, Step::Copy { .. } | Step::MakeDir(_))) { job.steps.push(Step::Flush(target.clone())); }
         if op == Op::Move {
             for (from, entry) in &sources { if !same_volume(from, &target) { if let Err(error) = job.plan_remove(from, entry, disk, 0) { self.notice = Some(error); return; } } }
         }
@@ -584,7 +627,7 @@ impl<'b> Fm<'b> {
         let job = self.job.as_mut().unwrap();
         if job.index < job.steps.len() {
             match job.step(disk) {
-                Ok(true) => { job.index += 1; job.files += 1; }
+                Ok(true) => { if !matches!(job.steps[job.index], Step::Flush(_)) { job.files += 1; } job.index += 1; }
                 Ok(false) => {}
                 Err(failure) => { job.failure = Some(failure); job.choice = 0; }
             }
@@ -596,11 +639,14 @@ impl<'b> Fm<'b> {
     fn finish(&mut self, stopped: bool, disk: &mut dyn Disk) {
         let Some(mut job) = self.job.take() else { return };
         job.copying = None; // closes a partly written file
-        for path in job.sources.iter().chain(job.target.iter()) { disk.flush(path); }
+        let mut unwritten = None;
+        for path in job.target.iter().chain(job.sources.iter()) { if let Err(failure) = disk.flush(path) { unwritten.get_or_insert(failure); } }
         let bytes = if job.op == Op::Delete { String::new() } else { format!(", {} bytes", job.done) };
-        let mut text = format!("{} {} of {}{}", if stopped { "Stopped:" } else { job.op.done() }, job.files, job.steps.len(), bytes);
+        let planned = job.steps();
+        let mut text = format!("{} {} of {}{}", if stopped { "Stopped:" } else { job.op.done() }, job.files, planned, bytes);
         if job.skipped > 0 { text += &format!(", {} skipped", job.skipped); }
         if job.errors > 0 { text += &format!(", {} failed", job.errors); }
+        if let Some(failure) = unwritten { text += &format!("; NOT WRITTEN TO DISK: {}", failure.text()); }
         self.notice = Some(text);
         self.panels[self.active].marked.clear();
         // The cursor goes to what was made: the first entry put in a directory, or the new name.
@@ -624,9 +670,14 @@ impl<'b> Fm<'b> {
                 Some(Some(1)) => {
                     let partial = job.copying.is_some();
                     job.drop_copy();
-                    if let Some(Step::Copy { from, to, size }) = job.steps.get(job.index).cloned() {
-                        if partial { let _ = disk.remove(&to); } // a partly written copy is not left behind
-                        job.kept.push(from); job.done += size;
+                    match job.steps.get(job.index).cloned() {
+                        Some(Step::Copy { from, to, size }) => {
+                            if partial { let _ = disk.remove(&to); } // a partly written copy is not left behind
+                            job.kept.push(from); job.done += size;
+                        }
+                        // The copies may not be on their medium: no source of a move is removed.
+                        Some(Step::Flush(_)) => { let sources = job.sources.clone(); job.kept.extend(sources); }
+                        _ => {}
                     }
                     job.failure = None; job.skipped += 1; job.errors += 1; job.index += 1;
                     if job.index >= job.steps.len() { stop = Some(false); }
@@ -806,10 +857,10 @@ impl<'b> Fm<'b> {
                     }
                 }
             }
-            Dialog::Volume { side, list, .. } => {
-                if list.key(key, VOLUMES.len(), VOLUMES.len()) { true } else {
+            Dialog::Volume { side, list, paths, .. } => {
+                if list.key(key, paths.len(), paths.len()) { true } else {
                     match key.code() {
-                        Code::Enter => { let (side, path) = (*side, VOLUMES[list.selected.min(VOLUMES.len() - 1)].0); self.load(side, path, None, disk); false }
+                        Code::Enter => { let (side, path) = (*side, paths[list.selected.min(paths.len() - 1)]); self.load(side, path, None, disk); false }
                         Code::Esc | Code::F(10) => false,
                         _ => true,
                     }
@@ -824,12 +875,13 @@ impl<'b> Fm<'b> {
                 Edit::Submit => {
                     let typed = String::from(line.as_str().trim());
                     if !typed.is_empty() {
-                        let path = resolve(&self.panels[self.active].path, &typed);
+                        let (path, into_data) = mkdir_target(&self.panels[self.active].path, &typed);
                         match disk.mkdir(&path) {
                             Ok(()) => {
-                                disk.flush(&path);
-                                // The cursor goes to the new directory, or to the one it was made in.
-                                let here = self.panels[self.active].path.clone();
+                                if into_data { self.notice = Some(format!("Made {}: on the boot disk only data/ may be written", display(&path))); }
+                                if let Err(failure) = disk.flush(&path) { self.notice = Some(format!("{}: not written to disk: {}", display(&path), failure.text())); }
+                                // The cursor goes to the new directory, or to the one it was made in (data/ when it went there).
+                                let here = if into_data { String::from(DATA) } else { self.panels[self.active].path.clone() };
                                 let below = if is_root(&here) { panel::volume(&path).1 } else { path.get(here.len() + 1..).unwrap_or("") };
                                 let focus = (inside(&path, &here) && !path.eq_ignore_ascii_case(&here)).then(|| String::from(below.split('/').next().unwrap_or("")));
                                 self.load(self.active, &here, focus.as_deref(), disk);
@@ -1080,7 +1132,7 @@ impl<'b> Fm<'b> {
         let (offset, size) = job.copying.as_ref().map_or((0, 0), |c| (c.offset, c.size));
         progress(grid, inner.x + 1, inner.y + 1, inner.w.saturating_sub(2), offset, size, theme.selected, theme.dialog);
         progress(grid, inner.x + 1, inner.y + 3, inner.w.saturating_sub(2), job.done, job.total, theme.selected, theme.dialog);
-        let totals = if job.op == Op::Delete { format!("{} of {}", job.index, job.steps.len()) } else { format!("{} of {}; {} of {} bytes", job.index, job.steps.len(), job.done, job.total) };
+        let totals = if job.op == Op::Delete { format!("{} of {}", job.at(), job.steps()) } else { format!("{} of {}; {} of {} bytes", job.at(), job.steps(), job.done, job.total) };
         grid.text_max(inner.x + 1, inner.y + 4, &totals, inner.w.saturating_sub(2), theme.dialog);
         grid.text_max(inner.x + 1, inner.y + 5, "Esc: stop", inner.w.saturating_sub(2), theme.dialog);
         if job.asking { message(grid, job.op.title(), &["Stop the operation?"], &["Stop", "Continue"], job.choice, theme); }
@@ -1140,7 +1192,9 @@ impl<'b> Fm<'b> {
                 let prompt = format!("{} {} to (A:/..., ram:/...):", if *op == Op::Copy { "Copy" } else { "Move or rename" }, what);
                 Some(input_dialog(grid, if *op == Op::Copy { "Copy" } else { "Move" }, &prompt, line, 64, theme))
             }
-            Some(Dialog::Mkdir { line }) => Some(input_dialog(grid, "Make directory", "Name (parents are made too):", line, 50, theme)),
+            Some(Dialog::Mkdir { line }) => Some(if outside_data(&self.panels[self.active].path) {
+                input_dialog(grid, "Make directory", "Only data/ may be written here: a name is made in A:/data/", line, 64, theme)
+            } else { input_dialog(grid, "Make directory", "Name (parents are made too):", line, 50, theme) }),
             Some(Dialog::NewFile { line }) => Some(input_dialog(grid, "Edit new file", "Name:", line, 50, theme)),
             Some(Dialog::Delete { job, count, selected }) => {
                 let lines = [format!("Delete {} {}", count, if *count == 1 { "entry" } else { "entries" }), format!("({} files and directories in all)?", job.steps.len())];
@@ -1164,7 +1218,7 @@ impl<'b> Fm<'b> {
                 grid.text(inner.x + 1, inner.bottom() - 1, "Enter: go to   F3: view   Esc: close", theme.dialog);
                 None
             }
-            Some(Dialog::Volume { side, list, lines }) => {
+            Some(Dialog::Volume { side, list, lines, .. }) => {
                 let inner = dialog(grid, if *side == 0 { "Left panel volume" } else { "Right panel volume" }, 64, lines.len() + 4, theme);
                 for (i, volume) in lines.iter().enumerate() {
                     grid.text_padded(inner.x + 1, inner.y + 1 + i, volume, inner.w.saturating_sub(2), if i == list.selected { theme.selected } else { theme.dialog });
@@ -1182,7 +1236,7 @@ impl<'b> Fm<'b> {
                                          Some(Dialog::Find { .. }) => "FIND", Some(Dialog::Results { .. }) => "RESULTS", Some(Dialog::Volume { .. }) => "VOLUME",
                                          Some(Dialog::Target { .. }) => "TARGET", Some(Dialog::Mkdir { .. }) => "MKDIR", Some(Dialog::NewFile { .. }) => "NEWFILE",
                                          Some(Dialog::Delete { .. }) => "DELETE", Some(Dialog::Overwrite { .. }) => "OVERWRITE" };
-        let job = match &self.job { None => String::from("NONE"), Some(job) => format!("{}:{}/{}{}", job.op.name(), job.index, job.steps.len(), if job.failure.is_some() { ":FAILED" } else if job.asking { ":ASKING" } else { "" }) };
+        let job = match &self.job { None => String::from("NONE"), Some(job) => format!("{}:{}/{}{}", job.op.name(), job.at(), job.steps(), if job.failure.is_some() { ":FAILED" } else if job.asking { ":ASKING" } else { "" }) };
         let panel = &self.panels[self.active];
         format!("LEFT=/{} {} RIGHT=/{} {} ACTIVE={} CURRENT={} MARKED={} DIALOG={} MENU={} VIEW={} JOB={}", self.panels[0].path, mode(&self.panels[0]), self.panels[1].path,
                 mode(&self.panels[1]), if self.active == 0 { "L" } else { "R" }, panel.current().map_or("", |e| e.name.as_str()), panel.marked.len(), dialog,

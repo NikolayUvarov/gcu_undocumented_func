@@ -80,3 +80,46 @@ impl Glottis {
         (((2 * x - (3 * x * x >> 15)) * 4096) >> 15, wrapped)
     }
 }
+
+/// 16 → 48 kHz: the polyphase windowed-sinc filter of `mind::voice::Resampler::between(16_000, 48_000, 1)` (Kaiser,
+/// cut at 7.5 kHz: flat to 6 kHz, −1 dB at 7 kHz, images 52 dB down from 8.5 kHz) as a table, so the service needs no
+/// heap or floating point; `tests/voice_host.rs` checks it against that design (252-APP-0041).
+pub const UP: usize = 3;
+pub const TAPS: usize = 32;
+#[rustfmt::skip]
+pub const UPSAMPLE: [i32; UP * TAPS] = [
+    // phase 0
+    14, -42, 95, -183, 313, -486, 697, -929,
+    1150, -1315, 1355, -1167, 569, 890, -5103, 58978,
+    15743, -8434, 5872, -4328, 3193, -2300, 1592, -1044,
+    639, -355, 172, -66, 13, 7, -9, 5,
+    // phase 1
+    15, -40, 77, -123, 170, -200, 186, -92,
+    -130, 539, -1214, 2276, -3950, 6806, -12940, 41389,
+    41389, -12940, 6806, -3950, 2276, -1214, 539, -130,
+    -92, 186, -200, 170, -123, 77, -40, 15,
+    // phase 2
+    5, -9, 7, 13, -66, 172, -355, 639,
+    -1044, 1592, -2300, 3193, -4328, 5872, -8434, 15743,
+    58978, -5103, 890, 569, -1167, 1355, -1315, 1150,
+    -929, 697, -486, 313, -183, 95, -42, 14,
+];
+
+/// Three 48 kHz samples for each 16 kHz one; about 1 ms of delay (`TAPS / 2` input samples).
+pub struct Upsampler { history: [i32; 2 * TAPS], write: usize }
+impl Upsampler {
+    pub const fn new() -> Self { Self { history: [0; 2 * TAPS], write: 0 } }
+    pub fn run(&mut self, input: i16) -> [i16; UP] {
+        // The last TAPS samples twice over, so that every window is contiguous; oldest first from `write`.
+        self.history[self.write] = input as i32;
+        self.history[self.write + TAPS] = input as i32;
+        self.write = (self.write + 1) % TAPS;
+        let window = &self.history[self.write..self.write + TAPS];
+        let mut out = [0i16; UP];
+        for (phase, sample) in out.iter_mut().enumerate() {
+            let sum: i64 = UPSAMPLE[phase * TAPS..(phase + 1) * TAPS].iter().zip(window).map(|(&c, &x)| c as i64 * x as i64).sum();
+            *sample = ((sum + (1 << 15)) >> 16).clamp(i16::MIN as i64, i16::MAX as i64) as i16;
+        }
+        out
+    }
+}

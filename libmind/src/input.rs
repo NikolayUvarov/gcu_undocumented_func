@@ -12,6 +12,7 @@ static MODIFIERS: AtomicU8 = AtomicU8::new(0);
 static POINTER_X: AtomicUsize = AtomicUsize::new(0);
 static POINTER_Y: AtomicUsize = AtomicUsize::new(0);
 static AREA: [AtomicUsize; 6] = [const { AtomicUsize::new(0) }; 6]; // screen width, height; grid x, y, width, height
+static CELL: [AtomicUsize; 2] = [AtomicUsize::new(8), AtomicUsize::new(16)]; // the grid's cell in pixels (wm's scale)
 static POINTER_SEEN: AtomicBool = AtomicBool::new(false);
 static MOVED: [AtomicIsize; 2] = [const { AtomicIsize::new(0) }; 2]; // how far the last pointer event moved it
 
@@ -54,7 +55,12 @@ fn next_word() -> usize {
 
 /// The area the pointer of a screen moves in: on a screen of `screen` pixels, the grid at (x, y), `width` × `height`
 /// pixels of 8 × 16 cells (`Terminal` sets its grid's). The pointer starts in the middle.
-pub fn pointer_area(screen: (usize, usize), x: usize, y: usize, width: usize, height: usize) {
+pub fn pointer_area(screen: (usize, usize), x: usize, y: usize, width: usize, height: usize) { pointer_area_cells(screen, x, y, width, height, (8, 16)) }
+
+/// `pointer_area` for a grid of cells `cell` pixels in size (a scaled grid, 000-APP-0061).
+pub fn pointer_area_cells(screen: (usize, usize), x: usize, y: usize, width: usize, height: usize, cell: (usize, usize)) {
+    CELL[0].store(cell.0.max(1), Ordering::Relaxed);
+    CELL[1].store(cell.1.max(1), Ordering::Relaxed);
     for (at, value) in AREA.iter().zip([screen.0, screen.1, x, y, width, height]) { at.store(value, Ordering::Relaxed); }
     POINTER_X.store(width / 2, Ordering::Relaxed);
     POINTER_Y.store(height / 2, Ordering::Relaxed);
@@ -66,7 +72,7 @@ pub fn pointer_pixel() -> Option<(usize, usize)> {
 }
 
 /// The cell the pointer of the screen is on, once a pointer event came (a window's manager draws its own pointer).
-pub fn pointer_cell() -> Option<(usize, usize)> { pointer_pixel().map(|(x, y)| (x / 8, y / 16)) }
+pub fn pointer_cell() -> Option<(usize, usize)> { pointer_pixel().map(|(x, y)| (x / CELL[0].load(Ordering::Relaxed), y / CELL[1].load(Ordering::Relaxed))) }
 
 /// Next key press of the calling (focused) task; releases and events without a decoded key are skipped.
 pub fn read_key() -> Option<Key> {

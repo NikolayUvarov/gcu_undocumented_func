@@ -27,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import wave
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
@@ -37,6 +38,9 @@ import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 import release as release_tool  # noqa: E402
+sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
+from fbank_reference import signal as fbank_signal  # noqa: E402
+FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
 SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
@@ -275,7 +279,8 @@ class VM:
     def screenshot(self):
         path = ROOT / (self.disk + ".ppm")
         try:
-            self.hmp(f"screendump {path.relative_to(ROOT).as_posix()}")
+            # Relative inside the tree (no drive letter for HMP on Windows); a disk elsewhere (/tmp) is named in full.
+            self.hmp(f"screendump {(path.relative_to(ROOT) if path.is_relative_to(ROOT) else path).as_posix()}")
             data = path.read_bytes()
             # Retain a viewable artifact outside the build tree.
             (Path(tempfile.gettempdir()) / "mind-core-clock.ppm").write_bytes(data)
@@ -316,25 +321,28 @@ def canon(text):
     return "".join(lookup[tuple(glyphs[ord(ch)][1])] if ord(ch) in glyphs else "?" for ch in text)
 
 
-def screen_text(vm):
-    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs."""
+def screen_text(vm, cell=(8, 16)):
+    """Reads the screen as text: every 8x16 cell with at most two colours is matched against the font's glyphs. A larger
+    `cell` (wm's scale, 000-APP-0061) is read at the first screen pixel each font pixel was stretched to."""
     lookup = glyph_lookup()
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     width, height = map(int, size.split())
+    cw, ch = cell
     # mind::tui centers the text grid: a screen not a multiple of the cell (800x600 on aarch64) has margins.
-    x0, y0 = width % 8 // 2, height % 16 // 2
+    x0, y0 = width % cw // 2, height % ch // 2
+    xs, ys = [(c * cw + 7) // 8 for c in range(8)], [(r * ch + 15) // 16 for r in range(16)]
     lines = []
-    for cy in range(height // 16):
+    for cy in range(height // ch):
         line = []
-        for cx in range(width // 8):
-            rows = [[pixels[((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3:((y0 + cy * 16 + r) * width + x0 + cx * 8 + c) * 3 + 3] for c in range(8)] for r in range(16)]
+        for cx in range(width // cw):
+            rows = [[pixels[((y0 + cy * ch + ys[r]) * width + x0 + cx * cw + xs[c]) * 3:((y0 + cy * ch + ys[r]) * width + x0 + cx * cw + xs[c]) * 3 + 3] for c in range(8)] for r in range(16)]
             colours = {p for row in rows for p in row}
             found = " " if len(colours) == 1 else "?"
             for fg in colours if len(colours) == 2 else ():
                 bits = tuple(sum(0x80 >> c for c in range(8) if row[c] == fg) for row in rows)
-                ch = lookup.get(bits)
-                if ch is not None:
-                    found = ch
+                glyph = lookup.get(bits)
+                if glyph is not None:
+                    found = glyph
                     break
             line.append(found)
         lines.append("".join(line))
@@ -383,6 +391,13 @@ def frames_free(vm):
         previous = free
         time.sleep(.1)
     raise AssertionError("frame pool use did not settle")
+
+
+def test_bmp(width, height, pixel):
+    """A 24-bit BMP, rows from the bottom, of `pixel(x, y)` (0xRRGGBB)."""
+    stride = (width * 3 + 3) & ~3
+    rows = b"".join(b"".join(struct.pack("<I", pixel(x, y))[:3] for x in range(width)).ljust(stride, b"\0") for y in reversed(range(height)))
+    return b"BM" + struct.pack("<IHHI", 54 + len(rows), 0, 0, 54) + struct.pack("<IiiHHIIiiII", 40, width, height, 1, 24, 0, len(rows), 2835, 2835, 0, 0) + rows
 
 
 def heap_used(vm):
@@ -581,9 +596,35 @@ def pool_covers_free_ram(vm):
         for a, b in pieces:
             if b > a and b - a >= 2 << 20:
                 expected, ranges = expected + b - a, ranges + 1
-    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", vm.command("free"))[1])
+    free = vm.command("free")
+    total = int(re.search(r"FRAMES=(\d+) FRAMES_FREE=", free)[1])
     assert total == expected, (total, expected, ranges)
-    print(f"PASS: the frame pool is every free range of the firmware map ({ranges} ranges, {total >> 20} MiB)", flush=True)
+    # 211-APP-0057: free names the machine's memory, the frame pool, first; the kernel arena after it.
+    mib, used, unused = map(int, re.search(r"^MEMORY: (\d+) MIB, (\d+) MIB IN USE, (\d+) MIB FREE", free, re.M).groups())
+    pool_free = int(re.search(r"FRAMES_FREE=(\d+)", free)[1])
+    assert (mib, used, unused) == (total >> 20, (total - pool_free) >> 20, pool_free >> 20), free
+    assert free.index("MEMORY:") < free.index("KERNEL ARENA: ARENA="), free
+    # top's first memory bar is the frame pool too, of the size free gives; the arena has the second.
+    vm.send("top\n")
+    vm.expect("[TOP] READY")
+    time.sleep(1.5)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    vm.send("q")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[TOP] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    def size(n):
+        for unit, letter in ((1 << 30, "G"), (1 << 20, "M"), (1 << 10, "K")):
+            if n >= unit:
+                tenths = n * 10 // unit
+                return f"{tenths // 10}{letter}" if tenths >= 1000 else f"{tenths // 10}.{tenths % 10}{letter}"
+        return f"{n}B"
+    mem = next((row for row in screen if row.startswith(" Mem  [")), None)
+    kern = next((row for row in screen if row.startswith(" Kern [")), None)
+    assert mem and re.search(rf"\d+(\.\d)?[KMG]/{re.escape(size(total))} used, ", mem), (size(total), screen[:14])
+    assert kern and "kernel arena " in kern and "/64.0M used" in kern, screen[:14]
+    print(f"PASS: the frame pool is every free range of the firmware map ({ranges} ranges, {total >> 20} MiB); free and "
+          f"top show it as the machine's memory ({used} MiB in use), the kernel arena apart", flush=True)
     return ranges
 
 
@@ -636,7 +677,7 @@ def normal_suite(vm):
     require(vm.command("run app &"), "PID=4 NAME=app BACKGROUND")
     require(vm.command("run app2 &"), "PID=5 NAME=app2 BACKGROUND")
     first = task_rows(vm)
-    time.sleep(.4)
+    time.sleep(1.2)  # a clock wakes when its second changes (000-APP-0012)
     second = task_rows(vm)
     assert set(second) == {1, 2, 3, 4, 5}, second
     assert all(int(second[p][-1]) > int(first[p][-1]) for p in first), (first, second)
@@ -1055,6 +1096,16 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
+    # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
+    # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
+    import datetime
+    require(vm.command("date set 2031-05-17 08:30:15"), "CLOCK SET")
+    require(vm.command("date"), "DATE: 2031-05-17 08:30:1")
+    for wrong in ("2031-02-30 08:30", "2100-01-01 00:00", "2031-05-17"):
+        require(vm.command(f"date set {wrong}"), "USAGE: DATE SET YYYY-MM-DD HH:MM[:SS]")
+    require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
+    require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
+    print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
 
 
 def line_faces_check(vm):
@@ -1076,6 +1127,27 @@ def line_faces_check(vm):
         vm.expect("MIND> ")
     assert task_rows(vm) == {}, task_rows(vm)
     print("PASS: clock --line and dzen-clock --line run as console programs: one line on the screen, written again every second; Esc stops them", flush=True)
+    rtc_load_check(vm)
+
+
+def rtc_load_check(vm):
+    """000-APP-0012: a clock reads the RTC service about once a minute and counts the seconds between, so four clocks
+    in the background add a few messages to its endpoint, not 10 a second each."""
+    rtc = vm.services()["rtc"]
+    def rtc_messages():
+        return sum(int(m) for m, server in re.findall(r"^EP=\d+ .*MESSAGES=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M) if int(server) == rtc)
+    start = rtc_messages()
+    pids = [int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1]) for _ in range(4)]
+    time.sleep(3)  # each clock waits out one change of the RTC's second when it starts
+    before = rtc_messages()
+    time.sleep(5)
+    added = rtc_messages() - before
+    for pid in pids:
+        vm.command(f"kill {pid}")
+    # Starting, each clock read the RTC until its second changed: the count sees the clocks' calls.
+    assert before - start >= 4, f"{before - start} messages to the RTC service while four clocks started"
+    assert added < 20, f"{added} messages to the RTC service in 5 s with 4 clocks (10 a second each was 200)"
+    print(f"PASS: four clocks: {before - start} messages to the RTC service as they started, {added} in the next 5 s (they read it once a minute)", flush=True)
 
 
 # msh scripts on the shell suite's disk (issue 094).
@@ -1234,7 +1306,77 @@ def tools_suite(vm):
     require(vm.command("view nothing.txt"), "PID=")
     assert heap_used(vm) == baseline
     print("PASS: view: UTF-8 text with Cyrillic, paging, line numbers, search, end of file, hex mode, missing file", flush=True)
+    fbank_check(vm)
+    dictate_check(vm)
+    speak_check(vm)
     monitors_check(vm)
+
+
+def fbank_check(vm):
+    """250: dictate computes the dictation models' features in the system (built with SSE2 on x86, in soft float on
+    aarch64, where programs may not use FP/SIMD yet) as kaldi-native-fbank does on the host (tests/fbank_reference.txt)."""
+    reference = [list(map(float, line.split())) for line in (ROOT / "tests/fbank_reference.txt").read_text().splitlines() if not line.startswith("#")]
+    vm.send("dictate --features fbank.wav\n")
+    out = vm.expect("MIND> ", timeout=60, after="dictate --features fbank.wav\n")
+    head = re.search(r"FBANK SAMPLES=(\d+) FRAMES=(\d+) IN (\d+) US", out)
+    assert head and int(head[1]) == len(FBANK_SIGNAL) and int(head[2]) == len(reference), out[-2000:]
+    rows = dict(re.findall(r"^F(\d+) ([-\d. ]+)$", out.replace("\r", ""), re.M))
+    worst = 0.0
+    for frame, want in enumerate(reference):
+        got = list(map(float, rows[str(frame)].split()))
+        assert len(got) == 80, (frame, len(got))
+        worst = max(worst, max(abs(a - b) for a, b in zip(got, want)))
+    assert worst < 2e-3, worst
+    print(f"PASS: dictate's features in the system equal kaldi-native-fbank's ({head[2]} frames, largest difference {worst:.1e}, "
+          f"{int(head[3]) / 1000:.1f} ms)", flush=True)
+
+
+# The toy transducer's text of the test signal (tests/nn_host.rs, TOY_TEXT).
+TOY_TEXT = "нет нет дом нет нет дом нет нет дом нет нет дом нет нет"
+
+
+def dictate_check(vm):
+    """250: dictate runs the whole chain in the system (a network file read and checked, features, encoder, greedy
+    search) and gives the host's text, with tests/dictate_toy.bin (scripts/voice_dictate/toy.py) in place of the 71 MB
+    model; and refuses a damaged file."""
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("dictate --model toy.bin fbank.wav")
+    simd = re.search(r"DICTATE: MODEL 9604 BYTES, READ IN \d+ MS, CHECKED IN \d+ MS; SIMD (AVX2|NONE)", out)
+    assert simd and f"TEXT: {TOY_TEXT}" in out and "331 MS OF SPEECH" in out, out[-2000:]
+    require(run("dictate --model toy-damaged.bin fbank.wav"), "dictate: toy-damaged.bin: Format(\"checksum\")")
+    print(f"PASS: dictate in the system: the toy transducer's text is the host's (SIMD {simd[1]}); a damaged file is refused", flush=True)
+
+
+def speak_dictionary():
+    """252: a small MINDDIC1 dictionary (scripts/voice_tts/dictionary.py) over a made-up phoneme table, the text speak
+    reads, and the ids vosk-tts's algorithm gives for it on the host."""
+    sys.path.insert(0, str(ROOT / "scripts/voice_tts"))
+    sys.dont_write_bytecode = True  # nothing written into scripts/
+    import dictionary as voice_dictionary
+    names = ["_", "^", "$", " ", "!", ",", ".", "-"] + [v + s for v in "aoueiy" for s in "01"] + \
+        [c + soft for c in "bvgdzklmnprstfh" for soft in ("", "j")] + ["zh", "c", "ch", "sh", "sch", "j"]
+    table = {n: [i] for i, n in enumerate(names)}
+    rules = voice_dictionary.convert
+    best = {"говорит": rules("говор+ит"), "разум": rules("р+азум"), "корабля": rules("корабл+я"), "ёлка": rules("+ёлка"),
+            "мкс": ["e0", "m", "k", "a0", "e1", "s"]}  # an abbreviation, kept with its phonemes
+    text = "Говорит разум корабля — ёлка, МКС! Неизвестное слово."
+    data = voice_dictionary.build(table, best)[0]
+    return data, text, voice_dictionary.ids(text, table, best)
+
+
+def speak_check(vm):
+    """252: speak's Russian front end in the system (dictionary, rules, punctuation) gives the host's ids, and a
+    damaged dictionary is refused."""
+    want = speak_dictionary()[2]
+    def run(command):
+        vm.send(command + "\n")
+        return vm.expect("MIND> ", timeout=60, after=command + "\n")
+    out = run("speak --dictionary speak.dic --ids --file speak.txt")
+    assert f"IDS: {' '.join(map(str, want))}" in out, (want, out[-2000:])
+    require(run("speak --dictionary speak-damaged.dic --ids --file speak.txt"), "speak: speak-damaged.dic: checksum")
+    print(f"PASS: speak in the system: the Russian front end gives the host's {len(want)} phoneme ids; a damaged dictionary is refused", flush=True)
 
 
 # kbench's rows (176-KRN-0062), by group; `check` and `bench` follow the same table.
@@ -1446,6 +1588,7 @@ def monitors_check(vm):
     baseline = heap_used(vm)
     clock = int(re.search(r"PID=(\d+) NAME=clock BACKGROUND", vm.command("run clock &"))[1])
     tasks = BASE + 2  # the services, clock and the monitor
+    require(vm.command(f"budget {clock} 20 100"), f"BUDGET PID={clock} 20 MS PER 100 MS")  # top shows it (000-APP-0034)
     # top: the task table agrees with ps; details, sorting, filter and tree.
     vm.send("top\n")
     vm.expect("[TOP] READY")
@@ -1455,6 +1598,7 @@ def monitors_check(vm):
     assert canon(f"Tasks {tasks}:") in screen[1], screen[1]
     assert canon("load average") in screen[0], screen[0]
     assert table_row(screen, r"PID +PPID NAME +STATE") and table_row(screen, r" clock +") and table_row(screen, r" top +"), screen
+    assert table_row(screen, r"PPID NAME .* BUDGET") and re.search(r" 20/100\*? *$", table_row(screen, r" clock +")), table_row(screen, r" clock +")
     assert table_row(screen, r"/64\.0M used"), screen
     assert len([row for row in screen if re.match(r"^CPU\d|^ CPU\d", row)]) >= 1, screen
     assert re.search(r"DETAILS=[1-9]", tool_status(vm, "[TOP] SORT=CPU"))
@@ -1657,7 +1801,7 @@ def fm_check(vm):
         return status_line(vm, text)
     def poke(text):
         return keys(b"\x18", text)  # Ctrl+X: bound to nothing (a letter would go to the command line)
-    vm.send("fm\n")
+    vm.send("fm /\n")  # the root: fm alone opens in data/ when it exists (000-APP-0062)
     vm.expect("[FM] READY LEFT=/ FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=docs")
     time.sleep(.3)
     screen = screen_text(vm)
@@ -1723,7 +1867,8 @@ def fm_check(vm):
     else:
         raise AssertionError("clock.elf not reached")
     vm.send_bytes(b"\r")
-    time.sleep(.5)
+    vm.expect("[CLOCK] ")  # started and in front: loading it from the disk may take longer than a fixed wait
+    time.sleep(.2)
     vm.send_bytes(b"\x1a")
     pid = int(re.search(r"PID=(\d+) BACKGROUND\. SHELL RESUMED\.", vm.expect("BACKGROUND. SHELL RESUMED."))[1])
     time.sleep(.2)
@@ -1917,7 +2062,7 @@ def busy_suite(vm):
     require(vm.command("run app2 &"), "PID=1 NAME=app2 BACKGROUND")
     require(vm.command("run clock &"), "PID=2 NAME=clock BACKGROUND")
     first = task_rows(vm)
-    time.sleep(.4)
+    time.sleep(1.2)  # a clock wakes when its second changes (000-APP-0012)
     second = task_rows(vm)
     assert int(second[1][-2]) > int(first[1][-2]), (first, second)
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
@@ -2873,6 +3018,53 @@ def store_suite(vm):
     require(tally("effect fy.txt"), "EFFECT 2 DONE SAVED EPOCH 8")
     print("PASS: checkpoints: tally restores and saves its counters across instances, a stale instance is fenced, an "
           "effect cut short comes back pending and is reconciled before another begins", flush=True)
+    fm_store_check(vm)
+
+
+def fm_store_check(vm):
+    """300-APP-0038: fm shows the block store as store:; a file copied there is stored as an object and published under
+    its name, F3 reads it back, F8 unpublishes it."""
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    text = b"from fm to the store\n"
+    require(vm.command("write ram:fmnote.txt from fm to the store"), "WROTE 21 BYTES")
+    vm.send("fm ram:\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/ram: FULL")
+    keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: A:, ram:, store: (no log: or models: here)
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/store: BRIEF")
+
+    def to(name):
+        line = keys(b"\x1b[H", "CURRENT=")  # Home
+        for _ in range(30):
+            if f"CURRENT={name} " in line:
+                return
+            line = keys(b"\x1b[B", "CURRENT=")
+        raise AssertionError(line)
+    to("fmnote.txt")
+    keys(b"\x1b[15~", "DIALOG=TARGET")  # F5: to the other panel, store:/
+    vm.send_bytes(b"\r")
+    require(status_line(vm, "JOB=NONE", whole=True), "RIGHT=/store: BRIEF")
+    keys(b"\t", "ACTIVE=R")
+    to("fmnote.txt")
+    keys(b"\x1bOR", "VIEW=1")  # F3
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("from fm to the store") in row for row in screen), screen
+    keys(b"\x1b", "VIEW=0")
+    keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
+    vm.send_bytes(b"\r")
+    status_line(vm, "JOB=NONE", whole=True)
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
+    require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
+    require(log, "REMOVED fmnote.txt VERSION")
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
 
 
 def free_port():
@@ -3227,10 +3419,13 @@ def services_suite(vm):
     require(details, "NAME=hello")
     require(details, "QUOTA TASKS=0/0 ENDPOINTS=0/4")
     require(details, "CAPS=5/4095")
-    # The standard client endpoints in slots 2..6, write and grant only; no privilege.
+    # The standard client endpoints in slots 2..6, write and grant only, no badge right (ABI 6); no privilege.
     caps = vm.command("caps 4")
     for slot in (2, 3, 4, 5, 6):
-        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg-", caps), (slot, caps)  # EP: issue 075
+        assert re.search(fr"SLOT={slot} GEN=0 endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=-wg--(?:\s|$)", caps, re.M), (slot, caps)  # EP: issue 075
+    # init's own endpoint carries every right, the badge right too (000-KRN-0073).
+    init_caps = vm.command("caps 1", raw=True)
+    assert re.search(r" endpoint NODE=\d+ PARENT=\d+ EP=[1-9]\d* RIGHTS=rwgkb(?:\s|$)", init_caps, re.M), init_caps
     assert not re.search(r"(control|platform|spawn|observe|input|display)", caps), caps
     require(vm.command("run extra/demo.elf &"), "PID=5 NAME=demo BACKGROUND")
     time.sleep(1.2)
@@ -3306,6 +3501,13 @@ def services_suite(vm):
     require(output, "fm — file manager")
     assert "STARTED" not in output, output
     require(vm.command("help cat"), "- ls [path], cat <file>: files")
+    # log: named in help, efivar described (211-APP-0013); the USB image test checks log: on a disk that has it.
+    require(vm.command("help ls"), "log: the boot disk's log partition")
+    require(vm.command("help write"), "on ram:, on log: and in data/")
+    output = vm.command("efivar --help")
+    require(output, "efivar — the firmware's boot variables")
+    assert "ALLOW?" not in output, "--help asks the user for nothing"
+    require(vm.command("help efivar"), "bootnext <hex>")
     output = vm.command("help voice")
     require(output, "- voice on [--wav file] [seconds], voice off, voice listen: voice control")
     require(output, "PROGRAM voice:")
@@ -3322,6 +3524,17 @@ def services_suite(vm):
     output = vm.command("run view --help")
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
+    # The shell's commands answer the same keys with their lines of help; fm /? shows fm's text unstarted (000-APP-0054).
+    for line, want in (("date -h", "- date: calendar date and time from the RTC"), ("date /?", "- date: calendar date"),
+                       ("ls --help", "- ls [path], cat <file>: files"), ("ps -help", "- ps: tasks"), ("kill /H", "- kill <id>: terminate")):
+        output = vm.command(line)
+        require(output, want)
+        assert "TAKES NO ARGUMENTS" not in output and "ERROR" not in output and "KILLED" not in output, (line, output)
+    output = vm.command("fm /?")
+    require(output, "fm — file manager")
+    assert "STARTED" not in output, output
+    print("PASS: the shell's commands answer the help keys with their lines of help (date -h, date /?, ls --help, ps -help, "
+          "kill /H); fm /? shows fm's text without starting it", flush=True)
     blockstore_check(vm)
     escrow_check(vm)
     reader_badges_check(vm)
@@ -3886,12 +4099,35 @@ def edit_check(vm):
     leave(f10, "[EDIT] DONE")
     require(vm.command("ls ram:"), "1 ENTRIES, 1 FILES")
     require(vm.command("ls data"), "2 ENTRIES, 2 FILES, 59 BYTES")
+    # T4: a Rust file in its language's colours on the classic blue, pixel for pixel: keyword, plain text, comment.
+    require(vm.command("write ram:colour.rs fn main() // note"), "WROTE 18 BYTES")  # no braces: msh would read them
+    start("ram:colour.rs")
+    keys(b"\x1b[F", "LINE=1 COL=18 ")  # End: the cursor's underline off the cells checked
+    time.sleep(.3)
+    _, size, _, _ = vm.screenshot().split(b"\n", 3)
+    width, height = map(int, size.split())
+    x0, y0 = width % 8 // 2, height % 16 // 2 + 16
+    check_text16(vm, x0, y0, "fn", 0xFFFFFF, 0x0000AA)
+    check_text16(vm, x0 + 3 * 8, y0, "main", 0x55FFFF, 0x0000AA)
+    check_text16(vm, x0 + 10 * 8, y0, "// note", 0xAAAAAA, 0x0000AA)
+    assert canon("Rust") in screen_text(vm)[0]
+    vm.serial(enter=False)
+    leave(f10, "[EDIT] DONE")
+    # 175-APP-0035: a save stages in a file of its own; an existing keep.txt.tmp stays as it was.
+    require(vm.command("write ram:keep.txt.tmp not the editor's"), "WROTE")
+    start("ram:keep.txt")
+    keys(b"kept", "BYTES=4 ")
+    keys(f2, "[EDIT] SAVED 4 BYTES TO ram:keep.txt")
+    leave(f10, "[EDIT] DONE")
+    require(vm.command("cat ram:keep.txt.tmp"), "not the editor's")
+    require(vm.command("cat ram:keep.txt"), "kept")
+    assert "keep.txt.tmp1" not in vm.command("ls ram:"), "the save's own staging file is gone"
     # vfs_server made a scope for each start and ended those whose editor had exited.
     scopes = vm.command("dmesg -s vfs_server")
     for made in ("FOR ram:/ (WRITABLE)", "FOR :/data (WRITABLE)", "FOR :/ (READ-ONLY)"):
         require(scopes, made)
     require(scopes, "ENDED")
-    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory", flush=True)
+    print("PASS: edit: Latin and Cyrillic text saved on ram: and in data/ (F2, the unsaved-changes dialog), read back; CRLF kept; a boot file opens read-only; the editor's client is confined to its file's directory; a Rust file in its colours; a save leaves an existing name.tmp alone", flush=True)
 
 
 def edit_suite(args):
@@ -4019,6 +4255,16 @@ def disk_check(vm):
     require(vm.expect("MIND> "), "бета")
     after = ram_free()
     assert copied < after <= before, (before, copied, after)  # only the new directory's cluster (512 bytes) is used
+    # Session 3 (000-APP-0062): fm alone opens in data/; F7 at the boot disk's root, where nothing may be written,
+    # makes the name in data/ and goes there.
+    vm.send("fm\n")
+    require(status_line(vm, "[FM] READY"), "LEFT=/data FULL")
+    keys(b"\r", "LEFT=/ FULL")  # the cursor starts on ".."
+    keys(f7, "DIALOG=MKDIR")
+    keys("плюс".encode(), "DIALOG=MKDIR")
+    keys(b"\r", "LEFT=/data FULL RIGHT=/ BRIEF ACTIVE=L CURRENT=плюс ")
+    leave("[FM] DONE")
+    require(vm.command("ls data"), "плюс")
     # fsck: the boot disk has a broken chain (broken.txt), the RAM disk is clean; nothing is changed.
     output = vm.command("fsck")
     require(output, "ERRORS: lost clusters")
@@ -4027,7 +4273,7 @@ def disk_check(vm):
     assert re.search(r"ram: MIND RAM FAT16: 0 files, 1 directories; 1 clusters used, \d+ free\s+clean", output), output
     require(output, "fsck: 1 volume with errors (nothing was changed)")
     require(vm.command("fsck ram:"), "fsck: no errors (nothing was changed)")
-    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
+    print("PASS: disk: fm copies a tree to ram:, renames, copies back to data/, deletes, makes a directory (in data/ when typed at the root, where fm alone opens) and edits in place; df follows; fsck finds a broken chain and passes a clean volume", flush=True)
     # format (issue 083): only ram:, only with -y; the files are gone, the label is new, the volume works at once.
     require(vm.command("write ram:keep.txt kept"), "WROTE")
     require(vm.command("format ram: -l scratch"), "FORMAT: THIS ERASES ALL FILES ON ram: (NOTHING WAS CHANGED). TO GO ON: format ram: -l scratch -y")
@@ -4557,16 +4803,28 @@ def listen_suite(vm, starts):
     vm.command("kill 8")
     # hear (issue 078): commands recognized in a WAV file, the phrase outside the grammar refused; the microphone's
     # silence holds nothing.
-    vm.send("hear --wav commands.wav\n")
-    heard = vm.expect("MIND> ", timeout=180, after="hear --wav commands.wav\n")
+    vm.send("hear --wav commands.wav --save ram:first.wav\n")
+    heard = vm.expect("MIND> ", timeout=180, after="hear --wav commands.wav --save ram:first.wav\n")
     require(heard, 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
     require(heard, 'HEARD "what time is it" INTENT=time CONFIDENCE=')
     require(heard, "NOT UNDERSTOOD (CLOSEST")
     assert heard.count("HEARD") == 2 and heard.count("NOT UNDERSTOOD") == 1, heard
+    # 000-APP-0053: each utterance with its time, length and level and the three closest phrases; a refusal says why.
+    utterances = re.findall(r"UTTERANCE AT \d+\.\d\d S: (\d+) MS, LEVEL (-\d+) DBFS\s+CANDIDATES: (\"[^\"]+\" \d\.\d\d), (\"[^\"]+\" \d\.\d\d), (\"[^\"]+\" \d\.\d\d)", heard)
+    assert len(utterances) == 3 and all(200 <= int(u[0]) <= 8000 and -60 <= int(u[1]) < 0 for u in utterances), heard
+    assert utterances[0][2].startswith('"открой файлы" '), utterances
+    assert re.search(r"NOT UNDERSTOOD \(CLOSEST \"[^\"]+\", CONFIDENCE=\d\.\d\d\): (FAR FROM EVERY PHRASE|TOO CLOSE TO ANOTHER MEANING)", heard), heard
+    # --save kept the first utterance, which hear takes back.
+    require(heard, "SAVED THE FIRST UTTERANCE TO ram:first.wav: ")
+    vm.send("hear --wav ram:first.wav\n")
+    require(vm.expect("MIND> ", timeout=180, after="hear --wav ram:first.wav\n"), 'HEARD "открой файлы" INTENT=open TOOL=fm CONFIDENCE=')
+    # The microphone's silence: the level meter while it listens, then the noise floor rather than a bare "nothing".
     vm.send("hear 1\n")
-    require(vm.expect("MIND> ", timeout=60, after="hear 1\n"), "NOTHING HEARD")
+    quiet = vm.expect("MIND> ", timeout=60, after="hear 1\n")
+    require(quiet, "LEVEL: PEAK ")
+    assert re.search(r"NOTHING HEARD: (DIGITAL SILENCE FOR \d+ S|NOISE FLOOR -\d+ DBFS, PEAK -\d+ DBFS OVER \d+ S; SPEECH STARTS AT -\d+ DBFS)", quiet), quiet
     require(vm.command("hear --wav nosuch.wav"), "HEAR: CANNOT READ nosuch.wav: File(NotFound)")
-    require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] | HEAR --wav FILE")
+    require(vm.command("hear x y"), "USAGE: HEAR [SECONDS] [--save FILE] | HEAR --wav FILE [--save FILE]")
     # The microphone has one owner at a time (idl/audio.wit 1.1): hear cannot record while listen does.
     pid = re.search(r"STARTED PID=(\d+) NAME=listen", vm.command("run listen 10 &"))[1]
     vm.send("hear 1\n")
@@ -4635,7 +4893,14 @@ def voice_control(vm):
     output = turn("VOICE: STOPPED rtc")
     require(output, 'VOICE: "да" (')
     require(output, "-> Останавливаю службу rtc")
-    assert "rtc" not in vm.services()
+    # Stopped: no row of rtc in ps, or one that has EXITED and is not reaped yet (within 5 s).
+    for _ in range(20):
+        rows = re.findall(r"^\d+ rtc (\w+) ", vm.command("ps"), re.M)
+        if all(state == "EXITED" for state in rows):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(rows)
     require(vm.command("date"), "RTC NOT AVAILABLE")
     require(vm.command("run rtc &"), "NAME=rtc")
     # A file read aloud: its first lines.
@@ -4652,6 +4917,8 @@ def voice_control(vm):
                  "[VOICE] SAY Останавливаю службу rtc", "[VOICE] SAY Строка 1: съешь же ещё этих мягких французских булок, да выпей чаю. Line 1.\n",
                  "[VOICE] SAY Не понял", '[VOICE] HEARD "да" INTENT=yes', "[VOICE] NOTHING HEARD"):
         require(log, line)
+    # The same per-utterance lines as hear's (000-APP-0053): length, level and the closest phrases.
+    assert re.search(r'\[VOICE\] \d+ MS -\d+ DBFS: "да" \d+, "[^"]+" \d+', log), log
     # Push-to-talk over a focused program (issue 154): F12 reaches the shell and not the program; other keys the program.
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
@@ -5218,6 +5485,17 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
+    # Copies of clock that also ask for the network and the TLS client (351-APP-0017): tlsclock has a rule in the
+    # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
+    elf = bytearray((disk / "clock.elf").read_bytes())
+    note = elf.index(b"MINDREQ1") + 8
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072).to_bytes(4, "little")
+    for name in ("tlsclock", "tlsnone"):
+        (disk / f"{name}.elf").write_bytes(elf)
+    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
+    (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
     # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
     entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
@@ -5273,6 +5551,7 @@ def tls_suite(args, disk):
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
         assert holders == ["tls"], holders
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+        tls_lending_check(vm, servers, real["tls"])
     finally:
         vm.close()
         for server in (good, rogue, asking):
@@ -5352,6 +5631,33 @@ def device_key_check(args, cpu):
         fsck_volume(image, start, fs_sectors)
     print(f"PASS: the device key kept across boots in the key service's private directory (MIND {first} twice, a damaged one replaced); "
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
+
+
+def tls_lending_check(vm, servers, tls):
+    """351-APP-0017: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
+    flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
+    service = {ep for ep, server in servers.items() if server == tls}
+
+    def lent(command):
+        out = vm.command(command)
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
+        caps = vm.command(f"stat caps {pid + BASE}", raw=True)
+        require(vm.command(f"kill {pid}"), "KILLED")
+        slot = re.search(r"^SLOT=20 [^\n]* EP=(\d+)", caps, re.M)
+        return out, bool(slot and int(slot[1]) in service)
+
+    out, tls_lent = lent("run tlsclock &")
+    assert tls_lent, out
+    require(vm.command("netgrants"), "GRANT ")
+    out, tls_lent = lent("run tlsnone &")
+    require(out, "NETWORK FOR tlsnone: NoPolicy")
+    assert not tls_lent, "no flow grant, no TLS client"
+    out, tls_lent = lent("msh data/notls.msh")
+    assert not tls_lent, "a script without `tls`"
+    out, tls_lent = lent("msh data/tls.msh")
+    assert tls_lent, out
+    print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
+          "grant, and to a script's program only if the script declares tls", flush=True)
 
 
 def tpm_check(args, cpu):
@@ -5512,7 +5818,9 @@ def wm_suite(vm):
     """The window manager (issue 088): fm, clock and top in three windows on one screen (text frames and content, the
     clock's pixels); keys reach only the window in front; halves, quarters, maximize and snapping by keys and by
     dragging a title with the mouse; a program started from wm gets only what wm holds; leaving wm and killing it keep
-    the programs running and the next wm shows them where they were; close all ends them."""
+    the programs running and the next wm shows them where they were; close all ends them. The shell's own window
+    (211-APP-0040) opens only with Ctrl+Alt+F5 (211-APP-0045): the shell's commands typed there, programs started there
+    in windows of their own."""
     # The broker's first window gives it a heap arena it keeps: one window before the baseline.
     require(vm.command("wintest show W 1"), "W DONE AFTER")
     time.sleep(1.2)  # the broker frees a window within 500 ms of its program's end
@@ -5559,11 +5867,257 @@ def wm_suite(vm):
         # Alt+Tab until `window` is in front.
         return keys(*["alt-tab"] * (list(state()[2]).index(window) + 1))
 
-    vm.send("wm fm, clock, top\n")
+    def last_state():
+        return re.findall(r"\[WM\] (MODE=[^\n]*)", "".join(seen))[-1]
+
+    def inside(window):
+        # The text inside `window`'s frame, row by row.
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        x, y, w, h = state()[2][window]
+        return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
+
+    shell_re = re.compile(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"')
+
+    def open_shell():
+        # Ctrl+Alt+F5: the shell opens its window (it takes the key; wm never sees it); in front, as a new window is.
+        before = set(shell_re.findall("".join(seen)))
+        vm.hmp("sendkey ctrl-alt-f5")
+        vm.serial(enter=False)
+        while not set(shell_re.findall("".join(seen))) - before:
+            wait('"shell"', lines=0)
+        window = int((set(shell_re.findall("".join(seen))) - before).pop())
+        while window not in state()[2] or state()[1] != window:
+            wait()
+        return window
+
+    def close_shell(window):
+        # Alt+W: the shell's window goes, and wm goes on.
+        keys("alt-w", text=f"CLOSE {window}")
+        until(f"GONE {window}")
+        while window in state()[2]:
+            wait()
+        assert last_state().startswith("MODE=NORMAL"), last_state()
+
+    def shell_window(started):
+        # The shell's window (211-APP-0040): a session of the shell, its keys through wm, every command but fg.
+        def shows(window, text):
+            # `text` inside `window`'s frame, once it came.
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(window)
+                if any(canon(text) in row for row in rows):
+                    return rows
+            raise AssertionError((window, text, rows))
+
+        def typed(line, text=None):
+            # A line typed on the serial line, which the shell passes to wm and wm to the window in front.
+            vm.send_bytes(line.encode() + b"\r")
+            wait(lines=len(line) + 1)
+            return shows(shell, text) if text else None
+
+        shell = open_shell()
+        mode, focus, rects = state()
+        assert focus == shell and rects[shell][2:] == (80, 24), rects
+        typed("ps", "TASK(S); SHELL PID=")
+        typed("date", "(RTC, NO TIME ZONE)")
+        clock_pid = int(started["clock"]) + BASE
+        typed(f"logs {clock_pid}", f"LOGS PID={clock_pid}")
+        # A program started there opens a window of its own in wm, and the session goes on.
+        known = {m[1] for m in windows_re.findall("".join(seen))}
+        typed("top")
+        while not any(m[1] not in known for m in windows_re.findall("".join(seen))):
+            wait("[WM] WINDOW", lines=0)
+        top2 = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] not in known)
+        front(shell)
+        shows(shell, "NAME=top IN A WINDOW")
+        front(top2)
+        shows(top2, "PID NAME")
+        keys("alt-w", text=f"CLOSE {top2}")
+        until(f"GONE {top2}")
+        while top2 in state()[2]:
+            wait()
+        # Resized by wm, the session wraps and shows at the window's new size: a line of 113 characters on one row.
+        front(shell)
+        quarter = state()[2][shell]
+        assert keys("alt-ret")[2][shell] == (0, 1, 160, 48)
+        long = "logger " + "0123456789" * 10
+        rows = typed(long, "LOGGED")
+        assert any(canon("MIND> " + long) in row for row in rows), rows
+        assert keys("alt-ret")[2][shell] == quarter
+        # reboot asks there; n keeps the machine running (the answer through wm's keyboard: the shell is busy asking).
+        typed("reboot", "RESTART THE MACHINE? (Y/N)")
+        keys("n")
+        for _ in range(20):
+            time.sleep(.3)
+            rows = inside(shell)
+            if any(canon("MIND> ") == row[:6] for row in rows[-3:]):
+                break
+        assert canon("RESTART THE MACHINE? (Y/N) N") in "".join(rows), rows
+        # fg is the screen's, not the window's.
+        typed("fg 1", "FG WORKS IN A CONSOLE")
+        # Closed, the window goes and wm goes on; Ctrl+Alt+F5 opens it again.
+        close_shell(shell)
+        until("[SHELL] THE SHELL'S WINDOW CLOSED")
+        again = open_shell()
+        assert again != shell
+        shows(again, "THE SHELL'S WINDOW:")
+        close_shell(again)
+        # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
+        # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
+        before = set(shell_re.findall("".join(seen)))
+        keys("alt-p", text="MODE=MENU")
+        keys("down", text="MENU=Shell")
+        keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
+        while not set(shell_re.findall("".join(seen))) - before:
+            wait('"shell"', lines=0)
+        menu_shell = int((set(shell_re.findall("".join(seen))) - before).pop())
+        until(f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
+        while menu_shell not in state()[2] or state()[1] != menu_shell:
+            wait()
+        shows(menu_shell, "THE SHELL'S WINDOW:")
+        front(next(w for w in state()[2] if w != menu_shell))
+        keys("alt-p", text="MODE=MENU")
+        keys("down")
+        keys("ret", text=f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
+        while state()[1] != menu_shell:
+            wait()
+        close_shell(menu_shell)
+        print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
+              "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
+              "and opened again with Ctrl+Alt+F5 and from the menu's first item, which brings it to the front when open", flush=True)
+
+    def full_screen_and_list(fm, clock, top):
+        # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
+        # Alt+Tab from it shows the desktop with the next window in front, and back it is full again; Alt+F again
+        # gives it its frame back.
+        frames = front(clock)[2]
+        mode, focus, rects = keys("alt-f", text=f"FULL={clock}")
+        assert focus == clock and rects == frames, (focus, rects)
+        until(f"[WM] PIXELS {clock} 1280X800")  # it draws at the screen's size
+        time.sleep(.5)
+        screen = screen_text(vm)
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        width = int(size.split()[0])
+        assert not screen[0].startswith(canon(" wm │")) and canon("keys go to") not in screen[-1], (screen[0], screen[-1])
+        green = [px for py in range(0, 800, 2) for px in range(0, 1280, 2) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
+        assert green and max(green) > 700, (len(green), max(green, default=0))  # its digits across the screen
+        mode, focus, rects = keys("alt-tab")
+        assert focus != clock and "FULL=" not in last_state(), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        assert screen[0].startswith(canon(" wm │")), screen[0]
+        keys(*["alt-tab"] * (len(frames) - 1), text=f"FULL={clock}")
+        mode, focus, rects = keys("alt-f")
+        assert focus == clock and rects == frames and "FULL=" not in last_state(), last_state()
+        until(f"[WM] PIXELS {clock} {(frames[clock][2] - 2) * 8}X{(frames[clock][3] - 2) * 16}")
+        # A text window: top on the whole cell grid, then back in its frame.
+        front(top)
+        keys("alt-f", text=f"FULL={top}")
+        for _ in range(20):  # top lays itself out again on the whole grid
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(canon("PID NAME") in row for row in screen):
+                break
+        assert not screen[0].startswith(canon(" wm │")) and any(canon("PID NAME") in row for row in screen), screen
+        assert canon("keys go to") not in screen[-1], screen[-1]
+        mode, focus, rects = keys("alt-f")
+        assert focus == top and rects == frames and "FULL=" not in last_state(), last_state()
+        # The window list (211-APP-0014): Alt+L lists the three windows with their programs' PIDs; the second is
+        # brought to the front by keys, then by a click; a window closed from the list leaves it.
+        ids = sorted(frames)
+        owners = {int(m[0]): int(m[1]) for m in windows_re.findall("".join(seen))}
+        mode, focus, rects = keys("alt-l", text="MODE=LIST")
+        assert last_state().endswith(f"LIST={top}"), last_state()
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        column = screen[title].index(canon(" Windows "))
+        for row, window in zip(screen[title + 1:title + 1 + len(ids)], ids):
+            assert canon(f"PID {owners[window] + BASE} ") in row, (window, row)
+        assert canon("in front") in screen[title + 1 + ids.index(top)], screen[title + 1:title + 4]
+        keys("home", "down", text=f"LIST={ids[1]}")
+        mode, focus, rects = keys("ret")
+        assert mode == "NORMAL" and focus == ids[1], (mode, focus)
+        front(next(w for w in ids if w != ids[1]))
+        keys("alt-l", text="MODE=LIST")
+        point(column + 3, title + 2)  # the second entry
+        mode, focus, rects = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "NORMAL" and focus == ids[1], last_state()
+        # A fourth window, closed from the list with Alt+W: the list follows it out.
+        keys("alt-r", "c", "l", "o", "c", "k", "ret", text="STARTED clock")
+        while len(state()[2]) < 4:
+            wait()
+        extra = max(state()[2])
+        keys("alt-l", "end", text=f"LIST={extra}")
+        keys("alt-w", text=f"CLOSE {extra}")
+        until(f"GONE {extra}")
+        while extra in state()[2]:
+            wait()
+        assert last_state().startswith("MODE=LIST") and not last_state().endswith(f"LIST={extra}"), last_state()
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        title = next(i for i, row in enumerate(screen) if canon(" Windows ") in row)
+        assert sum(canon("PID ") in row for row in screen[title + 1:title + 6]) == 3, screen[title:title + 6]
+        mode, focus, rects = keys("esc")
+        assert mode == "NORMAL" and set(rects) == set(frames), (mode, rects)
+        print("PASS: wm full screen: the clock's pixels and top's cells on the whole screen without frames or bars, Alt+Tab "
+              "from it and back, Alt+F restoring the frame; the window list: PIDs and states, Enter and a click bring a "
+              "window to the front, Alt+W closes one and the list follows", flush=True)
+
+    # The desktop background (000-APP-0047, 000-APP-0050): data/wm.conf says none (the ░ cells as before) or an image
+    # (BMP, PNG or JPEG); without it the default, a slowly moving pattern with the time, the date and the CPU load over
+    # it (checked below). `again` takes a second screenshot that long after the first.
+    def desktop_alone(conf, again=0):
+        require(vm.command(f"write data/wm.conf {conf}"), "WROTE")
+        vm.send("wm\n")
+        out = wait("[WM] READY", lines=0)
+        time.sleep(1.5)
+        screen = screen_text(vm)
+        shots = [vm.screenshot()]
+        if again:
+            time.sleep(again)
+            shots.append(vm.screenshot())
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        require(wait("RESUMED.", lines=0).replace("\n", ""), "DETACHED: 0 WINDOWS KEPT")
+        _, size, _, _ = shots[0].split(b"\n", 3)
+        width = int(size.split()[0])
+        pixels = [shot.split(b"\n", 3)[3] for shot in shots]
+        colour = lambda px, py, shot=0: pixels[shot][(py * width + px) * 3:(py * width + px) * 3 + 3]
+        return out, screen, colour
+
+    out, screen, colour = desktop_alone("background = none")
+    require(out, "[WM] BACKGROUND background = none;")
+    assert all(screen[row].count(canon("░")) > 150 for row in (5, 25, 45)), screen[5]
+    near = lambda got, want: max(abs(a - b) for a, b in zip(got, want)) <= 2
+    for picture in ("sky.bmp", "sky.png", "sky.jpg"):
+        out, screen, colour = desktop_alone(f"background = image data/{picture}")
+        require(out, f"[WM] BACKGROUND background = image data/{picture};")
+        left = sum(near(colour(px, py), (0xC0, 0x80, 0x40)) for py in range(48, 760, 8) for px in range(0, 1280, 8))
+        right = sum(near(colour(px, py), (0x40, 0x80, 0xC0)) for py in range(48, 760, 8) for px in range(0, 1280, 8))
+        assert left > 4000 and right > 3000, (picture, left, right)  # the image's halves, but where the time and the date are
+    # The pattern's kind, speed, contrast and complexity and the information's brightness, on one line: at speed 20
+    # the pattern moves far in half a second (at speed 1, a table step: a few levels at most).
+    out, screen, colour = desktop_alone("pattern = aurora; speed = 20; contrast = 60; complexity = 4; info = 50", again=.5)
+    require(out, "[WM] BACKGROUND background = abstract; pattern = aurora; speed = 20; contrast = 60; complexity = 4; info = 50;")
+    moved = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for py in range(48, 400, 8) for px in range(0, 1280, 8))
+    assert moved > 16, moved
+    require(vm.command("rm data/wm.conf"), "OK")
+    print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
+          "desktop; the aurora pattern at speed 20 moves fast", flush=True)
+    seen.clear()  # the PIDs and windows below are the next wm's
+    read[0] = len(vm.log)
+
+    vm.send("wm fm /, clock, top\n")  # fm at the root (alone it opens in data/, 000-APP-0062)
     out = wait()
     while len(windows_re.findall("".join(seen))) < 3:
         out = wait("[WM] WINDOW", lines=0)
     out = "".join(seen)
+    # wm starts without the shell's window: it opens only when asked (211-APP-0045).
+    assert not shell_re.findall(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
     started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
     wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
     windows = {int(m[0]): m for m in windows_re.findall(out)}
@@ -5592,18 +6146,37 @@ def wm_suite(vm):
                 for py in range((y + 1) * 16, (y + h - 1) * 16) for px in range((x + 1) * 8, (x + w - 1) * 8))
     assert green > 500, green  # the clock's digits, drawn by clock into its pixel window
     assert canon(" clock ") in screen[y][x:x + w], screen[y]
+    # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
+    # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
+    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right")
+    time.sleep(1.2)
+    _, _, _, later = vm.screenshot().split(b"\n", 3)
+    vm.serial(enter=False)
+    quarter = [(py * width + px) * 3 for py in range(26 * 16, 48 * 16, 4) for px in range(81 * 8, 160 * 8, 4) if not (rects[top][0] <= px // 8 < rects[top][0] + rects[top][2] and rects[top][1] <= py // 16 < rects[top][1] + rects[top][3])]
+    moved = sum(pixels[i:i + 3] != later[i:i + 3] for i in quarter)
+    text = sum(later[i:i + 3] == bytes((0x4D, 0x5D, 0x6C)) for i in quarter)  # info = 30: paler than before (000-APP-0050)
+    graph = sum(later[i:i + 3] == bytes((0x3A, 0x49, 0x58)) for i in quarter)
+    assert moved > len(quarter) // 10 and text > 50, (moved, len(quarter), text, graph)
     # Keys reach only the window in front: fm gets "cd docs", top nothing.
     mode, focus, rects = front(fm)
     assert focus == fm, (focus, rects)
     vm.send_bytes(b"cd docs\r")
     wait(lines=8)
     vm.background(wm_pid)
-    fm_log = vm.command(f"logs {started['fm']}")
+    # wm has passed the keys on; fm may still be changing the directory (its log is drained at each read).
+    fm_log = ""
+    for _ in range(20):
+        fm_log += vm.command(f"logs {started['fm']}")
+        if "LEFT=/docs FULL" in fm_log:
+            break
+        time.sleep(.25)
     require(fm_log, "CMD=cd docs")
     require(fm_log, "LEFT=/docs FULL")
     assert "[TOP] " not in vm.command(f"logs {started['top']}").replace("[TOP] READY", ""), "top got no key"
     vm.send(f"fg {wm_pid}\n")
     vm.expect(f"FOREGROUND PID={wm_pid}")
+    shell_window(started)
+    front(fm)
     # A program fm starts opens a window of its own next to fm's (issue 099), in front; Alt+W closes it.
     read[0] = len(vm.log)
     vm.send_bytes(b"clock\r")
@@ -5630,9 +6203,11 @@ def wm_suite(vm):
     assert mode == "NORMAL" and rects[fm] == (0, 1, 80, 48), (mode, rects)
     # The mouse: the pointer starts in the middle of the screen (cell 80, 25); the clock's title is dragged to the
     # left edge, below the top, and let go: it snaps to the left half.
+    mode, focus, rects = front(clock)
     x, y, w, h = rects[clock]
     dx, dy = (x + 4) * 8 + 4 - 640, y * 16 + 8 - 400
-    for move in [f"mouse_move {dx // 4} 0"] * 4 + [f"mouse_move 0 {dy // 4}"] * 4 + ["mouse_button 1"] + ["mouse_move -100 0"] * 8 + ["mouse_move 0 80"] * 2 + ["mouse_button 0"]:
+    down = (12 - y) * 16 // 2  # let go about row 12: the left side, not its corners
+    for move in [f"mouse_move {dx // 4} 0"] * 4 + [f"mouse_move 0 {dy // 4}"] * 4 + ["mouse_button 1"] + ["mouse_move -100 0"] * 8 + [f"mouse_move 0 {down}"] * 2 + ["mouse_button 0"]:
         vm.hmp(move)
         time.sleep(.12)
     vm.serial(enter=False)
@@ -5647,6 +6222,13 @@ def wm_suite(vm):
     vm.serial(enter=False)
     green = [px for py in range(2 * 16, 48 * 16) for px in range(8, 79 * 8) if pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == bytes((0xA6, 0xE3, 0xA1))]
     assert green and max(green) > 8 + 400, (len(green), max(green, default=0))
+    # 211-APP-0046: Alt+0 gives the frame back to the content's first size, where it stands: the clock draws at
+    # 320 x 176 again. Alt+Left puts it back on the left half.
+    mode, focus, rects = keys("alt-0")
+    assert rects[clock] == (0, 1, 42, 13), rects
+    if f"[WM] PIXELS {clock} 320X176" not in seen[-1]:
+        wait(f"[WM] PIXELS {clock} 320X176", lines=0)
+    assert keys("alt-left")[2][clock] == (0, 1, 80, 48), state()
     # The mouse in a window (issue u001): with fm on the right half behind the clock, a click on an entry of fm's
     # brings its window to the front and goes to fm at the cell of its content; a double click on ".." opens it; the
     # wheel moves fm's cursor.
@@ -5741,6 +6323,491 @@ def wm_suite(vm):
     until(f"GONE {caps}")
     while caps in state()[2]:
         wait()  # the state line after the window went
+    # The camera from wm (158-APP-0043): wm holds the shell's client of the video gateway and lends it; camera started
+    # from the run line, in console and in the shell's window shows the synthetic source's bars in its window.
+    def colours(window, wanted):
+        # How many pixels of each of `wanted` (RGB bytes) are inside `window`'s frame, every other one counted.
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        vm.serial(enter=False)
+        width = int(size.split()[0])
+        x, y, w, h = state()[2][window]
+        counts = dict.fromkeys(wanted, 0)
+        for py in range((y + 1) * 16, (y + h - 1) * 16, 2):
+            for px in range((x + 1) * 8, (x + w - 1) * 8, 2):
+                p = pixels[(py * width + px) * 3:(py * width + px) * 3 + 3]
+                if p in counts:
+                    counts[p] += 1
+        return counts
+
+    def camera_window(start):
+        # Starts camera with `start`; its window shows the bars (yellow, cyan, magenta); then it is closed.
+        known = {m[0] for m in windows_re.findall("".join(seen))}
+        start()
+        while not any(m[0] not in known and m[2] == "PIXELS" for m in windows_re.findall("".join(seen))):
+            wait("[WM] WINDOW", lines=0)
+        cam = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[0] not in known and m[2] == "PIXELS")
+        while state()[1] != cam:
+            wait()
+        for _ in range(20):
+            time.sleep(.3)
+            counts = colours(cam, (b"\xff\xff\x00", b"\x00\xff\xff", b"\xff\x00\xff"))
+            if all(n > 300 for n in counts.values()):
+                break
+        else:
+            raise AssertionError(counts)
+        keys("alt-w", text=f"CLOSE {cam}")
+        until(f"GONE {cam}")
+        while cam in state()[2]:
+            wait()
+        time.sleep(1)  # the gateway closes the stream of an ended reader within its next look
+        return counts
+
+    def scale_from_settings():
+        # 000-APP-0061: wm started at auto, 100% on the suite's 1280 × 800 screen. Settings' screen page steps to 100%,
+        # then 150%: the grid is made anew of 12 × 24 cells, the frames keep their share of the screen, the text is read
+        # at that cell, and data/wm.conf keeps it; then back to 100% and auto.
+        require("".join(seen), "[WM] SCALE 100% (AUTO): CELLS OF 8X16 PIXELS ON 1280X800")
+        before = state()[2]
+        # With a window in front, its title leaves the top bar no room for Settings: they are in more ▼'s menu, which a
+        # click opens; a click on their entry opens them, as Alt+S does.
+        bar = screen_has("more ▼")[0]
+        point(bar.index(canon("more ▼")) + 1, 0)
+        mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "MORE", mode
+        rows = screen_has("Alt+S settings")
+        y = next(i for i, row in enumerate(rows) if i > 0 and canon("Alt+S settings") in row)
+        point(rows[y].index(canon("Alt+S settings")) + 2, y)
+        mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
+        assert mode == "SETTINGS", mode
+        print("PASS: wm top bar: with a window in front, Settings are in more ▼'s menu, opened by a click, and a click on "
+              "their entry opens them", flush=True)
+        keys(*["down"] * 5, text="SETTINGS=Screen")
+        keys("ret", text="SETTINGS=Screen:Scale")
+        screen_has("Scale       < auto (100%) >")
+        keys("right", text="; scale = 100; pointer = auto; pointer-colour = white; SAVED")
+        keys("right", text="[WM] SCALE 150%: CELLS OF 12X24 PIXELS, 106X33 OF THEM")
+        require("".join(seen), "; scale = 150; pointer = auto; pointer-colour = white; SAVED")
+        wait(lines=0)
+        after = state()[2]
+        for id, (x, y, w, h) in before.items():
+            ax, ay, aw, ah = after[id]
+            # The frame's middle at the same share of the screen (within a tenth), and the frame inside the new grid.
+            assert abs((ax + aw / 2) / 106 - (x + w / 2) / 160) < .1 and abs((ay + ah / 2) / 33 - (y + h / 2) / 50) < .1, (id, before[id], after[id])
+            assert ax + aw <= 106 and ay + ah <= 32, (id, after[id])
+        rows = []
+        for _ in range(20):
+            time.sleep(.3)
+            rows = screen_text(vm, (12, 24))
+            vm.serial(enter=False)
+            if any(canon("Scale       < 150% >") in row for row in rows) and canon("│ more ▼ ") in rows[0]:
+                break
+        else:
+            raise AssertionError(rows)
+        assert len(rows) == 33 and len(rows[0]) == 106, (len(rows), len(rows[0]))
+        keys("left", text="[WM] SCALE 100%: CELLS OF 8X16 PIXELS, 160X50 OF THEM")
+        keys("left", text="; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+        screen_has("Scale       < auto (100%) >")
+        print("PASS: wm scale: auto gives 100% on 1280 × 800; Settings' screen page set 150% (12 × 24 cells, 106 × 33 of "
+              "them, the frames in the same share of the screen, the text read at that cell, kept in data/wm.conf), then "
+              "100% and auto again", flush=True)
+        # The pointer's rows: 200% and yellow, drawn so where the mouse moved it; then auto and white again.
+        require("".join(seen), "[WM] POINTER SIZE 100% (AUTO): 8X12 PIXELS, WHITE")
+        keys("down", text="SETTINGS=Screen:Pointer")
+        keys("right", text="[WM] POINTER SIZE 100%: 8X12 PIXELS, WHITE")
+        keys("right", text="; pointer = 150; ")
+        keys("right", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, WHITE")
+        keys("down", text="SETTINGS=Screen:Colour")
+        keys("right", text="; pointer-colour = black; SAVED")
+        keys("right", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, YELLOW")
+        screen_has("Pointer     < 200% >")
+        screen_has("Colour      < yellow >")
+        # The mouse to the top left corner, then 600 × 400 pixels in: the arrow is whole on the screen.
+        for move in ["mouse_move -100 -100"] * 20 + mouse_moves(600, 400):
+            vm.hmp(move)
+            time.sleep(.05)
+        found = []
+        for _ in range(20):
+            time.sleep(.3)
+            _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+            width = int(size.split()[0])
+            found = [(i // 3 % width, i // 3 // width) for i in range(0, len(pixels), 3) if pixels[i:i + 3] == b"\xff\xe0\x00"]
+            vm.serial(enter=False)
+            if len(found) == 27 * 4:
+                break
+        else:
+            raise AssertionError(len(found))
+        # The fill of the 8 × 12 arrow at twice its size: 108 pixels within 16 × 24, its rows 2 to 10 and columns 1 to 6.
+        xs, ys = [p[0] for p in found], [p[1] for p in found]
+        assert (max(xs) - min(xs) + 1, max(ys) - min(ys) + 1) == (12, 18), (min(xs), max(xs), min(ys), max(ys))
+        keys("left", text="; pointer-colour = black; SAVED")
+        keys("left", text="[WM] POINTER SIZE 200%: 16X24 PIXELS, WHITE")
+        keys("up", text="SETTINGS=Screen:Pointer")
+        keys("left", text="; pointer = 150; ")
+        keys("left", text="; pointer = 100; ")
+        keys("left", text="[WM] POINTER SIZE 100% (AUTO): 8X12 PIXELS, WHITE")
+        require("".join(seen), "; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+        keys("esc", text="MODE=NORMAL")
+        print("PASS: wm pointer: Settings' screen page set it to 200% and yellow (108 yellow pixels on the screen, the arrow's "
+              "fill at twice its size), kept in data/wm.conf, then auto and white again", flush=True)
+
+    def screen_has(text):
+        # `text` on the screen within 6 s; the screen.
+        for _ in range(20):
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if any(canon(text) in row for row in screen):
+                return screen
+        raise AssertionError((text, screen))
+
+    def clock_from_settings():
+        # The date and time page (000-APP-0055): the year one on, set by the shell at once for wm (000-APP-0060: no
+        # question and no window of the shell's), shown on the page, which stays open; then back.
+        def page():
+            keys("alt-s", text="MODE=SETTINGS")
+            keys("down", "down", "ret", text="SETTINGS=Date and time:Year")
+            return shown_year()
+
+        def shown_year(want=None):
+            # The page's clock line, read from the screen (`want`: until it shows that year).
+            screen = []
+            for _ in range(20):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                found = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen))
+                if found and (want is None or int(found[1]) == want):
+                    return int(found[1])
+            raise AssertionError((want, screen))
+
+        def set_year(step):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            year = page()
+            keys("right" if step > 0 else "left")
+            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            keys("ret", text=f"[WM] SET CLOCK {year + step:04}-")
+            until(f'THE SHELL RAN "date set {year + step:04}-')
+            assert re.search(rf'THE SHELL RAN "date set {year + step:04}-[^"]*" AT ONCE', "".join(seen)), "".join(seen)[-2000:]
+            assert re.search(rf"\[WM\] SET CLOCK {year + step:04}-\S+ \S+: The clock is set to", "".join(seen)), "".join(seen)[-2000:]
+            assert shown_year(year + step) == year + step
+            screen_has("The clock is set to")
+            assert last_state().startswith("MODE=SETTINGS"), last_state()
+            assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
+            keys("esc", text="MODE=NORMAL")
+            return year
+
+        year = set_year(1)
+        set_year(-1)
+        print(f"PASS: wm settings: the date page set the year to {year + 1} and back at once through the shell, with no question "
+              "and no window of the shell's; the page stayed open and showed it", flush=True)
+
+    def every_entry_reacts():
+        # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
+        # own, or in console's for a console program) or says why not; every window that opens is closed again.
+        base = set(state()[2])
+        reaction_re = re.compile(r"\[WM\] (STARTED (\S+) PID (\d+)[^\n]*|SHELL WINDOW: [^\n]*|cannot start [^\n]*|[^\n]* is a console program[^\n]*|[^\n]* is a window manager|the window broker gives no client)\n")
+
+        def at():
+            # The highlighted entries, as wm logs them: Files>fm.
+            return re.search(r"MENU=(.*)$", last_state())[1]
+
+        def close_menu():
+            while last_state().startswith("MODE=MENU"):
+                keys("esc")
+
+        def tidy():
+            # The windows the entry opened, closed (a program that ended keeps its window until then).
+            for _ in range(30):
+                extra = [w for w in state()[2] if w not in base]
+                if not extra:
+                    return
+                window = extra[-1]
+                if state()[1] != window:
+                    front(window)
+                keys("alt-w", text=f"CLOSE {window}")
+                until(f"GONE {window}")
+                while window in state()[2]:
+                    wait()
+            raise AssertionError(state())
+
+        # The tree, walked once with the keys: → opens a category at its first program, ↓ wraps at the end. The menu
+        # is read from the loader as wm starts (its line on the serial may be broken by the shell's): until then its
+        # one entry is "Looking for programs…".
+        for _ in range(30):
+            keys("alt-p", "down", text="MODE=MENU")
+            if not at().startswith("Looking for programs"):
+                break
+            close_menu()
+            time.sleep(1)
+        first, tree = at(), []
+        while True:
+            label = at()
+            keys("right")
+            if at() == label:
+                tree.append(([len({p[0][0] for p in tree})], label))
+            else:
+                top, start = len({p[0][0] for p in tree}), at()
+                while True:
+                    tree.append(([top, len([p for p in tree if p[0][0] == top])], at()))
+                    keys("down")
+                    if at() == start:
+                        break
+                keys("left")
+            keys("down")
+            if at() == first:
+                break
+        close_menu()
+        started, said, unseen = [], [], []
+        RUN_TO_END = {"check", "bench", "kbench"}
+        for path, name in tree:
+            keys("alt-p", text="MODE=MENU")
+            for level, index in enumerate(path):
+                if level:
+                    keys("right")
+                if index + (level == 0):
+                    keys(*["down"] * (index + (level == 0)))
+            assert at() == name, (at(), name)
+            keys("ret")
+            found = reaction_re.findall(seen[-1])
+            assert found, (name, seen[-1][-1500:])
+            line, program, pid = found[-1]
+            if program:
+                started.append(name.split(">")[-1])
+                # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+                    time.sleep(.1)
+                    wait(lines=0)
+                ids = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == pid]
+                if not ids:
+                    unseen.append(name)
+                # The state line that has the window, which may come after its own line: tidy() reads the state.
+                for _ in range(100):
+                    if not ids or ids[-1] in state()[2]:
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
+                # The self-test and the benchmarks go on after their console closes (libmind keeps a program whose
+                # launcher ended), so the walk lets them finish rather than run the rest of the suite beside them.
+                # console's own lines stay off the serial line: its note in the window says when the program ended.
+                tool = name.split(">")[-1]
+                if tool in RUN_TO_END and ids:
+                    deadline = time.monotonic() + 900
+                    while not any(f"({tool} ended" in row for row in inside(ids[-1])):
+                        assert time.monotonic() < deadline, (tool, inside(ids[-1]))
+                        time.sleep(2)
+                        wait(lines=0)
+            else:
+                said.append(f"{name}: {line}")
+            close_menu()
+            tidy()
+        time.sleep(2)  # a window that comes late
+        wait(lines=0)
+        tidy()
+        assert len(started) >= 20, (started, said)
+        assert not unseen, f"started with no window: {unseen}"
+        print(f"PASS: wm menu: each of the {len(tree)} entries reacted to Enter: {len(started)} started their programs, "
+              f"each in a window (closed again){'; ' + '; '.join(said) if said else ''}", flush=True)
+
+    def settings_react():
+        # 000-APP-0056: each row of Settings' background page changes and is changed back (Left steps back, Enter ticks a
+        # box again), and the image's file with nothing typed says what to do; each page to read says so on Enter; Enter
+        # on a field of the date page sets the clock at once.
+        kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
+        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"]
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("ret", text="SETTINGS=Background:Picture")
+        changed = 0
+        for index, row in enumerate(rows):
+            if index:
+                keys("down", text=f"SETTINGS=Background:{row}")
+            if row == "Image file":
+                keys("ret")
+                screen_has("Type the image's file here (BMP, PNG or JPEG), then Enter")
+                continue
+            keys("ret", text="[WM] SETTINGS ")
+            assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
+            keys("ret" if row in ("Time", "Date", "CPU load", "Network") else "left", text="[WM] SETTINGS ")
+            assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
+            changed += 1
+        keys("tab", text="SETTINGS=Background")
+        for page in ("Keyboard", "Network", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
+            keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
+            keys("ret")
+            screen_has(f"{page}: a page to read; nothing is set here yet")
+        keys("up", "up", text="SETTINGS=Date and time")
+        keys("ret", text="SETTINGS=Date and time:Year")
+        # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
+        # stays as it was; no window of the shell's opens, and Settings stay open on the field.
+        known = {m[0] for m in windows_re.findall("".join(seen))}
+        fields = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds"]
+        for index, field in enumerate(fields):
+            if index:
+                keys("down", text=f"SETTINGS=Date and time:{field}")
+            ran = "".join(seen).count('THE SHELL RAN "date set ')
+            keys("ret", text="[WM] SET CLOCK ")
+            assert re.search(r"\[WM\] SET CLOCK \S+ \S+: The clock is set to", seen[-1]), (field, seen[-1])
+            deadline = time.monotonic() + 20
+            while "".join(seen).count('THE SHELL RAN "date set ') <= ran:
+                assert time.monotonic() < deadline, (field, "".join(seen)[-2000:])
+                time.sleep(.1)
+                wait(lines=0)
+            assert last_state().startswith(f"MODE=SETTINGS") and last_state().split("SETTINGS=", 2)[-1].startswith(f"Date and time:{field}"), (field, last_state())
+        assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
+        keys("esc", text="MODE=NORMAL")
+        print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
+              "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
+              "six fields set the clock at once, with no window of the shell's", flush=True)
+
+    def console_joined(console):
+        # console joined to the shell (211-APP-0044): wm passed on the shell's commands; quotas runs on the shell's
+        # authority and prints in console; fg is refused; kill asks in the shell's window first: no keeps the clock, yes
+        # ends it.
+        assert "shell" in re.findall(r"\[WM\] STARTED console PID \d+ WITH ([^\n ]*)", "".join(seen))[-1].split(","), "wm lends the shell's commands"
+        def console_has(text, pattern=None):
+            # `text` in console's window, or a row matching `pattern`.
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(console)
+                if any(re.match(pattern, row) if pattern else canon(text) in row for row in rows):
+                    return rows
+            raise AssertionError((text or pattern, rows))
+        # console's own lines go to its log, not to the serial line; the shell notes each request there.
+        vm.send_bytes(b"quotas\r")
+        console_has(None, r"\d+ console \d+/\d+ \d+/\d+")  # console's own row, among the last (the header scrolls away)
+        until('THE SHELL RAN "quotas"')
+        vm.send_bytes(b"fg 1\r")
+        console_has("fg: the shell does not take it from console")
+        until('THE SHELL REFUSED "fg 1"')
+        # The help keys (000-APP-0054): console's own command says its line; the shell's command the shell's lines,
+        # taken at once; a program with a screen prints its text into console and opens no window.
+        vm.send_bytes(b"date -h\r")
+        console_has("date: the date and time from the RTC")
+        vm.send_bytes(b"free /?\r")
+        console_has("- free: the machine's memory")
+        until('THE SHELL RAN "help free"')
+        vm.send_bytes(b"fm --help\r")
+        console_has("fm — file manager")
+        console_has("(fm ended)")
+        run_line("clock", "STARTED clock")
+        target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
+        front(console)
+
+        # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
+        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
+        for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            vm.send_bytes(f"kill {target + BASE}\r".encode())
+            # The shell opens its window, in front as a new window is, and waits for the answer there. Meanwhile it
+            # passes wm's lines on no more (it does that between keys): the question is looked for on the screen.
+            screen = []
+            for _ in range(40):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
+                    break
+            else:
+                raise AssertionError(screen)
+            assert any(canon(f"kill {target + BASE}    (ASKED BY PID") in row for row in screen), screen
+            vm.hmp(f"sendkey {answer}")
+            vm.serial(enter=False)
+            until(logged_text)
+            # wm's lines come again: its window for the question, in front.
+            opened = []
+            for _ in range(100):
+                wait(lines=0)
+                opened = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if opened:
+                    break
+                time.sleep(.1)
+            asking = opened[-1]
+            while state()[1] != asking:
+                wait()
+            close_shell(asking)
+            front(console)
+        console_has("not run: the answer in the shell's window was no")
+        console_has("KILLED PID=")
+
+    def run_line(command, text):
+        names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
+        return keys("alt-r", *names, "ret", text=text)
+
+    camera_window(lambda: run_line("camera", "STARTED camera"))
+    assert re.findall(r"\[WM\] STARTED camera PID \d+ WITH ([^\n]*)", "".join(seen))[-1].split(",")[-1] == "camera", "wm lends the camera"
+    run_line("console", "STARTED console")
+    console_pid = re.findall(r"\[WM\] STARTED console PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
+    assert "camera" in console_pid[1], console_pid
+    while not any(m[1] == console_pid[0] for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    console = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == console_pid[0])
+    while state()[1] != console:
+        wait()
+    camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
+    assert state()[1] == console, state()
+    console_joined(console)
+    keys("alt-w", text=f"CLOSE {console}")
+    until(f"GONE {console}")
+    while console in state()[2]:
+        wait()
+    shell = open_shell()
+    camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
+    close_shell(shell)
+    print("PASS: wm: camera shows the synthetic source in its window, started from the run line (wm lends the camera), "
+          "in console (lent on by console) and in the shell's window; console sends the shell its commands (quotas runs, "
+          "fg is refused, kill is declined and then agreed in the shell's window); help keys: date -h says console's line, "
+          "free /? the shell's, fm --help prints fm's text into console", flush=True)
+    # A program that ends at once with a failure leaves its message on view (211-APP-0039): camera at a size the source
+    # does not give says so in a window of its own with its status, until a key.
+    run_line("camera -z 100x100", "STARTED camera")
+    camera_pid = re.findall(r"\[WM\] STARTED camera PID (\d+)", "".join(seen))[-1]
+    while not any(m[1] == camera_pid for m in windows_re.findall("".join(seen))):
+        wait("[WM] WINDOW", lines=0)
+    ended = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == camera_pid)
+    for _ in range(20):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("camera: cannot open") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
+    time.sleep(1)  # it stays
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("camera: cannot open") in row for row in screen), screen
+    assert any(canon("ENDED (STATUS 1): PRESS A KEY") in row for row in screen), screen
+    assert any(canon("camera ended") in row for row in screen), "the window's title"
+    while ended not in state()[2]:
+        wait()  # the state line after the window came
+    assert state()[1] == ended, state()
+    keys("spc")
+    until(f"GONE {ended}")
+    while ended in state()[2]:
+        wait()
+    # Settings (000-APP-0048): Alt+S opens them at the background's page; the picture goes to an image (data/background.bmp
+    # is not there: the pattern, and a notice), then to none, and the desktop's free cells are the ░ cells at once; the
+    # choice is kept in data/wm.conf for the next wm (checked as it starts again below).
+    keys("alt-s", text="MODE=SETTINGS")
+    assert last_state().endswith("SETTINGS=Background"), last_state()
+    keys("ret")
+    keys("right", text="[WM] SETTINGS background = image data/background.bmp")
+    keys("right", text="[WM] SETTINGS background = none")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+    keys("esc")
+    time.sleep(.5)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    free = [row[84:158] for row in screen[27:46]]
+    assert sum(row.count(canon("░")) for row in free) > 600, free
+    print("PASS: wm settings: Alt+S opens them; the background switched to an image's fallback and to none, the desktop "
+          "follows at once, and data/wm.conf keeps it", flush=True)
+    clock_from_settings()
+    every_entry_reacts()
+    settings_react()
+    full_screen_and_list(fm, clock, top)
+    scale_from_settings()
     # Leaving: the programs keep running; the next wm shows them where they were.
     places = state()[2]
     assert set(places) == {fm, clock, top}, places
@@ -5754,6 +6821,7 @@ def wm_suite(vm):
         read[0] = len(vm.log)
         vm.send("wm\n")
         out = wait("[WM] READY", lines=0)
+        require(out, "[WM] BACKGROUND background = none")  # as Settings kept it
         restored = {int(m[0]): tuple(map(int, m[5:9])) for m in windows_re.findall(out)}
         assert restored == places, (restored, places)
         return int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
@@ -5781,7 +6849,33 @@ def wm_suite(vm):
           "halves, quarters, maximize, Alt+M and snapping, a title dragged with the mouse, clicks, a double click and the wheel "
           "in fm's window, [⇕] and a snapped title dragged off the edge give the frame back; record -w records the clock's window "
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
+          "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+    # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
+    # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
+    seen.clear()
+    read[0] = len(vm.log)
+    vm.send("wm console\n")
+    out = wait("[WM] READY", lines=0)
+    while "[WM] STARTED console PID" not in "".join(seen):
+        wait("[WM] STARTED console", lines=0)
+    time.sleep(2)  # console's window in front, its prompt drawn
+    vm.send_bytes(b"reboot\r")
+    screen = []
+    for _ in range(40):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("RESTART THE MACHINE? (Y/N)") in row for row in screen):
+            break
+    else:
+        raise AssertionError(screen)
+    assert any(canon("reboot    (ASKED BY PID") in row for row in screen), screen
+    vm.hmp("sendkey y")
+    vm.process.wait(timeout=90)
+    vm.collect()
+    assert "PANIC" not in vm.log, vm.log[-2000:]
+    print("PASS: wm: reboot typed in console asks in the shell's window and, once agreed, restarts the machine", flush=True)
 
 
 def usb_suite(vm):
@@ -5835,7 +6929,7 @@ def usb_suite(vm):
     got = typed(["w"], hold=1200)
     assert len([g for g in got if "char=w " in g]) >= 10, got
     # The tablet: a click on fm's first entry puts the cursor there.
-    vm.send("fm\n")
+    vm.send("fm /\n")
     vm.expect("[FM] READY")
     time.sleep(.3)
     start = len(vm.log)
@@ -5892,7 +6986,7 @@ def tablet_suite(vm, wav):
         return logged(vm, start, text)
 
     # fm on its own screen: a click puts the cursor on the entry under the host's pointer; 10 Quit in the corner ends it.
-    vm.send("fm\n")
+    vm.send("fm /\n")
     vm.expect("[FM] READY")
     time.sleep(.3)
     require(click(10, 2, "CURRENT=EFI "), "[FM] POINTER 10,2 BUTTONS=1 WHEEL=0")  # the first entry
@@ -5931,13 +7025,14 @@ def tablet_suite(vm, wav):
     require(click(156, 1, f"[WM] CLOSE {top}"), f"[WM] CLOSE {top}")
     logged(vm, start, f"[WM] GONE {top}", timeout=12)  # top ends: its frame no longer covers the desktop
     assert "POINTER=159,49" in click(159, 49, "POINTER=159,49"), "the bottom right corner"
-    # The desktop menu (issue u003): a right click on the desktop lists the programs by category; the mouse on Clocks
-    # opens its programs beside it (the categories are 20 cells wide: "Sound and voice"); a click starts clock.
-    logged(vm, 0, "[WM] PROGRAMS: ")
+    # The desktop menu (issue u003): a right click on the desktop lists the shell's window first (211-APP-0044), then the
+    # programs by category; the mouse on Clocks opens its programs beside it (the categories are 26 cells wide: "Tests
+    # and performance", 176-APP-0051); a click starts clock.
+    logged(vm, 0, "[WM] PROGRAMS: ", timeout=30)  # gathered while wm is idle: about 6 s on a 16-thread host, 15 s on a 4-CPU one
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
-    vm.tablet_at(103 * 8 + 4, 38 * 16 + 8)
+    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 38, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
+    require(click(127, 39, "[WM] STARTED clock PID"), "[WM] STARTED clock PID")
     # The top bar's items can be clicked (issue u008): help opens and a click closes it; the run line opens.
     assert "MODE=HELP" in click(80, 0, "MODE=HELP")
     assert "MODE=NORMAL" in click(80, 30, "MODE=NORMAL")
@@ -5960,9 +7055,9 @@ def tablet_suite(vm, wav):
     # beep from the desktop menu (issue u011): Sound and voice > beep runs in a console window of its own, in the
     # bottom right quarter, which shows beep's lines; its tones reach the sound card (checked in the WAV below).
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
-    vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
+    vm.tablet_at(103 * 8 + 4, 40 * 16 + 8)
     time.sleep(.2)
-    require(click(121, 39, "[WM] STARTED console PID"), "[WM] STARTED console PID")
+    require(click(127, 40, "[WM] STARTED console PID"), "[WM] STARTED console PID")  # 26 cells wide, as above
     for _ in range(30):
         time.sleep(.3)
         screen = screen_text(vm)
@@ -5972,6 +7067,45 @@ def tablet_suite(vm, wav):
     else:
         raise AssertionError(screen)
     assert any(canon("[BEEP] DEVICE=true RATE=48000") in row[80:] for row in screen[25:]), screen
+    # A window held by its title is marked until the button is released (211-APP-0037): beep's window is pressed on its
+    # title through the tablet, which marks its frame in the accent colour; moved and released, it is unmarked.
+    beep_pid = re.findall(r"\[WM\] STARTED console PID (\d+)", logged(vm, 0, "[WM] STARTED console PID"))[-1]
+    beep = int(re.search(fr"\[WM\] WINDOW (\d+) PID {beep_pid} ", logged(vm, 0, f"PID {beep_pid} "))[1])
+
+    def state(out):
+        # beep's frame (cells) and whether wm holds it, from the last state line in `out`.
+        line = re.findall(r"\[WM\] MODE=.*$", out, re.M)[-1]
+        return tuple(map(int, re.search(fr"\b{beep}@(\d+),(\d+),(\d+)x(\d+)", line).groups())), f" DRAG={beep}" in line
+
+    def accent_on_left_edge(frame):
+        # Pixels in wm's accent colour (DARK) on the left edge of `frame`, below its title.
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        width, height = map(int, size.split())
+        x0, y0 = width % 8 // 2, height % 16 // 2
+        x, y, _, h = frame
+        return sum(pixels[(py * width + px) * 3:(py * width + px) * 3 + 3] == b"\xa6\xe3\xa1"
+                   for py in range(y0 + (y + 1) * 16, y0 + (y + h - 1) * 16) for px in range(x0 + x * 8, x0 + x * 8 + 8))
+
+    (x, y, w, h), held = state(logged(vm, 0, "[WM] MODE="))
+    assert not held and accent_on_left_edge((x, y, w, h)) == 0, (x, y, w, h)
+    start = len(vm.log)
+    vm.tablet_at((x + w // 3) * 8 + 4, y * 16 + 8)
+    time.sleep(.05)
+    vm.qmp("input-send-event", events=[{"type": "btn", "data": {"down": True, "button": "left"}}])
+    pressed, held = state(logged(vm, start, f" DRAG={beep}"))
+    assert held and pressed == (x, y, w, h), (pressed, held)
+    time.sleep(.3)
+    assert accent_on_left_edge(pressed) >= 8 * (h - 2), "the held window's frame in the accent colour"
+    # Moves while the button is held are not logged; the release is, with where the window went.
+    to = (x + w // 3 - 20, y - 6)
+    vm.tablet_at(to[0] * 8 + 4, to[1] * 16 + 8)
+    time.sleep(.3)
+    start = len(vm.log)
+    vm.qmp("input-send-event", events=[{"type": "btn", "data": {"down": False, "button": "left"}}])
+    dropped, held = state(logged(vm, start, f"POINTER={to[0]},{to[1]}"))
+    assert not held and dropped[:2] != (x, y), (dropped, held)
+    time.sleep(.3)
+    assert accent_on_left_edge(dropped) == 0, "no mark after the release"
     start = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
@@ -5988,7 +7122,7 @@ def tablet_suite(vm, wav):
     beep_demo_tones(left, rate, loud[0])
     print("PASS: tablet: the VirtIO tablet's positions; fm clicked through it, 10 Quit in the bottom right corner; edit's File > Quit and view's 10 Quit clicked; wm's [▲] and [×] at the screen's right edge; "
           "the desktop menu opened by a right click, a program started from its Clocks submenu; the top bar clicked (help, run); uptime in a console window; "
-          "beep from the menu: its lines in its console window, its tones in the WAV", flush=True)
+          "beep from the menu: its lines in its console window, its tones in the WAV; a window dragged by its title marked until the release", flush=True)
 
 
 def windows_suite(vm):
@@ -6546,6 +7680,13 @@ def main():
             if suite == "wm":
                 (disk / "docs").mkdir()
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
+                # video/synthetic: the video gateway serves its test pattern, for camera in windows (158-APP-0043).
+                (disk / "data").mkdir(exist_ok=True)
+                (disk / "data/sky.bmp").write_bytes(test_bmp(64, 40, lambda x, y: 0xC08040 if x < 32 else 0x4080C0))
+                for kind in ("png", "jpg"):  # the same halves (000-APP-0050)
+                    shutil.copy(ROOT / f"tests/data/images/halves.{kind}", disk / f"data/sky.{kind}")
+                (disk / "video").mkdir()
+                (disk / "video/synthetic").write_text("the video gateway's test pattern stands in for a camera\n")
             if suite == "store":
                 # blocksro: blocks asking only to read (REQUEST_BLOCKSTORE_READ 32768 for REQUEST_BLOCKSTORE 16384).
                 elf = bytearray((disk / "blocks.elf").read_bytes())
@@ -6553,6 +7694,22 @@ def main():
                 elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") & ~16384 | 32768).to_bytes(4, "little")
                 (disk / "blocksro.elf").write_bytes(elf)
             if suite == "tools":
+                # The dictation models' features of a test signal (250): dictate compares with kaldi-native-fbank's,
+                # and runs the toy transducer on it; one byte changed in a copy fails its checksum.
+                with wave.open(str(disk / "fbank.wav"), "wb") as out:
+                    out.setnchannels(1); out.setsampwidth(2); out.setframerate(16000)
+                    out.writeframes(struct.pack(f"<{len(FBANK_SIGNAL)}h", *FBANK_SIGNAL))
+                toy = bytearray((ROOT / "tests/dictate_toy.bin").read_bytes())
+                (disk / "toy.bin").write_bytes(toy)
+                toy[len(toy) // 2] ^= 1
+                (disk / "toy-damaged.bin").write_bytes(toy)
+                # speak's front end (252): a small dictionary, its text, and a damaged copy.
+                words, text, _ = speak_dictionary()
+                (disk / "speak.dic").write_bytes(words)
+                (disk / "speak.txt").write_text(text, encoding="utf-8")
+                damaged = bytearray(words)
+                damaged[len(damaged) // 2] ^= 1
+                (disk / "speak-damaged.dic").write_bytes(damaged)
                 # caps without REQUEST_AUTHORITY (mind::process, 128): the request note patched in a copy.
                 elf = bytearray((disk / "caps.elf").read_bytes())
                 note = elf.index(b"MINDREQ1") + 8

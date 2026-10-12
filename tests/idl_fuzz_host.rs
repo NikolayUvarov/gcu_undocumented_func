@@ -90,6 +90,7 @@ mod idl {
     #[path = "../../libmind/src/idl/netpolicy.rs"] pub mod netpolicy;
     #[path = "../../libmind/src/idl/parse.rs"] pub mod parse;
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
+    #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
     #[path = "../../libmind/src/idl/sysinfo.rs"] pub mod sysinfo;
     #[path = "../../libmind/src/idl/tls.rs"] pub mod tls;
@@ -348,7 +349,7 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
+        owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(window),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -423,8 +424,9 @@ types! {
     netpolicy: Error Grant;
     parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
     rtc: Error;
+    shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram;
-    sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load;
+    sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer;
     tpm: Error Info;
     update: Error Offer State;

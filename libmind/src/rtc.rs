@@ -9,6 +9,25 @@ pub fn seconds_since_midnight() -> Option<usize> {
     (seconds < 24 * 3600).then_some(seconds as usize)
 }
 
+/// The time of day for a program that shows it often (a clock face): the RTC service is read about once a minute and
+/// the seconds in between counted from the monotonic clock; the date is read again after midnight (000-APP-0012).
+pub struct Clock { wall: crate::wallclock::WallClock, date: Option<(u32, u32, u32)> }
+
+impl Clock {
+    pub const fn new() -> Self { Self { wall: crate::wallclock::WallClock::new(), date: None } }
+    /// Seconds since midnight, as `seconds_since_midnight` gives them.
+    pub fn seconds_since_midnight(&mut self) -> Option<usize> {
+        self.wall.seconds(crate::time::monotonic_ns(), seconds_since_midnight)
+    }
+    /// Today's date, as `date` gives it.
+    pub fn date(&mut self) -> Option<(u32, u32, u32)> {
+        if self.wall.date_due() || self.date.is_none() { self.date = date(); }
+        self.date
+    }
+    /// Milliseconds to wait before the shown second can change, `poll_ms` while the RTC is being read.
+    pub fn wait_ms(&self, poll_ms: u64) -> usize { self.wall.wait_ms(crate::time::monotonic_ns(), poll_ms) as usize }
+}
+
 /// Today's date (year, month 1-12, day 1-31) from the CMOS RTC, no time zone.
 pub fn date() -> Option<(u32, u32, u32)> {
     let days = crate::idl::rtc::date(Endpoint::RTC).ok()??;
@@ -20,6 +39,23 @@ pub fn unix_time() -> Option<u64> {
     let (year, month, day) = date()?;
     let days = days_from_civil(year, month, day)? as u64 + 10957; // 1970-01-01 to 2000-01-01
     Some(days * 86400 + seconds_since_midnight()? as u64)
+}
+
+/// The clock's setting from `YYYY-MM-DD HH:MM[:SS]` (`date set`, 211-APP-0042): days since 2000-01-01 and seconds
+/// since midnight; None unless the date is real and in 2000..=2099 (what `rtc.wit` 1.2 `set` takes) and the time too.
+pub fn parse_setting(text: &str) -> Option<(u32, u32)> {
+    let mut words = text.split_whitespace();
+    let (date, time) = (words.next()?, words.next()?);
+    if words.next().is_some() { return None; }
+    let number = |part: &str, digits: usize| (part.len() == digits && part.bytes().all(|b| b.is_ascii_digit())).then(|| part.parse::<u32>().ok()).flatten();
+    let mut d = date.split('-');
+    let (year, month, day) = (number(d.next()?, 4)?, number(d.next()?, 2)?, number(d.next()?, 2)?);
+    if d.next().is_some() || year > 2099 { return None; }
+    let mut t = time.split(':');
+    let (hour, minute) = (number(t.next()?, 2)?, number(t.next()?, 2)?);
+    let second = match t.next() { Some(part) => number(part, 2)?, None => 0 };
+    if t.next().is_some() || hour > 23 || minute > 59 || second > 59 { return None; }
+    Some((days_from_civil(year, month, day)?, hour * 3600 + minute * 60 + second))
 }
 
 /// Days since 2000-01-01 for a valid date in 2000..=9999.

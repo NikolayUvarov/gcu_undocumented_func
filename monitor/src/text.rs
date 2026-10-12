@@ -45,6 +45,25 @@ pub fn hundredths(value: u32) -> String { format!("{}.{:02}", value / 100, value
 /// Per mille as a percentage with one decimal: 425 → 42.5.
 pub fn permille(value: u32) -> String { format!("{}.{}", value / 10, value % 10) }
 
+/// A CPU budget for the task table: "20/100" (ms of CPU per period), "*" while it waits for its next period; "-"
+/// without a limit.
+pub fn budget(budget_ns: u64, period_ns: u64, throttled: bool) -> String {
+    if budget_ns == 0 || period_ns == 0 { return String::from("-"); }
+    format!("{}/{}{}", ms(budget_ns), ms(period_ns), if throttled { "*" } else { "" })
+}
+
+/// The same for a task's details, with its band.
+pub fn budget_line(budget_ns: u64, period_ns: u64, band: u8, throttled: bool) -> String {
+    let band = if band == 0 { "system" } else { "application" };
+    if budget_ns == 0 || period_ns == 0 { return format!("CPU budget: no limit; band {}", band); }
+    let percent = budget_ns.saturating_mul(1000) / period_ns;
+    format!("CPU budget: {} ms per {} ms ({}% of a CPU); band {}{}", ms(budget_ns), ms(period_ns), permille(percent.min(1000) as u32), band,
+            if throttled { "; spent: waits for its next period" } else { "" })
+}
+
+// Milliseconds, with tenths below 10 ms.
+fn ms(ns: u64) -> String { if ns < 10_000_000 && ns % 1_000_000 != 0 { format!("{}.{}", ns / 1_000_000, ns / 100_000 % 10) } else { format!("{}", ns / 1_000_000) } }
+
 /// Short name of a task state.
 pub fn state(state: u8) -> &'static str {
     match state { WAIT_NONE => "READY", WAIT_RUNNING => "RUN", WAIT_SLEEP => "SLEEP", WAIT_SEND => "SEND", WAIT_RECEIVE => "RECV", WAIT_REPLY => "CALL", WAIT_IRQ => "IRQ", WAIT_FLUSH => "FLUSH", WAIT_EXITED => "EXIT", _ => "?" }

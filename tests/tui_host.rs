@@ -204,3 +204,46 @@ fn large_digits_fit_and_draw() {
     assert_eq!(text(&grid, 2), " ▀▀▀ ▀▀▀   ▀▀▀                ");
     assert_eq!(grid.get(2, 0).style, S);
 }
+
+// 211-APP-0039: what a program in a window that ended with a failure leaves on view.
+#[test]
+fn an_ended_program_leaves_its_last_lines_and_status() {
+    use tui::ended::{draw, Tail};
+    let theme = tui::DARK;
+    let mut cells = vec![Cell::BLANK; 20 * 4];
+    let mut grid = Grid::new(&mut cells, 20, 4);
+    draw(&mut grid, b"[CAMERA] START\r\nfirst\ncamera: no camera\n", 1, &theme);
+    assert_eq!(text(&grid, 0).trim_end(), "[CAMERA] START");
+    assert_eq!(text(&grid, 1).trim_end(), "first");
+    assert_eq!(text(&grid, 2).trim_end(), "camera: no camera");
+    assert_eq!(text(&grid, 3), "ENDED (STATUS 1): PR");
+    assert_eq!(grid.get(0, 3).style, theme.selected);
+    assert_eq!(grid.get(0, 0).style, theme.panel);
+    // More than fit: the last lines; a long line wraps at the width; the oldest go.
+    draw(&mut grid, b"one\ntwo\nthree\n0123456789012345678901234", 7, &theme);
+    assert_eq!(text(&grid, 0).trim_end(), "three");
+    assert_eq!(text(&grid, 1), "01234567890123456789");
+    assert_eq!(text(&grid, 2).trim_end(), "01234");
+    assert!(text(&grid, 3).starts_with("ENDED (STATUS 7)"));
+    // Nothing printed: the status line only, the rest cleared.
+    draw(&mut grid, b"", 3, &theme);
+    assert!((0..3).all(|y| text(&grid, y).trim().is_empty()));
+    assert!(text(&grid, 3).starts_with("ENDED (STATUS 3)"));
+    // The tail keeps the last bytes; a character it cut at its start is left out when drawn.
+    let tail = Tail::<7>::new();
+    tail.push(b"abc\n");
+    tail.push("дx\nend\n".as_bytes());
+    let mut out = [0u8; 7];
+    let len = tail.copy(&mut out);
+    assert_eq!(&out[..len], &"дx\nend\n".as_bytes()[1..]);
+    tail.push(b"0123456789");
+    let len = tail.copy(&mut out);
+    assert_eq!(&out[..len], b"3456789");
+    let mut cells = vec![Cell::BLANK; 10 * 3];
+    let mut grid = Grid::new(&mut cells, 10, 3);
+    tail.push("дx\nend\n".as_bytes());
+    let len = tail.copy(&mut out);
+    draw(&mut grid, &out[..len], 2, &theme);
+    assert_eq!(text(&grid, 0).trim_end(), "x");
+    assert_eq!(text(&grid, 1).trim_end(), "end");
+}

@@ -1,5 +1,5 @@
 // File commands of the shell (mind::fs over idl/vfs.wit). The shell's VFS capability carries the user's badge: it
-// writes on `ram:` and in `data/` of the boot disk; boot files and the rest of the disk stay read-only.
+// writes on `ram:`, on `log:` and in `data/` of the boot disk; boot files and the rest of the disk stay read-only.
 use crate::console::Console;
 use core::fmt::Write;
 use mind::fs::{self, Error, File};
@@ -7,7 +7,7 @@ use mind::fs::{self, Error, File};
 pub fn text(error: Error) -> &'static str {
     match error {
         Error::NotFound => "NOT FOUND", Error::Exists => "ALREADY EXISTS", Error::NotEmpty => "DIRECTORY NOT EMPTY", Error::Invalid => "INVALID PATH OR REQUEST",
-        Error::Denied => "DENIED (ONLY RAM: AND DATA/ ARE WRITABLE)", Error::NoSpace => "NO SPACE", Error::ReadOnly => "READ-ONLY DEVICE", Error::Io => "I/O ERROR",
+        Error::Denied => "DENIED (ONLY RAM:, LOG: AND DATA/ ARE WRITABLE)", Error::NoSpace => "NO SPACE", Error::ReadOnly => "READ-ONLY DEVICE", Error::Io => "I/O ERROR",
         Error::Handles => "TOO MANY OPEN FILES", Error::Name => "INVALID NAME", Error::NotDirectory => "NOT A DIRECTORY", Error::IsDirectory => "IS A DIRECTORY",
         Error::NoMemory => "OUT OF MEMORY", Error::NoService => "VFS NOT AVAILABLE",
     }

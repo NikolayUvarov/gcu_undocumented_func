@@ -4,7 +4,13 @@ use crate::sys::{call, check, syscall, Result};
 pub fn exit() -> ! { exit_with(0) }
 
 /// Ends the program with `code` (0: success; issue 166): its launcher reads it with `control::exit_status`.
+/// In a window, a nonzero code leaves the program's last lines on view until a key (211-APP-0039).
 pub fn exit_with(code: u32) -> ! {
+    if code & 0xFF_FFFF != 0 { crate::windowed::ended(code & 0xFF_FFFF); }
+    end(code)
+}
+
+fn end(code: u32) -> ! {
     call(SYSCALL_EXIT, code as usize & 0xFF_FFFF, 0);
     loop { core::hint::spin_loop(); }
 }
@@ -33,6 +39,7 @@ pub fn log(bytes: &[u8]) {
     }
     crate::log::capture(bytes);
     crate::output::send(bytes);
+    crate::windowed::keep(bytes);
 }
 
 /// Exit code of a program that does not match the kernel's ABI.
@@ -43,7 +50,7 @@ pub fn check_abi(info: &BootInfo) {
     let mut line = crate::line::Line::new(log);
     let _ = core::fmt::Write::write_fmt(&mut line, format_args!("ABI MISMATCH: PROGRAM {} KERNEL {}\n", ABI_VERSION, info.abi_version));
     drop(line);
-    exit_with(ABI_MISMATCH_EXIT);
+    end(ABI_MISMATCH_EXIT); // nothing more: the system calls may not mean what this program thinks
 }
 
 /// One line for `println!`: formatted, then written whole with its newline (issue 209).
@@ -167,6 +174,7 @@ pub const BADGE_LIFECYCLE: u16 = 2;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
+pub const REQUEST_SHELL: u32 = 1048576; // a client of the shell's commands (idl/shell.wit) in SLOT_SHELL: a window manager (211-APP-0044)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).
@@ -205,6 +213,7 @@ pub fn asks_help(args: &str) -> bool { HELP_KEYS.iter().any(|key| args.trim().eq
 macro_rules! about {
     ($text:expr) => {{
         const MIND_ABOUT_TEXT: &str = $text;
+        $crate::windowed::name(MIND_ABOUT_TEXT);
         #[used]
         #[link_section = ".mind_about"]
         static MIND_ABOUT: [u8; MIND_ABOUT_TEXT.len()] = $crate::process::about_note::<{ MIND_ABOUT_TEXT.len() }>(MIND_ABOUT_TEXT);

@@ -1,0 +1,57 @@
+# 250-APP-0024 — The word error rate of our engine: 5.10 % in Russian, 11.96 % in English, as the published models — done
+
+**Type:** tools (voice) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [250](../issues/250-voice-dictation.md) (step 4, and step 8 on the host) · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.2
+
+## Problem
+
+Acceptance of 250: with our int8 weights, WER on the 272 Russian FLEURS sentences must be within 0.5 points of the 5.20 % measured for the published model. Until now our engine had been compared with onnxruntime on ten clips only, and with onnxruntime's features rather than ours.
+
+The English model (Zipformer GigaSpeech, step 8) had not been converted at all. Converting it showed two problems:
+
+- It uses three operators the interpreter lacked: `ReduceMax`, `Greater` and `Identity`.
+- `convert.py` put the names of all three graphs in one table. Each graph has its own `/Constant_output_0`, and the decoder's overwrote the encoder's: an index of 1 where the encoder has -1.
+  - In the English encoder this made a `Gather` read out of range.
+  - In the Russian model the same thing happened, but harmlessly: the encoder's output and text are the same before and after the fix.
+
+## Plan
+
+- **The test `word_error_rate_of_a_test_set`** in `tests/nn_host.rs`, run by hand with `MIND_DICTATE_MODEL` and `MIND_DICTATE_SET`. It runs the whole chain:
+  - reads the WAVs;
+  - computes our features (`mind::voice::fbank`);
+  - runs our network;
+  - runs greedy search (`mind::voice::dictation`, shared with the program `dictate`).
+
+  It normalizes text as `scripts/voice_v3/evaluate.py` does: lower case, ё as е, no punctuation. WER and CER are counted over the whole set, as jiwer counts them.
+- **`convert.py`:** each top graph has its own names, which its `If` branches share.
+- **`mind::nn`:**
+  - `ReduceMax`, `Greater` and `Identity`;
+  - an operator's error names the node's first output, so a failure points at its node.
+
+## Acceptance criteria
+
+- The Russian model's WER on the 272 sentences is within 0.5 points of 5.20 %.
+- The English model runs, and its WER on the 281 English sentences is reported beside the published int8 model's 11.98 %.
+- The new operators are tested against values worked out by hand (`tests/nn_host.rs`, in CI).
+
+## Resolution
+
+- **Measured on this host** (one thread, AVX2, our features), on the sets of [scripts/voice_v3](../scripts/voice_v3/README.md):
+
+  | Model | Sentences | WER % | CER % | Published model (sherpa-onnx), WER / CER % | Time |
+  |---|---|---|---|---|---|
+  | `vosk-model-ru` 0.54 | 272, 51 min | **5.10** (265 of 5196 words) | 1.28 | 5.20 / 1.30 | 0.099 of real time |
+  | Zipformer GigaSpeech, int8 | 281, 45 min | **11.96** (736 of 6154 words) | 7.28 | 11.98 / 7.34 | 0.095 of real time |
+
+  Our engine is as accurate as onnxruntime's on these sets. The small differences are int8 quantization noise ([250-APP-0021](250-APP-0021-network-interpreter.done)).
+
+  The times were measured with other jobs running on the host, and they are the host's (MC-12.1).
+- **Code:**
+  - [`tests/nn_host.rs`](../tests/nn_host.rs);
+  - [`libmind/src/voice/dictation.rs`](../libmind/src/voice/dictation.rs): greedy search, moved out of the test;
+  - [`libmind/src/nn/ops.rs`](../libmind/src/nn/ops.rs) and [`mod.rs`](../libmind/src/nn/mod.rs);
+  - [`scripts/voice_dictate/convert.py`](../scripts/voice_dictate/convert.py).
+- **Files made before this fix must be converted again.**
+
+## Related
+
+[250](../issues/250-voice-dictation.md), [250-APP-0022](250-APP-0022-fast-products.done), [scripts/voice_v3](../scripts/voice_v3/README.md).

@@ -61,10 +61,26 @@ fn rms(samples: &[i16]) -> i32 {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("listen — records from the microphone, shows the level and plays the recording back; finds speech.\nUsage: listen [seconds] | listen --vad [seconds] | listen [--vad] --wav file\n--vad prints each utterance (start, length, level); --wav takes a WAV file instead of the microphone.");
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen), where what went wrong is written too.
+    let info = mind::windowed::pixels(info, 608, 336, "listen");
     let screen = Screen::new(info);
-    match options() { Some(options) => run(&screen, options), None => mind::println!("{}", USAGE) }
+    match options() { Some(options) => run(&screen, options), None => note(&screen, USAGE) }
     mind::println!("[LISTEN] DONE");
-    loop { mind::input::wait_or_exit(200); }
+    loop {
+        // A new size: what was shown is gone, its end is said again.
+        if let Some(resized) = mind::windowed::pixels_resized() {
+            if let Some(s) = Screen::new(&resized) { s.clear(BACKGROUND); s.text(24, 24, b"LISTEN - DONE (ESC: EXIT)", 2, 0x0080FFC0, None); }
+        }
+        mind::input::wait_or_exit(200);
+    }
+}
+
+// A line for the log and, below the meter, for the window: why nothing was recorded or played.
+fn note(screen: &Option<Screen>, text: &str) {
+    mind::println!("{}", text);
+    let Some(screen) = screen else { return };
+    screen.fill(24, 160, screen.width.saturating_sub(48), 16, BACKGROUND);
+    screen.text16(24, 160, text.trim_start_matches("[LISTEN] "), 0x00FF9090, None);
 }
 
 fn run(screen: &Option<Screen>, options: Options) {
@@ -82,14 +98,14 @@ fn run(screen: &Option<Screen>, options: Options) {
         (false, None) => record(screen, options.seconds.unwrap_or(3).clamp(1, 10)),
         (true, None) => match Microphone::start() {
             Ok(microphone) => detect(screen, Stream::new(microphone), Some(options.seconds.unwrap_or(10).clamp(1, 60))),
-            Err(error) => mind::println!("[LISTEN] NO MICROPHONE: {:?}", error),
+            Err(error) => note(screen, &format!("[LISTEN] NO MICROPHONE: {:?}", error)),
         },
         (vad, Some(path)) => match Wav::open(path) {
             Ok(wav) => {
                 mind::println!("[LISTEN] FILE {}: {} HZ, {} CHANNELS, {} MS", path, wav.rate(), wav.channels(), wav.duration_ms());
                 if vad { detect(screen, Stream::new(wav), None) } else { file(screen, Stream::new(wav)) }
             }
-            Err(error) => mind::println!("[LISTEN] CANNOT READ {}: {:?}", path, error),
+            Err(error) => note(screen, &format!("[LISTEN] CANNOT READ {}: {:?}", path, error)),
         },
     }
 }
@@ -98,8 +114,8 @@ fn run(screen: &Option<Screen>, options: Options) {
 fn record(screen: &Option<Screen>, seconds: usize) {
     let total = seconds * RATE * 2; // interleaved L/R
     // The gateway hands out whole 4 KiB capture buffers: room for the last one, the recording is cut to `total`.
-    let Some(mut buffer) = Pages::new((total * 2).next_multiple_of(4096)) else { mind::println!("[LISTEN] OUT OF MEMORY"); return };
-    if let Err(error) = mind::audio::record_start() { mind::println!("[LISTEN] NO MICROPHONE: {:?}", error); return; }
+    let Some(mut buffer) = Pages::new((total * 2).next_multiple_of(4096)) else { note(screen, "[LISTEN] OUT OF MEMORY"); return };
+    if let Err(error) = mind::audio::record_start() { note(screen, &format!("[LISTEN] NO MICROPHONE: {:?}", error)); return; }
     mind::println!("[LISTEN] RECORDING {} S", seconds);
     let (mut filled, mut idle, mut overflows) = (0usize, 0usize, 0usize);
     let mut stopped = false;
@@ -112,7 +128,7 @@ fn record(screen: &Option<Screen>, seconds: usize) {
             meter(screen, peak, b"RECORDING");
         } else {
             idle += 1;
-            if idle > 100 { mind::println!("[LISTEN] NO INPUT FROM THE MICROPHONE"); break; } // 2 s without data
+            if idle > 100 { note(screen, "[LISTEN] NO INPUT FROM THE MICROPHONE"); break; } // 2 s without data
             if mind::input::read_key().is_some_and(mind::input::is_escape) { stopped = true; break; }
             mind::time::sleep(20);
         }
@@ -124,7 +140,7 @@ fn record(screen: &Option<Screen>, seconds: usize) {
     mind::println!("[LISTEN] RECORDED {} FRAMES ({} MS), PEAK {}, RMS {}, OVERFLOWS {}", filled / 2, filled / 2 * 1000 / RATE, peak, rms(recorded), overflows);
     meter(screen, peak, b"PLAYBACK");
     if !stopped && filled > 0 {
-        match mind::audio::play_all(recorded) { Ok(()) => mind::println!("[LISTEN] PLAYED BACK"), Err(error) => mind::println!("[LISTEN] PLAYBACK FAILED: {:?}", error) }
+        match mind::audio::play_all(recorded) { Ok(()) => mind::println!("[LISTEN] PLAYED BACK"), Err(error) => note(screen, &format!("[LISTEN] PLAYBACK FAILED: {:?}", error)) }
     }
 }
 
@@ -154,7 +170,7 @@ fn detect<S: Source>(screen: &Option<Screen>, mut stream: Stream<S>, seconds: Op
         if limit.is_some_and(|limit| total >= limit) || stream.finished() { break; }
         if chunk.is_empty() {
             idle += 1;
-            if idle > 100 { mind::println!("[LISTEN] NO INPUT FROM THE MICROPHONE"); break; } // 2 s without data
+            if idle > 100 { note(screen, "[LISTEN] NO INPUT FROM THE MICROPHONE"); break; } // 2 s without data
             if mind::input::read_key().is_some_and(mind::input::is_escape) { break; }
             mind::time::sleep(20);
         } else {
@@ -176,7 +192,7 @@ fn file<S: Source>(screen: &Option<Screen>, mut stream: Stream<S>) where S::Erro
     let peak = peak(&mono);
     mind::println!("[LISTEN] 16 KHZ MONO: {} MS, PEAK {}, RMS {}", mono.len() / 16, peak, rms(&mono));
     meter(screen, peak, b"PLAYBACK");
-    let Ok(mut out) = mind::audio::Stream::new() else { mind::println!("[LISTEN] NO AUDIO OUTPUT"); return };
+    let Ok(mut out) = mind::audio::Stream::new() else { note(screen, "[LISTEN] NO AUDIO OUTPUT"); return };
     let mut previous = 0i32;
     let mut frames = [0i16; 6 * 256];
     for block in mono.chunks(256) {
@@ -186,7 +202,7 @@ fn file<S: Source>(screen: &Option<Screen>, mut stream: Stream<S>) where S::Erro
             for value in [(2 * a + b) / 3, (a + 2 * b) / 3, b] { frames[at] = value as i16; frames[at + 1] = value as i16; at += 2; }
             previous = b;
         }
-        if let Err(error) = out.write(&frames[..at]) { mind::println!("[LISTEN] PLAYBACK FAILED: {:?}", error); return; }
+        if let Err(error) = out.write(&frames[..at]) { note(screen, &format!("[LISTEN] PLAYBACK FAILED: {:?}", error)); return; }
     }
-    match out.flush() { Ok(()) => mind::println!("[LISTEN] PLAYED BACK"), Err(error) => mind::println!("[LISTEN] PLAYBACK FAILED: {:?}", error) }
+    match out.flush() { Ok(()) => mind::println!("[LISTEN] PLAYED BACK"), Err(error) => note(screen, &format!("[LISTEN] PLAYBACK FAILED: {:?}", error)) }
 }

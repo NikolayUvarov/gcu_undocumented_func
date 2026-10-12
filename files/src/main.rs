@@ -23,10 +23,22 @@ const BOOTLOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("files — VFS demo: lists the root of the disk and reads a file through vfs_server.\nUsage: files\nEsc: exit.");
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen); its lines are kept to draw them again at the
+    // size wm gives it.
+    let info = mind::windowed::pixels(info, 608, 336, "files");
     let screen = Screen::new(info);
-    if let Some(s) = screen { s.clear(BACKGROUND); s.text16(24, 24, TITLE, ACCENT, Some(BACKGROUND)); }
-    let mut y = 64;
-    let mut line = |text: &[u8]| { mind::process::log(text); mind::process::log(b"\n"); if let Some(s) = screen { s.text(24, y, text, 1, TEXT, None); y += 12; } };
+    let draw = |s: &Screen, lines: &[Vec<u8>]| {
+        s.clear(BACKGROUND);
+        s.text16(24, 24, TITLE, ACCENT, Some(BACKGROUND));
+        for (i, text) in lines.iter().enumerate() { s.text(24, 64 + 12 * i, text, 1, TEXT, None); }
+    };
+    if let Some(s) = screen { draw(&s, &[]); }
+    let mut shown: Vec<Vec<u8>> = Vec::new();
+    let mut line = |text: &[u8]| {
+        mind::process::log(text); mind::process::log(b"\n");
+        if let Some(s) = screen { s.text(24, 64 + 12 * shown.len(), text, 1, TEXT, None); }
+        shown.push(text.to_vec());
+    };
 
     let mut out = FixedBuf::<96>::new();
     // The listing is collected on the program heap (mind::alloc) and sorted: directories first, then by name.
@@ -61,5 +73,8 @@ fn main(info: &'static BootInfo) {
         line(out.as_bytes());
     }
     line(b"[FILES] DONE");
-    loop { mind::input::wait_or_exit(200); }
+    loop {
+        if let Some(resized) = mind::windowed::pixels_resized() { if let Some(s) = Screen::new(&resized) { draw(&s, &shown); } }
+        mind::input::wait_or_exit(200);
+    }
 }

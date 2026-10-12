@@ -56,7 +56,8 @@ impl Source for Client {
         paged(40, |start| Ok(take(sysinfo::tasks(Endpoint::SYSINFO, start))?.as_slice().iter().map(|t| Task { pid: t.pid, parent: t.parent, run_ns: t.run_ns, runs: t.runs, calls: t.calls, sent: t.sends, received: t.receives, started_ns: t.started_ns,
             image: t.image, stack: t.stack, screen: t.screen, heap: t.heap, shared: t.shared, retained: t.retained, wait: t.wait_on as u64, heap_blocks: t.heap_blocks, caps: t.caps,
             quota_tasks: t.quota_tasks as u32, used_tasks: t.used_tasks as u32, quota_endpoints: t.quota_endpoints as u32, used_endpoints: t.used_endpoints as u32,
-            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel }).collect()))
+            name: String::from(t.name.as_str()), state: t.wait, cpu: t.cpu, flags: t.flags, kernel: t.kernel,
+            budget_ns: t.budget_ns, period_ns: t.period_ns, band: t.band, throttled: t.throttled }).collect()))
     }
     fn cpus(&mut self) -> Result<Vec<Cpu>, Problem> {
         paged(64, |start| Ok(take(sysinfo::cpus(Endpoint::SYSINFO, start))?.as_slice().iter()
@@ -64,9 +65,11 @@ impl Source for Client {
     }
     fn memory(&mut self) -> Result<Memory, Problem> {
         let m = take(sysinfo::memory(Endpoint::SYSINFO))?;
+        let pool = take(sysinfo::pool(Endpoint::SYSINFO)).unwrap_or_default();
         Ok(Memory { arena: m.arena, used: m.used, free: m.free, images: m.images, stacks: m.stacks, task_pages: m.task_pages, screens: m.screens, heaps: m.heaps,
                     objects: m.objects, objects_limit: m.objects_limit, dma: m.dma, dma_limit: m.dma_limit, tasks: m.tasks, endpoints: m.endpoints,
-                    largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit })
+                    largest_free: m.largest_free, page_tables: m.page_tables, shared: m.shared, tasks_limit: m.tasks_limit, endpoints_limit: m.endpoints_limit,
+                    frames: pool.frames, frames_free: pool.frames_free })
     }
     fn physmap(&mut self) -> Result<Vec<Range>, Problem> {
         let list = take(sysinfo::physmap(Endpoint::SYSINFO))?;

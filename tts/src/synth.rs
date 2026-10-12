@@ -10,6 +10,9 @@ pub const FRAME: usize = 80; // 5 ms at 16 kHz
 /// point, rather than rounding the feedback differently, changes the speech only by the cycle no longer carried into
 /// the next sound (about 40 dB below the signal); rounding toward zero changed it by 26 dB and still left cycles.
 const SETTLE: usize = 480;
+/// Samples over which a frame's amplitudes move from the last frame's (2 ms): a step at a frame's start clicks, most
+/// of all from silence (252-APP-0041).
+const RAMP: usize = 32;
 
 #[derive(Clone, Copy)]
 pub struct Voice { pub pitch: i64, pub rate: i64 }
@@ -18,6 +21,13 @@ impl Default for Voice { fn default() -> Self { Self { pitch: 112, rate: 100 } }
 struct State { cascade: [Resonator; 5], fric: Resonator, nasal_pole: Resonator, nasal_zero: Antiresonator, glottis: Glottis, noise: Noise, current: Target, dc_x: i64, dc_y: i64, phrase_ms: i64, tilt: i64, last_noise: i64, toward: Option<[i32; 3]>, attack: Option<i64>, jitter: i64, quiet: usize }
 
 fn lerp(a: i32, b: i32, k: i64) -> i32 { a + ((b - a) as i64 * k >> 10) as i32 }
+
+// Amplitudes (voicing, aspiration, frication) `r` samples of RAMP on the way from `a` to `b`.
+fn ramp(a: (i64, i64, i64), b: (i64, i64, i64), r: usize) -> (i64, i64, i64) {
+    let (r, n) = (r.min(RAMP) as i64, RAMP as i64);
+    let mix = |x: i64, y: i64| (x * (n - r) + y * r) / n;
+    (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2))
+}
 
 impl State {
     fn new() -> Self {
@@ -49,6 +59,7 @@ impl State {
         let samples = (segment.ms as i64 * RATE / 1000 * 100 / voice.rate.clamp(50, 200)) as usize;
         let blend = (segment.blend as i64 * RATE / 1000).max(1); let amp_blend = if segment.snap { 1 } else { self.attack.take().unwrap_or(8) * RATE / 1000 };
         let start = self.current; let mut buffer = [0i16; FRAME]; let mut done = 0usize;
+        let mut last = (start.av as i64, start.ah as i64, start.af as i64);
         while done < samples {
             let k = ((done as i64) << 10) / blend; let ka = ((done as i64) << 10) / amp_blend;
             let (k, ka) = (k.min(1024), ka.min(1024));
@@ -69,9 +80,10 @@ impl State {
             // Pitch within a segment: linear from contour.0 to contour.1.
             let f0 = contour.0 + (contour.1 - contour.0) * done as i64 / samples.max(1) as i64;
             let count = FRAME.min(samples - done);
-            let excited = cur.av != 0 || cur.ah != 0 || cur.af != 0;
-            for sample in buffer[..count].iter_mut() {
-                if excited { self.quiet = 0; } else { self.quiet += 1; if self.quiet == SETTLE { self.settle(); } }
+            let target = (cur.av as i64, cur.ah as i64, cur.af as i64);
+            for (i, sample) in buffer[..count].iter_mut().enumerate() {
+                let (av, ah, af) = ramp(last, target, i);
+                if av != 0 || ah != 0 || af != 0 { self.quiet = 0; } else { self.quiet += 1; if self.quiet == SETTLE { self.settle(); } }
                 // Slight pitch jitter and breath noise in the open phase: a voice is not perfectly periodic.
                 let (pulse, period) = self.glottis.next(f0 + self.jitter);
                 if period { self.jitter = (self.noise.next() * f0 / 4096) / 100; }
@@ -79,17 +91,18 @@ impl State {
                 // High-frequency-boosted noise (first difference): otherwise aspiration and wide frication resonators boom in the lows.
                 let tilted = noise - self.last_noise; self.last_noise = noise;
                 // Source spectral tilt: a one-pole filter softens the "buzz" of the upper harmonics.
-                self.tilt = (pulse * cur.av as i64 / 1000 + self.tilt * 3) / 4;
-                let breath = if pulse > 0 { tilted * cur.av as i64 / 1000 / 12 } else { 0 };
-                let mut y = self.nasal_zero.run(self.nasal_pole.run(self.tilt * 2 + breath + tilted * cur.ah as i64 / 1000));
+                self.tilt = (pulse * av / 1000 + self.tilt * 3) / 4;
+                let breath = if pulse > 0 { tilted * av / 1000 / 12 } else { 0 };
+                let mut y = self.nasal_zero.run(self.nasal_pole.run(self.tilt * 2 + breath + tilted * ah / 1000));
                 for resonator in self.cascade.iter_mut() { y = resonator.run(y); }
-                let fric = if cur.af > 0 { self.fric.run(tilted) * cur.af as i64 / 1000 } else { self.fric.run(0) };
+                let fric = if af > 0 { self.fric.run(tilted) * af / 1000 } else { self.fric.run(0) };
                 let mixed = y * 2 + fric * 3;
                 let dc = mixed - self.dc_x + (self.dc_y * 4064 >> 12); self.dc_x = mixed; self.dc_y = dc; // DC-blocking filter
                 *sample = (dc * 2 / 3).clamp(-32_000, 32_000) as i16; // headroom: no clipping on open vowels
             }
             sink(&buffer[..count]);
             done += count;
+            last = ramp(last, target, count);
             self.current = cur;
         }
         self.phrase_ms += segment.ms as i64;
