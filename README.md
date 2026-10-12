@@ -28,6 +28,8 @@ ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64 (ARM64) in QE
 ./04_make_usb_image.sh                              # a USB image for real hardware
 ```
 
+**Pictures and videos** of the system, in QEMU and on real machines, and how they are made: [docs/media.md](docs/media.md) (Russian: [docs/media_RU.md](docs/media_RU.md)).
+
 ### Why "MIND Core"
 
 The Minds of the Culture's spaceships — the ultra-powerful AIs controlling General Contact Units and Orbitals — must reside somewhere. No matter how multidimensional and advanced their hardware substrate may be, at a fundamental level, any computing architecture needs two basic things to wake up and become self-aware: a bootloader and an operating system.

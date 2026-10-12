@@ -52,3 +52,12 @@ The maintainer (2026-10-12) wants for the project's page on GitHub ([000-KRN-008
 ## Related
 
 [000-KRN-0088](000-KRN-0088-mind-core-os-a-copy-under-the-os-name.md), [docs/tools/README.md](../docs/tools/README.md) (`screenshot`, `record`), [requests-APP.md](requests-APP.md).
+
+## Progress (2026-10-12)
+
+- **`scripts/media.py`** (`shots`, `series`, `video`): its own BMP and AVI readers and PNG writer in Python; ffmpeg scales and writes WebP, GIF and MP4. On a 2880 × 1800 BMP made for the test, the PNG is the BMP pixel for pixel (both decoded by ffmpeg, the same SHA-256), 0.58 MB, and the 1600-wide copy 0.29 MB. A 3-second 2880 × 1800 AVI at 10 frames a second became an MP4 of 1.02 MB, 1920 × 1200, yuv420p.
+- **`tests/media_test.py`** (in `scripts/host_tests.sh`): the readers and the PNG writer on small files it makes, the AVI laid out as `libmind/src/avi.rs` writes it, with a repeated frame, an odd-length frame and a recording cut before its final header; the three commands where ffmpeg is installed. 8 tests pass here.
+- **`scripts/qemu_scenes.py`:** `boot`, `check`, `top`, `wm` and `series` at 1920 × 1080 (QEMU's VGA offers the size through EDID and OVMF takes it). Here (QEMU 8.2, TCG, 4 CPUs) every scene took 29 s.
+- **The guide:** [docs/media.md](../docs/media.md) and [docs/media_RU.md](../docs/media_RU.md), linked from the README.
+
+**Still open:** the scenes on i9 (the second criterion); pictures in `docs/media/` with the README showing them, one of them from a real machine (the third).
