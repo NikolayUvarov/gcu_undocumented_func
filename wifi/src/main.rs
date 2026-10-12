@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-// wifi (550-APP-0033): the Wi-Fi networks around and joining one. The 802.11 station that is to serve it (the network
-// track's `wlan`, requests-NET.md) does not run yet: without it the screen says so, and `--demo` runs the program
-// against a stand-in station with fixed networks (the QEMU test; a look at the screen), with no radio.
+// wifi (550-APP-0033): the Wi-Fi networks around and joining one, through the 802.11 station's idl/wifi.wit 1.0 (the
+// network track's `wlan`). No launcher lends the station's client to a program yet (requests-KRN.md): the screen says
+// so, and `--demo` runs the program against a stand-in of the same interface with fixed networks and no radio.
 extern crate alloc;
 
 use alloc::string::String;
@@ -16,11 +16,11 @@ const SCAN_MS: usize = 15_000;
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("wifi — the Wi-Fi networks around: their names, signal and protection; Enter joins one, with a passphrase typed\nwithout echo that the station may keep (in keystore, never in a file).\nUsage: wifi [--demo]\n↑↓ choose, Enter: join, r or F5: scan again, d: leave, f: forget, q or Esc: quit.\nThe 802.11 station that serves it is the network track's (task 550); until it runs, --demo shows the program with a\nstand-in station and no radio.");
+    mind::about!("wifi — the Wi-Fi networks around: their names, signal and protection; Enter joins one, with a passphrase typed\nwithout echo that the station may keep (in keystore, never in a file).\nUsage: wifi [--demo]\n↑↓ choose, Enter: join, r or F5: scan again, d: leave, f: forget, q or Esc: quit.\nThe 802.11 station that serves it is the network track's wlan (idl/wifi.wit); until its client is lent to programs,\n--demo shows the program with a stand-in station and no radio.");
     let demo = mind::process::args_str().split_whitespace().any(|w| w == "--demo");
     let Some(mut term) = Terminal::open(info, "wifi") else { return };
     let mut stand_in = Demo::new();
-    let mut absent = Absent(String::from("the network track's 802.11 station (wlan, task 550) does not run here yet, so nothing can scan or join."));
+    let mut absent = Absent(String::from("no launcher lends the 802.11 station's client (wlan, idl/wifi.wit) to a program yet, so nothing can scan or join."));
     let station: &mut dyn Station = if demo { &mut stand_in } else { &mut absent };
     let mut view = Wifi::new(demo);
     view.refresh(station);

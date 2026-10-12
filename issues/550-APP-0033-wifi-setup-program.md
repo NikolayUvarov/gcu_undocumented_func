@@ -1,6 +1,6 @@
 # 550-APP-0033 — `wifi`: choosing a Wi-Fi network and typing its passphrase
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the program and its screen done against a stand-in, 2026-10-12) · **Blocked by:** the network track's 802.11 station and its configuration interface (`idl/wifi.wit`, proposed by the tools track in [requests-NET.md](requests-NET.md)); a slot for its client ([requests-KRN.md](requests-KRN.md)) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the program follows the agreed `idl/wifi.wit` 1.0, against a stand-in, 2026-10-12) · **Blocked by:** a slot for the station's client ([requests-KRN.md](requests-KRN.md)); the station running on the MacBook Pro (550-NET-0018, 550-DRV-0027) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
 
 _Numbered 550-APP-0017 in the tools branch's commits until main's own 351-APP-0017 (2026-10-09); renumbered at the merge._
 
@@ -39,6 +39,22 @@ The maintainer's word: "do the tools track's part of the network and Wi-Fi confi
 - **The interface:** `idl/wifi.wit` 1.0 proposed to `NET` (requests-NET.md), and a slot for its client asked of `KRN` (requests-KRN.md).
 - **Tests:** [`tests/wifi_host.rs`](../tests/wifi_host.rs) (5 tests: the rows, the passphrase's rules, joining unseen, a wrong passphrase, the refusals, no station); `tests/wm_host.rs` (the network page's rows); the shell suite runs `wifi` and `wifi --demo` on x86 and aarch64; the `wm` suite opens `wifi` from Settings.
 - **Left:** the client of the agreed interface in place of the stand-in, the shell's commands (`wifi list`, `wifi join`), and the acceptance criteria with the station, on the MacBook Pro. These wait for `NET` and `KRN`.
+
+## Progress: `idl/wifi.wit` 1.0 (2026-10-12)
+
+The network track agreed the interface (550-NET-0018) with changes it asked of this track in requests-APP.md ("`wifi` follows `idl/wifi.wit` 1.0 as agreed", on the network branch until it reaches `main`). `wifi` follows them:
+
+- **The interface in this branch:** `idl/wifi.wit` and its generated `libmind/src/idl/wifi.rs` as the network track committed them (c2ee9ea), so that the same files merge cleanly; the IDL index row and the fuzzer's entry stay the network track's.
+- **[`station.rs`](../wifi/src/station.rs):**
+  - an SSID is bytes, shown as UTF-8 where it is and as `\xNN` where it is not (control characters too), so a name stays exact;
+  - the signal is minus dBm (0 unknown, listed last), the access point a BSSID, the rate in 500 kb/s units;
+  - `security.other`, `error.not-found`, `reason.not-found` and `unsupported`, `state.scanning`; a lost link that the station joins again;
+  - no address: the link shows the access point, signal, channel and rate, and says the address is the network stack's (`ip`);
+  - the station joins open and WPA2 networks only: WEP, WPA3, enterprise and other protections are refused with the reason before a passphrase is asked;
+  - `Demo` serves 1.0: ten access points (a Latin-1 name, a TKIP and a WPA3 network among them), `not-found`, `unsupported`, `invalid`; `remembers` false answers `remember` with `unsupported`, as the station does until it keeps keys.
+- **[`view.rs`](../wifi/src/view.rs):** a `remember` the station answers with `unsupported` is asked again without, and the line says the key was not kept; `forget` answered so says the station does not remember networks yet. The passphrase is no longer copied: the line it was typed in is overwritten after the call.
+- **[`service.rs`](../wifi/src/service.rs):** `Station` over the station's client with `mind::idl::wifi`. It builds and is not run: no launcher lends the client yet (requests-KRN.md, "A slot for the Wi-Fi station's configuration client"), so `wifi` without `--demo` says so.
+- **Tests:** [`tests/wifi_host.rs`](../tests/wifi_host.rs), 8 tests (SSIDs as bytes, the stand-in's answers, a station that does not remember); the shell suite's `wifi --demo` check names the access point joined. What is tested is the program against the stand-in, not the station (MC-12.2).
 
 ## Related
 
