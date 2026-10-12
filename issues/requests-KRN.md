@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (10 requests waiting, 2026-10-12, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-12, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -241,3 +241,23 @@ B.6 gives each session its own parser. Today one `parse` process serves every pr
 ### Acceptance criteria
 
 A test program starts a copy of `parse` this way. The copy's capabilities are its endpoint alone, the program gets an answer from it, and the copy ends when the program does.
+
+## A read-only client of a network card for a program, for `wm`'s background (000-NET-0015, 000-APP-0049)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [000-NET-0015](000-NET-0015-a-card-read-only-client.md) and the tools track's [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md).
+
+### Problem
+
+`idl/net.wit` 1.3 gives a card's driver a client that only reads the card: with `BADGE_COUNTERS` (`mind::network`) it may call `info`, `counters` and `offloads`, and nothing that sends, receives or lends a ring. Only a holder of a client with `CAP_BADGE` can mint it, and nobody that would lend it to a program has one: `init` lends the shell's `SLOT_NET` copy of `virtio_net` with `CLIENT` rights, and no program can ask for such a client.
+
+### Plan (a proposal; the kernel track decides)
+
+- **The client for the shell to lend.** Either:
+  - `init` gives the shell's `SLOT_NET` copy `CAP_BADGE` too, as it gives `netstack` its own endpoint, so the shell mints the read-only copy itself; or
+  - `init` mints the read-only client for the shell in a slot the kernel track chooses.
+- **A request flag,** for example `REQUEST_NET_COUNTERS`, for which the shell lends the read-only client to a program in `SLOT_NET` (programs do not hold `SLOT_NET` otherwise). The shell's part is the tools track's, in 000-APP-0049.
+- `wm` would hold one more lent client: the launch session's limit of 5 grants ("A launch session holds as many grants as there are launch slots" above) may come first.
+
+### Acceptance criteria
+
+A program that asks for the flag holds the read-only client in `SLOT_NET`: it reads the counters, and `send`, `receive` and `attach` answer `denied`.
