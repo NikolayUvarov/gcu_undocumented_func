@@ -9,6 +9,7 @@ use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 
 mod stage3;
+mod stage4;
 mod tables;
 
 // PCI configuration: the backplane addresses BAR0's first two 4 KiB windows show.
@@ -304,7 +305,11 @@ fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
         Ok(_) => {
             let (revision, patch, date, time) = (shared(0), shared(2), shared(4), shared(6));
             mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
-            match mac { Some(mac) => stage3::run(bar, mac), None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGE 3 SKIPPED") }
+            let core = stage3::Core::new(bar);
+            match mac {
+                Some(mac) => if stage3::run(&core, mac) { stage4::run(&core) },
+                None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
+            }
         }
         Err(v) => mind::println!("[BCM] MICROCODE DOES NOT ANSWER: {} WORDS LOADED; IRQ REASON {:08X}, MAC CONTROL {:08X}", count, v, bar.read32(D11_MAC_CONTROL)),
     }

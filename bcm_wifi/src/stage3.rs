@@ -32,12 +32,12 @@ pub struct Core<'a> { bar: &'a Mmio, phy_writes: Cell<u32>, radio_writes: Cell<u
 
 impl<'a> Core<'a> {
     pub fn new(bar: &'a Mmio) -> Self { Self { bar, phy_writes: Cell::new(0), radio_writes: Cell::new(0) } }
-    fn r16(&self, r: usize) -> u16 { self.bar.read16(r) }
-    fn w16(&self, r: usize, v: u16) { self.bar.write16(r, v) }
-    fn r32(&self, r: usize) -> u32 { self.bar.read32(r) }
-    fn w32(&self, r: usize, v: u32) { self.bar.write32(r, v) }
-    fn set32(&self, r: usize, s: u32) { self.w32(r, self.r32(r) | s) }
-    fn clear32(&self, r: usize, c: u32) { self.w32(r, self.r32(r) & !c) }
+    pub(crate) fn r16(&self, r: usize) -> u16 { self.bar.read16(r) }
+    pub(crate) fn w16(&self, r: usize, v: u16) { self.bar.write16(r, v) }
+    pub(crate) fn r32(&self, r: usize) -> u32 { self.bar.read32(r) }
+    pub(crate) fn w32(&self, r: usize, v: u32) { self.bar.write32(r, v) }
+    pub(crate) fn set32(&self, r: usize, s: u32) { self.w32(r, self.r32(r) | s) }
+    pub(crate) fn clear32(&self, r: usize, c: u32) { self.w32(r, self.r32(r) & !c) }
     fn cc(&self, r: usize) -> u32 { self.r32(CC + r) }
     fn cc_w(&self, r: usize, v: u32) { self.w32(CC + r, v) }
     // About `n` microseconds: reads of the agent take about one each.
@@ -86,8 +86,8 @@ impl<'a> Core<'a> {
     fn table32_read(&self, table: u16, offset: u16) -> u32 { self.phy_w(0x072, table << 10 | offset); let high = self.phy(0x074) as u32; high << 16 | self.phy(0x073) as u32 }
 
     // Shared memory takes byte offsets; scratch takes word indexes.
-    fn shm16(&self, offset: u32) -> u16 { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.r16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }) }
-    fn shm16_w(&self, offset: u32, v: u16) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }, v) }
+    pub(crate) fn shm16(&self, offset: u32) -> u16 { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.r16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }) }
+    pub(crate) fn shm16_w(&self, offset: u32, v: u16) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }, v) }
     fn shm32_w(&self, offset: u32, v: u32) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w32(SHM_DATA, v) }
     fn scratch_w(&self, index: u32, v: u16) { self.w32(SHM_CONTROL, SCRATCH << 16 | index); self.w16(SHM_DATA, v) }
 
@@ -168,13 +168,13 @@ impl<'a> Core<'a> {
     }
 
     // MAC suspended and enabled as the microcode expects; true when it answered.
-    fn suspend(&self) -> bool {
+    pub(crate) fn suspend(&self) -> bool {
         self.set32(MAC_CONTROL, MAC_AWAKE); self.clear32(MAC_CONTROL, MAC_ENABLED); let _ = self.r32(MAC_CONTROL);
         let end = mind::time::uptime_ms() + 50;
         while mind::time::uptime_ms() < end { if self.r32(IRQ_REASON) & IRQ_SUSPENDED != 0 { return true; } self.us(10); }
         false
     }
-    fn enable(&self) -> u16 {
+    pub(crate) fn enable(&self) -> u16 {
         self.set32(MAC_CONTROL, MAC_ENABLED); self.w32(IRQ_REASON, IRQ_SUSPENDED);
         let _ = (self.r32(MAC_CONTROL), self.r32(IRQ_REASON));
         self.w32(MAC_CONTROL, (self.r32(MAC_CONTROL) | MAC_AWAKE) & !MAC_HW_POWER_SAVE);
@@ -230,10 +230,10 @@ fn read_file(path: &str, buffer: &mut [u8]) -> Option<usize> {
 
 fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 3, STEP {}: {}", n, what); mind::time::sleep(crate::STEP_MS); }
 
-// The stage, after the microcode answered; `mac` from the SPROM. The core is left to the caller to reset.
-pub fn run(bar: &Mmio, mac: [u8; 6]) {
-    let core = Core::new(bar);
-    let Some(mut pages) = mind::mem::Pages::new(16 * 1024) else { mind::println!("[BCM] NO MEMORY FOR THE INITIAL VALUES"); return };
+// The stage, after the microcode answered; `mac` from the SPROM. True when it ran through with the MAC suspended at
+// the end; the core is left to the caller to reset.
+pub fn run(core: &Core, mac: [u8; 6]) -> bool {
+    let Some(mut pages) = mind::mem::Pages::new(16 * 1024) else { mind::println!("[BCM] NO MEMORY FOR THE INITIAL VALUES"); return false };
     let buffer = pages.as_mut_slice();
 
     step(1, "GPIO AND THE INITIAL VALUES");
@@ -242,10 +242,10 @@ pub fn run(bar: &Mmio, mac: [u8; 6]) {
     core.w16(GPIO_MASK, core.r16(GPIO_MASK) | 0x000F);
     core.cc_w(CC_GPIO_CONTROL, (core.cc(CC_GPIO_CONTROL) & !0x1F) | 0x0F);
     for path in INITVALS {
-        let Some(n) = read_file(path, buffer) else { mind::println!("[BCM] NO INITIAL VALUES AT {}: STAGE 3 STOPPED", path); return };
-        match initvals(&core, &buffer[..n]) {
+        let Some(n) = read_file(path, buffer) else { mind::println!("[BCM] NO INITIAL VALUES AT {}: STAGE 3 STOPPED", path); return false };
+        match initvals(core, &buffer[..n]) {
             Ok(count) => mind::println!("[BCM] {}: {} BYTES, {} VALUES WRITTEN", path, n, count),
-            Err(why) => { mind::println!("[BCM] {}: {}: STAGE 3 STOPPED", path, why); return; }
+            Err(why) => { mind::println!("[BCM] {}: {}: STAGE 3 STOPPED", path, why); return false; }
         }
     }
 
@@ -295,14 +295,14 @@ pub fn run(bar: &Mmio, mac: [u8; 6]) {
     for t in [0x20, 0x22, 0x24] { core.table32(t, 0x000, &SET_H); }
 
     step(7, "THE HT-PHY'S SET-UP SEQUENCE");
-    phy_init(&core);
+    phy_init(core);
 
     step(8, "THE SECOND CHANNEL SWITCH, TO CHANNEL 6");
     let (before, after) = core.channel(6);
     mind::println!("[BCM] CHANNEL 6 AGAIN: CLOCK CONTROL {:08X} BEFORE THE PLL UPDATE, {:08X} AFTER; RADIO 945 {:04X}, 140 {:04X}", before, after, core.radio(0x945), core.radio(0x140));
 
     step(9, "THE REST OF THE CHIP'S INIT AND THE MAC ADDRESS");
-    chip_init(&core, mac);
+    chip_init(core, mac);
     mind::println!("[BCM] MAC CONTROL {:08X}, IRQ REASON {:08X}, CLOCK CONTROL {:08X}, MICROCODE STATUS {}", core.r32(MAC_CONTROL), core.r32(IRQ_REASON), core.r32(CLOCK), core.shm16(0x0040));
 
     step(10, "THE RECEIVER ON: NOISE SAMPLES ON CHANNELS 1, 6 AND 11");
@@ -322,6 +322,7 @@ pub fn run(bar: &Mmio, mac: [u8; 6]) {
     }
     let suspended = core.suspend();
     mind::println!("[BCM] MAC SUSPENDED: {}; IRQ REASON {:08X}", if suspended { "YES" } else { "NO" }, core.r32(IRQ_REASON));
+    suspended
 }
 
 // The HT-PHY's set-up after its tables (fact sheet 3.3, steps 1 to 34); the transmit power steps are left out.
@@ -405,6 +406,7 @@ fn chip_init(c: &Core, mac: [u8; 6]) {
         let word = u32::from_le_bytes([bytes[4 * k], bytes[4 * k + 1], bytes[4 * k + 2], bytes[4 * k + 3]]);
         c.w32(TEMPLATE_CONTROL, 0x20 + 4 * k as u32); c.w32(TEMPLATE_DATA, if swap { word.swap_bytes() } else { word });
     }
-    slot(0, mac);
-    mind::println!("[BCM] HARDWARE CAPABILITIES {:08X}; STATION ADDRESS SET", caps);
+    // While only receiving, the address match holds no address of ours, so no frame is acknowledged.
+    slot(0, [0; 6]);
+    mind::println!("[BCM] HARDWARE CAPABILITIES {:08X}; THE STATION ADDRESS IN THE TEMPLATE, NOT IN THE ADDRESS MATCH", caps);
 }
