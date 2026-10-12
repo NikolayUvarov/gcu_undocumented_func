@@ -1,8 +1,9 @@
 //! `wm`'s Settings (000-APP-0048): one window for what can be configured, opened from the top bar or with Alt+S. Its
 //! first page is the desktop background (000-APP-0047, 000-APP-0050), kept in `data/wm.conf`. The date and time page
 //! sets the clock through the shell, at once and without a question (000-APP-0055, 000-APP-0060). The screen page sets
-//! wm's scale and the pointer's size and colour (000-APP-0061), kept in `data/wm.conf` too. The other system pages are to read and say where each setting
-//! is made. Every row and page answers Enter and a click: it changes, or a line
+//! wm's scale and the pointer's size and colour (000-APP-0061), kept in `data/wm.conf` too. The network page opens what
+//! shows or sets each part of the network: `wifi`, and the shell's commands in `console` (550-APP-0033). The other
+//! system pages are to read and say where each setting is made. Every row and page answers Enter and a click: it changes, or a line
 //! says why not (000-APP-0056). Host-tested in tests/wm_host.rs.
 use crate::background::{Config, Picture, Place, COMPLEXITY, PATTERNS};
 use crate::keys::{Code, Key};
@@ -24,6 +25,15 @@ pub const DATE: usize = 2;
 /// The screen page and its rows: wm's scale, the pointer's size and its colour (000-APP-0061).
 pub const SCREEN: usize = 5;
 pub const SCREEN_ROWS: [&str; 3] = ["Scale", "Pointer", "Colour"];
+/// The network page (550-APP-0033) and its rows: a name, what Enter starts, and what it is for.
+pub const NETWORK: usize = 3;
+pub const NETWORK_ROWS: [(&str, &str, &str); 5] = [
+    ("Wi-Fi", "wifi", "the networks around; join one"),
+    ("Addresses", "console ip", "address, gateway, DNS server"),
+    ("Cards", "console net", "MAC address, link, counters"),
+    ("Flow grants", "console netgrants", "what each program may reach"),
+    ("Policy", "console netpolicy", "its lines; a change asks first"),
+];
 pub const CLOCK_ROWS: [&str; 7] = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds", "Set the clock"];
 const SET: usize = 6;
 // Each field's range and digits.
@@ -40,12 +50,12 @@ const LIST: usize = 17; // the pages' column
 pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
     pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize,
-    pub message: Option<String>, pub shell: bool, pub screen_row: usize, pub pixels: (usize, usize), pub scale: u16,
+    pub message: Option<String>, pub shell: bool, pub screen_row: usize, pub pixels: (usize, usize), pub scale: u16, pub net_row: usize,
 }
 
 /// What a key or a click did.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 } }
+pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, Run(String) }
 
 /// Days since 2000-01-01 of a date from 2000 to 2099; None for a day the month does not have.
 pub fn days(year: u32, month: u32, day: u32) -> Option<u32> {
@@ -64,7 +74,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Picture::Image(name) = &config.picture { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100 }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0 }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -200,7 +210,7 @@ impl Settings {
     /// change it on (and tick a box), typing edits the image's file on its row (Enter takes it), Esc or Alt+S closes.
     pub fn key(&mut self, key: Key, config: &Config) -> Outcome {
         if key.code() == Code::Esc || (key.alt() && key.letter() == Some('s')) { return Outcome::Close; }
-        let enterable = self.page == 0 || self.page == DATE || self.page == SCREEN;
+        let enterable = [0, DATE, NETWORK, SCREEN].contains(&self.page);
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
         if self.on_pages {
             match key.code() {
@@ -213,6 +223,17 @@ impl Settings {
             return Outcome::Stay;
         }
         if self.page == DATE { return self.clock_key(key); }
+        if self.page == NETWORK {
+            match key.code() {
+                Code::Up => self.net_row = self.net_row.saturating_sub(1),
+                Code::Down => self.net_row = (self.net_row + 1).min(NETWORK_ROWS.len() - 1),
+                Code::Left => self.on_pages = true,
+                Code::Right | Code::Enter => return self.network(),
+                Code::Char if key.char() == Some(' ') => return self.network(),
+                _ => {}
+            }
+            return Outcome::Stay;
+        }
         if self.page == SCREEN {
             let step = match key.code() {
                 Code::Up => { (self.screen_row, self.message) = (self.screen_row.saturating_sub(1), None); return Outcome::Stay }
@@ -238,6 +259,13 @@ impl Settings {
             Code::Char if key.char() == Some(' ') => self.changed(config, self.row, 0),
             _ => Outcome::Stay,
         }
+    }
+
+    // The network page's row: what it starts, Settings closed so its window is in front.
+    fn network(&mut self) -> Outcome {
+        let (name, command, _) = NETWORK_ROWS[self.net_row];
+        self.message = Some(format!("{}: {}", name, command));
+        Outcome::Run(String::from(command))
     }
 
     // Page `page` shown, its line about the last try gone.
@@ -295,7 +323,12 @@ impl Settings {
             if self.row != FILE { return self.changed(config, self.row, 0); }
         }
         // A page to read says so.
-        if ![0, DATE, SCREEN].contains(&self.page) { self.to_read(); }
+        if ![0, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
+        // The network page: a click on a row starts what it opens.
+        if self.page == NETWORK && (1..=NETWORK_ROWS.len()).contains(&cy) {
+            (self.net_row, self.on_pages) = (cy - 1, false);
+            return self.network();
+        }
         // The screen page: a click on a row chooses it and steps it on.
         if self.page == SCREEN && (1..=SCREEN_ROWS.len()).contains(&cy) {
             (self.screen_row, self.on_pages) = (cy - 1, false);
@@ -362,6 +395,19 @@ impl Settings {
             let below = inner.y + 2 + SCREEN_ROWS.len();
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
             if let Some(message) = &self.message { grid.text_max(x, below + lines.len(), message, w, theme.accent); }
+        } else if self.page == NETWORK {
+            grid.text_max(x, inner.y, "The network: each row opens what shows or sets it.", w, theme.dialog);
+            for (i, (name, command, what)) in NETWORK_ROWS.iter().enumerate() {
+                let chosen = !self.on_pages && self.net_row == i;
+                grid.text_padded(x, inner.y + 1 + i, &format!("{:<11} {:<17} {}", name, command, what), w, if chosen { theme.selected } else { theme.dialog });
+            }
+            let lines = ["Wi-Fi goes through the 802.11 station of the network track",
+                         "(task 550). Until it runs, wifi says so; wifi --demo shows",
+                         "the program with a stand-in station. console passes the",
+                         "shell's commands to the shell; a change asks in its window."];
+            let below = inner.y + 2 + NETWORK_ROWS.len();
+            for (i, line) in lines.iter().enumerate() { grid.text_max(x, below + i, line, w, theme.dialog); }
+            if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
         } else if self.page == DATE {
             let now = match self.now { Some(((y, mo, d), s)) => format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, s / 3600, s / 60 % 60, s % 60), None => String::from("cannot be read") };
             grid.text_max(x, inner.y, &format!("The clock (it keeps no time zone): {}", now), w, theme.dialog);
@@ -378,7 +424,8 @@ impl Settings {
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, inner.y + i, line, w, if i == 0 { theme.accent } else { theme.dialog }); }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
-        let help = if self.on_pages && ![0, DATE, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+        let help = if self.on_pages && ![0, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+            else if !self.on_pages && self.page == NETWORK { "↑↓: rows · Enter: open it in a window · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == SCREEN { "↑↓: rows · ← → Enter Space: change, used at once · Tab: pages · Esc: close" }
             else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
             else if self.row == FILE { "type the file · Enter: use it · ↑↓: rows · Esc: close" } else { "↑↓: rows · ← → Space: change · Tab: pages · Esc: close" };
@@ -391,7 +438,6 @@ impl Settings {
         let shell = ["in the shell's window, which Shell in the menu opens", "(a right click on the desktop, Alt+P), as Ctrl+Alt+F5 does."];
         let lines: Vec<&str> = match self.page {
             1 => Vec::from(["To read: the keyboard is set in the shell.", "The layout and its switch:", "  keymap us|ru [--switch both|ctrl-shift|alt-shift|caps|none]", shell[0], shell[1]]),
-            3 => Vec::from(["To read: the network is set in the shell.", "Addresses, flow grants and the policy:", "  ip, netgrants, netrevoke <program>, netpolicy", shell[0], shell[1]]),
             _ => Vec::from(["To read: the sound has no volume to set yet.", "audio.wit has none (asked of the drivers track for this page);", "beep and say play at the level they make."]),
         };
         lines.iter().map(|s| String::from(*s)).collect()

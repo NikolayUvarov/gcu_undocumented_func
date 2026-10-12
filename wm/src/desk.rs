@@ -603,6 +603,8 @@ impl Wm {
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                     // The shell sets the clock at once (000-APP-0060): Settings stay open and show the outcome.
                     Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                    // The network page's row (550-APP-0033): its program in a window, in front of the closed Settings.
+                    Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
                 };
             }
             Mode::Normal => {}
@@ -720,6 +722,7 @@ impl Wm {
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                 Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
             };
         }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
@@ -991,7 +994,7 @@ impl Wm {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
             Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
         format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)

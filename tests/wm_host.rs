@@ -1111,7 +1111,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
     assert_eq!(wm.background.picture, Picture::Image("sky.bmp".into()));
     assert!((wm.background.time, wm.background.place) == (false, Place::BottomLeft));
-    // The system's pages say where the setting is made today; a click outside closes.
+    // The network page names what each row opens (550-APP-0033); a click outside closes.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
     let inner = s.area().inner();
     assert_eq!(s.click(inner.x + 2, inner.y + 3, &wm.background), settings::Outcome::Stay);
@@ -1120,7 +1120,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     let mut grid = Grid::new(&mut cells, 160, 50);
     s.draw(&mut grid, &DARK, &wm.background);
     let text: String = (inner.y..inner.bottom()).map(|y| (inner.x..inner.right()).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
-    assert!(text.contains("netpolicy") && text.contains("To read: the network is set in the shell") && text.contains("Shell in the menu"), "{}", text);
+    assert!(text.contains("console netpolicy") && text.contains("wifi --demo") && text.contains("a change asks in its window."), "{}", text);
     // A click on a row of the background page changes it.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
     match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
@@ -1319,7 +1319,7 @@ fn every_page_and_row_of_settings_reacts() {
         let mut s = Settings::new(&config, (160, 50));
         for _ in 0..page { s.key(key(KEY_DOWN), &config); }
         assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-        if page == 0 || page == DATE || page == settings::SCREEN { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
         assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
         assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
         assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
@@ -1333,6 +1333,23 @@ fn every_page_and_row_of_settings_reacts() {
         // Every line of the page fits its column.
         for line in s.page_text() { assert!(line.chars().count() <= 63, "{:?}", line); }
     }
+    // The network page (550-APP-0033): each row starts what it opens, by Enter and by a click; ← goes back to the pages.
+    for (row, (name, command, what)) in settings::NETWORK_ROWS.iter().enumerate() {
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..settings::NETWORK { s.key(key(KEY_DOWN), &config); }
+        s.key(key(KEY_ENTER), &config);
+        assert!(screen(&s).contains("The network: each row opens what shows or sets it."));
+        for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+        assert!(screen(&s).contains(&format!("{:<11} {:<17} {}", name, command, what)), "the whole row fits");
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Run(command.to_string()), "{}", name);
+        let inner = s.area().inner();
+        let mut c = Settings::new(&config, (160, 50));
+        c.click(inner.x + 2, inner.y + settings::NETWORK, &config);
+        assert_eq!(c.click(inner.x + 30, inner.y + 1 + row, &config), Outcome::Run(command.to_string()), "{}", name);
+        s.key(key(KEY_LEFT), &config);
+        assert!(s.on_pages && s.page == settings::NETWORK);
+    }
+    assert_eq!(settings::NETWORK_ROWS[0].1, "wifi");
     // Each row of the background page: Enter changes it, or a line says why not.
     for row in 0..ROWS.len() {
         let mut s = Settings::new(&config, (160, 50));
