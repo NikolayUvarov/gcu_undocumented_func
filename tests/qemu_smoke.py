@@ -6942,7 +6942,11 @@ def usb_suite(vm):
     # A boot mouse plugged in at run time (211-DRV-0003): its layout from the descriptor in the report protocol, its
     # first reports logged, its movement to the focused program.
     vm.qmp("device_add", driver="usb-mouse", bus="xhci.0", port="1.3", id="mouse")
-    require(vm.service_logs("usb_hid", "MOUSE"), "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    logs = vm.service_logs("usb_hid", "MOUSE")
+    require(logs, "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    # Its report descriptor came at its own length, not the 1024 bytes asked (211-DRV-0008).
+    sizes = [int(n) for n in re.findall(r"\[USB_HID\] 0627:0001 REPORT DESCRIPTOR: (\d+) BYTES", logs)]
+    assert sizes and all(0 < n < 1024 for n in sizes), logs
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
     time.sleep(.3)

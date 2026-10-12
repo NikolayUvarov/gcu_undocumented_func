@@ -73,6 +73,8 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
         return Ok(device(Kind::Keyboard(Keyboard::new()), [0; 4]));
     }
     let length = host.control(handle, 0x81, 6, 0x2200, number, 1024); // the report descriptor
+    // Logged once, for a pointer whose layout is read wrong (211-DRV-0008: a mouse that moved only sideways).
+    if first { if let Ok(n) = length { dump(name, "REPORT DESCRIPTOR", &host.buffer()[..n]); } }
     let (parsed, ids) = match length { Ok(n) => (Pointer::parse(&host.buffer()[..n]), report_ids(&host.buffer()[..n])), Err(_) => (None, [0; 4]) };
     let pointer = match (parsed, length) {
         // The firmware may have left a boot device in the boot protocol, whose reports the descriptor does not describe.
@@ -81,9 +83,10 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
         (None, Err(error)) => return Err(Some(error)),
         (None, Ok(_)) => { mind::println!("[USB_HID] {:04X}:{:04X} NEITHER KEYBOARD NOR POINTER, LEFT ALONE", name.0, name.1); return Err(None) }
     };
-    mind::println!("[USB_HID] {:04X}:{:04X} {}: ID {}, X AT BIT {} ({} BITS), Y AT BIT {} ({} BITS), {} PROTOCOL", name.0, name.1,
+    let protocol = match (parsed, length) { (Some(_), _) => "REPORT PROTOCOL", (None, Ok(_)) => "BOOT PROTOCOL (NO X AND Y IN ITS DESCRIPTOR)", (None, Err(_)) => "BOOT PROTOCOL (ITS DESCRIPTOR NOT READ)" };
+    mind::println!("[USB_HID] {:04X}:{:04X} {}: ID {}, X AT BIT {} ({} BITS), Y AT BIT {} ({} BITS), {}", name.0, name.1,
                    if pointer.absolute { "TABLET" } else { "MOUSE" }, pointer.id, pointer.x.offset, pointer.x.size, pointer.y.offset,
-                   pointer.y.size, if parsed.is_some() { "REPORT" } else { "BOOT" });
+                   pointer.y.size, protocol);
     Ok(device(Kind::Pointer(pointer), ids))
 }
 

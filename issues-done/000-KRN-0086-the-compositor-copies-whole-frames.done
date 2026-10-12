@@ -1,6 +1,6 @@
-# 000-KRN-0086 — The compositor copies whole frames: no pointer missing, no cleared cells on the screen
+# 000-KRN-0086 — The compositor copies whole frames: no pointer missing, no cleared cells on the screen — done
 
-**Type:** kernel (`scheduler.rs`, `common/abi.rs`), `compositor`, `libmind` `dev` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made and tested in QEMU; the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.3
+**Type:** kernel (`scheduler.rs`, `common/abi.rs`), `compositor`, `libmind` `dev` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -51,6 +51,14 @@ A copy taken after step 1 shows no pointer: the flicker. A copy taken while cell
 - With frame mode it passed: 10 screen dumps, frames 58 to 527.
 - These suites passed with it on 4 CPUs: boot, display, dzen, isolation, windows, wm and tablet. The aarch64 image builds.
 
+## Resolution
+
+- **The ABI** (`common/abi.rs`): `COMPOSITOR_PULL` takes a mode. Mode 0 works as before; `COMPOSITOR_FRAME` answers `COMPOSITOR_BUSY` while the focused task is ready and its screen changed, and otherwise copies the screen and holds the task until `COMPOSITOR_RELEASE` or 50 ms.
+- **The kernel** (`kernel/src/scheduler.rs`): the held task is not selected; the timer lets it go after 50 ms.
+- **The compositor** (`compositor/src/main.rs`): pulls in frame mode, releases after the copy, tries again 1 ms after `BUSY`, and copies the screen as it is after 250 ms of `BUSY`. `libmind` `dev` has `pull` and `Frame`.
+- **QEMU** (x86, the isolation suite): `app2 F` draws numbered frames in two halves. With mode 0 the first screen dump showed a bottom half newer than its top; with frame mode none did. The display, `wm`, windows, tablet and clock suites pass; the gate passed on x86 and aarch64.
+- **The MacBook Pro** (the maintainer, 2026-10-12, `fast-test` c548a85): "the cursor stopped flickering, the picture is smooth".
+
 ## Related
 
-[000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done), [docs/profile/README.md](../docs/profile/README.md) (the compositor's shared memory).
+[000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md), [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done), [docs/profile/README.md](../docs/profile/README.md) (the compositor's shared memory).
