@@ -231,3 +231,10 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
   - `cat log:boot0001.log | sha256` equals `sha256 log:boot0001.log`;
   - 100 KiB through `|` arrive whole.
 - **On the MacBook Pro**, `dmesg -s battery > data/battery.txt` leaves the file on the stick.
+
+## Display output over several monitors (177; the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, for main task [177](177-display-output.md).
+
+The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
+
