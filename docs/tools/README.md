@@ -255,7 +255,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 
 **The current directory and Tab** (000-APP-0066), in the shell and in `console`:
 
-- `cd [directory]` sets it, and the prompt names it (`MIND diag> `; `console`: `diag> `). `cd` alone goes to the boot disk's root, `cd ..` one level up, and a missing directory is refused. `pwd` shows it (`/`, `/diag`, `ram:notes`). Each console, and the shell's window, has its own.
+- `cd [directory]` sets it, and the prompt names it (`MIND diag> `; `console`: `diag> `). `cd` alone goes to the boot disk's root, `cd ..` one level up, and a missing directory is refused. A path that climbs above its volume's root (`ram:../x`, `..` at `/`) is refused (`INVALID PATH`), never cut at the root. `pwd` shows it (`/`, `/diag`, `ram:notes`). Each console, and the shell's window, has its own.
 - A path that names no volume starts there: in `ls`, `cat`, `write`, `mkdir`, `rm`, `mv`, `msh`, a script by its name (`quick.msh` in `diag`), `release`, `screenshot`, and the scripts' `files()` and `glob()`. A leading `/` is the boot disk's root.
 - A program has no directory of its own: the shell (and `console`) passes it a word that names a file or directory in the current directory, and the first word of a program that asks for its file (`edit new.txt`), as a full path.
 - A script's `cd` lasts while the script runs.

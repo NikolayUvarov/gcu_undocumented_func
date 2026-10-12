@@ -17,8 +17,8 @@ fn join(volume: &str, parts: &[&str]) -> String {
 }
 
 /// `path` taken from the directory `cwd`: a volume (`ram:x`) or a leading `/` (the boot disk) starts at a root; `.`
-/// is the directory, `..` the one above (none above a root). The result has no `.`, `..`, empty parts or a `/` at
-/// either end.
+/// is the directory, `..` the one above. The result has no `.`, `..`, empty parts or a `/` at either end. A path that
+/// climbs above its root comes back as typed, for the file service to refuse (`INVALID PATH`): it is not cut at the root.
 pub fn resolve(cwd: &str, path: &str) -> String {
     let path = path.trim();
     let (volume, rest) = split(path);
@@ -28,7 +28,11 @@ pub fn resolve(cwd: &str, path: &str) -> String {
         (v, d.split('/').filter(|p| !p.is_empty() && *p != ".").collect())
     };
     for part in rest.split('/') {
-        match part { "" | "." => {} ".." => { parts.pop(); } _ => parts.push(part) }
+        match part {
+            "" | "." => {}
+            ".." => if parts.pop().is_none() { return String::from(path) },
+            _ => parts.push(part),
+        }
     }
     join(volume, &parts)
 }

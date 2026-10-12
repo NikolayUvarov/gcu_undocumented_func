@@ -9,11 +9,15 @@ use path::*;
 fn a_path_is_taken_from_the_current_directory() {
     for (cwd, typed, full) in [
         ("", "diag", "diag"), ("diag", "quick.msh", "diag/quick.msh"), ("diag", "..", ""), ("diag", "../data/x", "data/x"),
-        ("", "..", ""), ("diag", "/docs", "docs"), ("diag", "ram:notes", "ram:notes"), ("ram:notes", "a/./b//", "ram:notes/a/b"),
-        ("ram:notes", "..", "ram:"), ("ram:", "..", "ram:"), ("RAM:x", ".", "ram:x"), ("log:boot", "/", ""), ("diag", "", "diag"),
+        ("diag", "/docs", "docs"), ("diag", "ram:notes", "ram:notes"), ("ram:notes", "a/./b//", "ram:notes/a/b"),
+        ("ram:notes", "..", "ram:"), ("RAM:x", ".", "ram:x"), ("log:boot", "/", ""), ("diag", "", "diag"),
         ("data/a/b", "../../c", "data/c"), ("diag", "LOG:", "log:"),
     ] {
         assert_eq!(resolve(cwd, typed), full, "{:?} from {:?}", typed, cwd);
+    }
+    // Above a root: as typed, for the file service to refuse; never cut at the root (paths cannot climb out).
+    for (cwd, typed) in [("", ".."), ("ram:", ".."), ("", "ram:../kernel.elf"), ("diag", "../../kernel.elf"), ("data/a", "/../x"), ("ram:x", "../../y")] {
+        assert_eq!(resolve(cwd, typed), typed, "{:?} from {:?}", typed, cwd);
     }
     assert!(relative("quick.msh") && relative("a/b") && !relative("-f") && !relative("/x") && !relative("ram:x") && !relative(""));
 }
