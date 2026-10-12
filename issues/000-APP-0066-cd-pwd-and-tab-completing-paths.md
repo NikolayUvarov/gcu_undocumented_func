@@ -23,7 +23,7 @@ In the shell (`shell/src/main.rs`, `complete`):
 ## Plan
 
 - **`mind::path`** (`libmind/src/path.rs`), shared by the shell and `console`:
-  - a path taken from the current directory: a volume or a leading `/` starts at a root, `.` and `..` work;
+  - a path taken from the current directory: a volume or a leading `/` starts at a root, `.` and `..` work; one that climbs above its root goes to the file service as typed, which refuses it (`INVALID PATH`, as before `cd`);
   - `pwd`'s form (`/`, `/diag`, `ram:notes`) and the prompt's (`MIND diag> `);
   - Tab's completion of a name from a list.
 - **The shell:**
@@ -41,7 +41,7 @@ In the shell (`shell/src/main.rs`, `complete`):
 ## Acceptance criteria
 
 - **Host tests:**
-  - `tests/path_host.rs`: paths from a directory, `..` at a root, the volumes; `pwd`'s and the prompt's forms; Tab's completion, its shared part, its list, letter case, Cyrillic.
+  - `tests/path_host.rs`: paths from a directory, `..` above a root refused (as typed), the volumes; `pwd`'s and the prompt's forms; Tab's completion, its shared part, its list, letter case, Cyrillic.
   - `tests/console_host.rs`: `cd`, `pwd` and the prompt.
 - **The shell suite** (x86 and aarch64):
   - `cd data`, and the prompt is `MIND data> `; `pwd` says `/data` (the suite's scripts are in `data/`; `diag/` is on the `bench` suite's disk only);
