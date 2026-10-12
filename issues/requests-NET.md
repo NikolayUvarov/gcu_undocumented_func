@@ -6,7 +6,7 @@ The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other
 
 ## Several network interfaces (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.md) (2026-10-12); more than two cards wait for the station's card and the USB Ethernet driver, and `init`'s part for them is asked in requests-KRN.md ("The Wi-Fi station in the boot services").
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.md); the station is the stack's third card, in slot 4 ([550-NET-0018](550-NET-0018-the-station-service.md), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](550-NET-0025-the-default-card.md) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
 
 ### Problem
 

@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card drivers' frames. Serves idl/socket.wit 2.1. Holds clients of up to CARDS card drivers (slots 2 and 3,
+// network card drivers' frames. Serves idl/socket.wit 2.5. Holds clients of up to CARDS card drivers (slots 2 and 3,
 // and the Wi-Fi station `wlan` in slot 4) and nothing of the devices themselves (Appendix B.6: packet and flow
 // endpoints with quotas, no power over the device); each card is an interface of its own (issue 105) and a flow goes
 // out through the one its route names. What each client may reach comes from the badge of its capability (policy.rs,
@@ -44,6 +44,8 @@ const EPHEMERAL: u16 = 49152;
 const SLOT_STATION: usize = 4; // the Wi-Fi station's client when one runs (550-NET-0018, 550-KRN-0097)
 const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per card) and the station, which answers once joined
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
+const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
+const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.
@@ -201,6 +203,8 @@ struct Stack {
     sequence: u16, next_port: u16,
     // The card the default route goes out through, as last logged.
     default: Option<usize>,
+    // The card the operator or the policy prefers as the default (socket.wit 2.5, 550-NET-0025).
+    preferred: Option<usize>,
 }
 
 fn now_ms() -> u64 { mind::time::monotonic_ns() / 1_000_000 }
@@ -273,19 +277,46 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL, default: None }
+               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
 
     // The interface a flow to `address` goes out through, among the cards whose link is up: the one whose network holds
     // it, else the first with a gateway (the default route: the lowest card), else the first configured one.
+    // The card a flow to `address` goes out through (0: the default card): the one whose network holds it; else the
+    // preferred card if it is up with a gateway; else the first, wired before the station, that is (550-NET-0025); else
+    // any card with an address.
     fn route(&self, address: u32) -> Option<usize> {
         let target = Ipv4Address::from(address);
         let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
+        let gateway = |card: usize| configured(&self.links[card]).is_some_and(|(_, gateway)| gateway.is_some());
         self.links.iter().position(|l| configured(l).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target)))
-            .or_else(|| self.links.iter().position(|l| configured(l).is_some_and(|(_, gateway)| gateway.is_some())))
+            .or_else(|| self.preferred.filter(|&card| gateway(card)))
+            .or_else(|| (0..CARDS).find(|&card| gateway(card)))
             .or_else(|| self.links.iter().position(|l| configured(l).is_some()))
+    }
+
+    // Every card the stack has a slot for, as socket.wit 2.5 `cards` tells them.
+    fn cards(&self) -> List<socket::Card, 4> {
+        let mut list = List::default();
+        for card in 0..CARDS {
+            let link = self.links[card].as_ref();
+            let up = link.is_some_and(|l| l.up);
+            let configured = up && link.is_some_and(|l| l.address.is_some() && l.gateway.is_some());
+            list.push(socket::Card { card: card as u8, kind: KINDS[card], present: link.is_some(), up, configured,
+                                     preferred: self.preferred == Some(card), default: self.default == Some(card) });
+        }
+        list
+    }
+
+    fn prefer(&mut self, card: u8) -> Result<(), Error> {
+        let preferred = match card { NO_CARD => None, card if (card as usize) < CARDS => Some(card as usize), _ => return Err(Error::Invalid) };
+        if preferred != self.preferred {
+            self.preferred = preferred;
+            match preferred { Some(card) => mind::println!("[NETSTACK] CARD {} PREFERRED AS THE DEFAULT", card), None => mind::println!("[NETSTACK] NO CARD PREFERRED") }
+        }
+        Ok(())
     }
 
     // Asks card `index` once a second whether its link is up (550-NET-0023). Down: its address and routes go, so new flows
@@ -522,6 +553,8 @@ impl Stack {
                 for link in self.links.iter().flatten() { list.push(link.describe()); }
                 socket::reply_interfaces(call, Ok(list.as_slice()))
             }
+            socket::Request::Prefer { card } => socket::reply_prefer(call, self.prefer(card)),
+            socket::Request::Cards => socket::reply_cards(call, Ok(self.cards().as_slice())),
             socket::Request::Offload { enable } => {
                 OFFLOAD.store(enable, Ordering::Relaxed);
                 let mut cards = 0;
@@ -679,8 +712,10 @@ fn main(_info: &'static BootInfo) {
         let allowed = match policy::access(badge) {
             Access::Operator => Ok(()),
             // The broker reads the DNS server and looks up the host names of the policy (socket.wit 2.3).
-            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. }) { Ok(()) } else { Err(Error::Denied) },
-            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces) => Ok(()),
+            // It also applies the policy's preferred card (socket.wit 2.5).
+            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. } | socket::Request::Prefer { .. } | socket::Request::Cards) { Ok(()) } else { Err(Error::Denied) },
+            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces | socket::Request::Cards) => Ok(()),
+            Access::Grant(_) if matches!(decoded, socket::Request::Prefer { .. }) => Err(Error::Denied),
             Access::Grant(_) if matches!(decoded, socket::Request::Offload { .. }) => Err(Error::Denied),
             Access::Nothing => Err(Error::Denied),
             Access::Grant(grant) => match &decoded {
@@ -726,6 +761,8 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::Interfaces => socket::reply_interfaces(call, Err(error)),
         socket::Request::Offload { .. } => socket::reply_offload(call, Err(error)),
         socket::Request::Sockets { .. } => socket::reply_sockets(call, Err(error)),
+        socket::Request::Prefer { .. } => socket::reply_prefer(call, Err(error)),
+        socket::Request::Cards => socket::reply_cards(call, Err(error)),
     }
 }
 

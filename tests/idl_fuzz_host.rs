@@ -429,7 +429,7 @@ types! {
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
     shell: Error;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
     tpm: Error Info;

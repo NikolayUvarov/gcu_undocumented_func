@@ -5531,7 +5531,7 @@ def net_suite(args, disk):
         # the address, port, badge and the bytes it moved; a program without a grant lists nothing.
         listed = vm.command(f"netcheck open:10.0.2.2:{web_port} sockets")
         require(listed, f"NETCHECK open:10.0.2.2:{web_port} OK")
-        assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+\n", listed.replace("\r", "")), listed
+        assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+ CARD 0\n", listed.replace("\r", "")), listed
         require(listed, "NETCHECK 1 SOCKETS")
         require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
         flow_bounds_check(vm, web_port)
@@ -5589,7 +5589,10 @@ def net_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
     download_check(args, disk)
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
-    # and one driver's restart leaves the other card working and gives the new instance its own card back.
+    # and one driver's restart leaves the other card working and gives the new instance its own card back. netcheck
+    # sends datagrams to a TEST-NET address, on neither card's network, to show which card is the default (550-NET-0025).
+    with open(disk / "netpolicy.txt", "a") as policy:
+        policy.write("netcheck 192.0.2.1 udp 9\n")
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
     web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
@@ -5625,6 +5628,35 @@ def net_suite(args, disk):
         log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
         require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
         require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
+        # The default card (550-NET-0025): wired cards before the station, the first with a gateway; the policy's
+        # `default card 1` makes card 1 the default while its link is up, and the rule takes over while it is down.
+        def default_sends(card):
+            before = frames()
+            require(vm.command("netcheck " + " ".join(["udp:192.0.2.1:9"] * 6)), "NETCHECK udp:192.0.2.1:9 OK")
+            after = frames()
+            other = 1 - card
+            assert after[card][0] - before[card][0] >= 6 and after[other][0] - before[other][0] < 3, (card, before, after)
+        cards = vm.command("netcheck cards")
+        for line in ("NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT", "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED", "NETCHECK CARD 2 Wireless"):
+            require(cards, line)
+        assert "PREFERRED" not in cards, cards
+        default_sends(0)
+        require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] DEFAULT CARD 1 FROM THE POLICY")
+        require(vm.command("netcheck cards"), "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED PREFERRED DEFAULT")
+        default_sends(1)
+        vm.hmp("set_link n1 off")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
+        default_sends(0)
+        vm.hmp("set_link n1 on")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1"), "DEFAULT ROUTE: CARD 1")
+        require(policy_answer(vm, "netpolicy add default card 3", "y"), "NETPOLICY: Invalid")
+        require(policy_answer(vm, "netpolicy remove default card 1", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] NO CARD PREFERRED")
+        default_sends(0)
         # The second driver dies: the first card keeps working, the restarted instance drives the second card again.
         require(vm.command(f"kill {vm.services()['virtio_net#1']}", raw=True), "KILLED PID=")
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
