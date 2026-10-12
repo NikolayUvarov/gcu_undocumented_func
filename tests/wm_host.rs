@@ -763,8 +763,18 @@ fn the_background_configuration_is_read_and_written() {
     assert!(!Config::parse("show = none").0.memory);
     assert!(Config::parse("show = time, memory").0.memory);
     let off = Config { memory: false, ..Config::default() };
-    assert!(off.format().contains("show = time, date, cpu\n") && !Config::parse(&off.format()).0.memory, "{}", off.format());
-    assert!(Config::default().format().contains("show = time, date, cpu, memory\n"));
+    assert!(off.format().contains("show = time, seconds, date, cpu\n") && !Config::parse(&off.format()).0.memory, "{}", off.format());
+    assert!(Config::default().format().contains("show = time, seconds, date, cpu, memory\n"));
+    // The seconds apart from the time, and the sizes (000-APP-0068): an old file shows the seconds; each is kept.
+    assert!(c.seconds && Config::parse("show = time, memory").0.seconds, "a file that never named the seconds");
+    let no_seconds = Config::parse("show = time, date").0;
+    assert!(no_seconds.time && no_seconds.seconds, "no `seconds` word anywhere: an old file");
+    let written = Config { seconds: false, time_size: 200, text_size: 50, ..Config::default() };
+    assert!(written.format().contains("show = time, date, cpu, memory\ntime-size = 200\ntext-size = 50\n"), "{}", written.format());
+    assert_eq!(Config::parse(&written.format()).0, written);
+    assert_eq!((Config::default().time_size, Config::default().text_size), (100, 100));
+    let (c, problems) = Config::parse("time-size = 80\ntext-size = 75%");
+    assert_eq!((c.time_size, c.text_size, problems.len()), (100, 100, 2), "{:?}", problems);
     // The pattern, its speed, contrast and complexity, the information's brightness; parts of a line between `;`.
     let (c, problems) = Config::parse("pattern = blobs; speed = 20 ; contrast = 45%\ncomplexity = 5; info = 0  # hidden");
     assert!(problems.is_empty(), "{:?}", problems);
@@ -948,6 +958,36 @@ fn png_and_jpeg_pictures_cover_the_desktop() {
     assert!(b.moving());
 }
 
+// 000-APP-0068: the time without its seconds is narrower; the time's digits and the other lines have sizes of their own.
+#[test]
+fn the_time_and_the_lines_have_their_sizes() {
+    let only_time = Config { date: false, cpu: false, memory: false, ..Config::default() };
+    let ((_, _, w, h), big, _) = layout(&only_time, 1280, 800, 1, 100).unwrap();
+    assert_eq!((w, h, big), (8 * 8 * 6, 16 * 6, 6), "HH:MM:SS at the first size");
+    let ((_, _, w, _), _, _) = layout(&Config { seconds: false, ..only_time.clone() }, 1280, 800, 1, 100).unwrap();
+    assert_eq!(w, 5 * 8 * 6, "HH:MM");
+    for (size, digits) in [(50, 3), (75, 4), (100, 6), (200, 12), (300, 18)] {
+        let (_, big, small) = layout(&Config { time_size: size, ..Config::default() }, 2560, 1600, 1, 100).unwrap();
+        assert_eq!((big, small), (digits, 2), "time-size {}", size);
+    }
+    for (size, pixels) in [(50, 1), (100, 2), (150, 3), (300, 6)] {
+        let (_, big, small) = layout(&Config { text_size: size, ..Config::default() }, 2560, 1600, 1, 100).unwrap();
+        assert_eq!((big, small), (6, pixels), "text-size {}", size);
+    }
+    // The CPU graph follows the other lines' size: 24 glyphs wide, as wide as HH:MM:SS at the first sizes.
+    let cpu = Config { time: false, date: false, memory: false, ..Config::default() };
+    let ((_, _, w, _), _, _) = layout(&cpu, 1280, 800, 1, 100).unwrap();
+    let ((_, _, w2, _), _, _) = layout(&Config { text_size: 50, ..cpu.clone() }, 1280, 800, 1, 100).unwrap();
+    assert_eq!((w, w2), (24 * 8 * 2, 24 * 8));
+    // Drawn: the time's line without the seconds, at the size asked.
+    let info = Info { seconds: Some(20 * 3600 + 5 * 60 + 9), ..Info::default() };
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &Config { seconds: false, ..only_time.clone() }, &info, &glyph);
+    let ((x, y, w, h), _, _) = layout(&Config { seconds: false, ..only_time.clone() }, 1280, 800, 1, 100).unwrap();
+    let inked = |x0: usize, x1: usize| (y..y + h).any(|py| (x0..x1).any(|px| frame[py * 1280 + px] != 0));
+    assert!(inked(x, x + w) && !inked(x + w + 8, 1280), "five glyphs, nothing right of them");
+}
+
 #[test]
 fn the_information_has_its_place() {
     let c = Config::default();
@@ -1098,14 +1138,29 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     wm.key(key(KEY_DOWN));
     assert!(wm.status().ends_with(":Time"), "{}", wm.status());
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu && c.memory), other => panic!("{:?}", other) }
+    // The seconds and the time's size (000-APP-0068).
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Seconds"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.seconds), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.seconds), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Time size"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.time_size, 125), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.time_size, 100), other => panic!("{:?}", other) }
     for _ in 0..3 { wm.key(key(KEY_DOWN)); }
     // The free memory (000-APP-0064): its own box.
     assert!(wm.status().ends_with(":Free memory"), "{}", wm.status());
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.memory && c.cpu), other => panic!("{:?}", other) }
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.memory), other => panic!("{:?}", other) }
-    for _ in 0..2 { wm.key(key(KEY_DOWN)); }
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Text size"), "{}", wm.status());
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.text_size, 50), other => panic!("{:?}", other) }
+    assert_eq!(wm.key(key(KEY_LEFT)), Action::Redraw, "50% is the smallest");
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.text_size, 100), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
     match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
-    for _ in 0..11 { wm.key(key(KEY_UP)); }
+    for _ in 0..14 { wm.key(key(KEY_UP)); }
     assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
     for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
@@ -1123,7 +1178,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     assert!(text.contains("console netpolicy") && text.contains("wifi --demo") && text.contains("a change asks in its window."), "{}", text);
     // A click on a row of the background page changes it.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
-    match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    match s.click(inner.x + 20, inner.y + 1 + 10, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
     match s.click(inner.x + 20, inner.y + 1 + 2, &wm.background) { settings::Outcome::Changed(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
     // Every row fits the window.
     let mut cells = vec![Cell::BLANK; 160 * 50];
@@ -1525,7 +1580,7 @@ fn the_scale_follows_the_screen_and_settings() {
     wm.rescale(180, 56, 200);
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
-    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 18));
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 21));
 }
 
 // The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from

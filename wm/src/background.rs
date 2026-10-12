@@ -29,12 +29,17 @@ pub const SPEED: (u8, u8) = (1, 50);
 pub const CONTRAST: (u8, u8) = (0, 100);
 pub const COMPLEXITY: (u8, u8) = (1, 5);
 pub const INFO: (u8, u8) = (0, 100);
+/// The sizes of the time's digits and of the other lines, in percent of their first size (000-APP-0068).
+pub const TIME_SIZES: [u16; 8] = [50, 75, 100, 125, 150, 200, 250, 300];
+pub const TEXT_SIZES: [u16; 6] = [50, 100, 150, 200, 250, 300];
 
 /// What the background shows. `None` shows nothing over the `░` cells, whatever `show` says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub picture: Picture, pub pattern: Pattern, pub speed: u8, pub contrast: u8, pub complexity: u8, pub info: u8,
     pub time: bool, pub date: bool, pub cpu: bool, pub memory: bool, pub net: bool, pub place: Place,
+    /// The time's seconds (000-APP-0068), and the sizes of the time and of the other lines, in percent.
+    pub seconds: bool, pub time_size: u16, pub text_size: u16,
     /// wm's scale in percent (000-APP-0061); None: `auto`, chosen from the screen at each start.
     pub scale: Option<u16>,
     /// The pointer's size in percent of its 8 × 12 arrow, None: `auto`, at wm's scale; its colour, an index into
@@ -44,15 +49,17 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, memory: true, net: false, place: Place::BottomRight, scale: None, pointer: None, pointer_colour: 0 }
+        Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, memory: true, net: false, place: Place::BottomRight,
+               seconds: true, time_size: 100, text_size: 100, scale: None, pointer: None, pointer_colour: 0 }
     }
 }
 
 impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
-    /// `complexity = 1..5`, `info = 0..100`, `show = time, date, cpu, memory, net` (or `none`; a file that never names
-    /// `memory`, written before it could be chosen, shows it, 000-APP-0064),
+    /// `complexity = 1..5`, `info = 0..100`, `show = time, seconds, date, cpu, memory, net` (or `none`; a file that never
+    /// names `memory` or `seconds`, written before it could be chosen, shows it, 000-APP-0064, 000-APP-0068),
+    /// `time-size = 50 | 75 | 100 | … | 300`, `text-size = 50 | 100 | … | 300` (percent),
     /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`,
     /// `pointer = auto | 100 | 150 | … | 800`, `pointer-colour = white | black | yellow | …` (wm's, 000-APP-0061). What
     /// is not said stays the default; each
@@ -89,12 +96,20 @@ impl Config {
                     "info" => match number(value, INFO) { Some(n) => config.info = n, None => wrong("info (its brightness) is 0 to 100") },
                     "show" => {
                         let words: Vec<&str> = value.split(',').map(str::trim).filter(|w| !w.is_empty()).collect();
-                        match words.iter().find(|w| !["time", "date", "cpu", "memory", "net", "none"].contains(w)) {
-                            Some(word) => wrong(&format!("show takes time, date, cpu, memory, net or none, not {}", word)),
+                        match words.iter().find(|w| !["time", "seconds", "date", "cpu", "memory", "net", "none"].contains(w)) {
+                            Some(word) => wrong(&format!("show takes time, seconds, date, cpu, memory, net or none, not {}", word)),
                             None => {
-                                [config.time, config.date, config.cpu, config.memory, config.net] = ["time", "date", "cpu", "memory", "net"].map(|name| words.contains(&name));
+                                [config.time, config.seconds, config.date, config.cpu, config.memory, config.net] =
+                                    ["time", "seconds", "date", "cpu", "memory", "net"].map(|name| words.contains(&name));
                                 none = words.contains(&"none");
                             }
+                        }
+                    }
+                    "time-size" | "text-size" => {
+                        let sizes: &[u16] = if key == "time-size" { &TIME_SIZES } else { &TEXT_SIZES };
+                        match value.trim_end_matches('%').trim_end().parse::<u16>().ok().filter(|n| sizes.contains(n)) {
+                            Some(n) => if key == "time-size" { config.time_size = n } else { config.text_size = n },
+                            None => wrong(&format!("{} is {}", key, sizes.iter().map(|s| format!("{}", s)).collect::<Vec<_>>().join(", "))),
                         }
                     }
                     "place" => match PLACES.iter().find(|p| p.0 == value) {
@@ -125,13 +140,15 @@ impl Config {
         }
         // `show` from before `memory` could be chosen (000-APP-0064): the memory shown, as the default does.
         if !none && !text.contains("memory") { config.memory = true; }
+        // The same for the seconds (000-APP-0068): the time had them from 000-APP-0064 on.
+        if !none && !text.contains("seconds") { config.seconds = true; }
         (config, problems)
     }
 
     /// The configuration as `parse` reads it back.
     pub fn format(&self) -> String {
         let picture = match &self.picture { Picture::None => String::from("none"), Picture::Abstract => String::from("abstract"), Picture::Image(file) => format!("image {}", file) };
-        let shown: Vec<&str> = [(self.time, "time"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
+        let shown: Vec<&str> = [(self.time, "time"), (self.seconds, "seconds"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
         let scale = self.scale.map_or(String::from("auto"), |s| format!("{}", s));
@@ -140,13 +157,15 @@ impl Config {
         format!("# wm's desktop background (000-APP-0047, 000-APP-0050), scale and pointer (000-APP-0061)\n\
                  # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
-                 # show = time, date, cpu, memory, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
+                 # show = time, seconds, date, cpu, memory, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
+                 # time-size = 50 | 75 | 100 | 125 | 150 | 200 | 250 | 300; text-size = 50 | 100 | 150 | 200 | 250 | 300 (percent)\n\
                  # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
                  # pointer = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 | 800 (percent of 8 x 12; auto: at the scale)\n\
                  # pointer-colour = white | black | yellow | orange | red | green | cyan | magenta\n\
-                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\nplace = {}\nscale = {}\n\
+                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\ntime-size = {}\ntext-size = {}\nplace = {}\nscale = {}\n\
                  pointer = {}\npointer-colour = {}\n",
-                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") }, place, scale,
+                picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") },
+                self.time_size, self.text_size, place, scale,
                 pointer, colour)
     }
 }
@@ -368,11 +387,16 @@ pub fn cover(data: &[u8], frame: &mut [u32], width: usize, height: usize) -> Res
 #[derive(Clone, Copy, Default)]
 pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub net: Option<&'a str> }
 
-// The lines' widths in glyphs: the time with seconds, the date, the memory's line at most, the network's.
-const TIME: usize = 8;
+// The lines' widths in glyphs: the date, the memory's line at most, the network's; the CPU graph's width and height in
+// the other lines' glyph pixels (24 glyphs by 3 rows of them, as the time with seconds was wide at the first sizes).
 const DATE: usize = 10;
 const MEMORY: usize = 18;
 const NET: usize = 24;
+const GRAPH: usize = 24;
+const GRAPH_ROWS: usize = 24;
+
+// The time's width in glyphs: `HH:MM:SS`, or `HH:MM` without the seconds (000-APP-0068).
+fn time_chars(config: &Config) -> usize { if config.seconds { 8 } else { 5 } }
 
 /// The memory's line: `MEM 336 MiB FREE`, in GiB with a tenth from 10 GiB on; at most `MEMORY` glyphs.
 pub fn memory_line(free: Option<u64>) -> String {
@@ -408,18 +432,19 @@ fn text(frame: &mut [u32], width: usize, height: usize, x: usize, y: usize, text
 
 /// Where the information goes on a frame of `width` × `height` pixels, each `unit` screen pixels wide, at wm's scale
 /// `zoom` (percent, 000-APP-0061): its rectangle (x, y, w, h), and the scales of the time's and the other lines'
-/// glyphs. None when it shows nothing.
+/// glyphs, at the sizes `config` gives them (000-APP-0068). None when it shows nothing.
 pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: usize) -> Option<((usize, usize, usize, usize), usize, usize)> {
     if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.memory || config.net) { return None; }
     let unit = unit.max(1);
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit;
-    let (big, small, gap) = (z(6).max(1), z(2).max(1), z(8));
+    let sized = |pixels: usize, size: u16| (pixels * size as usize * zoom.max(100) / 10_000 / unit).max(1);
+    let (big, small, gap) = (sized(6, config.time_size), sized(2, config.text_size), z(8));
     let mut w = 0;
     let mut h = 0;
     let mut add = |line_w: usize, line_h: usize| { w = w.max(line_w); h += if h > 0 { gap } else { 0 } + line_h; };
-    if config.time { add(TIME * 8 * big, 16 * big); }
+    if config.time { add(time_chars(config) * 8 * big, 16 * big); }
     if config.date { add(DATE * 8 * small, 16 * small); }
-    if config.cpu { add(TIME * 8 * big, 16 * small + gap / 2 + z(48)); }
+    if config.cpu { add(GRAPH * 8 * small, 16 * small + gap / 2 + GRAPH_ROWS * small); }
     if config.memory { add(MEMORY * 8 * small, 16 * small); }
     if config.net { add(NET * 8 * small, 16 * small); }
     // Two cells from the edges: clear of the top bar and the status line.
@@ -440,7 +465,11 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
     let (colour, graph, shadow) = ink(config.info);
     let ink = (colour, shadow);
     if config.time {
-        let line = match info.seconds { Some(s) => format!("{:02}:{:02}:{:02}", s / 3600 % 24, s / 60 % 60, s % 60), None => String::from("--:--:--") };
+        let line = match (info.seconds, config.seconds) {
+            (Some(s), true) => format!("{:02}:{:02}:{:02}", s / 3600 % 24, s / 60 % 60, s % 60),
+            (Some(s), false) => format!("{:02}:{:02}", s / 3600 % 24, s / 60 % 60),
+            (None, seconds) => String::from(if seconds { "--:--:--" } else { "--:--" }),
+        };
         // A glyph's ink starts in its second column: the large digits moved left by the difference, so their edge is the
         // smaller lines' edge.
         text(frame, width, height, x.saturating_sub(big - small), y, &line, big, ink, glyph);
@@ -452,11 +481,11 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
         y += 16 * small + gap;
     }
     if config.cpu {
-        let graph_w = TIME * 8 * big;
+        let graph_w = GRAPH * 8 * small;
         let label = match info.cpu.last() { Some(p) => format!("CPU {:3}%", p), None => String::from("CPU    -") };
         text(frame, width, height, x, y, &label, small, ink, glyph);
         y += 16 * small + gap / 2;
-        let (gx, gh) = (x, z(48));
+        let (gx, gh) = (x, GRAPH_ROWS * small);
         // A bar a sample, the newest at the right; a line along the bottom.
         let samples = &info.cpu[info.cpu.len().saturating_sub(CPU_SAMPLES)..];
         let bar = (graph_w / CPU_SAMPLES).max(1);
