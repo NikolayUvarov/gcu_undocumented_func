@@ -28,10 +28,10 @@ impl core::fmt::Display for Shown<'_> {
 impl Wifi {
     /// The networks kept under the device key whose seed is `seed`.
     pub fn load(seed: &[u8; 32]) -> Self {
-        let mut material = [0u8; 64];
+        let mut material = [0u8; LABEL.len() + 32];
         material[..LABEL.len()].copy_from_slice(LABEL);
-        material[LABEL.len()..LABEL.len() + 32].copy_from_slice(seed);
-        let kek = mind::sha256::digest(&material[..LABEL.len() + 32]);
+        material[LABEL.len()..].copy_from_slice(seed);
+        let kek = mind::sha256::digest(&material);
         wipe(&mut material);
         let mut data = [0u8; kept::FILE_MAX + 1];
         let read = File::open(FILE).and_then(|file| file.read_at(0, &mut data));
