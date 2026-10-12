@@ -222,6 +222,9 @@ fn microcode(bar: &Mmio) {
     let errors = AI_ERROR_LOG.map(|r| bar.read32(WRAPPER + r));
     mind::println!("[BCM] AGENT READ AND WRITE IDS {:08X} {:08X}; ERROR LOG CONTROL {:08X}, DONE {:08X}, STATUS {:08X}, ADDRESS {:08X}{:08X}, ID {:08X}, USER {:08X}, FLAGS {:08X}; INTERRUPT STATUS {:08X}",
                    bar.read32(WRAPPER + 0x808), bar.read32(WRAPPER + 0x80C), errors[0], errors[1], errors[2], errors[4], errors[3], errors[5], errors[6], errors[7], bar.read32(WRAPPER + 0xA00));
+    // A pending operation means the kernel's stop before bus mastering went off did not take (550-KRN-0082): an access
+    // to the core would stop the machine, so nothing further is tried.
+    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A BACKPLANE OPERATION PENDING (550-KRN-0082 DID NOT TAKE), STAGE 2 NOT ATTEMPTED", v); return; }
     // The simplest access first: two registers of the core as the reset pulse left it, nothing else changed.
     step(2, "TWO REGISTERS OF THE IDLE CORE READ (MAC CONTROL, CLOCK CONTROL)");
     if bar.read32(WRAPPER + AI_RESET_CONTROL) & RESET == 0 {
@@ -229,8 +232,7 @@ fn microcode(bar: &Mmio) {
         mind::println!("[BCM] IDLE CORE: MAC CONTROL {:08X}, CLOCK CONTROL {:08X}", mac, bar.read32(D11_CLOCK));
     } else { mind::println!("[BCM] THE CORE IS HELD IN RESET: NOT READ"); }
     step(3, "THE CORE DISABLED AND ENABLED");
-    // A pending operation the agent reports is logged; the stage goes on, as a test the maintainer asked for.
-    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X}: A BACKPLANE OPERATION STILL PENDING; GOING ON", v); }
+    if let Err(v) = wait(bar, WRAPPER + AI_RESET_STATUS, 300, |v| v == 0) { mind::println!("[BCM] RESET STATUS {:08X} AFTER THE IDLE READ: STAGE 2 STOPPED", v); return; }
     // Disabled first if it runs: held in reset with its clock off.
     if bar.read32(WRAPPER + AI_RESET_CONTROL) & RESET == 0 {
         bar.write32(WRAPPER + AI_RESET_CONTROL, RESET); let _ = bar.read32(WRAPPER + AI_RESET_CONTROL);

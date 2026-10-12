@@ -83,6 +83,16 @@ Two msh scripts on the boot volume, `diag/quick.msh` and `diag/full.msh`, run fr
 - Interrupts on CPU 6, where `usb_host` ran, rose from 1.5 million to 9.3 million over the 25 s run, 22 s of which were `bench files`: about 300 000 a second. They are for 000-KRN-0078 and 000-KRN-0077 to explain.
 - **Left:** a run of `diag/full.msh` on the MacBook Pro.
 
+**2026-10-12, the MacBook Pro, the full run** (`fast-test` 3ab50c0, `log:full0002/`):
+
+- 73 steps in 42 s, none failed.
+- `check` ran all its groups: 62 passed, 31 skipped (no device), none failed. The three faults in `faults-after` are its security probes, which fault on purpose.
+- **The maintainer:** "it hung and hung, then printed many messages at once". The shell drew its screen only between commands, so nothing showed until the script ended.
+  - Now each line shows as it is printed: the shell's script host (`requests-APP.md`, a note).
+  - Both runs print `DIAG FULL: STARTED` (or `QUICK`) before anything else.
+  - The `shell` suite reads the screen while a script sleeps; the host test checks the first line.
+- **Left:** the maintainer sees the lines appear during a run.
+
 ## Related
 
 [176](176-test-and-performance-utilities.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../issues-done/176-KRN-0063-check.done), [176-KRN-0064](../issues-done/176-KRN-0064-bench.done), [docs/tools/README.md](../docs/tools/README.md) §4.13, [docs/msh.md](../docs/msh.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the hardware report).

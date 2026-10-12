@@ -3,6 +3,7 @@
 pub mod codec;
 pub mod wire;
 pub mod audio;
+pub mod battery;
 pub mod block;
 pub mod blockstore;
 pub mod display;

@@ -64,5 +64,5 @@ These are tests, not proofs (MC-12.2). A service that answers one call and then 
 ## Related
 
 - [351-KRN-0022](../issues-done/351-KRN-0022-updater-grants.done) (the updater's grants)
-- [550-DRV-0023](../issues/550-DRV-0023-bcm4331-microcode-runs.md) (the freeze)
+- [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done) (the freeze)
 - [000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md) (recovering from a freeze)

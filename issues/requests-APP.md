@@ -185,6 +185,9 @@ What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
   - a second Tab lists them.
 - **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
 - **`help`** names `cd`, `pwd` and the keys.
+- **A script by its name** (the maintainer, 2026-10-12: "I cannot run the script from fm by Enter, nor in its directory by typing its name"):
+  - in the shell, `full.msh` runs from the current directory, as `diag/full.msh` runs from the root now;
+  - in `fm`, Enter on a `.msh` file runs it in the shell's window, or in `console`, as `msh <path>` does. Today `fm` hands it to the loader, which answers `Cannot start full.msh: NotFound`.
 
 ### Acceptance criteria
 
@@ -194,3 +197,70 @@ What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
   - Tab after `msh diag/q` gives `msh diag/quick.msh`;
   - Tab twice after `ch` lists `check` and the other matches.
 - **In `console`**, the same keys work.
+- **In the `fm` suite**, Enter on `diag/quick.msh` runs it, and its first line shows.
+
+## Note: the shell shows what a script prints at once (176-KRN-0087; the maintainer's word, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12.
+
+The maintainer's full run (`diag/full.msh`) looked hung for 42 s, then printed everything at once. The shell drew its screen only between commands, and a script is one command. At the maintainer's word ("all this must be fixed"), the kernel session changed two lines in `shell/src/msh.rs`:
+
+- the script host's `print` draws the screen after each line;
+- so does a command a script runs without capturing it.
+
+The `shell` suite now checks the screen while a script sleeps. The tools track may do it otherwise.
+
+## The battery in `wm`'s top bar, and in the shell (211-PRT-0008; the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12. The maintainer: "The battery's state must also be shown in the indicator: on the mains, % or minutes left, switched." Switching is by a click (the maintainer's choice). The maintainer gave this part to the tools track.
+
+### What the kernel track has made
+
+- **The service `battery`** reads the Smart Battery System behind the embedded controller on the MacBook Pro ([211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md)). Its interface, `idl/battery.wit`, has one call, `status`, which returns:
+  - `on-ac`, `charging`, `discharging`, `full`;
+  - `percent`;
+  - `to-empty` and `to-full` in minutes (65535: not discharging, or not charging);
+  - current, voltage, capacities and cycles;
+  - the reading's age.
+- **The shell holds a client** in `SLOT_BATTERY` (32). `REQUEST_BATTERY` (bit 21) asks for it ([211-KRN-0090](211-KRN-0090-a-slot-for-the-battery.md), ABI 8). `mind::battery::write_minutes` writes minutes as `2:41`.
+
+### Plan (a proposal; the tools track decides)
+
+- **The shell** lends `SLOT_BATTERY` for `REQUEST_BATTERY`, as it does `SLOT_GPIO`; `msh` gets the word `battery`.
+- **The shell's `battery` command** prints the status in one line, and `help` names it.
+- **`wm`** asks for `REQUEST_BATTERY`.
+  - At the right end of its top bar, every 5 s: `⚡ 87%` on the mains, `▮ 87%` on the battery.
+  - A click switches between the percentage and the minutes: `▮ 2:41` left, or `⚡ 0:45` to full while charging. The choice stays until the next click.
+  - Below 10 % on the battery it is marked.
+  - With no client, or `no-battery` (QEMU, a desktop), no item.
+- **`console`** passes the client on like the others.
+
+### Acceptance criteria
+
+- **In the `wm` suite**, with no battery service (QEMU), the top bar has no battery item and nothing else changes.
+- **On the MacBook Pro**, the item shows the charge and follows the adapter being plugged in and out; a click shows the minutes.
+
+## Screenshots and recordings for the project's page (000-KRN-0093; the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, for [000-KRN-0093](000-KRN-0093-pictures-and-video-for-the-showcase.md).
+
+### Problem
+
+The maintainer will shoot the interface on the MacBook Pro for the page on GitHub: pictures, a row of frames and a video. `screenshot` and `record` do the capture, but:
+
+- **The shell is in the picture.** A screenshot is typed in the shell, and `wm`'s menu entry opens over the screen.
+- **The files are lost at a reboot.** Without a file name both write to `ram:`.
+- **A Retina recording is heavy.** At 2880 × 1800 each Motion JPEG frame is large, and the encoder may not keep 10 frames a second.
+
+### Plan (a proposal; the tools track decides)
+
+- **A key for a screenshot** that saves at once, without the shell or a menu on the screen: PrintScreen on a PC keyboard. The MacBook Pro has no PrintScreen key, so a combination as well, for example Ctrl+Alt+S. A short note in the corner says where the file went.
+- **`screenshot -d <seconds>`:** waits first, so the screen can be arranged.
+- **Files kept by default** in `data/media/` (`screen-NNN.bmp`, `record-NNN.avi`), so they survive a reboot and can be read from the stick in Windows; `ram:` when the boot disk is read-only.
+- **`record -s 2`:** half the size in each direction. **`record -q <quality>`:** the JPEG quality. Both for a Retina screen.
+
+### Acceptance criteria
+
+- **In the `tools` suite**, the key writes a BMP to `data/media/` with the screen as it was, no shell in it.
+- **`record -s 2 -t 3`** writes an AVI whose frames are half the screen's size.
+- **On the MacBook Pro**, the maintainer takes a picture and a 30 s recording without the shell in them.
