@@ -9,6 +9,9 @@
 
 MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
 
+<p align="center"><img src="docs/media/tour.webp" width="100%" alt="MIND Core in QEMU: the boot, the kernel's self-test, hw, top, then the window manager with fm, clock, top and the shell, and three of its windows full screen"></p>
+<p align="center"><sub>In QEMU 8.2 (x86_64, 4 CPUs, a 1920 × 1080 screen; the shell's screens cut at their top left), built from 73b3d33, made by <code>scripts/qemu_scenes.py --scenes tour</code>. A virtual machine, not a real one.</sub></p>
+
 **What is there today**, each part with its tests (details below):
 
 - **Kernel:** capabilities with derivation and revocation, synchronous IPC with lent pages, SMP scheduling with CPU budgets, a 1 ms tick on x86, memory quotas, SMEP, SMAP, UMIP and PAN.
@@ -27,6 +30,8 @@ sudo scripts/setup_build_env.sh                     # Ubuntu or WSL: QEMU, OVMF,
 ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64 (ARM64) in QEMU
 ./04_make_usb_image.sh                              # a USB image for real hardware
 ```
+
+**Pictures and videos** of the system, in QEMU and on real machines, and how they are made: [docs/media.md](docs/media.md) (Russian: [docs/media_RU.md](docs/media_RU.md)).
 
 ### Why "MIND Core"
 

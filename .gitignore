@@ -60,3 +60,6 @@ Thumbs.db
 
 # Proprietary files (firmware, microcode): fetched here by scripts, never committed; copied onto the written disk (AGENTS.md, section 3).
 /proprietary/
+
+# --- scripts/qemu_scenes.py's default output (000-KRN-0093) ---
+/media-scenes/
