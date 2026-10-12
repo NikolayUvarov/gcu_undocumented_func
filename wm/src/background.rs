@@ -44,6 +44,8 @@ pub const TEXT_SIZES: [u16; 6] = [50, 100, 150, 200, 250, 300];
 pub struct Config {
     pub picture: Picture, pub pattern: Pattern, pub speed: u8, pub contrast: u8, pub complexity: u8, pub info: u8,
     pub time: bool, pub date: bool, pub cpu: bool, pub memory: bool, pub net: bool, pub place: Place,
+    /// The battery's charge and minutes (211-APP-0070); off unless chosen, as the top bar shows it too.
+    pub battery: bool,
     /// The time's seconds (000-APP-0068), and the sizes of the time and of the other lines, in percent.
     pub seconds: bool, pub time_size: u16, pub text_size: u16,
     /// Digits and a graph, or a dial and gauges (000-APP-0069).
@@ -58,14 +60,14 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, memory: true, net: false, place: Place::BottomRight,
-               seconds: true, time_size: 100, text_size: 100, face: Face::Digital, scale: None, pointer: None, pointer_colour: 0 }
+               battery: false, seconds: true, time_size: 100, text_size: 100, face: Face::Digital, scale: None, pointer: None, pointer_colour: 0 }
     }
 }
 
 impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
-    /// `complexity = 1..5`, `info = 0..100`, `show = time, seconds, date, cpu, memory, net` (or `none`; a file that never
+    /// `complexity = 1..5`, `info = 0..100`, `show = time, seconds, date, cpu, memory, battery, net` (or `none`; a file that never
     /// names `memory` or `seconds`, written before it could be chosen, shows it, 000-APP-0064, 000-APP-0068),
     /// `time-size = 50 | 75 | 100 | … | 300`, `text-size = 50 | 100 | … | 300` (percent), `face = digital | analog`,
     /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`,
@@ -104,11 +106,11 @@ impl Config {
                     "info" => match number(value, INFO) { Some(n) => config.info = n, None => wrong("info (its brightness) is 0 to 100") },
                     "show" => {
                         let words: Vec<&str> = value.split(',').map(str::trim).filter(|w| !w.is_empty()).collect();
-                        match words.iter().find(|w| !["time", "seconds", "date", "cpu", "memory", "net", "none"].contains(w)) {
-                            Some(word) => wrong(&format!("show takes time, seconds, date, cpu, memory, net or none, not {}", word)),
+                        match words.iter().find(|w| !["time", "seconds", "date", "cpu", "memory", "battery", "net", "none"].contains(w)) {
+                            Some(word) => wrong(&format!("show takes time, seconds, date, cpu, memory, battery, net or none, not {}", word)),
                             None => {
-                                [config.time, config.seconds, config.date, config.cpu, config.memory, config.net] =
-                                    ["time", "seconds", "date", "cpu", "memory", "net"].map(|name| words.contains(&name));
+                                [config.time, config.seconds, config.date, config.cpu, config.memory, config.battery, config.net] =
+                                    ["time", "seconds", "date", "cpu", "memory", "battery", "net"].map(|name| words.contains(&name));
                                 none = words.contains(&"none");
                             }
                         }
@@ -160,7 +162,7 @@ impl Config {
     /// The configuration as `parse` reads it back.
     pub fn format(&self) -> String {
         let picture = match &self.picture { Picture::None => String::from("none"), Picture::Abstract => String::from("abstract"), Picture::Image(file) => format!("image {}", file) };
-        let shown: Vec<&str> = [(self.time, "time"), (self.seconds, "seconds"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
+        let shown: Vec<&str> = [(self.time, "time"), (self.seconds, "seconds"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.battery, "battery"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
         let scale = self.scale.map_or(String::from("auto"), |s| format!("{}", s));
@@ -169,9 +171,9 @@ impl Config {
         format!("# wm's desktop background (000-APP-0047, 000-APP-0050), scale and pointer (000-APP-0061)\n\
                  # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
-                 # show = time, seconds, date, cpu, memory, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
+                 # show = time, seconds, date, cpu, memory, battery, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
                  # time-size = 50 | 75 | 100 | 125 | 150 | 200 | 250 | 300; text-size = 50 | 100 | 150 | 200 | 250 | 300 (percent)\n\
-                 # face = digital | analog (a dial with hands, and gauges of the CPU load and the memory in use)\n\
+                 # face = digital | analog (a dial with hands, and gauges of the CPU load, the memory in use and the battery)\n\
                  # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
                  # pointer = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 | 800 (percent of 8 x 12; auto: at the scale)\n\
                  # pointer-colour = white | black | yellow | orange | red | green | cyan | magenta\n\
@@ -397,14 +399,50 @@ pub fn cover(data: &[u8], frame: &mut [u32], width: usize, height: usize) -> Res
 
 /// What is drawn over the picture: the seconds since midnight, the date (year, month, day), the CPU load of the last
 /// samples (percent, oldest first), the free memory in bytes (000-APP-0064) of `total` (000-APP-0069: the memory
-/// gauge) and a line about the network.
+/// gauge), the battery (211-APP-0070) and a line about the network.
 #[derive(Clone, Copy, Default)]
-pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub total: Option<u64>, pub net: Option<&'a str> }
+pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub total: Option<u64>, pub battery: Option<Power>, pub net: Option<&'a str> }
+
+/// The battery as its service last read it (idl/battery.wit, 211-APP-0070): on the mains, charging, the charge in
+/// percent, and the minutes to empty and to full (`NO_MINUTES`: not discharging, or not charging).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Power { pub on_ac: bool, pub charging: bool, pub percent: u8, pub to_empty: u16, pub to_full: u16 }
+
+/// battery.wit's minutes when there are none.
+pub const NO_MINUTES: u16 = 0xFFFF;
+
+impl Power {
+    /// The minutes that matter now: to empty on the battery, to full while charging; None when the battery gives none.
+    pub fn minutes(&self) -> Option<u16> {
+        let m = if self.on_ac { if self.charging { self.to_full } else { NO_MINUTES } } else { self.to_empty };
+        (m != NO_MINUTES).then_some(m)
+    }
+    /// Low: on the battery with less than 10 % left.
+    pub fn low(&self) -> bool { !self.on_ac && self.percent < 10 }
+}
+
+/// Minutes as `2:41`, or `-:--` for none.
+pub fn hours(minutes: Option<u16>) -> String { minutes.map_or(String::from("-:--"), |m| format!("{}:{:02}", m / 60, m % 60)) }
+
+/// The battery's line on the background: `BAT 87% 2:41 LEFT`, `BAT 87% AC 0:45 TO FULL`, `BAT 100% AC`, or
+/// `NO BATTERY` (no service, or none fitted); at most `BATTERY` glyphs.
+pub fn battery_line(power: Option<&Power>) -> String {
+    match power {
+        None => String::from("NO BATTERY"),
+        Some(p) => match (p.on_ac, p.minutes()) {
+            (false, Some(m)) => format!("BAT {}% {} LEFT", p.percent, hours(Some(m))),
+            (false, None) => format!("BAT {}%", p.percent),
+            (true, Some(m)) => format!("BAT {}% AC {} TO FULL", p.percent, hours(Some(m))),
+            (true, None) => format!("BAT {}% AC", p.percent),
+        },
+    }
+}
 
 // The lines' widths in glyphs: the date, the memory's line at most, the network's; the CPU graph's width and height in
 // the other lines' glyph pixels (24 glyphs by 3 rows of them, as the time with seconds was wide at the first sizes).
 const DATE: usize = 10;
 const MEMORY: usize = 18;
+const BATTERY: usize = 24;
 const NET: usize = 24;
 const GRAPH: usize = 24;
 const GRAPH_ROWS: usize = 24;
@@ -448,7 +486,7 @@ fn text(frame: &mut [u32], width: usize, height: usize, x: usize, y: usize, text
 /// `zoom` (percent, 000-APP-0061): its rectangle (x, y, w, h), and the scales of the time's and the other lines'
 /// glyphs, at the sizes `config` gives them (000-APP-0068). None when it shows nothing.
 pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: usize) -> Option<((usize, usize, usize, usize), usize, usize)> {
-    if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.memory || config.net) { return None; }
+    if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.memory || config.battery || config.net) { return None; }
     let unit = unit.max(1);
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit;
     let sized = |pixels: usize, size: u16| sized(pixels, size, zoom, unit);
@@ -459,7 +497,7 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: u
     if config.face == Face::Analog {
         // The dial (its radius in place of the time's glyph scale), the date, the gauges in a row, the network.
         let (radius, gauge) = (sized(DIAL, config.time_size), sized(GAUGE, config.text_size));
-        let gauges = config.cpu as usize + config.memory as usize;
+        let gauges = config.cpu as usize + config.memory as usize + config.battery as usize;
         if config.time { add(2 * radius, 2 * radius); }
         if config.date { add(DATE * 8 * small, 16 * small); }
         if gauges > 0 { add(gauges * gauge_cell(gauge, small) + (gauges - 1) * 2 * gap, gauge + gap / 2 + 16 * small); }
@@ -470,6 +508,7 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: u
     if config.date { add(DATE * 8 * small, 16 * small); }
     if config.cpu { add(GRAPH * 8 * small, 16 * small + gap / 2 + GRAPH_ROWS * small); }
     if config.memory { add(MEMORY * 8 * small, 16 * small); }
+    if config.battery { add(BATTERY * 8 * small, 16 * small); }
     if config.net { add(NET * 8 * small, 16 * small); }
     place(config, width, height, z(32), (w, h)).map(|at| (at, big, small))
 }
@@ -527,8 +566,8 @@ pub fn used_percent(free: Option<u64>, total: Option<u64>) -> Option<u8> {
 }
 
 // The analog face (000-APP-0069): a dial with twelve marks and the hands (the second's with `seconds`), the date, the
-// gauges of the CPU load and the memory in use (a half circle each, filled from the left, with a needle and a label),
-// and the network's line, in one column from (x, y).
+// gauges of the CPU load, the memory in use and the battery's charge (211-APP-0070; a half circle each, filled from the
+// left, with a needle and a label), and the network's line, in one column from (x, y).
 #[allow(clippy::too_many_arguments)]
 fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, usize), (radius, gauge, small, gap): (usize, usize, usize, usize), config: &Config, info: &Info, glyph: Glyph) {
     let (colour, dim, shadow) = ink(config.info);
@@ -561,8 +600,10 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
         y += 16 * small + gap;
     }
     let cell = gauge_cell(gauge, small);
-    let gauges: Vec<(&str, Option<u8>)> = [(config.cpu, "CPU", info.cpu.last().copied()), (config.memory, "MEM", used_percent(info.free, info.total))]
-        .iter().filter(|g| g.0).map(|g| (g.1, g.2)).collect();
+    // The battery's label says AC on the mains.
+    let bat = if info.battery.is_some_and(|p| p.on_ac) { "AC" } else { "BAT" };
+    let gauges: Vec<(&str, Option<u8>)> = [(config.cpu, "CPU", info.cpu.last().copied()), (config.memory, "MEM", used_percent(info.free, info.total)),
+        (config.battery, bat, info.battery.map(|p| p.percent))].iter().filter(|g| g.0).map(|g| (g.1, g.2)).collect();
     for (i, (name, value)) in gauges.iter().enumerate() {
         let gx = x + i * (cell + 2 * gap);
         let centre = ((gx + cell / 2) as isize, (y + gauge) as isize);
@@ -574,7 +615,7 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
             if span > 0 { arc(frame, width, height, centre, gauge.saturating_sub(size), (3 * PERIOD / 4, span), size, colour); }
             line(frame, width, height, centre, polar(centre, gauge * 4 / 5, 3 * PERIOD / 4 + span), (size / 2).max(1), colour);
         }
-        let label = match value { Some(p) => format!("{} {:3}%", name, p), None => format!("{}    -", name) };
+        let label = match value { Some(p) => format!("{:<3} {:3}%", name, p), None => format!("{:<3}    -", name) };
         text(frame, width, height, gx, y + gauge + gap / 2, &label, small, ink, glyph);
     }
     if !gauges.is_empty() { y += gauge + gap / 2 + 16 * small + gap; }
@@ -632,6 +673,10 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
     }
     if config.memory {
         text(frame, width, height, x, y, &memory_line(info.free), small, ink, glyph);
+        y += 16 * small + gap;
+    }
+    if config.battery {
+        text(frame, width, height, x, y, &battery_line(info.battery.as_ref()), small, ink, glyph);
         y += 16 * small + gap;
     }
     if config.net {

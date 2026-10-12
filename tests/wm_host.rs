@@ -1054,7 +1054,7 @@ fn the_information_has_its_place() {
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, net: None }, &glyph);
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, battery: None, net: None }, &glyph);
     let ((bx, by, bw, bh), big, small) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
@@ -1077,7 +1077,7 @@ fn the_information_has_its_place() {
     // The large digits' edge is the smaller lines' edge: "2026" and "12" both start in their glyph's second column.
     let edge = |f: &[u32], top: usize, tall: usize| (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| f[py * fw + px] == text)).min().unwrap();
     let mut evening = vec![background::DARK; fw * fh];
-    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, net: None }, &glyph);
+    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, battery: None, net: None }, &glyph);
     assert_eq!(edge(&evening, by, 16 * big), edge(&evening, by + 16 * big + gap, 16 * small), "20:00:00 over 2026-10-10");
     assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
     assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
@@ -1087,7 +1087,7 @@ fn the_information_has_its_place() {
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, battery: None, net: None }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -1195,6 +1195,11 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     assert!(wm.status().ends_with(":Free memory"), "{}", wm.status());
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.memory && c.cpu), other => panic!("{:?}", other) }
     match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.memory), other => panic!("{:?}", other) }
+    // The battery (211-APP-0070): a box, off until ticked.
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Battery"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.battery && c.memory), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.battery), other => panic!("{:?}", other) }
     wm.key(key(KEY_DOWN));
     wm.key(key(KEY_DOWN));
     assert!(wm.status().ends_with(":Text size"), "{}", wm.status());
@@ -1203,7 +1208,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.text_size, 100), other => panic!("{:?}", other) }
     wm.key(key(KEY_DOWN));
     match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
-    for _ in 0..14 { wm.key(key(KEY_UP)); }
+    for _ in 0..15 { wm.key(key(KEY_UP)); }
     assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
     for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
@@ -1623,7 +1628,7 @@ fn the_scale_follows_the_screen_and_settings() {
     wm.rescale(180, 56, 200);
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
-    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 22));
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 23));
 }
 
 // The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from
@@ -1751,4 +1756,72 @@ fn the_top_bar_folds_into_more() {
     wm.desk.add(text(1, "fm"));
     let screen = draw(&mut wm, 160);
     assert!(screen[0].contains("│ Alt+0 fit │ more ▼ ") && screen[0].ends_with(" fm ") && !screen[0].contains("settings"), "{}", screen[0]);
+}
+
+#[test]
+fn the_battery_on_the_background_and_in_the_top_bar() {
+    use background::{battery_line, hours, Power, NO_MINUTES};
+    // 211-APP-0070: `show` names it; off by default and in a file written before it could be chosen.
+    assert!(!Config::default().battery);
+    let (c, problems) = Config::parse("show = time, battery\n");
+    assert!(problems.is_empty() && c.battery && c.time && !c.cpu, "{:?}", problems);
+    assert!(c.format().contains("show = time, seconds, memory, battery"), "{}", c.format());
+    assert_eq!(Config::parse(&c.format()).0, c);
+    assert!(!Config::parse("show = time, date, cpu, memory\n").0.battery);
+    // The line: on the battery the time left, on the mains the time to full while charging, or neither.
+    let on_battery = Power { on_ac: false, charging: false, percent: 87, to_empty: 161, to_full: NO_MINUTES };
+    let charging = Power { on_ac: true, charging: true, percent: 40, to_empty: NO_MINUTES, to_full: 45 };
+    let full = Power { on_ac: true, charging: false, percent: 100, to_empty: NO_MINUTES, to_full: NO_MINUTES };
+    assert_eq!(battery_line(Some(&on_battery)), "BAT 87% 2:41 LEFT");
+    assert_eq!(battery_line(Some(&charging)), "BAT 40% AC 0:45 TO FULL");
+    assert_eq!(battery_line(Some(&full)), "BAT 100% AC");
+    assert_eq!(battery_line(Some(&Power { to_empty: NO_MINUTES, ..on_battery })), "BAT 87%");
+    assert_eq!(battery_line(None), "NO BATTERY");
+    assert_eq!((hours(Some(161)), hours(Some(5)), hours(None)), ("2:41".into(), "0:05".into(), "-:--".into()));
+    assert!(Power { percent: 9, ..on_battery }.low() && !Power { percent: 9, ..charging }.low() && !on_battery.low());
+    // On the digital face its line comes under the memory's, a line more; on the analog face a third gauge.
+    let digital = Config { battery: true, ..Config::default() };
+    let ((_, _, w0, h0), _, small) = layout(&Config::default(), 1280, 800, 1, 100).unwrap();
+    let ((_, _, _, h1), _, _) = layout(&digital, 1280, 800, 1, 100).unwrap();
+    assert_eq!(h1, h0 + 8 + 16 * small);
+    let mut frame = vec![background::DARK; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &digital, &Info { battery: Some(on_battery), ..Info::default() }, &glyph);
+    let ((bx, by, _, bh), _, _) = layout(&digital, 1280, 800, 1, 100).unwrap();
+    let (text, _, _) = ink(digital.info);
+    let band = by + bh - 16 * small..by + bh;
+    assert!(band.clone().any(|y| (bx..bx + w0).any(|x| frame[y * 1280 + x] == text)), "the battery's line drawn last");
+    let analog = Config { face: Face::Analog, time: false, date: false, battery: true, ..Config::default() };
+    let ((_, _, w3, _), _, _) = layout(&analog, 1280, 800, 1, 100).unwrap();
+    let ((_, _, w2, _), _, _) = layout(&Config { battery: false, ..analog.clone() }, 1280, 800, 1, 100).unwrap();
+    assert!(w3 > w2, "three gauges are wider than two");
+    // The top bar: no item without a battery; with one, at the right end, and a click shows the minutes.
+    let mut wm = Wm::new(160, 50);
+    assert!(wm.chip().is_none() && !wm.status().contains("BATTERY"));
+    wm.battery = Some(on_battery);
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 87% "));
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut none = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    let bar: String = (153..160).map(|x| grid.get(x, 0).ch).collect();
+    assert_eq!(bar, " ▮ 87% ");
+    assert!(wm.top_bar().0.iter().all(|&(at, width, _)| at + width <= 153), "the items leave it room");
+    assert!(wm.status().ends_with("BATTERY=▮ 87%"), "{}", wm.status());
+    assert_eq!(wm.pointer(157, 0, 1, 0), Action::Redraw);
+    wm.pointer(157, 0, 0, 0);
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 2:41 "), "clicked: the time left");
+    wm.battery = Some(charging);
+    assert_eq!(wm.chip().as_deref(), Some(" AC 0:45 "), "charging: the time to full");
+    wm.battery = Some(full);
+    assert_eq!(wm.chip().as_deref(), Some(" AC -:-- "));
+    wm.pointer(157, 0, 1, 0);
+    assert_eq!(wm.chip().as_deref(), Some(" AC 100% "), "clicked again: the charge");
+    // Below 10 % on the battery it is marked.
+    wm.battery = Some(Power { percent: 7, ..on_battery });
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    assert_ne!(grid.get(158, 0).style, grid.get(140, 0).style);
+    let low = grid.get(158, 0).style;
+    wm.battery = Some(on_battery);
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    assert_ne!(grid.get(158, 0).style, low, "marked only when low");
 }

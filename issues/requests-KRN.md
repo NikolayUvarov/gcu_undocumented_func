@@ -60,6 +60,8 @@ On a trial boot, the updater writes the confirmed record within a few seconds of
 
 The `wm` suite's `record -w` lost its window lease to the limit. The tools track now grants `SLOT_SHELL` last and lets a start go on without it (wm and the shell), so the program runs without the shell's commands when the session is full.
 
+On the MacBook Pro `wm` itself now asks for six: the window manager's client, the user's files, system information, the camera, the shell's commands and the battery (211-APP-0070). The battery comes last and `wm` asks the shell for a copy when it did not fit (`shell.wit` 1.4 `battery`), so nothing waits on this; a larger session would make that call unneeded.
+
 ### Plan (a proposal; the kernel track decides)
 
 - **The session's array** holds `LAUNCH_SLOTS.len()` grants, or `SPAWN_GRANTS_MAX` less the loader's own.

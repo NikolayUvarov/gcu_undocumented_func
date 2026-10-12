@@ -57,3 +57,24 @@ fn down(out: &mut Console, force: bool, off: bool) {
     let _ = writeln!(out, "REBOOTING...");
     if control::reboot().is_err() { let _ = writeln!(out, "ERROR: REBOOT REFUSED"); }
 }
+
+/// `battery` (211-APP-0070): the battery as its service last read it (idl/battery.wit), in one line.
+pub fn battery(out: &mut Console) {
+    if mind::dev::cap_info(mind::abi::SLOT_BATTERY).0 == 0 {
+        let _ = writeln!(out, "NO BATTERY SERVICE: IT RUNS WHERE THE ACPI TABLES NAME AN EMBEDDED CONTROLLER WITH A SMART BATTERY");
+        return;
+    }
+    let s = match mind::idl::battery::status(Endpoint(mind::abi::SLOT_BATTERY)) {
+        Ok(Ok(s)) => s,
+        Ok(Err(mind::idl::battery::Error::NoBattery)) => { let _ = writeln!(out, "NO BATTERY: NONE ANSWERS ON THE SMBUS"); return; }
+        Ok(Err(mind::idl::battery::Error::Unavailable)) => { let _ = writeln!(out, "BATTERY UNAVAILABLE: THE EMBEDDED CONTROLLER DID NOT ANSWER THE LAST READING"); return; }
+        Err(_) => { let _ = writeln!(out, "THE BATTERY SERVICE DOES NOT ANSWER"); return; }
+    };
+    let state = if s.charging { "CHARGING" } else if s.full { "FULL" } else if s.discharging { "DISCHARGING" } else { "IDLE" };
+    let _ = write!(out, "BATTERY: {}%, {}, {}", s.percent, if s.on_ac { "ON THE MAINS" } else { "ON THE BATTERY" }, state);
+    if s.discharging && s.to_empty != 0xFFFF { let _ = write!(out, ", "); let _ = mind::battery::write_minutes(out, s.to_empty); let _ = write!(out, " LEFT"); }
+    if s.charging && s.to_full != 0xFFFF { let _ = write!(out, ", "); let _ = mind::battery::write_minutes(out, s.to_full); let _ = write!(out, " TO FULL"); }
+    let unit = if s.tens_of_mwh { "0 MWH" } else { " MAH" };
+    let _ = writeln!(out, "; {} MV, {} MA; {}{} OF {}{} (DESIGN {}{}), {} CYCLES; READ {} MS AGO",
+        s.millivolts, s.milliamps, s.remaining, unit, s.full_capacity, unit, s.design, unit, s.cycles, s.age_ms);
+}
