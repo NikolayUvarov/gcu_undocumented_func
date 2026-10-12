@@ -257,6 +257,8 @@ impl Service {
         let server = pki_types::ServerName::try_from(name).map_err(|_| Error::Invalid)?.to_owned();
         let device = if client_certificate { Some(Arc::new(device::Device::new(KEYS).ok_or(Error::Denied)?)) } else { None };
         let how = match &pins { Some(p) if p.checked => " BY ITS PIN", Some(_) => " BY ITS PINNED KEY", None => "" };
+        // connect-pinned (1.1) logs its refusal as it always did; connect-pins (1.2) has one or two pins of either kind.
+        let unmatched = match &pins { Some(p) if p.checked => "NOT A PINNED KEY OR CERTIFICATE", _ => "NOT THE PINNED KEY" };
         let pinned = pins.is_some();
         let config = Arc::new(self.config(device.clone(), pins)?);
         let session = self.session(id, pid)?;
@@ -283,7 +285,7 @@ impl Service {
             Err(failure) => {
                 let error = match &failure {
                     Failure::Tls(rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)) if pinned => {
-                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: NOT A PINNED KEY OR CERTIFICATE", id, pid, name); Error::Certificate
+                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: {}", id, pid, name, unmatched); Error::Certificate
                     }
                     Failure::Tls(rustls::Error::InvalidCertificate(why)) => { mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: CERTIFICATE {:?}", id, pid, name, why); Error::Certificate }
                     Failure::Tls(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {} FAILED: {:?}", id, pid, name, error); Error::Handshake }

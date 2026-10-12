@@ -315,6 +315,7 @@ impl core::fmt::Display for Name<'_> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
     let info = match wlanhw::info(RADIO) { Ok(Ok(info)) => info, _ => { mind::println!("[WLAN] NO RADIO"); wlanhw::Info::default() } };
     let own = mac(info.mac);
     let channels = info.channels.as_slice();
