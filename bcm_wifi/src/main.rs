@@ -8,6 +8,9 @@
 use mind::abi::{BootInfo, SLOT_DEV0};
 use mind::dev::{device_config, Mmio};
 
+mod stage3;
+mod tables;
+
 // PCI configuration: the backplane addresses BAR0's first two 4 KiB windows show.
 const CFG_WINDOW: usize = 0x80; const CFG_WINDOW2: usize = 0xAC;
 // BAR0 (16 KiB): the core in window 1, that core's wrapper in window 2, the PCIe core, ChipCommon.
@@ -121,14 +124,14 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[BCM] PCIE CORE: {:08X} {:08X} {:08X} {:08X}", bar.read32(PCIE), bar.read32(PCIE + 4), bar.read32(PCIE + 8), bar.read32(PCIE + 12));
     let _ = WINDOW;
 
-    sprom(&bar, capabilities);
-    if index == CORE_80211 { microcode(&bar); }
+    let mac = sprom(&bar, capabilities);
+    if index == CORE_80211 { microcode(&bar, mac); }
     idle()
 }
 
 // The SPROM, read where it may appear, its revision, CRC and MAC address logged.
-fn sprom(bar: &Mmio, capabilities: u32) {
-    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return; }
+fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
+    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return None; }
     // The SPROM's pins are shared with the external amplifier lines; they are given back as they were after the read.
     let chip_control = bar.read32(CC + CC_CHIP_CONTROL);
     if chip_control & CHIPCTL_EXTPA != 0 {
@@ -136,7 +139,7 @@ fn sprom(bar: &Mmio, capabilities: u32) {
         mind::time::sleep(1);
         mind::println!("[BCM] SPROM PINS TAKEN FROM THE AMPLIFIER LINES: CHIP CONTROL {:08X} -> {:08X}", chip_control, bar.read32(CC + CC_CHIP_CONTROL));
     }
-    let mut found = false;
+    let mut found = None;
     for at in SPROM_AT {
         let mut words = [0u16; SPROM_WORDS];
         for (i, w) in words.iter_mut().enumerate() { *w = bar.read16(CC + at + i * 2); }
@@ -146,7 +149,7 @@ fn sprom(bar: &Mmio, capabilities: u32) {
                 let mac = [words[0x46] >> 8, words[0x46] & 0xFF, words[0x47] >> 8, words[0x47] & 0xFF, words[0x48] >> 8, words[0x48] & 0xFF];
                 mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: REVISION {}, CRC GOOD, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, WORDS 0-3 {:04X} {:04X} {:04X} {:04X}",
                                at, revision, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], words[0], words[1], words[2], words[3]);
-                found = true;
+                found = Some(mac.map(|b| b as u8));
             }
             None => mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: NOT VALID (FIRST WORDS {:04X} {:04X} {:04X} {:04X}, LAST {:04X}, CRC OF THE REST {:02X})",
                                    at, words[0], words[1], words[2], words[3], words[SPROM_WORDS - 1], sprom_crc(&words)),
@@ -156,7 +159,8 @@ fn sprom(bar: &Mmio, capabilities: u32) {
         bar.write32(CC + CC_CHIP_CONTROL, chip_control);
         mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
     }
-    if !found { mind::println!("[BCM] NO VALID SPROM"); }
+    if found.is_none() { mind::println!("[BCM] NO VALID SPROM"); }
+    found
 }
 
 // About `n` microseconds: one read of a wrapper register over PCIe takes about one.
@@ -203,7 +207,7 @@ fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTR
 // revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
 fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(STEP_MS); }
 
-fn microcode(bar: &Mmio) {
+fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
     if mind::fs::File::open(STAGE2_FLAG).is_err() { mind::println!("[BCM] STAGE 2 NOT ASKED FOR ({} IS ABSENT): THE CORE STAYS IN RESET", STAGE2_FLAG); return; }
     let Ok(file) = mind::fs::File::open(MICROCODE) else { mind::println!("[BCM] NO MICROCODE AT {} (FILE ACCESS OR scripts/proprietary.sh copy): STAGE 2 SKIPPED", MICROCODE); return };
     let Some(mut pages) = mind::mem::Pages::new(MICROCODE_MAX) else { mind::println!("[BCM] NO MEMORY FOR THE MICROCODE"); return };
@@ -296,6 +300,7 @@ fn microcode(bar: &Mmio) {
         Ok(_) => {
             let (revision, patch, date, time) = (shared(0), shared(2), shared(4), shared(6));
             mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
+            match mac { Some(mac) => stage3::run(bar, mac), None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGE 3 SKIPPED") }
         }
         Err(v) => mind::println!("[BCM] MICROCODE DOES NOT ANSWER: {} WORDS LOADED; IRQ REASON {:08X}, MAC CONTROL {:08X}", count, v, bar.read32(D11_MAC_CONTROL)),
     }
