@@ -52,7 +52,7 @@ fn main(_info: &'static BootInfo) {
                 // The whole text is read on every page; the values from `start` are kept (750-NET-0021).
                 let mut page = parse::JsonPage::default();
                 let walked = json::walk(text, &mut |index, value| {
-                    if (index as u32) < start || page.page.as_slice().len() == 32 { return Ok(()); }
+                    if (index as u32) < start || page.page.as_slice().len() == 16 { return Ok(()); }
                     let kind = match value.kind {
                         json::Kind::Object => parse::JsonKind::Object, json::Kind::Array => parse::JsonKind::Array, json::Kind::String => parse::JsonKind::String,
                         json::Kind::Number => parse::JsonKind::Number, json::Kind::True => parse::JsonKind::True, json::Kind::False => parse::JsonKind::False,

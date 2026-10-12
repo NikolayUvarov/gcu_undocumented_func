@@ -8,6 +8,8 @@
 // them and the TLS service still checks its certificate for NAME (default: the host) (tls.wit 1.2, 750-NET-0020).
 // Response heads go to the parser service, as download's do; with --json, a JSON body too, one line per value
 // (parse.wit 1.4, 750-NET-0021). One line per step.
+extern crate alloc;
+
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
 use mind::http::{self, Connection, Method, Transport, Url};
 use mind::idl::{socket, tls};
@@ -158,8 +160,9 @@ fn main(_info: &'static BootInfo) {
     };
     let mut connection = Connection::new(Timed { link, idle_ms: 15_000 });
     let mut parser = mind::parse::Service(Endpoint(SLOT_PARSE));
-    // A body is kept up to what the parser service's `json` takes (bytes<16384>).
-    let mut first = [0u8; 16384];
+    // A body is kept up to what the parser service's `json` takes (bytes<16384>), on the heap: a page of `json`'s answer
+    // takes much of the 64 KiB stack.
+    let mut first = alloc::vec![0u8; 16384];
     if let Some(json) = post {
         let mut source = json.as_bytes();
         let headers = [("Content-Type", "application/json"), ("Authorization", "Bearer webcheck")];

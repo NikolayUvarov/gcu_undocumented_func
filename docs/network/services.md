@@ -45,7 +45,7 @@ A service that talks to one server for as long as the machine runs, such as the 
 
 ## JSON read by the parser service (`idl/parse.wit` 1.4)
 
-- **`json(text, start)`.** `parse` reads a whole JSON text (RFC 8259, UTF-8, up to 16 KiB) with `mind::json` and answers its values in document order, 32 at a time from `start`, with how many there are. Each value comes with:
+- **`json(text, start)`.** `parse` reads a whole JSON text (RFC 8259, UTF-8, up to 16 KiB) with `mind::json` and answers its values in document order, 16 at a time from `start`, with how many there are. Each value comes with:
   - its kind: object, array, string, number, true, false or null;
   - the index of the object or array it is in (65535 for the outermost);
   - its member's key (empty in an array);

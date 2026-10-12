@@ -16,7 +16,7 @@ Effector's commands and replies are JSON. Under MC-11.11 the process that holds 
   - a key of 64 bytes and a string of 512 bytes once decoded.
 
   Anything past them is malformed.
-- **`idl/parse.wit` 1.4 `json`:** the text (up to 16 KiB) in, the values out 32 at a time from `start`, and how many there are. A refusal is logged with the client's PID.
+- **`idl/parse.wit` 1.4 `json`:** the text (up to 16 KiB) in, the values out 16 at a time from `start`, and how many there are. A refusal is logged with the client's PID.
 - **The client still checks the tree against what it asked for (MC-11.5).** A key that comes twice is the client's to refuse.
 - **The library task of the Effector track** (750-EFF-0004, `mind::json` with a writer and the JSONTestSuite) is not taken here. This builds on the reader `mind::json` already has (251-STO-0014).
 
