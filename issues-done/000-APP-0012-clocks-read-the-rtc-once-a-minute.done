@@ -45,6 +45,9 @@ The kernel track's request ([requests-APP.md](../issues/requests-APP.md), 2026-1
   - `WallClock::wait_ms` and `Clock::wait_ms`: until the next second of the count, the poll's 100 ms only while the RTC is read.
   - `clock` (its three faces) and `dzen-clock --line` wait for it. A key, or an event of the window, still wakes them at once. `dzen-clock`'s faces keep 100 ms for their orbit.
   - [`tests/clock_host.rs`](../tests/clock_host.rs): `a_face_wakes_when_its_second_changes`: every second shown once in ten minutes, about one wake a second.
+  - Measured on PCU at 5cb75b5, the same run with each answer timed: the slowest `run clock &` took 2.1 s at 149 clocks, and the whole 16-CPU normal suite 318 s (670 to 900 s before). "aarch64: 16 CPUs" passed there and on i9.
+  - The normal and busy suites' progress checks sample a clock over 1.2 s, since a clock may make no call in 0.4 s now.
+  - These are QEMU's numbers under TCG, not a real machine's (MC-12.1).
 
 ## Related
 

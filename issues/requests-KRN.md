@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (8 requests waiting, 2026-10-11, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (9 requests waiting, 2026-10-12, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -198,3 +198,21 @@ The same build passed the whole suite when it ran again. Nothing in the tools tr
 ### Acceptance criteria
 
 The `wm` suite types its lines with no press lost in repeated runs, or a drop is logged where it happens.
+
+## `bcm_wifi` gets DMA memory and its interrupt (550-DRV-0025)
+
+**Recorded by:** the drivers track (`DRV`), 2026-10-12, ahead of stage 4 of the MacBook Pro's Wi-Fi, so that it can be done while stage 3 is written.
+
+### Problem
+
+Stage 2 ran Broadcom's microcode in the BCM4331 ([550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done)). Stage 3 sets up the PHY and the radio through registers only. Stage 4 receives frames: the 802.11 core's DMA engines write them into rings in memory and raise an interrupt. `init` gives `bcm_wifi` BAR0 and a read-only VFS client, nothing else.
+
+### Plan (a proposal; the kernel track decides)
+
+In `init`'s `bcm_wifi` arm, as for `ahci` and `usb_host`:
+- `SLOT_MEM`: one physically contiguous DMA region of 512 KiB (a receive ring of 64-bit descriptors, its buffers, and a transmit ring later), below 4 GiB;
+- `SLOT_IRQ`: the function's MSI (capability at 0x48, one vector, 64-bit), or its INTx line where MSI is not available.
+
+### Acceptance criteria
+
+On the MacBook Pro, `bcm_wifi` logs the region's physical address and size and that it can wait on its interrupt. Nothing is started by the grant itself: the core stays idle until the driver sets up its rings.
