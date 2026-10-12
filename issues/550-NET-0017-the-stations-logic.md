@@ -1,0 +1,63 @@
+# 550-NET-0017 — The 802.11 station's logic, host-tested
+
+**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.11, MC-12.2
+
+The second part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK", 2026-10-08), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) (the keys, the handshakes and CCMP). The station service `wlan` that drives it over `idl/wlanhw.wit` is the next task.
+
+## Problem
+
+A SoftMAC radio leaves the MAC layer to the host: scanning, joining a network, and turning Ethernet frames into 802.11 data frames and back. QEMU has no Wi-Fi device, so this logic needs a test that does not depend on one.
+
+## Plan
+
+A crate `dot11/`, with no libmind, no allocation and no I/O. The station service feeds it the radio's frames and a clock. It answers what the radio is to do: tune, filter, send a frame at a rate, or deliver an Ethernet frame.
+- **`frame`:**
+  - MAC headers (QoS and four-address frames included) and elements;
+  - the management frames a station sends: a probe request, Open System authentication, an association request with its RSN element, deauthentication;
+  - data frames to and from Ethernet through LLC/SNAP.
+- **`scan`:**
+  - a network from each beacon or probe response: SSID, BSSID, channel, signal, capability, RSN element;
+  - its protection: open, WEP, WPA2-PSK with CCMP, WPA3, enterprise, other;
+  - a list of 32 that keeps the strongest.
+- **`station`:**
+  - **Scanning.** Every channel of the radio. Probe requests only on channels 1 to 11, which every regulatory domain allows, and only listening elsewhere.
+  - **Joining.** Open System authentication and association, each tried 3 times. Then the 4-way handshake through `wpa`.
+  - **The data path.** CCMP in both directions and a replay counter per TID. A group key is taken from its RSC. Nothing passes in the clear on a protected network, or before its keys.
+  - **What ends a join, and how it ends:**
+    - a wrong passphrase (the handshake was answered but never completed, or the access point deauthenticated during it);
+    - no answer;
+    - a refusal;
+    - a downgrade in message 3: the station leaves.
+  - **Joining again.** A lost network (deauthenticated, or silent for 10 s) is joined again after 3 s.
+  - **Rate control.** It starts at 24 Mb/s or the fastest rate below it that both sides support, steps down after two unacknowledged frames, and steps up after ten acknowledged ones.
+- **`wpa::authenticator`:** the access point's side of the handshakes, for the tests and later for a stand-in radio in QEMU.
+
+## Acceptance criteria
+
+`dot11/tests/station.rs`, run by `scripts/host_tests.sh`, passes against a simulated access point on channel 6:
+- **A scan.** It finds the network as WPA2, and probe requests go out on channels 1 to 11 only.
+- **Joining and data.**
+  - It joins a WPA2-PSK network.
+  - Data in both directions under the TK, and broadcast under the GTK.
+  - A replayed frame, a changed frame, a frame in the clear and the station's own broadcast are dropped.
+  - A frame with another source is not sent.
+- **A group rekey; the rates.**
+- **A failed join.**
+  - A wrong passphrase gives `WrongPassphrase`, and the station leaves.
+  - Silence gives `NoAnswer` after 3 tries.
+  - A refusal gives `Refused`.
+  - A downgrade makes the station leave.
+- **An open network.**
+- **A lost network** is joined again; silence is a loss too.
+- **Networks it does not join:**
+  - WPA3, enterprise, TKIP and a required management frame protection are not joined;
+  - an unknown name is `NotFound`.
+- **Malformed frames** are refused.
+
+The crate builds for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
+
+What this does not show: a real access point and radio. Those come with the station service, `bcm_wifi` (550-DRV-0027) and the MacBook Pro.
+
+## Related
+
+[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`, which proposes `idl/wifi.wit`).
