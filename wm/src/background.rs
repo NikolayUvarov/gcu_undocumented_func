@@ -441,7 +441,9 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
     let ink = (colour, shadow);
     if config.time {
         let line = match info.seconds { Some(s) => format!("{:02}:{:02}:{:02}", s / 3600 % 24, s / 60 % 60, s % 60), None => String::from("--:--:--") };
-        text(frame, width, height, x, y, &line, big, ink, glyph);
+        // A glyph's ink starts in its second column: the large digits moved left by the difference, so their edge is the
+        // smaller lines' edge.
+        text(frame, width, height, x.saturating_sub(big - small), y, &line, big, ink, glyph);
         y += 16 * big + gap;
     }
     if config.date {
