@@ -305,3 +305,29 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## `wifi` follows `idl/wifi.wit` 1.0 as agreed (550-APP-0033)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's proposal in requests-NET.md ("`idl/wifi.wit`: what `wifi` needs of the station").
+
+### Problem
+
+The network track agreed the interface in [`idl/wifi.wit`](../idl/wifi.wit) 1.0 (550-NET-0018), with these changes to the proposal:
+
+- **An SSID is `list<u8, 32>`, not `string<32>`.** An access point sends up to 32 bytes, and some send names that are not UTF-8 (GBK, Latin-1). As bytes, a network is listed and joined by its exact name; `wifi` shows it as it can (for example, with U+FFFD for bytes that are not UTF-8).
+- **`status` has no `address`, and `reason` no `no-address`.** The station does no DHCP: the address is the network stack's (`ip`, which the network page of `wm`'s Settings already opens). `status` gains the BSSID, the channel and the data rate.
+- **New cases:**
+  - `security.other`: TKIP, management frame protection required, or another AKM. Like WEP, WPA3 and enterprise, the station does not join it.
+  - `error.not-found` and `reason.not-found`: no network of that name in the last scan.
+  - `reason.unsupported`.
+  - `state.scanning`.
+- **`scan` answers when the scan ends** (about 2 s), with the list. While joining or joined, it answers the list as it stands and does not leave the channel.
+- **The badges.** The station's one endpoint also serves `idl/net.wit` to the network stack. A client with `BADGE_WIFI` (`mind::network`) speaks `wifi.wit` and only reads. With `BADGE_WIFI_CHANGE`, it may also join, leave and forget.
+
+### Plan (a proposal; the tools track decides)
+
+`wifi`'s `Station` and `Demo` follow 1.0 in a step of 550-APP-0033: the stand-in serves the agreed interface, and the passphrase rules stay as the program has them (the station checks them again).
+
+### Acceptance criteria
+
+The tools suite checks `wifi` against a stand-in station of `idl/wifi.wit` 1.0.

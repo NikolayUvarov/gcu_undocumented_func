@@ -11,5 +11,10 @@ pub const BADGE_GRANT_LAST: u16 = 0xFFFD;
 /// `offloads`.
 pub const BADGE_COUNTERS: u16 = 1;
 
+/// The 802.11 station's configuration client (idl/wifi.wit, 550-NET-0018): it reads; with BADGE_WIFI_CHANGE it may
+/// also join, leave and forget. A station client without BADGE_WIFI is the network stack's card (idl/net.wit).
+pub const BADGE_WIFI: u16 = 0x0100;
+pub const BADGE_WIFI_CHANGE: u16 = 0x0300;
+
 /// The key service's signer (idl/keystore.wit, issue 103): the TLS service's client may ask for signatures.
 pub const BADGE_KEY_SIGNER: u16 = 1;
