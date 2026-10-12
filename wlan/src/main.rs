@@ -316,7 +316,8 @@ impl core::fmt::Display for Name<'_> {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
-    let info = match wlanhw::info(RADIO) { Ok(Ok(info)) => info, _ => { mind::println!("[WLAN] NO RADIO"); wlanhw::Info::default() } };
+    // Without a radio's client (started by hand, not by init with a radio) there is nothing to drive.
+    let info = match wlanhw::info(RADIO) { Ok(Ok(info)) => info, _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) } };
     let own = mac(info.mac);
     let channels = info.channels.as_slice();
     mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS", own[0], own[1], own[2], own[3], own[4], own[5], channels.len());
