@@ -21,16 +21,17 @@ use mind::keys::Key;
 use mind::mem::Mapping;
 use mind::tui::{Rect, Terminal, DARK};
 use mind::window::{Kind, Surface, STATE_CLOSE, TITLE};
-use wm::background::{self, Backdrop, Config, Info};
+use wm::background::{self, Backdrop, Config, Info, Power};
 use wm::desk::{Action, Content, Mode, Win, Wm, BACKGROUND};
 use wm::menu::{self, Kind as ProgramKind};
 
 // REQUEST_GPIO: the pin controller's client where the board has one, passed on to pins and pinmap (issue u017).
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
 // REQUEST_SHELL: the shell's commands, for the menu's Shell item, the shell's own window (211-APP-0044).
+// REQUEST_BATTERY: the battery service's client, for the top bar's item and the background's line, passed on (211-APP-0070).
 // 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
 // file of up to 32 MiB as it is decoded, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL, memory: 64);
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
@@ -40,6 +41,8 @@ const SYNC_MS: usize = 250;
 const SHELL_MS: u32 = 2000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
+// How often the battery is read: as often as its service reads it (idl/battery.wit).
+const BATTERY_MS: usize = 5000;
 // How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
 const FRESH_MS: usize = 120_000;
 
@@ -51,6 +54,16 @@ impl Live {
 }
 
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
+
+// The battery as its service reads it (211-APP-0070): None without one (no service, or no battery fitted); a reading
+// the controller missed keeps the last.
+fn battery(last: Option<Power>) -> Option<Power> {
+    match mind::idl::battery::status(Endpoint(SLOT_BATTERY)) {
+        Ok(Ok(s)) => Some(Power { on_ac: s.on_ac, charging: s.charging, percent: s.percent.min(100), to_empty: s.to_empty, to_full: s.to_full }),
+        Ok(Err(mind::idl::battery::Error::Unavailable)) => last,
+        _ => None,
+    }
+}
 
 // The lease of window `id`'s surface and its wake endpoint.
 fn adopt(id: u32) -> Option<Live> {
@@ -157,6 +170,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_PARSE != 0 { missing.push("parse"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
+    if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -450,6 +464,11 @@ fn main(info: &'static BootInfo) {
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
+    // The battery's client: lent at the launch where there was room, else a copy of the shell's (shell.wit 1.4).
+    if !holds(SLOT_BATTERY) && holds(SLOT_SHELL) {
+        let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::battery(Endpoint(SLOT_SHELL), SLOT_BATTERY));
+        mind::println!("[WM] BATTERY CLIENT FROM THE SHELL: {}", match asked { Ok(Ok(())) => "LENT", Ok(Err(_)) => "NONE (NO BATTERY SERVICE)", Err(_) => "NO ANSWER" });
+    }
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
     let args = mind::process::args_str().trim();
@@ -469,6 +488,8 @@ fn main(info: &'static BootInfo) {
     // Where the pointer was drawn last, and its size then.
     let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
     let (mut free, mut total): (Option<u64>, Option<u64>) = (None, None); // the free memory the background shows
+    let has_battery = holds(SLOT_BATTERY);
+    let mut next_battery = 0;
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
@@ -615,6 +636,12 @@ fn main(info: &'static BootInfo) {
         }
         let (changed, mut pixels) = manager.follow();
         if !manager.wm.desk.take_changed().is_empty() { relayout = true; }
+        // The battery for the top bar and the background (211-APP-0070).
+        if has_battery && now >= next_battery {
+            next_battery = now + BATTERY_MS;
+            let read = battery(manager.wm.battery);
+            if read != manager.wm.battery { manager.wm.battery = read; relayout = true; }
+        }
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
         // either came.
         let mut background_moved = false;
@@ -650,7 +677,7 @@ fn main(info: &'static BootInfo) {
                     (free, total) = (pool.as_ref().map(|p| p.frames_free), pool.as_ref().map(|p| p.frames));
                 }
             }
-            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, net: None };
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: None };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
         }

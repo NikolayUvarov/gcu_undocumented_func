@@ -1130,6 +1130,10 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
+    require(vm.command("battery"), "NO BATTERY SERVICE")
+    require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
+    print("PASS: battery says there is no battery service", flush=True)
     # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
     # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
     import datetime
@@ -6487,6 +6491,9 @@ def wm_suite(vm):
     # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
     # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
     require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
+    # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
+    require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
@@ -6972,7 +6979,7 @@ def wm_suite(vm):
         # on a field of the date page sets the clock at once.
         kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
         rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date", "CPU load",
-                "Free memory", "Network", "Text size", "Place", "Face"]
+                "Free memory", "Battery", "Network", "Text size", "Place", "Face"]
         keys("alt-s", text="MODE=SETTINGS")
         keys("ret", text="SETTINGS=Background:Picture")
         changed = 0
@@ -6985,7 +6992,7 @@ def wm_suite(vm):
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
-            keys("ret" if row in ("Time", "Seconds", "Date", "CPU load", "Free memory", "Network") else "left", text="[WM] SETTINGS ")
+            keys("ret" if row in ("Time", "Seconds", "Date", "CPU load", "Free memory", "Battery", "Network") else "left", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
