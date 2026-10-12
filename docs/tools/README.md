@@ -250,7 +250,15 @@ Graphs over the last 30 s (100 ms samples) or 10 min (1 s samples): CPU busy per
 
 ### 4.8 Shell
 
-Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); Tab completion of program names (loader `LIST`) and paths; lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
+Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower case and Cyrillic through the 8×16 font; scrollback with Shift+PgUp/PgDn; console programs (§2.4).
+
+**The current directory and Tab** (000-APP-0066), in the shell and in `console`:
+
+- `cd [directory]` sets it, and the prompt names it (`MIND diag> `; `console`: `diag> `). `cd` alone goes to the boot disk's root, `cd ..` one level up, and a missing directory is refused. `pwd` shows it (`/`, `/diag`, `ram:notes`). Each console, and the shell's window, has its own.
+- A path that names no volume starts there: in `ls`, `cat`, `write`, `mkdir`, `rm`, `mv`, `msh`, a script by its name (`quick.msh` in `diag`), `release`, `screenshot`, and the scripts' `files()` and `glob()`. A leading `/` is the boot disk's root.
+- A program has no directory of its own: the shell (and `console`) passes it a word that names a file or directory in the current directory, and the first word of a program that asks for its file (`edit new.txt`), as a full path.
+- A script's `cd` lasts while the script runs.
+- Tab completes the first word, and the one after `run`, from the commands and programs; a word holding `/` or `:`, or any later word, from the directory it names (`libmind/src/path.rs`). One match gets its full name, `/` after a directory; several get the part they share; once they share nothing more, Tab lists them, sorted.
 
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.

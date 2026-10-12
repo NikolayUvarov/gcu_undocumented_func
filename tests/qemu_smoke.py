@@ -1050,8 +1050,8 @@ def shell_suite(vm):
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
     keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
-    # Several matches are listed under the line: the shell's commands, then the programs (clock is one, issue u007);
-    # the prompt drawn again ends the listing.
+    # Several matches that share nothing more are listed under the line, the shell's commands and the programs in one
+    # sorted list (clock is one, issue u007; 000-APP-0066); the prompt drawn again ends the listing.
     vm.send_bytes(b"c\t")
     listing = vm.expect("MIND> ", after="cpus")
     for word in ("clear", "clock"):
@@ -1139,6 +1139,24 @@ def shell_suite(vm):
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
     print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
+    # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
+    # names.
+    def at(line, prompt):
+        vm.send(line + "\n")
+        return vm.expect(prompt, after=to_ordinal(to_real(line)) + "\n")
+    assert re.search(r"^/$", vm.command("pwd"), re.M)
+    at("cd diag", "MIND diag> ")
+    assert re.search(r"^/diag$", at("pwd", "MIND diag> "), re.M)
+    require(at("msh --check quick.msh", "MIND diag> "), "MSH: diag/quick.msh: OK")
+    assert re.search(r"(?i)^quick\.msh ", at("ls", "MIND diag> "), re.M)
+    require(at("cd nowhere", "MIND diag> "), "ERROR: CD /diag/nowhere: NOT FOUND")
+    at("cd ..", "MIND> ")
+    vm.send_bytes(b"cat diag/qu\t")
+    vm.expect("cat diag/quick.msh ")
+    keys(b"\r", "# diag/quick.msh")
+    print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
+          "refused; Tab completed a path", flush=True)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -6795,6 +6813,19 @@ def wm_suite(vm):
         vm.send_bytes(b"fm --help\r")
         console_has("fm — file manager")
         console_has("(fm ended)")
+        # cd, pwd and Tab in console too (000-APP-0066): the prompt names the directory, ls lists it, Tab completes a
+        # name there, and cd alone goes back to the boot disk's root.
+        vm.send_bytes(b"cd diag\r")
+        console_has("diag> ")
+        vm.send_bytes(b"ls\r")
+        console_has(None, r"(?i)quick\.msh +\d+")
+        vm.send_bytes(b"cat qu\t")
+        console_has("diag> cat quick.msh")
+        vm.send_bytes(b"\r")
+        console_has("# diag/quick.msh")
+        vm.send_bytes(b"cd\r")
+        vm.send_bytes(b"pwd\r")
+        console_has(None, r"/ *$")
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)

@@ -122,7 +122,7 @@ impl Host for ShellHost<'_> {
                 Value::ok(Value::List(list[..count].iter().filter(|t| t.service != 0).map(|t| Value::str(crate::label(&t.name))).collect()))
             }
             "files" => {
-                let dir = text(0).unwrap_or_default();
+                let dir = self.shell.path(&text(0).unwrap_or_default());
                 let mut entries = Vec::new();
                 match mind::fs::list(&dir, |e| entries.push(Value::record(&[("name", Value::str(e.name_str())), ("size", Value::Int(e.size as i64)), ("dir", Value::Bool(e.is_dir))]))) {
                     Ok(_) => Value::ok(Value::List(entries)),
@@ -134,7 +134,8 @@ impl Host for ShellHost<'_> {
                 let Some(pattern) = text(0) else { return Some(Value::err("glob needs a mask")) };
                 let (dir, mask) = match pattern.rfind(['/', ':']) { Some(i) => (&pattern[..=i], &pattern[i + 1..]), None => ("", pattern.as_str()) };
                 let mut paths = Vec::new();
-                match mind::fs::list(dir.trim_end_matches('/'), |e| if mind::mask::glob(mask, e.name_str()) { paths.push(Value::Str(alloc::format!("{}{}", dir, e.name_str()))); }) {
+                // The directory from the current one (000-APP-0066); the paths answered as the mask names them.
+                match mind::fs::list(&self.shell.path(dir), |e| if mind::mask::glob(mask, e.name_str()) { paths.push(Value::Str(alloc::format!("{}{}", dir, e.name_str()))); }) {
                     Ok(_) => Value::ok(Value::List(paths)),
                     Err(e) => Value::err(crate::files::text(e)),
                 }
@@ -231,7 +232,10 @@ pub fn command(shell: &mut Shell, args: &[u8]) {
     }
     let (check, rest) = match args.strip_prefix("--check") { Some(rest) => (true, rest.trim()), None => (false, args) };
     let mut words = rest.split_whitespace();
-    let Some(path) = words.next() else { return shell.report("USAGE: MSH <FILE> [ARGS], MSH -C \"CODE\", MSH --CHECK <FILE>") };
+    let Some(typed) = words.next() else { return shell.report("USAGE: MSH <FILE> [ARGS], MSH -C \"CODE\", MSH --CHECK <FILE>") };
+    // From the current directory (000-APP-0066): `full.msh` in diag/ is diag/full.msh.
+    let resolved = shell.path(typed);
+    let path = resolved.as_str();
     let source = match read(path) { Ok(s) => s, Err(e) => return shell.report(&alloc::format!("MSH: {}: {}", path, e)) };
     let script = match parse(&source) { Ok(s) => s, Err(e) => { let _ = writeln!(shell.term, "MSH: {}: {}", path, e); return; } };
     if let Some(word) = script.requires.iter().find(|w| !WORDS.contains(&w.as_str())) {
@@ -254,7 +258,10 @@ pub fn command(shell: &mut Shell, args: &[u8]) {
     let mut interpreter = Interpreter::default();
     interpreter.set("args", Value::List(words.map(Value::str).collect()));
     let requires = script.requires.clone();
+    // A script's `cd` lasts while it runs (000-APP-0066): the prompt's directory is as it was.
+    let cwd = shell.cwd.clone();
     execute(shell, &mut interpreter, &script, Some(requires));
+    shell.cwd = cwd;
 }
 
 /// Whether a command name is a script file to run.
