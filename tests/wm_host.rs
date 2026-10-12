@@ -624,6 +624,11 @@ fn the_programs_by_category() {
     let menu = menu::with_shell(catalogue(&programs(true)));
     assert_eq!(labels(&menu), ["Shell", "Files", "System", "Clocks", "Other"]);
     assert_eq!(menu[0].command.as_deref(), Some(menu::SHELL));
+    // Restart and Turn off at the end of System, through console to the shell, which asks first (000-APP-0065); not
+    // without console to pass them on.
+    assert_eq!(labels(&menu[2].children), ["console", "top", "uptime", "Restart", "Turn off"]);
+    assert_eq!(menu[2].children[3..].iter().map(|i| i.command.as_deref().unwrap()).collect::<Vec<_>>(), ["console reboot", "console poweroff"]);
+    assert_eq!(labels(&menu::with_shell(catalogue(&programs(false)))[2].children), ["top"]);
     let mut open = menu::Menu::new(10, 5);
     assert_eq!(open.key(&menu, key(KEY_DOWN)), menu::Outcome::Stay);
     assert_eq!(open.key(&menu, key(KEY_ENTER)), menu::Outcome::Run(String::from("shell")));

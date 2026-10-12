@@ -27,8 +27,16 @@ pub enum Kind { Window, Console, Manager }
 /// The command of the menu's first item where `wm` holds the shell's commands (211-APP-0044): the shell's own window.
 pub const SHELL: &str = "shell";
 
-/// The menu's first item, the shell's window, before `catalogue`'s.
+/// Restarting and turning off the machine (000-APP-0065): `console` passes the command to the shell, which asks in
+/// its own window first.
+pub const POWER: [(&str, &str); 2] = [("Restart", "console reboot"), ("Turn off", "console poweroff")];
+
+/// The menu's first item, the shell's window, before `catalogue`'s; `POWER` at the end of "System" when `console` is
+/// there to pass them on.
 pub fn with_shell(mut menu: Vec<Item>) -> Vec<Item> {
+    if let Some(system) = menu.iter_mut().find(|item| item.label == "System" && item.children.iter().any(|c| c.command.as_deref() == Some("console"))) {
+        system.children.extend(POWER.iter().map(|&(label, command)| Item::program(label, command)));
+    }
     menu.insert(0, Item::program("Shell", SHELL));
     menu
 }
@@ -37,7 +45,7 @@ pub fn with_shell(mut menu: Vec<Item>) -> Vec<Item> {
 /// gathers the self-test and the benchmarks, console programs whose tables show in `console`'s window.
 pub const CATEGORIES: [(&str, &[&str]); 6] = [
     ("Files", &["fm", "edit", "view", "find", "grep", "df", "fsck", "format"]),
-    ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "pinmap", "reboot"]),
+    ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "pinmap"]),
     ("Clocks", &["clock", "dzen-clock"]),
     ("Sound and voice", &["beep", "say", "listen", "hear"]),
     ("Network", &["netcheck"]),

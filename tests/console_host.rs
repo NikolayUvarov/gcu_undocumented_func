@@ -140,6 +140,11 @@ fn the_command_line() {
     assert_eq!(parse("date set 2026-10-10 12:00"), Command::Shell("date"));
     assert_eq!(parse("date"), Command::Builtin { name: "date", args: "" });
     assert_eq!(parse("netpolicy add x"), Command::Shell("netpolicy"));
+    // Turning the machine off by its usual names (000-APP-0065): the shell asks in its window first.
+    for name in ["poweroff", "shutdown"] {
+        assert_eq!(parse(&format!("{} -f", name)), Command::Shell(name));
+        assert!(screen::ASKED.contains(&name), "{}", name);
+    }
     assert!(screen::ASKED.iter().all(|c| screen::SHELL_ONLY.contains(c)));
 }
 

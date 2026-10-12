@@ -1,7 +1,7 @@
-//! `reboot [-f] [--off]` (issue 084): writes what `vfs_server` caches to the disks, stops the boot services in reverse
-//! start order through `init`'s lifecycle requests (so drivers quiesce their devices), then resets the machine
-//! (`REBOOT`, kernel issue 152), or with `--off` turns it off (issue 203: aarch64 only so far). `-f` skips stopping the
-//! services.
+//! `reboot [-f] [--off]` (issue 084) and `poweroff [-f]`, `shutdown [-f]` (000-APP-0065): writes what `vfs_server`
+//! caches to the disks, stops the boot services in reverse start order through `init`'s lifecycle requests (so drivers
+//! quiesce their devices), then resets the machine (`REBOOT`, kernel issue 152), or turns it off: ACPI S5 on x86
+//! (000-KRN-0080), PSCI on aarch64 (issue 203). `-f` skips stopping the services.
 use crate::console::Console;
 use crate::files;
 use core::fmt::Write;
@@ -17,6 +17,19 @@ pub fn reboot(out: &mut Console, args: &[u8]) {
     for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
         match word { b"-f" | b"-F" => force = true, b"--off" | b"--OFF" => off = true, _ => { let _ = writeln!(out, "USAGE: REBOOT [-F] [--OFF]"); return; } }
     }
+    down(out, force, off);
+}
+
+/// `poweroff [-f]` and `shutdown [-f]`: `reboot --off` by the names people look for.
+pub fn poweroff(out: &mut Console, args: &[u8]) {
+    let mut force = false;
+    for word in args.split(|b| *b == b' ').filter(|w| !w.is_empty()) {
+        match word { b"-f" | b"-F" => force = true, _ => { let _ = writeln!(out, "USAGE: POWEROFF [-F] (OR SHUTDOWN [-F])"); return; } }
+    }
+    down(out, force, true);
+}
+
+fn down(out: &mut Console, force: bool, off: bool) {
     files::flush_all();
     if !force {
         match idl_init::list(Endpoint::INIT) {
@@ -34,7 +47,11 @@ pub fn reboot(out: &mut Console, args: &[u8]) {
     }
     if off {
         let _ = writeln!(out, "POWERING OFF...");
-        if control::power_off().is_err() { let _ = writeln!(out, "ERROR: POWER OFF REFUSED (NOT ON THIS PLATFORM)"); }
+        match control::power_off() {
+            Ok(()) => {}
+            Err(mind::sys::Error::Invalid) => { let _ = writeln!(out, "ERROR: POWER OFF REFUSED: THE FIRMWARE NAMES NO WAY TO TURN THIS MACHINE OFF (NO ACPI S5); REBOOT RESTARTS IT"); }
+            Err(_) => { let _ = writeln!(out, "ERROR: POWER OFF REFUSED"); }
+        }
         return;
     }
     let _ = writeln!(out, "REBOOTING...");
