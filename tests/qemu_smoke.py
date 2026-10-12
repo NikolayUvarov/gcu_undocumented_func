@@ -1537,7 +1537,9 @@ def diag_check(vm):
     steps, where = int(done[1]), done[4]
     summary = vm.command(f"cat {where}/summary.txt")
     assert len(re.findall(r"^\d\d ok \d+ ms ", summary, re.M)) == steps and "BUILD:" in summary and "RUNNING NOW" not in summary, summary[-3000:]
-    require(vm.command(f"cat {where}/16-kbench.txt"), "kbench: 4 measurements, 0 failed")
+    kbench = re.search(r"^\d\d ok \d+ ms  (\d\d-kbench\.txt)", summary, re.M)  # its number moves as steps are added
+    assert kbench, summary[-3000:]
+    require(vm.command(f"cat {where}/{kbench[1]}"), "kbench: 4 measurements, 0 failed")
     require(vm.command("msh --check diag/full.msh"), "OK, REQUIRES: files sysinfo log lifecycle network camera")
     print(f"PASS: diag/quick.msh: {steps} steps in {done[3]} s, each in its file under {where} with summary.txt; diag/full.msh accepted", flush=True)
 
