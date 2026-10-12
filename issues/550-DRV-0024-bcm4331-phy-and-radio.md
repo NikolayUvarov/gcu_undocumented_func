@@ -1,6 +1,6 @@
 # 550-DRV-0024 — `bcm_wifi`, stage 3: the HT-PHY and the 2059 radio set up and a channel tuned
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written from the fact sheet; waits for a run on the MacBook Pro) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -8,17 +8,30 @@ Stage 2 ([550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done)
 
 ## Plan
 
-`bcm_wifi/src/main.rs`, on request (`data/wifitest.txt`) and step by step as stage 2, after the microcode answers:
+`bcm_wifi/src/stage3.rs`, on request (`data/wifitest.txt`) and step by step as stage 2, once the microcode answers. The facts are in a fact sheet written from Linux's `b43` and the b43 specifications under 550-DRV-0006's rule (values and sequences, no code): the HT-PHY's tables are generated from it as numbers (`bcm_wifi/src/tables.rs`).
 
-- **Initial values.** `ht0initvals29.fw` and `ht0bsinitvals29.fw` from `data/firmware/b43/` (`scripts/proprietary.sh`): a list of register offsets, sizes and values, written into the core.
-- **The MAC.** The address from the SPROM into the receiver's address match; the MAC left suspended, the receiver off.
-- **The PHY and the radio.** The HT-PHY's and the 2059's set-up for 2.4 GHz at 20 MHz, then channel 1, 6 or 11 tuned and the radio's PLL lock read back. The register sequences and tables are taken as facts from the b43 specifications and from Linux's `b43` (`phy_ht`, `radio_2059`), under 550-DRV-0006's rule: values and sequences, no code copied or translated.
-- **A measurement.** The PHY's noise estimate on the tuned channel, read and logged.
-- **Then stopped.** The core reset again, as stage 2 does.
+1. **GPIO and the initial values.** `ht0initvals29.fw` and `ht0bsinitvals29.fw` from `data/firmware/b43/`: an 8-byte header (`i`, version 1, a count), then entries of an offset with a size bit and a 16- or 32-bit value, each a write into the core's registers. A file is checked whole before anything is written.
+2. **Analog on, the radio reset and its initial table.**
+3. **The radio's resistor calibration**, its done bit (radio 0x945 bit 0) logged.
+4. **The radio's RC calibration**, three passes, each done bit (radio 0x140 bit 1) logged.
+5. **A channel switch** to channel 6: the synthesizer and per-core radio values, the synthesizer's calibration pulse, the PHY's channel values, spur avoidance mode 0 with the PMU's PLL update and the PHY PLL reset. The core's clock control is logged before and after the PLL update (b43 clears the PLL requests there, which may be a mistake).
+6. **The PHY's 24 table uploads.**
+7. **The HT-PHY's set-up sequence**, with the RF sequencer's results logged. The transmit power steps (an idle TSSI measured by playing samples, power control) are left out: nothing is to be transmitted.
+8. **The second channel switch**, as b43 does.
+9. **The rest of the chip's init and the station's address** (from the SPROM) in the address match and the template.
+10. **A measurement.** The HT-PHY has no receive noise reading without frames. The microcode's background-noise request (MAC command bit 4, interrupt reason bit 18, four samples in shared memory 0x88) is tried on channels 1, 6 and 11 with the MAC enabled and every receive filter off. b43 uses it for older PHYs only, so whether this microcode answers it is part of what the run shows.
+11. **Then stopped:** the MAC suspended, the microcode stopped, the core reset.
 
 ## Acceptance criteria
 
-On the MacBook Pro, one boot on request logs the initial values written, the channel tuned with the radio's PLL locked, and a noise figure that changes when the channel changes. The machine runs on. Evidence for this machine only (MC-12.1); nothing is sent.
+On the MacBook Pro, one boot on request logs:
+- both initial values files written;
+- the resistor calibration and the three RC calibration passes done;
+- the RF sequencer's switch to transmit and back to receive done, with the power amplifiers held off;
+- the channel switches and the clock control around them;
+- the MAC enabled and suspended again, and either noise samples on channels 1, 6 and 11 or that the microcode gave none.
+
+The machine runs on. This is evidence for this machine only (MC-12.1). The MAC is enabled for about three seconds with no frame queued to send; it could only acknowledge a frame addressed to it, and no station knows its address.
 
 ## Related
 
