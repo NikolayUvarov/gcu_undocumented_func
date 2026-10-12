@@ -52,12 +52,12 @@ interface parse {
 
     /// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
     /// values, nesting 16 deep, a key 64 bytes and a string 512 bytes once decoded; anything else is malformed. Its values
-    /// in document order, 32 from `start`: each with its kind, the index of the object or array it is in (65535 for the
+    /// in document order, 16 from `start` (a page fits a program's stack beside its own buffers): each with its kind, the index of the object or array it is in (65535 for the
     /// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme as written.
     /// The client still checks the tree against what it expects (MC-11.5); a key that comes twice is the client's to
     /// refuse.
     enum json-kind { object, array, string, number, true, false, null }
     record json-value { kind: json-kind, parent: u16, key: string<64>, text: string<512> }
-    record json-page { values: u32, page: list<json-value, 32> }
+    record json-page { values: u32, page: list<json-value, 16> }
     json: func(text: bytes<16384>, start: u32) -> result<json-page, error>;
 }

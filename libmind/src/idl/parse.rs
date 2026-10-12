@@ -113,7 +113,7 @@ impl Wire for HttpResponse {
 
 /// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
 /// values, nesting 16 deep, a key 64 bytes and a string 512 bytes once decoded; anything else is malformed. Its values
-/// in document order, 32 from `start`: each with its kind, the index of the object or array it is in (65535 for the
+/// in document order, 16 from `start` (a page fits a program's stack beside its own buffers): each with its kind, the index of the object or array it is in (65535 for the
 /// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme as written.
 /// The client still checks the tree against what it expects (MC-11.5); a key that comes twice is the client's to
 /// refuse.
@@ -139,9 +139,9 @@ impl Wire for JsonValue {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct JsonPage { pub values: u32, pub page: List<JsonValue, 32> }
+pub struct JsonPage { pub values: u32, pub page: List<JsonValue, 16> }
 impl Wire for JsonPage {
-    const MAX: usize = <u32 as Wire>::MAX + <List<JsonValue, 32> as Wire>::MAX;
+    const MAX: usize = <u32 as Wire>::MAX + <List<JsonValue, 16> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.values.encode(w)?; self.page.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { values: Wire::decode(r)?, page: Wire::decode(r)? }) }
 }
@@ -233,7 +233,7 @@ pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result:
     };
     let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 18662, false, false)?;
+    let length = wire::buffer_reply(&reply, 9334, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonPage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -304,7 +304,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::HttpResponse { head }, call))
         }
         6 => {
-            let (call, length) = wire::take_buffer(request, cap, 18662, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 9334, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let text = codec::decode_bytes::<16384>(&mut r).ok_or(Reject::Invalid)?;
