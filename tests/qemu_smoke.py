@@ -5091,6 +5091,26 @@ def policy_edit_check(vm, web_port):
           "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
 
 
+def flow_bounds_check(vm, web_port):
+    """750-NET-0014: a policy line may give the largest term and volume its numbers hold, and a grant's own term, not a
+    default, ends a connection it holds while a lasting grant's connection goes on (brief and lasting copy netcheck)."""
+    lasting = int(re.search(r"PID=(\d+) NAME=lasting", vm.command(f"run lasting hold:10.0.2.2:{web_port}:40 &"))[1])
+    vm.program_logs(lasting, "NETCHECK HOLDING", 40)
+    require(vm.command("netgrants"), f"lasting RULES=1 LEFT={(2**32 - 1) // 1000} S")
+    require(vm.command("dmesg -s netpolicy"), f"TO lasting: 1 RULES, {2**32 - 1} S, {2**64 - 1} BYTES")
+    brief = int(re.search(r"PID=(\d+) NAME=brief", vm.command(f"run brief hold:10.0.2.2:{web_port}:60 &"))[1])
+    text = vm.program_logs(brief, "NETCHECK HOLDING", 40)
+    held = time.monotonic()
+    text += vm.program_logs(brief, f"NETCHECK hold:10.0.2.2:{web_port}:60 ", 120)
+    assert re.search(fr"NETCHECK hold:10.0.2.2:{web_port}:60 (NO GRANT|Denied|NoSocket|Closed)", text) and time.monotonic() - held < 30, text
+    badge = re.search(r"GRANT (\d+) TO brief: 1 RULES, 10 S", vm.command("dmesg -s netpolicy"))
+    assert badge, vm.command("dmesg -s netpolicy")
+    require(vm.command("dmesg -s netstack"), f"[NETSTACK] GRANT {badge[1]} ENDED, 1 SOCKETS CLOSED")
+    require(vm.program_logs(lasting, f"NETCHECK hold:10.0.2.2:{web_port}:40 ", 160), f"NETCHECK hold:10.0.2.2:{web_port}:40 OK")
+    print("PASS: flow bounds: a policy line gives the largest term and volume its numbers hold (4294967295 s, 2^64-1 bytes); "
+          "a 10 s term ends the connection its grant holds, while a lasting grant holds its connection for 40 s", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -5272,9 +5292,10 @@ def net_suite(args, disk):
     # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing;
     # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
-                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n")
-    shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
-    shutil.copyfile(disk / "netcheck.elf", disk / "named.elf")
+                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
+                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
+    for copy in ("rogue", "named", "brief", "lasting"):
+        shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5337,6 +5358,7 @@ def net_suite(args, disk):
         assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+\n", listed.replace("\r", "")), listed
         require(listed, "NETCHECK 1 SOCKETS")
         require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
+        flow_bounds_check(vm, web_port)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)

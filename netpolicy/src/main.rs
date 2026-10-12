@@ -76,7 +76,7 @@ fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> 
 // that does not resolve gives no rule. The grant gets the shortest term and the smallest volume any of its lines names
 // (the defaults where none does).
 fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
-    let (mut rules, mut seconds, mut bytes) = (Vec::new(), u32::MAX, u64::MAX);
+    let (mut rules, mut seconds, mut bytes) = (Vec::new(), None::<u32>, None::<u64>);
     let Some(text) = policy_text() else { return (rules, 0, 0) };
     let text = text.as_str();
     let resolver = resolver(text);
@@ -93,10 +93,10 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
         };
         let Some(rule) = rule else { continue };
         if rules.len() < 16 { rules.push(rule); }
-        if let Some(s) = words.get(4).and_then(|s| s.parse().ok()) { seconds = seconds.min(s); }
-        if let Some(b) = words.get(5).and_then(|b| b.parse().ok()) { bytes = bytes.min(b); }
+        if let Some(s) = words.get(4).and_then(|s| s.parse::<u32>().ok()) { seconds = Some(seconds.map_or(s, |t| t.min(s))); }
+        if let Some(b) = words.get(5).and_then(|b| b.parse::<u64>().ok()) { bytes = Some(bytes.map_or(b, |v| v.min(b))); }
     }
-    (rules, if seconds == u32::MAX { SECONDS } else { seconds }, if bytes == u64::MAX { BYTES } else { bytes })
+    (rules, seconds.unwrap_or(SECONDS), bytes.unwrap_or(BYTES))
 }
 
 // The policy in force (108): the changed one, a change cut short before it replaced it, or the shipped one.

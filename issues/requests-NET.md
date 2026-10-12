@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](000-NET-0013-the-stacks-sockets.md), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](000-NET-0013-the-stacks-sockets.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](750-NET-0014-the-bounds-of-a-flow.md), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -164,24 +164,3 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 - `parse` turns a valid Effector command into its typed tree.
 - It refuses malformed, too deep and too large input, and logs the refusal with the client's PID.
 - The authority map gains the row for the agent's stage when 750-EFF-0006 lands.
-
-## A flow for a long-running service (750)
-
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
-
-### Problem
-
-`init` gives a boot service its flow once, and a grant keeps its term and volume until it ends: by default 3600 s and 16 MiB. The policy line can name longer ones (108). The Effector agent talks to one server for as long as the machine runs. Its heartbeats alone come to several megabytes an hour, and packages and files can reach 1 GiB.
-
-### Plan (a proposal; the network track decides)
-
-- **Bounds.** State the largest term and volume a policy line may give. The owner then sets the agent's line with `netpolicy add` (108), and nothing new is needed for a first version.
-- **Later, if the track agrees:**
-  - a flow the policy marks renewable, renewed by `netpolicy` before its term ends without closing sockets, while the policy still allows it;
-  - a volume counted per period;
-  - a host name resolved again when the service reconnects.
-- **Init's part.** Any change to how `init` hands out the flow is a kernel task.
-
-### Acceptance criteria
-
-The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
