@@ -11,6 +11,7 @@ pub mod font;
 pub mod font16;
 
 pub mod audio;
+pub mod battery;
 pub mod block;
 pub mod block_protocol;
 pub mod blockstore;

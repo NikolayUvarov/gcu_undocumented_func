@@ -41,6 +41,7 @@ let before = [
     {name: "tpm", cmd: "tpm", why: "the TPM: manufacturer and interface"},
     {name: "dmesg", cmd: "dmesg", why: "the system log's ring, every record"},
     {name: "warnings", cmd: "dmesg -l warn", why: "the system log's warnings and errors"},
+    {name: "battery", cmd: "dmesg -s battery", why: "the battery and the power source (211-PRT-0008)"},
 ]
 # Every task: its details, capabilities, address space and the output it buffered.
 let tasks = []

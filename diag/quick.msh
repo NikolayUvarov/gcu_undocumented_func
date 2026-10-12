@@ -23,6 +23,7 @@ let steps = [
     {name: "wifi", cmd: "dmesg -s bcm_wifi", why: "the Wi-Fi card's driver (550-DRV-0023)"},
     {name: "usb", cmd: "dmesg -s usb_host", why: "the USB host controllers (211-DRV-0017, 211-DRV-0018)"},
     {name: "sound", cmd: "dmesg -s audio_gw", why: "the sound device (551-DRV-0010)"},
+    {name: "battery", cmd: "dmesg -s battery", why: "the battery and the power source (211-PRT-0008)"},
     {name: "check", cmd: "check kernel clock files sound", why: "self-tests: sleeps not shorter than asked (000-KRN-0065), the volumes, sound (551-DRV-0010); its full log: log:checkNNNN.txt"},
     {name: "kbench", cmd: "kbench timer ipc", why: "sleeps (000-KRN-0083, 000-KRN-0065), IPC round trips between CPUs (000-KRN-0084); its full log: log:kbenchNNNN.txt"},
     {name: "bench", cmd: "bench files", why: "writes and reads on ram:, data/ and log: (000-KRN-0078); its full log: log:benchNNNN.txt"},

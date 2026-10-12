@@ -798,3 +798,33 @@ The maintainer's full run (`diag/full.msh`) looked hung for 42 s, then printed e
 - so does a command a script runs without capturing it.
 
 The `shell` suite now checks the screen while a script sleeps. The tools track may do it otherwise.
+
+## The battery in `wm`'s top bar, and in the shell (211-PRT-0008; the maintainer's request, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12. The maintainer: "The battery's state must also be shown in the indicator: on the mains, % or minutes left, switched." Switching is by a click (the maintainer's choice). The maintainer gave this part to the tools track.
+
+### What the kernel track has made
+
+- **The service `battery`** reads the Smart Battery System behind the embedded controller on the MacBook Pro ([211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md)). Its interface, `idl/battery.wit`, has one call, `status`, which returns:
+  - `on-ac`, `charging`, `discharging`, `full`;
+  - `percent`;
+  - `to-empty` and `to-full` in minutes (65535: not discharging, or not charging);
+  - current, voltage, capacities and cycles;
+  - the reading's age.
+- **The shell holds a client** in `SLOT_BATTERY` (32). `REQUEST_BATTERY` (bit 21) asks for it ([211-KRN-0090](211-KRN-0090-a-slot-for-the-battery.md), ABI 8). `mind::battery::write_minutes` writes minutes as `2:41`.
+
+### Plan (a proposal; the tools track decides)
+
+- **The shell** lends `SLOT_BATTERY` for `REQUEST_BATTERY`, as it does `SLOT_GPIO`; `msh` gets the word `battery`.
+- **The shell's `battery` command** prints the status in one line, and `help` names it.
+- **`wm`** asks for `REQUEST_BATTERY`.
+  - At the right end of its top bar, every 5 s: `⚡ 87%` on the mains, `▮ 87%` on the battery.
+  - A click switches between the percentage and the minutes: `▮ 2:41` left, or `⚡ 0:45` to full while charging. The choice stays until the next click.
+  - Below 10 % on the battery it is marked.
+  - With no client, or `no-battery` (QEMU, a desktop), no item.
+- **`console`** passes the client on like the others.
+
+### Acceptance criteria
+
+- **In the `wm` suite**, with no battery service (QEMU), the top bar has no battery item and nothing else changes.
+- **On the MacBook Pro**, the item shows the charge and follows the adapter being plugged in and out; a click shows the minutes.

@@ -89,17 +89,17 @@ fn the_quick_run_writes_each_step_and_a_summary() {
     assert_eq!(shell.dirs, ["log:quick0003-2"]);
     let summary = &shell.files["log:quick0003-2/summary.txt"];
     assert!(summary.contains("BUILD: BRANCH fast-test, COMMIT 8c15a16abcde") && !shell.run.iter().any(|c| c.starts_with("grep")), "{}", summary);
-    assert!(summary.contains("19 steps, 1 failed"), "{}", summary);
+    assert!(summary.contains("20 steps, 1 failed"), "{}", summary);
     assert!(summary.contains("06 FAILED") && summary.contains("svc list: svc exited with 1"), "{}", summary);
-    assert!(summary.contains("17 ok") && summary.contains("bench files"), "{}", summary);
+    assert!(summary.contains("18 ok") && summary.contains("bench files"), "{}", summary);
     assert!(summary.contains("000-KRN-0086") && !summary.contains("RUNNING NOW"), "{}", summary);
     // Every step's output in its own file, in order; a failed one says why.
-    assert_eq!(shell.files["log:quick0003-2/16-kbench.txt"], "what kbench timer ipc printed\n");
+    assert_eq!(shell.files["log:quick0003-2/17-kbench.txt"], "what kbench timer ipc printed\n");
     assert_eq!(shell.files["log:quick0003-2/06-svc.txt"], "FAILED: svc exited with 1\n");
-    assert_eq!(shell.files.keys().filter(|k| k.starts_with("log:quick0003-2/")).count(), 20);
+    assert_eq!(shell.files.keys().filter(|k| k.starts_with("log:quick0003-2/")).count(), 21);
     // Each step is in the system log before it runs, so a machine that stops in one names it.
-    assert!(shell.logged.iter().any(|l| l == "DIAG QUICK: STEP 16 OF 19: kbench timer ipc"), "{:?}", shell.logged);
-    assert!(shell.printed.iter().any(|p| p.starts_with("DIAG QUICK: 19 STEPS, 1 FAILED")), "{:?}", shell.printed);
+    assert!(shell.logged.iter().any(|l| l == "DIAG QUICK: STEP 17 OF 20: kbench timer ipc"), "{:?}", shell.logged);
+    assert!(shell.printed.iter().any(|p| p.starts_with("DIAG QUICK: 20 STEPS, 1 FAILED")), "{:?}", shell.printed);
 }
 
 #[test]
@@ -107,16 +107,16 @@ fn the_full_run_covers_every_task_and_every_measurement() {
     let shell = run("diag/full.msh", true);
     assert_eq!(shell.dirs, ["log:full0003-2"]);
     let summary = &shell.files["log:full0003-2/summary.txt"];
-    // The build from this boot's log file; 34 views before, two tasks, three measurements, six after.
+    // The build from this boot's log file; 35 views before, two tasks, three measurements, six after.
     assert!(summary.contains("BUILD: BRANCH main, COMMIT 3b64839abcde"), "{}", summary);
-    assert!(summary.contains("45 steps, 1 failed"), "{}", summary);
+    assert!(summary.contains("46 steps, 1 failed"), "{}", summary);
     for command in ["check", "kbench", "bench", "dmesg", "fsck", "stat irqs", "list -l"] {
         assert!(shell.run.iter().any(|c| c == command), "{} not run", command);
     }
     // A task's views in one file; its 60 800 bytes of buffered output would not fit the same string, so they go on
     // in -2.
-    let wm = &shell.files["log:full0003-2/36-task-7-wm.txt"];
+    let wm = &shell.files["log:full0003-2/37-task-7-wm.txt"];
     assert!(wm.starts_with("== stat 7\nwhat stat 7 printed\n") && wm.contains("== caps 7") && wm.contains("== pmap 7"), "{}", &wm[..200]);
-    assert!(shell.files["log:full0003-2/36-task-7-wm-2.txt"].starts_with("== logs 7\n"));
+    assert!(shell.files["log:full0003-2/37-task-7-wm-2.txt"].starts_with("== logs 7\n"));
     assert!(shell.files.keys().all(|k| shell.files[k].len() <= 65536), "a file longer than one string");
 }

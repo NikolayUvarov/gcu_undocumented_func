@@ -686,7 +686,7 @@ impl Scheduler {
         match kind {
             PLATFORM_PORTS => {
                 let end = a.checked_add(b).ok_or(ERR_INVALID)?;
-                if b == 0 || !platform::PORTS.iter().any(|&(base, count)| a >= base as usize && end <= base as usize + count as usize) { return Err(ERR_RIGHTS); }
+                if b == 0 || !platform::ports(a, end) { return Err(ERR_RIGHTS); }
                 Ok(Capability::IoPorts(a as u16, b as u16))
             }
             PLATFORM_IRQ if platform::irq(a) => Ok(Capability::Interrupt(a as u8)),
