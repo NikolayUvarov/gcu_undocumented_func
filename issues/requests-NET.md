@@ -228,3 +228,61 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 ### Acceptance criteria
 
 The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
+
+## The raw-frame interface between `bcm_wifi` and the station (550-DRV-0027)
+
+**Recorded by:** the drivers track (`DRV`), 2026-10-12, for the station of "An 802.11 station and WPA2-PSK" above.
+
+### Problem
+
+On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](550-DRV-0026-bcm4331-transmits.md)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
+
+### Plan (a proposal; the network track decides)
+
+`idl/wlanhw.wit` 1.0, served by `bcm_wifi`, used by `wlan` only:
+- `info` → MAC address, supported channels;
+- `set-channel(channel)`; `set-filter(all-beacons, bssid, own-address)`;
+- `send(frame, rate)` → transmit status (acknowledged or not, retries);
+- `receive` → frames from a shared buffer, each with signal (dBm), channel, rate and the FCS already checked;
+- later, `set-key`/`clear-key` for the chip's CCMP, only if the station wants it.
+
+The driver keeps no 802.11 state beyond the filter and the channel: authentication, association, scanning policy, keys and rates are the station's.
+
+### Acceptance criteria
+
+`NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
+
+
+## A notice: 109-NET-0010 is done by the kernel track (109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
+
+### What was done
+
+The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy`, and they reach `main` through the gate:
+
+- **109-KRN-0096 (the loader starts a helper):** `idl/loader.wit` 1.8 gains `helper(parse, served)`. The loader starts a copy of `parse` whose only capability is the caller's endpoint, with a bounded quota and a per-owner limit.
+- **109-NET-0010 itself:** `parse --session` answers on that endpoint alone and ends when its client does or after 30 s idle; `mind::parse::Session` owns such a copy, and `download` uses one, falling back to the shared service. The `net` suite's `session_parsers_check` shows two downloads with a parser each.
+
+### What is asked of the network track
+
+- **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
+- **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## The stack's third card in slot 4 (550-KRN-0097, for 550-NET-0018)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, answering "The Wi-Fi station in the boot services" (requests-KRN.md on the network branch).
+
+### What the kernel track prepared
+
+550-KRN-0097, built and passing the `net` suite on the network branch's 40ba302 merged with the kernel branch; it reaches `main` once 550-NET-0017 and 550-NET-0018 are there:
+
+- `init` starts `wlansim` (where a test puts it) and `wlan` when a radio runs, and lends the radio's client to `wlan` alone, in slot 2;
+- `netstack` gets `wlan`'s client without a badge in **slot 4**;
+- the shell gets `wlan`'s client with `BADGE_WIFI_CHANGE` in `SLOT_WIFI`: 33, a launch slot, so `SLOT_DYNAMIC` moves to 34 (ABI 9), with `REQUEST_WIFI` = `1 << 22`;
+- the `net` suite puts the `wlansim` fixture on its disk as `wlansim.elf` (`--wlansim-elf`, or where `scripts/x86_fixtures.sh` and `build_aarch64.sh --fixtures` build it) and checks these grants with `stat caps`.
+
+### What is asked of the network track
+
+- **`netstack`:** read slot 4 as its third card (`CARDS` = 3). Slot 4 is empty without the station, as slot 3 is without a second card.
+- **The `net` suite:** with the station up, `netstack` finds three cards, and a join to `MIND-TEST` gets 10.0.3.15.
