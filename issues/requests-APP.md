@@ -55,9 +55,9 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
 
-## `poweroff` and `shutdown`, and a menu entry to turn the machine off (000-KRN-0080)
+## `poweroff` and `shutdown`, and a menu entry to turn the machine off ([000-KRN-0080](../issues-done/000-KRN-0080-power-off-on-x86.done))
 
-**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off".
+**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off". The maintainer asked again on 2026-10-12, once `reboot --off` had turned the MacBook Pro off: "a synonym `poweroff` is needed for this command".
 
 ### Problem
 
@@ -154,3 +154,43 @@ The Effector agent is off by default, and only the owner may turn it on and say 
 ### Acceptance criteria
 
 In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.
+
+## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md)) was run by its path.
+
+### Problem
+
+The maintainer:
+
+- "`cd diag` does not work: there is no such command."
+- "Tab does not complete a path: `diag/q` is not completed to the name, or part of it."
+- "No list of the programs that match what was typed is shown."
+
+What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
+
+- **No current directory.** The shell has none, so every path is written from the volume's root.
+- **Tab completes only the first word**, or the word after `run`, and only with command and program names. A word holding `/` or `:` matches nothing, so nothing happens.
+- **The list.** It is printed only when the matches share nothing beyond what was typed. `console` has no Tab at all. Which of the two the maintainer typed in is not known.
+
+### Plan (a proposal; the tools track decides)
+
+- **`cd` and `pwd`** in the shell and `console`:
+  - `cd PATH` checks that the directory exists and names it in the prompt (`MIND diag> `);
+  - `cd` alone goes back to the boot volume's root, and `cd ..` goes up one level;
+  - a relative path in every command (`ls`, `cat`, `msh`, `run`, `edit`…) is taken from the current directory.
+- **Tab on a path.** A word holding `/` or `:`, or any word after a command that takes a file, is completed from the directory it names (vfs `list`):
+  - a single match gets its full name, with `/` after a directory;
+  - several matches get their common part;
+  - a second Tab lists them.
+- **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
+- **`help`** names `cd`, `pwd` and the keys.
+
+### Acceptance criteria
+
+- **In the shell suite (x86 and aarch64):**
+  - `cd diag` then `msh quick.msh --check` works, and the prompt names `diag`;
+  - `cd nowhere` says the directory does not exist;
+  - Tab after `msh diag/q` gives `msh diag/quick.msh`;
+  - Tab twice after `ch` lists `check` and the other matches.
+- **In `console`**, the same keys work.

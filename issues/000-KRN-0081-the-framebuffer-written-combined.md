@@ -37,6 +37,11 @@ The analysis, from the code:
 - **The framebuffer's range.** The framebuffer at 0x90020000 lies in variable MTRR 2 (0x90000000, 256 MiB, UC). With an MTRR of UC and a PAT of WC, the CPU uses WC (Intel SDM, vol. 3A, 12.5.2.2), so the compositor's writes are now combined.
 - **Left.** Whether the moving background runs evenly is the maintainer's to judge, together with 000-KRN-0083's tick.
 
+**2026-10-12, MacBook Pro** (`fast-test` c548a85, with [000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done)): the maintainer reported "the cursor stopped flickering, the picture is smooth". Left:
+
+- the tools track's part (`requests-APP.md`: the background drawn by rows, paced to a deadline);
+- the maintainer's look at the moving background at full contrast.
+
 ## Related
 
 [174](174-full-use-of-pc-hardware.md), [211-KRN-0018](../issues-done/211-KRN-0018-the-compositors-quota-fits-the-screen.done).
