@@ -5,8 +5,8 @@
 // 802.11 core the firmware left running with a reset pulse, and frees the SPROM's pins while the SPROM is read. Stage 2
 // (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
-use mind::abi::{BootInfo, SLOT_DEV0};
-use mind::dev::{device_config, Mmio};
+use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
+use mind::dev::{cap_info, device_config, Dma, Mmio};
 
 mod stage3;
 mod tables;
@@ -93,6 +93,10 @@ fn main(_info: &'static BootInfo) {
     let id = device_config(SLOT_DEV0, 0x00).unwrap_or(0);
     let (window, window2) = (device_config(SLOT_DEV0, CFG_WINDOW).unwrap_or(0), device_config(SLOT_DEV0, CFG_WINDOW2).unwrap_or(0));
     mind::println!("[BCM] PCI {:04X}:{:04X}, BAR0 WINDOWS {:08X} AND {:08X}", id & 0xFFFF, id >> 16, window, window2);
+    // What stage 4 receives with (550-KRN-0091): the DMA region and the interrupt, only noted; neither starts the core.
+    match Dma::map(SLOT_MEM) { Ok(dma) => mind::println!("[BCM] DMA REGION AT {:#X}, {} KiB", dma.physical(0), dma.len() / 1024), Err(_) => mind::println!("[BCM] NO DMA REGION GRANTED") }
+    let (kind, line, _) = cap_info(SLOT_IRQ);
+    if kind == CAP_KIND_IRQ { mind::println!("[BCM] INTERRUPT GRANTED: LINE {}", line); } else { mind::println!("[BCM] NO INTERRUPT GRANTED (KIND {})", kind); }
 
     let chip = bar.read32(CC + CC_CHIP_ID);
     let (number, revision, package, cores, bus) = (chip & 0xFFFF, chip >> 16 & 0xF, chip >> 20 & 0xF, chip >> 24 & 0xF, chip >> 28);
