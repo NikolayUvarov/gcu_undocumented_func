@@ -536,9 +536,9 @@ impl Init {
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
             // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
             "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
-            // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
-            // MacBook Pro's Retina panel, 211-PRT-0004).
-            "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
+            // On top of the default, three screens: the compositor's shadow copy of the framebuffer, and the two sealed
+            // copies `record` holds, the frame it codes and the one before (211-KRN-0095); 20 MiB each at 2880 × 1800.
+            "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + 3 * self.screen_mib, ..Quota::default() },
             _ => Quota::default(),
         };
         let mut kept = ([0u8; ARGS_KEPT], args.as_str().len());
