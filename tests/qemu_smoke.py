@@ -1145,16 +1145,17 @@ def shell_suite(vm):
     def at(line, prompt):
         vm.send(line + "\n")
         return vm.expect(prompt, after=to_ordinal(to_real(line)) + "\n")
+    # data/ holds this suite's scripts (MSH_SCRIPTS).
     assert re.search(r"^/$", vm.command("pwd"), re.M)
-    at("cd diag", "MIND diag> ")
-    assert re.search(r"^/diag$", at("pwd", "MIND diag> "), re.M)
-    require(at("msh --check quick.msh", "MIND diag> "), "MSH: diag/quick.msh: OK")
-    assert re.search(r"(?i)^quick\.msh ", at("ls", "MIND diag> "), re.M)
-    require(at("cd nowhere", "MIND diag> "), "ERROR: CD /diag/nowhere: NOT FOUND")
+    at("cd data", "MIND data> ")
+    assert re.search(r"^/data$", at("pwd", "MIND data> "), re.M)
+    require(at("msh --check sum.msh", "MIND data> "), "MSH: data/sum.msh: OK, REQUIRES: files")
+    assert re.search(r"(?i)^sum\.msh ", at("ls", "MIND data> "), re.M)
+    require(at("cd nowhere", "MIND data> "), "ERROR: CD /data/nowhere: NOT FOUND")
     at("cd ..", "MIND> ")
-    vm.send_bytes(b"cat diag/qu\t")
-    vm.expect("cat diag/quick.msh ")
-    keys(b"\r", "# diag/quick.msh")
+    vm.send_bytes(b"cat data/su\t")
+    vm.expect("cat data/sum.msh ")
+    keys(b"\r", "requires: files")
     print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
           "refused; Tab completed a path", flush=True)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
@@ -6815,15 +6816,15 @@ def wm_suite(vm):
         console_has("fm — file manager")
         console_has("(fm ended)")
         # cd, pwd and Tab in console too (000-APP-0066): the prompt names the directory, ls lists it, Tab completes a
-        # name there, and cd alone goes back to the boot disk's root.
-        vm.send_bytes(b"cd diag\r")
-        console_has("diag> ")
+        # name there, and cd alone goes back to the boot disk's root (docs/notes.txt is on this suite's disk).
+        vm.send_bytes(b"cd docs\r")
+        console_has("docs> ")
         vm.send_bytes(b"ls\r")
-        console_has(None, r"(?i)quick\.msh +\d+")
-        vm.send_bytes(b"cat qu\t")
-        console_has("diag> cat quick.msh")
+        console_has(None, r"(?i)notes\.txt +\d+")
+        vm.send_bytes(b"cat no\t")
+        console_has("docs> cat notes.txt")
         vm.send_bytes(b"\r")
-        console_has("# diag/quick.msh")
+        console_has(None, r".*Line \d+\.")
         vm.send_bytes(b"cd\r")
         vm.send_bytes(b"pwd\r")
         console_has(None, r"/ *$")

@@ -44,12 +44,12 @@ In the shell (`shell/src/main.rs`, `complete`):
   - `tests/path_host.rs`: paths from a directory, `..` at a root, the volumes; `pwd`'s and the prompt's forms; Tab's completion, its shared part, its list, letter case, Cyrillic.
   - `tests/console_host.rs`: `cd`, `pwd` and the prompt.
 - **The shell suite** (x86 and aarch64):
-  - `cd diag`, and the prompt is `MIND diag> `; `pwd` says `/diag`;
-  - `msh --check quick.msh` works there, and `ls` lists it;
+  - `cd data`, and the prompt is `MIND data> `; `pwd` says `/data` (the suite's scripts are in `data/`; `diag/` is on the `bench` suite's disk only);
+  - `msh --check sum.msh` works there, and `ls` lists it;
   - `cd nowhere` says the directory is not found; `cd ..` goes back;
-  - Tab after `cat diag/qu` gives `cat diag/quick.msh`;
+  - Tab after `cat data/su` gives `cat data/sum.msh`;
   - Tab after `c` lists the commands and programs.
-- **The `wm` suite:** in `console`, `cd diag`, `ls`, Tab after `cat qu`, `cd` and `pwd`.
+- **The `wm` suite:** in `console`, `cd docs`, `ls`, Tab after `cat no`, `cd` and `pwd`.
 
 ## Related
 
