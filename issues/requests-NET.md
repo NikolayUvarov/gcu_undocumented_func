@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), and the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](550-NET-0018-the-station-service.md) (2026-10-12).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](550-NET-0018-the-station-service.md), and remembered networks kept by `keystore` [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (2026-10-12).
 
 ### Problem
 

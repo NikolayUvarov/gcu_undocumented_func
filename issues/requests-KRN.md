@@ -254,11 +254,12 @@ The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/
 - **The station's clients:**
   - an unbadged client to `netstack` as its third card, in a slot the kernel track chooses: the network track then raises `netstack`'s `CARDS`;
   - one with `BADGE_WIFI_CHANGE` (`mind::network`) to the shell. That is the client the tools track asked to lend to `wifi` ("A slot for the Wi-Fi station's configuration client" above).
+- **`keystore`'s client for the station** (added 2026-10-12, for [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md)): a client of `keystore` with `BADGE_KEY_STATION` (`mind::network`, value 2) to `wlan` alone, in slot 3. With it the station has `keystore` keep a remembered network's PMK and asks it for each handshake's keys (`idl/keystore.wit` 1.1). Without it, `remember` and `forget` answer `unsupported`.
 - **Restarts.** `wlan` restarts like the other services. The stack sees its card come back as it sees `virtio_net`'s.
 
 ### Acceptance criteria
 
-In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
+In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client and `keystore`'s, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
 
 ### Progress (2026-10-12)
 

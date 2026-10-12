@@ -22,3 +22,6 @@ pub const BADGE_TLS_NO_DEVICE: u16 = 1;
 
 /// The key service's signer (idl/keystore.wit, issue 103): the TLS service's client may ask for signatures.
 pub const BADGE_KEY_SIGNER: u16 = 1;
+/// The key service's Wi-Fi station (idl/keystore.wit 1.1, 550-NET-0024): `wlan`'s client may keep, list and forget
+/// networks and ask for each handshake's keys.
+pub const BADGE_KEY_STATION: u16 = 2;
