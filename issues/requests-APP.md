@@ -331,3 +331,21 @@ The network track agreed the interface in [`idl/wifi.wit`](../idl/wifi.wit) 1.0 
 ### Acceptance criteria
 
 The tools suite checks `wifi` against a stand-in station of `idl/wifi.wit` 1.0.
+
+## The shell lends a TLS client that cannot present the device certificate (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's request "A TLS client without the device certificate".
+
+### Problem
+
+`tls` refuses `client-certificate` to a client badged `BADGE_TLS_NO_DEVICE` (`mind::network`, `idl/tls.wit` 1.2). The shell lends its own unbadged client today, so a program can still sign in as the device.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell the right to badge its `SLOT_TLS` copy (requests-KRN.md, "The right to badge the shell's TLS client"), the shell does two things:
+- for `REQUEST_TLS`, it lends a copy minted with `BADGE_TLS_NO_DEVICE`;
+- it keeps the unbadged one for its own `https -c`.
+
+### Acceptance criteria
+
+In the `tls` suite, a program with the lent client gets `denied` for `client-certificate`, and the shell's `https -c` still sends the certificate.

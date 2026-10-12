@@ -5,7 +5,7 @@
 //! and compares it with the signed bytes.
 use crate::http::{self, Head, Range};
 use crate::idl::codec::{List, Text};
-use crate::idl::parse::{self, HttpHead};
+use crate::idl::parse::{self, HttpHead, HttpResponse};
 use crate::ipc::Endpoint;
 use crate::release;
 
@@ -24,7 +24,20 @@ pub fn from_record(record: &HttpHead) -> Head {
         (true, true) => Some(Range::Unsatisfied { total: record.range_total }),
         (true, false) => Some(Range::Bytes { start: record.range_start, end: record.range_end, total: record.range_total }),
     };
-    Head { status: record.status, length: record.has_length.then_some(record.length), range, chunked: record.chunked }
+    Head { status: record.status, length: record.has_length.then_some(record.length), range, chunked: record.chunked, close: false }
+}
+
+/// A head with whether its connection closes after it (parse.wit 1.3, 750-NET-0019).
+pub fn to_response(head: &Head) -> HttpResponse {
+    let r = to_record(head);
+    HttpResponse { status: r.status, has_length: r.has_length, length: r.length, has_range: r.has_range, range_unsatisfied: r.range_unsatisfied,
+                   range_start: r.range_start, range_end: r.range_end, range_total: r.range_total, chunked: r.chunked, close: head.close }
+}
+
+pub fn from_response(r: &HttpResponse) -> Head {
+    let head = HttpHead { status: r.status, has_length: r.has_length, length: r.length, has_range: r.has_range, range_unsatisfied: r.range_unsatisfied,
+                          range_start: r.range_start, range_end: r.range_end, range_total: r.range_total, chunked: r.chunked };
+    Head { close: r.close, ..from_record(&head) }
 }
 
 /// A `mind::http::Parser` that asks the parser service at the endpoint (`SLOT_PARSE` in a program that asked for it).
@@ -32,8 +45,8 @@ pub struct Service(pub Endpoint);
 
 impl http::Parser for Service {
     fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> {
-        match parse::http_head(self.0, head) {
-            Ok(Ok(record)) => Ok(from_record(&record)),
+        match parse::http_response(self.0, head) {
+            Ok(Ok(record)) => Ok(from_response(&record)),
             Ok(Err(parse::Error::Malformed)) => Err(http::Error::Head),
             Err(_) => Err(http::Error::Parser),
         }

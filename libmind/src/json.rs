@@ -208,4 +208,65 @@ impl<'a> Reader<'a> {
 
     /// Checks that only whitespace is left.
     pub fn end(&mut self) -> Result<()> { self.space(); if self.at == self.text.len() && self.depth == 0 { Ok(()) } else { Err(Malformed) } }
+
+    /// A number as written (its sign, fraction and exponent included), checked against the grammar.
+    pub fn number(&mut self) -> Result<&'a [u8]> { self.number_text() }
+}
+
+/// Bounds of `walk` (750-NET-0021): values, nesting, a key's and a string's bytes once decoded.
+pub const VALUES_MAX: usize = 1024;
+pub const WALK_DEPTH: usize = 16;
+pub const KEY_MAX: usize = 64;
+pub const TEXT_MAX: usize = 512;
+
+/// One value of a text, in document order: its kind, the index of the object or array it is in (None for the
+/// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme.
+pub struct Value<'v> { pub kind: Kind, pub parent: Option<u16>, pub key: &'v [u8], pub text: &'v [u8] }
+
+/// Reads a whole JSON text and hands each value to `visit`, in document order, within the bounds above: anything
+/// deeper, longer or more is malformed. Returns how many values there were.
+pub fn walk(text: &[u8], visit: &mut dyn FnMut(u16, &Value) -> Result<()>) -> Result<u16> {
+    let mut reader = Reader::new(text)?;
+    // The open containers: each one's index and whether it is an object.
+    let mut stack = [(0u16, false); WALK_DEPTH];
+    let mut depth = 0;
+    let mut count: u16 = 0;
+    let mut key = [0u8; KEY_MAX];
+    let mut string = [0u8; TEXT_MAX];
+    let mut first = true;
+    loop {
+        // The next value's key, if its container is an object, or the end of the container.
+        let mut key_len = 0;
+        if !first {
+            if depth == 0 { break; }
+            let (_, object) = stack[depth - 1];
+            let more = if object {
+                match reader.key(&mut key)? { Some(k) => { key_len = k.len(); true } None => false }
+            } else { reader.item()? };
+            if !more { depth -= 1; continue; }
+        }
+        first = false;
+        if count as usize == VALUES_MAX { return Err(Malformed); }
+        let parent = (depth > 0).then(|| stack[depth - 1].0);
+        let kind = reader.peek()?;
+        let index = count;
+        count += 1;
+        let text: &[u8] = match kind {
+            Kind::String => reader.string(&mut string)?,
+            Kind::Number => reader.number()?,
+            Kind::True => { reader.skip()?; b"" }
+            Kind::False => { reader.skip()?; b"" }
+            Kind::Null => { reader.skip()?; b"" }
+            Kind::Object | Kind::Array => b"",
+        };
+        visit(index, &Value { kind, parent, key: &key[..key_len], text })?;
+        if matches!(kind, Kind::Object | Kind::Array) {
+            if depth == WALK_DEPTH { return Err(Malformed); }
+            if kind == Kind::Object { reader.object()?; } else { reader.array()?; }
+            stack[depth] = (index, kind == Kind::Object);
+            depth += 1;
+        }
+    }
+    reader.end()?;
+    Ok(count)
 }

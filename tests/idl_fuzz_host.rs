@@ -426,12 +426,12 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
+    parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
     shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
-    tls: Error Peer;
+    tls: Error Peer PinKind Pin;
     tpm: Error Info;
     update: Error Offer State;
     vfs: Error Entry Volume Report;

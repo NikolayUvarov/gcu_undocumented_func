@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-12, three of them for 750; a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (12 requests waiting, 2026-10-12, three of them for 750; a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -254,7 +254,7 @@ The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/
 ### Plan (a proposal; the kernel track decides)
 
 - **Starting it.** `init` starts `wlan` when a radio service runs. On the MacBook Pro the radio is `bcm_wifi` as a frame service. In the `net` suite's image it is `wlansim`, which the test puts on the boot disk; a boot entry or a file could name it.
-- **The radio's client.** `init` lends the radio's endpoint to `wlan` alone (slot 2, for example), as 550-DRV-0027 asks (MC-2.3).
+- **The radio's client.** `init` lends the radio's endpoint, the `idl/wlanhw.wit` endpoint of `bcm_wifi` (or of `wlansim`), to `wlan` alone, in slot 2 for example (MC-2.3; the drivers track asks the same, 550-DRV-0027). Nothing else gets a client of it.
 - **The station's clients:**
   - an unbadged client to `netstack` as its third card, in a slot the kernel track chooses: the network track then raises `netstack`'s `CARDS`;
   - one with `BADGE_WIFI_CHANGE` (`mind::network`) to the shell. That is the client the tools track asked to lend to `wifi` ("A slot for the Wi-Fi station's configuration client" above).
@@ -263,3 +263,21 @@ The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/
 ### Acceptance criteria
 
 In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
+
+## The right to badge the shell's TLS client (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md).
+
+### Problem
+
+`tls` now refuses the device certificate to a client badged `BADGE_TLS_NO_DEVICE` (`idl/tls.wit` 1.2). The shell lends its own unbadged copy to programs (351-APP-0017), and it cannot make a badged one: `init` lends `SLOT_TLS` without `CAP_BADGE` (000-KRN-0073).
+
+### Plan (a proposal; the kernel track decides)
+
+- **The shell's copy.** `init` gives the shell's `SLOT_TLS` copy `CAP_BADGE` too. The shell then mints a `BADGE_TLS_NO_DEVICE` copy for each program it lends to (the tools track's part, requests-APP.md).
+- **Or init mints it.** Alternatively, `init` mints the badged client for the shell in a slot of the kernel track's choosing.
+- **The updater.** `init`'s client for `updater` may be the badged kind, unless the update server asks for the device's certificate.
+
+### Acceptance criteria
+
+`stat caps` shows the shell's TLS client with the right to badge (or the second client). The `tls` suite's check comes with the tools track's lending.

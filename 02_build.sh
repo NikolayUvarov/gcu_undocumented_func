@@ -96,6 +96,7 @@ USER_CRATES=(
     "parse:parse:parse.elf"
     "tpm:tpm:tpm.elf"
     "netcheck:netcheck:netcheck.elf"
+    "webcheck:webcheck:webcheck.elf"
     "download:download:download.elf"
     "windows:windows:windows.elf"
     "wintest:wintest:wintest.elf"
