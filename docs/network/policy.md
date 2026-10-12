@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.1 (2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.2 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues/750-NET-0014-the-bounds-of-a-flow.md) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -19,6 +19,14 @@ One line per rule, `#` starts a comment:
 | `program address tcp\|udp\|icmp [port [seconds [bytes]]]` | `program` may reach `address` (an IPv4 address or a host name) over the protocol, on `port` (0 or none: any), for a term of `seconds` (default 3600) and a volume of `bytes` (default 16 MiB); a grant takes the shortest term and the smallest volume its lines give |
 | `program dns` | `program` may ask the stack's DNS server (UDP port 53) |
 | `resolver A.B.C.D[:PORT]` | host names in this file are looked up at this server (default: the stack's DNS server) |
+
+### Term and volume
+
+- **A term** is 0 to 4294967295 seconds (about 136 years). It runs from the moment the broker makes the grant, on the stack's monotonic clock, and nothing renews it. A term of 0 gives a grant that has already ended.
+- **A volume** is 0 to 18446744073709551615 bytes (2^64 − 1). It counts every byte the grant's sockets send and receive together, payload only, over the grant's life.
+- **When either runs out,** the stack closes the grant's sockets and refuses its requests (`[NETSTACK] GRANT n ENDED, k SOCKETS CLOSED`), and the broker removes the grant (`[NETPOLICY] EXPIRED …`).
+- **A long-running service** (a client of one server for as long as the machine runs) gets its own line with a long term and a large volume, for example `effector 203.0.113.7 tcp 443 4294967295 1099511627776`. Its grant then lasts as long as the line says, or until its process ends, `netrevoke` ends it, or `netstack` or the system restarts.
+- **What a grant reports** of its term (`netgrants`, `idl/netpolicy.wit` `left-ms`, `idl/socket.wit` `policy-usage`) is in milliseconds as a u32, so a term longer than 49.7 days shows as 4294967 s left until it comes within that.
 
 A host name is looked up when the grant is made (351-NET-0003). The grant keeps the address it got, and the log names both. The answer is plain DNS: the grant reaches whatever address the resolver gave.
 
@@ -46,6 +54,12 @@ In the `net` suite on x86 and aarch64:
 - the shell cannot open `system/netpolicy`;
 - every change is logged.
 
+In the same suite (750-NET-0014), on x86 and aarch64:
+- a line with the largest term and volume gives a grant with them;
+- a grant's 10-second term ends the connection it holds, while a lasting grant holds its connection for 40 s.
+
+A connection held past the default term (an hour) is not run.
+
 In the `tls` suite's raw-image check, a change is still there after a reboot.
 
 ## Not provided
@@ -54,3 +68,5 @@ In the `tls` suite's raw-image check, a change is still there after a reboot.
 - **Policies per user, or roles:** whoever is at the keyboard decides.
 - **Limits on the shell's operator client,** which reaches every destination.
 - **A change that applies to grants already made:** `netrevoke` ends them.
+- **A renewable grant, a volume per period, a name looked up again on reconnecting:** a long-running service holds one grant for its life (750-NET-0014).
+- **Grants across a restart of `netstack`:** the stack keeps them in memory only, so after a restart a grant's requests are refused until its program is started again with a new one (read from the code, not tested).
