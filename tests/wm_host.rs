@@ -983,9 +983,14 @@ fn the_information_has_its_place() {
         let frame = &frame;
         let lit: Vec<usize> = (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| frame[py * fw + px] == text)).collect();
         let first = *lit.iter().min().unwrap_or_else(|| panic!("{}: nothing drawn", name));
-        assert!(first >= bx && first < bx + 8 * scale, "{} starts at {}, the block at {}", name, first, bx);
+        assert!(first + big >= bx + small && first < bx + 8 * scale, "{} starts at {}, the block at {}", name, first, bx);
         if name == "time" { assert!(*lit.iter().max().unwrap() >= bx + 7 * 8 * big, "the seconds"); }
     }
+    // The large digits' edge is the smaller lines' edge: "2026" and "12" both start in their glyph's second column.
+    let edge = |f: &[u32], top: usize, tall: usize| (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| f[py * fw + px] == text)).min().unwrap();
+    let mut evening = vec![background::DARK; fw * fh];
+    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, net: None }, &glyph);
+    assert_eq!(edge(&evening, by, 16 * big), edge(&evening, by + 16 * big + gap, 16 * small), "20:00:00 over 2026-10-10");
     assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
     assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
     assert_eq!(background::memory_line(None), "MEM - FREE");
