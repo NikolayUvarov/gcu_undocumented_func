@@ -12,7 +12,7 @@ TARGET=aarch64-unknown-none-softfloat
 X86_ONLY=" ata ps2_kbd audio_gw bcm_wifi " # crate directories: port I/O (docs/legacy.md); bcm_wifi: no aarch64 target has the chip
 mapfile -t CRATES < <(sed -n '/^USER_CRATES=(/,/^)/{s/^ *"\([^"]*\)"$/\1/p}' "$ROOT/02_build.sh")
 [[ ${#CRATES[@]} -gt 20 ]] || { echo "USER_CRATES not found in 02_build.sh" >&2; exit 1; }
-rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice"
+rm -rf "$OUT"; mkdir -p "$OUT/EFI/BOOT" "$OUT/LICENSES" "$OUT/voice" "$OUT/diag"
 # The bootloader and every crate build in parallel, a log each (000-KRN-0020).
 source "$ROOT/scripts/build_jobs.sh"
 JOBS=$(build_jobs)
@@ -46,6 +46,7 @@ for entry in "${CRATES[@]}"; do
 done
 cp "$ROOT"/LICENSE-MIT "$ROOT"/LICENSE-APACHE "$ROOT"/THIRD_PARTY.md "$ROOT"/LICENSES/*.txt "$OUT/LICENSES/"
 cp "$ROOT"/voice/model.bin "$ROOT"/voice/commands.txt "$OUT/voice/"
+cp "$ROOT"/diag/*.msh "$OUT/diag/"
 if [[ "${1:-}" == --fixtures ]]; then
     for case in kernel_read text_write stack_exec undefined; do
         rustc --edition=2021 --target "$TARGET" --crate-type bin -C opt-level=2 -C panic=abort -C relocation-model=pic \

@@ -32,6 +32,7 @@ One crate, `bench/`, with three console programs that share their tables, statis
   - the services' round trips;
   - hashing;
   - the camera's frame rate.
+- [176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md) — **`diag/quick.msh` and `diag/full.msh`**, the runs on real hardware (the maintainer, 2026-10-11): each collects what debugging needs into a directory of its own on the log volume; the quick one runs this stage's steps, the full one everything.
 
 What they have in common:
 

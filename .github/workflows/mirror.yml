@@ -1,0 +1,46 @@
+# Copies this repository's main and tags to github.com/NikolayUvarov/mind-core-os, the showcase under the OS's own name
+# (the maintainer, 2026-10-11), with scripts/mirror_showcase.sh. It looks once a day and copies only when something
+# changed and the last copy is at least 48 hours old; run by hand (Actions → Run workflow) it copies any change at
+# once. Work happens here; the showcase is only pushed to. It pushes with the secret MIRROR_TOKEN (a fine-grained token
+# that may write only to mind-core-os) or MIRROR_SSH_KEY (a deploy key of mind-core-os); without either nothing is copied.
+name: Mirror to mind-core-os
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    if: github.repository == 'NikolayUvarov/gcu_undocumented_func'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Copy main and the tags
+        env:
+          TOKEN: ${{ secrets.MIRROR_TOKEN }}
+          KEY: ${{ secrets.MIRROR_SSH_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          EVERY_HOURS: ${{ github.event_name == 'schedule' && '48' || '0' }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            target="https://x-access-token:$TOKEN@github.com/NikolayUvarov/mind-core-os.git"
+          elif [ -n "$KEY" ]; then
+            mkdir -p ~/.ssh && printf '%s\n' "$KEY" > ~/.ssh/mirror && chmod 600 ~/.ssh/mirror
+            ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+            export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/mirror -o IdentitiesOnly=yes"
+            target=git@github.com:NikolayUvarov/mind-core-os.git
+          else
+            echo "Neither MIRROR_TOKEN nor MIRROR_SSH_KEY is set: nothing copied"; exit 0
+          fi
+          scripts/mirror_showcase.sh --every-hours "$EVERY_HOURS" "$target"
