@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -228,27 +228,3 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 ### Acceptance criteria
 
 The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
-
-## The raw-frame interface between `bcm_wifi` and the station (550-DRV-0027)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-12, for the station of "An 802.11 station and WPA2-PSK" above.
-
-### Problem
-
-On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](550-DRV-0026-bcm4331-transmits.md)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
-
-### Plan (a proposal; the network track decides)
-
-`idl/wlanhw.wit` 1.0, served by `bcm_wifi`, used by `wlan` only:
-- `info` → MAC address, supported channels;
-- `set-channel(channel)`; `set-filter(all-beacons, bssid, own-address)`;
-- `send(frame, rate)` → transmit status (acknowledged or not, retries);
-- `receive` → frames from a shared buffer, each with signal (dBm), channel, rate and the FCS already checked;
-- later, `set-key`/`clear-key` for the chip's CCMP, only if the station wants it.
-
-The driver keeps no 802.11 state beyond the filter and the channel: authentication, association, scanning policy, keys and rates are the station's.
-
-### Acceptance criteria
-
-`NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
-
