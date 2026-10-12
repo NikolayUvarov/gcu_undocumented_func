@@ -175,7 +175,7 @@ def run(args, booted):
         for pid, name in enumerate(["app", "app2", "clock", "dzen-clock"], 1):
             require(vm.command(f"run {name} &"), f"PID={pid} NAME={name} BACKGROUND")
         first = task_rows(vm)
-        time.sleep(.4)
+        time.sleep(1.2)  # a clock wakes when its second changes (000-APP-0012)
         second = task_rows(vm)
         assert set(second) == {1, 2, 3, 4}, second
         assert all(int(second[p][-1]) > int(first[p][-1]) for p in second), (first, second)
