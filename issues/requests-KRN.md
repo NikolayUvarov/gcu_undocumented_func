@@ -4,6 +4,8 @@
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
+The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-KRN-0091-bcm-wifi-dma-and-its-interrupt.md) (2026-10-12).
+
 ## A client of the updater for the shell
 
 **Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) and the tools track's `update` command (351-APP-0029, on its branch).
@@ -198,21 +200,3 @@ The same build passed the whole suite when it ran again. Nothing in the tools tr
 ### Acceptance criteria
 
 The `wm` suite types its lines with no press lost in repeated runs, or a drop is logged where it happens.
-
-## `bcm_wifi` gets DMA memory and its interrupt (550-DRV-0025)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-12, ahead of stage 4 of the MacBook Pro's Wi-Fi, so that it can be done while stage 3 is written.
-
-### Problem
-
-Stage 2 ran Broadcom's microcode in the BCM4331 ([550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done)). Stage 3 sets up the PHY and the radio through registers only. Stage 4 receives frames: the 802.11 core's DMA engines write them into rings in memory and raise an interrupt. `init` gives `bcm_wifi` BAR0 and a read-only VFS client, nothing else.
-
-### Plan (a proposal; the kernel track decides)
-
-In `init`'s `bcm_wifi` arm, as for `ahci` and `usb_host`:
-- `SLOT_MEM`: one physically contiguous DMA region of 512 KiB (a receive ring of 64-bit descriptors, its buffers, and a transmit ring later), below 4 GiB;
-- `SLOT_IRQ`: the function's MSI (capability at 0x48, one vector, 64-bit), or its INTx line where MSI is not available.
-
-### Acceptance criteria
-
-On the MacBook Pro, `bcm_wifi` logs the region's physical address and size and that it can wait on its interrupt. Nothing is started by the grant itself: the core stays idle until the driver sets up its rings.

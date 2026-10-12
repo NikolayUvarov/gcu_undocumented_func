@@ -7337,18 +7337,23 @@ def bar_move_check(args, disk):
         shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
         (volume / "kernel.elf").write_bytes(Path(args.bar_kernel).read_bytes())
         sign_manifest.sign_volume(volume)
-        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58"])
+        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58",
+                                                         "-device", "edu"])
         try:
-            out = vm.expect("READ THERE", timeout=60)
+            out = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=60)  # the test's lines come before init
             packed = re.search(r"PCI TEST: BAR 1 OF (\w+) PACKED AT ([0-9A-F]+), IN THE PAGE OF (\w+)", out)
             moved = re.search(r"PCI: BAR 1 OF (\w+) MOVED FROM ([0-9A-F]+) TO ([0-9A-F]+): ITS PAGE HELD REGISTERS OF (\w+)", out)
             granted = re.search(r"PCI TEST: GRANTED AT ([0-9A-F]+), MAC ([0-9A-F:]+) READ THERE", out)
             assert packed and moved and granted, out[-3000:]
             assert moved[2] == packed[2] and moved[4] == packed[3] and int(moved[3], 16) % 4096 == 0 and int(moved[3], 16) >> 12 != int(packed[2], 16) >> 12, out[-3000:]
             assert granted[1] == moved[3] and granted[2] == "52:54:00:12:34:58", out[-3000:]
+            # 550-KRN-0091: the edu device's MSI (it has no MSI-X), granted: on, at the local APIC, with its vector.
+            msi = re.search(r"PCI TEST: MSI OF (\w+) AS LINE (\d+): (ON|OFF), ADDRESS ([0-9A-F]+), DATA ([0-9A-F]+)", out)
+            assert msi and msi[3] == "ON" and int(msi[4], 16) >> 20 == 0xFEE and int(msi[5], 16) == 0x40 + int(msi[2]) - 16, out[-3000:]
         finally:
             vm.close()
-    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there", flush=True)
+    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there; "
+          f"a device's MSI is programmed when granted (line {msi[2]}, data {msi[5]})", flush=True)
 
 
 def trial_check(args, disk):

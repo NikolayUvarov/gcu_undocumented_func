@@ -24,6 +24,7 @@ const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyo
 // Every task's log also goes to the kernel's console while no driver holds it (aarch64: until the shell takes the PL011).
 static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
 use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
+const MSI_WHOLE: u16 = u16::MAX; // in `msi`: a device's MSI, not an MSI-X entry
 const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
@@ -657,6 +658,16 @@ impl Scheduler {
             Ok(_) => say(format_args!("MIND CORE KERNEL: PCI TEST: NOT A REGISTER CAPABILITY\n")),
             Err(code) => say(format_args!("MIND CORE KERNEL: PCI TEST: REFUSED ({:X})\n", code)),
         }
+        // 550-KRN-0091: QEMU's edu device has MSI and no MSI-X; granted, its capability is programmed and on.
+        let Some(edu) = self.devices.iter().position(|d| d.id == 0x11E8_1234) else { return say(format_args!("MIND CORE KERNEL: PCI TEST: NO EDU DEVICE\n")) };
+        match self.platform_cap(PLATFORM_DEVICE_MSI, edu, 0) {
+            Ok(Capability::Interrupt(line)) => match unsafe { pci::msi_state(&self.devices[edu]) } {
+                Some((on, address, data)) => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI OF {:06X} AS LINE {}: {}, ADDRESS {:X}, DATA {:X}\n", self.devices[edu].location(), line, if on { "ON" } else { "OFF" }, address, data)),
+                None => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI NOT READ BACK\n")),
+            },
+            Ok(_) => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI NOT AN INTERRUPT\n")),
+            Err(code) => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI REFUSED ({:X})\n", code)),
+        }
     }
 
     // A free 4 KiB page for a BAR moved off a shared one (211-KRN-0021): within the span the firmware gave bus 0's
@@ -741,6 +752,14 @@ impl Scheduler {
                 unsafe { paging::uncached(at); }
                 unsafe { pci::msix(&device, entry, index) }.ok_or(ERR_NOT_FOUND)?;
                 self.msi[index] = Some((a, entry));
+                Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
+            }
+            // A device's MSI (one message) aimed at an MSI vector, as for MSI-X (550-KRN-0091); the vector stays with it.
+            PLATFORM_DEVICE_MSI => {
+                let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?;
+                let index = match self.msi.iter().position(|m| *m == Some((a, MSI_WHOLE))) { Some(index) => index, None => self.msi.iter().position(Option::is_none).ok_or(ERR_NO_SLOT)? };
+                unsafe { pci::msi(&device, index) }.ok_or(ERR_NOT_FOUND)?;
+                self.msi[index] = Some((a, MSI_WHOLE));
                 Ok(Capability::Interrupt((MSI_FIRST + index) as u8))
             }
             PLATFORM_FRAMEBUFFER => Ok(Capability::Memory(self.boot.fb_ptr as usize, frame_bytes(&self.boot), MEMORY_ALL)),
