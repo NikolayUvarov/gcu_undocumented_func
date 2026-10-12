@@ -82,7 +82,7 @@ Made as described under Progress: `bench/src/bin/kbench.rs` and the `bench` suit
 
 These numbers hold for this machine and this build only (MC-12.1). Two findings became tasks:
 
-- sleeps waited for the 10 ms tick: [000-KRN-0083](../issues/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.md);
+- sleeps waited for the 10 ms tick: [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done);
 - an IPC round trip between two CPUs took eight times the fastest one: [000-KRN-0084](../issues/000-KRN-0084-an-ipc-round-trip-between-two-cpus.md).
 
 ## Related

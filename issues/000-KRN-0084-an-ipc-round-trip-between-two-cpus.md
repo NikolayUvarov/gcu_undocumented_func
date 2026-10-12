@@ -48,4 +48,4 @@ On this Ivy Bridge, `HLT` may become C1E (`MSR_POWER_CTL` bit 1, not in the repo
 
 ## Related
 
-[176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [174](174-full-use-of-pc-hardware.md) (step on C-states), [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.md).
+[176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [174](174-full-use-of-pc-hardware.md) (step on C-states), [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done).

@@ -53,4 +53,4 @@ A copy taken after step 1 shows no pointer: the flicker. A copy taken while cell
 
 ## Related
 
-[000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.md), [docs/profile/README.md](../docs/profile/README.md) (the compositor's shared memory).
+[000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done), [docs/profile/README.md](../docs/profile/README.md) (the compositor's shared memory).

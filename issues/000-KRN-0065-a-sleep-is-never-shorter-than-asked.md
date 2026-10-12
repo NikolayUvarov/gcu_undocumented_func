@@ -1,6 +1,6 @@
 # 000-KRN-0065 — A sleep is never shorter than asked
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and tested in QEMU x86; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made, gated, and run on the MacBook Pro after the change; the run before it is missing) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
 
 ## Problem
 
@@ -44,6 +44,13 @@ The cause is in `SYSCALL_WAIT` (`kernel/src/scheduler.rs`):
   - The `bench` suite (x86): `kbench` reports no sleep shorter than asked; `sleep 10 ms` has a median of 19.9 ms.
   - `check` passes "sleeps last as asked", so its test now requires every check to pass or be skipped.
   - `docs/api`, `docs/profile` (`clocks.md`, the MC-5.6 row) and `docs/tools` (EN, RU) say the same.
+
+**2026-10-12, the MacBook Pro.** Two runs after the change:
+
+- `kbench0002.txt`, the build with 000-KRN-0065 and the 10 ms tick: "sleep 1 ms" shortest 1.67 ms, "sleep 10 ms" shortest 19.9 ms;
+- `kbench0001.txt` of build 8223d24, with the 1 ms tick of [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done): shortest 1.01 ms and 10.2 ms.
+
+No sleep was shorter than asked. The run "before" (a build without this change) was never recorded, so criterion 3 is not met yet. It needs an older build run on the MacBook Pro, or the maintainer's decision on the criterion.
 
 ## Related
 

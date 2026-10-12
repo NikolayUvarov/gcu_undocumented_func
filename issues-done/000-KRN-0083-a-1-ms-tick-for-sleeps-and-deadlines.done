@@ -1,10 +1,10 @@
-# 000-KRN-0083 — A 1 ms tick for the clock, sleeps and deadlines; time slices stay 10 ms
+# 000-KRN-0083 — A 1 ms tick for the clock, sleeps and deadlines; time slices stay 10 ms — done
 
-**Type:** kernel (`kernel/src/arch/*/interrupts.rs`, `context.rs`, `scheduler.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested in QEMU and on the MacBook Pro; to close once in `main`) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-5.6, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/*/interrupts.rs`, `context.rs`, `scheduler.rs`) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-5.6, MC-12.1, MC-12.3
 
 ## Problem
 
-The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pro. [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md) dealt with the framebuffer. The other part is time: every sleep ended on the boot CPU's 10 ms tick.
+The maintainer (2026-10-11): `wm`'s moving background stutters on the MacBook Pro. [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md) dealt with the framebuffer. The other part is time: every sleep ended on the boot CPU's 10 ms tick.
 
 `kbench` on the MacBook Pro (`kbench0002.txt`, the same build as 000-KRN-0065's):
 
@@ -63,6 +63,16 @@ A sleep of 1 ms now ends in about 2 ms. A sleep of 10 ms still often took two sl
 
 Both medians are within the criteria (1–2 ms and 10–11 ms), and no sleep was shorter than asked. A few sleeps of 1 ms took up to 9.45 ms (10 of 100 over 4 ms): a task woken on a CPU that runs another waits for that one's time slice, as in QEMU.
 
+## Resolution
+
+- **The tick.** The boot CPU ticks every millisecond on x86: the LAPIC timer measured on the ACPI PM timer, or the PIT with a 1 ms divisor (`kernel/src/arch/x86_64/interrupts.rs`). aarch64 keeps 100 Hz, as the 1 ms tick cost an idle machine under TCG too much. Its compare value now steps from the last tick, so late ticks are counted.
+- **Time slices stay 10 ms.** Every tenth tick is `Event::Tick`; the ticks between are `Event::Clock` (`context.rs`). They end sleeps and IPC deadlines through `Scheduler::timers`, which looks at the tasks only once the earliest sleep or deadline is due (`next_wake`, `next_expiry`).
+- **Uptime on x86** reads the TSC once calibrated, so late ticks do not slow it.
+- **Evidence:**
+  - QEMU x86: the `bench` suite checks a median of "sleep 1 ms" below 8 ms; the full gate passed on the kernel session's machine and on i9.
+  - The MacBook Pro (build 8223d24): "sleep 1 ms" median 1.99 ms, "sleep 10 ms" median 10.9 ms, none shorter than asked.
+- **Not done here:** a tickless idle, and preempting a running task for one woken on its CPU (a woken task may still wait for the slice; [000-KRN-0084](../issues/000-KRN-0084-an-ipc-round-trip-between-two-cpus.md) measures the related wake cost).
+
 ## Related
 
-[000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.md), [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [clocks.md](../docs/profile/clocks.md).
+[000-KRN-0065](../issues/000-KRN-0065-a-sleep-is-never-shorter-than-asked.md), [000-KRN-0081](../issues/000-KRN-0081-the-framebuffer-written-combined.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [clocks.md](../docs/profile/clocks.md).
