@@ -42,3 +42,11 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
 ## Related
 
 [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
+
+## Progress (2026-10-12)
+
+- **Done:**
+  - `idl/wifi.wit` 1.0 (c2ee9ea), told to the tools track in requests-APP.md;
+  - [`wlan/`](../wlan/src/main.rs), the service, built for both targets (in `02_build.sh`'s list, so in the images, though nothing starts it yet);
+  - [`tests/wlansim/`](../tests/wlansim/src/main.rs), the stand-in radio with its access point and DHCP, ARP and ICMP echo, built with the test programs on both architectures.
+- **Not tested yet:** `init` does not start `wlan` or `wlansim`, and the stack has no third card (requests-KRN.md). The QEMU checks of the criteria come with that.
