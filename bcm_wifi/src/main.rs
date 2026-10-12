@@ -307,7 +307,7 @@ fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
             mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
             let core = stage3::Core::new(bar);
             match mac {
-                Some(mac) => if stage3::run(&core, mac) { stage4::run(&core) },
+                Some(mac) => if stage3::run(&core, mac) { stage4::run(&core, mac) },
                 None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
             }
         }

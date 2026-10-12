@@ -1,6 +1,6 @@
 # 550-DRV-0026 — `bcm_wifi`, stage 5: frames transmitted, within the power the SPROM allows
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written; waits for a run on the MacBook Pro) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -20,6 +20,12 @@ The facts come from a fact sheet written from Linux's `b43` (transmit header, ri
 ## Acceptance criteria
 
 On the MacBook Pro, one boot on request logs each probe request's transmit status and the probe responses received for it, with the transmit power used. The machine runs on. Evidence for this machine only (MC-12.1).
+
+## Progress
+
+**2026-10-12:** written in `bcm_wifi/src/stage4.rs` after the passive scan, from a fact sheet on transmitting. Two choices differ from the plan above, both towards less power:
+- **No closed-loop power control yet.** b43's HT-PHY power control writes its TSSI-to-power table wrongly (64 16-bit entries taken from an array of 32-bit values), so it is not copied. The transmit gain is fixed instead, from entry 80 of the gain table (b43's fixed gain uses entry 40; a higher entry is a lower gain), with power control off. Power control from the SPROM's per-core maximum and PA parameters becomes its own step once transmitting is shown to work.
+- **Broadcast probe requests only,** one per channel 1 to 11, at 1 Mbit/s CCK on engine 1 (the BCM4331 sends everything there), one descriptor per frame with the 118-byte transmit header; the channel code in the header matches shared memory 0xA0. The station's address is in the address match during this step, so the probe responses addressed to it are kept, and acknowledged by the card as any station does.
 
 ## Related
 
