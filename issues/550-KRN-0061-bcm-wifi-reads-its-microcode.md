@@ -4,7 +4,7 @@
 
 ## Problem
 
-This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), stage 2 of the MacBook Pro's Wi-Fi.
+This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), stage 2 of the MacBook Pro's Wi-Fi.
 
 - Stage 2 of `bcm_wifi` loads Broadcom's microcode into the BCM4331's 802.11 core.
 - The maintainer's build copies the file onto the written disk under `data/firmware/b43/` (`scripts/proprietary.sh`), never into the image.
@@ -28,4 +28,4 @@ This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-
 
 ## Related
 
-[550-DRV-0023](550-DRV-0023-bcm4331-microcode-runs.md), [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done).
+[550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done).
