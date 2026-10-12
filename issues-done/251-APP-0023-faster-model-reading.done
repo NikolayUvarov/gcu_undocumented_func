@@ -43,6 +43,7 @@
   | New `vfs_server`, 16 KiB reads | 17.4 s | 4.1 MB/s | the hash computed under TCG included |
 
   The hash equals the host's.
+- **With 000-KRN-0079** (2026-10-12): the runs are asked of the drive like single sectors, so a drive that does not answer or was replaced is not read, and while mounting they join the medium's identity (the boot manifest is read as a run). Before this, the USB image test saw a stick with another manifest taken for the old one.
 - **What remains:**
   - Each 16 KiB costs one call to the file service, and each call shares a fresh buffer, about six system calls on the client. A version of `vfs.wit` that reads into a buffer lent once, as the block protocol does, is the next step.
   - `virtio_blk` polls, and sleeps 10 ms when a request takes longer. That belongs to the drivers track.
