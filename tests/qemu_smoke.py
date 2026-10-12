@@ -6229,7 +6229,7 @@ def wm_suite(vm):
     assert canon(" clock ") in screen[y][x:x + w], screen[y]
     # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
     # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
-    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; place = bottom-right")
+    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
@@ -6715,7 +6715,7 @@ def wm_suite(vm):
         # on a field of the date page sets the clock at once.
         kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
         rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date", "CPU load",
-                "Free memory", "Network", "Text size", "Place"]
+                "Free memory", "Network", "Text size", "Place", "Face"]
         keys("alt-s", text="MODE=SETTINGS")
         keys("ret", text="SETTINGS=Background:Picture")
         changed = 0
@@ -6932,7 +6932,7 @@ def wm_suite(vm):
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
     keys("right", text="[WM] SETTINGS background = none")
-    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")
     time.sleep(.5)
     screen = screen_text(vm)

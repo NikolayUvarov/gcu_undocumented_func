@@ -21,6 +21,12 @@ pub const PATTERNS: [(&str, Pattern); 4] = [("waves", Pattern::Waves), ("rings",
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place { TopLeft, TopRight, Center, BottomLeft, BottomRight }
 
+/// How the time and the load are drawn (000-APP-0069): digits and a graph, or a dial with hands and gauges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Face { Digital, Analog }
+
+pub const FACES: [(&str, Face); 2] = [("digital", Face::Digital), ("analog", Face::Analog)];
+
 const PLACES: [(&str, Place); 5] = [("top-left", Place::TopLeft), ("top-right", Place::TopRight), ("center", Place::Center), ("bottom-left", Place::BottomLeft), ("bottom-right", Place::BottomRight)];
 
 /// The ranges of the numbers: the pattern's speed (1: two pixels a second across a screen 1024 pixels wide), its
@@ -40,6 +46,8 @@ pub struct Config {
     pub time: bool, pub date: bool, pub cpu: bool, pub memory: bool, pub net: bool, pub place: Place,
     /// The time's seconds (000-APP-0068), and the sizes of the time and of the other lines, in percent.
     pub seconds: bool, pub time_size: u16, pub text_size: u16,
+    /// Digits and a graph, or a dial and gauges (000-APP-0069).
+    pub face: Face,
     /// wm's scale in percent (000-APP-0061); None: `auto`, chosen from the screen at each start.
     pub scale: Option<u16>,
     /// The pointer's size in percent of its 8 × 12 arrow, None: `auto`, at wm's scale; its colour, an index into
@@ -50,7 +58,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self { picture: Picture::Abstract, pattern: Pattern::Waves, speed: 1, contrast: 20, complexity: 2, info: 30, time: true, date: true, cpu: true, memory: true, net: false, place: Place::BottomRight,
-               seconds: true, time_size: 100, text_size: 100, scale: None, pointer: None, pointer_colour: 0 }
+               seconds: true, time_size: 100, text_size: 100, face: Face::Digital, scale: None, pointer: None, pointer_colour: 0 }
     }
 }
 
@@ -59,7 +67,7 @@ impl Config {
     /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
     /// `complexity = 1..5`, `info = 0..100`, `show = time, seconds, date, cpu, memory, net` (or `none`; a file that never
     /// names `memory` or `seconds`, written before it could be chosen, shows it, 000-APP-0064, 000-APP-0068),
-    /// `time-size = 50 | 75 | 100 | … | 300`, `text-size = 50 | 100 | … | 300` (percent),
+    /// `time-size = 50 | 75 | 100 | … | 300`, `text-size = 50 | 100 | … | 300` (percent), `face = digital | analog`,
     /// `place = top-left | top-right | center | bottom-left | bottom-right`, `scale = auto | 100 | 150 | … | 600`,
     /// `pointer = auto | 100 | 150 | … | 800`, `pointer-colour = white | black | yellow | …` (wm's, 000-APP-0061). What
     /// is not said stays the default; each
@@ -112,6 +120,10 @@ impl Config {
                             None => wrong(&format!("{} is {}", key, sizes.iter().map(|s| format!("{}", s)).collect::<Vec<_>>().join(", "))),
                         }
                     }
+                    "face" => match FACES.iter().find(|f| f.0 == value) {
+                        Some(&(_, face)) => config.face = face,
+                        None => wrong("face is digital or analog"),
+                    },
                     "place" => match PLACES.iter().find(|p| p.0 == value) {
                         Some(&(_, place)) => config.place = place,
                         None => wrong("place is top-left, top-right, center, bottom-left or bottom-right"),
@@ -159,13 +171,14 @@ impl Config {
                  # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
                  # show = time, seconds, date, cpu, memory, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
                  # time-size = 50 | 75 | 100 | 125 | 150 | 200 | 250 | 300; text-size = 50 | 100 | 150 | 200 | 250 | 300 (percent)\n\
+                 # face = digital | analog (a dial with hands, and gauges of the CPU load and the memory in use)\n\
                  # scale = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 (percent; auto: from the screen at each start)\n\
                  # pointer = auto | 100 | 150 | 200 | 250 | 300 | 400 | 500 | 600 | 800 (percent of 8 x 12; auto: at the scale)\n\
                  # pointer-colour = white | black | yellow | orange | red | green | cyan | magenta\n\
-                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\ntime-size = {}\ntext-size = {}\nplace = {}\nscale = {}\n\
+                 background = {}\npattern = {}\nspeed = {}\ncontrast = {}\ncomplexity = {}\ninfo = {}\nshow = {}\ntime-size = {}\ntext-size = {}\nface = {}\nplace = {}\nscale = {}\n\
                  pointer = {}\npointer-colour = {}\n",
                 picture, pattern, self.speed, self.contrast, self.complexity, self.info, if shown.is_empty() { String::from("none") } else { shown.join(", ") },
-                self.time_size, self.text_size, place, scale,
+                self.time_size, self.text_size, FACES.iter().find(|f| f.1 == self.face).map_or("digital", |f| f.0), place, scale,
                 pointer, colour)
     }
 }
@@ -383,9 +396,10 @@ pub fn cover(data: &[u8], frame: &mut [u32], width: usize, height: usize) -> Res
 }
 
 /// What is drawn over the picture: the seconds since midnight, the date (year, month, day), the CPU load of the last
-/// samples (percent, oldest first), the free memory in bytes (000-APP-0064) and a line about the network.
+/// samples (percent, oldest first), the free memory in bytes (000-APP-0064) of `total` (000-APP-0069: the memory
+/// gauge) and a line about the network.
 #[derive(Clone, Copy, Default)]
-pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub net: Option<&'a str> }
+pub struct Info<'a> { pub seconds: Option<usize>, pub date: Option<(u32, u32, u32)>, pub cpu: &'a [u8], pub free: Option<u64>, pub total: Option<u64>, pub net: Option<&'a str> }
 
 // The lines' widths in glyphs: the date, the memory's line at most, the network's; the CPU graph's width and height in
 // the other lines' glyph pixels (24 glyphs by 3 rows of them, as the time with seconds was wide at the first sizes).
@@ -437,22 +451,137 @@ pub fn layout(config: &Config, width: usize, height: usize, unit: usize, zoom: u
     if config.picture == Picture::None || !(config.time || config.date || config.cpu || config.memory || config.net) { return None; }
     let unit = unit.max(1);
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit;
-    let sized = |pixels: usize, size: u16| (pixels * size as usize * zoom.max(100) / 10_000 / unit).max(1);
+    let sized = |pixels: usize, size: u16| sized(pixels, size, zoom, unit);
     let (big, small, gap) = (sized(6, config.time_size), sized(2, config.text_size), z(8));
     let mut w = 0;
     let mut h = 0;
     let mut add = |line_w: usize, line_h: usize| { w = w.max(line_w); h += if h > 0 { gap } else { 0 } + line_h; };
+    if config.face == Face::Analog {
+        // The dial (its radius in place of the time's glyph scale), the date, the gauges in a row, the network.
+        let (radius, gauge) = (sized(DIAL, config.time_size), sized(GAUGE, config.text_size));
+        let gauges = config.cpu as usize + config.memory as usize;
+        if config.time { add(2 * radius, 2 * radius); }
+        if config.date { add(DATE * 8 * small, 16 * small); }
+        if gauges > 0 { add(gauges * gauge_cell(gauge, small) + (gauges - 1) * 2 * gap, gauge + gap / 2 + 16 * small); }
+        if config.net { add(NET * 8 * small, 16 * small); }
+        return place(config, width, height, z(32), (w, h)).map(|at| (at, radius, small));
+    }
     if config.time { add(time_chars(config) * 8 * big, 16 * big); }
     if config.date { add(DATE * 8 * small, 16 * small); }
     if config.cpu { add(GRAPH * 8 * small, 16 * small + gap / 2 + GRAPH_ROWS * small); }
     if config.memory { add(MEMORY * 8 * small, 16 * small); }
     if config.net { add(NET * 8 * small, 16 * small); }
-    // Two cells from the edges: clear of the top bar and the status line.
-    let (mx, my) = (z(32), z(32));
-    if w + 2 * mx > width || h + 2 * my > height { return None; }
-    let x = match config.place { Place::TopLeft | Place::BottomLeft => mx, Place::Center => (width - w) / 2, _ => width - mx - w };
-    let y = match config.place { Place::TopLeft | Place::TopRight => my, Place::Center => (height - h) / 2, _ => height - my - h };
-    Some(((x, y, w, h), big, small))
+    place(config, width, height, z(32), (w, h)).map(|at| (at, big, small))
+}
+
+// `pixels` at the first size, at `size` percent and wm's scale `zoom`, in frame pixels of `unit` screen pixels.
+fn sized(pixels: usize, size: u16, zoom: usize, unit: usize) -> usize { (pixels * size as usize * zoom.max(100) / 10_000 / unit.max(1)).max(1) }
+
+// The block of `w` × `h` at its place, `margin` from the edges (two cells: clear of the top bar and the status line).
+fn place(config: &Config, width: usize, height: usize, margin: usize, (w, h): (usize, usize)) -> Option<(usize, usize, usize, usize)> {
+    if w + 2 * margin > width || h + 2 * margin > height { return None; }
+    let x = match config.place { Place::TopLeft | Place::BottomLeft => margin, Place::Center => (width - w) / 2, _ => width - margin - w };
+    let y = match config.place { Place::TopLeft | Place::TopRight => margin, Place::Center => (height - h) / 2, _ => height - margin - h };
+    Some((x, y, w, h))
+}
+
+// The analog face's sizes at the first size, in pixels: the dial's radius and a gauge's (000-APP-0069).
+const DIAL: usize = 72;
+const GAUGE: usize = 56;
+
+// A gauge's column: its dial, or its label (`CPU 100%`) when that is wider.
+fn gauge_cell(gauge: usize, small: usize) -> usize { (2 * gauge).max(8 * 8 * small) }
+
+// A point of the frame, inside it.
+fn plot(frame: &mut [u32], width: usize, height: usize, x: isize, y: isize, colour: u32) {
+    if x >= 0 && y >= 0 && (x as usize) < width && (y as usize) < height { frame[y as usize * width + x as usize] = colour; }
+}
+
+// A square of `size` pixels centred at (x, y).
+fn dot(frame: &mut [u32], width: usize, height: usize, (x, y): (isize, isize), size: usize, colour: u32) {
+    let (from, to) = (-(size as isize / 2), (size as isize + 1) / 2);
+    for dy in from..to { for dx in from..to { plot(frame, width, height, x + dx, y + dy, colour); } }
+}
+
+// The point `radius` from (cx, cy) at `angle` steps of the sine table, 0 up and a quarter period to the right.
+fn polar((cx, cy): (isize, isize), radius: usize, angle: usize) -> (isize, isize) {
+    (cx + at(angle) as isize * radius as isize / 127, cy - at(angle + PERIOD / 4) as isize * radius as isize / 127)
+}
+
+// A line `size` pixels thick from `a` to `b`.
+fn line(frame: &mut [u32], width: usize, height: usize, a: (isize, isize), b: (isize, isize), size: usize, colour: u32) {
+    let steps = (b.0 - a.0).abs().max((b.1 - a.1).abs()).max(1);
+    for i in 0..=steps { dot(frame, width, height, (a.0 + (b.0 - a.0) * i / steps, a.1 + (b.1 - a.1) * i / steps), size, colour); }
+}
+
+// An arc of `radius` round (cx, cy) from angle `from` for `span` steps of the sine table, `size` pixels thick.
+#[allow(clippy::too_many_arguments)]
+fn arc(frame: &mut [u32], width: usize, height: usize, centre: (isize, isize), radius: usize, (from, span): (usize, usize), size: usize, colour: u32) {
+    let steps = (span * radius * 7 / PERIOD).max(8);
+    for i in 0..=steps { dot(frame, width, height, polar(centre, radius, from + span * i / steps), size, colour); }
+}
+
+/// The memory in use, in percent of the frame pool, from the free bytes and the pool's (000-APP-0069).
+pub fn used_percent(free: Option<u64>, total: Option<u64>) -> Option<u8> {
+    match (free, total) { (Some(free), Some(total)) if total > 0 => Some(((total - free.min(total)) * 100 / total) as u8), _ => None }
+}
+
+// The analog face (000-APP-0069): a dial with twelve marks and the hands (the second's with `seconds`), the date, the
+// gauges of the CPU load and the memory in use (a half circle each, filled from the left, with a needle and a label),
+// and the network's line, in one column from (x, y).
+#[allow(clippy::too_many_arguments)]
+fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, usize), (radius, gauge, small, gap): (usize, usize, usize, usize), config: &Config, info: &Info, glyph: Glyph) {
+    let (colour, dim, shadow) = ink(config.info);
+    // The rim and the gauges' tracks, darker than what is lit on them.
+    let track = mix(MID, colour, 80);
+    let ink = (colour, shadow);
+    let stroke = |r: usize| (r / 24).max(1);
+    if config.time {
+        let centre = ((x + radius) as isize, (y + radius) as isize);
+        let rim = radius.saturating_sub(stroke(radius));
+        arc(frame, width, height, centre, rim, (0, PERIOD), stroke(radius), track);
+        for hour in 0..12 {
+            let angle = hour * PERIOD / 12;
+            let inner = if hour % 3 == 0 { rim * 3 / 4 } else { rim * 7 / 8 };
+            line(frame, width, height, polar(centre, inner, angle), polar(centre, rim, angle), stroke(radius) + (hour % 3 == 0) as usize, colour);
+        }
+        if let Some(s) = info.seconds {
+            let (h, m, sec) = (s / 3600 % 12, s / 60 % 60, s % 60);
+            let hour_angle = (h * 60 + m) * PERIOD / 720;
+            line(frame, width, height, centre, polar(centre, rim / 2, hour_angle), stroke(radius) * 3, colour);
+            line(frame, width, height, centre, polar(centre, rim * 4 / 5, (m * 60 + sec) * PERIOD / 3600), stroke(radius) * 2, colour);
+            if config.seconds { line(frame, width, height, centre, polar(centre, rim * 9 / 10, sec * PERIOD / 60), stroke(radius), dim); }
+        }
+        dot(frame, width, height, centre, stroke(radius) * 4, colour);
+        y += 2 * radius + gap;
+    }
+    if config.date {
+        let line = match info.date { Some((year, month, day)) => format!("{:04}-{:02}-{:02}", year, month, day), None => String::from("----------") };
+        text(frame, width, height, x, y, &line, small, ink, glyph);
+        y += 16 * small + gap;
+    }
+    let cell = gauge_cell(gauge, small);
+    let gauges: Vec<(&str, Option<u8>)> = [(config.cpu, "CPU", info.cpu.last().copied()), (config.memory, "MEM", used_percent(info.free, info.total))]
+        .iter().filter(|g| g.0).map(|g| (g.1, g.2)).collect();
+    for (i, (name, value)) in gauges.iter().enumerate() {
+        let gx = x + i * (cell + 2 * gap);
+        let centre = ((gx + cell / 2) as isize, (y + gauge) as isize);
+        let size = (gauge / 10).max(2);
+        // The half circle from the left (0 %) over the top to the right (100 %): three quarters of the period on.
+        arc(frame, width, height, centre, gauge.saturating_sub(size), (3 * PERIOD / 4, PERIOD / 2), size, track);
+        if let Some(p) = value {
+            let span = PERIOD / 2 * (*p).min(100) as usize / 100;
+            if span > 0 { arc(frame, width, height, centre, gauge.saturating_sub(size), (3 * PERIOD / 4, span), size, colour); }
+            line(frame, width, height, centre, polar(centre, gauge * 4 / 5, 3 * PERIOD / 4 + span), (size / 2).max(1), colour);
+        }
+        let label = match value { Some(p) => format!("{} {:3}%", name, p), None => format!("{}    -", name) };
+        text(frame, width, height, gx, y + gauge + gap / 2, &label, small, ink, glyph);
+    }
+    if !gauges.is_empty() { y += gauge + gap / 2 + 16 * small + gap; }
+    if config.net {
+        let line = info.net.unwrap_or("NET: NO COUNTERS");
+        text(frame, width, height, x, y, line, small, ink, glyph);
+    }
 }
 
 /// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
@@ -462,6 +591,10 @@ pub fn overlay(frame: &mut [u32], width: usize, height: usize, unit: usize, zoom
     let Some(((x, mut y, _, _), big, small)) = layout(config, width, height, unit, zoom) else { return };
     let z = |pixels: usize| pixels * zoom.max(100) / 100 / unit.max(1);
     let gap = z(8);
+    if config.face == Face::Analog {
+        let gauge = sized(GAUGE, config.text_size, zoom, unit);
+        return analog(frame, width, height, (x, y), (big, gauge, small, gap), config, info, glyph);
+    }
     let (colour, graph, shadow) = ink(config.info);
     let ink = (colour, shadow);
     if config.time {

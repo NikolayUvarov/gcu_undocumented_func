@@ -741,7 +741,7 @@ fn a_dragged_window_is_marked() {
 }
 
 // The desktop background (000-APP-0047, 000-APP-0050).
-use background::{colours, cover, ink, layout, overlay, pattern, Backdrop, Config, Info, Pattern, Picture, Place};
+use background::{colours, cover, ink, layout, overlay, pattern, used_percent, Backdrop, Config, Face, Info, Pattern, Picture, Place};
 
 fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 
@@ -988,6 +988,49 @@ fn the_time_and_the_lines_have_their_sizes() {
     assert!(inked(x, x + w) && !inked(x + w + 8, 1280), "five glyphs, nothing right of them");
 }
 
+// 000-APP-0069: the analog face, a dial with hands and gauges of the CPU load and the memory in use.
+#[test]
+fn the_analog_face_has_a_dial_and_gauges() {
+    assert_eq!(Config::default().face, Face::Digital);
+    let analog = Config { face: Face::Analog, ..Config::default() };
+    assert!(analog.format().contains("\nface = analog\n"), "{}", analog.format());
+    assert_eq!(Config::parse(&analog.format()).0, analog);
+    assert_eq!(Config::parse("face = round").1.len(), 1);
+    assert_eq!((used_percent(Some(25), Some(100)), used_percent(Some(0), Some(100)), used_percent(Some(5), None), used_percent(Some(9), Some(0))), (Some(75), Some(100), None, None));
+    // The block: the dial (its radius in place of the glyph scale), the date, the two gauges side by side.
+    let ((x, y, w, h), radius, small) = layout(&analog, 1280, 800, 1, 100).unwrap();
+    assert_eq!((radius, small), (72, 2));
+    assert!(w >= 2 * 72 && w >= 2 * 8 * 8 * 2 + 16 && h >= 2 * 72 + 16 * 2 + 56, "{} {}", w, h);
+    assert_eq!((x + w, y + h), (1280 - 32, 800 - 32));
+    let ((_, _, _, h2), radius2, _) = layout(&Config { time_size: 200, ..analog.clone() }, 1280, 800, 1, 100).unwrap();
+    assert!(radius2 == 144 && h2 > h);
+    // Drawn at 3:00:00 with the CPU at 50 % and three quarters of the memory in use: the hour hand points right, the
+    // minute hand up; the CPU gauge is lit to its top, the memory's beyond it.
+    let only_dial = Config { date: false, cpu: false, memory: false, ..analog.clone() };
+    let ((dx, dy, _, _), r, _) = layout(&only_dial, 1280, 800, 1, 100).unwrap();
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &only_dial, &Info { seconds: Some(3 * 3600), ..Info::default() }, &glyph);
+    let (cx, cy) = (dx + r, dy + r);
+    let lit = |frame: &[u32], x: usize, y: usize| frame[y * 1280 + x] != 0;
+    assert!(lit(&frame, cx + r / 3, cy) && !lit(&frame, cx - r / 3, cy), "the hour hand to the right");
+    assert!(lit(&frame, cx, cy - r / 2) && !lit(&frame, cx, cy + r / 2), "the minute hand up");
+    assert!(lit(&frame, cx, dy + 1) && lit(&frame, dx + 1, cy), "the rim");
+    let gauges = Config { time: false, date: false, ..analog.clone() };
+    let ((gx, gy, _, _), _, small) = layout(&gauges, 1280, 800, 1, 100).unwrap();
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &gauges, &Info { cpu: &[50], free: Some(25), total: Some(100), ..Info::default() }, &glyph);
+    let (colour, _, _) = ink(gauges.info);
+    let gauge = 56;
+    let cell = (2 * gauge).max(8 * 8 * small);
+    let top = |i: usize| (gx + i * (cell + 16) + cell / 2, gy + 3);
+    let right = |i: usize| (gx + i * (cell + 16) + cell / 2 + gauge - 4, gy + gauge - 1);
+    let at = |frame: &[u32], (x, y): (usize, usize)| frame[y * 1280 + x];
+    assert_eq!(at(&frame, top(0)), colour, "the CPU's arc lit to its top");
+    assert!(at(&frame, right(0)) != colour && at(&frame, right(0)) != 0, "the track beyond it, darker");
+    assert!(at(&frame, right(1)) != colour && at(&frame, right(1)) != 0, "the memory's arc not lit to its end at 75 %");
+    assert_eq!(at(&frame, top(1)), colour);
+}
+
 #[test]
 fn the_information_has_its_place() {
     let c = Config::default();
@@ -1011,7 +1054,7 @@ fn the_information_has_its_place() {
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), net: None }, &glyph);
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, net: None }, &glyph);
     let ((bx, by, bw, bh), big, small) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
@@ -1034,7 +1077,7 @@ fn the_information_has_its_place() {
     // The large digits' edge is the smaller lines' edge: "2026" and "12" both start in their glyph's second column.
     let edge = |f: &[u32], top: usize, tall: usize| (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| f[py * fw + px] == text)).min().unwrap();
     let mut evening = vec![background::DARK; fw * fh];
-    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, net: None }, &glyph);
+    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, net: None }, &glyph);
     assert_eq!(edge(&evening, by, 16 * big), edge(&evening, by + 16 * big + gap, 16 * small), "20:00:00 over 2026-10-10");
     assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
     assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
@@ -1044,7 +1087,7 @@ fn the_information_has_its_place() {
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, net: None }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -1580,7 +1623,7 @@ fn the_scale_follows_the_screen_and_settings() {
     wm.rescale(180, 56, 200);
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
-    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 21));
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 22));
 }
 
 // The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from

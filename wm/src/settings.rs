@@ -5,7 +5,7 @@
 //! shows or sets each part of the network: `wifi`, and the shell's commands in `console` (550-APP-0033). The other
 //! system pages are to read and say where each setting is made. Every row and page answers Enter and a click: it changes, or a line
 //! says why not (000-APP-0056). Host-tested in tests/wm_host.rs.
-use crate::background::{Config, Picture, Place, COMPLEXITY, PATTERNS, TEXT_SIZES, TIME_SIZES};
+use crate::background::{Config, Face, Picture, Place, COMPLEXITY, FACES, PATTERNS, TEXT_SIZES, TIME_SIZES};
 use crate::keys::{Code, Key};
 use crate::tui::widgets::{dialog, Edit, InputLine};
 use crate::tui::{Grid, Rect, Theme};
@@ -13,10 +13,10 @@ use alloc::{format, string::String, vec::Vec};
 
 pub const PAGES: [&str; 6] = ["Background", "Keyboard", "Date and time", "Network", "Sound", "Screen"];
 /// The background page's rows.
-pub const ROWS: [&str; 16] = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date",
-    "CPU load", "Free memory", "Network", "Text size", "Place"];
+pub const ROWS: [&str; 17] = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date",
+    "CPU load", "Free memory", "Network", "Text size", "Place", "Face"];
 // The rows ← and → step through (the others: the file typed, and boxes ticked).
-const STEPPED: [usize; 9] = [0, 2, 3, 4, 5, 6, 9, 14, 15];
+const STEPPED: [usize; 10] = [0, 2, 3, 4, 5, 6, 9, 14, 15, 16];
 const FILE: usize = 1;
 const PLACES: [Place; 5] = [Place::TopLeft, Place::TopRight, Place::Center, Place::BottomLeft, Place::BottomRight];
 // The speeds offered; the percentages go in fives.
@@ -40,7 +40,7 @@ const SET: usize = 6;
 // Each field's range and digits.
 const FIELDS: [(u32, u32, u32); 6] = [(2000, 2099, 4), (1, 12, 2), (1, 31, 2), (0, 23, 2), (0, 59, 2), (0, 59, 2)];
 const WIDTH: usize = 84;
-const HEIGHT: usize = 21;
+const HEIGHT: usize = 22;
 const LIST: usize = 17; // the pages' column
 
 /// The window's state: the page, the row on it, whether the keys move in the pages' list, and the image's file as typed.
@@ -205,6 +205,7 @@ impl Settings {
             13 => c.net = !c.net,
             14 => c.text_size = next(&TEXT_SIZES, c.text_size, step),
             15 => c.place = PLACES[cycle(PLACES.iter().position(|p| *p == c.place).unwrap_or(4), PLACES.len())],
+            16 => c.face = FACES[cycle(FACES.iter().position(|f| f.1 == c.face).unwrap_or(0), FACES.len())].1,
             _ => return None,
         }
         (c != *config).then_some(c)
@@ -361,7 +362,8 @@ impl Settings {
                    (ROWS[7], check(config.time)), (ROWS[8], format!("{} of the time", check(config.seconds))),
                    (ROWS[9], format!("< {}% >  the time's digits", config.time_size)), (ROWS[10], check(config.date)), (ROWS[11], check(config.cpu)),
                    (ROWS[12], check(config.memory)), (ROWS[13], format!("{} (no counters yet)", check(config.net).as_str())),
-                   (ROWS[14], format!("< {}% >  the date, CPU, memory and network lines", config.text_size)), (ROWS[15], format!("< {} >", place))])
+                   (ROWS[14], format!("< {}% >  the date, CPU, memory and network lines", config.text_size)), (ROWS[15], format!("< {} >", place)),
+                   (ROWS[16], String::from(if config.face == Face::Analog { "< analog >  a dial, and gauges of CPU and memory" } else { "< digital >  digits, and a graph of the CPU" }))])
     }
 
     /// Draws the window; returns where the text cursor is (on the image file's row while it is chosen).
