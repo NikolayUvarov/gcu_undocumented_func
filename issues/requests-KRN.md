@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (9 requests waiting, 2026-10-12, three of them for 750; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (10 requests waiting, 2026-10-12, three of them for 750, one for 550-APP-0033; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -200,3 +200,21 @@ The same build passed the whole suite when it ran again. Nothing in the tools tr
 ### Acceptance criteria
 
 The `wm` suite types its lines with no press lost in repeated runs, or a drop is logged where it happens.
+
+## A slot for the Wi-Fi station's configuration client (550-APP-0033)
+
+**Recorded by:** the tools track (APP), 2026-10-12, for `wifi` and the station's configuration interface proposed to `NET` (requests-NET.md, "`idl/wifi.wit`: what `wifi` needs of the station").
+
+### Problem
+
+`wifi` will talk to the network track's 802.11 station (`wlan`) through its configuration interface. A program gets a service's client only in a fixed slot its launcher lends, and there is none for this one.
+
+### Plan (a proposal; the kernel track decides)
+
+- `SLOT_WIFI` and `REQUEST_WIFI`, as `SLOT_BATTERY` and `REQUEST_BATTERY` came (211-KRN-0090).
+- `init` gives the shell the station's configuration client with the badge that changes settings, once `wlan` runs.
+- The shell lends it to a program that asks for `REQUEST_WIFI`; `wm` asks for it too and passes it on, as it passes the camera.
+
+### Acceptance criteria
+
+With the station (or a stand-in service of the agreed interface in QEMU), `wifi` started from the shell and from `wm` holds the client in `SLOT_WIFI`, and `caps` shows it there.

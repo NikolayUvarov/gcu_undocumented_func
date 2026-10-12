@@ -48,7 +48,7 @@ pub const CATEGORIES: [(&str, &[&str]); 6] = [
     ("System", &["console", "top", "memmap", "load", "hw", "ipc", "caps", "dmesg", "svc", "keys", "keymap", "screenshot", "uptime", "pinmap"]),
     ("Clocks", &["clock", "dzen-clock"]),
     ("Sound and voice", &["beep", "say", "listen", "hear"]),
-    ("Network", &["netcheck"]),
+    ("Network", &["wifi", "netcheck"]),
     ("Tests and performance", &["check", "bench", "kbench", "netbench", "memtest"]),
 ];
 /// Programs with a text face (issue 089) get a second entry for it.

@@ -228,3 +228,74 @@ Effector's commands and replies are JSON. Under MC-11.11 and the authority map (
 ### Acceptance criteria
 
 The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
+
+## The raw-frame interface between `bcm_wifi` and the station (550-DRV-0027)
+
+**Recorded by:** the drivers track (`DRV`), 2026-10-12, for the station of "An 802.11 station and WPA2-PSK" above.
+
+### Problem
+
+On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](550-DRV-0026-bcm4331-transmits.md)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
+
+### Plan (a proposal; the network track decides)
+
+`idl/wlanhw.wit` 1.0, served by `bcm_wifi`, used by `wlan` only:
+- `info` → MAC address, supported channels;
+- `set-channel(channel)`; `set-filter(all-beacons, bssid, own-address)`;
+- `send(frame, rate)` → transmit status (acknowledged or not, retries);
+- `receive` → frames from a shared buffer, each with signal (dBm), channel, rate and the FCS already checked;
+- later, `set-key`/`clear-key` for the chip's CCMP, only if the station wants it.
+
+The driver keeps no 802.11 state beyond the filter and the channel: authentication, association, scanning policy, keys and rates are the station's.
+
+### Acceptance criteria
+
+`NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
+
+## `idl/wifi.wit`: what `wifi` needs of the station (550-APP-0033)
+
+**Recorded by:** the tools track (APP), 2026-10-12, at the maintainer's word ("do the tools track's part of the network and Wi-Fi configuration"), for the Wi-Fi configuration interface that "An 802.11 station and WPA2-PSK" above proposes.
+
+### Problem
+
+`wifi` (550-APP-0033) is built against a stand-in station (`wifi/src/station.rs`, `wifi --demo`), since the station does not exist. Its calls are what the tools track asks the station's configuration interface for. The network track decides the interface; the program follows it.
+
+### Plan (a proposal; the network track decides)
+
+```wit
+/// The 802.11 station's configuration (`wlan`): the access points around, joining one, the link, the networks it
+/// remembers. The setup program and the shell hold the badge that changes settings; others may only read.
+package mind:wifi@1.0.0;
+
+interface wifi {
+    enum security { open, wep, wpa2, wpa3, enterprise }
+    enum error { no-device, busy, invalid, denied, unsupported }
+    enum state { off, joining, joined, failed }
+    enum reason { none, wrong-passphrase, no-answer, refused, no-address, lost }
+    /// An access point the last scan heard: its network's name (empty: hidden), BSSID in the low 48 bits, channel,
+    /// signal as minus dBm (48: -48 dBm; the IDL has no signed integers), protection, and whether a passphrase for
+    /// the name is kept.
+    record network { ssid: string<32>, bssid: u64, channel: u8, weakness: u8, security: security, remembered: bool }
+    /// The link: its state, the network's name, the IPv4 address once DHCP answered (0 before), the signal, and why
+    /// joining failed.
+    record status { state: state, ssid: string<32>, address: u32, weakness: u8, reason: reason }
+    /// The access points of the last scan; a new scan starts.
+    scan: func() -> result<list<network, 32>, error>;
+    /// Starts joining `ssid` (`status` follows): `passphrase` empty for an open or a remembered network; `remember`
+    /// keeps it through `keystore`, never in a file (MC-11.9). Change badge only.
+    join: func(ssid: string<32>, passphrase: string<64>, remember: bool) -> result<_, error>;
+    status: func() -> status;
+    /// Leaves the network (change badge only).
+    leave: func() -> result<_, error>;
+    /// Forgets a remembered network; false when none had the name (change badge only).
+    forget: func(ssid: string<32>) -> result<bool, error>;
+}
+```
+
+- `wifi` checks a passphrase before it sends it (WPA2-PSK: 8 to 63 printable characters or 64 hexadecimal digits); the station checks it again.
+- The passphrase crosses the interface once, to the station, which hands it to `keystore`; it is never answered back.
+- A slot and a request bit for the client are asked of `KRN` (requests-KRN.md, "A slot for the Wi-Fi station's configuration client").
+
+### Acceptance criteria
+
+The network track agrees or changes the interface; `wifi` follows it in a new step of 550-APP-0033, and its QEMU check runs against a stand-in service of the agreed interface.

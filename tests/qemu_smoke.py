@@ -1099,6 +1099,36 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
+    # wifi (550-APP-0033): without the 802.11 station it says so; with --demo, against the stand-in station, Enter on
+    # MIND-Lab asks for its passphrase, which shows as dots only, and joins.
+    vm.send("wifi\n")
+    vm.expect("NO STATION", after="[WIFI] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("No Wi-Fi station:") in row for row in screen), screen
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    vm.send("wifi --demo\n")
+    vm.expect("MODE=LIST ROWS=7 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
+    vm.send_bytes(b"correct horse")
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("•" * 13) in row for row in screen):
+            break
+    assert any(canon("•" * 13) in row for row in screen) and not any("horse" in row for row in screen), screen
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-Lab 10.0.0.42")
+    assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
     # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
     # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
     import datetime
@@ -6683,11 +6713,35 @@ def wm_suite(vm):
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        for page in ("Keyboard", "Network", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
-            keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
+        for page in ("Keyboard", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
+            keys(*["down"] * (3 if page == "Sound" else 1), text=f"SETTINGS={page}")
             keys("ret")
             screen_has(f"{page}: a page to read; nothing is set here yet")
-        keys("up", "up", text="SETTINGS=Date and time")
+        # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
+        # window, which says there is no station here.
+        keys("up", text="SETTINGS=Network")
+        keys("ret", text="SETTINGS=Network:Wi-Fi")
+        screen_has("console netpolicy")
+        keys("ret", text="[WM] STARTED wifi PID")
+        pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
+        while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+            time.sleep(.1)
+            wait(lines=0)
+        wifi = int(next(m[0] for m in windows_re.findall("".join(seen)) if m[1] == pid))
+        while wifi not in state()[2]:
+            wait()
+        for _ in range(30):
+            if any(canon("No Wi-Fi station:") in row for row in inside(wifi)):
+                break
+            time.sleep(.3)
+        else:
+            raise AssertionError(inside(wifi))
+        keys("alt-w", text=f"CLOSE {wifi}")
+        until(f"GONE {wifi}")
+        while wifi in state()[2]:
+            wait()
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("down", "down", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
         # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
         # stays as it was; no window of the shell's opens, and Settings stay open on the field.
@@ -6708,7 +6762,7 @@ def wm_suite(vm):
         assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
         keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
-              "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
+              "file with nothing typed says what to do, each page to read says so, the network page's Wi-Fi row starts wifi, and Enter on each of the date page's "
               "six fields set the clock at once, with no window of the shell's", flush=True)
 
     def console_joined(console):
