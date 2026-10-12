@@ -3714,14 +3714,23 @@ def vfs_suite(args):
             stopped = re.findall(r"^STOPPED (\w+)$", output, re.M)
             assert "REBOOTING..." in output and stopped[-1] == "logd" and "init" not in stopped and "shell" not in stopped, output
             assert stopped.index("vfs_server") < stopped.index(BOOT_DRIVER) < stopped.index("compositor"), stopped
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            # Without data/pause.txt the boot waits for no photo (211-KRN-0089).
+            boot = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            assert "A PAUSE OF" not in boot, boot
             vm.expect("MIND> ", timeout=60)
+            assert "A PAUSE OF" not in vm.command("dmesg -s init")
             require(vm.command("cat data/reboot.txt"), "kept")
+            require(vm.command("write data/pause.txt 1"), "WROTE 2 BYTES")
             vm.send("reboot -f\n")
             output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=60)
             assert "REBOOTING..." in output and "STOPPED" not in output, output
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            # With it, the bootloader's two pauses and init's, of the seconds it names.
+            boot = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            require(boot, "MIND CORE BOOT: A PAUSE OF 1 S: THE LINES ABOVE ARE THE FIRMWARE'S")
+            require(boot, "A PAUSE OF 1 S FOR A PHOTO OF THESE LINES")
             vm.expect("MIND> ", timeout=60)
+            require(vm.command("dmesg -s init"), "[INIT] A PAUSE OF 1 S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT")
+            vm.command("rm data/pause.txt")
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
             # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
             require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")

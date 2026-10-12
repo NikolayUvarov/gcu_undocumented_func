@@ -11,7 +11,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, ABI_VERSION, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, ABI_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -54,16 +54,16 @@ fn drawable(info: &ModeInfo) -> bool {
 struct ConsoleOutDevice { _opaque: u8 }
 
 // A line of the loader's progress on the text console (211-KRN-0016): without COM1 it shows where a boot stops.
-// The pause for a photo of the screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
-const PHOTO_PAUSE_S: usize = 5;
-
-// No hypervisor bit in CPUID: a real machine, not QEMU, whose tests need no pause.
-fn bare_metal() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    #[allow(unused_unsafe)]
-    { PHOTO_PAUSE_S > 0 && unsafe { core::arch::x86_64::__cpuid(1) }.ecx >> 31 == 0 }
-    #[cfg(not(target_arch = "x86_64"))]
-    { false }
+// The pause for a photo of the screen (211-PRT-0004), in seconds: the first number in data/pause.txt on the loader's
+// own volume, at most PHOTO_PAUSE_MAX_S. No file, or 0, no pause: it slowed every boot once no photo was needed (the
+// maintainer, 2026-10-12, 211-KRN-0089).
+fn photo_pause_s(services: &BootServices, image: Handle) -> u32 {
+    let Ok(mut sfs) = services.get_image_file_system(image) else { return 0 };
+    let Ok(mut root) = sfs.open_volume() else { return 0 };
+    let mut buffer = [0u8; 64];
+    let Ok(text) = read_file(&mut root, "DATA\\", "PAUSE.TXT", &mut buffer) else { return 0 };
+    let digits = text.iter().skip_while(|b| b.is_ascii_whitespace()).take_while(|b| b.is_ascii_digit());
+    digits.fold(0u32, |n, &d| n.saturating_mul(10).saturating_add((d - b'0') as u32)).min(PHOTO_PAUSE_MAX_S)
 }
 
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
@@ -382,11 +382,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
     show_text(&system_table);
     say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
-    // On a real machine, time to read what the firmware printed above this line before the loader's own lines push it
-    // out of the small text console (the MacBook Pro, 2026-10-09).
-    if bare_metal() {
-        say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", PHOTO_PAUSE_S));
-        system_table.boot_services().stall(PHOTO_PAUSE_S * 1_000_000);
+    // When asked, time to read what the firmware printed above this line before the loader's own lines push it out of
+    // the small text console (the MacBook Pro, 2026-10-09).
+    let pause_s = photo_pause_s(system_table.boot_services(), image);
+    if pause_s > 0 {
+        say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", pause_s));
+        system_table.boot_services().stall(pause_s as usize * 1_000_000);
     }
     let loaded = {
         let boot_services = system_table.boot_services();
@@ -438,12 +439,12 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs, heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
-    // On a machine without a hypervisor, time for a photo of these lines before the screen changes (211-PRT-0004).
-    if bare_metal() {
-        say(&system_table, format_args!("{} CPUS; A PAUSE OF {} S FOR A PHOTO OF THESE LINES", cpu_count, PHOTO_PAUSE_S));
-        system_table.boot_services().stall(PHOTO_PAUSE_S * 1_000_000);
+    // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
+    if pause_s > 0 {
+        say(&system_table, format_args!("{} CPUS; A PAUSE OF {} S FOR A PHOTO OF THESE LINES", cpu_count, pause_s));
+        system_table.boot_services().stall(pause_s as usize * 1_000_000);
     }
     say(&system_table, format_args!("{} CPUS; EXITING BOOT SERVICES", cpu_count));
     BOOT_TABLE.store(core::ptr::null_mut(), Relaxed);

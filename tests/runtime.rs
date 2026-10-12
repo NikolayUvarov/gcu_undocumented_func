@@ -229,7 +229,7 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 6));
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 7));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));

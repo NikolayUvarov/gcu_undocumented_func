@@ -149,7 +149,13 @@ ls log:                    # the log partition: a BOOTNNNN.LOG for each boot
 | `MIND CORE KERNEL: NO TICK FROM THE PIT`, or everything waits forever (programs that sleep, time not moving) | No timer interrupt reaches the kernel. The line `MIND CORE KERNEL: TICK: …` says where the tick comes from: the LAPIC timer, or the PIT where the firmware lists no ACPI PM timer ([211-PRT-0003](../issues-done/211-PRT-0003-tick-without-the-pit.done)) | Photograph the lines and report it |
 | The keyboard does nothing | Only PS/2 and USB keyboards on the first USB 3 (xHCI) controller work; on Intel 7–9 series chipsets the kernel first moves the USB ports there from EHCI | Another USB port (rear, on the chipset) or a PS/2 keyboard |
 
-While real machines are diagnosed, two screens stay for 5 seconds on a machine without a hypervisor, so they can be photographed: the bootloader's `MIND CORE BOOT:` lines (`A PAUSE OF 5 S FOR A PHOTO OF THESE LINES`), and the kernel's grey lines before the compositor takes the screen. QEMU does not pause.
+**Pauses for a photo of the screen.** The boot does not wait by default. To photograph the boot screens, put a number of seconds (at most 60) in `data/pause.txt` on the boot volume: from Windows on the written stick, or in MIND with `write data/pause.txt 5` and a restart. Then three screens stay that long:
+
+- the firmware's lines (`A PAUSE OF 5 S: THE LINES ABOVE ARE THE FIRMWARE'S`);
+- the bootloader's `MIND CORE BOOT:` lines (`A PAUSE OF 5 S FOR A PHOTO OF THESE LINES`);
+- the kernel's grey lines, before the compositor takes the screen.
+
+`0` or no file: no pause (211-KRN-0089). A boot that fails stops with its error on the screen anyway.
 
 ## 9. What to send back
 

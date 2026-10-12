@@ -57,6 +57,7 @@ mod tests {
             launch: Default::default(),
             efi_runtime: 0,
             device_tree: 0,
+            photo_pause_s: 0,
         }
     }
 
