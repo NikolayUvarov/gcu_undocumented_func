@@ -468,6 +468,7 @@ fn main(info: &'static BootInfo) {
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
     // Where the pointer was drawn last, and its size then.
     let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
+    let mut free: Option<u64> = None; // the free memory the background shows
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
     let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
@@ -642,8 +643,10 @@ fn main(info: &'static BootInfo) {
                     }
                     cpu = Some((busy, idle));
                 }
+                // The frame pool's free memory (000-APP-0064), without the search for the arena's largest block.
+                if backdrop.config.memory { free = mind::idl::sysinfo::pool(Endpoint::SYSINFO).ok().and_then(|r| r.ok()).map(|p| p.frames_free); }
             }
-            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], net: None };
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, net: None };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
         }
