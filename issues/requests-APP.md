@@ -305,3 +305,22 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## Translucent windows in `wm` (the maintainer's question, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12. The maintainer asked whether windows can have a translucent colour and did not get an answer; this request is the answer's place.
+
+### Problem
+
+`wm` draws each screen cell from the one window that owns it (an owner map over the cells), and the background where no window does. A window is opaque: what is under it is not drawn.
+
+### What it takes (no kernel change)
+
+- **Translucent over the desktop:** a setting in `data/wm.conf` (for example `opacity 85`) that blends each window's pixels with the background's (`Backdrop::pixel`) as `blit` and the text cells draw them. Windows below a translucent one stay hidden, as now. Only `wm`.
+- **Translucent over other windows:** the cells of a translucent window draw the windows under it first, then blend. More drawing for each change: on the MacBook Pro's 2880 × 1800, a full redraw blends about 5 million pixels on the CPU, which is fine for windows that stand still and slow for moving ones until the GPU draws (177).
+- **A program's own transparency** (an alpha channel in its pixels): a pixel format with alpha in `idl/window.wit` (a new minor version), kept by the broker `windows` and blended by `wm`. The compositor stays as it is: it shows the screen of the task in front.
+
+### Acceptance criteria
+
+- With the setting, the `wm` suite reads a window's pixel as the blend of its colour and the background's.
+- Without it, every pixel is as today.
