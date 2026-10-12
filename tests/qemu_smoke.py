@@ -1867,7 +1867,8 @@ def fm_check(vm):
     else:
         raise AssertionError("clock.elf not reached")
     vm.send_bytes(b"\r")
-    time.sleep(.5)
+    vm.expect("[CLOCK] ")  # started and in front: loading it from the disk may take longer than a fixed wait
+    time.sleep(.2)
     vm.send_bytes(b"\x1a")
     pid = int(re.search(r"PID=(\d+) BACKGROUND\. SHELL RESUMED\.", vm.expect("BACKGROUND. SHELL RESUMED."))[1])
     time.sleep(.2)
