@@ -365,7 +365,7 @@ Three console programs of the crate `bench/`.
 
 These are measurements of one machine in one configuration, not proofs (MC-12.1, 12.2). The QEMU suite `bench` runs all three on x86 and aarch64. There, every check of `check` passes or is skipped with its reason; a sleep is never shorter than asked since 000-KRN-0065.
 
-**The runs on real hardware** ([176-KRN-0087](../../issues/176-KRN-0087-runs-on-real-hardware.md)) are two msh scripts on the boot volume. Each collects what debugging needs, with one command typed in the shell; Esc stops it.
+**The runs on real hardware** ([176-KRN-0087](../../issues-done/176-KRN-0087-runs-on-real-hardware.done)) are two msh scripts on the boot volume. Each collects what debugging needs, with one command typed in the shell; Esc stops it.
 
 | Script | What it runs |
 |---|---|

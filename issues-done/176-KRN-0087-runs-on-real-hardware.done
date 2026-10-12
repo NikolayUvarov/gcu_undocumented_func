@@ -1,6 +1,6 @@
-# 176-KRN-0087 — Two runs on real hardware that collect what debugging needs: `diag/quick.msh` and `diag/full.msh`
+# 176-KRN-0087 — Two runs on real hardware that collect what debugging needs: `diag/quick.msh` and `diag/full.msh` — done
 
-**Type:** tools (`diag/`, the image's staging in `02_build.sh`, `scripts/build_aarch64.sh` and `scripts/make_usb_image.py`, tests) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested on the host and in QEMU; the quick run done on the MacBook Pro, the full run left) · **Blocked by:** — · **Roadmap:** Assurance, track A, main task [176](176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** tools (`diag/`, the image's staging in `02_build.sh`, `scripts/build_aarch64.sh` and `scripts/make_usb_image.py`, tests) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Roadmap:** Assurance, track A, main task [176](../issues/176-test-and-performance-utilities.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 
@@ -93,6 +93,17 @@ Two msh scripts on the boot volume, `diag/quick.msh` and `diag/full.msh`, run fr
   - The `shell` suite reads the screen while a script sleeps; the host test checks the first line.
 - **Left:** the maintainer sees the lines appear during a run.
 
+## Resolution
+
+- **The scripts:** `diag/quick.msh` and `diag/full.msh` on the boot disk, staged by `02_build.sh`, `scripts/build_aarch64.sh` and `scripts/make_usb_image.py`. Each step writes its own file under `log:quickNNNN/` or `log:fullNNNN/`, and `summary.txt` names the build, each step's result and time, and the checks by eye.
+- **The tests:** `tests/diag_host.rs` and the `bench` suite (x86 and aarch64), as the acceptance criteria say.
+- **The MacBook Pro, the last full run** (`fast-test` 7281472, `log:full0001/`, 2026-10-12):
+  - 73 steps in 44 s, none failed;
+  - `check`: 63 passed, 31 skipped (no device), none failed;
+  - no warnings before or after the run.
+- **Lines during a run:** the maintainer's photos show `DIAG FULL: STARTED`, then each `[N/73]` step and its time as it ran. The system log has `DIAG FULL: STEP N OF 73` with times from 690 s to 734 s.
+- **Not covered:** the `msh` host draws the screen after each print; that is the tools track's code, changed at the maintainer's word with a note in `requests-APP.md`.
+
 ## Related
 
-[176](176-test-and-performance-utilities.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../issues-done/176-KRN-0063-check.done), [176-KRN-0064](../issues-done/176-KRN-0064-bench.done), [docs/tools/README.md](../docs/tools/README.md) §4.13, [docs/msh.md](../docs/msh.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the hardware report).
+[176](../issues/176-test-and-performance-utilities.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../issues-done/176-KRN-0063-check.done), [176-KRN-0064](../issues-done/176-KRN-0064-bench.done), [docs/tools/README.md](../docs/tools/README.md) §4.13, [docs/msh.md](../docs/msh.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the hardware report).

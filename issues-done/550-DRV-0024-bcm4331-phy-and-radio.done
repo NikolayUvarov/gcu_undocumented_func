@@ -1,6 +1,6 @@
-# 550-DRV-0024 — `bcm_wifi`, stage 3: the HT-PHY and the 2059 radio set up and a channel tuned
+# 550-DRV-0024 — `bcm_wifi`, stage 3: the HT-PHY and the 2059 radio set up and a channel tuned — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written from the fact sheet; waits for a run on the MacBook Pro) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -33,6 +33,18 @@ On the MacBook Pro, one boot on request logs:
 
 The machine runs on. This is evidence for this machine only (MC-12.1). The MAC is enabled for about three seconds with no frame queued to send; it could only acknowledge a frame addressed to it, and no station knows its address.
 
+## Resolution
+
+`bcm_wifi/src/stage3.rs` with the tables in `bcm_wifi/src/tables.rs`. On the MacBook Pro (`fast-test` 7281472, LOG:boot0001.log, 2026-10-12, on request):
+- `ht0initvals29.fw`: 499 values written; `ht0bsinitvals29.fw`: 35;
+- the resistor calibration done (radio 0x945 = `0021`); the three RC calibration passes done (radio 0x140 = `0002`);
+- the channel switch to 6: the clock control `070B0302` before b43's PLL update and `070B0002` after: the PLL requests are cleared, as b43 does, but both PLLs stay running (bits 24 and 25), so that step does no harm here;
+- the HT-PHY's 24 tables and set-up; the RF sequencer's switch to transmit and back to receive done, the power amplifiers held off;
+- the MAC enabled (microcode status 2, active) and suspended again;
+- the microcode's noise request answered at once with no sample (`7F` on channels 1, 6 and 11), as b43 implies for this PHY: the receiver is shown by stage 4 instead.
+
+The machine ran on through `check`, `kbench` and `bench`. Evidence for this machine only (MC-12.1).
+
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), stage 4: [requests-KRN.md](requests-KRN.md) ("`bcm_wifi` gets DMA memory and its interrupt"), `bcm_wifi/`.
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), stage 4: [requests-KRN.md](../issues/requests-KRN.md) ("`bcm_wifi` gets DMA memory and its interrupt"), `bcm_wifi/`.

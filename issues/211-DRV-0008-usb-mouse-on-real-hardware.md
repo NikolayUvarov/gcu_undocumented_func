@@ -57,6 +57,8 @@ A second device there, 1A81:1006 (a low-speed keyboard and mouse), fails its req
 
 - 2026-10-08, the MacBook Pro, `fast-test` at 89809ad: the Logitech receiver's mouse works. The cursor moves, both buttons work, the desktop menu opens on a right click and windows are dragged. The QEMU `usb` suite passes with the boot mouse on x86. Still to see: the log of the low-speed device 1A81:1006, now that its interface is retried every 5 s instead of claimed again at once; the suite on aarch64.
 
+- 2026-10-12, the MacBook Pro, `fast-test` 7281472 (the length from the configuration's HID descriptor, `log:boot0001.log`): `10C4:8105 REPORT DESCRIPTOR: 64 BYTES`, dumped whole. `usb_hid` reads it as `MOUSE: ID 0, X AT BIT 8 (16 BITS), Y AT BIT 24 (16 BITS), REPORT PROTOCOL`, and a report `[00, 00, 00, FF, FF, 00]` is a move of −1 in Y. **Left:** the maintainer's word that the pointer moves up and down.
+
 ## Related
 
 [211-DRV-0003](../issues-done/211-DRV-0003-usb-host-on-real-hardware.done), [211-DRV-0004](211-DRV-0004-ehci.md), issue 164.
