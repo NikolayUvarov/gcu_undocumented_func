@@ -1,6 +1,6 @@
 # 550-DRV-0027 — `bcm_wifi` as a service: raw 802.11 frames for the station, through an IDL interface agreed with NET
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** the interface's agreement with `NET` ([requests-NET.md](requests-NET.md), "The raw-frame interface…"); [550-DRV-0026](550-DRV-0026-bcm4331-transmits.md) for transmitting · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.4
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open · **Blocked by:** the interface's agreement with `NET` ([requests-NET.md](requests-NET.md), "The raw-frame interface…"); [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done) for transmitting · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.4
 
 ## Problem
 
@@ -24,4 +24,4 @@ On the MacBook Pro, `wlan` (or, until it exists, a test client) sets a channel, 
 
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0026](550-DRV-0026-bcm4331-transmits.md), [requests-NET.md](requests-NET.md) (the station), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`), `bcm_wifi/`.
+[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [requests-NET.md](requests-NET.md) (the station), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`), `bcm_wifi/`.
