@@ -103,11 +103,13 @@ impl Pointer {
         Self { id: 0, buttons: [button(0), button(1), button(2)], x: byte(8), y: byte(16), wheel: Some(byte(24)), absolute: false }
     }
 
-    /// The layout of the first report with X and Y in a report descriptor; None if it has none.
+    /// The layout of the first report with X and Y in a report descriptor; None if it has none. An item cut short ends
+    /// the descriptor.
     pub fn parse(descriptor: &[u8]) -> Option<Self> {
         let (mut page, mut min, mut max, mut size, mut count, mut id) = (0u32, 0i32, 0i32, 0u32, 0u32, 0u8);
-        let mut usages = [0u32; 16];
-        let (mut used, mut range) = (0usize, None::<(u32, u32)>);
+        // Local usages, with those given with their page (4 bytes) marked; the range's page given or not.
+        let (mut usages, mut extended) = ([0u32; 16], 0u16);
+        let (mut used, mut range, mut range_extended) = (0usize, None::<(u32, u32)>, false);
         let mut offsets = [0u32; 256]; // per report ID
         let mut found: [Option<Pointer>; 8] = [None; 8]; // by report ID, in order of appearance
         let mut at = 0;
@@ -115,7 +117,7 @@ impl Pointer {
             let prefix = descriptor[at];
             if prefix == 0xFE { at += 3 + *descriptor.get(at + 1)? as usize; continue; } // a long item
             let length = [0, 1, 2, 4][(prefix & 3) as usize];
-            let bytes = descriptor.get(at + 1..at + 1 + length)?;
+            let Some(bytes) = descriptor.get(at + 1..at + 1 + length) else { break };
             let data = bytes.iter().rev().fold(0u32, |v, &b| v << 8 | b as u32);
             let signed = match length { 1 => data as u8 as i8 as i32, 2 => data as u16 as i16 as i32, _ => data as i32 };
             at += 1 + length;
@@ -125,12 +127,20 @@ impl Pointer {
                     7 => size = data, 8 => id = data as u8, 9 => count = data, _ => {}
                 },
                 2 => match prefix >> 4 { // local
-                    0 => { if used < usages.len() { usages[used] = if length == 4 { data } else { page << 16 | data }; used += 1; } }
-                    1 => range = Some((page << 16 | data, range.map_or(0, |r| r.1))),
-                    2 => range = Some((range.map_or(0, |r| r.0), page << 16 | data)),
+                    0 => { if used < usages.len() { usages[used] = if length == 4 { data } else { page << 16 | data }; extended |= ((length == 4) as u16) << used; used += 1; } }
+                    1 => { range = Some((if length == 4 { data } else { page << 16 | data }, range.map_or(0, |r| r.1))); range_extended = length == 4; }
+                    2 => range = Some((range.map_or(0, |r| r.0), if length == 4 { data } else { page << 16 | data })),
                     _ => {}
                 },
                 0 => {
+                    // A Usage Page after the usages it is for (some mice give X and Y, then the page): the usages given
+                    // without a page take the current one, back to the first already on it, as Linux's hid-core does.
+                    let mut walked = true;
+                    for n in (0..used).rev().filter(|n| extended >> n & 1 == 0) {
+                        if usages[n] >> 16 == page { walked = false; break; }
+                        usages[n] = page << 16 | usages[n] & 0xFFFF;
+                    }
+                    if let Some((low, high)) = range.filter(|r| walked && !range_extended && r.0 >> 16 != page) { range = Some((page << 16 | low & 0xFFFF, page << 16 | high & 0xFFFF)); }
                     if prefix >> 4 == 8 { // Input
                         let offset = &mut offsets[id as usize];
                         let constant = data & 1 != 0; let variable = data & 2 != 0; let relative = data & 4 != 0;
@@ -150,7 +160,7 @@ impl Pointer {
                             *offset += size;
                         }
                     }
-                    used = 0; range = None; // local items end at every main item
+                    used = 0; extended = 0; range = None; // local items end at every main item
                 }
                 _ => {}
             }

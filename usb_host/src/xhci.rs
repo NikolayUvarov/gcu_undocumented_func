@@ -191,6 +191,11 @@ impl Xhci {
         self.done.iter_mut().filter(|d| d.is_some_and(|d| d.slot == slot && d.dci == dci)).for_each(|d| *d = None); // stale ones
         for &(parameter, status, control) in trbs { Self::enqueue(&mut self.dma, ring, parameter, status, control); }
         self.doorbell(slot, dci as u32);
+        self.completion_for(attempts, slot, dci)
+    }
+
+    // The next completion on endpoint `dci` of `slot`: Ok(residue), or Err(completion code; 0: no answer).
+    fn completion_for(&mut self, attempts: usize, slot: u8, dci: u8) -> Result<u32, u32> {
         let mut result = None;
         wait_for(attempts, || {
             self.pump();
@@ -212,11 +217,13 @@ impl Xhci {
         // At most 5 s (USB 2.0 9.2.6.4). A device that stalls a request (SET_IDLE, often) halts endpoint 0 on the
         // controller, and one that does not answer leaves it running: either way it is reset to after this transfer, or
         // every later request would wait in vain (211-DRV-0003).
-        let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16), status_trb];
+        let trbs = [setup_trb, (data, length as u32, TYPE_DATA << 10 | (input as u32) << 16 | if input { ISP } else { 0 }), status_trb];
         let result = if length == 0 { self.transfer_for(1_500, slot, 1, ring, &[setup_trb, status_trb]) } else { self.transfer_for(1_500, slot, 1, ring, &trbs) };
         let residue = result.inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?;
-        // The status stage completes the transfer; a short data stage reports its residue on the data TRB only when it
-        // asks (ISP), so the length is taken as asked, less any residue reported.
+        // A short IN data stage reports its residue on the data TRB (ISP), and the status stage completes after it. The
+        // length is what came, not what was asked: a report descriptor read with room to spare came with the bytes of
+        // earlier transfers after it, and a mouse's layout was lost (211-DRV-0008).
+        if self.last == SHORT_PACKET { self.completion_for(1_500, slot, 1).inspect_err(|&code| self.restart(slot, 1, ring, code != 0))?; }
         Ok((length as u32).saturating_sub(residue) as usize)
     }
 
