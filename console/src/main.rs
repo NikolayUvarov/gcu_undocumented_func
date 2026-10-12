@@ -30,7 +30,9 @@ const HELP: &str = "Type a program and its arguments: uptime, df, find ram: -nam
 A console program prints here; one with a screen opens a window of its own. run <program> starts a program even where a\n\
 command has its name (run ping: the IPC demo).\n\
 Commands: ps, ls [dir], cat <file>, date, time, ping <host>, mkdir, rm, mv, write <file> <text>; list: the programs;\n\
-clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back.\n\
+cd [dir], pwd: the current directory, where paths that name no volume start (cd ..: up; cd: the boot disk's root);\n\
+clear (Ctrl+L): clear; exit: close. ↑ ↓: earlier lines; PgUp PgDn or the wheel: scroll back; Tab: complete a command,\n\
+a program or a path (again: the choices).\n\
 help <command or program>, or the name and -h, /? or --help: what it does (a program prints its own text).\n\
 kill, logs, ip, nslookup, fetch and the shell's other commands need what only the shell holds: console sends them to the\n\
 shell, which runs them on its authority; for process control, the network, logs and the like it asks first in its own\n\
@@ -40,12 +42,65 @@ struct Job { pid: u64, name: String, console: bool, printed: bool, front: bool }
 
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
 
+// A program's arguments from the current directory (000-APP-0066), as the shell takes them: a word that names a file or
+// directory there, and the first word of a program that asks for its file, go as full paths.
+fn program_args(cwd: &str, args: &str, file_first: bool) -> String {
+    if cwd.is_empty() { return String::from(args); }
+    args.split(' ').enumerate().map(|(i, word)| {
+        if !mind::path::relative(word) { return String::from(word); }
+        let full = mind::path::resolve(cwd, word);
+        if (i == 0 && file_first) || mind::fs::metadata(&full).is_ok() { full } else { String::from(word) }
+    }).collect::<Vec<_>>().join(" ")
+}
+
+// A builtin's paths from the current directory: `ls` alone lists it; `write`'s first word; every word of the others.
+fn builtin_args(cwd: &str, name: &str, args: &str) -> String {
+    match name {
+        "ls" => mind::path::resolve(cwd, args),
+        "write" => { let (path, body) = args.split_once(char::is_whitespace).unwrap_or((args, "")); format!("{} {}", mind::path::resolve(cwd, path), body).trim_end().into() }
+        "cat" | "mkdir" | "rm" | "mv" => args.split_whitespace().map(|w| mind::path::resolve(cwd, w)).collect::<Vec<_>>().join(" "),
+        _ => String::from(args),
+    }
+}
+
+// Tab (000-APP-0066): the first word from console's commands, the shell's and the programs; a word holding `/` or `:`,
+// or a later word, from the directory it names. One match is completed, several to what they share, else listed.
+fn complete(screen: &mut Screen) {
+    let text = String::from(screen.line.as_str());
+    if screen.line.cursor_chars() != text.chars().count() { return; }
+    let start = text.rfind(' ').map_or(0, |i| i + 1);
+    let (before, word) = (&text[..start], &text[start..]);
+    let first = before.trim().is_empty();
+    let after_run = before.split_whitespace().count() == 1 && before.trim() == "run";
+    let mut found: Vec<(String, bool)> = Vec::new();
+    let typed = if word.contains('/') || word.contains(':') || !(first || after_run) {
+        let (dir, name) = mind::path::split_word(word);
+        let _ = mind::fs::list(&mind::path::resolve(&screen.cwd, dir), |e| found.push((String::from(e.name_str()), e.is_dir)));
+        name
+    } else {
+        if first {
+            let own = screen::LINES.iter().flat_map(|(names, _)| names.iter()).chain(screen::SHELL_ONLY.iter());
+            found.extend(own.map(|n| (String::from(*n), false)));
+        }
+        if let Ok(programs) = loader::list(Endpoint::LOADER) { found.extend(programs.as_slice().iter().filter(|p| !p.service).map(|p| (String::from(p.name.as_str()), false))); }
+        word
+    };
+    let names: Vec<(&str, bool)> = found.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+    match mind::path::complete(typed, &names) {
+        mind::path::Completion::None => {}
+        mind::path::Completion::Add(add) => for ch in add.chars() { screen.line.insert(ch); },
+        mind::path::Completion::List(names) => screen.say(&names.join("  "), Kind::Note),
+    }
+}
+
 // Starts `name` with `args`, lending what it asks for of what console holds, and `output` (a send copy of console's
 // endpoint) to a console program.
-fn run(name: &str, args: &str, output: usize) -> Result<Job, String> {
+fn run(name: &str, args: &str, output: usize, cwd: &str) -> Result<Job, String> {
     let failed = |error: loader::Error| match error { loader::Error::NotFound => format!("{}: no such program", name), other => format!("{}: {:?}", name, other) };
     let lost = |_| format!("{}: the loader does not answer", name);
     let needs = loader::inspect(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
+    let resolved = program_args(cwd, args, needs.file && !needs.files);
+    let args = resolved.as_str();
     let requests = loader::inspect_requests(Endpoint::LOADER, name).map_err(lost)?.map_err(failed)?;
     if requests & mind::process::REQUEST_WINDOW_MANAGER != 0 { return Err(format!("{}: a window manager; start it from the shell", name)); }
     // `clock --line` too (issue u016); a help key too, so a program with a screen prints its text here (000-APP-0054).
@@ -143,14 +198,27 @@ fn main(info: &'static BootInfo) {
     let mut to_shell: Option<String> = None; // a line for the shell, sent once it is drawn
     loop {
         if let Some((line, echo)) = pending.take() {
-            if echo { screen.say(&format!("{}{}", screen::PROMPT, line), Kind::Command); }
+            if echo { let prompt = screen.prompt(); screen.say(&format!("{}{}", prompt, line), Kind::Command); }
             match parse(&line) {
                 Command::Nothing => {}
                 Command::Help => screen.say(HELP, Kind::Note),
                 Command::Clear => screen.clear(),
                 Command::Exit => break,
                 Command::List => list(&mut screen),
-                Command::Builtin { name, args } => builtins::run(&mut screen, name, args),
+                Command::Builtin { name, args } => { let args = builtin_args(&screen.cwd, name, args); builtins::run(&mut screen, name, &args) }
+                Command::Pwd => { let shown = mind::path::shown(&screen.cwd); screen.say(&shown, Kind::Output) }
+                Command::Cd(args) if args.split_whitespace().count() > 1 => screen.say("cd [directory]: one directory (cd: the boot disk's root; cd ..: up)", Kind::Error),
+                Command::Cd(args) => {
+                    let target = if args.is_empty() { String::new() } else { mind::path::resolve(&screen.cwd, args) };
+                    let (volume, dir) = mind::fs::split(&target);
+                    let found = if dir.is_empty() { mind::fs::Dir::root(volume).map(|_| ()) } else {
+                        mind::fs::metadata(&target).and_then(|m| if m.is_dir { Ok(()) } else { Err(mind::fs::Error::NotDirectory) })
+                    };
+                    match found {
+                        Ok(()) => screen.cwd = target,
+                        Err(error) => screen.say(&format!("cd {}: {:?}", mind::path::shown(&target), error), Kind::Error),
+                    }
+                }
                 Command::About(name) => match screen::line_of(name) {
                     Some(line) => screen.say(line, Kind::Output),
                     // A command of the shell: its lines of `help`, from the shell (help is taken at once).
@@ -164,7 +232,7 @@ fn main(info: &'static BootInfo) {
                 }
                 Command::Shell(name) => screen.say(&format!("{}: a command of the shell (it needs what only the shell holds); type it in the shell's {}", name, if name == "fg" { "screen (Ctrl+Alt+F1…F4)" } else { "window" }), Kind::Error),
                 Command::Run { name: "", .. } => screen.say("run <program> [arguments]", Kind::Error),
-                Command::Run { name, args } => match run(name, args, output) {
+                Command::Run { name, args } => match run(name, args, output, &screen.cwd) {
                     Ok(job) => {
                         mind::println!("[CONSOLE] RUN {} PID {}{}", job.name, job.pid, if job.console { "" } else if job.front { " ITS OWN SCREEN IN FRONT" } else { " ITS OWN SCREEN" });
                         if !job.console {
@@ -205,6 +273,7 @@ fn main(info: &'static BootInfo) {
             match input {
                 Input::Key(event) => {
                     let Some(key) = Key::from_event(event.to_word()) else { continue };
+                    if key.code() == mind::keys::Code::Tab { complete(&mut screen); dirty = true; continue; }
                     if let Some(line) = screen.key(key, page) { pending = Some((line, false)); }
                     dirty = true;
                 }

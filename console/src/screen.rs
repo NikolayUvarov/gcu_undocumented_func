@@ -30,7 +30,7 @@ pub const BACKGROUND: u32 = 0x101418;
 /// its name, as `run ping` the IPC demo).
 /// `About`: what one of console's commands or the shell's does (`help <command>`, `<command> -h`; 000-APP-0054).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str, args: &'a str }, Shell(&'a str), Run { name: &'a str, args: &'a str }, About(&'a str) }
+pub enum Command<'a> { Nothing, Help, Clear, Exit, List, Builtin { name: &'a str, args: &'a str }, Shell(&'a str), Run { name: &'a str, args: &'a str }, About(&'a str), Cd(&'a str), Pwd }
 
 /// Commands console does itself, with what it holds (issue u006).
 pub const BUILTINS: [&str; 10] = ["ps", "ls", "cat", "date", "time", "ping", "mkdir", "rm", "mv", "write"];
@@ -43,7 +43,7 @@ pub const SHELL_ONLY: [&str; 34] = ["kill", "fg", "logs", "stop", "boot", "ip", 
 /// Of those, the ones the shell runs in its own window after the user agrees there (shell/src/clients.rs).
 pub const ASKED: [&str; 16] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "logs", "stat", "pmap", "logger", "nslookup", "fetch", "https", "tpm"];
 /// Console's own commands, a line each, for `help <command>` and `<command> <help key>` (000-APP-0054).
-pub const LINES: [(&[&str], &str); 12] = [
+pub const LINES: [(&[&str], &str); 13] = [
     (&["ps"], "ps: the tasks, from sysmon"),
     (&["ls"], "ls [dir]: a directory's entries and sizes (ram:, log:, data/, docs/, …)"),
     (&["cat"], "cat <file>: a file's text, up to 16 KiB"),
@@ -51,6 +51,7 @@ pub const LINES: [(&[&str], &str); 12] = [
     (&["time"], "time: the time of day and the uptime"),
     (&["ping"], "ping <host>: the network ping, on console's flow grant (run ping: the IPC demo)"),
     (&["mkdir", "rm", "mv", "write"], "mkdir <dir>, rm <path>, mv <from> <to>, write <file> <text>: change files on ram:, on log: and in data/"),
+    (&["cd", "pwd"], "cd [directory]: the current directory, named in the prompt: paths that name no volume start there (cd: the boot disk's root; cd ..: up); pwd: shows it"),
     (&["list"], "list: the programs on the boot disk"),
     (&["clear", "cls"], "clear, cls (Ctrl+L): clear the screen"),
     (&["exit", "quit"], "exit, quit: close console"),
@@ -80,6 +81,8 @@ pub fn parse(line: &str) -> Command<'_> {
         "clear" | "cls" => Command::Clear,
         "exit" | "quit" => Command::Exit,
         "list" if args.is_empty() => Command::List,
+        "cd" => Command::Cd(args),
+        "pwd" if args.is_empty() => Command::Pwd,
         "run" => { let (name, args) = split(args); Command::Run { name: program(name), args } }
         "date" if args.starts_with("set") => Command::Shell(name),
         _ if BUILTINS.contains(&name) => Command::Builtin { name, args },
@@ -99,13 +102,18 @@ pub struct Screen {
     pub scroll: usize,
     pub line: InputLine,
     history: Vec<String>,
+    /// The current directory (000-APP-0066): `diag`, `ram:notes`; empty: the boot disk's root.
+    pub cwd: String,
     recall: Option<usize>,
 }
 
 impl Default for Screen { fn default() -> Self { Self::new() } }
 
 impl Screen {
-    pub fn new() -> Self { Self { lines: Vec::new(), partial: String::new(), at: 0, carry: Vec::new(), scroll: 0, line: InputLine::new(), history: Vec::new(), recall: None } }
+    pub fn new() -> Self { Self { lines: Vec::new(), partial: String::new(), at: 0, carry: Vec::new(), scroll: 0, line: InputLine::new(), history: Vec::new(), cwd: String::new(), recall: None } }
+
+    /// The prompt: `> `, after the current directory when it is not the boot disk's root (`diag> `).
+    pub fn prompt(&self) -> String { alloc::format!("{}{}", self.cwd, PROMPT) }
 
     fn push(&mut self, text: String, kind: Kind) {
         if self.lines.len() == LINES_MAX { self.lines.remove(0); }
@@ -186,7 +194,8 @@ impl Screen {
                     self.line.clear();
                     self.recall = None;
                     self.scroll = 0;
-                    self.say(&alloc::format!("{}{}", PROMPT, text), Kind::Command);
+                    let prompt = self.prompt();
+                    self.say(&alloc::format!("{}{}", prompt, text), Kind::Command);
                     if !text.trim().is_empty() && self.history.last() != Some(&text) {
                         if self.history.len() == HISTORY { self.history.remove(0); }
                         self.history.push(text.clone());
@@ -240,8 +249,10 @@ impl Screen {
         let y = h - 1;
         let note = if busy.is_empty() { String::new() } else { alloc::format!(" {} ", busy) };
         let room = w.saturating_sub(note.chars().count());
-        grid.text_max(0, y, PROMPT, room, Kind::Command.style());
-        let column = self.line.draw(grid, PROMPT.len().min(room), y, room.saturating_sub(PROMPT.len()), Kind::Command.style());
+        let prompt = self.prompt();
+        let width = prompt.chars().count();
+        grid.text_max(0, y, &prompt, room, Kind::Command.style());
+        let column = self.line.draw(grid, width.min(room), y, room.saturating_sub(width), Kind::Command.style());
         if !note.is_empty() { grid.text_right(w, y, &note, Kind::Note.style()); }
         Some((column, y))
     }

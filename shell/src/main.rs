@@ -23,6 +23,7 @@ mod screenshot;
 mod tpm;
 mod voicectl;
 
+use alloc::string::String;
 use console::{Console, Position};
 use core::fmt::Write;
 use mind::abi::*;
@@ -38,11 +39,11 @@ use mind::script::Interpreter;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC; date set YYYY-MM-DD HH:MM[:SS]: set the clock (it keeps no time zone)\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): THE SHELL'S OWN WINDOW, TITLED SHELL; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES, ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC; date set YYYY-MM-DD HH:MM[:SS]: set the clock (it keeps no time zone)\n- cd [directory], pwd: the current directory, named in the prompt (MIND diag>): paths that name no volume start there, in every command and in a program's arguments; cd alone: the boot disk's root; cd ..: up\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping <host>, nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [file]: the screen as a BMP (ram:screen-NNN.bmp)\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): THE SHELL'S OWN WINDOW, TITLED SHELL; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES A COMMAND, A PROGRAM OR A PATH (AGAIN: THE CHOICES), ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const BOOT_LOG_LINES: usize = 24;
-const COMMANDS: [&str; 52] = ["boot", "budget", "caps", "cat", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "nslookup", "physmap", "ping", "pmap", "poweroff", "ps", "quotas", "reboot", "release", "rm", "run", "screenshot", "shutdown", "stat", "stop", "sync", "time", "tls", "tpm", "voice", "write"];
+const COMMANDS: [&str; 54] = ["boot", "budget", "caps", "cat", "cd", "clear", "cpus", "date", "devices", "endpoints", "faults", "fetch", "fg", "free", "heap", "help", "https", "ip", "irqs", "keymap", "kill", "list", "logger", "logs", "ls", "mkdir", "msh", "mv", "net", "netgrants", "netpolicy", "netrevoke", "nslookup", "physmap", "ping", "pmap", "poweroff", "ps", "pwd", "quotas", "reboot", "release", "rm", "run", "screenshot", "shutdown", "stat", "stop", "sync", "time", "tls", "tpm", "voice", "write"];
 const NAMES: usize = 128; // as many as the loader lists (loader.wit 1.4)
 // Where the scoped VFS client for a program that asks for a file arrives: a fixed slot the shell does not use (11 is
 // SLOT_LIFECYCLE in applications). The shell lends it to the program and drops its own copy.
@@ -61,7 +62,7 @@ const SESSIONS: usize = CONSOLES + 1;
 const OWNERS: usize = 32;
 
 // A console the shell keeps aside while another is active (issue 155): its text, input line, history and programs.
-struct Session { term: Console, line: InputLine, history: History<32>, prompt_at: Position, focused: Option<u64>, line_start: bool, console: Option<u64>, msh: Interpreter }
+struct Session { term: Console, line: InputLine, history: History<32>, prompt_at: Position, focused: Option<u64>, line_start: bool, console: Option<u64>, msh: Interpreter, cwd: String }
 
 // A session in memory of its own: one is 9 KB (mostly its history), and the shell's stack is 64 KB.
 struct Parked { _pages: Pages, session: *mut Session }
@@ -94,6 +95,7 @@ struct Shell {
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
     msh: Interpreter, // the active console's: the variables and functions of statements typed at its prompt (issue 094)
+    cwd: String, // the active console's current directory (000-APP-0066): `diag`, `ram:notes`; empty: the boot disk's root
     script: Option<alloc::vec::Vec<alloc::string::String>>, // while a script runs: what programs it starts may get
     log_next: Option<u64>, // the next system log record shown above the prompt, until the first key (211-PRT-0004)
     beat: (u64, u64), // until then: the line of the `UP n S` heartbeat above the prompt, and the second it shows
@@ -153,6 +155,7 @@ impl Shell {
         core::mem::swap(&mut self.line_start, &mut session.line_start);
         core::mem::swap(&mut self.console, &mut session.console);
         core::mem::swap(&mut self.msh, &mut session.msh);
+        core::mem::swap(&mut self.cwd, &mut session.cwd);
         // The memory now holds the console that was active.
         self.parked[self.active] = self.parked[index].take();
         self.active = index;
@@ -165,7 +168,7 @@ impl Shell {
     fn show(&mut self, index: usize) {
         if index == self.shown || index >= CONSOLES { return; }
         if !self.is_open(index) {
-            let session = self.term.sibling().and_then(|term| Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default() }));
+            let session = self.term.sibling().and_then(|term| Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default(), cwd: String::new() }));
             let Some(session) = session else { let _ = writeln!(self.term, "\nERROR: NO MEMORY FOR CONSOLE {}", index + 1); return self.prompt(); };
             self.parked[index] = Some(session);
             for i in 0..CONSOLES { if self.activate(i) { self.term.label = LABELS[i]; } }
@@ -191,7 +194,7 @@ impl Shell {
         if let Some(window) = &self.window { let id = window.id(); self.note(format_args!("THE SHELL'S WINDOW IS OPEN")); return Ok(id); }
         let window = mind::windowed::Window::open(Endpoint(SLOT_WINDOWS), SCOPE_RECEIVE, mind::window::Kind::Text, self.room, (80, 25), "shell").ok_or(commands::Error::Unavailable)?;
         let term = mind::tui::Terminal::in_window(window.surface(), self.room).and_then(|term| Console::in_window(term, self.room.0)).ok_or(commands::Error::NoMemory)?;
-        let session = Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default() }).ok_or(commands::Error::NoMemory)?;
+        let session = Parked::new(Session { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, focused: None, line_start: true, console: None, msh: Interpreter::default(), cwd: String::new() }).ok_or(commands::Error::NoMemory)?;
         let id = window.id();
         self.parked[WINDOW] = Some(session);
         self.window = Some(window);
@@ -399,13 +402,21 @@ impl Shell {
         let mut line = mind::util::FixedBuf::<32>::new();
         let _ = writeln!(line, "UP {} S", second);
         self.term.put_str(core::str::from_utf8(line.as_bytes()).unwrap_or(""));
-        self.term.put_str("MIND> ");
+        let prompt = self.prompt_text();
+        self.term.put_str(&prompt);
         self.prompt_at = self.term.position();
     }
 
+    // `MIND> `, with the current directory when it is not the boot disk's root (`MIND diag> `, 000-APP-0066).
+    fn prompt_text(&self) -> String { alloc::format!("MIND{}> ", mind::path::prompt(&self.cwd)) }
+
+    // `path` as typed, taken from the current directory.
+    fn path(&self, path: &str) -> String { mind::path::resolve(&self.cwd, path) }
+
     fn prompt(&mut self) {
         if self.script.is_some() { return; } // a script's commands do not prompt
-        let _ = write!(self.term, "MIND> ");
+        let prompt = self.prompt_text();
+        let _ = write!(self.term, "{}", prompt);
         self.prompt_at = self.term.position();
         if !self.line.is_empty() { self.redraw_input(true); }
     }
@@ -482,6 +493,16 @@ impl Shell {
     // still leaves its output and the exit notice.
     fn start_front(&mut self, name: &[u8], args: &[u8], service: bool) -> Result<u64, Error> { self.start_with(name, args, service, &[], true) }
 
+    // A program's arguments with their paths taken from the current directory (see `start_with`).
+    fn program_args(&self, args: &str, file_first: bool) -> String {
+        if self.cwd.is_empty() { return String::from(args); }
+        args.split(' ').enumerate().map(|(i, word)| {
+            if !mind::path::relative(word) { return String::from(word); }
+            let full = self.path(word);
+            if (i == 0 && file_first) || mind::fs::metadata(&full).is_ok() { full } else { String::from(word) }
+        }).collect::<alloc::vec::Vec<_>>().join(" ")
+    }
+
     // `start`, lending `extra` (slot in the program, capability here) too.
     fn start_with(&mut self, name: &[u8], args: &[u8], service: bool, extra: &[(usize, usize)], front: bool) -> Result<u64, Error> {
         if service {
@@ -497,6 +518,11 @@ impl Shell {
             loader::Error::Unreadable => Error::Other(ERR_IO),
         };
         let needs = loader::inspect(Endpoint::LOADER, name)?.map_err(failed)?;
+        // The arguments from the current directory (000-APP-0066): a program has none of its own, so a word that names
+        // a file or directory there, and the first word of one that asks for its file (`edit new.txt`), go as full paths.
+        let resolved = self.program_args(args, needs.file && !needs.files);
+        let args = resolved.as_str();
+        if args.len() > ARGS_MAX { return Err(Error::Invalid); }
         // Requests `needs` has no field for (loader.wit 1.2): the network (issue 102), the authority client (issue 081).
         let requests = loader::inspect_requests(Endpoint::LOADER, name)?.map_err(failed)?;
         let authority = requests & mind::process::REQUEST_AUTHORITY != 0;
@@ -669,10 +695,36 @@ impl Shell {
             if program_args.len() > ARGS_MAX { return self.report("ARGUMENTS TOO LONG"); }
             if self.help_instead(name, program_args) { return; }
             self.run_program(name, program_args, background);
+        } else if is(b"cd") || is(b"pwd") {
+            // The current directory (000-APP-0066): paths that name no volume start there.
+            let Ok(text) = core::str::from_utf8(args) else { return self.report("NOT UTF-8") };
+            if is(b"pwd") {
+                if !text.is_empty() { return self.report("THIS COMMAND TAKES NO ARGUMENTS"); }
+                let _ = writeln!(self.term, "{}", mind::path::shown(&self.cwd));
+                return;
+            }
+            if text.split_whitespace().count() > 1 { return self.report("USAGE: CD [DIRECTORY] (CD: THE BOOT DISK'S ROOT; CD ..: UP)"); }
+            let target = if text.is_empty() { String::new() } else { self.path(text) };
+            let (volume, dir) = mind::fs::split(&target);
+            let found = if dir.is_empty() { mind::fs::Dir::root(volume).map(|_| ()) } else {
+                mind::fs::metadata(&target).and_then(|m| if m.is_dir { Ok(()) } else { Err(mind::fs::Error::NotDirectory) })
+            };
+            match found {
+                Ok(()) => self.cwd = target,
+                Err(error) => { let _ = writeln!(self.term, "ERROR: CD {}: {}", mind::path::shown(&target), files::text(error)); }
+            }
         } else if is(b"ls") {
-            files::ls(&mut self.term, args);
+            let path = self.path(core::str::from_utf8(args).unwrap_or(""));
+            files::ls(&mut self.term, path.as_bytes());
         } else if is(b"cat") || is(b"mkdir") || is(b"rm") || is(b"mv") || is(b"write") {
             if args.is_empty() { return self.report("EXPECTED A PATH"); }
+            // The paths taken from the current directory: write's first word, every word of the others.
+            let text = core::str::from_utf8(args).unwrap_or("");
+            let resolved = if is(b"write") {
+                let (path, body) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
+                alloc::format!("{} {}", self.path(path), body)
+            } else { text.split_whitespace().map(|w| self.path(w)).collect::<alloc::vec::Vec<_>>().join(" ") };
+            let args = resolved.trim_end().as_bytes();
             if is(b"cat") { files::cat(&mut self.term, args) } else if is(b"write") { files::write(&mut self.term, args) }
             else { files::change(&mut self.term, if is(b"mkdir") { "MKDIR" } else if is(b"rm") { "RM" } else { "MV" }, args) }
         } else if is(b"sync") {
@@ -768,7 +820,9 @@ impl Shell {
         } else if is(b"keymap") {
             keymap::command(&mut self.term, args);
         } else if is(b"screenshot") {
-            screenshot::command(&mut self.term, args, SCOPE_RECEIVE);
+            let file = core::str::from_utf8(args).unwrap_or("");
+            let file = if mind::path::relative(file) { self.path(file) } else { String::from(file) };
+            screenshot::command(&mut self.term, file.as_bytes(), SCOPE_RECEIVE);
         } else if is(b"stop") {
             if self.active == WINDOW && !msh::ask(self, "HALT THE SYSTEM?") { return; }
             files::flush_all(); // what vfs_server still caches goes to the disks first
@@ -814,7 +868,8 @@ impl Shell {
         } else if is(b"tpm") {
             tpm::command(&mut self.term, args);
         } else if is(b"release") {
-            release::command(&mut self.term, args);
+            let file = self.path(core::str::from_utf8(args).unwrap_or(""));
+            release::command(&mut self.term, if args.is_empty() { args } else { file.as_bytes() });
         } else if is(b"time") {
             // One line (`clock` is the clock program, full screen): the time of day from the RTC, then the kernel's clock.
             let (ns, resolution, hz) = mind::time::clock_info();
@@ -865,7 +920,9 @@ impl Shell {
         self.term.truncate(self.prompt_at);
         self.term.put_str(text);
         if uart {
-            self.term.serial_str("\r\x1b[KMIND> ");
+            let prompt = self.prompt_text();
+            self.term.serial_str("\r\x1b[K");
+            self.term.serial_str(&prompt);
             self.term.serial_str(text);
             let back = text.chars().count() - self.line.cursor_chars();
             if back > 0 { let mut seq = mind::util::FixedBuf::<16>::new(); let _ = write!(seq, "\x1b[{}D", back); self.term.serial_str(core::str::from_utf8(seq.as_bytes()).unwrap_or("")); }
@@ -887,40 +944,39 @@ impl Shell {
     }
 
     // Tab: completes the word before the cursor with a command or program name; several matches are listed.
+    // Tab (000-APP-0066): the first word (and the one after `run`) from the commands and programs; a word holding `/`
+    // or `:`, or any later word, from the directory it names, taken from the current one. One match is completed (`/`
+    // after a directory), several to what they share; when they share nothing more, Tab lists them.
     fn complete(&mut self) {
-        let mut copy = [0u8; 256];
-        let text = self.line.as_str(); let len = text.len(); copy[..len].copy_from_slice(text.as_bytes());
+        let text = String::from(self.line.as_str());
         if self.line.cursor_chars() != text.chars().count() { return; }
-        let start = copy[..len].iter().rposition(|&b| b == b' ').map_or(0, |i| i + 1);
-        let word = &copy[start..len];
-        let first = copy[..start].trim_ascii().is_empty();
-        let first_token = copy[..len].split(|&b| b == b' ').next().unwrap_or(&[]);
-        if !first && !first_token.eq_ignore_ascii_case(b"run") { return; }
-        self.refresh_names();
-        let mut matches = [[0u8; NAME_MAX]; NAMES]; let mut lens = [0usize; NAMES]; let mut count = 0;
-        let names = (0..self.name_count).map(|i| &self.names[i][..self.name_lens[i]]);
-        let commands = COMMANDS.iter().map(|c| c.as_bytes()).filter(|_| first);
-        for name in commands.chain(names) {
-            if name.len() >= word.len() && name[..word.len()].eq_ignore_ascii_case(word) && count < NAMES && !matches[..count].iter().zip(&lens).any(|(m, &l)| &m[..l] == name) {
-                matches[count][..name.len()].copy_from_slice(name); lens[count] = name.len(); count += 1;
+        let start = text.rfind(' ').map_or(0, |i| i + 1);
+        let (before, word) = (&text[..start], &text[start..]);
+        let first = before.trim().is_empty();
+        let after_run = before.split_whitespace().count() == 1 && before.trim().eq_ignore_ascii_case("run");
+        let completion = if word.contains('/') || word.contains(':') || !(first || after_run) {
+            let (dir, name) = mind::path::split_word(word);
+            let mut found: alloc::vec::Vec<(String, bool)> = alloc::vec::Vec::new();
+            let _ = mind::fs::list(&self.path(dir), |e| found.push((String::from(e.name_str()), e.is_dir)));
+            let names: alloc::vec::Vec<(&str, bool)> = found.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+            mind::path::complete(name, &names)
+        } else {
+            self.refresh_names();
+            let programs = (0..self.name_count).map(|i| core::str::from_utf8(&self.names[i][..self.name_lens[i]]).unwrap_or(""));
+            let names: alloc::vec::Vec<(&str, bool)> = COMMANDS.iter().copied().filter(|_| first).chain(programs).map(|n| (n, false)).collect();
+            mind::path::complete(word, &names)
+        };
+        match completion {
+            mind::path::Completion::None => {}
+            mind::path::Completion::Add(add) => { for ch in add.chars() { self.line.insert(ch); } self.redraw_input(true); }
+            mind::path::Completion::List(names) => {
+                let _ = write!(self.term, "\n{}\n", names.join("  "));
+                let prompt = self.prompt_text();
+                let _ = write!(self.term, "{}", prompt);
+                self.prompt_at = self.term.position();
+                self.redraw_input(true);
             }
         }
-        if count == 0 { return; }
-        // The longest common prefix of all matches.
-        let mut common = lens[0];
-        for i in 1..count { common = common.min(lens[i]); while common > 0 && !matches[i][..common].eq_ignore_ascii_case(&matches[0][..common]) { common -= 1; } }
-        if common > word.len() || count == 1 {
-            for &b in &matches[0][word.len()..common] { self.line.insert(b as char); }
-            if count == 1 { self.line.insert(' '); }
-            self.redraw_input(true);
-            return;
-        }
-        self.term.print_char(b'\n');
-        for i in 0..count { for &b in &matches[i][..lens[i]] { self.term.print_char(b); } self.term.print_char(b' '); self.term.print_char(b' '); }
-        self.term.print_char(b'\n');
-        let _ = write!(self.term, "MIND> ");
-        self.prompt_at = self.term.position();
-        self.redraw_input(true);
     }
 
     // A key typed while the shell has the focus.
@@ -934,7 +990,7 @@ impl Shell {
         if self.voice_key(key) { return; }
         if key.shift() && matches!(key.code(), Code::PageUp | Code::PageDown) { self.term.scroll(key.code() == Code::PageUp); return; }
         self.term.unscroll();
-        if key.is_ctrl('l') { self.term.clear(); let _ = write!(self.term, "MIND> "); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
+        if key.is_ctrl('l') { self.term.clear(); let prompt = self.prompt_text(); let _ = write!(self.term, "{}", prompt); self.prompt_at = self.term.position(); self.redraw_input(true); return; }
         if self.history.key(key, &mut self.line) { self.redraw_input(true); return; }
         if key.code() == Code::Tab { self.complete(); return; }
         let (old_len, old_at_end) = (self.line.as_str().len(), self.line.cursor_chars() == self.line.as_str().chars().count());
@@ -995,7 +1051,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
                             parked: [const { None }; SESSIONS], active: 0, shown: 0, window: None, room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
-                            msh: Interpreter::default(), script: None, log_next: None, beat: (0, u64::MAX) })
+                            msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX) })
 }
 
 mind::entry!(main);

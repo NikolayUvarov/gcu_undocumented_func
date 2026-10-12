@@ -146,6 +146,15 @@ fn the_command_line() {
         assert!(screen::ASKED.contains(&name), "{}", name);
     }
     assert!(screen::ASKED.iter().all(|c| screen::SHELL_ONLY.contains(c)));
+    // The current directory (000-APP-0066): console's own; its line answers help.
+    assert_eq!(parse("cd diag"), Command::Cd("diag"));
+    assert_eq!(parse("cd"), Command::Cd(""));
+    assert_eq!(parse("pwd"), Command::Pwd);
+    assert_eq!(parse("help cd"), Command::About("cd"));
+    let mut screen = Screen::new();
+    assert_eq!(screen.prompt(), "> ");
+    screen.cwd = "diag".into();
+    assert_eq!(screen.prompt(), "diag> ");
 }
 
 #[test]
