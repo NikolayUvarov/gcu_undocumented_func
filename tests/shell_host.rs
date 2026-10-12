@@ -89,7 +89,7 @@ fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
     // What a command or program does (000-APP-0054): text only.
     for line in ["help kill", "help", "HELP fm"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
     // In the shell's window once the user agrees there: what changes the machine or reaches beyond it.
-    for line in ["kill 7", "reboot", "reboot -f", "stop", "budget 7 5 10", "netrevoke fetch", "netpolicy add allow x", "date set 2026-10-10 12:00",
+    for line in ["kill 7", "reboot", "reboot -f", "poweroff", "shutdown -f", "stop", "budget 7 5 10", "netrevoke fetch", "netpolicy add allow x", "date set 2026-10-10 12:00",
                  "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
     // The screen's own commands, scripts, programs and statements are refused.
     for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh x.msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }

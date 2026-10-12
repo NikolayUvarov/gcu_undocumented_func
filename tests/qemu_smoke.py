@@ -1109,6 +1109,17 @@ def shell_suite(vm):
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
     print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
+    # machine off without stopping the services: QEMU ends. The suite's last step.
+    for name in ("poweroff", "shutdown"):
+        require(vm.command(f"help {name}"), "- reboot [-f] [--off], poweroff [-f], shutdown [-f]: ")
+        require(vm.command(f"{name} now"), "USAGE: POWEROFF [-F] (OR SHUTDOWN [-F])")
+    require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+    vm.send("poweroff -f\n")
+    output = vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+    assert "POWERING OFF..." in output and "STOPPED" not in output, output
+    vm.process.wait(timeout=30)
+    print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
 
 
 def line_faces_check(vm):
@@ -5965,15 +5976,17 @@ def wm_suite(vm):
         rows = typed(long, "LOGGED")
         assert any(canon("MIND> " + long) in row for row in rows), rows
         assert keys("alt-ret")[2][shell] == quarter
-        # reboot asks there; n keeps the machine running (the answer through wm's keyboard: the shell is busy asking).
-        typed("reboot", "RESTART THE MACHINE? (Y/N)")
-        keys("n")
-        for _ in range(20):
-            time.sleep(.3)
-            rows = inside(shell)
-            if any(canon("MIND> ") == row[:6] for row in rows[-3:]):
-                break
-        assert canon("RESTART THE MACHINE? (Y/N) N") in "".join(rows), rows
+        # reboot and poweroff (000-APP-0065) ask there; n keeps the machine running (the answer through wm's keyboard:
+        # the shell is busy asking).
+        for command, question in (("reboot", "RESTART THE MACHINE? (Y/N)"), ("poweroff", "TURN THE MACHINE OFF? (Y/N)")):
+            typed(command, question)
+            keys("n")
+            for _ in range(20):
+                time.sleep(.3)
+                rows = inside(shell)
+                if canon(f"{question} N") in "".join(rows) and any(canon("MIND> ") == row[:6] for row in rows[-3:]):
+                    break
+            assert canon(f"{question} N") in "".join(rows), rows
         # fg is the screen's, not the window's.
         typed("fg 1", "FG WORKS IN A CONSOLE")
         # Closed, the window goes and wm goes on; Ctrl+Alt+F5 opens it again.
@@ -6579,6 +6592,8 @@ def wm_suite(vm):
         close_menu()
         started, said, unseen = [], [], []
         RUN_TO_END = {"check", "bench", "kbench"}
+        POWER = {"Restart": ("reboot", "RESTART THE MACHINE? (Y/N)"), "Turn off": ("poweroff", "TURN THE MACHINE OFF? (Y/N)")}
+        assert {"System>Restart", "System>Turn off"} <= {name for _, name in tree}, tree
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6593,6 +6608,23 @@ def wm_suite(vm):
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
+                if name.split(">")[-1] in POWER:
+                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
+                    command, question = POWER[name.split(">")[-1]]
+                    screen = []
+                    for _ in range(40):
+                        time.sleep(.3)
+                        screen = screen_text(vm)
+                        vm.serial(enter=False)
+                        if any(canon(question) in row for row in screen):
+                            break
+                    else:
+                        raise AssertionError((name, screen))
+                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                    vm.hmp("sendkey n")
+                    vm.serial(enter=False)
+                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):

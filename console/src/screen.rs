@@ -37,11 +37,11 @@ pub const BUILTINS: [&str; 10] = ["ps", "ls", "cat", "date", "time", "ping", "mk
 /// The shell's commands that need what only the shell holds: process control, its network and device clients. With
 /// the shell's commands (`SLOT_SHELL`, 211-APP-0044) console sends them to the shell; `fg`, `boot`, `keymap` and
 /// `screenshot` act on the shell's own screen, and the shell refuses them.
-pub const SHELL_ONLY: [&str; 32] = ["kill", "fg", "logs", "stop", "boot", "ip", "nslookup", "fetch", "https", "tls", "net", "netgrants", "netrevoke",
+pub const SHELL_ONLY: [&str; 34] = ["kill", "fg", "logs", "stop", "boot", "ip", "nslookup", "fetch", "https", "tls", "net", "netgrants", "netrevoke",
     "netpolicy", "tpm", "pmap", "stat", "free", "cpus", "physmap", "irqs", "devices", "endpoints", "faults", "quotas", "budget", "heap", "sync", "logger",
-    "reboot", "keymap", "screenshot"];
+    "reboot", "poweroff", "shutdown", "keymap", "screenshot"];
 /// Of those, the ones the shell runs in its own window after the user agrees there (shell/src/clients.rs).
-pub const ASKED: [&str; 14] = ["kill", "stop", "reboot", "budget", "netrevoke", "netpolicy", "logs", "stat", "pmap", "logger", "nslookup", "fetch", "https", "tpm"];
+pub const ASKED: [&str; 16] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "logs", "stat", "pmap", "logger", "nslookup", "fetch", "https", "tpm"];
 /// Console's own commands, a line each, for `help <command>` and `<command> <help key>` (000-APP-0054).
 pub const LINES: [(&[&str], &str); 12] = [
     (&["ps"], "ps: the tasks, from sysmon"),

@@ -55,29 +55,6 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
 
-## `poweroff` and `shutdown`, and a menu entry to turn the machine off ([000-KRN-0080](../issues-done/000-KRN-0080-power-off-on-x86.done))
-
-**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off". The maintainer asked again on 2026-10-12, once `reboot --off` had turned the MacBook Pro off: "a synonym `poweroff` is needed for this command".
-
-### Problem
-
-`reboot --off` writes the caches, stops the services and turns the machine off. Since 000-KRN-0080 it does so on x86 too (ACPI S5), not only on aarch64. But:
-
-- nobody looks for it under `reboot`;
-- `wm`'s menu has no entry for it;
-- `help reboot` and `shell/src/power.rs` still say "aarch64 only".
-
-### Plan (a proposal; the tools track decides)
-
-- **In the shell and `console`.** `poweroff` and `shutdown` as names for `reboot --off`, with `-f` as there; `help` names them.
-- **In `wm`.** A "Turn off" entry next to the restart, asking for confirmation as the restart does.
-- **The help texts and `docs/tools` (EN, RU).** Turning off works on x86 and aarch64. Where the firmware names no S5, it says why.
-
-### Acceptance criteria
-
-- **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
-- **In `wm`.** The menu entry is there.
-
 ## `wm`'s moving background: drawn by rows, paced to a deadline (000-KRN-0081)
 
 **Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "the moving background jerks when the bright screen is on, and redrawing is slow".
