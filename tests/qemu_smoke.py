@@ -1115,13 +1115,15 @@ def shell_suite(vm):
     vm.send_bytes(b"\r")
     vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
     vm.send_bytes(b"correct horse")
+    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
+    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
     for _ in range(30):
         time.sleep(.3)
         screen = screen_text(vm)
         vm.serial(enter=False)
-        if any(canon("•" * 13) in row for row in screen):
+        if dots(screen):
             break
-    assert any(canon("•" * 13) in row for row in screen) and not any("horse" in row for row in screen), screen
+    assert dots(screen) and not any("horse" in row for row in screen), screen
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
