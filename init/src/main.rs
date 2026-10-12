@@ -687,17 +687,6 @@ fn boot_order() -> impl Iterator<Item = usize> {
     (1..BOOT_IMAGES).flat_map(|image| core::iter::once(image).chain((BOOT_IMAGES..UNITS).filter(move |&u| unit_image(u).0 == image)))
 }
 
-// The pause for a photo of the boot screen while real machines are diagnosed (211-PRT-0004); 0 turns it off.
-const PHOTO_PAUSE_MS: usize = 5000;
-
-// No hypervisor bit in CPUID: a real machine, not QEMU, whose tests need no pause.
-fn bare_metal() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    #[allow(unused_unsafe)]
-    { PHOTO_PAUSE_MS > 0 && unsafe { core::arch::x86_64::__cpuid(1) }.ecx >> 31 == 0 }
-    #[cfg(not(target_arch = "x86_64"))]
-    { false }
-}
 
 mind::entry!(main);
 // A service that does not answer never stops the boot or the supervision of the others (000-KRN-0075).
@@ -721,10 +710,11 @@ fn boot(info: &'static BootInfo) {
     }
     let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
-        // On a real machine, time for a photo of the kernel's lines before the compositor takes the screen (211-PRT-0004).
-        if unit_name(index) == "compositor" && bare_metal() {
-            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", PHOTO_PAUSE_MS / 1000);
-            mind::time::sleep(PHOTO_PAUSE_MS);
+        // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
+        // before the compositor takes the screen (211-PRT-0004).
+        if unit_name(index) == "compositor" && info.photo_pause_s > 0 {
+            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", info.photo_pause_s);
+            mind::time::sleep(info.photo_pause_s.min(PHOTO_PAUSE_MAX_S) as usize * 1000);
         }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.programs[unit_image(index).0].len == 0 { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
