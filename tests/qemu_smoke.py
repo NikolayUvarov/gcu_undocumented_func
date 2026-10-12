@@ -122,7 +122,8 @@ class VM:
         if not prompt:
             return
         try:
-            self.expect("MIND> ", timeout=30)
+            # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
+            self.expect("MIND> ", timeout=90)
             global BASE
             BASE = len(self.services())
         except BaseException:
@@ -5192,9 +5193,10 @@ def download_check(args, disk):
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
+    held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port)))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5210,10 +5212,12 @@ def download_check(args, disk):
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
+        session_parsers_check(vm, held, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
     finally:
         vm.close()
-        for server in (release, secure, rogue):
+        held.go.set()
+        for server in (release, secure, rogue, held):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -5246,7 +5250,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 4 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, and the held one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
@@ -5290,17 +5294,71 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
     print("PASS: download over HTTPS: a wrong pin and a server from an untrusted CA refused; a pinned key trusted whoever signed it; without the TLS client (a script without tls) https refused", flush=True)
 
 
+def hold_server(body):
+    """An HTTP server whose answers wait until `server.go` is set, then send `body` (109-NET-0010: two downloads that
+    run at once). `server.paths` lists the requests it holds or held."""
+    go, paths = threading.Event(), []
+
+    class Held(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            paths.append(self.path)
+            go.wait(60)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Held)
+    server.daemon_threads, server.go, server.paths = True, go, paths
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def session_parsers_check(vm, held, body):
+    """109-NET-0010: two downloads at once have their heads parsed in two processes of their own, each holding only its
+    own endpoint, and each ends with its download."""
+    url = f"http://10.0.2.2:{held.server_address[1]}"
+    service = vm.services()["parse"]
+    for name in ("h1", "h2"):
+        require(vm.command(f"run download ram:{name}.bin {url}/{name} &"), "NAME=download BACKGROUND")
+    for _ in range(80):  # both connected, both held by the server
+        if len(held.paths) >= 2:
+            break
+        time.sleep(.25)
+    assert sorted(held.paths) == ["/h1", "/h2"], held.paths
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 2, (parsers, vm.command("ps", raw=True))
+    for pid in parsers:
+        text = vm.command(f"stat caps {pid}", raw=True)
+        require(text, "STAT CAPS VERSION=2 COUNT=1 ")
+        assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    held.go.set()
+    for _ in range(80):  # each parser ends with its download
+        listed = vm.command("ps", raw=True)
+        if not re.search(r"^\d+ download ", listed, re.M) and not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers), listed
+    for name in ("h1", "h2"):
+        require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
+    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+
+
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
 
 
 def parser_check(vm, url):
-    """109-NET-0008, 0009: every response head above was parsed in `parse`, which holds its endpoint and the log client
-    and nothing else; a malformed head is refused there, and download, given everything but the parser, refuses."""
+    """109-NET-0008, 0009, 0010: a malformed head is refused by the download's own parser, so the shared service logs
+    nothing of it; the shared service holds its endpoint and the log client and nothing else; download, given everything
+    but the parser, refuses; killed, the shared service is restarted and serves the shell's `release` again."""
     out = vm.command(f"download data/bad.bin {url}/bad.bin --tries 1")
     require(out, "DOWNLOAD: HTTP: Head")
     real = vm.services()
-    log, head = vm.command("dmesg -s parse"), len(BAD_HEAD.split(b"\r\n\r\n")[0])
-    assert re.search(fr"\[PARSE\] REFUSED AN HTTP HEAD FOR PID \d+: MALFORMED \({head} BYTES\)", log), log
+    log = vm.command("dmesg -s parse")
+    assert "REFUSED AN HTTP HEAD" not in log and "NO PARSER OF ITS OWN" not in out, (out, log)
     # Its capabilities: its own endpoint (served by it) and a client of logd; no memory, device, privilege or other client.
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
     text = vm.command(f"stat caps {real['parse']}", raw=True)
@@ -5317,9 +5375,8 @@ def parser_check(vm, url):
             break
         time.sleep(.25)
     assert vm.services()["parse"] != real["parse"], vm.services()
-    out = vm.command(f"download ram:again.bin {url}/small.bin")
-    require(out, "DOWNLOAD: DONE 200000 BYTES")
-    print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+    require(vm.command("release data/stable"), "CHANNEL stable: VERSION 7, MINIMUM 5")
+    print("PASS: parse: a malformed head refused in the download's own parser, the shared service none the wiser; the shared service holds only its endpoint and the log; download without it refuses; restarted after a kill, it serves release again", flush=True)
 
 
 def release_metadata_check(vm):
