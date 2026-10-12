@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.2 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.3 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues/550-NET-0025-the-default-card.md) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -19,6 +19,7 @@ One line per rule, `#` starts a comment:
 | `program address tcp\|udp\|icmp [port [seconds [bytes]]]` | `program` may reach `address` (an IPv4 address or a host name) over the protocol, on `port` (0 or none: any), for a term of `seconds` (default 3600) and a volume of `bytes` (default 16 MiB); a grant takes the shortest term and the smallest volume its lines give |
 | `program dns` | `program` may ask the stack's DNS server (UDP port 53) |
 | `resolver A.B.C.D[:PORT]` | host names in this file are looked up at this server (default: the stack's DNS server) |
+| `default card N` | card `N` (0 or 1: the wired cards, 2: the Wi-Fi station) is the default while its link is up and it has an address and a gateway; the last such line counts (550-NET-0025) |
 
 ### Term and volume
 
@@ -27,6 +28,13 @@ One line per rule, `#` starts a comment:
 - **When either runs out,** the stack closes the grant's sockets and refuses its requests (`[NETSTACK] GRANT n ENDED, k SOCKETS CLOSED`), and the broker removes the grant (`[NETPOLICY] EXPIRED …`).
 - **A long-running service** (a client of one server for as long as the machine runs) gets its own line with a long term and a large volume, for example `effector 203.0.113.7 tcp 443 4294967295 1099511627776`. Its grant then lasts as long as the line says, or until its process ends, `netrevoke` ends it, or `netstack` or the system restarts.
 - **What a grant reports** of its term (`netgrants`, `idl/netpolicy.wit` `left-ms`, `idl/socket.wit` `policy-usage`) is in milliseconds as a u32, so a term longer than 49.7 days shows as 4294967 s left until it comes within that.
+
+### The default card
+
+- **The rule.** A flow goes out through the card whose network holds its destination. Any other flow, and the stack's DNS server, go through the default card: the preferred card while its link is up and it has an address and a gateway, else the first card that has, wired cards (0, 1) before the Wi-Fi station (2), else any card with an address.
+- **The preferred card** is the policy's `default card N` line. The broker tells the stack at start, after each change and every 10 seconds, so a restarted stack learns it again. Without the line no card is preferred.
+- **Logged:** `[NETPOLICY] DEFAULT CARD N FROM THE POLICY`, `[NETSTACK] CARD N PREFERRED AS THE DEFAULT`, and each move of the default, `[NETSTACK] DEFAULT ROUTE: CARD N`.
+- **`idl/socket.wit` 2.5** `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default; `netcheck cards` prints them.
 
 A host name is looked up when the grant is made (351-NET-0003). The grant keeps the address it got, and the log names both. The answer is plain DNS: the grant reaches whatever address the resolver gave.
 
@@ -53,6 +61,12 @@ In the `net` suite on x86 and aarch64:
 - a removed line takes the rule away again;
 - the shell cannot open `system/netpolicy`;
 - every change is logged.
+
+In the `net` suite's two-card check (550-NET-0025), on x86 and aarch64:
+- with no preference, card 0 is the default and datagrams to an address on neither card's network leave through it;
+- `default card 1` added through `netpolicy add` makes card 1 the default, and they leave through card 1;
+- with card 1's link down, card 0 is the default again, and card 1 again once its link is back;
+- `default card 3` is refused, and removing the line makes card 0 the default again.
 
 In the same suite (750-NET-0014), on x86 and aarch64:
 - a line with the largest term and volume gives a grant with them;

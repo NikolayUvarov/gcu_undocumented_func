@@ -21,6 +21,11 @@
 //!
 //! 2.4 (000-NET-0013): `sockets` lists the stack's open sockets, for `netstat`: the operator sees every one, a grant
 //! only its own, the policy badge none.
+//!
+//! 2.5 (550-NET-0025): the default card by a stated rule. Cards 0 and 1 are wired (slots 2 and 3), card 2 the Wi-Fi
+//! station (slot 4); the default is the preferred card while its link is up and it has an address and a gateway, else
+//! the first card in that order that has. `prefer` names the preferred card (operator and policy badges: the broker
+//! applies the policy's `default card N` line); `cards` tells every card's kind and state.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -30,7 +35,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 4, 0);
+pub const VERSION: (u8, u8, u8) = (2, 5, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -130,6 +135,30 @@ impl Wire for Datagram {
     const MAX: usize = <u32 as Wire>::MAX + <u16 as Wire>::MAX + <List<u8, 1472> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.address.encode(w)?; self.port.encode(w)?; self.data.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { address: Wire::decode(r)?, port: Wire::decode(r)?, data: Wire::decode(r)? }) }
+}
+
+/// What a card is (2.5): wired (a card driver's) or wireless (the Wi-Fi station's).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CardKind { #[default] Wired = 0, Wireless = 1 }
+impl CardKind {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Wired), 1 => Some(Self::Wireless), _ => None } }
+}
+impl Wire for CardKind {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// A card the stack may hold (2.5): its number and kind, whether its driver answered, whether its link is up and it
+/// has an address and a gateway, and whether it is the preferred card and the default one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Card { pub card: u8, pub kind: CardKind, pub present: bool, pub up: bool, pub configured: bool, pub preferred: bool, pub default: bool }
+impl Wire for Card {
+    const MAX: usize = <u8 as Wire>::MAX + <CardKind as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.kind.encode(w)?; self.present.encode(w)?; self.up.encode(w)?; self.configured.encode(w)?; self.preferred.encode(w)?; self.default.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, kind: Wire::decode(r)?, present: Wire::decode(r)?, up: Wire::decode(r)?, configured: Wire::decode(r)?, preferred: Wire::decode(r)?, default: Wire::decode(r)? }) }
 }
 
 pub fn config(endpoint: Endpoint) -> Result<core::result::Result<Config, Error>> {
@@ -344,6 +373,30 @@ pub fn sockets(endpoint: Endpoint, start: u32) -> Result<core::result::Result<Li
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<SocketInfo, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Names the preferred card, 255 for none (operator and policy badges, 2.5); `invalid` for a card the stack has no
+/// slot for.
+pub fn prefer(endpoint: Endpoint, card: u8) -> Result<core::result::Result<(), Error>> {
+    let words = [17 | MAJOR << 8 | ((card) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// Every card the stack has a slot for, in order (2.5).
+pub fn cards(endpoint: Endpoint) -> Result<core::result::Result<List<Card, 4>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 18 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 30, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Card, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -366,6 +419,8 @@ pub enum Request<'a> {
     Interfaces,
     Offload { enable: bool },
     Sockets { start: u32 },
+    Prefer { card: u8 },
+    Cards,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -489,6 +544,17 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Sockets { start }, call))
         }
+        17 => {
+            wire::body(request, cap, [0xff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Prefer { card: wire::field(&words, 0, 16, 8) as u8 }, Call::words(request, cap)))
+        }
+        18 => {
+            let (call, length) = wire::take_buffer(request, cap, 30, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Cards, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -556,4 +622,12 @@ pub fn reply_offload(call: Call, value: core::result::Result<u32, Error>) -> Res
 pub fn reply_sockets(call: Call, value: core::result::Result<&[SocketInfo], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<SocketInfo, 32>(value, w))
+}
+pub fn reply_prefer(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_cards(call: Call, value: core::result::Result<&[Card], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Card, 4>(value, w))
 }

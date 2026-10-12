@@ -349,3 +349,20 @@ Once `init` gives the shell the right to badge its `SLOT_TLS` copy (requests-KRN
 ### Acceptance criteria
 
 In the `tls` suite, a program with the lent client gets `denied` for `client-certificate`, and the shell's `https -c` still sends the certificate.
+
+## `ip` shows each card's kind and the default card (550-NET-0025)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for the request "Several network interfaces" in requests-NET.md ("`ip` shows the default and the kind of each card").
+
+### Problem
+
+`netstack` now states which card is the default: the card the policy's `default card N` line prefers while its link is up and configured, else the first configured card, wired before the Wi-Fi station. `idl/socket.wit` 2.5 `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default. The shell's `ip` shows none of this yet.
+
+### Plan (a proposal; the tools track decides)
+
+- `ip` adds to each card's line its kind and the words `DEFAULT` and `PREFERRED` where they apply, from `cards`, and lists the station's card even when it is not there yet.
+- A live choice that does not outlast a restart, `ip prefer N|none`, through the operator's `prefer`, if the tools track wants one. The lasting choice stays the policy line, which `netpolicy add` asks the user for.
+
+### Acceptance criteria
+
+In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.

@@ -20,7 +20,12 @@
 ///
 /// 2.4 (000-NET-0013): `sockets` lists the stack's open sockets, for `netstat`: the operator sees every one, a grant
 /// only its own, the policy badge none.
-package mind:socket@2.4.0;
+///
+/// 2.5 (550-NET-0025): the default card by a stated rule. Cards 0 and 1 are wired (slots 2 and 3), card 2 the Wi-Fi
+/// station (slot 4); the default is the preferred card while its link is up and it has an address and a gateway, else
+/// the first card in that order that has. `prefer` names the preferred card (operator and policy badges: the broker
+/// applies the policy's `default card N` line); `cards` tells every card's kind and state.
+package mind:socket@2.5.0;
 
 interface socket {
     /// Why a request failed.
@@ -84,4 +89,15 @@ interface socket {
     /// The open sockets from the stack's table index `start`, in its order (2.4): every one for the operator, its own
     /// for a grant; `denied` for the policy badge. A socket a client closed is gone from the list.
     sockets: func(start: u32) -> result<list<socket-info, 32>, error>;
+
+    /// What a card is (2.5): wired (a card driver's) or wireless (the Wi-Fi station's).
+    enum card-kind { wired, wireless }
+    /// A card the stack may hold (2.5): its number and kind, whether its driver answered, whether its link is up and it
+    /// has an address and a gateway, and whether it is the preferred card and the default one.
+    record card { card: u8, kind: card-kind, present: bool, up: bool, configured: bool, preferred: bool, default: bool }
+    /// Names the preferred card, 255 for none (operator and policy badges, 2.5); `invalid` for a card the stack has no
+    /// slot for.
+    prefer: func(card: u8) -> result<_, error>;
+    /// Every card the stack has a slot for, in order (2.5).
+    cards: func() -> result<list<card, 4>, error>;
 }
