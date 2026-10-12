@@ -15,11 +15,13 @@
 | `top` | `top`, пока работает `clock` |
 | `wm` | `wm` с `fm`, `clock`, `top` и окном оболочки |
 | `series` | окна `wm` сменяют друг друга, кадр каждые полсекунды; ещё и анимированные WebP и GIF |
+| `tour` | анимация для страницы: загрузка, `check`, `hw`, `top`, `wm` и три его окна во весь экран, каждый кадр уходит в следующий через затемнение; WebP без потерь, ширина 1280 (экраны оболочки обрезаны с левого верхнего угла, экраны `wm` уменьшены). Играет свои сцены сама, поэтому запускается отдельно |
 
 ```bash
 ./02_build.sh
 python3 scripts/qemu_scenes.py -o media-scenes            # все сцены, около 30 с
 python3 scripts/qemu_scenes.py --scenes wm,series          # некоторые
+python3 scripts/qemu_scenes.py --scenes tour -o media-scenes && cp media-scenes/tour.webp docs/media/   # анимация для страницы
 ```
 
 Принимает те же `--qemu`, `--firmware` и `--cpus`, что и наборы, и `--size` для другого экрана. WebP и GIF делает ffmpeg.
@@ -44,6 +46,7 @@ python3 scripts/media.py shots  screen-001.bmp              # screen-001.png и 
 python3 scripts/media.py series wm.avi                      # wm/frame-NNNN.png (каждая отличная картинка), wm.webp, wm.gif
 python3 scripts/media.py series a.bmp b.bmp c.bmp --fps 1   # ряд снимков, по секунде каждый
 python3 scripts/media.py video  wm.avi                      # wm.mp4: H.264, yuv420p, не шире 1920, меньше 10 МБ
+python3 scripts/media.py slideshow a.png b.png -o show      # show.webp: по 2,5 с, переход через затемнение, по кругу
 ```
 
 - **Один Python** читает BMP и AVI и пишет PNG в полный размер. Масштаб, WebP, GIF и MP4 делает ffmpeg.
@@ -54,6 +57,6 @@ python3 scripts/media.py video  wm.avi                      # wm.mp4: H.264, yuv
 
 ## 4. Куда идут результаты
 
-- **Снимки** для страницы — в `docs/media/` этого репозитория, каждый меньше 1 МБ (копия для страницы от `shots` или кадр от `series`). Витрина копирует их вместе с `main`.
+- **Снимки** для страницы — в `docs/media/` этого репозитория, каждый меньше 1 МБ (копия для страницы от `shots` или кадр от `series`), а анимация страницы — меньше 2 МБ (`docs/media/tour.webp`). Витрина копирует их вместе с `main`.
 - **Видео** прикрепляются на GitHub (в задаче, выпуске или редакторе страницы), а не коммитятся: MP4 меньше 10 МБ.
 - **Под каждым снимком:** машина (QEMU или модель настоящей машины), размер экрана и коммит сборки.

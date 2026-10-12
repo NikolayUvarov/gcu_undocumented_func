@@ -3,11 +3,13 @@
 machine (tests/qemu_smoke.py), plays fixed scenes and saves each screen as PNG, so the page's pictures are made the same
 way for each of its updates. They show QEMU's machine, not a real one (MC-12.1): the page says so under each.
 
-  qemu_scenes.py [-o DIR] [--firmware OVMF.fd] [--size 1920x1080] [--scenes boot,check,top,wm,series]
+  qemu_scenes.py [-o DIR] [--firmware OVMF.fd] [--size 1920x1080] [--scenes boot,check,top,wm,series,tour]
 
 Scenes: `boot` the shell after the boot; `check` the kernel's self-test table; `top`; `wm` with fm, clock, top and the
-shell's window; `series` wm's windows changing, a frame every half second, also as an animated WebP and GIF
-(scripts/media.py, ffmpeg)."""
+shell's window; `series` wm's windows changing, a frame every half second, also as an animated WebP and GIF;
+`tour` the page's animation: the boot, `check`, `hw`, `top`, then `wm` and three of its windows full screen, each going
+into the next through dark (tour.webp, lossless, 1280 wide: the shell's screens cut at their top left, wm's scaled;
+scripts/media.py, ffmpeg). Run `tour` alone: it plays its own scenes."""
 import argparse
 import re
 import shutil
@@ -23,7 +25,8 @@ import media  # noqa: E402
 import qemu_smoke as smoke  # noqa: E402
 import sign_manifest  # noqa: E402
 
-SCENES = ("boot", "check", "top", "wm", "series")
+SCENES = ("boot", "check", "top", "wm", "series", "tour")
+PAGE = (1280, 720)  # the tour's pictures
 
 
 def ppm(data):
@@ -100,6 +103,47 @@ class Scenes:
             self.vm.hmp(f"sendkey {name}")
             time.sleep(.08)
         self.vm.serial(enter=False)
+
+    def program(self, picture, name, ready, quit):
+        # `name` in front of the shell, its screen as `picture` once `ready` was printed and 2 s passed; then `quit` keys.
+        self.vm.command("clear")
+        self.vm.send(name + "\n")
+        self.vm.expect(ready, timeout=30)
+        time.sleep(2)
+        path = self.shot(picture)
+        self.vm.send_bytes(quit)
+        self.vm.expect("MIND> ", timeout=30)
+        return path
+
+    def tour(self):
+        (self.out / "tour").mkdir(exist_ok=True)
+        shots = [(self.shot("tour/1-boot"), "crop")]
+        self.vm.command("clear")
+        self.vm.send("check kernel\n")
+        self.vm.expect("MIND> ", timeout=300, after="check kernel\n")
+        shots.append((self.shot("tour/2-check"), "crop"))
+        shots.append((self.program("tour/3-hw", "hw", "[HW] READY", b"q"), "crop"))
+        self.vm.command("run clock &")
+        shots.append((self.program("tour/4-top", "top", "[TOP] READY", b"q"), "crop"))
+        self.vm.command("clear")
+        self.start_wm()
+        shots.append((self.shot("tour/5-wm"), "scale"))
+        # Alt+Tab to each of fm, clock and top, Alt+F: the window fills the screen; Alt+F again gives it back.
+        for n in range(3):
+            self.keys("alt-tab")
+            time.sleep(.6)
+            self.keys("alt-f")
+            time.sleep(1.5)
+            shots.append((self.shot(f"tour/{6 + n}-full"), "scale"))
+            self.keys("alt-f")
+            time.sleep(.6)
+        pages = []
+        for n, (path, fit) in enumerate(shots):
+            page = self.out / "tour" / f"page-{n + 1:02d}.png"
+            view = f"crop={PAGE[0]}:{PAGE[1]}:0:0" if fit == "crop" else f"scale={PAGE[0]}:{PAGE[1]}:flags=lanczos"
+            media.ffmpeg("-i", path, "-vf", view, page, why="the tour's pictures")
+            pages.append(page)
+        media.slideshow(pages, self.out / "tour", PAGE[0], hold=3.0, fade=0.6)
 
     def series(self):
         # Alt+Tab brings each window to the front, Alt+F fills the screen with one and gives the screen back.

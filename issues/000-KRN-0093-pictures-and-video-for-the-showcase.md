@@ -60,4 +60,6 @@ The maintainer (2026-10-12) wants for the project's page on GitHub ([000-KRN-008
 - **`scripts/qemu_scenes.py`:** `boot`, `check`, `top`, `wm` and `series` at 1920 × 1080 (QEMU's VGA offers the size through EDID and OVMF takes it). Here (QEMU 8.2, TCG, 4 CPUs) every scene took 29 s.
 - **The guide:** [docs/media.md](../docs/media.md) and [docs/media_RU.md](../docs/media_RU.md), linked from the README.
 
-**Still open:** the scenes on i9 (the second criterion); pictures in `docs/media/` with the README showing them, one of them from a real machine (the third).
+- **The page's animation** (the maintainer, 2026-10-12: "make a nice animation of them and put it on GitHub"): `qemu_scenes.py --scenes tour` plays the boot, `check kernel`, `hw`, `top`, `wm` and three of its windows full screen, and `media.py slideshow` joins them, each going into the next through dark, looping. `docs/media/tour.webp`: lossless, 1280 × 720, 8 pictures, 24.6 s, 1.39 MB (a crossfade of two screens of text came to 2.3–4.7 MB). The README shows it under its intro, saying it is QEMU and which build. The tour took 66 s here.
+
+**Still open:** the scenes on i9 (the second criterion); a picture from a real machine on the page (the third).

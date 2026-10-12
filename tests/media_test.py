@@ -128,6 +128,22 @@ class Commands(unittest.TestCase):
         self.assertEqual(self.probe(self.dir / "screen-001-2.png", "stream=width,height"), "2,2")
         self.assertIn("screen-001-2.png", out)
 
+    def test_a_slideshow_loops_through_dark(self):
+        for n, colour in enumerate((0x2040C0, 0xC04020)):
+            (self.dir / f"{n}.bmp").write_bytes(bmp(64, 36, [[colour] * 64] * 36))
+        self.run_media("slideshow", self.dir / "0.bmp", self.dir / "1.bmp", "-o", self.dir / "show", "--width", 64, "--hold", 1, "--fade", .5)
+        data = (self.dir / "show.webp").read_bytes()
+        frames, at = [], 12
+        while at + 8 <= len(data):
+            size, = struct.unpack_from("<I", data, at + 4)
+            if data[at:at + 4] == b"ANMF":
+                frames.append(int.from_bytes(data[at + 20:at + 23], "little"))  # the frame's duration in ms
+            at += 8 + size + (size & 1)
+        # Two pictures held, two transitions of 5 frames (the last back to the first): 2.5 s in all, looping.
+        self.assertEqual(data[:4] + data[8:12], b"RIFFWEBP")
+        self.assertEqual(sum(frames), 2500)
+        self.assertGreater(len(frames), 4)
+
     def test_series_and_video_from_a_recording(self):
         red, blue = self.jpeg("red"), self.jpeg("blue")
         (self.dir / "record-001.avi").write_bytes(avi(321, 181, 10, [red, b"", blue, b"", red]))

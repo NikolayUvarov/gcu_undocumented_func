@@ -181,6 +181,42 @@ def animate(source, rate, width, out):
     report(gif, f", {width} wide at {rate} a second")
 
 
+def slideshow(pictures, out, width, hold=2.5, fade=0.6, fps=10, gif=False, transition="fadeblack"):
+    """`pictures` (PNG or BMP files) as an animation that loops: each shown `hold` seconds, going into the next through
+    dark in `fade` seconds (`transition`: ffmpeg's xfade; `fade` blends two screens of text, which costs more), the last
+    back into the first. `out`.webp, lossless: text stays sharp, and a screen compresses well. With `gif`, `out`.gif
+    too. Their paths."""
+    with tempfile.TemporaryDirectory(prefix="mind-media-") as temporary:
+        inputs, frames = [], []
+        for n, picture in enumerate(map(Path, pictures)):
+            if picture.suffix.lower() == ".bmp":
+                width_, height, rgb = read_bmp(picture.read_bytes())
+                picture = Path(temporary) / f"{n:03d}.png"
+                picture.write_bytes(png(width_, height, rgb))
+            frames.append(picture)
+        frames.append(frames[0])  # back to the first: the loop has no seam
+        for picture in frames:
+            inputs += ["-loop", "1", "-framerate", str(fps), "-t", str(hold + fade), "-i", picture]
+        scale = f"{even_width(width)},format=rgb24,fps={fps},settb=1/{fps}"
+        chain = [f"[{n}:v]{scale}[s{n}]" for n in range(len(frames))]
+        last = "s0"
+        for n in range(1, len(frames)):
+            chain.append(f"[{last}][s{n}]xfade=transition={transition}:duration={fade}:offset={n * hold:.3f}[x{n}]")
+            last = f"x{n}"
+        total = (len(frames) - 1) * hold + fade  # ends as the first picture is whole again
+        graph = ";".join(chain)
+        outputs = [out.with_suffix(".webp")]
+        ffmpeg(*inputs, "-filter_complex", graph, "-map", f"[{last}]", "-t", f"{total:.3f}",
+               "-c:v", "libwebp_anim", "-lossless", "1", "-compression_level", "6", "-loop", "0", outputs[0], why="WebP")
+        report(outputs[0], f", {len(pictures)} pictures, {width} wide, {total:.1f} s")
+        if gif:
+            outputs.append(out.with_suffix(".gif"))
+            ffmpeg(*inputs, "-filter_complex", f"{graph};[{last}]split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=sierra2_4a[v]",
+                   "-map", "[v]", "-t", f"{total:.3f}", "-loop", "0", outputs[1], why="GIF")
+            report(outputs[1], f", {len(pictures)} pictures, {width} wide, {total:.1f} s")
+        return outputs
+
+
 def video(args):
     source = Path(args.files[0])
     avi = read_avi(source.read_bytes())
@@ -216,6 +252,16 @@ def main():
             command.add_argument("--fps", type=Fraction, help="frames a second of the animation (AVI: its own, at most 10; BMPs: 1)")
         if name == "video":
             command.add_argument("--limit-mb", type=float, default=10, help="GitHub's limit for an attached video (10 MB; 100 on paid plans)")
+    command = sub.add_parser("slideshow")
+    command.add_argument("files", nargs="+", help="PNG or BMP pictures, in order")
+    command.add_argument("-o", required=True, help="the animation's path without its extension")
+    command.add_argument("--width", type=int, default=1280)
+    command.add_argument("--hold", type=float, default=2.5, help="seconds each picture is shown")
+    command.add_argument("--fade", type=float, default=0.6, help="seconds of each transition")
+    command.add_argument("--fps", type=int, default=10)
+    command.add_argument("--transition", default="fadeblack", help="ffmpeg's xfade transition: fadeblack, fade, wipeleft, …")
+    command.add_argument("--gif", action="store_true", help="a GIF as well as the WebP")
+    command.set_defaults(run=lambda a: slideshow(a.files, Path(a.o), a.width, a.hold, a.fade, a.fps, a.gif, a.transition))
     args = parser.parse_args()
     if args.command == "video" and len(args.files) != 1:
         parser.error("video takes one AVI")
