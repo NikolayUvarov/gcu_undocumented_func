@@ -56,7 +56,7 @@ At the end a summary: how many passed, failed and were skipped. The exit status 
 - **QEMU** (the `bench` suite):
   - x86: 43 passed, 26 skipped, 1 failed;
   - aarch64: 48 passed, 20 skipped, 1 failed;
-  - the one failure is "sleeps last as asked": 10 of 20 sleeps of 10 ms were shorter ([000-KRN-0065](../issues/000-KRN-0065-a-sleep-is-never-shorter-than-asked.md));
+  - the one failure is "sleeps last as asked": 10 of 20 sleeps of 10 ms were shorter ([000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.done));
   - the suite requires the kernel, security, clock, file and core service checks to pass, and accepts no other failure.
 
 Left: the MacBook Pro's run (criterion 4), and a policy line for the network group (the network track's file).

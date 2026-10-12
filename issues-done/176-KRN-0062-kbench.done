@@ -53,7 +53,7 @@ Nothing measures what the kernel's basic operations cost on a given machine, so 
   | the same with a lent page | 319 µs | — |
   | process start | 105–133 ms | 187 ms |
 - **Found on the way.**
-  - **Sleeps.** A sleep can be shorter than asked: up to a tick, because the deadline counts from the tick's start. This is [000-KRN-0065](../issues/000-KRN-0065-a-sleep-is-never-shorter-than-asked.md).
+  - **Sleeps.** A sleep can be shorter than asked: up to a tick, because the deadline counts from the tick's start. This is [000-KRN-0065](000-KRN-0065-a-sleep-is-never-shorter-than-asked.done).
   - **Dropped endpoints.** A dropped endpoint counts against its creator's quota until the boot CPU's idle loop reclaims it (`reap`). Creating and dropping endpoints quickly reaches the limit; `kbench` waits 10 ms each time and says how often. On a machine whose boot CPU is never idle, they would not come back. That is worth a task if a real program meets it.
 
 Left: the MacBook Pro's numbers, recorded with the configuration (criterion 4).

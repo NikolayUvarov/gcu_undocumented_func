@@ -1,6 +1,6 @@
-# 000-KRN-0065 — A sleep is never shorter than asked
+# 000-KRN-0065 — A sleep is never shorter than asked — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made, gated, and run on the MacBook Pro after the change; the run before it is missing) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-12) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-12.3 (a stated behaviour must hold)
 
 ## Problem
 
@@ -50,7 +50,25 @@ The cause is in `SYSCALL_WAIT` (`kernel/src/scheduler.rs`):
 - `kbench0002.txt`, the build with 000-KRN-0065 and the 10 ms tick: "sleep 1 ms" shortest 1.67 ms, "sleep 10 ms" shortest 19.9 ms;
 - `kbench0001.txt` of build 8223d24, with the 1 ms tick of [000-KRN-0083](../issues-done/000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done): shortest 1.01 ms and 10.2 ms.
 
-No sleep was shorter than asked. The run "before" (a build without this change) was never recorded, so criterion 3 is not met yet. It needs an older build run on the MacBook Pro, or the maintainer's decision on the criterion.
+No sleep was shorter than asked.
+
+**2026-10-12, the MacBook Pro before the change.** The maintainer ran commit 406110b, the parent of this change (`build-and-write.sh --commit`; the boot log names `COMMIT 406110be985b`), with `kbench timer`:
+
+| | median | shortest | longest | shorter than asked |
+|---|---|---|---|---|
+| sleep 1 ms | 9.98 ms | **123 µs** | 10.0 ms | 1 of 100 |
+| sleep 10 ms | 9.98 ms | **9.91 ms** | 10.0 ms | 26 of 50 |
+
+Before the change, half of the sleeps of 10 ms ended early, and one sleep of 1 ms ended after 123 µs. After it, none did, in both runs above.
+
+## Resolution
+
+- **`WAIT`** ends at the monotonic clock at the call, plus the time asked, plus the clock's resolution. The boot CPU's tick wakes a sleeper on the first tick after that (`kernel/src/scheduler.rs`, `task_state.rs`). `mind::windowed::wait` measures on the monotonic clock. IPC timeouts were left as they were; `docs/profile/clocks.md` says so.
+- **Evidence:**
+  - QEMU x86 and aarch64: `kbench` in the `bench` suite reports no sleep shorter than asked, and the suite checks it (the gates of 3b64839 and 3a09bf2 on i9 and PCU).
+  - The MacBook Pro before the change (commit 406110b): 1 of 100 sleeps of 1 ms and 26 of 50 of 10 ms were shorter than asked, the shortest 123 µs and 9.91 ms.
+  - After it (two builds, the second with [000-KRN-0083](000-KRN-0083-a-1-ms-tick-for-sleeps-and-deadlines.done)): none; the shortest were 1.67 and 19.9 ms, then 1.01 and 10.2 ms.
+- **Not done here:** IPC timeouts may still end up to a tick early.
 
 ## Related
 
