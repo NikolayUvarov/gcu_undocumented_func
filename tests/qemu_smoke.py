@@ -677,7 +677,7 @@ def normal_suite(vm):
     require(vm.command("run app &"), "PID=4 NAME=app BACKGROUND")
     require(vm.command("run app2 &"), "PID=5 NAME=app2 BACKGROUND")
     first = task_rows(vm)
-    time.sleep(.4)
+    time.sleep(1.2)  # a clock wakes when its second changes (000-APP-0012)
     second = task_rows(vm)
     assert set(second) == {1, 2, 3, 4, 5}, second
     assert all(int(second[p][-1]) > int(first[p][-1]) for p in first), (first, second)
@@ -2062,7 +2062,7 @@ def busy_suite(vm):
     require(vm.command("run app2 &"), "PID=1 NAME=app2 BACKGROUND")
     require(vm.command("run clock &"), "PID=2 NAME=clock BACKGROUND")
     first = task_rows(vm)
-    time.sleep(.4)
+    time.sleep(1.2)  # a clock wakes when its second changes (000-APP-0012)
     second = task_rows(vm)
     assert int(second[1][-2]) > int(first[1][-2]), (first, second)
     assert int(second[1][-1]) == 1, second  # only the initial UART syscall
