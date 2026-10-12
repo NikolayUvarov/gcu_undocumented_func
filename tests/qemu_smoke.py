@@ -5194,9 +5194,14 @@ def download_check(args, disk):
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
+    service = _service_server(certificates)
+    _expired_certificate(certificates)
+    expired, _ = _https_server(certificates, "expired")
+    service_port, expired_port = service.server_address[1], expired.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1])))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1]))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5214,14 +5219,68 @@ def download_check(args, disk):
         download_runs(vm, release, port, big, small, cut)
         session_parsers_check(vm, held, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
+        service_runs(vm, service_port)
+        pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
         held.go.set()
-        for server in (release, secure, rogue, held):
+        for server in (release, secure, rogue, held, service, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def service_runs(vm, port):
+    """750-NET-0019: HTTP for services over one TLS session of the TLS service: a JSON POST with its chunked answer,
+    100 more requests on the same connection, and a stream the server holds for 55 s before its body."""
+    _Service.served, _Service.stream_seconds = 0, 55
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/heartbeat --post {{\"agent\":\"mind\"}} --repeat 100 --stream --idle 75 --json\n")
+    out = vm.expect("MIND> ", timeout=600, after="WEBCHECK DONE")
+    require(out, 'WEBCHECK POST 200 20 BYTES {"ok":true,"got":16}')
+    # The answer's JSON as the parser service reads it (750-NET-0021).
+    for line in ('WEBCHECK JSON 0 Object IN -1 KEY "" TEXT ""', 'WEBCHECK JSON 1 True IN 0 KEY "ok" TEXT ""', 'WEBCHECK JSON 2 Number IN 0 KEY "got" TEXT "16"',
+                 "WEBCHECK JSON 3 VALUES"):
+        require(out, line)
+    require(out, "WEBCHECK 101 REQUESTS ON ONE CONNECTION")
+    stream = re.search(r"WEBCHECK STREAM 5 BYTES IN (\d+) S woken", out)
+    assert stream and int(stream[1]) >= 55, out
+    assert _Service.served == 101, _Service.served
+    print("PASS: HTTP for services: over one TLS session, a JSON POST answered chunked, 100 more requests on the same "
+          f"connection, and a stream held {stream[1]} s to its end", flush=True)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/command --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    for line in ('WEBCHECK JSON 1 Number IN 0 KEY "id" TEXT "7"', 'WEBCHECK JSON 3 Array IN 0 KEY "argv" TEXT ""', 'WEBCHECK JSON 5 String IN 3 KEY "" TEXT "-a"',
+                 'WEBCHECK JSON 8 String IN 7 KEY "LANG" TEXT "C"', "WEBCHECK JSON 9 VALUES"):
+        require(out, line)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
+    require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
+    require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
+          "nesting refused and logged with the client's PID", flush=True)
+
+
+def pinned_runs(vm, certificates, port, rogue_port, expired_port):
+    """750-NET-0020: a server trusted by one of two pins (its leaf or its SPKI, tls.wit 1.2), its certificate's name,
+    validity and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused."""
+    leaf, spki = _leaf_pin(certificates / "server.pem"), _spki_pin(certificates / "server.pem")
+    url = f"https://10.0.2.2:{port}/pinned"
+
+    def run(arguments, until):
+        vm.send(f"webcheck {arguments}\n")
+        return vm.expect("MIND> ", timeout=60, after=until)
+    require(run(f"{url} --pin leaf:{leaf}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    # The next pin second: a stale first pin does not matter while the second matches (rotation).
+    require(run(f"{url} --pin leaf:{'00' * 32} --pin spki:{spki}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    require(run(f"{url} --pin spki:{spki} --name mind.test", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    for arguments in (f"https://10.0.2.2:{rogue_port}/small.bin --pin leaf:{leaf} --pin spki:{spki}", f"{url} --pin leaf:{leaf} --name other.test",
+                      f"https://10.0.2.2:{expired_port}/x --pin leaf:{_leaf_pin(certificates / 'expired.pem')}"):
+        require(run(arguments, "WEBCHECK: TLS CONNECT"), "Certificate")
+    log = vm.command("dmesg -s tls")
+    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired"):
+        require(log, line)
+    print("PASS: pinned servers: trusted by a leaf or an SPKI pin, the second pin of two accepted (rotation); a server matching "
+          "neither, a wrong name and an expired certificate refused", flush=True)
 
 
 def download_runs(vm, release, port, big, small, cut):
@@ -5555,6 +5614,16 @@ def net_suite(args, disk):
         assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
         require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
         assert frames()[0][0] - after[0][0] >= 3, (after, frames())
+        # A card's link down and up again (550-NET-0023): its address and its connections go, the default route moves
+        # to the other card; back up, it gets a lease again and the default route returns.
+        vm.hmp("set_link n0 off")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+        require(vm.command(f"fetch 10.0.3.2:{web_port} /while-down"), "hello from the host: /while-down")
+        vm.hmp("set_link n0 on")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
+        require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
         # The second driver dies: the first card keeps working, the restarted instance drives the second card again.
         require(vm.command(f"kill {vm.services()['virtio_net#1']}", raw=True), "KILLED PID=")
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
@@ -5620,12 +5689,81 @@ def _certificates(directory):
         run("x509", "-req", "-in", f"{server}.csr", "-CA", f"{ca}.pem", "-CAkey", f"{ca}.key", "-CAcreateserial", "-out", f"{server}.pem", "-days", "2", "-extfile", "names.cnf")
 
 
+def _expired_certificate(directory):
+    # A server certificate from the test CA for the same names, valid only in January 2020 (750-NET-0020): `openssl ca`
+    # takes explicit dates, which `openssl x509 -req` of OpenSSL 3.0 does not.
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    (directory / "index.txt").write_text("")
+    (directory / "serial.txt").write_text("1000\n")
+    (directory / "ca.cnf").write_text("[ca]\ndefault_ca = test\n[test]\ndatabase = index.txt\nnew_certs_dir = .\nserial = serial.txt\n"
+                                      "default_md = sha256\npolicy = any\nunique_subject = no\n[any]\ncommonName = supplied\n")
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "expired.key", "-out", "expired.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "expired.csr", "-out", "expired.pem", "-notext",
+        "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-extfile", "names.cnf")
+
+
+def _leaf_pin(pem):
+    # The SHA-256 of a certificate's DER (a leaf pin, tls.wit 1.2).
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem.read_text())).hexdigest()
+
+
 class _Https(_Http):
     def do_GET(self):
         peer = self.request.getpeercert()
         client = dict(item[0] for item in peer["subject"])["commonName"] if peer else "nobody"
         body = f"hello from the host: {self.path} to {client}\n".encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+
+class _Service(http.server.BaseHTTPRequestHandler):
+    """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
+    protocol_version = "HTTP/1.1"
+    stream_seconds = 55
+    served = 0
+
+    def _chunked(self, body):
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for piece in (body[:7], body[7:]):
+            if piece:
+                self.wfile.write(b"%x;piece=1\r\n%s\r\n" % (len(piece), piece))
+        self.wfile.write(b"0\r\nX-Served: %d\r\n\r\n" % type(self).served)
+        type(self).served += 1
+
+    def do_POST(self):
+        data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        ok = self.headers.get("Authorization") == "Bearer webcheck" and json.loads(data) == {"agent": "mind"}
+        self._chunked(json.dumps({"ok": ok, "got": len(data)}, separators=(",", ":")).encode())
+
+    def do_GET(self):
+        if self.headers.get("X-Stream"):
+            # A wake-up stream: the head at once, the body only after stream_seconds of silence.
+            self.send_response(200); self.send_header("Transfer-Encoding", "chunked"); self.end_headers(); self.wfile.flush()
+            time.sleep(type(self).stream_seconds)
+            self.wfile.write(b"5\r\nwoken\r\n0\r\n\r\n")
+            return
+        if self.path.endswith("/command"):
+            # A command as the Effector agent would get one (750-NET-0021).
+            self._chunked(b'{"id":7,"kind":"exec","argv":["uname","-a"],"timeout":30,"env":{"LANG":"C"}}')
+            return
+        if self.path.endswith("/deep"):
+            self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        self._chunked(b"request %d" % type(self).served)
+
+    def log_message(self, *args):
+        pass
+
+
+def _service_server(directory):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / "server.pem", directory / "server.key")
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Service)
+    server.daemon_threads = True
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def _https_server(directory, certificate):

@@ -189,12 +189,16 @@ enum Waiting {
 struct Link {
     card: Card, iface: Interface, sockets: SocketSet<'static>, dhcp: SocketHandle, icmp: SocketHandle,
     mac: u64, address: Option<Ipv4Cidr>, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool, started: u64,
+    // Whether the card says its link is up, and when that was last asked (550-NET-0023).
+    up: bool, checked: u64,
 }
 
 struct Stack {
     links: [Option<Link>; CARDS], tried: [u64; CARDS],
     slots: [Option<Slot>; SOCKETS], generations: [u32; SOCKETS], waiting: Vec<Waiting>, closing: Vec<(usize, SocketHandle, u64)>,
     sequence: u16, next_port: u16,
+    // The card the default route goes out through, as last logged.
+    default: Option<usize>,
 }
 
 fn now_ms() -> u64 { mind::time::monotonic_ns() / 1_000_000 }
@@ -221,7 +225,8 @@ impl Link {
         let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
         let icmp = sockets.add(echo);
         mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, if card.ring.is_some() { " (FRAME RING)" } else { "" }, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
-        Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms() })
+        Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
+                    up: info.link, checked: now_ms() })
     }
 
     fn configure(&mut self, address: Ipv4Cidr, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool) {
@@ -250,7 +255,7 @@ impl Link {
             Some(Some((address, router, dns))) => self.configure(address, router, dns, true),
             Some(None) => { self.address = None; self.leased = false; }
             // QEMU user networking's static setup, for the first card only (another card's network is unknown).
-            None => if self.card.index == 0 && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
+            None => if self.card.index == 0 && self.up && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
                 self.configure(Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24), Some(Ipv4Address::new(10, 0, 2, 2)), Some(Ipv4Address::new(10, 0, 2, 3)), false);
             },
         }
@@ -266,19 +271,47 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL }
+               sequence: 0, next_port: EPHEMERAL, default: None }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
 
-    // The interface a flow to `address` goes out through: the one whose network holds it, else the first with a
-    // gateway, else the first configured one.
+    // The interface a flow to `address` goes out through, among the cards whose link is up: the one whose network holds
+    // it, else the first with a gateway (the default route: the lowest card), else the first configured one.
     fn route(&self, address: u32) -> Option<usize> {
         let target = Ipv4Address::from(address);
-        let configured = |l: &Option<Link>| l.as_ref().and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
+        let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
         self.links.iter().position(|l| configured(l).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target)))
             .or_else(|| self.links.iter().position(|l| configured(l).is_some_and(|(_, gateway)| gateway.is_some())))
             .or_else(|| self.links.iter().position(|l| configured(l).is_some()))
+    }
+
+    // Asks card `index` once a second whether its link is up (550-NET-0023). Down: its address and routes go, so new flows
+    // take another card, and its TCP connections are aborted so their owners learn at once. Up again: DHCP starts over.
+    fn watch_link(&mut self, index: usize, now: u64) {
+        let Some(link) = self.links[index].as_mut() else { return };
+        if now - link.checked < 1000 { return; }
+        link.checked = now;
+        let up = matches!(net::info(link.card.endpoint), Ok(Ok(info)) if info.link);
+        if up == link.up { return; }
+        link.up = up;
+        if up {
+            mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index);
+            link.sockets.get_mut::<dhcpv4::Socket>(link.dhcp).reset();
+            link.started = now;
+            return;
+        }
+        link.address = None;
+        link.gateway = None;
+        link.leased = false;
+        link.iface.update_ip_addrs(|addrs| addrs.clear());
+        link.iface.routes_mut().remove_default_ipv4_route();
+        let mut aborted = 0;
+        for slot in self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp)) {
+            let tcp = link.sockets.get_mut::<tcp::Socket>(slot.handle);
+            if tcp.state() != tcp::State::Closed { tcp.abort(); aborted += 1; }
+        }
+        mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index, aborted);
     }
 
     fn port(&mut self) -> u16 { let port = self.next_port; self.next_port = if port == u16::MAX { EPHEMERAL } else { port + 1 }; port }
@@ -289,6 +322,12 @@ impl Stack {
         for index in 0..CARDS {
             if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index); }
             if let Some(link) = self.links[index].as_mut() { link.poll(); }
+            self.watch_link(index, now);
+        }
+        let default = self.route(0);
+        if default != self.default {
+            self.default = default;
+            match default { Some(card) => mind::println!("[NETSTACK] DEFAULT ROUTE: CARD {}", card), None => mind::println!("[NETSTACK] DEFAULT ROUTE: NONE") }
         }
         self.finish_pings();
         let mut index = 0;

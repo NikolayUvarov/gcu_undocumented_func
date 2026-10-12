@@ -28,5 +28,6 @@ pub mod usb;
 pub mod vfs;
 pub mod video;
 pub mod voice;
+pub mod wifi;
 pub mod window;
 pub mod wlanhw;

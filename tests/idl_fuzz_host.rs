@@ -102,6 +102,7 @@ mod idl {
     #[path = "../../libmind/src/idl/vfs.rs"] pub mod vfs;
     #[path = "../../libmind/src/idl/video.rs"] pub mod video;
     #[path = "../../libmind/src/idl/voice.rs"] pub mod voice;
+    #[path = "../../libmind/src/idl/wifi.rs"] pub mod wifi;
     #[path = "../../libmind/src/idl/window.rs"] pub mod window;
     #[path = "../../libmind/src/idl/wlanhw.rs"] pub mod wlanhw;
 }
@@ -352,7 +353,7 @@ fn every_receiver_survives_fuzzed_messages() {
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
         owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
-        owned!(video), owned!(voice), owned!(window), borrowed!(wlanhw),
+        owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
     let mut modules = generated_modules(); modules.sort();
@@ -425,17 +426,18 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
+    parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
     shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
-    tls: Error Peer;
+    tls: Error Peer PinKind Pin;
     tpm: Error Info;
     update: Error Offer State;
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;
+    wifi: Security Error State Reason Network Status;
     window: Error Kind Placement Info;
     wlanhw: Error Info Filter Sent;
 }
