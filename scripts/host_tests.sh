@@ -12,6 +12,8 @@ for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd s
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
+# The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests (550-NET-0016).
+cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"

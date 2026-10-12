@@ -1,0 +1,19 @@
+[package]
+name = "wpa"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# WPA2-PSK for the 802.11 station (550-NET-0016): no libmind, no allocation, so `cargo test` runs it on the host.
+[dependencies]
+sha1 = { version = "0.10", default-features = false, features = ["force-soft"] } # no SHA-NI: the target has no SSE in its ABI
+hmac = { version = "0.12", default-features = false }
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+aes = { version = "0.8", default-features = false }
+aes-kw = { version = "0.2", default-features = false }
+ccm = { version = "0.5", default-features = false }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

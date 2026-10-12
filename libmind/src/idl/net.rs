@@ -16,6 +16,11 @@
 //! wrapping; from 4096, `ring-slots` transmit slots and then as many receive slots of 2048 bytes: a u16 length, a u16
 //! checksum start and a u16 checksum offset (both 0: no checksum to complete; transmit only), then the frame from byte
 //! 8. Each side checks every index and length it reads from the shared region.
+//!
+//! 1.3 (000-NET-0015): a client with bit 0 of its badge set (`BADGE_COUNTERS` in `mind::network`) only reads the card:
+//! it may call `info`, `counters` and `offloads`. Its other calls are refused: those with a result answer `denied`,
+//! `wait` is rejected, and a ring it lends is dropped unused. A client that may badge copies of the driver's endpoint
+//! mints it for a program that shows the traffic (`wm`'s background, 000-APP-0049) and must not touch the frames.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -25,16 +30,16 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:net";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
-/// Why a request failed.
+/// Why a request failed; `denied` (1.3): the client only reads the card.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NoDevice = 0, Busy = 1, Empty = 2, Invalid = 3 }
+pub enum Error { #[default] NoDevice = 0, Busy = 1, Empty = 2, Invalid = 3, Denied = 4 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoDevice), 1 => Some(Self::Busy), 2 => Some(Self::Empty), 3 => Some(Self::Invalid), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoDevice), 1 => Some(Self::Busy), 2 => Some(Self::Empty), 3 => Some(Self::Invalid), 4 => Some(Self::Denied), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;

@@ -1,6 +1,6 @@
 # 750-EFF-0006 — `effector`: the session with the Effector server
 
-**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 0001–0004; [requests-NET.md](requests-NET.md) (an HTTP/1.1 client for a service, a pinned leaf certificate); [750-NET-0014](750-NET-0014-the-bounds-of-a-flow.md) (a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
+**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 0001–0004; [requests-NET.md](requests-NET.md) (an HTTP/1.1 client for a service, a pinned leaf certificate); [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) (a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
 
 ## Problem
 

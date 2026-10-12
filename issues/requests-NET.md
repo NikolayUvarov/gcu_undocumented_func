@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](000-NET-0013-the-stacks-sockets.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](750-NET-0014-the-bounds-of-a-flow.md), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request.
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) (2026-10-12); the station service, its configuration interface and its test radio follow.
 
 ### Problem
 
@@ -77,23 +77,6 @@ The shell now lends its client of `tls` to a program that asks for `REQUEST_TLS`
 ### Acceptance criteria
 
 The `tls` suite: a program with the lent client gets `denied` for `client-certificate`, while the shell's `https -c` still sends it.
-
-## A read-only client of a card's counters, for `wm`'s background (000-APP-0049)
-
-**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md), split from 000-APP-0047 (the maintainer's request: the network traffic on `wm`'s desktop background).
-
-### Problem
-
-`wm` can show the network traffic on its desktop, but a card's counters (`net.wit` `counters`: sent, received, dropped) are reached only through a full client of the driver, which can also send and receive frames. The shell holds that client for `net`; lending it to `wm` would give `wm` the card itself.
-
-### Plan (a proposal; the network track decides)
-
-- A badge of the driver's endpoint that answers `info` and `counters` and refuses the rest (`net.wit` 1.x, with its version and transition), minted by whoever holds the full client.
-- The shell lends it to a program that asks for it (a request flag for it comes with the tools track's change; a fixed slot, if one is needed, from the kernel track).
-
-### Acceptance criteria
-
-A program holding the read-only client reads the counters and is refused `send`, `receive` and `attach`.
 
 ## HTTP for a service, a certificate pin and long-lived sessions (501, 750)
 

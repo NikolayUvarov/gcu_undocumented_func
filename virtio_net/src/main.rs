@@ -16,6 +16,7 @@ use mind::idl::{net, wire};
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
 use mind::netring::{self, Ring};
+use mind::network::BADGE_COUNTERS;
 
 const F_CSUM: u32 = 1 << 0; const F_MAC: u32 = 1 << 5; const F_STATUS: u32 = 1 << 16;
 const HDR_NEEDS_CSUM: u8 = 1; // virtio_net_hdr flags: the device completes the checksum (issue 106)
@@ -296,8 +297,20 @@ fn main(_info: &'static BootInfo) {
         }
         let Ok(request) = received else { continue };
         if request.irq.is_some() { continue; }
-        let sender = request.sender;
+        let (sender, reader) = (request.sender, request.badge & BADGE_COUNTERS != 0);
         let (request, call) = match net::decode(&request, RECEIVED_CAP, &mut scratch) { Ok(decoded) => decoded, Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; } };
+        // A client that only reads the card (net.wit 1.3): its other calls are refused, a ring it lends dropped unused.
+        if reader && !matches!(request, net::Request::Info | net::Request::Counters | net::Request::Offloads) {
+            let _ = match request {
+                net::Request::Send { .. } => net::reply_send(call, Err(net::Error::Denied)),
+                net::Request::SendPartial { .. } => net::reply_send_partial(call, Err(net::Error::Denied)),
+                net::Request::Receive => net::reply_receive(call, Err(net::Error::Denied)),
+                net::Request::Attach { ring: lent } => { let _ = mind::ipc::drop_cap(lent); net::reply_attach(call, Err(net::Error::Denied)) }
+                net::Request::Kick => net::reply_kick(call, Err(net::Error::Denied)),
+                _ => wire::reject(wire::Reject::Invalid),
+            };
+            continue;
+        }
         let _ = match (request, device.as_mut()) {
             (net::Request::Counters, d) => net::reply_counters(call, &d.map_or(net::Counters::default(), |d| d.counters)),
             (net::Request::Info, None) => net::reply_info(call, Err(net::Error::NoDevice)),

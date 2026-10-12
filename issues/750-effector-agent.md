@@ -157,7 +157,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 |---|---|---|
 | HTTP for a service, a certificate pin and long-lived sessions (shared with 501) | `NET` | 0006 |
 | JSON in the parser service | `NET` | 0006 |
-| A flow for a long-running service: [750-NET-0014](750-NET-0014-the-bounds-of-a-flow.md) | `NET` | 0006 |
+| A flow for a long-running service: [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) | `NET` | 0006 |
 | Boot images and `init`'s grants for `effector` and `effector_gw`, with their private directories | `KRN` | 0006, 0007 |
 | A writable `vfs` client scoped to a service's directories | `KRN` | 0007, 0008 |
 | A lifecycle client limited to named services | `KRN` | 0007 |

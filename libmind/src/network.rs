@@ -7,5 +7,9 @@ pub const BADGE_POLICY: u16 = 0xFFFF;
 /// Flow grants of the broker use badges from 1 up to this one.
 pub const BADGE_GRANT_LAST: u16 = 0xFFFD;
 
+/// A network card driver's client that only reads the card (idl/net.wit 1.3, 000-NET-0015): `info`, `counters`,
+/// `offloads`.
+pub const BADGE_COUNTERS: u16 = 1;
+
 /// The key service's signer (idl/keystore.wit, issue 103): the TLS service's client may ask for signatures.
 pub const BADGE_KEY_SIGNER: u16 = 1;

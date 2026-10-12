@@ -1,0 +1,47 @@
+# 000-NET-0013 — The stack's sockets, listed for `netstat` — done
+
+**Type:** network (`netstack`, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** — (for the tools track's [000-APP-0031](../issues/000-APP-0031-netstat.md)) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.3, MC-12.4
+
+From the tools track's request in requests-NET.md ("A list of the stack's sockets, for `netstat`", 2026-10-09).
+
+## Problem
+
+`socket.wit` names the interfaces (`interfaces`) and a grant's totals (`policy-usage`), and `netpolicy.wit` the live grants, but nothing names the stack's sockets. A `netstat` cannot show which connections are open, in what state, to where, or for which program.
+
+## Plan
+
+- `socket.wit` 2.4 adds `sockets(start)`: the open sockets from a table index, at most 32. Each comes with:
+  - its handle, protocol and card, and its local port;
+  - the remote address and port (0 for UDP);
+  - its TCP state, as RFC 9293 names them;
+  - the PID and badge of the client that opened it;
+  - the bytes it moved through its client.
+- Who may call it:
+  - the operator (the shell's client) sees every socket;
+  - a grant sees only its own, so a program never sees another's flows (MC-11.6);
+  - the policy badge sees none.
+- `netstack` counts what each socket moves, beside the grant's totals.
+- `netcheck`, the network track's diagnostic, gains `open:` (a connection kept open) and `sockets` (the list for its grant), so the network track checks the list without the shell.
+
+## Acceptance criteria
+
+- In the `net` suite (x86, aarch64), `netcheck open:… sockets` lists its own connection as established, with the server's address and port, its badge and the bytes it sent.
+- A program without a grant gets nothing.
+- The operator's whole list is the tools track's to show (`netstat`, 000-APP-0031).
+
+## Resolution
+
+- **`idl/socket.wit` 2.4** adds `sockets(start)`: up to 32 open sockets from a table index. Each gives its handle, protocol, card, local port, remote address and port, TCP state (RFC 9293's names), the PID and badge of the client that opened it, and the bytes it moved through its client.
+- **`netstack`** lists them:
+  - the operator's client sees every socket;
+  - a grant sees only its own;
+  - the policy badge and a client without a grant get nothing.
+
+  It counts each socket's bytes beside the grant's totals.
+- **`netcheck`** gained `open:A.B.C.D:PORT`, a connection kept open after a request line, and `sockets`.
+- **Tested in the `net` suite** on x86 (2b4851a) and aarch64 (ef2dbe3), QEMU 8.2 on this session's machine:
+  - `netcheck open:… sockets` lists its own connection as `Tcp … REMOTE 10.0.2.2:PORT Established`, with its badge and `SENT 16`, and counts 1 socket;
+  - a program without a grant gets `NO GRANT`.
+- **Not tested here:**
+  - the operator's whole list, which is the tools track's `netstat` ([000-APP-0031](../issues/000-APP-0031-netstat.md), now unblocked);
+  - a socket's disappearance after its program ends.
