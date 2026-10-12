@@ -28,6 +28,13 @@ Two tracks running these at once on one machine would overwrite each other's pro
 - [ ] A full gate (i9 x86, PCU aarch64) passes with `TMPDIR=/tmp/mind-KRN`, and the built programs and logs are found there.
 - [x] docs/effector.md and its Russian version say how to use several queues and the track's `TMPDIR`.
 
+## Progress
+
+**2026-10-12.**
+
+- **The first gate with `TMPDIR=/tmp/mind-KRN`** (6b6135d): the x86 groups ran in a queue of their own on i9, beside the tools track's gate. Every group passed until `keys, shell, tools`, whose last suite's machine did not reach its prompt within 30 s: two tracks' QEMU runs shared the CPUs. The suites now wait 90 s for the first prompt; a boot that hangs still fails.
+- **A long `TMPDIR` breaks the suites:** QEMU's control sockets go under it, and a Unix socket's path must stay under 108 bytes. docs/effector.md (EN, RU) says to keep it short, as `/tmp/mind-<TRK>` is.
+
 ## Related
 
 [docs/effector.md](../docs/effector.md) (rules 1 and 4), [175-KRN-0046](../issues-done/175-KRN-0046-ci-fails-on-every-build-failure.done) (the fixtures' and host tests' scripts), `tests/gate_test.py`.

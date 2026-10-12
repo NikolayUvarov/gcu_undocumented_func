@@ -122,7 +122,8 @@ class VM:
         if not prompt:
             return
         try:
-            self.expect("MIND> ", timeout=30)
+            # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
+            self.expect("MIND> ", timeout=90)
             global BASE
             BASE = len(self.services())
         except BaseException:
