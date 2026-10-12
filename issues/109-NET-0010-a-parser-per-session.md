@@ -1,6 +1,6 @@
 # 109-NET-0010 — A parser process per session
 
-**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** open · **Blocked by:** a kernel and loader change (a spawn with no standard clients; to be requested from `KRN`) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
+**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** open · **Blocked by:** a kernel and loader change (a spawn with no standard clients: [requests-KRN.md](requests-KRN.md), "A program started with no standard clients", 2026-10-12) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
 
 Split from 109, whose own criteria are met with one parser process for the system.
 
