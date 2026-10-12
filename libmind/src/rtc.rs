@@ -24,6 +24,8 @@ impl Clock {
         if self.wall.date_due() || self.date.is_none() { self.date = date(); }
         self.date
     }
+    /// Milliseconds to wait before the shown second can change, `poll_ms` while the RTC is being read.
+    pub fn wait_ms(&self, poll_ms: u64) -> usize { self.wall.wait_ms(crate::time::monotonic_ns(), poll_ms) as usize }
 }
 
 /// Today's date (year, month 1-12, day 1-31) from the CMOS RTC, no time zone.

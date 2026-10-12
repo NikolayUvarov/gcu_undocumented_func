@@ -48,4 +48,16 @@ impl WallClock {
 
     /// True once after midnight and after each resynchronization: the date may have changed and should be read again.
     pub fn date_due(&mut self) -> bool { core::mem::replace(&mut self.new_day, false) }
+
+    /// How long a face may wait at monotonic time `now_ns` before the second it shows can change: to the next second of
+    /// the count (1 to 1000 ms), or `poll_ms` while the slow clock is being read. A clock that wakes ten times a second
+    /// for nothing costs a busy machine more than its RTC reads did (16 CPUs on a 4-CPU host under QEMU).
+    pub fn wait_ms(&self, now_ns: u64, poll_ms: u64) -> u64 {
+        match self.anchor {
+            Some((_, at)) if self.aligning.is_none() && now_ns.saturating_sub(self.synced_ns) < RESYNC_NS => {
+                ((SECOND_NS - now_ns.saturating_sub(at) % SECOND_NS) / 1_000_000 + 1).min(1000)
+            }
+            _ => poll_ms,
+        }
+    }
 }

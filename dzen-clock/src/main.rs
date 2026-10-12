@@ -40,7 +40,7 @@ fn line_face() {
             }
             previous = Some(seconds);
         }
-        mind::time::sleep(100);
+        mind::time::sleep(rtc.wait_ms(100));
     }
 }
 

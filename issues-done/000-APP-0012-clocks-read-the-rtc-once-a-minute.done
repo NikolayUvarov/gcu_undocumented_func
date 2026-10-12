@@ -41,6 +41,10 @@ The kernel track's request ([requests-APP.md](../issues/requests-APP.md), 2026-1
   - In `tests/qemu_smoke.py`, `rtc_load_check` runs in the shell suite. It also requires the clocks' reads at their start to show in the count, so the check sees their calls at all.
   - On x86 with 4 CPUs, four clocks sent 24 messages to the RTC service as they started and none in the next 5 s.
 - **Not measured:** the aarch64 run with 120 clocks that the request describes. The aarch64 groups run the same shell suite in CI.
+- **A face waits for its second (2026-10-12).** The faces still woke ten times a second, now only to count. On PCU (4 CPUs, aarch64 under QEMU with 16 CPUs) that made `run clock &` answer in up to 14 to 16 s at about 140 clocks, against 7.2 to 7.7 s for `main`'s clocks, which wait for the RTC service's answer, and failed the 8 s wait of "aarch64: 16 CPUs". On i9 (16 threads) both answered within about 1 s. With `main`'s `clock/` on the branch the slowest answer was 7.4 s.
+  - `WallClock::wait_ms` and `Clock::wait_ms`: until the next second of the count, the poll's 100 ms only while the RTC is read.
+  - `clock` (its three faces) and `dzen-clock --line` wait for it. A key, or an event of the window, still wakes them at once. `dzen-clock`'s faces keep 100 ms for their orbit.
+  - [`tests/clock_host.rs`](../tests/clock_host.rs): `a_face_wakes_when_its_second_changes`: every second shown once in ten minutes, about one wake a second.
 
 ## Related
 
