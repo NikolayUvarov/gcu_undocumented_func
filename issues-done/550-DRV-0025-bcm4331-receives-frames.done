@@ -1,10 +1,10 @@
-# 550-DRV-0025 — `bcm_wifi`, stage 4: frames received by DMA, the networks around listed from their beacons
+# 550-DRV-0025 — `bcm_wifi`, stage 4: frames received by DMA, the networks around listed from their beacons — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written from a fact sheet; waits for a run on the MacBook Pro after stage 3's) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-1.5, MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-1.5, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
-Stage 3 ([550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md)) sets the radio and the HT-PHY up for a 2.4 GHz channel, with the microcode running. Nothing received reaches the host yet: the 802.11 core writes frames into a receive ring in memory with its DMA engine and tells the host by an interrupt. `init` now gives `bcm_wifi` a 512 KiB DMA region below 4 GiB and the card's MSI (550-KRN-0091).
+Stage 3 ([550-DRV-0024](../issues-done/550-DRV-0024-bcm4331-phy-and-radio.done)) sets the radio and the HT-PHY up for a 2.4 GHz channel, with the microcode running. Nothing received reaches the host yet: the 802.11 core writes frames into a receive ring in memory with its DMA engine and tells the host by an interrupt. `init` now gives `bcm_wifi` a 512 KiB DMA region below 4 GiB and the card's MSI (550-KRN-0091).
 
 ## Plan
 
@@ -32,6 +32,16 @@ On the MacBook Pro, one boot on request logs the networks around it, each with i
 - the station's own address cleared from the address match while receiving, so no frame is acknowledged; no probe request sent;
 - channels 1 to 13, 200 ms each, beacons and probe responses parsed for SSID, BSSID, channel, signal and RSN/WPA/WEP; then the engine disabled and waited for before the core is reset.
 
+## Resolution
+
+`bcm_wifi/src/stage4.rs`. On the MacBook Pro (`fast-test` ca9cd9c, LOG:boot0001.log, 2026-10-12, on request), receiving only:
+- the ring at 0x76780000 in the region 550-KRN-0091 grants (0x76770000, 512 KiB), the engine at `0000084D`;
+- channels 1 to 13, 200 ms each, polled: 8 beacons, no frame with a bad FCS, no DMA error;
+- five networks, all WPA2/RSN, with their SSID, BSSID, channel and signal: `Tenda_E25140` (channel 3, −42 dBm), `Xiaomi_7C34` (6, −45), `TP-LINK_POCKET_3020_90CB86` (6, −41), `ZATV` (8, −48), `CoolNet2` (8, −47);
+- the engine disabled (state 0) before the core was reset.
+
+Nothing was sent: no probe request, and no address of ours in the address match. Evidence for this machine only (MC-12.1); the interrupt is granted but not used yet (the core's routing to PCIe is a configuration write `bcm_wifi` cannot make).
+
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md), 550-KRN-0091 (the DMA region and the MSI), `bcm_wifi/`; the station, keys and association later: `NET` ([requests-NET.md](requests-NET.md)), and the `wifi` program: [550-APP-0033](550-APP-0033-wifi-setup-program.md).
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0024](../issues-done/550-DRV-0024-bcm4331-phy-and-radio.done), 550-KRN-0091 (the DMA region and the MSI), `bcm_wifi/`; the station, keys and association later: `NET` ([requests-NET.md](../issues/requests-NET.md)), and the `wifi` program: [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md).
