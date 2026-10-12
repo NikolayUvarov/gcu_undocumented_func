@@ -1,6 +1,6 @@
-# 550-NET-0016 — WPA2-PSK as a library for the station
+# 550-NET-0016 — WPA2-PSK as a library for the station — done
 
-**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.2, Appendix B.6
+**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.2, Appendix B.6
 
 The first part of the drivers track's request in requests-NET.md ("An 802.11 station and WPA2-PSK", 2026-10-08): the keys, the handshakes and CCMP, before the station service (`wlan`) that uses them.
 
@@ -51,4 +51,15 @@ What this does not show:
 
 ## Related
 
-[requests-NET.md](requests-NET.md) ("An 802.11 station and WPA2-PSK"), [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
+[requests-NET.md](../issues/requests-NET.md) ("An 802.11 station and WPA2-PSK"), [550-NET-0012](550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md).
+
+## Resolution
+
+- **The crate `wpa/`** (32f834c), as planned: `keys`, `eapol`, `handshake` (the supplicant) and `ccmp`, over the RustCrypto crates `sha1`, `pbkdf2`, `aes-kw` and `ccm` (THIRD_PARTY.md).
+- **Tested on the host:** `wpa/tests/vectors.rs`, which `scripts/host_tests.sh` runs with Cargo. Its 9 tests pass:
+  - IEEE 802.11 J.4, J.3 and M.6.4;
+  - RFC 3394 4.1;
+  - the PTK against Python's `hashlib`;
+  - both handshakes and their refusals against the test's authenticator.
+- **Builds** for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
+- **Not shown,** as the criteria say: a handshake with a real access point. It comes with the station service and the MacBook Pro's run.
