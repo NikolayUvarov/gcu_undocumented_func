@@ -18,6 +18,9 @@
 //! 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
 //!
 //! 2.3 (351-NET-0003): the policy badge may `resolve`, for the host names of the policy file.
+//!
+//! 2.4 (000-NET-0013): `sockets` lists the stack's open sockets, for `netstat`: the operator sees every one, a grant
+//! only its own, the policy badge none.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -27,7 +30,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 3, 0);
+pub const VERSION: (u8, u8, u8) = (2, 4, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -94,6 +97,30 @@ impl Wire for Config {
     const MAX: usize = <u32 as Wire>::MAX + <u8 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.address.encode(w)?; self.prefix.encode(w)?; self.gateway.encode(w)?; self.dns.encode(w)?; self.mac.encode(w)?; self.dhcp.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { address: Wire::decode(r)?, prefix: Wire::decode(r)?, gateway: Wire::decode(r)?, dns: Wire::decode(r)?, mac: Wire::decode(r)?, dhcp: Wire::decode(r)? }) }
+}
+
+/// A TCP connection's state (2.4), as RFC 9293 names them; `none` for a UDP socket.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum TcpState { #[default] None = 0, Closed = 1, Listen = 2, SynSent = 3, SynReceived = 4, Established = 5, FinWait1 = 6, FinWait2 = 7, CloseWait = 8, Closing = 9, LastAck = 10, TimeWait = 11 }
+impl TcpState {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::None), 1 => Some(Self::Closed), 2 => Some(Self::Listen), 3 => Some(Self::SynSent), 4 => Some(Self::SynReceived), 5 => Some(Self::Established), 6 => Some(Self::FinWait1), 7 => Some(Self::FinWait2), 8 => Some(Self::CloseWait), 9 => Some(Self::Closing), 10 => Some(Self::LastAck), 11 => Some(Self::TimeWait), _ => None } }
+}
+impl Wire for TcpState {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// An open socket (2.4): its handle, protocol and card, its local port, the remote address and port (0 for UDP),
+/// its TCP state, the PID and badge of the client that opened it, and the bytes it moved through its client.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SocketInfo { pub id: u32, pub protocol: Protocol, pub card: u8, pub local_port: u16, pub remote_address: u32, pub remote_port: u16, pub state: TcpState, pub pid: u64, pub badge: u16, pub sent: u64, pub received: u64 }
+impl Wire for SocketInfo {
+    const MAX: usize = <u32 as Wire>::MAX + <Protocol as Wire>::MAX + <u8 as Wire>::MAX + <u16 as Wire>::MAX + <u32 as Wire>::MAX + <u16 as Wire>::MAX + <TcpState as Wire>::MAX + <u64 as Wire>::MAX + <u16 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.protocol.encode(w)?; self.card.encode(w)?; self.local_port.encode(w)?; self.remote_address.encode(w)?; self.remote_port.encode(w)?; self.state.encode(w)?; self.pid.encode(w)?; self.badge.encode(w)?; self.sent.encode(w)?; self.received.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, protocol: Wire::decode(r)?, card: Wire::decode(r)?, local_port: Wire::decode(r)?, remote_address: Wire::decode(r)?, remote_port: Wire::decode(r)?, state: Wire::decode(r)?, pid: Wire::decode(r)?, badge: Wire::decode(r)?, sent: Wire::decode(r)?, received: Wire::decode(r)? }) }
 }
 
 /// A UDP datagram and where it came from.
@@ -301,6 +328,22 @@ pub fn offload(endpoint: Endpoint, enable: bool) -> Result<core::result::Result<
     Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
 }
 
+/// The open sockets from the stack's table index `start`, in its order (2.4): every one for the operator, its own
+/// for a grant; `denied` for the policy badge. A socket a client closed is gone from the list.
+pub fn sockets(endpoint: Endpoint, start: u32) -> Result<core::result::Result<List<SocketInfo, 32>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 16 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1314, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<SocketInfo, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 4102;
 
@@ -322,6 +365,7 @@ pub enum Request<'a> {
     PolicyUsage { badge: u16 },
     Interfaces,
     Offload { enable: bool },
+    Sockets { start: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -437,6 +481,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x10000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Offload { enable: wire::field(&words, 0, 16, 1) != 0 }, Call::words(request, cap)))
         }
+        16 => {
+            let (call, length) = wire::take_buffer(request, cap, 1314, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Sockets { start }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -500,4 +552,8 @@ pub fn reply_interfaces(call: Call, value: core::result::Result<&[Interface], Er
 pub fn reply_offload(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_sockets(call: Call, value: core::result::Result<&[SocketInfo], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<SocketInfo, 32>(value, w))
 }

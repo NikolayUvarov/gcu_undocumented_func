@@ -17,7 +17,10 @@
 /// 2.2 (issue 106): `offload` turns transmit checksum offload on or off for every card that offers it (operator only).
 ///
 /// 2.3 (351-NET-0003): the policy badge may `resolve`, for the host names of the policy file.
-package mind:socket@2.3.0;
+///
+/// 2.4 (000-NET-0013): `sockets` lists the stack's open sockets, for `netstat`: the operator sees every one, a grant
+/// only its own, the policy badge none.
+package mind:socket@2.4.0;
 
 interface socket {
     /// Why a request failed.
@@ -39,6 +42,13 @@ interface socket {
     /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
     /// configured it (or the static fallback did).
     record config { address: u32, prefix: u8, gateway: u32, dns: u32, mac: u64, dhcp: bool }
+
+    /// A TCP connection's state (2.4), as RFC 9293 names them; `none` for a UDP socket.
+    enum tcp-state { none, closed, listen, syn-sent, syn-received, established, fin-wait-1, fin-wait-2, close-wait, closing, last-ack, time-wait }
+
+    /// An open socket (2.4): its handle, protocol and card, its local port, the remote address and port (0 for UDP),
+    /// its TCP state, the PID and badge of the client that opened it, and the bytes it moved through its client.
+    record socket-info { id: u32, protocol: protocol, card: u8, local-port: u16, remote-address: u32, remote-port: u16, state: tcp-state, pid: u64, badge: u16, sent: u64, received: u64 }
 
     /// A UDP datagram and where it came from.
     record datagram { address: u32, port: u16, data: list<u8, 1472> }
@@ -71,4 +81,7 @@ interface socket {
     interfaces: func() -> result<list<interface, 4>, error>;
     /// Turns transmit checksum offload on or off (operator only, 2.2); returns the cards that use it now (bit n: card n).
     offload: func(enable: bool) -> result<u32, error>;
+    /// The open sockets from the stack's table index `start`, in its order (2.4): every one for the operator, its own
+    /// for a grant; `denied` for the policy badge. A socket a client closed is gone from the list.
+    sockets: func(start: u32) -> result<list<socket-info, 32>, error>;
 }
