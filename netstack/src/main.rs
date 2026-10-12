@@ -1,10 +1,11 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card drivers' frames. Serves idl/socket.wit 2.1. Holds clients of up to CARDS card drivers (slots 2 and 3)
-// and nothing of the devices themselves (Appendix B.6: packet and flow endpoints with quotas, no power over the
-// device); each card is an interface of its own (issue 105) and a flow goes out through the one its route names. What
-// each client may reach comes from the badge of its capability (policy.rs, MC-11.6).
+// network card drivers' frames. Serves idl/socket.wit 2.1. Holds clients of up to CARDS card drivers (slots 2 and 3,
+// and the Wi-Fi station `wlan` in slot 4) and nothing of the devices themselves (Appendix B.6: packet and flow
+// endpoints with quotas, no power over the device); each card is an interface of its own (issue 105) and a flow goes
+// out through the one its route names. What each client may reach comes from the badge of its capability (policy.rs,
+// MC-11.6).
 extern crate alloc;
 
 mod dns;
@@ -40,8 +41,9 @@ const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
 const ICMP_IDENT: u16 = 0x4D49;
 const EPHEMERAL: u16 = 49152;
-const CARDS: usize = 2; // card drivers: SLOT_DEV0, SLOT_DEV1 (init starts one virtio_net instance per card)
-const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1];
+const SLOT_STATION: usize = 4; // the Wi-Fi station's client when one runs (550-NET-0018, 550-KRN-0097)
+const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per card) and the station, which answers once joined
+const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.

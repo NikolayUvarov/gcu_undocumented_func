@@ -1,8 +1,8 @@
 # 550-NET-0018 — The station service `wlan` and its configuration interface
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — for the interface and the service; `KRN` for starting it and lending its clients ([requests-KRN.md](requests-KRN.md), "The Wi-Fi station in the boot services") · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — for the interface and the service; 550-KRN-0097 for starting it and lending its clients (prepared by the kernel track from [requests-KRN.md](requests-KRN.md), "The Wi-Fi station in the boot services") · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
 
-The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](550-NET-0017-the-stations-logic.md).
+The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done).
 
 ## Problem
 
@@ -49,4 +49,6 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
   - `idl/wifi.wit` 1.0 (c2ee9ea), told to the tools track in requests-APP.md;
   - [`wlan/`](../wlan/src/main.rs), the service, built for both targets (in `02_build.sh`'s list, so in the images, though nothing starts it yet);
   - [`tests/wlansim/`](../tests/wlansim/src/main.rs), the stand-in radio with its access point and DHCP, ARP and ICMP echo, built with the test programs on both architectures.
-- **Not tested yet:** `init` does not start `wlan` or `wlansim`, and the stack has no third card (requests-KRN.md). The QEMU checks of the criteria come with that.
+  - `netstack` reads slot 4 as its third card (`CARDS` = 3), where 550-KRN-0097 lends it the station's client; the slot is empty without a station, as slot 3 is without a second card;
+  - `wlansim`'s network is 10.0.4.0/24, so that it never shares one with the second card's 10.0.3.0/24 in the `net` suite.
+- **Not tested yet:** `init` does not start `wlan` or `wlansim` on `main`. The kernel track prepared that as 550-KRN-0097, which reaches `main` after this task's code. The QEMU checks of the criteria come with it.

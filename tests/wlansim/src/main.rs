@@ -2,8 +2,8 @@
 #![no_main]
 // A stand-in radio for QEMU (550-NET-0018), which has no Wi-Fi device: serves idl/wlanhw.wit as a radio within reach of
 // one access point, `MIND-TEST` on channel 6, WPA2-PSK with the passphrase "mind test passphrase". The access point is
-// simulated here (its handshake from wpa::authenticator) with a small network behind it: it answers DHCP (10.0.3.15/24,
-// gateway and DNS 10.0.3.1), ARP for the gateway and ICMP echo to it. A test service: in no image but the tests'.
+// simulated here (its handshake from wpa::authenticator) with a small network behind it: it answers DHCP (10.0.4.15/24,
+// gateway and DNS 10.0.4.1), ARP for the gateway and ICMP echo to it. A test service: in no image but the tests'.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA, TYPE_MANAGEMENT};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
@@ -24,8 +24,8 @@ const SSID: &[u8] = b"MIND-TEST";
 const PASSPHRASE: &[u8] = b"mind test passphrase";
 const CHANNEL: u8 = 6;
 const WEAKNESS: u8 = 42;
-const GATEWAY: [u8; 4] = [10, 0, 3, 1];
-const LEASE: [u8; 4] = [10, 0, 3, 15];
+const GATEWAY: [u8; 4] = [10, 0, 4, 1]; // not 10.0.3.0/24, the second card's network in the net suite
+const LEASE: [u8; 4] = [10, 0, 4, 15];
 const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 16;
 const BEACON_MS: u64 = 100;
