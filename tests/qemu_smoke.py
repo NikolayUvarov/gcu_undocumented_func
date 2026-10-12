@@ -7038,7 +7038,7 @@ def tablet_suite(vm, wav):
     # The desktop menu (issue u003): a right click on the desktop lists the shell's window first (211-APP-0044), then the
     # programs by category; the mouse on Clocks opens its programs beside it (the categories are 26 cells wide: "Tests
     # and performance", 176-APP-0051); a click starts clock.
-    logged(vm, 0, "[WM] PROGRAMS: ")
+    logged(vm, 0, "[WM] PROGRAMS: ", timeout=30)  # gathered while wm is idle: about 6 s on a 16-thread host, 15 s on a 4-CPU one
     assert "MODE=MENU" in click(100, 35, "MODE=MENU", button="right")
     vm.tablet_at(103 * 8 + 4, 39 * 16 + 8)
     time.sleep(.2)
