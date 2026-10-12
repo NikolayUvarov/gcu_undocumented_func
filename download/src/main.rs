@@ -13,6 +13,7 @@ use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Sink, Transport, Url};
 use mind::idl::{socket, tls};
+use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::ipc::Endpoint;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_FILE | REQUEST_PARSE | REQUEST_TLS);
@@ -21,6 +22,8 @@ const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
 const IDLE_MS: usize = 15_000; // no progress for this long: the connection counts as cut
 const STAGE: usize = 64 * 1024; // the body is written to the file in pieces of this size
+// The endpoint of this download's own parser, ended on every way out (109-NET-0010); 0: the shared service.
+static OWN_PARSER: AtomicUsize = AtomicUsize::new(0);
 
 fn now() -> usize { mind::time::uptime_ms() }
 
@@ -193,6 +196,8 @@ fn sha256(file: &File) -> Option<[u8; 32]> {
 
 fn fail(what: core::fmt::Arguments) -> ! {
     mind::println!("DOWNLOAD: {}", what);
+    let own = OWN_PARSER.swap(0, Ordering::Relaxed);
+    if own != 0 { mind::parse::end_session(Endpoint(own)); }
     mind::process::exit_with(1)
 }
 
@@ -218,7 +223,11 @@ fn main(_info: &'static BootInfo) {
     if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
     // It does not parse response heads itself: without the parser service it does not download (MC-11.11).
     if mind::dev::cap_info(SLOT_PARSE).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PARSER SERVICE")); }
-    let mut parser = mind::parse::Service(Endpoint(SLOT_PARSE));
+    // A parser process of this download's own (109-NET-0010); the shared service where the loader starts none.
+    let mut parser = match mind::parse::Session::own(Endpoint::LOADER) {
+        Ok(own) => { OWN_PARSER.store(own.endpoint().0, Ordering::Relaxed); own }
+        Err(why) => { mind::println!("DOWNLOAD: NO PARSER OF ITS OWN ({:?}): THE SHARED SERVICE PARSES", why); mind::parse::Session::shared(Endpoint(SLOT_PARSE)) }
+    };
     // The client the launcher lent is confined to the file's directory.
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
         let (volume, rest) = fs::split(path);
