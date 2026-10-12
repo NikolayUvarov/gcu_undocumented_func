@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) (2026-10-12); the station service, its configuration interface and its test radio follow.
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](550-NET-0017-the-stations-logic.md) (2026-10-12); the station service `wlan`, its configuration interface (`idl/wifi.wit`, proposed by the tools track below) and a stand-in radio for QEMU follow.
 
 ### Problem
 
@@ -195,3 +195,19 @@ interface wifi {
 ### Acceptance criteria
 
 The network track agrees or changes the interface; `wifi` follows it in a new step of 550-APP-0033, and its QEMU check runs against a stand-in service of the agreed interface.
+
+## A notice: 109-NET-0010 is done by the kernel track (109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
+
+### What was done
+
+The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy`, and they reach `main` through the gate:
+
+- **109-KRN-0096 (the loader starts a helper):** `idl/loader.wit` 1.8 gains `helper(parse, served)`. The loader starts a copy of `parse` whose only capability is the caller's endpoint, with a bounded quota and a per-owner limit.
+- **109-NET-0010 itself:** `parse --session` answers on that endpoint alone and ends when its client does or after 30 s idle; `mind::parse::Session` owns such a copy, and `download` uses one, falling back to the shared service. The `net` suite's `session_parsers_check` shows two downloads with a parser each.
+
+### What is asked of the network track
+
+- **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
+- **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.

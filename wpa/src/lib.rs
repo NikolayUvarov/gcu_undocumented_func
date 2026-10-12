@@ -5,6 +5,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod authenticator;
 pub mod ccmp;
 pub mod eapol;
 pub mod handshake;

@@ -428,7 +428,7 @@ types! {
     parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
     rtc: Error;
     shell: Error;
-    socket: Error Protocol Rule Interface Usage Config Datagram;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer;
     tpm: Error Info;

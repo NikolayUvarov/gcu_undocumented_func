@@ -107,7 +107,7 @@ pub fn decrypt(tk: &[u8; 16], frame: &[u8], out: &mut [u8]) -> Result<(usize, u6
 }
 
 /// A receiver's highest PN for each traffic identifier (0-15) and for management frames (16).
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct Replay { last: [u64; 17] }
 
 impl Replay {
