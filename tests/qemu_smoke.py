@@ -5241,7 +5241,7 @@ def download_check(args, disk):
 def service_runs(vm, port):
     """750-NET-0019: HTTP for services over one TLS session of the TLS service: a JSON POST with its chunked answer,
     100 more requests on the same connection, and a stream the server holds for 55 s before its body."""
-    _Service.served, _Service.stream_seconds = 0, 55
+    _Service.served, _Service.stream_seconds, _Service.held = 0, 55, 0.0
     vm.send(f"webcheck https://10.0.2.2:{port}/api/heartbeat --post {{\"agent\":\"mind\"}} --repeat 100 --stream --idle 75 --json\n")
     out = vm.expect("MIND> ", timeout=600, after="WEBCHECK DONE")
     require(out, 'WEBCHECK POST 200 20 BYTES {"ok":true,"got":16}')
@@ -5250,11 +5250,12 @@ def service_runs(vm, port):
                  "WEBCHECK JSON 3 VALUES"):
         require(out, line)
     require(out, "WEBCHECK 101 REQUESTS ON ONE CONNECTION")
+    # The hold is the host's to measure: the guest's clock under TCG may run a little slow (54 s for 55).
     stream = re.search(r"WEBCHECK STREAM 5 BYTES IN (\d+) S woken", out)
-    assert stream and int(stream[1]) >= 55, out
+    assert stream and _Service.held >= 55 and int(stream[1]) >= 50, (_Service.held, out)
     assert _Service.served == 101, _Service.served
     print("PASS: HTTP for services: over one TLS session, a JSON POST answered chunked, 100 more requests on the same "
-          f"connection, and a stream held {stream[1]} s to its end", flush=True)
+          f"connection, and a stream held {_Service.held:.0f} s ({stream[1]} s by the guest's clock) to its end", flush=True)
     vm.send(f"webcheck https://10.0.2.2:{port}/api/command --json\n")
     out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
     for line in ('WEBCHECK JSON 1 Number IN 0 KEY "id" TEXT "7"', 'WEBCHECK JSON 3 Array IN 0 KEY "argv" TEXT ""', 'WEBCHECK JSON 5 String IN 3 KEY "" TEXT "-a"',
@@ -5759,6 +5760,7 @@ class _Service(http.server.BaseHTTPRequestHandler):
     """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
     protocol_version = "HTTP/1.1"
     stream_seconds = 55
+    held = 0.0  # how long the last stream was silent, by the host's clock
     served = 0
 
     def _chunked(self, body):
@@ -5779,8 +5781,10 @@ class _Service(http.server.BaseHTTPRequestHandler):
         if self.headers.get("X-Stream"):
             # A wake-up stream: the head at once, the body only after stream_seconds of silence.
             self.send_response(200); self.send_header("Transfer-Encoding", "chunked"); self.end_headers(); self.wfile.flush()
+            started = time.monotonic()
             time.sleep(type(self).stream_seconds)
-            self.wfile.write(b"5\r\nwoken\r\n0\r\n\r\n")
+            self.wfile.write(b"5\r\nwoken\r\n0\r\n\r\n"); self.wfile.flush()
+            type(self).held = time.monotonic() - started
             return
         if self.path.endswith("/command"):
             # A command as the Effector agent would get one (750-NET-0021).
