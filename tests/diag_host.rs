@@ -84,6 +84,8 @@ fn run(path: &str, ring_moved: bool) -> Shell {
 #[test]
 fn the_quick_run_writes_each_step_and_a_summary() {
     let shell = run("diag/quick.msh", false);
+    // The run says it started before it looks for anything (the MacBook Pro's full run looked hung, 176-KRN-0087).
+    assert_eq!(shell.printed.first().map(String::as_str), Some("DIAG QUICK: STARTED (diag/quick.msh); ESC STOPS IT"));
     assert_eq!(shell.dirs, ["log:quick0003-2"]);
     let summary = &shell.files["log:quick0003-2/summary.txt"];
     assert!(summary.contains("BUILD: BRANCH fast-test, COMMIT 8c15a16abcde") && !shell.run.iter().any(|c| c.starts_with("grep")), "{}", summary);

@@ -185,6 +185,9 @@ What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
   - a second Tab lists them.
 - **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
 - **`help`** names `cd`, `pwd` and the keys.
+- **A script by its name** (the maintainer, 2026-10-12: "I cannot run the script from fm by Enter, nor in its directory by typing its name"):
+  - in the shell, `full.msh` runs from the current directory, as `diag/full.msh` runs from the root now;
+  - in `fm`, Enter on a `.msh` file runs it in the shell's window, or in `console`, as `msh <path>` does. Today `fm` hands it to the loader, which answers `Cannot start full.msh: NotFound`.
 
 ### Acceptance criteria
 
@@ -194,3 +197,15 @@ What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
   - Tab after `msh diag/q` gives `msh diag/quick.msh`;
   - Tab twice after `ch` lists `check` and the other matches.
 - **In `console`**, the same keys work.
+- **In the `fm` suite**, Enter on `diag/quick.msh` runs it, and its first line shows.
+
+## Note: the shell shows what a script prints at once (176-KRN-0087; the maintainer's word, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12.
+
+The maintainer's full run (`diag/full.msh`) looked hung for 42 s, then printed everything at once. The shell drew its screen only between commands, and a script is one command. At the maintainer's word ("all this must be fixed"), the kernel session changed two lines in `shell/src/msh.rs`:
+
+- the script host's `print` draws the screen after each line;
+- so does a command a script runs without capturing it.
+
+The `shell` suite now checks the screen while a script sleeps. The tools track may do it otherwise.

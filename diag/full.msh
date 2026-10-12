@@ -58,7 +58,7 @@ let after = [
     {name: "stat-cpus-after", cmd: "stat cpus", why: "the kernel's statistics of each processor after the measurements"},
     {name: "free-after", cmd: "free", why: "kernel memory after the measurements"},
     {name: "ps-after", cmd: "ps", why: "the tasks after the measurements"},
-    {name: "faults-after", cmd: "faults", why: "faults during the run"},
+    {name: "faults-after", cmd: "faults", why: "faults during the run; check's security group makes three on purpose (kernel memory, its own code, a null pointer)"},
     {name: "warnings-after", cmd: "dmesg -l warn", why: "warnings and errors during the run"},
 ]
 let steps = before + tasks + measurements + after
@@ -149,6 +149,8 @@ fn run_step(cmd, path) {
     return failures
 }
 
+# Said at once, before the run's directory and the build are looked for.
+print("DIAG {upper(kind)}: STARTED (diag/{kind}.msh); ESC STOPS IT")
 let boot = boot_number()
 let dir = run_dir(kind, boot)
 let started = now()

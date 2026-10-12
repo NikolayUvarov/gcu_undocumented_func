@@ -116,6 +116,8 @@ fn run_step(cmd, path) {
     return failures
 }
 
+# Said at once, before the run's directory and the build are looked for.
+print("DIAG {upper(kind)}: STARTED (diag/{kind}.msh); ESC STOPS IT")
 let boot = boot_number()
 let dir = run_dir(kind, boot)
 let started = now()

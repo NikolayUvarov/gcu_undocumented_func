@@ -7,7 +7,7 @@
 // device's reports, laid out by its report descriptor, become pointer events for the focused task. Devices are
 // claimed as they come; one that goes away is let go.
 use mind::abi::{BootInfo, SLOT_DEV0};
-use mind::hid::{wellspring, Keyboard, Pointer, Trackpad, WELLSPRING_LONGEST, WELLSPRING_MODE};
+use mind::hid::{report_descriptor_length, wellspring, Keyboard, Pointer, Trackpad, WELLSPRING_LONGEST, WELLSPRING_MODE};
 use mind::idl::{keyboard, wire};
 use mind::ipc::Endpoint;
 use mind::keys::Ps2;
@@ -72,9 +72,14 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
         mind::println!("[USB_HID] {:04X}:{:04X} KEYBOARD", name.0, name.1);
         return Ok(device(Kind::Keyboard(Keyboard::new()), [0; 4]));
     }
-    let length = host.control(handle, 0x81, 6, 0x2200, number, 1024); // the report descriptor
+    // The report descriptor at the length the configuration names; without it, 1024 bytes, then 255 if nothing came
+    // (a firmware that reads only wLength's low byte took 1024 for 0, 211-DRV-0008).
+    let named = report_length(host, handle, info.number);
+    let asked = named.unwrap_or(1024);
+    let mut length = host.control(handle, 0x81, 6, 0x2200, number, asked);
+    if named.is_none() && matches!(length, Ok(0)) { length = host.control(handle, 0x81, 6, 0x2200, number, 255); }
     // Logged once, for a pointer whose layout is read wrong (211-DRV-0008: a mouse that moved only sideways).
-    if first { if let Ok(n) = length { dump(name, "REPORT DESCRIPTOR", &host.buffer()[..n]); } }
+    if first { if let Ok(n) = length { dump(name, if named.is_some() { "REPORT DESCRIPTOR" } else { "REPORT DESCRIPTOR (ITS LENGTH NOT IN THE CONFIGURATION)" }, &host.buffer()[..n]); } }
     let (parsed, ids) = match length { Ok(n) => (Pointer::parse(&host.buffer()[..n]), report_ids(&host.buffer()[..n])), Err(_) => (None, [0; 4]) };
     let pointer = match (parsed, length) {
         // The firmware may have left a boot device in the boot protocol, whose reports the descriptor does not describe.
@@ -88,6 +93,15 @@ fn setup(host: &mut Host, handle: u32, info: &Interface, first: bool, keyboard: 
                    if pointer.absolute { "TABLET" } else { "MOUSE" }, pointer.id, pointer.x.offset, pointer.x.size, pointer.y.offset,
                    pointer.y.size, protocol);
     Ok(device(Kind::Pointer(pointer), ids))
+}
+
+// The length of interface `number`'s report descriptor from its device's configuration descriptor, read at its own
+// length (9 bytes, then wTotalLength).
+fn report_length(host: &mut Host, handle: u32, number: u8) -> Option<u16> {
+    host.control(handle, 0x80, 6, 0x0200, 0, 9).ok().filter(|&n| n == 9)?;
+    let total = u16::from_le_bytes([host.buffer()[2], host.buffer()[3]]).clamp(9, mind::usb::CONTROL_MAX as u16);
+    let n = host.control(handle, 0x80, 6, 0x0200, 0, total).ok()?;
+    report_descriptor_length(&host.buffer()[..n], number)
 }
 
 // For an interface being set up: the handle of interface 0 of its device when held as a keyboard.

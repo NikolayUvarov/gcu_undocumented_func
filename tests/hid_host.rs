@@ -153,6 +153,21 @@ fn a_descriptor_cut_short_keeps_what_came_before() {
     assert_eq!(mouse, Pointer::parse(&MOUSE).expect("layout"));
 }
 
+#[test]
+fn the_report_descriptor_length_comes_from_the_configuration() {
+    // QEMU's usb-mouse: configuration, interface 0 (HID, boot mouse), its HID descriptor (report descriptor 52 bytes), endpoint.
+    let mouse = [9, 2, 34, 0, 1, 1, 0, 0xa0, 50, 9, 4, 0, 0, 1, 3, 1, 2, 0, 9, 0x21, 1, 0, 0, 1, 0x22, 52, 0, 7, 5, 0x81, 3, 4, 0, 10];
+    assert_eq!(report_descriptor_length(&mouse, 0), Some(52));
+    assert_eq!(report_descriptor_length(&mouse, 1), None, "no interface 1");
+    // A keyboard and a mouse in one device: each interface's own HID descriptor; a cut-off one names nothing.
+    let mut two = mouse[..27].to_vec();
+    two[2] = 59;
+    two.extend_from_slice(&[9, 4, 1, 0, 1, 3, 1, 2, 0, 9, 0x21, 0x11, 1, 0, 1, 0x22, 0x2c, 1, 7, 5, 0x82, 3, 6, 0, 10]);
+    assert_eq!(report_descriptor_length(&two, 1), Some(300));
+    assert_eq!(report_descriptor_length(&two, 0), Some(52));
+    assert_eq!(report_descriptor_length(&mouse[..25], 0), None);
+}
+
 // 211-DRV-0018: Wellspring packets as the MacBook Pro's trackpad sends them in its multitouch mode: a 30-byte header with
 // the button at byte 15, then 28 bytes a finger (X at 2, Y at 4, upwards; the touch's major axis at 16).
 fn packet(button: bool, fingers: &[(i16, i16)]) -> Vec<u8> {

@@ -1237,6 +1237,12 @@ def msh_check(vm):
     vm.expect("SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)")
     vm.send_bytes(b"n")
     require(vm.expect("MIND> "), "MSH: ram:w.msh: NOT RUN")
+    # What a script prints is on the screen at once, not when it ends: a long run looked hung (176-KRN-0087).
+    vm.send('print("SHOWN " + "WHILE IT RUNS"); sleep(4000)\n')  # the typed line does not hold the text itself
+    time.sleep(2)
+    screen = screen_text(vm)
+    assert any("SHOWN WHILE IT RUNS" in row for row in screen), screen
+    vm.expect("MIND> ")
     # Ctrl+Z (0x1A on the serial line) stops a script in an endless loop.
     vm.send('msh -c "let i = 0; while true { i = i + 1 }"\n')
     time.sleep(1)
@@ -6944,9 +6950,9 @@ def usb_suite(vm):
     vm.qmp("device_add", driver="usb-mouse", bus="xhci.0", port="1.3", id="mouse")
     logs = vm.service_logs("usb_hid", "MOUSE")
     require(logs, "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
-    # Its report descriptor came at its own length, not the 1024 bytes asked (211-DRV-0008).
+    # Its report descriptor asked for and read at the length its configuration names (211-DRV-0008).
     sizes = [int(n) for n in re.findall(r"\[USB_HID\] 0627:0001 REPORT DESCRIPTOR: (\d+) BYTES", logs)]
-    assert sizes and all(0 < n < 1024 for n in sizes), logs
+    assert sizes and all(0 < n < 1024 for n in sizes) and "NOT IN THE CONFIGURATION" not in logs, logs
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
     time.sleep(.3)
