@@ -1,0 +1,32 @@
+# 211-APP-0039 — A program that ends at once in a window leaves its message on view — done
+
+**Type:** tools (`libmind`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (and [158](../issues/158-video-capture.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
+
+Numbered from the kernel track's request in `requests-APP.md` (2026-10-09), after the maintainer's run on the MacBook Pro: "`camera` — nothing happens when it starts".
+
+## Problem
+
+Started from `wm`, `camera` found no camera and ended at once with `camera: no camera (the video gateway lists none)`. What a program prints goes to its log, not to its window, and the window went when the program ended, so the user saw nothing. Every program that fails at its start behaves so in `wm`.
+
+## Plan
+
+- When a program in a window ends with a nonzero status, its window stays with its last lines and `ENDED (STATUS n): PRESS A KEY`, until a key or a click.
+- A program that ends with status 0 closes its window as now.
+
+## Acceptance criteria
+
+- The `wm` suite starts `camera` without a camera (or another program that fails at once): its window stays with the message until a key.
+
+## Related
+
+[158](../issues/158-video-capture.md), [088](088-text-window-manager.done), [166](166-exit-status-for-launchers.done), [u004](u004-console.done).
+
+## Resolution
+
+- **Where:** in the program, not in `wm`. `wm` cannot read a program's exit status or its log: both need process control, which only the shell holds, and the loader, not `wm`, is the parent of the programs it starts. The program knows both, and holds the broker client its window comes from.
+- `libmind/src/windowed.rs`: a program started with a broker client keeps the last 2 KiB it prints (`keep`, called by `process::log`; `tui::ended::Tail`). `ended(status)`, called by `process::exit_with` for a nonzero status, draws the last lines that fit (wrapped at the window's width) and `ENDED (STATUS n): PRESS A KEY` into the program's text window, or into its pixel window with the 8x16 font, or into a text window it opens for them (160 × 64 cells of room, at 80 × 25, titled `<program> ended` from its `about!` text) when it had none. It waits for a key press (not a modifier or a release) or a click, or for the window's close, and then the program ends with its status. While it waits a closed window ends the wait rather than the program, so the status is kept; a new size from `wm` is drawn again.
+- `libmind/src/tui/ended.rs`: `Tail` (the last bytes printed, under a spin flag) and `draw` (the layout), host-tested in `tests/tui_host.rs` (`an_ended_program_leaves_its_last_lines_and_status`: lines, wrapping, the oldest dropped, nothing printed, a character cut at the tail's start).
+- `process::check_abi` ends a program built for another ABI without this (its system calls may not mean what it thinks). `mind::gfx::Screen::at` makes a screen over a pixel window's surface.
+- The `wm` suite (x86) starts `camera` with Alt+R: `wm` lends it no camera, it says `camera: no camera was granted …` and exits 1, and its window `camera ended` shows the line and `ENDED (STATUS 1): PRESS A KEY` and is still there a second later; a space closes it (`GONE`).
+- Not covered: a program that is killed or faults (the kernel ends it, and its window goes), and a panic, which ends with status 0. Programs started by the shell on a screen of their own are unchanged.
+- Docs: `docs/tools/README.md` and `README_RU.md` (programs in windows).

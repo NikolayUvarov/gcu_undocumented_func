@@ -83,6 +83,8 @@ fn usize_to_str(mut val: usize, buf: &mut [u8]) -> usize {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("app — graphics demo: an animation on its own screen.\nUsage: app (or boot)\nCtrl+Z: back to the shell, the demo keeps running; Esc: exit.");
+    // In wm a window of its own (000-APP-0056: otherwise it ran unseen, with no screen to draw on).
+    let info = mind::windowed::pixels(info, 600, 240, "app");
     unsafe { init_thread(); }
     
     os_print(b"\r\n========================================\r\n");

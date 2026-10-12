@@ -315,6 +315,25 @@ fn read_only_refuses_changes() {
     assert_eq!(text(&e), "!boot file");
 }
 
+// 000-APP-0063: the line under the text is green for what was done (saved, replaced), red for a problem.
+#[test]
+fn a_save_is_green_and_a_failure_red() {
+    let mut e = Editor::new(Vec::new(), "ram:new.txt", false);
+    typed(&mut e, "text");
+    e.saved("ram:new.txt", Err(String::from("the disk is full")));
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Not saved") && cells[24 * 80].style == CLASSIC.error, "{}", screen[24]);
+    e.saved("ram:new.txt", Ok(4));
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Saved 4 bytes") && cells[24 * 80].style == CLASSIC.ok, "{}", screen[24]);
+    assert_ne!(CLASSIC.ok, CLASSIC.error);
+    e.key(f(7));
+    typed(&mut e, "нет");
+    e.key(enter());
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[24].starts_with("Not found") && cells[24 * 80].style == CLASSIC.error, "{}", screen[24]);
+}
+
 #[test]
 fn saving_quitting_and_dialogs() {
     let mut e = Editor::new(Vec::new(), "", false);
@@ -525,4 +544,49 @@ fn quit_from_the_menu_and_the_key_bar() {
     editor.pointer(0, 1, 0, 0);
     assert_eq!(editor.pointer(0, 1, 0, 1), Outcome::Redraw);
     assert_eq!(editor.line(), 3, "one wheel step: three lines down (the last, empty line after the final newline)");
+}
+
+#[test]
+fn syntax_colours() {
+    // T4: a file in its language's colours; a comment opened on one line colours the next until an edit closes it.
+    use tui::syntax::{style, Kind};
+    let (keyword, comment) = (style(&CLASSIC, Kind::Keyword), style(&CLASSIC, Kind::Comment));
+    let mut e = Editor::new(b"fn a() {}\n/* c\nfn b() {}\n".to_vec(), "ram:x.rs", false);
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(screen[0].contains("Rust"), "{}", screen[0]);
+    assert_eq!(cells[80].style, keyword);
+    assert_eq!(cells[2 * 80].style, comment);
+    assert_eq!(cells[3 * 80].style, comment);
+    e.key(code(KEY_DOWN)); e.key(code(KEY_END));
+    typed(&mut e, " */");
+    let (_, cells, _) = draw(&mut e, 80, 25);
+    assert_eq!(cells[2 * 80 + 6].style, comment);
+    assert_eq!(cells[3 * 80].style, keyword);
+    e.key(ctrl('u'));
+    let (_, cells, _) = draw(&mut e, 80, 25);
+    assert_eq!(cells[3 * 80].style, comment);
+    // The selection still shows over the colours.
+    e.key(code(KEY_HOME)); e.key(shift(KEY_RIGHT));
+    let (_, cells, _) = draw(&mut e, 80, 25);
+    assert_eq!(cells[2 * 80].style, CLASSIC.selected);
+    // F9 Options → syntax colours: off, then on again.
+    let toggle = |e: &mut Editor| { e.key(f(9)); e.key(code(KEY_LEFT)); e.key(code(KEY_DOWN)); e.key(code(KEY_DOWN)); e.key(enter()); };
+    toggle(&mut e);
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(!e.colours && !screen[0].contains("Rust"));
+    assert_eq!(cells[80].style, CLASSIC.panel);
+    toggle(&mut e);
+    assert!(e.colours);
+    // Every line deleted: the states left are dropped.
+    e.key(ctrl('a')); e.key(code(KEY_DELETE));
+    let (_, cells, _) = draw(&mut e, 80, 25);
+    assert_eq!(cells[80].style, CLASSIC.panel);
+    typed(&mut e, "let x = 1;");
+    let (_, cells, _) = draw(&mut e, 80, 25);
+    assert_eq!(cells[80].style, keyword);
+    // Saved as a text file: no language.
+    e.saved("ram:x.txt", Ok(10));
+    let (screen, cells, _) = draw(&mut e, 80, 25);
+    assert!(e.syntax.is_none() && !screen[0].contains("Rust"));
+    assert_eq!(cells[80].style, CLASSIC.panel);
 }

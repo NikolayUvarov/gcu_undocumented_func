@@ -57,9 +57,9 @@ pub fn cycles(edges: &[Edge]) -> Vec<Vec<u64>> {
     found
 }
 
-/// `rwgk` rights of an endpoint capability.
+/// `rwgkb` rights of an endpoint capability (`b`: may set a badge, ABI 6, 000-KRN-0073).
 pub fn rights(rights: u32) -> String {
-    [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k')].iter().map(|&(bit, ch)| if rights as u8 & bit != 0 { ch } else { '-' }).collect()
+    [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k'), (CAP_BADGE, 'b')].iter().map(|&(bit, ch)| if rights as u8 & bit != 0 { ch } else { '-' }).collect()
 }
 
 pub struct Ipc {

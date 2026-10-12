@@ -10,10 +10,13 @@ pub fn free(out: &mut impl Write) {
     // Argument 1: the kernel also searches for the largest free block.
     let mut buffer = [0u8; 512];
     let Some(m) = stat::read(STAT_MEMORY, 1, &mut buffer).ok().and_then(|r| r.iter::<StatMemory>().next()) else { let _ = writeln!(out, "ERROR: STAT NOT AVAILABLE"); return };
-    let _ = writeln!(out, "MEMORY: ARENA={} USED={} FREE={} LARGEST={}", m.arena, m.used, m.free, m.largest_free);
+    // The machine's memory first, the frame pool programs run in; then the kernel's own arena (211-APP-0057).
+    let mib = |bytes: u64| bytes >> 20;
+    let _ = writeln!(out, "MEMORY: {} MIB, {} MIB IN USE, {} MIB FREE (THE FRAME POOL PROGRAMS RUN IN)", mib(m.frames), mib(m.frames.saturating_sub(m.frames_free)), mib(m.frames_free));
+    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
+    let _ = writeln!(out, "KERNEL ARENA: ARENA={} USED={} FREE={} LARGEST={} (THE KERNEL'S OWN STRUCTURES)", m.arena, m.used, m.free, m.largest_free);
     let _ = writeln!(out, "  TASKS={}/{} IMAGES={} STACKS={} SCREENS={} HEAPS={} TASK_PAGES={} PAGE_TABLES={}", m.tasks, m.tasks_limit, m.images, m.stacks, m.screens, m.heaps, m.task_pages, m.page_tables);
     let _ = writeln!(out, "  OBJECTS={}/{} DMA={}/{} ENDPOINTS={}/{} SHARED={}", m.objects, m.objects_limit, m.dma, m.dma_limit, m.endpoints, m.endpoints_limit, m.shared);
-    let _ = writeln!(out, "  FRAMES={} FRAMES_FREE={}", m.frames, m.frames_free);
 }
 
 pub fn cpus(out: &mut impl Write) {
@@ -21,8 +24,13 @@ pub fn cpus(out: &mut impl Write) {
     let Some(mut pages) = mind::mem::Pages::new(4 * 4096) else { return };
     let Ok(records) = stat::read(STAT_CPUS, 0, pages.as_mut_slice()) else { return };
     for (index, c) in records.iter::<StatCpu>().enumerate() {
-        // aarch64 saves no FP/SIMD state yet: programs are soft-float.
-        let state = if cfg!(target_arch = "aarch64") { if c.xsave != 0 { "FP/SIMD" } else { "NONE" } } else if c.xsave & 4 != 0 { "XSAVE+AVX" } else if c.xsave != 0 { "XSAVE" } else { "FXSAVE" };
+        // aarch64 saves no FP/SIMD state yet: programs are soft-float. x86: XCR0's groups the kernel saves per task,
+        // AVX-512 (0xE0) and AMX (0x60000) named after AVX when all their bits are set (174-APP-0058).
+        let mut state = alloc::string::String::from(if cfg!(target_arch = "aarch64") { if c.xsave != 0 { "FP/SIMD" } else { "NONE" } } else if c.xsave & 4 != 0 { "XSAVE+AVX" } else if c.xsave != 0 { "XSAVE" } else { "FXSAVE" });
+        if !cfg!(target_arch = "aarch64") && c.xsave & 4 != 0 {
+            if c.xsave & 0xE0 == 0xE0 { state.push_str("+AVX512"); }
+            if c.xsave & 0x6_0000 == 0x6_0000 { state.push_str("+AMX"); }
+        }
         let _ = writeln!(out, "CPU={} APIC={} ONLINE={} TICKS={} BUSY_MS={} IDLE_MS={} SWITCHES={} IRQS={} CURRENT={} FPU={}", index, c.apic_id, c.online != 0, c.ticks, c.busy_ns / 1_000_000, c.idle_ns / 1_000_000, c.switches, c.interrupts, c.current_pid, state);
     }
 }
@@ -105,11 +113,11 @@ pub fn caps(out: &mut impl Write, pid: u64) {
     let mut buffer = [0u8; 4096];
     let records: Records = match stat::read(STAT_CAPS, pid, &mut buffer) { Ok(r) => r, Err(_) => { let _ = writeln!(out, "ERROR: NO SUCH PID"); return } };
     for c in records.iter::<StatCap>() {
-        let rights = [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k')].map(|(bit, ch)| if c.rights as u8 & bit != 0 { ch } else { '-' });
+        let rights = [(CAP_READ, 'r'), (CAP_WRITE, 'w'), (CAP_GRANT, 'g'), (CAP_KEEP, 'k'), (CAP_BADGE, 'b')].map(|(bit, ch)| if c.rights as u8 & bit != 0 { ch } else { '-' });
         let _ = write!(out, "SLOT={} GEN={} {} NODE={} PARENT={}", c.slot, c.generation, stat::cap_name(c.kind), c.node, c.parent);
         match c.kind as usize {
             CAP_KIND_ENDPOINT => {
-                let _ = write!(out, " EP={} RIGHTS={}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3]);
+                let _ = write!(out, " EP={} RIGHTS={}{}{}{}{}", c.endpoint, rights[0], rights[1], rights[2], rights[3], rights[4]);
                 if c.badge != 0 { let _ = write!(out, " BADGE={:#x}", c.badge); }
             }
             CAP_KIND_MEMORY => { let _ = write!(out, " BYTES={} RIGHTS={}{}{}", c.size, rights[0], rights[1], rights[2]); }

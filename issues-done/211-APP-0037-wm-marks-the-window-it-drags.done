@@ -1,0 +1,33 @@
+# 211-APP-0037 — `wm` marks the window it drags or resizes — done
+
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (for [211-DRV-0018](../issues/211-DRV-0018-macbook-trackpad-gestures.md)) · **Roadmap:** track G · **Constitution:** MC-11.5
+
+Numbered from the kernel track's request in `requests-APP.md` (2026-10-09, at the maintainer's request after a run on the MacBook Pro). That file went once every request in it was numbered.
+
+## Problem
+
+The trackpad drags a window by its title in two ways: a press held while a finger moves, and a double tap that keeps the button down until the next tap (211-DRV-0018). While a window moves, nothing shows that `wm` holds it, so the user cannot tell whether the drag took.
+
+## Plan
+
+- While `wm` drags or resizes a window by the pointer, the window is marked until the button is released: its frame drawn double, and its title bar in the focus colour inverted.
+- The mark is quiet, and the same for a mouse and a trackpad.
+- `wm`'s state line names the drag (`DRAG=1`), so tests can follow it.
+
+## Acceptance criteria
+
+- **Host tests (`tests/wm_host.rs`):** the frame and title of a window being dragged and resized, and both again after the release.
+- **The `wm` suite:** it starts a drag by a title with the tablet, sees the mark while the button is held and its absence after the release.
+
+## Related
+
+[211-DRV-0018](../issues/211-DRV-0018-macbook-trackpad-gestures.md), [088](088-text-window-manager.done), [u002](u002-restore-and-unsnap-windows.done).
+
+## Resolution
+
+- `wm/src/desk.rs`: `Desk.held` names the window a drag holds; `Wm::pointer` sets it from the drag after every pointer event, for a move by the title and a resize by the corner alike, and clears it on the release. The held window's frame is drawn in the theme's accent colour (DARK: `#A6E3A1`) instead of the focus white, and its title in the focus colours inverted; the frame stays double, as the window in front has it. `wm`'s state line ends with `DRAG=<window>` while it lasts (the window's number rather than `1`, so a test knows which window is held).
+- The mark is the same for a mouse, the tablet and a trackpad's drag lock: it follows the drag in `wm`, not the device.
+- Host test `a_dragged_window_is_marked` (`tests/wm_host.rs`): the frame's colour and the inverted title while a window is dragged, the mark kept while it moves, gone after the release; a resize by the corner holds it too; a click in a window's content holds nothing.
+- The `tablet` suite (where `wm` runs with the tablet; x86): beep's window is pressed on its title through the VirtIO tablet; `DRAG=` is logged, and the screenshot has the accent colour on the window's left edge; moved and released, the window is in its new place with no mark. `wm` logs a drag when it ends, not each move, so the mark is looked at right after the press.
+- Docs: the mouse paragraph of `wm` in `docs/tools/README.md` and `README_RU.md`.
+- Not tested: a run on the MacBook's trackpad (211-DRV-0018 brings its drag lock).

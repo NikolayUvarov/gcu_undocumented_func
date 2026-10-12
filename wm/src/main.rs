@@ -21,16 +21,27 @@ use mind::keys::Key;
 use mind::mem::Mapping;
 use mind::tui::{Rect, Terminal, DARK};
 use mind::window::{Kind, Surface, STATE_CLOSE, TITLE};
-use wm::desk::{Action, Content, Mode, Win, Wm};
+use wm::background::{self, Backdrop, Config, Info};
+use wm::desk::{Action, Content, Mode, Win, Wm, BACKGROUND};
 use wm::menu::{self, Kind as ProgramKind};
 
 // REQUEST_GPIO: the pin controller's client where the board has one, passed on to pins and pinmap (issue u017).
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO);
+// REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
+// REQUEST_SHELL: the shell's commands, for the menu's Shell item, the shell's own window (211-APP-0044).
+// 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
+// file of up to 32 MiB as it is decoded, beside the rest.
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
+// How long wm waits for the shell to answer its menu's Shell item and to set the clock.
+const SHELL_MS: u32 = 2000;
+// The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
+const INFO_MS: usize = 1000;
+// How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
+const FRESH_MS: usize = 120_000;
 
 // A window wm shows: its lease of the surface, the program's wake endpoint, what was last drawn.
 struct Live { id: u32, _lease: Mapping, surface: Surface, waker: Option<usize>, changes: u32, asked: Option<(usize, usize)>, modifiers: u8 }
@@ -145,6 +156,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_TLS != 0 { missing.push("tls"); }
     if requests & mind::process::REQUEST_PARSE != 0 { missing.push("parse"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
+    if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -156,6 +168,9 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
             None => missing.push("the display"),
         }
     } else if display { missing.push("the display (no window in front)"); }
+    // The shell's commands, for console to send the shell its own (211-APP-0044): the shell decides what it takes. Last:
+    // a launch session holds 5 grants (requests-KRN.md), and the window to see matters more to a recorder.
+    if requests & mind::process::REQUEST_SHELL != 0 { if holds(SLOT_SHELL) && grant(SLOT_SHELL, SLOT_SHELL) { lent.push("shell"); } else { missing.push("shell"); } }
     let pid = match loader::commit(Endpoint::LOADER, session) { Ok(Ok(pid)) => pid, Ok(Err(error)) => return Err(failed(error)), Err(_) => return Err(lost()) };
     mind::println!("[WM] STARTED {} PID {} WITH {}{}{}{}", name, pid, lent.join(","), if missing.is_empty() { "" } else { " WITHOUT " }, missing.join(","),
                    window.map_or(String::new(), |id| format!(" (WINDOW {} TO SEE)", id)));
@@ -202,7 +217,9 @@ impl Manager {
         infos.sort_by_key(|i| i.place.z);
         let known: Vec<u32> = self.lives.iter().map(|l| l.id).collect();
         for info in infos.iter().filter(|i| !known.contains(&i.id)) {
-            let Some(live) = adopt(info.id) else { continue };
+            // A window whose surface the broker cannot lend yet (its program is still setting it up) is tried again at
+            // the next sync, whatever the generation says (211-APP-0044: the shell's window opened for a question).
+            let Some(live) = adopt(info.id) else { self.generation = u64::MAX; continue };
             let content = if info.kind == api::Kind::Pixels { Content::Pixels } else { Content::Text };
             let size = live.surface.check().map_or((info.width as usize, info.height as usize), |(_, w, h)| (w, h));
             let mut win = Win::new(info.id, info.owner, content, size, info.title.as_str());
@@ -231,6 +248,7 @@ impl Manager {
             }
         }
         let mut pixels = Vec::new();
+        let (full, screen) = (self.wm.desk.full_screen(), Rect::new(0, 0, self.wm.desk.cols, self.wm.desk.rows));
         for live in self.lives.iter_mut() {
             let changes = live.surface.changes();
             let Some(index) = self.wm.desk.index(live.id) else { continue };
@@ -247,8 +265,8 @@ impl Manager {
             }
             let name = title(&live.surface);
             if !name.is_empty() && name != win.title { win.title = name; dirty = true; }
-            // A window draws at the size of its frame's inside: its cells, or their pixels (issue u009).
-            let inner = win.rect.inner();
+            // A window draws at the size of its frame's inside (issue u009), or of the screen when full (211-APP-0014).
+            let inner = if full == Some(live.id) { screen } else { win.rect.inner() };
             let wanted = match win.content { Content::Text => (inner.w, inner.h), Content::Pixels => (inner.w * 8, inner.h * 16) };
             if wanted != live.surface.size() && live.asked != Some(wanted) && inner.w > 0 && inner.h > 0 {
                 live.surface.ask_size(wanted.0, wanted.1);
@@ -314,22 +332,25 @@ impl Manager {
     }
 }
 
-// Copies the visible cells of pixel window `index` from its surface to the screen.
-fn blit(screen: &Screen, origin: (usize, usize), owner: &[u16], cols: usize, index: usize, inner: Rect, surface: &Surface) {
+// Copies the visible cells of pixel window `index` from its surface to the screen. The content has 8 × 16 pixels a
+// cell; each cell of `cell` screen pixels shows its 8 × 16 stretched (wm's scale, 000-APP-0061).
+#[allow(clippy::too_many_arguments)]
+fn blit(screen: &Screen, origin: (usize, usize), cell: (usize, usize), owner: &[u16], cols: usize, index: usize, inner: Rect, surface: &Surface) {
     let Some((Kind::Pixels, width, height)) = surface.check() else { return };
     let pixels = surface.content() as *const u32;
     let tag = index as u16 + 1;
+    let (cw, ch) = cell;
     for cy in inner.y..inner.bottom() {
         for cx in inner.x..inner.right() {
             if owner.get(cy * cols + cx) != Some(&tag) { continue; }
             let (sx, sy) = ((cx - inner.x) * 8, (cy - inner.y) * 16);
-            for row in 0..16 {
-                let y = sy + row;
-                for col in 0..8 {
-                    let x = sx + col;
+            for row in 0..ch {
+                let y = sy + row * 16 / ch;
+                for col in 0..cw {
+                    let x = sx + col * 8 / cw;
                     // Inside the size the header had when it was checked: within the surface's memory.
                     let color = if x < width && y < height { unsafe { core::ptr::read_volatile(pixels.add(y * width + x)) } } else { 0 };
-                    screen.pixel(origin.0 + cx * 8 + col, origin.1 + cy * 16 + row, color);
+                    screen.pixel(origin.0 + cx * cw + col, origin.1 + cy * ch + row, color);
                 }
             }
         }
@@ -337,19 +358,69 @@ fn blit(screen: &Screen, origin: (usize, usize), owner: &[u16], cols: usize, ind
 }
 
 // The mouse pointer: an arrow, black outline (X) and white inside (W).
-const ARROW: [&[u8; 8]; 12] = [b"X       ", b"XX      ", b"XWX     ", b"XWWX    ", b"XWWWX   ", b"XWWWWX  ", b"XWWWWWX ", b"XWWWWWWX", b"XWWWXXXX", b"XWXWX   ", b"XX XWX  ", b"    XX  "];
 
-fn draw_pointer(screen: &Screen, x: usize, y: usize) {
-    for (row, line) in ARROW.iter().enumerate() {
-        for (col, &b) in line.iter().enumerate() {
-            match b { b'X' => screen.pixel(x + col, y + row, 0), b'W' => screen.pixel(x + col, y + row, 0xFFFFFF), _ => {} }
+// A whole file of at most `limit` bytes from the user's files.
+fn read_file(path: &str, limit: usize) -> Option<Vec<u8>> {
+    let file = mind::fs::File::open(path).ok()?;
+    if file.size() > limit { return None; }
+    let mut data = vec![0u8; file.size()];
+    (file.read_at(0, &mut data).ok()? == data.len()).then_some(data)
+}
+
+// The desktop's background as data/wm.conf says (000-APP-0047): the default without the file; what is not understood
+// is logged and left at the default.
+fn backdrop(screen: &Screen) -> (Backdrop, Option<String>) {
+    let config = match read_file(background::FILE, 64 << 10) {
+        Some(data) => {
+            let (config, problems) = Config::parse(&String::from_utf8_lossy(&data));
+            for problem in &problems { mind::println!("[WM] {}: {}", background::FILE, problem); }
+            config
+        }
+        None => Config::default(),
+    };
+    Backdrop::new(config, (screen.width, screen.height), &mut |file| read_file(file, 32 << 20))
+}
+
+// The background's configuration into data/wm.conf, for the next wm too (000-APP-0048).
+fn save(config: &Config) -> bool {
+    let text = config.format();
+    mind::fs::File::create(background::FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len())
+}
+
+// The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
+fn cpu_times() -> Option<(u64, u64)> {
+    let list = mind::idl::sysinfo::cpus(Endpoint::SYSINFO, 0).ok()?.ok()?;
+    Some(list.as_slice().iter().filter(|c| c.online).fold((0, 0), |(busy, idle), c| (busy + c.busy_ns, idle + c.idle_ns)))
+}
+
+// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels).
+fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
+    for index in cells {
+        let (x, y) = (origin.0 + index % cols * cell.0, origin.1 + index / cols * cell.1);
+        for py in y..y + cell.1 { for px in x..x + cell.0 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
+    }
+}
+
+// The pointer's size and colour as the log says them: `[WM] POINTER SIZE 200% (AUTO): 16X24 PIXELS, WHITE`.
+fn pointer_line(config: &Config, scale: u16) -> String {
+    let percent = wm::pointer::percent(config.pointer, scale);
+    let (w, h) = wm::pointer::size(percent);
+    let colour = wm::pointer::COLOURS.get(config.pointer_colour).map_or("white", |c| c.0);
+    format!("[WM] POINTER SIZE {}%{}: {}X{} PIXELS, {}", percent, if config.pointer.is_none() { " (AUTO)" } else { "" }, w, h, colour.to_uppercase())
+}
+
+// The pointer at (x, y), `size` pixels large in colour `colour` (000-APP-0061).
+fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colour: usize) {
+    for row in 0..size.1 {
+        for col in 0..size.0 {
+            if let Some(color) = wm::pointer::pixel(size, colour, col, row) { screen.pixel(x + col, y + row, color); }
         }
     }
 }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
-    mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+M move/resize, Alt+W close,\nAlt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all. The mouse drags titles and corners.");
+    mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+F full screen, Alt+L the windows,\nAlt+M move/resize, Alt+W close, Alt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all.\nThe mouse drags titles and corners.");
     if !holds(SLOT_WINDOW) { mind::println!("[WM] NO WINDOW BROKER CLIENT: START WM FROM THE SHELL"); return; }
     match api::attach(BROKER) {
         Ok(Ok(_)) => {}
@@ -358,9 +429,26 @@ fn main(info: &'static BootInfo) {
     }
     if holds(SLOT_FILE) { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let Some(screen) = Screen::new(info) else { return };
-    let Some(mut term) = Terminal::new(screen) else { return };
-    let (_, x0, y0) = term.screen().unwrap();
+    let pixels = (screen.width, screen.height);
+    // The scale as data/wm.conf says, or auto for this screen (000-APP-0061).
+    let (mut backdrop, problem) = backdrop(&screen);
+    let mut scale = wm::scale::resolve(backdrop.config.scale, pixels);
+    let mut cell = wm::scale::cell(scale);
+    let Some(mut term) = Terminal::scaled(screen, cell) else { return };
+    let (_, mut x0, mut y0) = term.screen().unwrap();
     let mut manager = Manager { wm: Wm::new(term.cols(), term.rows()), lives: Vec::new(), generation: u64::MAX, saved: Vec::new(), recordings: Vec::new() };
+    (manager.wm.pixels, manager.wm.scale, backdrop.zoom) = (pixels, scale, scale as usize);
+    mind::println!("[WM] SCALE {}%{}: CELLS OF {}X{} PIXELS ON {}X{}", scale, if backdrop.config.scale.is_none() { " (AUTO)" } else { "" }, cell.0, cell.1, pixels.0, pixels.1);
+    mind::println!("{}", pointer_line(&backdrop.config, scale));
+    if let Some(problem) = problem { mind::println!("[WM] {}", problem); manager.wm.notice = Some(problem); }
+    manager.wm.desk.background = backdrop.shown();
+    manager.wm.background = backdrop.config.clone();
+    mind::println!("[WM] BACKGROUND {}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "));
+    // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
+    let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
+    let mut last_pattern = mind::time::uptime_ms();
+    let mut next_clock = 0usize; // when Settings' date page reads the clock again
+    let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.
@@ -372,13 +460,17 @@ fn main(info: &'static BootInfo) {
         manager.wm.notice = Some(result.map_or_else(|e| e, |s| s.message));
     }
     let mut programs = Some(Programs::new());
-    manager.wm.programs = vec![menu::Item { label: String::from("Looking for programs…"), command: None, children: Vec::new() }];
+    manager.wm.programs = vec![menu::Item::note("Looking for programs…", "wm is still reading the programs on the boot disk: open the menu again in a moment")];
+    manager.wm.shell = holds(SLOT_SHELL);
+    if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).
     let (mut px, mut py) = (screen.width / 2, screen.height / 2);
-    let mut shown_pointer: Option<(usize, usize)> = None;
+    // Where the pointer was drawn last, and its size then.
+    let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
     let mut buttons = 0u8;
     let mut last_sync = 0usize;
+    let mut shell_window: Option<u32> = None; // the shell's window, to be brought to the front once it shows
     let mut first = true;
     loop {
         let mut relayout = first;
@@ -397,6 +489,7 @@ fn main(info: &'static BootInfo) {
                 }
                 Input::Pointer(p) => {
                     if let Some((gx, gy)) = mind::input::pointer_pixel() { (px, py) = (x0 + gx, y0 + gy); }
+                    manager.wm.now = mind::time::uptime_ms(); // for a double click on a title (211-APP-0046)
                     manager.wm.pointer(p.x, p.y, p.buttons, p.wheel)
                 }
             };
@@ -410,6 +503,18 @@ fn main(info: &'static BootInfo) {
                 Action::Forward => { if let Input::Key(event) = input { manager.forward(event.to_word()); } }
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
+                Action::Run(command) if command == menu::SHELL && holds(SLOT_SHELL) => {
+                    // The shell opens its own window (211-APP-0044); it may be busy with a command for a while.
+                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL)));
+                    let text = match answer {
+                        Ok(Ok(id)) => { shell_window = Some(id); format!("The shell's window ({})", id) }
+                        Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
+                        Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
+                    };
+                    mind::println!("[WM] SHELL WINDOW: {}", text);
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
                 Action::Run(command) => {
                     let result = launch(&command, manager.wm.desk.focus());
                     if let Err(error) = &result { mind::println!("[WM] {}", error); }
@@ -424,6 +529,62 @@ fn main(info: &'static BootInfo) {
                     return;
                 }
                 Action::CloseAll => { manager.close_all(); mind::println!("[WM] DONE"); return; }
+                Action::SetClock { date, seconds } => {
+                    // The shell sets the clock at once for wm, which it started (000-APP-0060): no question, no window
+                    // of its own; Settings stay open and show the clock as it now is.
+                    let (y, mo, d) = mind::rtc::civil_from_days(date);
+                    let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                            Ok(Ok(())) => format!("The clock is set to {}", when),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
+                            Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
+                            Ok(Err(error)) => format!("The clock is not set ({:?})", error),
+                            Err(_) => String::from("The clock is not set: the shell does not answer"),
+                        }
+                    };
+                    mind::println!("[WM] SET CLOCK {}: {}", when, text);
+                    // The background reads the RTC anew for a while, and the page at once.
+                    fresh_clock = mind::time::uptime_ms() + FRESH_MS;
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
+                Action::Settings(config) => {
+                    // Settings changed the background (000-APP-0048): used at once and kept in data/wm.conf.
+                    let saved = save(&config);
+                    let pointer_before = (backdrop.config.pointer, backdrop.config.pointer_colour);
+                    let problem = backdrop.change(config, &mut |file| read_file(file, 32 << 20));
+                    manager.wm.background = backdrop.config.clone();
+                    manager.wm.desk.background = backdrop.shown();
+                    (next_pattern, next_info) = (0, 0);
+                    mind::println!("[WM] SETTINGS {}{}", backdrop.config.format().lines().filter(|l| !l.starts_with('#')).collect::<Vec<_>>().join("; "), if saved { "; SAVED" } else { "; NOT SAVED" });
+                    manager.wm.notice = Some(problem.unwrap_or_else(|| String::from(if saved { "Settings: the background is kept in data/wm.conf" } else { "Settings: the background could not be written to data/wm.conf" })));
+                    // A new size or colour of the pointer (000-APP-0061): drawn so from the next frame.
+                    if (backdrop.config.pointer, backdrop.config.pointer_colour) != pointer_before {
+                        mind::println!("{}", pointer_line(&backdrop.config, scale));
+                        let colour = wm::pointer::COLOURS.get(backdrop.config.pointer_colour).map_or("white", |c| c.0);
+                        manager.wm.notice = Some(format!("Settings: the pointer is {}% and {}, kept in data/wm.conf", wm::pointer::percent(backdrop.config.pointer, scale), colour));
+                    }
+                    // A new scale (000-APP-0061): the grid is made anew at its cells, the frames keep their share of
+                    // the screen, and everything is drawn again.
+                    let wanted = wm::scale::resolve(backdrop.config.scale, pixels);
+                    if wanted != scale {
+                        if let Some(grid) = Terminal::scaled(screen, wm::scale::cell(wanted)) {
+                            (scale, cell, term) = (wanted, wm::scale::cell(wanted), grid);
+                            if let Some((_, gx, gy)) = term.screen() { (x0, y0) = (gx, gy); }
+                            manager.wm.rescale(term.cols(), term.rows(), scale);
+                            backdrop.zoom = scale as usize;
+                            (shown_background, shown_pointer, px, py) = (Vec::new(), None, screen.width / 2, screen.height / 2);
+                            screen.clear(0);
+                            mind::println!("[WM] SCALE {}%{}: CELLS OF {}X{} PIXELS, {}X{} OF THEM", scale, if backdrop.config.scale.is_none() { " (AUTO)" } else { "" }, cell.0, cell.1, term.cols(), term.rows());
+                            manager.wm.notice = Some(format!("Settings: the scale is {}%{}, kept in data/wm.conf", scale, if backdrop.config.scale.is_none() { " (auto)" } else { "" }));
+                        }
+                    }
+                }
                 Action::Pointer { id, x, y, buttons, wheel } => {
                     manager.pointer(id, mind::window::pointer_at(buttons, x, y, wheel));
                     if log { mind::println!("[WM] POINTER {} AT {},{} BUTTONS={} WHEEL={}", id, x, y, buttons, wheel); }
@@ -436,6 +597,7 @@ fn main(info: &'static BootInfo) {
             if let Some(p) = programs.as_mut() {
                 if p.step(2) {
                     manager.wm.programs = menu::catalogue(&p.found);
+                    if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
                     mind::println!("[WM] PROGRAMS: {} IN {} CATEGORIES IN {} MS", p.found.len(), manager.wm.programs.len(), mind::time::uptime_ms() - p.since);
                     programs = None;
                 }
@@ -444,8 +606,47 @@ fn main(info: &'static BootInfo) {
         manager.modifiers(mind::input::modifiers());
         let now = mind::time::uptime_ms();
         if now - last_sync >= SYNC_MS { last_sync = now; if manager.sync() { relayout = true; mind::println!("[WM] {}", manager.wm.status()); } }
+        if let Some(id) = shell_window.filter(|&id| manager.wm.desk.get(id).is_some()) {
+            manager.wm.desk.raise(id);
+            shell_window = None;
+            relayout = true;
+            mind::println!("[WM] {}", manager.wm.status());
+        }
         let (changed, mut pixels) = manager.follow();
         if !manager.wm.desk.take_changed().is_empty() { relayout = true; }
+        // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
+        // either came.
+        let mut background_moved = false;
+        // Settings' date page shows the clock each second (000-APP-0055).
+        if let Mode::Settings(settings) = &mut manager.wm.mode {
+            if settings.page == wm::settings::DATE && now >= next_clock {
+                // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
+                next_clock = now + INFO_MS;
+                settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                relayout = true;
+            }
+        }
+        let pattern_due = backdrop.moving() && now >= next_pattern;
+        if backdrop.shown() && (pattern_due || now >= next_info) {
+            if pattern_due {
+                backdrop.advance(now - last_pattern);
+                (last_pattern, next_pattern) = (now, now + backdrop.interval());
+            }
+            if now >= next_info {
+                next_info = now + INFO_MS;
+                if now < fresh_clock { clock = mind::rtc::Clock::new(); }
+                if let Some((busy, idle)) = cpu_times() {
+                    if let Some((was_busy, was_idle)) = cpu {
+                        let (b, i) = (busy.saturating_sub(was_busy), idle.saturating_sub(was_idle));
+                        if b + i > 0 { backdrop.sample((b * 100 / (b + i)) as u8); }
+                    }
+                    cpu = Some((busy, idle));
+                }
+            }
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], net: None };
+            backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
+            background_moved = true;
+        }
         if changed || relayout {
             let focused_cursor = manager.wm.desk.focus().and_then(|id| manager.live(id)).and_then(|l| l.surface.cursor());
             let owner = {
@@ -453,23 +654,41 @@ fn main(info: &'static BootInfo) {
                 let lives = &manager.lives;
                 let mut cell = |id: u32, x: usize, y: usize| lives.iter().find(|l| l.id == id).and_then(|l| l.surface.cell(x, y));
                 let (owner, cursor) = manager.wm.draw(&mut grid, &DARK, &mut cell, focused_cursor);
+                // The cells still showing the background after everything was drawn (000-APP-0047).
+                let cells: Vec<bool> = if backdrop.shown() { (0..grid.cols * grid.rows).map(|i| grid.get(i % grid.cols, i / grid.cols) == BACKGROUND).collect() } else { Vec::new() };
                 drop(grid);
                 term.set_cursor(cursor);
-                owner
+                (owner, cells)
             };
+            let (owner, cells) = owner;
+            let mut touched = Vec::new();
             // The cells under the pointer drawn last time are drawn again (pixel windows: all of them below).
-            if let Some((sx, sy)) = shown_pointer.take() {
-                for cy in (sy.saturating_sub(y0) / 16)..=((sy + 11).saturating_sub(y0) / 16) { for cx in (sx.saturating_sub(x0) / 8)..=((sx + 7).saturating_sub(x0) / 8) { term.touch(cx, cy); } }
+            if let Some((sx, sy, (aw, ah))) = shown_pointer.take() {
+                for cy in (sy.saturating_sub(y0) / cell.1)..=((sy + ah - 1).saturating_sub(y0) / cell.1) { for cx in (sx.saturating_sub(x0) / cell.0)..=((sx + aw - 1).saturating_sub(x0) / cell.0) { term.touch(cx, cy); touched.push(cy * term.cols() + cx); } }
                 relayout = true;
             }
             term.present();
             let cols = term.cols();
+            // The background in the cells that just became the desktop's, those under the pointer, or all when it moved.
+            if !cells.is_empty() {
+                let fresh = |i: &usize| cells[*i] && (background_moved || !shown_background.get(*i).copied().unwrap_or(false) || touched.contains(i));
+                paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop);
+            }
+            shown_background = cells;
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
                 let (Some(index), Some(live)) = (manager.wm.desk.index(id), manager.live(id)) else { continue };
-                blit(&screen, (x0, y0), &owner, cols, index, manager.wm.desk.windows[index].rect.inner(), &live.surface);
+                blit(&screen, (x0, y0), cell, &owner, cols, index, manager.wm.desk.content(id), &live.surface);
             }
-            if manager.wm.pointer.is_some() { draw_pointer(&screen, px, py); shown_pointer = Some((px, py)); }
+            if manager.wm.pointer.is_some() {
+                let size = wm::pointer::size(wm::pointer::percent(backdrop.config.pointer, scale));
+                draw_pointer(&screen, px, py, size, backdrop.config.pointer_colour);
+                shown_pointer = Some((px, py, size));
+            }
+        } else if background_moved && !shown_background.is_empty() {
+            // Nothing else changed: the background's cells only, and the pointer over them again.
+            paint(&screen, (x0, y0), cell, term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
+            if let Some((sx, sy, size)) = shown_pointer { draw_pointer(&screen, sx, sy, size, backdrop.config.pointer_colour); }
         }
         mind::time::sleep(if busy { 5 } else { 30 });
     }

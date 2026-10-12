@@ -1,0 +1,57 @@
+# 211-APP-0013 — `log:` in the shell's help, `fm`, `df` and `fsck`; `efivar` in the tools guide; scripts may declare `firmware` and `blockstore` — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-09) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track H · **Constitution:** MC-3.11, MC-10.6, MC-12.3
+
+## Problem
+
+Two requests of the kernel track ([requests-APP.md](../issues/requests-APP.md), 2026-10-08).
+
+- **`log:`** ([211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md)).
+  - Disk images now have a log partition, mounted as `log:`, with each boot's system log, and the shell may write there.
+  - The shell's help named only `ram:` and `data/`.
+  - `fm` offered only the boot disk and `ram:`, and `df` and `fsck` did not list `log:`.
+- **`efivar`** ([351-KRN-0027](351-KRN-0027-uefi-variables.done)).
+  - The tools guide did not name it.
+  - A script could not declare `firmware`, so a program a script started ran without it.
+
+Two more gaps came up while doing this:
+
+- The shell lends the block store for `blockstore`, but `msh` did not accept that word.
+- `efivar --help` asked the user for the firmware privilege, though `--help` only prints the program's text.
+
+## Plan
+
+- **The shell:**
+  - The help for `ls` and `cat` names `log:` (each boot's system log) and `models:`.
+  - The help for `write`, `mkdir`, `rm`, `mv` and `sync` says "on `ram:`, on `log:` and in `data/`". The denial message says the same.
+- **`fm`:**
+  - The volume menu (Alt+F1/F2) offers `log:` and `models:` where `mind::fs::volume` finds them.
+  - Its help and denial message name `log:`.
+- **`df` and `fsck`:** list `log:` as they list `models:`, skipped when it is not mounted.
+- **Scripts:** `msh` accepts `firmware` and `blockstore`. Declaring `firmware` only lets a program ask, and the shell still asks the user every time (MC-3.11).
+- **`--help`:** a program started with only `--help` is lent neither the camera nor the firmware privilege, so the shell asks nothing.
+- **Guide:** an `efivar` row in `docs/tools/README.md` and `README_RU.md`. `help efivar` already shows the program's own `--help`.
+
+## Acceptance criteria
+
+- The x86 services suite finds `log:` in `help ls` and `help write`, and runs `efivar --help` (without a question) and `help efivar`.
+- The USB image test boots an image with the log partition and checks that:
+  - `df` lists `log:` and `fsck log:` finds it clean;
+  - `fm` lists `log:` in its volume menu and shows the boot log in its viewer.
+- The `fm` host test lists `log:` and leaves out a `models:` that is not mounted.
+
+## Resolution
+
+- **The shell:** [`shell/src/main.rs`](../shell/src/main.rs) (help; no question for `--help`), [`shell/src/files.rs`](../shell/src/files.rs) (the denial message), [`shell/src/msh.rs`](../shell/src/msh.rs) (`firmware` and `blockstore` among the words).
+- **`fm`:** [`fm/src/fm.rs`](../fm/src/fm.rs) (`VOLUMES` with `log:` and `models:`; the volume menu lists the mounted ones) and [`fm/src/main.rs`](../fm/src/main.rs) (its `--help`).
+- **`df` and `fsck`:** [`disk/src/bin/df.rs`](../disk/src/bin/df.rs) and [`disk/src/bin/fsck.rs`](../disk/src/bin/fsck.rs).
+- **Docs:** [`docs/tools/README.md`](../docs/tools/README.md) and [`README_RU.md`](../docs/tools/README_RU.md) (`efivar`), [`docs/msh.md`](../docs/msh.md) and [`docs/msh_RU.md`](../docs/msh_RU.md) (the words), and [`README.md`](../README.md) (`fm`, `df`, `fsck`).
+- **Tests:**
+  - `tests/qemu_smoke.py`: the services suite, next to the other help checks.
+  - `tests/usb_image_smoke.py`: `log_tools_check`.
+  - `tests/fm_host.rs`: the volume menu.
+- **Run on this host (x86, 4 CPUs):** the services suite, the USB image test (`df`, `fsck log:`, and `fm` showing `log:` and the boot log) and the `fm` host tests passed. The aarch64 USB image test runs the same check in CI.
+
+## Related
+
+[211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done), [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.done), [094](094-shell-script-language.done).

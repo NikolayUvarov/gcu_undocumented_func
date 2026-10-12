@@ -28,7 +28,7 @@ No driver serves any of them. What exists to build on:
 | [550-DRV-0007](550-DRV-0007-broadcom-ethernet.md) | `DRV` (open) | Broadcom tg3-family Ethernet: Apple's Thunderbolt Gigabit Ethernet adapter and many PCs; no QEMU model |
 | [requests-NET.md](requests-NET.md): several network interfaces | `NET` | Card drivers other than `virtio_net`, more than two, cards that come and go; the default route chosen by a stated rule |
 | [requests-NET.md](requests-NET.md): an 802.11 station and WPA2-PSK | `NET` | Scan, authentication and association, the WPA2-PSK 4-way handshake and CCMP; a Wi-Fi configuration interface |
-| [requests-APP.md](requests-APP.md): a Wi-Fi setup program | `APP` | Lists the networks found with signal and security, connects with a passphrase and stores it through `keystore` |
+| [550-APP-0033](550-APP-0033-wifi-setup-program.md): a Wi-Fi setup program | `APP` | Lists the networks found with signal and security, connects with a passphrase and stores it through `keystore` |
 | `init` (not numbered yet) | `KRN` | Starts the new drivers with their `usb_host` badge or PCI device and hands their endpoints to `netstack` as cards; numbered by the kernel track when 550-DRV-0005 needs it |
 
 Order: 550-DRV-0005 and the `NET` request for several interfaces first; Wi-Fi after 550-DRV-0006 and the station; 550-DRV-0007 when an adapter or a PC with such a chip is at hand.

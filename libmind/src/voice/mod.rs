@@ -2,10 +2,15 @@
 //! utterances. `Stream::new(Microphone::start()?)` or `Stream::new(Wav::open(path)?)` gives 16 kHz mono samples;
 //! `Detector` finds the speech in them.
 mod front;
+pub mod dictation;
+pub mod fbank;
 pub mod features;
+pub mod math;
 pub mod grammar;
 pub mod model;
 pub mod recognizer;
+pub mod russian;
+pub mod synthesis;
 
 pub use front::*;
 

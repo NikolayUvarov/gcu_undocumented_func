@@ -15,6 +15,24 @@ mod tui;
 mod desk;
 #[path = "../wm/src/menu.rs"]
 mod menu;
+#[path = "../libmind/src/inflate.rs"]
+mod inflate;
+#[path = "../libmind/src/png.rs"]
+mod png;
+#[path = "../libmind/src/jpeg.rs"]
+mod jpeg;
+#[path = "../libmind/src/jpegdec.rs"]
+mod jpegdec;
+#[path = "../wm/src/background.rs"]
+mod background;
+#[path = "../wm/src/settings.rs"]
+mod settings;
+#[path = "../wm/src/scale.rs"]
+mod scale;
+#[path = "../wm/src/pointer.rs"]
+mod pointer;
+#[path = "../common/font16.rs"]
+mod font16;
 
 use abi::*;
 use desk::{Action, Content, Desk, Hit, Mode, Win, Wm};
@@ -337,7 +355,7 @@ fn the_top_bar_can_be_clicked() {
     wm.programs = catalogue(&programs(false));
     let items = desk::bar_items(160);
     assert_eq!(items[0], (0, 3, desk::Bar::Programs), "\"wm\" at the left");
-    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13)]);
+    assert_eq!(items[1..].iter().map(|i| (i.0, i.1)).collect::<Vec<_>>(), [(5, 14), (20, 16), (37, 11), (49, 12), (62, 13), (76, 12), (89, 13), (103, 15), (119, 12), (132, 11), (144, 16)]);
     let mut cells = vec![Cell::BLANK; 160 * 50];
     let mut grid = Grid::new(&mut cells, 160, 50);
     let mut text = |_: u32, _: usize, _: usize| None;
@@ -397,6 +415,104 @@ fn a_recorded_window_is_marked() {
     desk.windows[index].recording = false;
     desk.draw(&mut grid, &DARK, &mut text);
     assert!(!(70..112).map(|x| grid.get(x, 5).ch).collect::<String>().contains("REC"));
+}
+
+#[test]
+fn full_screen_and_back() {
+    // Alt+F (211-APP-0014): the window in front covers the whole screen, without the frame or the bars; its frame is
+    // kept, and Alt+F gives it back.
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let before = rect(&wm.desk, 4);
+    wm.desk.take_changed();
+    assert_eq!(wm.key(alt_char('f')), Action::Redraw);
+    assert!(wm.status().contains(" FULL=4"), "{}", wm.status());
+    assert_eq!(wm.desk.content(4), Rect::new(0, 0, 160, 50), "a pixel window gets the screen's size");
+    assert_eq!(rect(&wm.desk, 4), before, "its frame is kept");
+    assert_eq!(wm.desk.take_changed(), [4], "the program is asked for the new size");
+    assert_eq!(wm.desk.hit(80, 0), Hit::Content(4), "no top bar to click");
+    assert_eq!(wm.pointer(5, 0, 1, 0), Action::Pointer { id: 4, x: 5, y: 0, buttons: 1, wheel: 0 }, "a click goes to the program");
+    wm.pointer(5, 0, 0, 0);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, x: usize, y: usize| Some((if (x, y) == (0, 0) { 'A' } else { '.' }, 0xFFFFFF, 0x0000AA));
+    let (owner, _) = wm.draw(&mut grid, &DARK, &mut text, None);
+    let tag = wm.desk.index(4).unwrap() as u16 + 1;
+    assert!(owner.iter().all(|&o| o == tag), "every cell shows its pixels: no frame, no top bar, no status line");
+    // Alt+Tab from it: the next window in front on the desktop as it was; back again, full screen again.
+    wm.key(alt(KEY_TAB, '\t'));
+    assert_eq!(wm.desk.focus(), Some(1));
+    assert!(!wm.status().contains("FULL="), "{}", wm.status());
+    let (owner, _) = wm.draw(&mut grid, &DARK, &mut text, None);
+    assert_eq!(owner[0], 0, "the top bar is back");
+    assert!((0..160).map(|x| grid.get(x, 0).ch).collect::<String>().starts_with(" wm │"));
+    wm.key(Key(event(KEY_TAB, '\t' as u32, MOD_ALT | MOD_SHIFT)));
+    assert!(wm.status().contains(" FULL=4"), "{}", wm.status());
+    assert_eq!(wm.key(alt_char('f')), Action::Redraw);
+    assert!(!wm.status().contains("FULL="));
+    assert_eq!(wm.desk.content(4), Rect::new(81, 26, 50, 20), "inside its frame again");
+    // A text window: the whole cell grid; its cursor where the program has it.
+    wm.desk.raise(2);
+    wm.key(alt_char('а')); // the Russian layout's letter on the F key
+    assert_eq!(wm.desk.content(2), Rect::new(0, 0, 160, 50));
+    let (_, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((3, 1)));
+    assert_eq!((grid.get(0, 0).ch, grid.get(159, 49).ch, cursor), ('A', ' ', Some((3, 1))), "its content from the top left, past its size blank");
+    // Snapping or maximizing a full-screen window ends full screen first.
+    wm.key(alt(KEY_LEFT, '\0'));
+    assert!(!wm.status().contains("FULL="));
+    assert_eq!(rect(&wm.desk, 2), (0, 1, 80, 48));
+}
+
+#[test]
+fn the_window_list() {
+    // Alt+L (211-APP-0014): every window with its program's PID and state; arrows and Enter or a click bring one to
+    // the front, Alt+W closes the selected one, and the list follows windows that close.
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    wm.key(alt(KEY_ENTER, '\n')); // window 4 maximized: the others are under it
+    assert_eq!(wm.key(alt_char('l')), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=LIST") && wm.status().ends_with("LIST=4"), "{}", wm.status());
+    let listing = wm.desk.listing();
+    assert_eq!(listing.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1, 2, 3, 4], "in the order they opened");
+    assert_eq!(listing[3].1, "in front, maximized");
+    assert_eq!(listing[0].1, "hidden");
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    let area = wm.list_area();
+    let row = |grid: &Grid, y: usize| -> String { (area.x..area.right()).map(|x| grid.get(x, y).ch).collect() };
+    assert!(row(&grid, area.y).starts_with(" fm ") && row(&grid, area.y).contains("PID 101") && row(&grid, area.y).contains("hidden"), "{}", row(&grid, area.y));
+    assert!(row(&grid, area.y + 3).contains("dzen-clock") && row(&grid, area.y + 3).contains("PID 104") && row(&grid, area.y + 3).contains("in front, maximized"));
+    assert_eq!(grid.get(area.x, area.y + 3).style, DARK.selected, "the window in front is selected");
+    assert_eq!(wm.key(chr('x')), Action::Redraw, "nothing reaches the program while the list is shown");
+    wm.key(key(KEY_UP));
+    wm.key(key(KEY_UP));
+    assert!(wm.status().ends_with("LIST=2"));
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=2"), "{}", wm.status());
+    // A click on an entry; a click elsewhere only closes the list.
+    wm.key(alt_char('l'));
+    let area = wm.list_area();
+    wm.pointer(area.x + 5, area.y + 2, 1, 0);
+    wm.pointer(area.x + 5, area.y + 2, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
+    wm.key(alt_char('l'));
+    wm.pointer(2, 30, 1, 0);
+    wm.pointer(2, 30, 0, 0);
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
+    // The top bar's item opens it too; Alt+W closes the selected window, and the list follows it out.
+    let windows = desk::bar_items(160).iter().find(|i| i.2 == desk::Bar::List).unwrap().0;
+    wm.pointer(windows + 2, 0, 1, 0);
+    wm.pointer(windows + 2, 0, 0, 0);
+    assert!(wm.status().starts_with("MODE=LIST"), "{}", wm.status());
+    wm.key(key(KEY_HOME));
+    assert_eq!(wm.key(alt_char('w')), Action::Close(1));
+    wm.desk.remove(1);
+    assert!(wm.status().starts_with("MODE=LIST") && wm.status().ends_with("LIST=2"), "{}", wm.status());
+    assert_eq!(wm.desk.listing().len(), 3);
+    wm.key(key(KEY_ESC));
+    assert!(wm.status().starts_with("MODE=NORMAL FOCUS=3"), "{}", wm.status());
 }
 
 #[test]
@@ -497,6 +613,20 @@ fn the_programs_by_category() {
     assert_eq!(menu[1].children[2].command.as_deref(), Some("console uptime"));
     assert_eq!(labels(&menu[3].children), ["app", "zzz"]);
     assert_eq!(labels(&catalogue(&[])), ["No programs found"]);
+    // The self-test and the benchmarks have a category of their own, each run in console (176-APP-0051).
+    let mut with_tests = programs(true);
+    with_tests.extend([("memtest", Kind::Console), ("netbench", Kind::Console), ("check", Kind::Console), ("netcheck", Kind::Console)].iter().map(|&(n, k)| (n.to_string(), k)));
+    let menu = catalogue(&with_tests);
+    assert_eq!(labels(&menu), ["Files", "System", "Clocks", "Network", "Tests and performance", "Other"]);
+    assert_eq!(labels(&menu[4].children), ["check", "netbench", "memtest"]);
+    assert_eq!(menu[4].children.iter().map(|i| i.command.as_deref().unwrap()).collect::<Vec<_>>(), ["console check", "console netbench", "console memtest"]);
+    // Where wm holds the shell's commands, the shell's window comes first (211-APP-0044); Enter on it runs `shell`.
+    let menu = menu::with_shell(catalogue(&programs(true)));
+    assert_eq!(labels(&menu), ["Shell", "Files", "System", "Clocks", "Other"]);
+    assert_eq!(menu[0].command.as_deref(), Some(menu::SHELL));
+    let mut open = menu::Menu::new(10, 5);
+    assert_eq!(open.key(&menu, key(KEY_DOWN)), menu::Outcome::Stay);
+    assert_eq!(open.key(&menu, key(KEY_ENTER)), menu::Outcome::Run(String::from("shell")));
 }
 
 #[test]
@@ -565,4 +695,906 @@ fn the_desktop_menu() {
     let Mode::Menu(open) = &wm.mode else { panic!() };
     let rects = open.rects(&wm.programs, 160, 50);
     assert!(rects.len() == 2 && rects[1].x < first.x && rects[1].bottom() <= 49, "{:?}", rects);
+}
+
+// 211-APP-0037: the window the pointer holds by its title or corner is marked (its frame in the accent colour, its
+// title inverted) until the button is released, for a mouse and a trackpad's drag lock alike.
+#[test]
+fn a_dragged_window_is_marked() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk = desk_of_four();
+    let frame_style = |wm: &mut Wm, x: usize, y: usize| -> tui::Style {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+        grid.get(x, y).style
+    };
+    let calm = frame_style(&mut wm, 80, 10); // window 2's left edge, at rest
+    wm.pointer(100, 1, 1, 0);
+    assert!(wm.status().contains(" DRAG=2"), "{}", wm.status());
+    let held = frame_style(&mut wm, 80, 10);
+    assert_ne!(held, calm);
+    assert_eq!(held.fg, DARK.accent.fg);
+    let inverted = (80..160).any(|x| frame_style(&mut wm, x, 1) == DARK.selected.inverse());
+    assert!(inverted, "the title inverted");
+    wm.pointer(110, 5, 1, 0); // moved while held
+    assert!(wm.status().contains(" DRAG=2"));
+    wm.pointer(110, 5, 0, 0);
+    assert!(!wm.status().contains("DRAG="), "{}", wm.status());
+    let (x, y, _, _) = rect(&wm.desk, 2);
+    assert_ne!(frame_style(&mut wm, x, y + 2).fg, DARK.accent.fg, "no mark after the release");
+    // The resize corner holds it too.
+    wm.desk.place(2, Rect::new(40, 10, 30, 10));
+    wm.pointer(69, 19, 1, 0);
+    assert!(wm.status().contains(" DRAG=2"));
+    wm.pointer(69, 19, 0, 0);
+    assert!(!wm.status().contains("DRAG="));
+    // A click in a window's content holds nothing.
+    wm.pointer(50, 15, 1, 0);
+    assert!(!wm.status().contains("DRAG="));
+    wm.pointer(50, 15, 0, 0);
+}
+
+// The desktop background (000-APP-0047, 000-APP-0050).
+use background::{colours, cover, ink, layout, overlay, pattern, Backdrop, Config, Info, Pattern, Picture, Place};
+
+fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
+
+#[test]
+fn the_background_configuration_is_read_and_written() {
+    assert_eq!(Config::parse("").0, Config::default());
+    let d = Config::default();
+    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.net, d.place), (Picture::Abstract, true, true, true, false, Place::BottomRight));
+    assert_eq!((d.pattern, d.speed, d.contrast, d.complexity, d.info), (Pattern::Waves, 1, 20, 2, 30));
+    let (c, problems) = Config::parse("# a comment\nbackground = image data/sky.bmp\nshow = cpu, time\nplace = top-left  # here\n");
+    assert!(problems.is_empty(), "{:?}", problems);
+    assert_eq!(c.picture, Picture::Image("data/sky.bmp".into()));
+    assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
+    assert_eq!(Config::parse("background = none").0.picture, Picture::None);
+    assert_eq!(Config::parse("show = none").0.time, false);
+    // The pattern, its speed, contrast and complexity, the information's brightness; parts of a line between `;`.
+    let (c, problems) = Config::parse("pattern = blobs; speed = 20 ; contrast = 45%\ncomplexity = 5; info = 0  # hidden");
+    assert!(problems.is_empty(), "{:?}", problems);
+    assert_eq!((c.pattern, c.speed, c.contrast, c.complexity, c.info), (Pattern::Blobs, 20, 45, 5, 0));
+    // A line not understood is named and leaves the default.
+    let (c, problems) = Config::parse("background = plasma\nshow = time, weather\nplace = left\ncolour = red\nnothing here");
+    assert_eq!(c, Config::default());
+    assert_eq!(problems.len(), 5, "{:?}", problems);
+    assert!(problems[0].starts_with("line 1:") && problems[4].contains("no '='"), "{:?}", problems);
+    let (c, problems) = Config::parse("pattern = plasma; speed = 0\nspeed = 51; contrast = 101; complexity = 6; info = -1");
+    assert_eq!((c, problems.len()), (Config::default(), 6), "{:?}", problems);
+    assert!(problems[1].starts_with("line 1: speed") && problems[5].starts_with("line 2: info"), "{:?}", problems);
+    // What `format` writes is read back the same.
+    for text in ["background = none", "background = image a b.bmp\nshow = net\nplace = center", "show = date, time", "pattern = aurora; speed = 50; contrast = 0; complexity = 1; info = 100"] {
+        let c = Config::parse(text).0;
+        let (again, problems) = Config::parse(&c.format());
+        assert!(problems.is_empty() && again == c, "{:?} {:?}", c, problems);
+    }
+}
+
+#[test]
+fn the_pattern_is_low_contrast_and_moves() {
+    let (w, h) = (160, 100);
+    let c = Config::default();
+    let (mut a, mut b) = (vec![0u32; w * h], vec![0u32; w * h]);
+    pattern(&mut a, w, h, &c, 0);
+    pattern(&mut b, w, h, &c, 40 * 8);
+    let channel = |p: u32, s: u32| (p >> s) & 0xFF;
+    assert_eq!(colours(c.contrast), (background::DARK, background::LIGHT));
+    for &p in a.iter().chain(&b) {
+        for s in [16, 8, 0] { assert!(channel(p, s) >= channel(background::DARK, s) && channel(p, s) <= channel(background::LIGHT, s), "{:06x}", p); }
+    }
+    // It uses the range it has, and a later step is not the same picture.
+    let (lo, hi) = (a.iter().map(|&p| channel(p, 0)).min().unwrap(), a.iter().map(|&p| channel(p, 0)).max().unwrap());
+    assert!(hi - lo >= 0x0C, "{:x}..{:x}", lo, hi);
+    assert!(a.iter().zip(&b).filter(|(x, y)| x != y).count() > w * h / 4);
+    // Neighbouring steps (half a second at speed 1) differ only a little: it moves slowly.
+    pattern(&mut b, w, h, &c, 8);
+    let largest = a.iter().zip(&b).map(|(&x, &y)| channel(x, 0).abs_diff(channel(y, 0))).max().unwrap();
+    assert!(largest <= 3, "{}", largest);
+}
+
+#[test]
+fn each_pattern_has_its_own_look_contrast_and_complexity() {
+    let (w, h) = (160, 100);
+    let draw = |c: &Config, phase: u32| { let mut f = vec![0u32; w * h]; pattern(&mut f, w, h, c, phase); f };
+    let blue = |f: &[u32]| { let (lo, hi) = (f.iter().map(|&p| p & 0xFF).min().unwrap(), f.iter().map(|&p| p & 0xFF).max().unwrap()); (lo, hi) };
+    // How often the colour turns from lighter to darker or back along every tenth row and column (in 2 × 2 blocks):
+    // more with more complexity.
+    let turns = |f: &[u32]| -> usize {
+        let count = |line: Vec<u32>| { let mut last = 0i32; line.windows(2).filter(|d| { let s = (d[1] as i32 - d[0] as i32).signum(); let turn = s != 0 && last != 0 && s != last; if s != 0 { last = s; } turn }).count() };
+        (0..h).step_by(10).map(|y| count((0..w).step_by(2).map(|x| f[y * w + x] & 0xFF).collect())).sum::<usize>()
+            + (0..w).step_by(10).map(|x| count((0..h).step_by(2).map(|y| f[y * w + x] & 0xFF).collect())).sum::<usize>()
+    };
+    let mut looks = Vec::new();
+    for (name, kind) in background::PATTERNS {
+        let c = Config { pattern: kind, ..Config::default() };
+        let (f, later) = (draw(&c, 0), draw(&c, 400 * 8));
+        let (lo, hi) = blue(&f);
+        let (dark, light) = colours(c.contrast);
+        assert!(lo >= dark & 0xFF && hi <= light & 0xFF && hi - lo >= 8, "{}: {:x}..{:x}", name, lo, hi);
+        assert!(f.iter().zip(&later).filter(|(x, y)| x != y).count() > w * h / 8, "{} moves", name);
+        // Higher contrast: a wider range; contrast 0: one colour.
+        let (lo2, hi2) = blue(&draw(&Config { contrast: 100, ..c.clone() }, 0));
+        assert!(hi2 - lo2 > (hi - lo) * 3, "{}: {:x}..{:x}", name, lo2, hi2);
+        let flat = draw(&Config { contrast: 0, ..c.clone() }, 0);
+        assert!(flat.iter().all(|&p| p == flat[0]), "{}", name);
+        // More detail with more complexity.
+        let (simple, busy) = (turns(&draw(&Config { complexity: 1, contrast: 100, ..c.clone() }, 0)), turns(&draw(&Config { complexity: 5, contrast: 100, ..c.clone() }, 0)));
+        assert!(busy > simple, "{}: {} turns at 1, {} at 5", name, simple, busy);
+        looks.push(f);
+    }
+    for i in 0..looks.len() { for j in i + 1..looks.len() { assert!(looks[i].iter().zip(&looks[j]).filter(|(x, y)| x != y).count() > w * h / 2); } }
+}
+
+#[test]
+fn the_speed_sets_how_often_and_how_far_the_pattern_moves() {
+    let read_nothing = &mut |_: &str| None;
+    let (mut b, _) = Backdrop::new(Config::default(), (64, 32), read_nothing);
+    assert_eq!(b.interval(), 500);
+    // Speed 1: a table step each half second, as before; the milliseconds between frames carried over.
+    for _ in 0..4 { b.advance(250); }
+    assert_eq!(b.phase, 16);
+    for _ in 0..3 { b.advance(21); }
+    assert_eq!(b.phase, 17);
+    let mut fast = Config::default();
+    fast.speed = 20;
+    let (mut b, _) = Backdrop::new(fast.clone(), (64, 32), read_nothing);
+    assert_eq!(b.interval(), 50);
+    b.advance(1000);
+    assert_eq!(b.phase, 320);
+    fast.speed = 3;
+    assert_eq!(Backdrop::new(fast, (64, 32), read_nothing).0.interval(), 166);
+}
+
+// A BMP of `w` × `h` 24-bit pixels, rows from the bottom (`down` false) or from the top.
+fn bmp(w: usize, h: usize, down: bool, pixel: impl Fn(usize, usize) -> u32) -> Vec<u8> {
+    let stride = (w * 3 + 3) & !3;
+    let mut out = vec![0u8; 54 + stride * h];
+    out[..2].copy_from_slice(b"BM");
+    out[10..14].copy_from_slice(&54u32.to_le_bytes());
+    out[14..18].copy_from_slice(&40u32.to_le_bytes());
+    out[18..22].copy_from_slice(&(w as i32).to_le_bytes());
+    out[22..26].copy_from_slice(&(if down { -(h as i32) } else { h as i32 }).to_le_bytes());
+    out[26..28].copy_from_slice(&1u16.to_le_bytes());
+    out[28..30].copy_from_slice(&24u16.to_le_bytes());
+    for y in 0..h {
+        let row = 54 + stride * if down { y } else { h - 1 - y };
+        for x in 0..w { let p = pixel(x, y); out[row + x * 3..row + x * 3 + 3].copy_from_slice(&[p as u8, (p >> 8) as u8, (p >> 16) as u8]); }
+    }
+    out
+}
+
+#[test]
+fn an_image_covers_the_desktop() {
+    // 4 × 2: red on the left half, blue on the right; a 2:1 frame takes it whole, scaled twice.
+    let image = |down| bmp(4, 2, down, |x, y| if x < 2 { 0xFF0000 } else { 0x0000FF + y as u32 * 0x100 });
+    for down in [false, true] {
+        let mut frame = vec![0u32; 8 * 4];
+        assert_eq!(cover(&image(down), &mut frame, 8, 4), Ok(()));
+        assert_eq!(frame[0], 0xFF0000);
+        assert_eq!(frame[7], 0x0000FF);
+        assert_eq!(frame[3 * 8 + 7], 0x0001FF, "the bottom row is the image's second");
+    }
+    // A square frame cuts the sides: the middle two columns are left.
+    let mut frame = vec![0u32; 4 * 4];
+    cover(&image(false), &mut frame, 4, 4).unwrap();
+    assert_eq!((frame[0], frame[3]), (0xFF0000, 0x0000FF));
+    // Shrunk, each frame pixel the average of those it covers: 8 × 4 of stripes into 2 × 1.
+    let stripes = bmp(8, 4, false, |x, _| if x % 2 == 0 { 0x204060 } else { 0x406080 });
+    let mut small = vec![0u32; 2];
+    cover(&stripes, &mut small, 2, 1).unwrap();
+    assert_eq!(small, [0x305070, 0x305070]);
+    // Not a picture it reads, or one cut short: refused, and why.
+    assert_eq!(cover(b"GIF89a", &mut frame, 4, 4), Err("not a BMP, PNG or JPEG"));
+    let short = image(false);
+    assert!(cover(&short[..short.len() - 4], &mut frame, 4, 4).is_err());
+    assert!(cover(&[0x89, b'P', b'N', b'G'], &mut frame, 4, 4).is_err());
+    assert!(cover(&[0xFF, 0xD8, 0xFF], &mut frame, 4, 4).is_err());
+}
+
+// The pictures of tests/data/images (tests/image_host.rs): what each covers a frame with.
+fn picture(name: &str) -> Vec<u8> { std::fs::read(format!("tests/data/images/{}", name)).unwrap() }
+
+#[test]
+fn png_and_jpeg_pictures_cover_the_desktop() {
+    // 40 × 24 pictures into 80 × 48: each pixel twice each way, as the picture has it (JPEG: nearly).
+    let small = |x: usize, y: usize| (((x * 6) & 255) << 16 | ((y * 10) & 255) << 8 | ((x + y) * 4) & 255) as u32;
+    let error = |frame: &[u32]| -> f64 {
+        let sum: u32 = frame.iter().enumerate().map(|(i, &p)| { let q = small(i % 80 / 2, i / 80 / 2); [16, 8, 0].iter().map(|&s| (p >> s & 255).abs_diff(q >> s & 255)).sum::<u32>() }).sum();
+        sum as f64 / (frame.len() * 3) as f64
+    };
+    for (name, bound) in [("rgb.png", 0.0), ("rgba.png", 0.0), ("444.jpg", 3.0), ("plain.jpg", 4.0)] {
+        let mut frame = vec![0u32; 80 * 48];
+        assert_eq!(cover(&picture(name), &mut frame, 80, 48), Ok(()), "{}", name);
+        assert!(error(&frame) <= bound, "{}: {:.2}", name, error(&frame));
+    }
+    // A larger picture shrunk: 160 × 96 into 40 × 24, each frame pixel the average of 4 × 4 (the JPEG's: as libjpeg
+    // decodes it, tests/data/images/big444.jpg.rgb).
+    let (mut png_frame, mut jpeg_frame) = (vec![0u32; 40 * 24], vec![0u32; 40 * 24]);
+    cover(&picture("big.png"), &mut png_frame, 40, 24).unwrap();
+    cover(&picture("big444.jpg"), &mut jpeg_frame, 40, 24).unwrap();
+    let big = |x: usize, y: usize| { let n = (x * 7919 + y * 104_729 + x * y * 31) % 251; (((x * 3 + n / 8) & 255) << 16 | ((y * 5 + n / 4) & 255) << 8 | n & 255) as u32 };
+    let decoded = picture("big444.jpg.rgb");
+    let reference = |x: usize, y: usize| { let at = (y * 160 + x) * 3; (decoded[at] as u32) << 16 | (decoded[at + 1] as u32) << 8 | decoded[at + 2] as u32 };
+    for (i, (&p, &j)) in png_frame.iter().zip(&jpeg_frame).enumerate() {
+        let (fx, fy) = (i % 40, i / 40);
+        let mean = |pixel: &dyn Fn(usize, usize) -> u32, s: u32| (0..16).map(|k| pixel(fx * 4 + k % 4, fy * 4 + k / 4) >> s & 255).sum::<u32>() / 16;
+        for s in [16, 8, 0] {
+            assert_eq!(p >> s & 255, mean(&big, s), "({}, {})", fx, fy);
+            assert!((j >> s & 255).abs_diff(mean(&reference, s)) <= 1, "({}, {}): {:x}", fx, fy, j);
+        }
+    }
+    // A progressive JPEG is named as such.
+    assert_eq!(cover(&picture("progressive.jpg"), &mut png_frame, 40, 24), Err("a progressive or lossless JPEG"));
+    // Through the backdrop: still, and a notice naming the file and why when it cannot be used.
+    let (b, problem) = Backdrop::new(Config::parse("background = image sky.png").0, (80, 48), &mut |_| Some(picture("rgb.png")));
+    assert!(problem.is_none() && !b.moving());
+    let (b, problem) = Backdrop::new(Config::parse("background = image old.jpg").0, (80, 48), &mut |_| Some(picture("progressive.jpg")));
+    assert_eq!(problem.as_deref(), Some("old.jpg: a progressive or lossless JPEG; the pattern instead"));
+    assert!(b.moving());
+}
+
+#[test]
+fn the_information_has_its_place() {
+    let c = Config::default();
+    // 1280 × 800: a block two cells from the right and the bottom edges.
+    let ((x, y, w, h), big, small) = layout(&c, 1280, 800, 1, 100).unwrap();
+    assert_eq!((big, small), (6, 2));
+    assert_eq!((x + w, y + h), (1280 - 32, 800 - 32));
+    assert!(w >= 5 * 8 * 6 && h >= 16 * 6 + 32);
+    // Half the pixels each way (a 2560 × 1600 screen): the same block on the screen.
+    let ((x2, y2, w2, h2), big2, _) = layout(&c, 1280, 800, 2, 100).unwrap();
+    assert_eq!(big2, 3);
+    assert!(x2 * 2 >= 1280 && w2 <= w && h2 <= h && y2 > 0);
+    for place in [Place::TopLeft, Place::Center] {
+        let ((x, y, _, _), _, _) = layout(&Config { place, ..c.clone() }, 1280, 800, 1, 100).unwrap();
+        assert!(if place == Place::TopLeft { x == 32 && y == 32 } else { x > 300 && y > 200 });
+    }
+    // Nothing to show, or no room: no block.
+    assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&c, 200, 120, 1, 100).is_none());
+    // The drawing stays inside the block and puts the text's colour there.
+    let (fw, fh) = (640, 400);
+    let mut frame = vec![background::DARK; fw * fh];
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
+    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1, 100).unwrap();
+    let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
+    assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
+    let (text, graph, _) = ink(c.info);
+    assert!(frame.iter().filter(|&&p| p == text).count() > 500);
+    assert!(frame.contains(&graph));
+    // Paler than it was (0x7890A8), brighter with `info`, and gone at 0.
+    let blue = |p: u32| p & 0xFF;
+    assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
+    assert!(blue(ink(80).0) > blue(text) + 0x40);
+    let mut hidden = vec![background::DARK; fw * fh];
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
+    let (none, _, _) = ink(0);
+    assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
+}
+
+#[test]
+fn the_backdrop_keeps_its_frame() {
+    let read_nothing = &mut |_: &str| None;
+    let (b, problem) = Backdrop::new(Config::default(), (1280, 800), read_nothing);
+    assert!(problem.is_none() && b.shown() && b.moving());
+    assert_eq!((b.unit, b.width, b.height), (1, 1280, 800));
+    let (b, _) = Backdrop::new(Config::default(), (2560, 1600), read_nothing);
+    assert_eq!((b.unit, b.width, b.height), (2, 1280, 800));
+    // An image that cannot be read: the pattern, and a notice.
+    let (b, problem) = Backdrop::new(Config::parse("background = image data/missing.bmp").0, (640, 400), read_nothing);
+    assert_eq!(problem.as_deref(), Some("data/missing.bmp: not found, or larger than wm reads (32 MiB); the pattern instead"));
+    assert!(b.moving());
+    assert_eq!(b.config.picture, Picture::Image("data/missing.bmp".into()), "the choice is kept");
+    // An image that can: drawn, and still.
+    let file = bmp(2, 1, false, |x, _| if x == 0 { 0x203040 } else { 0x405060 });
+    let (mut b, problem) = Backdrop::new(Config::parse("background = image sky.bmp\nshow = none").0, (64, 32), &mut |_| Some(file.clone()));
+    assert!(problem.is_none() && !b.moving());
+    b.render(&Info::default(), &glyph);
+    assert_eq!((b.pixel(0, 0), b.pixel(63, 31)), (0x203040, 0x405060));
+    // Another speed or contrast keeps the picture without reading it again; another picture is read.
+    let mut reads = 0;
+    let mut count = |_: &str| { reads += 1; Some(file.clone()) };
+    assert!(b.change(Config { speed: 9, contrast: 70, ..b.config.clone() }, &mut count).is_none());
+    b.render(&Info::default(), &glyph);
+    assert_eq!(b.pixel(0, 0), 0x203040);
+    assert!(b.change(Config { picture: Picture::Abstract, ..b.config.clone() }, &mut count).is_none() && b.moving());
+    assert!(b.change(Config { picture: Picture::Image("sky.bmp".into()), ..b.config.clone() }, &mut count).is_none() && !b.moving());
+    assert_eq!(reads, 1);
+    // None draws nothing; samples are kept for a minute.
+    let (mut b, _) = Backdrop::new(Config::parse("background = none").0, (64, 32), read_nothing);
+    assert!(!b.shown() && b.frame.is_empty());
+    for i in 0..100 { b.sample(i as u8 * 2); }
+    assert_eq!((b.cpu.len(), b.cpu[0], *b.cpu.last().unwrap()), (60, 80, 100));
+}
+
+// Settings (000-APP-0048).
+fn draw_wm(wm: &mut Wm) -> Vec<String> {
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut text = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut text, None);
+    (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect()).collect()
+}
+
+#[test]
+fn settings_open_from_the_top_bar_and_change_the_background() {
+    let mut wm = Wm::new(160, 50);
+    // The top bar's last item, and Alt+S.
+    let (at, _, item) = *desk::bar_items(160).last().unwrap();
+    assert_eq!(item, desk::Bar::Settings);
+    assert_eq!(wm.pointer(at + 2, 0, 1, 0), Action::Redraw);
+    wm.pointer(at + 2, 0, 0, 0);
+    assert!(wm.status().starts_with("MODE=SETTINGS") && wm.status().ends_with("SETTINGS=Background"), "{}", wm.status());
+    let screen = draw_wm(&mut wm);
+    assert!(screen.iter().any(|row| row.contains("Settings")) && screen.iter().any(|row| row.contains("Picture") && row.contains("abstract")), "{:?}", &screen[15..35]);
+    assert_eq!(wm.key(key(KEY_ESC)), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=NORMAL"));
+    assert_eq!(wm.key(alt_char('s')), Action::Redraw);
+    assert!(wm.status().starts_with("MODE=SETTINGS"));
+    // Into the page: the picture cycles abstract → image → none → abstract.
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().ends_with("SETTINGS=Background:Picture"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("data/background.bmp".into())), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::None), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert_eq!(c.picture, Picture::Abstract), other => panic!("{:?}", other) }
+    // The pattern's kind cycles; the speed, contrast, complexity and brightness step and stop at their ends.
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Pattern"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Rings), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.pattern, Pattern::Blobs), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_LEFT)), Action::Redraw, "speed 1 is the slowest");
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.speed, 2), other => panic!("{:?}", other) }
+    for _ in 0..12 { wm.key(key(KEY_RIGHT)); }
+    assert_eq!(wm.background.speed, 50);
+    match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.speed, 1, "on from the fastest: the first"), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.contrast, 25), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.complexity, 3), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.info, 25), other => panic!("{:?}", other) }
+    assert_eq!((wm.background.pattern, wm.background.contrast, wm.background.complexity), (Pattern::Blobs, 25, 3));
+    // The time off, the place moved, an image's file typed.
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Time"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu), other => panic!("{:?}", other) }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
+    for _ in 0..10 { wm.key(key(KEY_UP)); }
+    assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
+    for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
+    match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
+    assert_eq!(wm.background.picture, Picture::Image("sky.bmp".into()));
+    assert!((wm.background.time, wm.background.place) == (false, Place::BottomLeft));
+    // The system's pages say where the setting is made today; a click outside closes.
+    let mut s = settings::Settings::new(&wm.background, (160, 50));
+    let inner = s.area().inner();
+    assert_eq!(s.click(inner.x + 2, inner.y + 3, &wm.background), settings::Outcome::Stay);
+    assert_eq!(s.page, 3);
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &wm.background);
+    let text: String = (inner.y..inner.bottom()).map(|y| (inner.x..inner.right()).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
+    assert!(text.contains("netpolicy") && text.contains("To read: the network is set in the shell") && text.contains("Shell in the menu"), "{}", text);
+    // A click on a row of the background page changes it.
+    let mut s = settings::Settings::new(&wm.background, (160, 50));
+    match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    match s.click(inner.x + 20, inner.y + 1 + 2, &wm.background) { settings::Outcome::Changed(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
+    // Every row fits the window.
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &wm.background);
+    for (i, (name, value)) in s.rows(&wm.background).iter().enumerate() {
+        let row: String = (inner.x..inner.right()).map(|x| grid.get(x, inner.y + 1 + i).ch).collect();
+        assert!(row.contains(&format!("{:<11} {}", name, value)), "{:?}", row);
+    }
+    assert_eq!(s.click(0, 0, &wm.background), settings::Outcome::Close);
+}
+
+// The date and time page (000-APP-0055).
+#[test]
+fn days_count_from_2000_and_refuse_days_a_month_does_not_have() {
+    use settings::days;
+    assert_eq!((days(2000, 1, 1), days(2000, 3, 1), days(2026, 10, 10), days(2027, 2, 28), days(2099, 12, 31)), (Some(0), Some(60), Some(9779), Some(9920), Some(36524)));
+    assert_eq!((days(2026, 2, 29), days(2024, 2, 29).is_some(), days(2026, 4, 31), days(2026, 13, 1), days(1999, 12, 31), days(2100, 1, 1)), (None, true, None, None, None, None));
+}
+
+#[test]
+fn the_date_page_sets_the_clock_through_the_shell() {
+    let mut wm = Wm::new(160, 50);
+    wm.shell = true;
+    wm.key(alt_char('s'));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(wm.status().ends_with("SETTINGS=Date and time:Year"), "{}", wm.status());
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    // The fields follow the clock until one is changed.
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 31));
+    assert_eq!(s.fields, [2026, 10, 10, 14, 5, 31]);
+    let screen = draw_wm(&mut wm);
+    assert!(screen.iter().any(|row| row.contains("2026-10-10 14:05:31")) && screen.iter().any(|row| row.contains("Set the clock")), "{:?}", &screen[15..35]);
+    // → steps the year; digits replace the month and the day; a day February does not have is refused on the page.
+    wm.key(key(KEY_RIGHT));
+    wm.key(key(KEY_DOWN));
+    for ch in "02".chars() { wm.key(chr(ch)); }
+    wm.key(key(KEY_DOWN));
+    for ch in "30".chars() { wm.key(chr(ch)); }
+    let Mode::Settings(s) = &mut wm.mode else { panic!() };
+    s.set_now(Some((2026, 10, 10)), Some(14 * 3600 + 5 * 60 + 32));
+    assert_eq!(s.fields, [2027, 2, 30, 14, 5, 31], "changed fields stay");
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::Redraw);
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("2027-02-30 14:05:31 is not a time the clock takes")));
+    // Day 28, then the button: the clock is set at once, and Settings stay open to show it (000-APP-0060).
+    for ch in "28".chars() { wm.key(chr(ch)); }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().ends_with(":Set the clock"), "{}", wm.status());
+    assert_eq!(wm.key(key(KEY_ENTER)), Action::SetClock { date: 9920, seconds: 14 * 3600 + 5 * 60 + 31 });
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("Setting the clock to 2027-02-28 14:05:31")));
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("[ Set the clock ]  at once, through the shell")));
+    // Without the shell's commands it says so instead.
+    let mut alone = Wm::new(160, 50);
+    alone.key(alt_char('s'));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_DOWN));
+    alone.key(key(KEY_ENTER));
+    assert_eq!(alone.key(chr(' ')), Action::Redraw);
+    assert!(draw_wm(&mut alone).iter().any(|row| row.contains("wm holds no shell's commands")));
+}
+
+// 000-APP-0056: every entry reacts. Enter and a click on each entry of the menu, each item of the top bar, each page
+// and row of Settings: a program started, a submenu or dialog opened, a setting changed, or a line saying why not.
+#[test]
+fn every_entry_of_the_menu_reacts() {
+    // The path of highlighted items in the open menu.
+    let path = |wm: &Wm| match &wm.mode { Mode::Menu(open) => open.path(&wm.programs), _ => String::new() };
+    // Opens the menu and goes to the entry at `at` (an index per level) with the keys.
+    fn to(wm: &mut Wm, at: &[usize]) {
+        wm.mode = Mode::Normal;
+        wm.key(alt_char('p'));
+        for (level, &index) in at.iter().enumerate() {
+            // → opens a category at its first program; the first level has none highlighted yet.
+            if level > 0 { wm.key(key(KEY_RIGHT)); }
+            for _ in 0..index + usize::from(level == 0) { wm.key(key(KEY_DOWN)); }
+            let Mode::Menu(open) = &wm.mode else { panic!() };
+            assert_eq!(open.levels[level], index);
+        }
+    }
+    // Every entry under `items`, by its indices.
+    fn entries(items: &[Item], at: Vec<usize>, all: &mut Vec<(Vec<usize>, Item)>) {
+        for (i, item) in items.iter().enumerate() {
+            let mut here = at.clone();
+            here.push(i);
+            all.push((here.clone(), item.clone()));
+            entries(&item.children, here, all);
+        }
+    }
+    let menus = [menu::with_shell(catalogue(&programs(true))), catalogue(&programs(false)), catalogue(&[]),
+                 vec![Item::note("Looking for programs…", "wm is still reading the programs on the boot disk")]];
+    let mut count = 0;
+    for programs in menus {
+        let mut all = Vec::new();
+        entries(&programs, Vec::new(), &mut all);
+        for (at, item) in all {
+            let mut wm = Wm::new(160, 50);
+            wm.programs = programs.clone();
+            // Enter.
+            to(&mut wm, &at);
+            let before = path(&wm);
+            let action = wm.key(key(KEY_ENTER));
+            match (&item.command, item.children.is_empty()) {
+                (Some(command), _) => assert_eq!(action, Action::Run(command.clone())),
+                (None, false) => assert!(path(&wm).len() > before.len() && path(&wm).starts_with(&before), "{} → {}", before, path(&wm)),
+                (None, true) => {
+                    assert!(wm.status().starts_with("MODE=NORMAL") && wm.notice.is_some(), "{:?}: {}", item.label, wm.status());
+                    assert!(draw_wm(&mut wm)[49].contains(wm.notice.as_deref().unwrap()));
+                }
+            }
+            // A click on it.
+            to(&mut wm, &at);
+            let Mode::Menu(open) = &wm.mode else { panic!() };
+            let r = open.rects(&wm.programs, 160, 50)[at.len() - 1].inner();
+            let (x, y) = (r.x + 1, r.y + at[at.len() - 1]);
+            wm.notice = None;
+            let action = wm.pointer(x, y, 1, 0);
+            wm.pointer(x, y, 0, 0);
+            match (&item.command, item.children.is_empty()) {
+                (Some(command), _) => assert_eq!(action, Action::Run(command.clone())),
+                (None, false) => assert!(path(&wm).ends_with(&item.label) && matches!(&wm.mode, Mode::Menu(open) if open.levels.len() == at.len() + 1)),
+                (None, true) => assert!(wm.status().starts_with("MODE=NORMAL") && wm.notice.is_some(), "{:?}: {}", item.label, wm.status()),
+            }
+            count += 1;
+        }
+    }
+    assert!(count >= 15, "{}", count);
+}
+
+#[test]
+fn every_item_of_the_top_bar_and_every_alt_key_reacts() {
+    // What a click did: an action for main, a dialog or mode of wm, the windows changed, or a line on the status line.
+    // An item the bar has no room for is reached through `more ▼`'s menu (000-APP-0061).
+    let click = |wm: &mut Wm, x: usize, y: usize| { let action = wm.pointer(x, y, 1, 0); wm.pointer(x, y, 0, 0); action };
+    for windows in [0, 1, 4] {
+        let make = || {
+            let mut wm = Wm::new(160, 50);
+            if windows == 4 { wm.desk = desk_of_four(); }
+            if windows == 1 { wm.desk.add(text(1, "fm")); }
+            wm
+        };
+        let (items, moved) = make().top_bar();
+        assert_eq!(moved.is_empty(), windows == 0, "{:?}", moved);
+        let reach: Vec<(desk::Bar, Option<usize>)> = items.iter().filter(|i| i.2 != desk::Bar::More).map(|i| (i.2, None)).chain(moved.iter().enumerate().map(|(row, &b)| (b, Some(row)))).collect();
+        assert_eq!(reach.len(), 12);
+        for (item, row) in reach {
+            let mut wm = make();
+            let before = wm.desk.status();
+            let action = match row {
+                None => { let at = items.iter().find(|i| i.2 == item).unwrap().0; click(&mut wm, at + 1, 0) }
+                Some(row) => {
+                    let more = items.iter().find(|i| i.2 == desk::Bar::More).unwrap().0;
+                    click(&mut wm, more + 1, 0);
+                    let area = wm.more_area().unwrap();
+                    click(&mut wm, area.x + 2, area.y + 1 + row)
+                }
+            };
+            let reacted = action != Action::Redraw || !wm.status().starts_with("MODE=NORMAL") || wm.notice.is_some() || wm.desk.status() != before;
+            assert!(reacted, "{:?} with {} windows: {}", item, windows, wm.status());
+            if windows == 0 && matches!(item, desk::Bar::Next | desk::Bar::Move | desk::Bar::Close | desk::Bar::Full) {
+                assert!(wm.notice.as_deref().is_some_and(|n| n.contains("there is no window")), "{:?}: {:?}", item, wm.notice);
+            }
+        }
+    }
+    // The keys that act on the window in front say there is none; Alt+Tab with one window names it.
+    let keys = [alt(KEY_TAB, '\t'), alt(KEY_LEFT, '\0'), alt(KEY_ENTER, '\r'), alt_char('f'), alt_char('w'), alt_char('m'), alt_char('1')];
+    for k in keys {
+        let mut wm = Wm::new(160, 50);
+        assert_eq!(wm.key(k), Action::Redraw);
+        assert!(wm.notice.as_deref().is_some_and(|n| n.contains("there is no window")), "{:?}: {:?}", k, wm.notice);
+        assert!(draw_wm(&mut wm)[49].contains("there is no window"));
+    }
+    let mut wm = Wm::new(160, 50);
+    wm.desk.add(text(1, "fm"));
+    wm.key(alt(KEY_TAB, '\t'));
+    assert_eq!(wm.notice.as_deref(), Some("Next window: \"fm\" is the only one"));
+}
+
+#[test]
+fn every_page_and_row_of_settings_reacts() {
+    use settings::{Outcome, Settings, CLOCK_ROWS, DATE, PAGES, ROWS};
+    let config = background::Config::default();
+    let screen = |s: &Settings| {
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        s.draw(&mut grid, &DARK, &config);
+        (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n")
+    };
+    // Each page: Enter on its name goes into it, or a page to read says so (and says so in its first line).
+    for page in 0..PAGES.len() {
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..page { s.key(key(KEY_DOWN), &config); }
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+        if page == 0 || page == DATE || page == settings::SCREEN { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
+        assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
+        assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
+        // A click on its text says so too; another page's name takes the line away.
+        let inner = s.area().inner();
+        s.message = None;
+        assert_eq!(s.click(inner.x + 30, inner.y + 2, &config), Outcome::Stay);
+        assert!(s.message.is_some(), "{}", PAGES[page]);
+        s.click(inner.x + 2, inner.y, &config);
+        assert!(s.message.is_none() && s.page == 0);
+        // Every line of the page fits its column.
+        for line in s.page_text() { assert!(line.chars().count() <= 63, "{:?}", line); }
+    }
+    // Each row of the background page: Enter changes it, or a line says why not.
+    for row in 0..ROWS.len() {
+        let mut s = Settings::new(&config, (160, 50));
+        s.key(key(KEY_ENTER), &config);
+        for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+        match s.key(key(KEY_ENTER), &config) {
+            Outcome::Changed(c) => assert_ne!(c, config, "{}", ROWS[row]),
+            Outcome::Stay => assert!(s.message.is_some() && screen(&s).contains(s.message.as_deref().unwrap()), "{}", ROWS[row]),
+            other => panic!("{}: {:?}", ROWS[row], other),
+        }
+    }
+    // The image's file not typed yet; a value at its end.
+    let mut s = Settings::new(&config, (160, 50));
+    s.key(key(KEY_ENTER), &config);
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    assert_eq!(s.message.as_deref(), Some("Type the image's file here (BMP, PNG or JPEG), then Enter"));
+    s.key(key(KEY_DOWN), &config);
+    s.key(key(KEY_DOWN), &config);
+    assert!(s.message.is_none(), "moved: the line goes");
+    assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::Stay, "speed 1 is the slowest");
+    assert_eq!(s.message.as_deref(), Some("Speed is at its lowest already: 1"));
+    assert!(matches!(s.key(key(KEY_RIGHT), &config), Outcome::Changed(_)));
+    assert!(s.message.is_none());
+    // Each row of the date page: Enter tries to set the clock, which says what came of it.
+    for shell in [false, true] {
+        for row in 0..CLOCK_ROWS.len() {
+            let mut s = Settings::new(&config, (160, 50));
+            s.shell = shell;
+            s.set_now(Some((2026, 10, 10)), Some(3600));
+            s.key(key(KEY_DOWN), &config);
+            s.key(key(KEY_DOWN), &config);
+            s.key(key(KEY_ENTER), &config);
+            for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+            match s.key(key(KEY_ENTER), &config) {
+                Outcome::SetClock { date, seconds } => assert!(shell && (date, seconds) == (9779, 3600)),
+                Outcome::Stay => assert!(!shell && s.message.as_deref().is_some_and(|m| m.contains("wm holds no shell's commands"))),
+                other => panic!("{:?}", other),
+            }
+        }
+    }
+}
+
+// 211-APP-0046: Alt+0, the top bar's item and a double click on the title give a window its content's first size back.
+#[test]
+fn a_window_back_to_its_contents_size() {
+    let mut wm = Wm::new(160, 50);
+    wm.desk.add(pixels(1, "camera", 320, 240));
+    assert_eq!(rect(&wm.desk, 1), (0, 1, 42, 17), "a pixel window opens at its content's size");
+    // Resized by hand, the program draws at the new size: the frame's natural size follows, the first does not.
+    wm.desk.place(1, Rect::new(10, 5, 82, 32));
+    wm.desk.windows[0].size = (640, 480);
+    assert_eq!((wm.desk.get(1).unwrap().natural(), wm.desk.get(1).unwrap().fitted()), ((82, 32), (42, 17)));
+    assert_eq!(wm.key(alt_char('0')), Action::Redraw);
+    assert_eq!(rect(&wm.desk, 1), (10, 5, 42, 17), "back to 320 x 240, where it stands");
+    // Already that size: the status line says so.
+    wm.key(alt_char('0'));
+    assert_eq!(wm.notice.as_deref(), Some("Fit to content: \"camera\" has its content's first size already"));
+    // Maximized, it leaves that (the top bar's item does the same); full screen, it leaves that too.
+    wm.desk.maximize(1);
+    let (at, _, item) = desk::bar_items(160)[10];
+    assert_eq!(item, desk::Bar::Fit);
+    wm.pointer(at + 1, 0, 1, 0);
+    wm.pointer(at + 1, 0, 0, 0);
+    let w = wm.desk.get(1).unwrap();
+    assert!(w.restore.is_none() && (w.rect.w, w.rect.h) == (42, 17), "{:?}", w.rect);
+    wm.desk.toggle_full(1);
+    wm.key(alt_char('0'));
+    let w = wm.desk.get(1).unwrap();
+    assert!(!w.full && (w.rect.w, w.rect.h) == (42, 17), "{:?}", w.rect);
+    wm.desk.place(1, Rect::new(150, 40, 60, 20));
+    wm.desk.windows[0].size = (464, 288);
+    // A double click on the title: two presses on the same cell within DOUBLE_MS; slower ones are two clicks.
+    let r = wm.desk.get(1).unwrap().rect;
+    let click = |wm: &mut Wm, now: usize| { wm.now = now; wm.pointer(r.x + 2, r.y, 1, 0); wm.pointer(r.x + 2, r.y, 0, 0); };
+    click(&mut wm, 1000);
+    click(&mut wm, 1000 + desk::DOUBLE_MS + 1);
+    assert_eq!(rect(&wm.desk, 1), (r.x, r.y, r.w, r.h), "too slow: no double click");
+    click(&mut wm, 1000 + desk::DOUBLE_MS + 1 + desk::DOUBLE_MS);
+    let fitted = rect(&wm.desk, 1);
+    assert_eq!((fitted.2, fitted.3), (42, 17), "{:?}", fitted);
+    assert!(fitted.0 + 42 <= 160 && fitted.1 + 17 <= 49, "kept on the screen: {:?}", fitted);
+    // A text window: back to the 80 x 25 it opened with.
+    wm.desk.add(text(2, "fm"));
+    wm.desk.place(2, Rect::new(0, 1, 100, 40));
+    wm.key(alt_char('0'));
+    assert_eq!((rect(&wm.desk, 2).2, rect(&wm.desk, 2).3), (82, 27));
+}
+
+// 000-APP-0061: wm's scale: auto from the screen, the scales offered, the configuration's key, the frames that follow a
+// new grid, and Settings' screen page.
+#[test]
+fn the_scale_follows_the_screen_and_settings() {
+    use settings::{Outcome, Settings, SCREEN};
+    // Cells and auto: the largest scale leaving 1280 × 720 pixels at 100%.
+    assert_eq!(scale::cell(100), (8, 16));
+    assert_eq!(scale::cell(150), (12, 24));
+    assert_eq!(scale::cell(250), (20, 40));
+    for (screen, auto) in [((1024, 768), 100), ((1280, 800), 100), ((1366, 768), 100), ((1920, 1080), 150), ((2560, 1600), 200),
+                           ((2880, 1800), 200), ((3840, 2160), 300), ((5120, 2880), 400), ((7680, 4320), 600), ((640, 480), 100)] {
+        assert_eq!(scale::auto(screen), auto, "{:?}", screen);
+        assert!(scale::fits(auto, screen));
+    }
+    // What a user may choose leaves 84 × 26 cells for Settings: a MacBook Pro up to 400%, the suites' 1280 × 800 to 150%.
+    assert_eq!(scale::offered((2880, 1800)).collect::<Vec<_>>(), [100, 150, 200, 250, 300, 400]);
+    assert_eq!(scale::offered((1280, 800)).collect::<Vec<_>>(), [100, 150]);
+    assert_eq!(scale::offered((3840, 2160)).collect::<Vec<_>>(), [100, 150, 200, 250, 300, 400, 500]);
+    assert_eq!(scale::resolve(Some(150), (1280, 800)), 150);
+    assert_eq!(scale::resolve(Some(400), (1280, 800)), 100, "too large for the screen: auto");
+    assert_eq!(scale::resolve(Some(175), (2880, 1800)), 200, "not a scale offered: auto");
+    assert_eq!(scale::resolve(None, (2880, 1800)), 200);
+    // data/wm.conf's key: auto by default, a percentage kept, a wrong one named.
+    let (c, problems) = background::Config::parse("scale = 250\n");
+    assert!(problems.is_empty() && c.scale == Some(250), "{:?}", problems);
+    assert_eq!(background::Config::parse(&c.format()).0, c);
+    assert!(background::Config::default().format().contains("scale = auto"));
+    assert_eq!(background::Config::parse("scale = 150%").0.scale, Some(150));
+    let (_, problems) = background::Config::parse("scale = 175");
+    assert!(problems.iter().any(|p| p.contains("scale is auto, 100, 150")), "{:?}", problems);
+    // A new grid: each frame keeps its place and share of the screen, a maximized one stays maximized.
+    let mut desk = Desk::new(160, 50);
+    desk.add(text(1, "fm"));
+    desk.add(text(2, "top"));
+    desk.maximize(2);
+    let area = desk.area();
+    desk.take_changed();
+    let before = desk.get(1).unwrap().rect;
+    desk.rescale(80, 25);
+    let after = desk.get(1).unwrap().rect;
+    assert_eq!((after.x, after.w), (before.x / 2, (before.w / 2).max(desk::MIN.0)), "{:?} -> {:?}", before, after);
+    assert_eq!(desk.get(2).unwrap().rect, desk.area(), "maximized");
+    assert_ne!(desk.area(), area);
+    let changed = desk.take_changed();
+    assert!(changed.contains(&1) && changed.contains(&2), "{:?}", changed);
+    for w in &desk.windows { let r = w.rect; assert!(r.right() <= 80 && r.bottom() <= desk.area().bottom(), "{:?}", r); }
+    // Settings' screen page: ← → step through auto and the scales offered, at once; the page says what each gives.
+    let config = background::Config::default();
+    let mut s = Settings::new(&config, (240, 75));
+    (s.pixels, s.scale) = ((2880, 1800), 200);
+    for _ in 0..SCREEN { s.key(key(KEY_DOWN), &config); }
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    assert!(!s.on_pages);
+    let mut seen = Vec::new();
+    let mut now = config.clone();
+    for _ in 0..7 {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { seen.push(c.scale); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(seen, [Some(100), Some(150), Some(200), Some(250), Some(300), Some(400), None], "on, and back to auto");
+    match s.key(key(KEY_LEFT), &now) { Outcome::Changed(c) => assert_eq!(c.scale, Some(400)), other => panic!("{:?}", other) }
+    let mut cells = vec![Cell::BLANK; 240 * 75];
+    let mut grid = Grid::new(&mut cells, 240, 75);
+    s.draw(&mut grid, &DARK, &now);
+    let shown: String = (0..75).map(|y| (0..240).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>().join("\n");
+    for text in ["Scale       < auto (200%) >", "The screen: 2880 × 1800 pixels.", "At 200%: cells of 16 × 32 pixels, 180 × 56 of them.",
+                 "Here: auto (200%), 100%, 150%, 200%, 250%, 300%, 400%.", "background's lines grow with the scale.",
+                 "Pointer     < auto (200%) >", "Colour      < white >", "The pointer: 16 × 24 pixels; auto draws it at the scale."] {
+        assert!(shown.contains(text), "{}\n{}", text, shown);
+    }
+    // A screen with room for 100% alone says so.
+    let mut small = Settings::new(&config, (80, 30));
+    (small.pixels, small.scale) = ((640, 480), 100);
+    for _ in 0..SCREEN { small.key(key(KEY_DOWN), &config); }
+    small.key(key(KEY_ENTER), &config);
+    match small.key(key(KEY_RIGHT), &config) { Outcome::Changed(c) => assert_eq!(c.scale, Some(100)), other => panic!("{:?}", other) }
+    // Wm: the status names the row, and a new scale moves an open Settings window with the grid.
+    let mut wm = Wm::new(240, 75);
+    (wm.pixels, wm.scale) = ((2880, 1800), 150);
+    wm.key(alt_char('s'));
+    for _ in 0..SCREEN { wm.key(key(KEY_DOWN)); }
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().contains("SETTINGS=Screen:Scale"), "{}", wm.status());
+    assert!(matches!(wm.key(key(KEY_RIGHT)), Action::Settings(_)));
+    wm.rescale(180, 56, 200);
+    assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
+    let Mode::Settings(open) = &wm.mode else { panic!() };
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 17));
+}
+
+// The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from
+// Settings' screen page; the arrow drawn at any size keeps its hot spot, edge and fill.
+#[test]
+fn the_pointer_has_a_size_and_a_colour() {
+    use settings::{Outcome, Settings, SCREEN};
+    // The size: auto follows the scale, a chosen one does not.
+    assert_eq!(pointer::size(pointer::percent(None, 100)), (8, 12));
+    assert_eq!(pointer::size(pointer::percent(None, 150)), (12, 18));
+    assert_eq!(pointer::size(pointer::percent(Some(400), 150)), (32, 48));
+    assert_eq!(pointer::size(800), (64, 96));
+    // At 100% the arrow is the 8 × 12 bitmap; larger, each pixel takes the one under it, the tip at the hot spot.
+    for row in 0..12 { for col in 0..8 {
+        let want = match pointer::ARROW[row][col] { b'X' => Some(0), b'W' => Some(0xFF_FF_FF), _ => None };
+        assert_eq!(pointer::pixel((8, 12), 0, col, row), want, "{},{}", col, row);
+    } }
+    let fill = |size: (usize, usize), colour: usize| (0..size.1).flat_map(|r| (0..size.0).map(move |c| (c, r))).filter(|&(c, r)| pointer::pixel(size, colour, c, r) == Some(pointer::COLOURS[colour].1)).count();
+    assert_eq!(fill((8, 12), 0), 27);
+    assert_eq!(fill((16, 24), 0), 27 * 4, "twice as large: four times the fill");
+    assert_eq!(pointer::pixel((32, 48), 2, 0, 0), Some(0), "yellow's tip is its black edge");
+    assert_eq!(pointer::pixel((32, 48), 2, 8, 20), Some(0xFF_E0_00), "and its fill yellow");
+    assert_eq!(pointer::pixel((32, 48), 1, 8, 20), Some(0), "black's fill");
+    assert_eq!(pointer::pixel((32, 48), 1, 0, 0), Some(0xFF_FF_FF), "with a white edge");
+    assert_eq!(pointer::pixel((32, 48), 0, 31, 0), None, "beside the arrow");
+    // data/wm.conf's keys.
+    let (c, problems) = background::Config::parse("pointer = 300; pointer-colour = cyan\n");
+    assert!(problems.is_empty() && c.pointer == Some(300) && pointer::COLOURS[c.pointer_colour].0 == "cyan", "{:?}", problems);
+    assert_eq!(background::Config::parse(&c.format()).0, c);
+    let text = background::Config::default().format();
+    assert!(text.contains("pointer = auto\npointer-colour = white\n"), "{}", text);
+    let (_, problems) = background::Config::parse("pointer = 175; pointer-colour = blue");
+    assert!(problems.iter().any(|p| p.contains("pointer is auto, 100, 150")) && problems.iter().any(|p| p.contains("pointer-colour is white, black")), "{:?}", problems);
+    // Settings' screen page: ↓ to the pointer's rows; ← → step them, each going round; a click chooses and steps.
+    let config = background::Config::default();
+    let mut s = Settings::new(&config, (160, 50));
+    (s.pixels, s.scale) = ((1280, 800), 100);
+    for _ in 0..SCREEN { s.key(key(KEY_DOWN), &config); }
+    s.key(key(KEY_ENTER), &config);
+    s.key(key(KEY_DOWN), &config);
+    let mut now = config.clone();
+    let mut sizes = Vec::new();
+    for _ in 0..10 {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { sizes.push(c.pointer); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(sizes, [Some(100), Some(150), Some(200), Some(250), Some(300), Some(400), Some(500), Some(600), Some(800), None]);
+    match s.key(key(KEY_LEFT), &now) { Outcome::Changed(c) => assert_eq!(c.pointer, Some(800)), other => panic!("{:?}", other) }
+    s.key(key(KEY_DOWN), &now);
+    let mut colours = Vec::new();
+    for _ in 0..pointer::COLOURS.len() {
+        match s.key(key(KEY_RIGHT), &now) { Outcome::Changed(c) => { colours.push(pointer::COLOURS[c.pointer_colour].0); now = c; } other => panic!("{:?}", other) }
+    }
+    assert_eq!(colours, ["black", "yellow", "orange", "red", "green", "cyan", "magenta", "white"]);
+    assert_eq!(now.scale, None, "the scale stays");
+    let inner = s.area().inner();
+    match s.click(inner.x + 20, inner.y + 2, &now) { Outcome::Changed(c) => assert_eq!(c.pointer, Some(100)), other => panic!("{:?}", other) }
+    assert_eq!(s.screen_row, 1);
+    // The status names the row.
+    let mut wm = Wm::new(160, 50);
+    wm.key(alt_char('s'));
+    for _ in 0..SCREEN { wm.key(key(KEY_DOWN)); }
+    wm.key(key(KEY_ENTER));
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().contains("SETTINGS=Screen:Colour"), "{}", wm.status());
+}
+
+// The top bar without room for every item (000-APP-0061: a grid of larger cells, the title of the window in front):
+// the items with a key leave first, from the right, into `more ▼`'s menu, which does what they do.
+#[test]
+fn the_top_bar_folds_into_more() {
+    use desk::Bar;
+    let (items, moved) = desk::bar_layout(160, 0);
+    assert!(items.len() == 12 && moved.is_empty() && items[11] == (144, 16, Bar::Settings), "{:?}", items);
+    let (items, moved) = desk::bar_layout(160, 7);
+    assert_eq!((items.last().copied(), moved), (Some((144, 8, Bar::More)), Vec::from([Bar::Settings])), "a title of 7 cells");
+    let (items, moved) = desk::bar_layout(106, 0);
+    assert_eq!(moved, [Bar::Leave, Bar::List, Bar::Full, Bar::Fit, Bar::Settings]);
+    assert_eq!(items.iter().map(|i| i.2).collect::<Vec<_>>(), [Bar::Programs, Bar::Next, Bar::Programs, Bar::Run, Bar::Move, Bar::Close, Bar::Help, Bar::More]);
+    assert_eq!(items.last().copied(), Some((89, 8, Bar::More)));
+    let (items, moved) = desk::bar_layout(84, 0);
+    assert!(moved.contains(&Bar::Help) && items.last().unwrap().0 + items.last().unwrap().1 <= 84, "{:?} {:?}", items, moved);
+    // Drawn: the items that fit, `more ▼`, and the title at the right.
+    let draw = |wm: &mut Wm, cols: usize| {
+        let mut cells = vec![Cell::BLANK; cols * 33];
+        let mut grid = Grid::new(&mut cells, cols, 33);
+        wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+        (0..33).map(|y| (0..cols).map(|x| grid.get(x, y).ch).collect::<String>()).collect::<Vec<_>>()
+    };
+    let mut wm = Wm::new(106, 33);
+    wm.desk.add(text(1, "clock"));
+    let screen = draw(&mut wm, 106);
+    assert!(screen[0].starts_with(" wm │ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ more ▼ ") && screen[0].ends_with(" clock "), "{}", screen[0]);
+    // A click on it opens its menu under it; ↓ and Enter do the item, as its key does.
+    let click = |wm: &mut Wm, x: usize, y: usize| { let action = wm.pointer(x, y, 1, 0); wm.pointer(x, y, 0, 0); action };
+    click(&mut wm, 92, 0);
+    assert!(wm.status().starts_with("MODE=MORE") && wm.status().contains("MORE=Alt+Q leave"), "{}", wm.status());
+    let screen = draw(&mut wm, 106);
+    for (row, label) in ["Alt+Q leave", "Alt+L windows", "Alt+F full", "Alt+0 fit", "Alt+S settings"].iter().enumerate() {
+        assert!(screen[2 + row].contains(&format!("│ {}", label)), "{}: {}", label, screen[2 + row]);
+    }
+    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().contains("MORE=Alt+S settings"), "{}", wm.status());
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    // A click on its item does it; Alt+L closes the menu and does its own; Esc and a click elsewhere close it.
+    click(&mut wm, 92, 0);
+    let area = wm.more_area().unwrap();
+    click(&mut wm, area.x + 3, area.y + 2);
+    assert!(wm.status().starts_with("MODE=LIST"), "Alt+L windows from the menu: {}", wm.status());
+    wm.key(key(KEY_ESC));
+    click(&mut wm, 92, 0);
+    wm.key(alt_char('s'));
+    assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    click(&mut wm, 92, 0);
+    wm.key(key(KEY_ESC));
+    assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
+    click(&mut wm, 92, 0);
+    click(&mut wm, 50, 20);
+    assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
+    // At 160 cells the title leaves no room for Settings: it is in the menu, not under the title.
+    let mut wm = Wm::new(160, 33);
+    wm.desk.add(text(1, "fm"));
+    let screen = draw(&mut wm, 160);
+    assert!(screen[0].contains("│ Alt+0 fit │ more ▼ ") && screen[0].ends_with(" fm ") && !screen[0].contains("settings"), "{}", screen[0]);
 }

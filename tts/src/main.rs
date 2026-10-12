@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 // tts: speech synthesis in ring 3. Text (UTF-8) arrives in a page shared by the client; speech is synthesized
-// by a 16 kHz formant synthesizer, upsampled to 48 kHz stereo and streamed to audio_gw.
+// by a 16 kHz formant synthesizer, upsampled to 48 kHz stereo (a windowed-sinc filter) and streamed to audio_gw.
 mod dsp;
 mod synth;
 
@@ -18,16 +18,15 @@ use phonemes::{Ph, Unit};
 const RECEIVED_CAP: usize = 9;
 const MAX_UNITS: usize = 2048;
 
-// Upsampling 16 -> 48 kHz by linear interpolation, mono -> stereo.
-struct Upsampler { previous: i32, buffer: [i16; synth::FRAME * 6], error: bool }
+// 16 -> 48 kHz through a windowed-sinc filter (linear interpolation left the spectrum's images 20-30 dB below the
+// speech and dulled 6 kHz by 4 dB, 252-APP-0041), mono -> stereo.
+struct Upsampler { filter: dsp::Upsampler, buffer: [i16; synth::FRAME * 2 * dsp::UP], error: bool }
 
 impl Upsampler {
     fn push(&mut self, stream: &mut Stream, input: &[i16]) {
         let mut at = 0;
         for &sample in input {
-            let (a, b) = (self.previous, sample as i32);
-            for value in [(2 * a + b) / 3, (a + 2 * b) / 3, b] { self.buffer[at] = value as i16; self.buffer[at + 1] = value as i16; at += 2; }
-            self.previous = b;
+            for value in self.filter.run(sample) { self.buffer[at] = value; self.buffer[at + 1] = value; at += 2; }
         }
         if stream.write(&self.buffer[..at]).is_err() { self.error = true; }
     }
@@ -37,9 +36,10 @@ fn say(text: &str, voice: synth::Voice) -> Result<usize, usize> {
     let mut units = [Unit { ph: Ph::Pause(0), soft: false, stress: false }; MAX_UNITS];
     let count = text::parse(text, &mut units);
     let mut stream = Stream::new().map_err(|e| e.code())?;
-    let mut upsampler = Upsampler { previous: 0, buffer: [0; synth::FRAME * 6], error: false };
+    let mut upsampler = Upsampler { filter: dsp::Upsampler::new(), buffer: [0; synth::FRAME * 2 * dsp::UP], error: false };
     let mut samples = 0usize;
     synth::speak(&units[..count], voice, &mut |chunk| { samples += chunk.len(); upsampler.push(&mut stream, chunk); });
+    upsampler.push(&mut stream, &[0; dsp::TAPS / 2]); // the filter's delay: the last millisecond out
     stream.flush().map_err(|e| e.code())?;
     if upsampler.error { return Err(ERR_PEER); }
     Ok(samples * 1000 / dsp::RATE as usize)

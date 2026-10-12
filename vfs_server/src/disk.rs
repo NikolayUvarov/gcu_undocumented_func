@@ -1,10 +1,11 @@
-// Volume sectors through a block driver over IPC: a cache of 64 sectors with read-ahead and write-back. A changed
-// sector stays in the cache until it is evicted or the volume is flushed. Either writes every changed sector in LBA
-// order, runs of neighbours in one write (000-KRN-0078: one write a sector held writes to 1.6 MiB/s); a flush then
-// asks the drive to empty its own cache.
+// Volume sectors through a block driver over IPC: a cache of 64 sectors with read-ahead and write-back, and runs of
+// file data read past it in large requests. A changed sector stays in the cache until it is evicted or the volume is
+// flushed. Either writes every changed sector in LBA order, runs of neighbours in one write (000-KRN-0078: one write a
+// sector held writes to 1.6 MiB/s); a flush then asks the drive to empty its own cache.
 use crate::fat::{Sectors, SECTOR};
 use alloc::rc::Rc;
 use core::cell::RefCell;
+use mind::abi::BLOCK_MAX_SECTORS;
 use mind::block::Device;
 use mind::mem::Pages;
 
@@ -154,6 +155,37 @@ impl Sectors for Disk {
 
     fn discard(&mut self) { self.tags = [u32::MAX; LINES]; self.dirty = [false; LINES]; self.failed = false; }
 
+    // File data in requests of up to BLOCK_MAX_SECTORS, past the cache; then the cached sectors of the run over it,
+    // which are as new as the medium's or newer. Each request is asked like any other (a quiet or replaced drive is not
+    // read), and while mounting the unchanged sectors join the identity (the boot manifest is read this way).
+    fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool {
+        let count = out.len() / SECTOR;
+        let mut at = 0;
+        while at < count {
+            let (from, want) = (lba as u64 + at as u64, (count - at).min(BLOCK_MAX_SECTORS));
+            let chunk = &mut out[at * SECTOR..(at + want) * SECTOR];
+            let read = |device: &mut Device| device.read(from, want).ok().map(|data| {
+                let got = (data.len() / SECTOR).min(want);
+                chunk[..got * SECTOR].copy_from_slice(&data[..got * SECTOR]);
+                got
+            });
+            let Some(got) = self.ask(read) else { return false };
+            if got == 0 { return false; }
+            at += got;
+        }
+        for (index, &tag) in self.tags.iter().enumerate() {
+            if tag >= lba && ((tag - lba) as usize) < count { let i = (tag - lba) as usize; out[i * SECTOR..(i + 1) * SECTOR].copy_from_slice(&self.cache.as_slice()[index * SECTOR..(index + 1) * SECTOR]); }
+        }
+        if self.recording {
+            for (i, sector) in out.chunks_exact(SECTOR).enumerate() {
+                let at = lba + i as u32;
+                if self.identity.len() >= IDENTITY { break; }
+                if !self.tags.iter().zip(self.dirty).any(|(&tag, dirty)| tag == at && dirty) { self.note_read(at, sector.try_into().unwrap()); }
+            }
+        }
+        true
+    }
+
     fn sectors(&self) -> u64 { self.device.sectors() }
     fn writable(&self) -> bool { !self.device.read_only() }
 }
@@ -173,6 +205,7 @@ impl Sectors for Shared {
     fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool { self.0.borrow_mut().write(lba, data) }
     fn flush(&mut self) -> bool { self.0.borrow_mut().flush() }
     fn discard(&mut self) { self.0.borrow_mut().discard() }
+    fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool { self.0.borrow_mut().read_run(lba, out) }
     fn sectors(&self) -> u64 { self.0.borrow().sectors() }
     fn writable(&self) -> bool { self.0.borrow().writable() }
 }

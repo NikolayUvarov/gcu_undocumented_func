@@ -55,3 +55,25 @@ fn pauses_and_phrase_ends_fall_silent() {
         }
     }
 }
+
+/// No sound starts with a step (252-APP-0041): amplitudes changed once a frame (5 ms), so a burst, a fricative or a
+/// voice after silence rose from 0 to thousands within a sample, a click on small speakers (223 such onsets in the 24
+/// Russian sentences of scripts/voice_tts/sentences.tsv). They now move over 2 ms.
+#[test]
+fn sounds_start_without_a_step() {
+    let phrases = ["кот", "сок", "привет, мир. как дела?", "сегодня хорошая погода, не правда ли", "Говорит разум корабля. Все системы работают нормально, курс проложен.",
+                   "Запускаю файловый менеджер. Свободно восемь гигабайт памяти из шестнадцати.", "the quick brown fox jumps over the lazy dog.", "open the files"];
+    for phrase in phrases {
+        let mut units = [phonemes::Unit { ph: phonemes::Ph::Pause(0), soft: false, stress: false }; 2048];
+        let count = text::parse(phrase, &mut units);
+        let mut samples: Vec<i16> = Vec::new();
+        synth::speak(&units[..count], synth::Voice::default(), &mut |chunk| samples.extend_from_slice(chunk));
+        // After 10 ms of silence, the first three samples stay small.
+        for n in 160..samples.len() - 3 {
+            if samples[n] != 0 && samples[n - 160..n].iter().all(|&s| s == 0) {
+                let peak = samples[n..n + 3].iter().map(|&s| (s as i32).abs()).max().unwrap();
+                assert!(peak <= 2000, "{:?}: a step to {} at {} ms", phrase, peak, n / 16);
+            }
+        }
+    }
+}

@@ -10,6 +10,10 @@ impl Screen {
     pub fn new(info: &BootInfo) -> Option<Self> {
         (!info.fb_ptr.is_null()).then_some(Self { fb: info.fb_ptr, width: info.width, height: info.height, stride: info.stride })
     }
+    /// Pixels at `fb`, `stride` apart from row to row (a pixel window's surface).
+    /// # Safety
+    /// `fb` must map `stride * height` writable pixels for as long as the screen is used.
+    pub unsafe fn at(fb: *mut u32, width: usize, height: usize, stride: usize) -> Self { Self { fb, width, height, stride } }
     pub fn pixel(&self, x: usize, y: usize, color: u32) {
         if x < self.width && y < self.height { unsafe { core::ptr::write_volatile(self.fb.add(y * self.stride + x), color) } }
     }
@@ -30,6 +34,21 @@ impl Screen {
                 let lit = bits & (0x80 >> col) != 0;
                 let Some(pixel) = (if lit { Some(color) } else { background }) else { continue };
                 unsafe { core::ptr::write_volatile(self.fb.add((y + row) * self.stride + x + col), pixel) }
+            }
+        }
+    }
+    /// One character of the 8x16 font stretched over a cell of `width` × `height` pixels (wm's scale, 000-APP-0061):
+    /// each pixel takes the font's pixel under it; at 8 × 16 it is `glyph16`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn glyph_cell(&self, x: usize, y: usize, width: usize, height: usize, ch: char, color: u32, background: Option<u32>) {
+        if (width, height) == (8, 16) { return self.glyph16(x, y, ch, color, background); }
+        let rows = crate::font16::glyph(ch);
+        for py in 0..height.min(self.height.saturating_sub(y)) {
+            let bits = rows[py * 16 / height];
+            for px in 0..width.min(self.width.saturating_sub(x)) {
+                let lit = bits & (0x80 >> (px * 8 / width)) != 0;
+                let Some(pixel) = (if lit { Some(color) } else { background }) else { continue };
+                unsafe { core::ptr::write_volatile(self.fb.add((y + py) * self.stride + x + px), pixel) }
             }
         }
     }

@@ -19,7 +19,7 @@ import qemu_smoke
 sys.path.insert(0, str(ROOT / "scripts"))
 import release as release_tool  # noqa: E402
 import sign_manifest  # noqa: E402
-from qemu_smoke import MTOOLS_ENV, VM, files_check, fsck_volume, heap_used, require, task_rows
+from qemu_smoke import MTOOLS_ENV, VM, canon, files_check, fsck_volume, heap_used, require, screen_text, status_line, task_rows
 
 
 def main():
@@ -215,6 +215,7 @@ def run(args, booted):
         require(saved, "THE SYSTEM LOG OF ONE BOOT")
         require(saved, "LOG-PARTITION-CHECK")
         require(vm.command("write log:note.txt written on MIND CORE"), "WROTE")
+        log_tools_check(vm, name)
         require(vm.command("sync"), "OK")
         time.sleep(3)  # the journal's last save, flushed
         debug_mode(vm, name)
@@ -249,7 +250,39 @@ def run(args, booted):
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
-          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
+          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host; "
+          "log: in help, df, fsck and fm")
+
+
+def log_tools_check(vm, name):
+    """The tools on log: (211-APP-0013): help, df and fsck name it; fm lists it and shows the boot log in its viewer."""
+    require(vm.command("help ls"), "log: the boot disk's log partition")
+    assert re.search(r"log:\s.*FAT16", vm.command("df")), vm.command("df")
+    require(vm.command("fsck log:"), "clean")
+    def keys(data, text):
+        vm.send_bytes(data)
+        return status_line(vm, text)
+    vm.send("fm\n")
+    status_line(vm, "[FM] READY")
+    keys(b"\x1b[12;3~", "DIALOG=VOLUME")  # Alt+F2: A:, ram:, log: (no model disk here)
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\x1b[B", "DIALOG=VOLUME")
+    keys(b"\r", "RIGHT=/log: BRIEF")
+    line = keys(b"\t", "ACTIVE=R")
+    for _ in range(8):
+        if f"CURRENT={name} " in line:
+            break
+        line = keys(b"\x1b[B", "ACTIVE=R")
+    require(line, f"CURRENT={name} ")
+    keys(b"\x1bOR", "VIEW=1")  # F3
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial()
+    assert any(canon("THE SYSTEM LOG OF ONE BOOT") in row for row in screen), screen
+    keys(b"\x1b", "VIEW=0")
+    vm.send_bytes(b"\x1b[21~")  # F10
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
 
 
 if __name__ == "__main__":
