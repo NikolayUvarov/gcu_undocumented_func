@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The host tests of CI's build job and of scripts/ci_local.sh: each compile and each test fails the run (175-KRN-0046).
-# MIND_TEST_OUT: where the test binaries go (default /tmp).
+# MIND_TEST_OUT: where the test binaries go (default $TMPDIR, else /tmp).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-OUT=${MIND_TEST_OUT:-/tmp}
+OUT=${MIND_TEST_OUT:-${TMPDIR:-/tmp}}
 rustc --edition=2021 --test tests/runtime.rs -o "$OUT/runtime-tests"
 "$OUT/runtime-tests"
 rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
