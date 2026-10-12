@@ -175,6 +175,7 @@ pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, f
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
 pub const REQUEST_SHELL: u32 = 1048576; // a client of the shell's commands (idl/shell.wit) in SLOT_SHELL: a window manager (211-APP-0044)
+pub const REQUEST_BATTERY: u32 = 2097152; // the battery service's client in SLOT_BATTERY (211-KRN-0090, for 211-PRT-0008)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).

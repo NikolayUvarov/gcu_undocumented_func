@@ -77,7 +77,7 @@ impl ShellHost<'_> {
         }
         let bytes = core::mem::replace(&mut shell.term.capture, outer).unwrap_or_default();
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        if !keep { for &byte in &bytes { shell.term.print_char(byte); } }
+        if !keep { for &byte in &bytes { shell.term.print_char(byte); } shell.term.render(None); }
         if let Some(reason) = text.lines().find_map(|l| l.strip_prefix("ERROR: ")) { return Err(reason.to_string()); }
         // How the program ended (issue 166): a code other than 0, a kill or a fault is a failure.
         match program.filter(|&pid| !mind::process::alive(pid)).and_then(control::exit_status) {
@@ -157,7 +157,8 @@ impl Host for ShellHost<'_> {
             _ => return None,
         })
     }
-    fn print(&mut self, text: &str) { let _ = writeln!(self.shell.term, "{}", text); }
+    // Shown at once: the shell's screen is otherwise drawn only between commands, and a long script looked hung (176-KRN-0087).
+    fn print(&mut self, text: &str) { let _ = writeln!(self.shell.term, "{}", text); self.shell.term.render(None); }
     fn interrupted(&mut self) -> bool { self.stop || { self.stop = interrupted(self.shell); self.stop } }
 }
 

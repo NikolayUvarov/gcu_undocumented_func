@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -659,10 +659,13 @@ def hardware_report_check(vm):
 
 
 def normal_suite(vm):
-    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207).
-    assert "gpio" not in vm.services()
+    # No pin controller on QEMU (virt with ACPI has none, issue 206): gpio is not started (issue 207). No ECDT either:
+    # no embedded controller, so no battery service (211-PRT-0008).
+    services = vm.services()
+    assert "gpio" not in services and "battery" not in services, services
     if vm.arch == "aarch64":
         require(vm.log, "[INIT] gpio NOT STARTED: NO DEVICE")  # init's lines reach the serial line there
+        require(vm.log, "[INIT] battery NOT STARTED: NO DEVICE")
     else:
         # 211-PRT-0003: the tick from the LAPIC timer, measured on the ACPI PM timer (QEMU's chipsets have one).
         tick = re.search(r"MIND CORE KERNEL: TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC \d+ MHZ; PIT (NOT )?COUNTING\n",
@@ -1237,6 +1240,12 @@ def msh_check(vm):
     vm.expect("SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)")
     vm.send_bytes(b"n")
     require(vm.expect("MIND> "), "MSH: ram:w.msh: NOT RUN")
+    # What a script prints is on the screen at once, not when it ends: a long run looked hung (176-KRN-0087).
+    vm.send('print("SHOWN " + "WHILE IT RUNS"); sleep(4000)\n')  # the typed line does not hold the text itself
+    time.sleep(2)
+    screen = screen_text(vm)
+    assert any("SHOWN WHILE IT RUNS" in row for row in screen), screen
+    vm.expect("MIND> ")
     # Ctrl+Z (0x1A on the serial line) stops a script in an endless loop.
     vm.send('msh -c "let i = 0; while true { i = i + 1 }"\n')
     time.sleep(1)
@@ -1528,7 +1537,9 @@ def diag_check(vm):
     steps, where = int(done[1]), done[4]
     summary = vm.command(f"cat {where}/summary.txt")
     assert len(re.findall(r"^\d\d ok \d+ ms ", summary, re.M)) == steps and "BUILD:" in summary and "RUNNING NOW" not in summary, summary[-3000:]
-    require(vm.command(f"cat {where}/16-kbench.txt"), "kbench: 4 measurements, 0 failed")
+    kbench = re.search(r"^\d\d ok \d+ ms  (\d\d-kbench\.txt)", summary, re.M)  # its number moves as steps are added
+    assert kbench, summary[-3000:]
+    require(vm.command(f"cat {where}/{kbench[1]}"), "kbench: 4 measurements, 0 failed")
     require(vm.command("msh --check diag/full.msh"), "OK, REQUIRES: files sysinfo log lifecycle network camera")
     print(f"PASS: diag/quick.msh: {steps} steps in {done[3]} s, each in its file under {where} with summary.txt; diag/full.msh accepted", flush=True)
 
@@ -3921,14 +3932,23 @@ def vfs_suite(args):
             stopped = re.findall(r"^STOPPED (\w+)$", output, re.M)
             assert "REBOOTING..." in output and stopped[-1] == "logd" and "init" not in stopped and "shell" not in stopped, output
             assert stopped.index("vfs_server") < stopped.index(BOOT_DRIVER) < stopped.index("compositor"), stopped
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            # Without data/pause.txt the boot waits for no photo (211-KRN-0089).
+            boot = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            assert "A PAUSE OF" not in boot, boot
             vm.expect("MIND> ", timeout=60)
+            assert "A PAUSE OF" not in vm.command("dmesg -s init")
             require(vm.command("cat data/reboot.txt"), "kept")
+            require(vm.command("write data/pause.txt 1"), "WROTE 2 BYTES")
             vm.send("reboot -f\n")
             output = vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=60)
             assert "REBOOTING..." in output and "STOPPED" not in output, output
-            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            # With it, the bootloader's two pauses and init's, of the seconds it names.
+            boot = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
+            require(boot, "MIND CORE BOOT: A PAUSE OF 1 S: THE LINES ABOVE ARE THE FIRMWARE'S")
+            require(boot, "A PAUSE OF 1 S FOR A PHOTO OF THESE LINES")
             vm.expect("MIND> ", timeout=60)
+            require(vm.command("dmesg -s init"), "[INIT] A PAUSE OF 1 S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT")
+            vm.command("rm data/pause.txt")
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
             # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
             require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
@@ -6942,7 +6962,11 @@ def usb_suite(vm):
     # A boot mouse plugged in at run time (211-DRV-0003): its layout from the descriptor in the report protocol, its
     # first reports logged, its movement to the focused program.
     vm.qmp("device_add", driver="usb-mouse", bus="xhci.0", port="1.3", id="mouse")
-    require(vm.service_logs("usb_hid", "MOUSE"), "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    logs = vm.service_logs("usb_hid", "MOUSE")
+    require(logs, "[USB_HID] 0627:0001 MOUSE: ID 0, X AT BIT 8 (8 BITS), Y AT BIT 16 (8 BITS), REPORT PROTOCOL")
+    # Its report descriptor asked for and read at the length its configuration names (211-DRV-0008).
+    sizes = [int(n) for n in re.findall(r"\[USB_HID\] 0627:0001 REPORT DESCRIPTOR: (\d+) BYTES", logs)]
+    assert sizes and all(0 < n < 1024 for n in sizes) and "NOT IN THE CONFIGURATION" not in logs, logs
     vm.send("run keys\n")
     vm.expect("[KEYS] READY")
     time.sleep(.3)
@@ -7315,18 +7339,23 @@ def bar_move_check(args, disk):
         shutil.copytree(disk, volume, ignore=shutil.ignore_patterns("smoke-*"))
         (volume / "kernel.elf").write_bytes(Path(args.bar_kernel).read_bytes())
         sign_manifest.sign_volume(volume)
-        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58"])
+        vm = VM(args, str(volume), prompt=False, extra=["-device", "sdhci-pci", "-netdev", "user,id=n9", "-device", "rtl8139,netdev=n9,mac=52:54:00:12:34:58",
+                                                         "-device", "edu"])
         try:
-            out = vm.expect("READ THERE", timeout=60)
+            out = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=60)  # the test's lines come before init
             packed = re.search(r"PCI TEST: BAR 1 OF (\w+) PACKED AT ([0-9A-F]+), IN THE PAGE OF (\w+)", out)
             moved = re.search(r"PCI: BAR 1 OF (\w+) MOVED FROM ([0-9A-F]+) TO ([0-9A-F]+): ITS PAGE HELD REGISTERS OF (\w+)", out)
             granted = re.search(r"PCI TEST: GRANTED AT ([0-9A-F]+), MAC ([0-9A-F:]+) READ THERE", out)
             assert packed and moved and granted, out[-3000:]
             assert moved[2] == packed[2] and moved[4] == packed[3] and int(moved[3], 16) % 4096 == 0 and int(moved[3], 16) >> 12 != int(packed[2], 16) >> 12, out[-3000:]
             assert granted[1] == moved[3] and granted[2] == "52:54:00:12:34:58", out[-3000:]
+            # 550-KRN-0091: the edu device's MSI (it has no MSI-X), granted: on, at the local APIC, with its vector.
+            msi = re.search(r"PCI TEST: MSI OF (\w+) AS LINE (\d+): (ON|OFF), ADDRESS ([0-9A-F]+), DATA ([0-9A-F]+)", out)
+            assert msi and msi[3] == "ON" and int(msi[4], 16) >> 20 == 0xFEE and int(msi[5], 16) == 0x40 + int(msi[2]) - 16, out[-3000:]
         finally:
             vm.close()
-    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there", flush=True)
+    print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there; "
+          f"a device's MSI is programmed when granted (line {msi[2]}, data {msi[5]})", flush=True)
 
 
 def trial_check(args, disk):

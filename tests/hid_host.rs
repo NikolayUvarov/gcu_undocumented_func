@@ -122,6 +122,52 @@ fn report_ids_select_the_report() {
     assert_eq!(pointer_fields(events(&mouse, &[2, 0, 1, 2, 0])[0]), (0, 1, 2, 0));
 }
 
+// 211-DRV-0008: a mouse with 16-bit X and Y that moved only sideways on the MacBook Pro, its reports
+// [buttons, X low, X high, Y low, Y high, wheel] read with the boot layout.
+fn mouse_16(page_after_usages: bool) -> Vec<u8> {
+    let mut d = vec![0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x09, 0x01, 0xa1, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x05, 0x15, 0x00, 0x25, 0x01,
+        0x95, 0x05, 0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x03, 0x81, 0x01];
+    if page_after_usages { d.extend_from_slice(&[0x09, 0x30, 0x09, 0x31, 0x05, 0x01]); } else { d.extend_from_slice(&[0x05, 0x01, 0x09, 0x30, 0x09, 0x31]); }
+    d.extend_from_slice(&[0x16, 0x01, 0x80, 0x26, 0xff, 0x7f, 0x75, 0x10, 0x95, 0x02, 0x81, 0x06, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7f, 0x75, 0x08,
+        0x95, 0x01, 0x81, 0x06, 0xc0, 0xc0]);
+    d
+}
+
+#[test]
+fn a_mouse_with_16_bit_x_and_y_moves_both_ways() {
+    for page_after_usages in [false, true] {
+        let mouse = Pointer::parse(&mouse_16(page_after_usages)).expect("layout");
+        assert_eq!((mouse.x.offset, mouse.x.size, mouse.y.offset, mouse.y.size), (8, 16, 24, 16), "page after its usages: {}", page_after_usages);
+        assert_eq!(mouse.wheel.map(|w| (w.offset, w.size)), Some((40, 8)));
+        assert_eq!(pointer_fields(events(&mouse, &[0, 3, 0, 0xfc, 0xff, 0])[0]), (0, 3, -4, 0));
+    }
+    // The boot layout takes X's high byte for Y and Y's low byte for the wheel: the pointer went only sideways.
+    assert_eq!(pointer_fields(events(&Pointer::boot(), &[0, 3, 0, 0xfc, 0xff, 0])[0]), (0, 3, 0, 4));
+}
+
+#[test]
+fn a_descriptor_cut_short_keeps_what_came_before() {
+    let mut descriptor = MOUSE.to_vec();
+    descriptor.push(0x26); // a Logical Maximum without its two bytes
+    let mouse = Pointer::parse(&descriptor).expect("layout");
+    assert_eq!(mouse, Pointer::parse(&MOUSE).expect("layout"));
+}
+
+#[test]
+fn the_report_descriptor_length_comes_from_the_configuration() {
+    // QEMU's usb-mouse: configuration, interface 0 (HID, boot mouse), its HID descriptor (report descriptor 52 bytes), endpoint.
+    let mouse = [9, 2, 34, 0, 1, 1, 0, 0xa0, 50, 9, 4, 0, 0, 1, 3, 1, 2, 0, 9, 0x21, 1, 0, 0, 1, 0x22, 52, 0, 7, 5, 0x81, 3, 4, 0, 10];
+    assert_eq!(report_descriptor_length(&mouse, 0), Some(52));
+    assert_eq!(report_descriptor_length(&mouse, 1), None, "no interface 1");
+    // A keyboard and a mouse in one device: each interface's own HID descriptor; a cut-off one names nothing.
+    let mut two = mouse[..27].to_vec();
+    two[2] = 59;
+    two.extend_from_slice(&[9, 4, 1, 0, 1, 3, 1, 2, 0, 9, 0x21, 0x11, 1, 0, 1, 0x22, 0x2c, 1, 7, 5, 0x82, 3, 6, 0, 10]);
+    assert_eq!(report_descriptor_length(&two, 1), Some(300));
+    assert_eq!(report_descriptor_length(&two, 0), Some(52));
+    assert_eq!(report_descriptor_length(&mouse[..25], 0), None);
+}
+
 // 211-DRV-0018: Wellspring packets as the MacBook Pro's trackpad sends them in its multitouch mode: a 30-byte header with
 // the button at byte 15, then 28 bytes a finger (X at 2, Y at 4, upwards; the touch's major axis at 16).
 fn packet(button: bool, fingers: &[(i16, i16)]) -> Vec<u8> {

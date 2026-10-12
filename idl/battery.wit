@@ -1,0 +1,28 @@
+/// The battery service (`battery`, 211-PRT-0008): the only holder of the embedded controller's two ports, which `init`
+/// gives it when the ACPI tables name an embedded controller (ECDT) with an SMBus host controller in it (ACPI0001's
+/// `_EC`). Through that host it reads the Smart Battery System (Smart Battery Data 1.1): the battery at SMBus address
+/// 0x0B, the manager at 0x0A and the charger at 0x09. It only reads, and any client may ask.
+package mind:battery@1.0.0;
+
+interface battery {
+    /// `no-battery`: no Smart Battery answers; `unavailable`: the controller did not answer the last reading.
+    enum error { no-battery, unavailable }
+
+    /// The battery as last read (every 5 s, at once after a change of the power source).
+    /// - `on-ac`: the machine runs from the mains: the charger's AC_PRESENT where it answers, else the battery is not
+    ///   discharging (`ac-from-charger` says which).
+    /// - `charging`, `discharging`, `full`: from BatteryStatus.
+    /// - `percent`: RelativeStateOfCharge, 0 to 100.
+    /// - `to-empty`, `to-full`: AverageTimeToEmpty and AverageTimeToFull in minutes; 65535 when not discharging or not
+    ///   charging.
+    /// - `millivolts`; `milliamps`: the current's size, its direction given by `charging` and `discharging`.
+    /// - `remaining`, `full-capacity`, `design`: in mAh, or with `tens-of-mwh` in tens of mWh (BatteryMode).
+    /// - `cycles`: CycleCount; `age-ms`: how long ago the service read it.
+    record status {
+        on-ac: bool, ac-from-charger: bool, charging: bool, discharging: bool, full: bool, percent: u8,
+        to-empty: u16, to-full: u16, millivolts: u16, milliamps: u16, remaining: u16, full-capacity: u16, design: u16,
+        tens-of-mwh: bool, cycles: u16, age-ms: u32,
+    }
+
+    status: func() -> result<status, error>;
+}

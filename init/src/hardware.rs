@@ -78,6 +78,22 @@ pub fn report(keeper: usize) {
     let _ = mind::ipc::drop_cap(client);
 }
 
+/// The embedded controller's command/status and data ports (the ECDT) and its SMBus host's base (ACPI0001's `_EC` in the
+/// DSDT or an SSDT), for the battery service (211-PRT-0008); None where the tables do not name both.
+pub fn battery_place() -> Option<(u16, u16, u8)> {
+    let (mut ports, mut base) = (None, None);
+    for index in 0..256 {
+        let Some(table) = object(PLATFORM_ACPI_TABLE, index) else { break };
+        let bytes = table.1.as_slice();
+        let length = bytes.get(4..8).map_or(0, |l| u32::from_le_bytes(l.try_into().unwrap()) as usize).min(bytes.len());
+        if bytes.starts_with(b"ECDT") { ports = ports.or_else(|| mind::battery::ecdt_ports(&bytes[..length])); }
+        if (bytes.starts_with(b"DSDT") || bytes.starts_with(b"SSDT")) && length > 36 { base = base.or_else(|| mind::battery::smbus_base(&bytes[36..length])); }
+        done(table);
+    }
+    let (command, data) = ports?;
+    Some((command, data, base?))
+}
+
 // Every ACPI table to log:acpi/<SIG>.bin (repeated signatures numbered: SSDT1.bin, SSDT2.bin, …).
 fn tables(files: Endpoint, root: u32) {
     let Ok(Ok(dir)) = vfs::open_dir(files, root, "acpi", true) else { return };

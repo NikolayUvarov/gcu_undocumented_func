@@ -4,6 +4,7 @@
 use super::board;
 
 pub const PORTS: [(u16, u16); 0] = [];
+pub fn ports(_start: usize, _end: usize) -> bool { false }
 /// Registers of platform device `index` (PLATFORM_UART, PLATFORM_RTC, PLATFORM_PINS_*): (base, bytes), if the board has it.
 pub fn mmio(index: usize) -> Option<(usize, usize)> {
     use crate::abi::{PLATFORM_PINS_BCM2711, PLATFORM_PINS_MAX, PLATFORM_PINS_PL061};

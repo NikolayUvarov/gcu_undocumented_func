@@ -216,6 +216,33 @@ pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
 
 /// Points MSI-X table entry `entry` (mapped uncached by the caller) at MSI line `index` (the arch's message), unmasks
 /// it and enables MSI-X, which turns the legacy line off. None where the platform has no MSI target.
+/// Aims the device's MSI (one message, Multiple Message Enable 0) at MSI vector `index`, unmasked, and turns it on; None
+/// without the capability (550-KRN-0091: the BCM4331 has MSI, not MSI-X).
+pub unsafe fn msi(device: &Device, index: usize) -> Option<()> {
+    let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
+    let cap = capability(device, 0x05)?;
+    let header = config(device, cap);
+    let control = header >> 16;
+    let (wide, masking) = (control & 0x80 != 0, control & 0x100 != 0);
+    enable(device);
+    write(device.bus, device.device, device.function, cap + 4, target as u32);
+    let data_at = if wide { write(device.bus, device.device, device.function, cap + 8, (target >> 32) as u32); cap + 12 } else { cap + 8 };
+    write(device.bus, device.device, device.function, data_at, data & 0xFFFF);
+    if masking { write(device.bus, device.device, device.function, data_at + 4, 0); }
+    write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control & !0x70) | 1) << 16);
+    Some(())
+}
+
+/// The device's MSI as programmed: enabled, address, data (the test kernel's check).
+#[cfg(feature = "bar-move-test")]
+pub unsafe fn msi_state(device: &Device) -> Option<(bool, u64, u32)> {
+    let cap = capability(device, 0x05)?;
+    let control = config(device, cap) >> 16;
+    let low = config(device, cap + 4) as u64;
+    let (address, data) = if control & 0x80 != 0 { (low | (config(device, cap + 8) as u64) << 32, config(device, cap + 12)) } else { (low, config(device, cap + 8)) };
+    Some((control & 1 != 0, address, data & 0xFFFF))
+}
+
 pub unsafe fn msix(device: &Device, entry: u16, index: usize) -> Option<()> {
     let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
     let cap = capability(device, 0x11)?;
