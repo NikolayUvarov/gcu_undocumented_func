@@ -4,7 +4,7 @@
 
 ## Problem
 
-The drivers track's request (`requests-KRN.md`, 2026-10-12, for 550-DRV-0025, stage 4 after [550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md) of the MacBook Pro's Wi-Fi): to receive frames, the 802.11 core's DMA engines write them into rings in memory and raise an interrupt. `init` gave `bcm_wifi` only BAR0 and a read-only VFS client. The request:
+The drivers track's request (`requests-KRN.md`, 2026-10-12, for 550-DRV-0025, stage 4 after [550-DRV-0024](../issues-done/550-DRV-0024-bcm4331-phy-and-radio.done) of the MacBook Pro's Wi-Fi): to receive frames, the 802.11 core's DMA engines write them into rings in memory and raise an interrupt. `init` gave `bcm_wifi` only BAR0 and a read-only VFS client. The request:
 
 - `SLOT_MEM`: one physically contiguous DMA region of 512 KiB below 4 GiB;
 - `SLOT_IRQ`: the function's MSI (capability at 0x48, one vector, 64-bit), or its INTx line where MSI is not available.
@@ -36,4 +36,4 @@ The kernel could aim only MSI-X entries (`PLATFORM_DEVICE_MSIX`), and the BCM433
 
 ## Related
 
-[550-DRV-0024](550-DRV-0024-bcm4331-phy-and-radio.md), [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), [docs/api/README.md](../docs/api/README.md).
+[550-DRV-0024](../issues-done/550-DRV-0024-bcm4331-phy-and-radio.done), [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), [docs/api/README.md](../docs/api/README.md).
