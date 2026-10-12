@@ -20,6 +20,8 @@ Why the descriptor gave no X and Y, as read from the code:
 
 Which of these struck this mouse is not known: its descriptor was not logged.
 
+**The second run** (the maintainer, 2026-10-12, `fast-test` 3ab50c0, with the changes below): the mouse still moved only sideways, and the log said why: `10C4:8105 REPORT DESCRIPTOR: 0 BYTES`. Asked for up to 1024 bytes, the mouse sent none. Its firmware probably reads only wLength's low byte, and 1024 is 0x400. Windows and Linux ask for the length that the HID descriptor in the configuration descriptor names, so the mouse works there. Before the first change `usb_host` reported the 1024 bytes asked, so the empty answer looked like a descriptor followed by stale bytes.
+
 A second device there, 1A81:1006 (a low-speed keyboard and mouse), fails its requests after Configure Endpoint. `usb_hid` gave the failing interface back and claimed it again at once, so its log filled with that interface, many times a second.
 
 ## Plan
@@ -37,11 +39,12 @@ A second device there, 1A81:1006 (a low-speed keyboard and mouse), fails its req
   - `mind::hid` keeps what came before an item cut short;
   - usages given without a page take the page in force at the main item, back to the first already on it, as Linux's `hid-core` does;
   - `usb_hid` logs a HID interface's report descriptor (up to 160 bytes) when it is first set up, and why it fell back to the boot protocol: no X and Y in the descriptor, or the descriptor not read.
+  - `usb_hid` asks for the report descriptor at the length its HID descriptor names. It finds that length in the configuration descriptor, read at its own length: 9 bytes, then wTotalLength. Without one it asks for 1024 bytes, then 255 if nothing came.
 - **A failed interface.** It stays claimed and is tried again every 5 s, at most 5 times, while the other interfaces are claimed and served. A device that is gone is given back at once.
 - **Test.**
   - The QEMU `usb` suite plugs in a boot mouse at run time and checks the layout, the logged report and the movement in `keys`.
   - It also checks that the descriptors logged are shorter than the 1024 bytes asked. Before the change, QEMU's mouse and tablet logged 1024; after it, 52 and 74.
-  - `tests/hid_host.rs` reads the descriptor of a mouse with 16-bit X and Y, with the page before and after its usages, and its report `[00, 03, 00, FC, FF, 00]` as +3 and −4. The test checks that a descriptor cut short keeps its layout.
+  - `tests/hid_host.rs` reads the descriptor of a mouse with 16-bit X and Y, with the page before and after its usages, and its report `[00, 03, 00, FC, FF, 00]` as +3 and −4. The test checks that a descriptor cut short keeps its layout. It also finds each interface's report descriptor length in configuration descriptors: QEMU's mouse, and a device with two interfaces.
 
 ## Acceptance criteria
 

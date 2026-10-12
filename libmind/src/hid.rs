@@ -191,6 +191,30 @@ impl Pointer {
     }
 }
 
+/// The length of interface `number`'s report descriptor: the HID descriptor (type 0x21) after its interface descriptor
+/// (alternate setting 0) in a configuration descriptor names it. Windows and Linux ask for that many bytes, and a
+/// mouse whose firmware reads only wLength's low byte answered a request for 1024 (0x400) with nothing (211-DRV-0008).
+pub fn report_descriptor_length(config: &[u8], number: u8) -> Option<u16> {
+    let (mut at, mut ours) = (0, false);
+    while at + 2 <= config.len() {
+        let (length, kind) = (config[at] as usize, config[at + 1]);
+        if length < 2 { break; }
+        match kind {
+            4 => ours = config.get(at + 2) == Some(&number) && config.get(at + 3) == Some(&0),
+            0x21 if ours => {
+                // bNumDescriptors at 5, then a type and a length for each.
+                for k in 0..*config.get(at + 5)? as usize {
+                    let entry = config.get(at + 6 + 3 * k..at + 9 + 3 * k)?;
+                    if entry[0] == 0x22 { return Some(u16::from_le_bytes([entry[1], entry[2]])); }
+                }
+            }
+            _ => {}
+        }
+        at += length;
+    }
+    None
+}
+
 /// Apple's trackpads of 2011-2013 (Wellspring 5 to 7A: MacBook Pro 8 to 10, MacBook Air 4 to 5) in their multitouch
 /// mode (211-DRV-0018). After their mode switch (`WELLSPRING_MODE`, a feature report to interface 0) they send each
 /// touch's fingers on the vendor interface: a 30-byte header with the built-in button at byte 15, then 28 bytes a
