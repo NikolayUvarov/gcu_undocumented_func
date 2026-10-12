@@ -26,6 +26,7 @@ use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
 use policy::{Access, Policy};
+use mind::network::BADGE_OPERATOR;
 use socket::{Error, Protocol};
 
 const RECEIVED: usize = 9;
@@ -176,7 +177,7 @@ impl Device for Card {
 enum Kind { Udp, Tcp }
 // A client's socket: its interface (`link`) and its handle in that interface's socket set.
 #[derive(Clone, Copy)]
-struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32 }
+struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64 }
 
 enum Waiting {
     Ping { call: wire::Call, link: usize, sequence: u16, sent: u64, deadline: u64 },
@@ -368,7 +369,7 @@ impl Stack {
         let free = self.slots.iter().position(Option::is_none);
         let (false, Some(index)) = (full, free) else { self.link(link).sockets.remove(handle); return Err(Error::Limit) };
         self.generations[index] = (self.generations[index] + 1) & 0xFF_FFFF;
-        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index] });
+        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0 });
         Ok(index)
     }
     fn free(&mut self, index: usize) {
@@ -378,6 +379,28 @@ impl Stack {
             Kind::Udp => { link.sockets.remove(slot.handle); }
             Kind::Tcp => { link.sockets.get_mut::<tcp::Socket>(slot.handle).close(); self.closing.push((slot.link, slot.handle, now_ms())); }
         }
+    }
+    // The open sockets from table index `start` that a client may see (`only` its badge's, None every one), for
+    // socket.wit 2.4 `sockets`.
+    fn list(&self, start: u32, only: Option<u16>) -> List<socket::SocketInfo, 32> {
+        let mut list = List::default();
+        for index in (start as usize).min(SOCKETS)..SOCKETS {
+            let Some(slot) = self.slots[index] else { continue };
+            if only.is_some_and(|badge| badge != slot.owner.1) { continue; }
+            let Some(link) = self.links[slot.link].as_ref() else { continue };
+            let (protocol, local_port, remote, state) = match slot.kind {
+                Kind::Udp => (Protocol::Udp, link.sockets.get::<udp::Socket>(slot.handle).endpoint().port, None, socket::TcpState::None),
+                Kind::Tcp => {
+                    let tcp = link.sockets.get::<tcp::Socket>(slot.handle);
+                    (Protocol::Tcp, tcp.local_endpoint().map_or(0, |e| e.port), tcp.remote_endpoint(), tcp_state(tcp.state()))
+                }
+            };
+            let (remote_address, remote_port) = remote.map_or((0, 0), |e| { let IpAddress::Ipv4(address) = e.addr; (u32::from(address), e.port) });
+            let info = socket::SocketInfo { id: self.id(index), protocol, card: link.card.index as u8, local_port, remote_address, remote_port, state,
+                                            pid: slot.owner.0, badge: slot.owner.1, sent: slot.sent, received: slot.received };
+            if !list.push(info) { break; }
+        }
+        list
     }
     // Sockets of clients that ended.
     fn reap(&mut self) {
@@ -440,7 +463,18 @@ impl Stack {
     // Answers one request; returns the bytes it moved (sent, received). `source` tells which datagrams the client may see.
     fn handle(&mut self, request: socket::Request, call: wire::Call, owner: (u64, u16), source: &dyn Fn(u32, u16) -> bool) -> (usize, usize) {
         let mut moved = (0, 0);
+        // The socket the request moves data through: what it moved is counted on it too (socket.wit 2.4).
+        let through = match &request {
+            socket::Request::UdpSend { socket: id, .. } | socket::Request::UdpReceive { socket: id } | socket::Request::TcpSend { socket: id, .. }
+            | socket::Request::TcpReceive { socket: id, .. } => Some(*id),
+            _ => None,
+        };
         let _ = match request {
+            socket::Request::Sockets { start } => {
+                let only = (owner.1 != BADGE_OPERATOR).then_some(owner.1);
+                let list = self.list(start, only);
+                socket::reply_sockets(call, Ok(list.as_slice()))
+            }
             socket::Request::Config => socket::reply_config(call, self.config().as_ref().ok_or(Error::NoNetwork)),
             socket::Request::Interfaces => {
                 let mut list = List::<socket::Interface, 4>::default();
@@ -538,6 +572,13 @@ impl Stack {
             // Policy requests are answered in main.
             _ => Ok(()),
         };
+        if let Some(id) = through {
+            let index = (id & 0xFF) as usize;
+            if let Some(slot) = (1..=SOCKETS).contains(&index).then(|| self.slots[index - 1].as_mut()).flatten().filter(|s| s.owner == owner) {
+                slot.sent += moved.0 as u64;
+                slot.received += moved.1 as u64;
+            }
+        }
         moved
     }
 
@@ -643,5 +684,16 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::PolicyUsage { .. } => socket::reply_policy_usage(call, Err(error)),
         socket::Request::Interfaces => socket::reply_interfaces(call, Err(error)),
         socket::Request::Offload { .. } => socket::reply_offload(call, Err(error)),
+        socket::Request::Sockets { .. } => socket::reply_sockets(call, Err(error)),
+    }
+}
+
+// smoltcp's TCP state as socket.wit 2.4 names it.
+fn tcp_state(state: tcp::State) -> socket::TcpState {
+    use socket::TcpState as S;
+    match state {
+        tcp::State::Closed => S::Closed, tcp::State::Listen => S::Listen, tcp::State::SynSent => S::SynSent, tcp::State::SynReceived => S::SynReceived,
+        tcp::State::Established => S::Established, tcp::State::FinWait1 => S::FinWait1, tcp::State::FinWait2 => S::FinWait2,
+        tcp::State::CloseWait => S::CloseWait, tcp::State::Closing => S::Closing, tcp::State::LastAck => S::LastAck, tcp::State::TimeWait => S::TimeWait,
     }
 }

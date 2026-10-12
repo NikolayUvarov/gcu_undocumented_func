@@ -5371,6 +5371,13 @@ def net_suite(args, disk):
         for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
             require(log, line)
         policy_edit_check(vm, web_port)
+        # The stack's sockets (000-NET-0013, socket.wit 2.4): a grant lists its own open connection, established, with
+        # the address, port, badge and the bytes it moved; a program without a grant lists nothing.
+        listed = vm.command(f"netcheck open:10.0.2.2:{web_port} sockets")
+        require(listed, f"NETCHECK open:10.0.2.2:{web_port} OK")
+        assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+\n", listed.replace("\r", "")), listed
+        require(listed, "NETCHECK 1 SOCKETS")
+        require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)

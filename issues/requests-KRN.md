@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (10 requests waiting, 2026-10-12, three of them for 750, one for 550-APP-0033; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-12, three of them for 750, one for 550-APP-0033, one for 109-NET-0010; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -218,3 +218,22 @@ The `wm` suite types its lines with no press lost in repeated runs, or a drop is
 ### Acceptance criteria
 
 With the station (or a stand-in service of the agreed interface in QEMU), `wifi` started from the shell and from `wm` holds the client in `SLOT_WIFI`, and `caps` shows it there.
+
+## A program started with no standard clients, for a parser per session (109-NET-0010)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [109-NET-0010](109-NET-0010-a-parser-per-session.md).
+
+### Problem
+
+B.6 gives each session its own parser. Today one `parse` process serves every program. Its successor is a `parse` started for one session (a download, an update check) and ended with it, holding only its own endpoint. `loader` cannot start such a process: every program it starts gets the standard clients (`loader/src/main.rs`, slots 2 to 6: `rtc`, `vfs_server`, `audio_gw`, the loader's spawn privilege, `tts`), and "the standard grants cannot be replaced".
+
+### Plan (a proposal; the kernel track decides)
+
+- A launch without the standard grants: a flag on a launch session (`loader.wit`, a minor version), allowed only to a holder the kernel track chooses.
+- The launcher gets the child's service endpoint back as a client, and the child holds its own endpoint and nothing else (`stat caps` shows it).
+- The child ends with its launcher's session: when the launcher ends, or when it stops the child.
+- Which programs may start such a parser (`download`, the updater) is the network track's part (109-NET-0010), with the request flag it needs from `KRN` and `APP`.
+
+### Acceptance criteria
+
+A test program starts a copy of `parse` this way. The copy's capabilities are its endpoint alone, the program gets an answer from it, and the copy ends when the program does.

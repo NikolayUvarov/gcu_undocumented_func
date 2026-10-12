@@ -1,6 +1,6 @@
 # 000-APP-0031 — `netstat`: the open connections, their state and their programs
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open · **Blocked by:** a list of the stack's sockets ([requests-NET.md](requests-NET.md)) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track D, G · **Constitution:** MC-11.6, MC-12.3
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open · **Blocked by:** [000-NET-0013](000-NET-0013-the-stacks-sockets.md) (the list of the stack's sockets) · **Main task:** — (the tools plan's phase T4, [docs/tools §5](../docs/tools/README.md)) · **Roadmap:** track D, G · **Constitution:** MC-11.6, MC-12.3
 
 ## Problem
 

@@ -103,6 +103,7 @@ mod idl {
     #[path = "../../libmind/src/idl/video.rs"] pub mod video;
     #[path = "../../libmind/src/idl/voice.rs"] pub mod voice;
     #[path = "../../libmind/src/idl/window.rs"] pub mod window;
+    #[path = "../../libmind/src/idl/wlanhw.rs"] pub mod wlanhw;
 }
 
 use abi::*;
@@ -351,7 +352,7 @@ fn every_receiver_survives_fuzzed_messages() {
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
         owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
-        owned!(video), owned!(voice), owned!(window),
+        owned!(video), owned!(voice), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
     let mut modules = generated_modules(); modules.sort();
@@ -436,6 +437,7 @@ types! {
     video: Error Camera Frame;
     voice: Action Order;
     window: Error Kind Placement Info;
+    wlanhw: Error Info Filter Sent;
 }
 
 /// libmind/src/idl, from the repository root where the host tests run.

@@ -29,3 +29,4 @@ pub mod vfs;
 pub mod video;
 pub mod voice;
 pub mod window;
+pub mod wlanhw;
