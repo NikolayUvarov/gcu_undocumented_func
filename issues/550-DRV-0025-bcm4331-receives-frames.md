@@ -1,6 +1,6 @@
 # 550-DRV-0025 — `bcm_wifi`, stage 4: frames received by DMA, the networks around listed from their beacons
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** open (the DMA region and the MSI granted by 550-KRN-0091; stage 3 waits for its run) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-1.5, MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (written from a fact sheet; waits for a run on the MacBook Pro after stage 3's) · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-1.5, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -21,6 +21,16 @@ The register facts (the DMA engine's registers and descriptor format, the receiv
 ## Acceptance criteria
 
 On the MacBook Pro, one boot on request logs the networks around it, each with its SSID, BSSID, channel and signal, as the maintainer can compare with another device's list. The machine runs on, and the DMA engine stops before the core is reset. Evidence for this machine only (MC-12.1).
+
+## Progress
+
+**2026-10-12:** `bcm_wifi/src/stage4.rs`, run after stage 3 when stage 3 ends with the MAC suspended:
+- the 64-bit engine checked in the agent's I/O status (bit 12);
+- an 8 KiB-aligned ring of 128 descriptors (the BCM4331 copies bit 12 of the ring's address into its status, so it stays clear) and 128 buffers of 2390 bytes, frame offset 38, the PCIe translation 0x80000000 in the high words;
+- polled every 2 ms, without the interrupt: the PCIe interrupt routing for the core (PCI configuration 0x94) is a write `bcm_wifi` cannot make, and a scan does not need it;
+- the index kept one descriptor short of the engine's current one;
+- the station's own address cleared from the address match while receiving, so no frame is acknowledged; no probe request sent;
+- channels 1 to 13, 200 ms each, beacons and probe responses parsed for SSID, BSSID, channel, signal and RSN/WPA/WEP; then the engine disabled and waited for before the core is reset.
 
 ## Related
 
