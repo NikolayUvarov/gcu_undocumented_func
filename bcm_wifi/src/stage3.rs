@@ -90,7 +90,7 @@ impl<'a> Core<'a> {
     pub(crate) fn shm16(&self, offset: u32) -> u16 { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.r16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }) }
     pub(crate) fn shm16_w(&self, offset: u32, v: u16) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }, v) }
     fn shm32_w(&self, offset: u32, v: u32) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w32(SHM_DATA, v) }
-    fn scratch_w(&self, index: u32, v: u16) { self.w32(SHM_CONTROL, SCRATCH << 16 | index); self.w16(SHM_DATA, v) }
+    pub(crate) fn scratch_w(&self, index: u32, v: u16) { self.w32(SHM_CONTROL, SCRATCH << 16 | index); self.w16(SHM_DATA, v) }
 
     fn force_clock(&self, on: bool) { if on { self.set32(IO_CONTROL, 0x2) } else { self.clear32(IO_CONTROL, 0x2) } }
     // The RF sequencer driven through `bit`; true when its status bit cleared within 200 ms.
