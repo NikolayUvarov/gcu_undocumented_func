@@ -26,7 +26,7 @@ fn main(info: &'static BootInfo) {
     let mut previous_time = None;
     let (mut x, mut y, mut scale) = face(&screen, previous_time);
     loop {
-        mind::input::wait_or_exit(100);
+        mind::input::wait_or_exit(rtc.wait_ms(100)); // until the second can change: a key or a window's event wakes it
         if let Some(resized) = mind::windowed::pixels_resized() {
             if let Some(new) = Screen::new(&resized) { screen = new; (x, y, scale) = face(&screen, previous_time); }
             mind::println!("[CLOCK] SIZE {}X{}", resized.width, resized.height);
@@ -54,7 +54,7 @@ fn line_face() {
             mind::process::log(line.as_bytes());
             previous = Some(seconds);
         }
-        mind::time::sleep(100);
+        mind::time::sleep(rtc.wait_ms(100));
     }
 }
 
@@ -83,6 +83,6 @@ fn text_face(info: &'static BootInfo) {
             previous = seconds;
             mind::process::log(b"[CLOCK] "); mind::process::log(&text::time_text(seconds)); mind::process::log(b"\r\n");
         }
-        mind::input::wait_or_exit(100);
+        mind::input::wait_or_exit(rtc.wait_ms(100));
     }
 }

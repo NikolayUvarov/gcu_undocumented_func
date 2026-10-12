@@ -143,6 +143,28 @@ fn the_rtc_is_read_once_a_minute_and_seconds_are_counted_between() {
 }
 
 #[test]
+fn a_face_wakes_when_its_second_changes() {
+    // A face that waits `wait_ms` (a wake lands up to 11 ms late: the tick and the clock's resolution) shows every second
+    // once, about a dozen ms after it begins, and wakes about once a second, not ten times.
+    let rtc = |t: u64| Some((43_200 + (t + 650_000_000) / 1_000_000_000) as usize % 86_400);
+    let mut clock = wallclock::WallClock::new();
+    let (mut t, mut wakes, mut shown) = (0u64, 0, Vec::new());
+    while t < 600_000_000_000 { // ten minutes
+        let s = clock.seconds(t, || rtc(t)).unwrap();
+        assert!(s.abs_diff(rtc(t).unwrap()) <= 1, "{} s off at {} ms", s.abs_diff(rtc(t).unwrap()), t / 1_000_000);
+        if shown.last() != Some(&s) { shown.push(s); }
+        let wait = clock.wait_ms(t, 100);
+        assert!((1..=1000).contains(&wait), "{} ms", wait);
+        t += wait * 1_000_000 + 11_000_000;
+        wakes += 1;
+    }
+    assert_eq!(shown.len(), 601, "every second shown once");
+    assert!(shown.windows(2).all(|w| w[1] == w[0] + 1));
+    assert!(wakes <= 600 + 10 * 20, "{} wakes in ten minutes", wakes); // once a second, more only while the RTC is read
+    assert_eq!(wallclock::WallClock::new().wait_ms(0, 100), 100, "before the first reading: the poll");
+}
+
+#[test]
 fn midnight_wraps_and_marks_the_date_due() {
     let mut clock = wallclock::WallClock::new();
     assert_eq!(clock.seconds(0, || Some(86_398)), Some(86_398));
