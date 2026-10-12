@@ -6,7 +6,7 @@
 // says so (issue 165), and while a camera stream is open a green camera mark left of it (issue 158): drawn here, on the
 // framebuffer only, so no capture holds them and no program can hide them.
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, SLOT_MEM};
-use mind::dev::{compositor_pull, Frame};
+use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
 use mind::idl::display::{self, Error, Mode, Request};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
@@ -14,6 +14,8 @@ use mind::mem::{Mapping, Pages};
 
 const RECEIVED_CAP: usize = 10;
 const FRAME_MS: u32 = 15;
+// A screen whose task has not waited for this long is copied while it runs, torn or not (000-KRN-0086).
+const FORCE_MS: usize = 250;
 // The dot stays this long after a capture: a recording at one frame a second keeps it lit.
 const DOT_MS: usize = 1500;
 const DOT_RADIUS: usize = 6;
@@ -80,8 +82,18 @@ fn main(info: &'static BootInfo) {
     let native = info.pixel_format == PIXEL_BGR; // screens already hold the framebuffer's layout
     let mut captured = None::<usize>; // when the last capture was, while the dot is shown
     let mut filmed = None::<usize>; // when the video gateway last said a stream is open, while the mark is shown
+    let mut busy = None::<usize>; // since when the screen changed while its task ran
     loop {
-        let frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
+        // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; one
+        // whose task never waits is copied as it is after FORCE_MS (000-KRN-0086).
+        let mut frame = compositor_pull_frame(SOURCE_SLOT).unwrap_or(Frame::Unchanged);
+        let held = frame == Frame::Dirty;
+        if frame == Frame::Busy {
+            let since = *busy.get_or_insert(mind::time::uptime_ms());
+            if mind::time::uptime_ms() - since >= FORCE_MS { frame = compositor_pull(SOURCE_SLOT).unwrap_or(Frame::Unchanged); }
+        } else {
+            busy = None;
+        }
         if frame == Frame::NewSource {
             drop(source.take()); // unmap the old mapping first (shared memory quota)
             source = Mapping::new(SOURCE_SLOT).ok();
@@ -89,15 +101,21 @@ fn main(info: &'static BootInfo) {
         }
         if let (Some(screen), Frame::Dirty | Frame::NewSource) = (source.as_ref(), frame) {
             let screen = screen.as_ptr::<u32>();
-            for i in 0..pixels {
-                let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
-                if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
-                    let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
-                    unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+            // The visible width of each row only: the stride may be far wider (4096 for 2880 on the MacBook Pro). Pixels
+            // are compared one by one, as a slice comparison is a byte-wise memcmp here (000-KRN-0081).
+            for y in 0..info.height {
+                let row = y * info.stride;
+                for i in row..row + info.width {
+                    let pixel = unsafe { core::ptr::read_volatile(screen.add(i)) };
+                    if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
+                        let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
+                        unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+                    }
                 }
             }
             valid = true;
         }
+        if held { let _ = compositor_release(SOURCE_SLOT); }
         // The capture dot: drawn over every frame while captures come, then the screen under it put back once.
         if let Some(at) = captured {
             let capturing = mind::time::uptime_ms() - at < DOT_MS;
@@ -110,7 +128,7 @@ fn main(info: &'static BootInfo) {
             if !streaming { filmed = None; }
         }
         // Wait for the next frame, answering requests meanwhile (without a service endpoint: just wait).
-        match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, FRAME_MS) {
+        match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if frame == Frame::Busy { 1 } else { FRAME_MS }) {
             Ok(request) => match display::decode(&request, RECEIVED_CAP) {
                 Ok((request, call)) => match serve(info, source.as_ref(), request, call) {
                     Some(Lit::Capture) => captured = Some(mind::time::uptime_ms()),

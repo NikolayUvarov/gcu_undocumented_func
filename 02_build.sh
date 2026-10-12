@@ -179,6 +179,9 @@ mkdir -p "$BUILD_SCRIPT_DIR/usb_root/LICENSES"
 cp "$BUILD_SCRIPT_DIR"/LICENSE-MIT "$BUILD_SCRIPT_DIR"/LICENSE-APACHE "$BUILD_SCRIPT_DIR"/THIRD_PARTY.md "$BUILD_SCRIPT_DIR"/LICENSES/*.txt "$BUILD_SCRIPT_DIR/usb_root/LICENSES/"
 mkdir -p "$BUILD_SCRIPT_DIR/usb_root/voice"
 cp "$BUILD_SCRIPT_DIR"/voice/model.bin "$BUILD_SCRIPT_DIR"/voice/commands.txt "$BUILD_SCRIPT_DIR/usb_root/voice/"
+# The runs on real hardware, quick and full, as msh scripts (176-KRN-0087).
+mkdir -p "$BUILD_SCRIPT_DIR/usb_root/diag"
+cp "$BUILD_SCRIPT_DIR"/diag/*.msh "$BUILD_SCRIPT_DIR/usb_root/diag/"
 # With $MIND_SECURE_BOOT_KEYS (a directory holding db.key and db.crt), the bootloader is signed for Secure Boot
 # first (351-UPD-0012, docs/update/secure-boot.md). Then the boot manifest and its signature: the bootloader loads
 # only what it lists (350-UPD-0002, docs/update/README.md).

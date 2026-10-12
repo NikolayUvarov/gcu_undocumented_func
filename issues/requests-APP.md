@@ -644,6 +644,61 @@ Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MIN
 
 `caps 1` shows `rwgkb` for `init`'s own endpoint, and a plain client shows `-wg--`.
 
+## `poweroff` and `shutdown`, and a menu entry to turn the machine off ([000-KRN-0080](../issues-done/000-KRN-0080-power-off-on-x86.done))
+
+**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off". The maintainer asked again on 2026-10-12, once `reboot --off` had turned the MacBook Pro off: "a synonym `poweroff` is needed for this command".
+
+### Problem
+
+`reboot --off` writes the caches, stops the services and turns the machine off. Since 000-KRN-0080 it does so on x86 too (ACPI S5), not only on aarch64. But:
+
+- nobody looks for it under `reboot`;
+- `wm`'s menu has no entry for it;
+- `help reboot` and `shell/src/power.rs` still say "aarch64 only".
+
+### Plan (a proposal; the tools track decides)
+
+- **In the shell and `console`.** `poweroff` and `shutdown` as names for `reboot --off`, with `-f` as there; `help` names them.
+- **In `wm`.** A "Turn off" entry next to the restart, asking for confirmation as the restart does.
+- **The help texts and `docs/tools` (EN, RU).** Turning off works on x86 and aarch64. Where the firmware names no S5, it says why.
+
+### Acceptance criteria
+
+- **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
+- **In `wm`.** The menu entry is there.
+
+## `wm`'s moving background: drawn by rows, paced to a deadline (000-KRN-0081)
+
+**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "the moving background jerks when the bright screen is on, and redrawing is slow".
+
+### Problem
+
+The kernel's part is 000-KRN-0081:
+
+- the framebuffer was mapped uncached;
+- `compositor` scanned the whole stride.
+
+`wm`'s own part, read from the code at fast-test 76bae52 (estimates for the MacBook Pro's 2880×1800, 5.2 Mpx, 20.7 MB a frame):
+
+- **`paint()`** (`wm/src/main.rs:397-402`) copies every background cell to `wm`'s screen one pixel at a time, through `backdrop.pixel()` with a division by `unit` (`wm/src/background.rs:480-483`) and bounds checks per pixel. That is about 50–90 ms a frame.
+- **`pattern()`** (`background.rs:166-237`) computes 324 000 blocks a frame, with divisions per block. Rings also takes a square root per centre. That is about 5–85 ms by pattern.
+- **Pacing.** `sleep(if busy {5} else {30})` (`main.rs:646`) comes after the work. Since 000-KRN-0065 a sleep of 30 ms lasts 30–40 ms. The phase moves in whole steps (`p/8`, `p/12`, …), so a slow frame jumps.
+- **Mouse moves.** Every one redraws everything and re-copies every pixel window (`main.rs:463, 635`).
+- **Contrast.** At high contrast more pixels change each frame, so the compositor writes more.
+
+All told, `wm` runs at about 5–11 frames a second, unevenly.
+
+### Plan (a proposal; the tools track decides)
+
+- **`paint()` by rows.** Runs of background cells are filled row by row with one loop for each unit size and no division: 5–10 ms instead of 50–90. A row helper in `libmind` (`Screen::span`, the core of `libmind`) can be asked of the kernel track.
+- **Pacing to a deadline.** Sleep until the next frame's deadline, not a fixed 30 ms after the work: since 000-KRN-0083 a sleep ends within a millisecond of the time asked. A finer phase, with interpolated sine values, moves every term every frame.
+- **A cheaper pattern.** Per-column and per-row terms computed once a frame, and a table or incremental distances instead of the square root.
+- **Only what changed.** Cells whose colour did not change are not repainted. Mouse moves redraw the cursor's surroundings only.
+
+### Acceptance criteria
+
+On the MacBook Pro with 000-KRN-0081, the moving background runs evenly at full contrast. `wm` records the time a frame takes; the `wm` suite reads it in QEMU.
+
 ## `files` reads the kernel from the slot that booted (351-UPD-0016)
 
 **Recorded by:** the update track (`UPD`), 2026-10-11, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done).
@@ -660,3 +715,71 @@ Since ABI 6 an endpoint capability has a fifth right, `CAP_BADGE` (16): `CAP_MIN
 ### Acceptance criteria
 
 On the slot image of `tests/usb_image_smoke.py`, `files` reads the slot's kernel whole.
+
+## The shell's `effector` command: setup, policy, status (750)
+
+**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
+
+### Problem
+
+The Effector agent is off by default, and only the owner may turn it on and say what the server may do. Only the shell can write to `data/`, so the owner's commands for the agent belong in the shell.
+
+### Plan (a proposal; the tools track decides)
+
+- `effector setup URL PIN [NEXT-PIN]`:
+  - writes the server's address and certificate pins to `data/effector/`;
+  - reads the token from the console without echoing it;
+  - asks for confirmation and shows what it wrote, except the token.
+- `effector policy show | edit | allow <line> | deny <line>`: the policy of 750-EFF-0003, with confirmation for anything that widens it.
+- `effector enable | disable`: through `svc enable`/`disable` (173) for both services; disabling also revokes the session.
+- `effector status`:
+  - connected or not;
+  - the server and its pin;
+  - the last heartbeat accepted;
+  - the operations in flight;
+  - the last audit lines.
+- The same commands in `msh` under `requires: lifecycle`, and help in `docs/tools/`.
+
+### Acceptance criteria
+
+In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.
+
+## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md)) was run by its path.
+
+### Problem
+
+The maintainer:
+
+- "`cd diag` does not work: there is no such command."
+- "Tab does not complete a path: `diag/q` is not completed to the name, or part of it."
+- "No list of the programs that match what was typed is shown."
+
+What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
+
+- **No current directory.** The shell has none, so every path is written from the volume's root.
+- **Tab completes only the first word**, or the word after `run`, and only with command and program names. A word holding `/` or `:` matches nothing, so nothing happens.
+- **The list.** It is printed only when the matches share nothing beyond what was typed. `console` has no Tab at all. Which of the two the maintainer typed in is not known.
+
+### Plan (a proposal; the tools track decides)
+
+- **`cd` and `pwd`** in the shell and `console`:
+  - `cd PATH` checks that the directory exists and names it in the prompt (`MIND diag> `);
+  - `cd` alone goes back to the boot volume's root, and `cd ..` goes up one level;
+  - a relative path in every command (`ls`, `cat`, `msh`, `run`, `edit`…) is taken from the current directory.
+- **Tab on a path.** A word holding `/` or `:`, or any word after a command that takes a file, is completed from the directory it names (vfs `list`):
+  - a single match gets its full name, with `/` after a directory;
+  - several matches get their common part;
+  - a second Tab lists them.
+- **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
+- **`help`** names `cd`, `pwd` and the keys.
+
+### Acceptance criteria
+
+- **In the shell suite (x86 and aarch64):**
+  - `cd diag` then `msh quick.msh --check` works, and the prompt names `diag`;
+  - `cd nowhere` says the directory does not exist;
+  - Tab after `msh diag/q` gives `msh diag/quick.msh`;
+  - Tab twice after `ch` lists `check` and the other matches.
+- **In `console`**, the same keys work.

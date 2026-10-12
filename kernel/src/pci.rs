@@ -93,6 +93,36 @@ unsafe fn ehci_handoff(bus: u8, device: u8, function: u8, bar: Bar) {
         if released { "TAKEN FROM THE FIRMWARE" } else { "THE FIRMWARE DID NOT LET GO" }));
 }
 
+// The BCM4331 in Macs (550-KRN-0082): the firmware leaves its 802.11 core running, and cutting its bus mastering under
+// it leaves the core's agent with an operation pending that stops the machine at the core's first access. The core is
+// reset first, as Linux's early quirk does: through BAR0's second window, which the firmware points at the core's agent.
+const BCM4331: u32 = 0x4331_14E4;
+const BCM4331_AGENT: u32 = 0x1810_1000;
+unsafe fn bcm4331_stop_core(bus: u8, device: u8, function: u8, bar: Bar) {
+    let say = |what: core::fmt::Arguments| { let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: {:02X}:{:02X}.{} BCM4331: {}\n", bus, device, function, what)); };
+    if read(bus, device, function, 0x04) & 0x4 == 0 { return; } // not mastering: the core is not writing to memory
+    if bar.io || bar.base == 0 || bar.base + 0x2000 > crate::mmu::IDENTITY_END { say(format_args!("BAR0 NOT REACHABLE, 802.11 CORE NOT STOPPED")); return; }
+    if let Some(pm) = capability_at(bus, device, function, 0x01) {
+        if read(bus, device, function, pm + 4) & 3 != 0 { say(format_args!("NOT IN D0, 802.11 CORE LEFT AS IS")); return; }
+    }
+    let window = read(bus, device, function, 0xAC);
+    if window != BCM4331_AGENT { say(format_args!("BAR0 WINDOW 2 AT {:08X}, NOT THE 802.11 CORE'S AGENT: NOT STOPPED", window)); return; }
+    let command = read(bus, device, function, 0x04);
+    write(bus, device, function, 0x04, command | 0x2); // memory decoding, for the agent
+    let (control, status) = ((bar.base + 0x1800) as *mut u32, (bar.base + 0x1804) as *const u32);
+    let before = status.read_volatile();
+    for _ in 0..30 { if status.read_volatile() == 0 { break; } crate::clock::spin_us(10); }
+    control.write_volatile(1);
+    let _ = control.read_volatile();
+    crate::clock::spin_us(1);
+    control.write_volatile(0);
+    let _ = control.read_volatile();
+    crate::clock::spin_us(10);
+    let after = status.read_volatile();
+    write(bus, device, function, 0x04, command);
+    say(format_args!("802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF (RESET STATUS {:08X}, NOW {:08X})", before, after));
+}
+
 // Bus mastering the firmware left on is turned off until a driver is granted the function (550-KRN-0070): until then it
 // cannot reach memory. Bridges carry their devices' DMA and a display controller may scan out the boot screen: left as is.
 unsafe fn stop_mastering(bus: u8, device: u8, function: u8, class: u32) -> bool {
@@ -119,6 +149,7 @@ pub unsafe fn enumerate() -> alloc::vec::Vec<Device> {
                 if class == 0x0C_03_30 && INTEL_SWITCHABLE_XHCI.contains(&id) { route_to_xhci(bus, device, function); }
                 let bars = bars(bus, device, function);
                 if class == 0x0C_03_20 { ehci_handoff(bus, device, function, bars[0]); }
+                if id == BCM4331 { bcm4331_stop_core(bus, device, function, bars[0]); }
                 let mastered_at_boot = stop_mastering(bus, device, function, class);
                 devices.push(Device { class, id, bars, irq, bus, device, function, granted: false, windows: windows(bus, device, function), mastered_at_boot });
             }
@@ -157,18 +188,20 @@ pub unsafe fn enable(device: &Device) {
 /// A dword of the device's configuration space (offset < 256, aligned down to 4); reading has no side effects.
 pub unsafe fn config(device: &Device, offset: u8) -> u32 { read(device.bus, device.device, device.function, offset) }
 
-// Offset of the device's capability `id` in configuration space.
-unsafe fn capability(device: &Device, id: u8) -> Option<u8> {
-    if config(device, 0x04) >> 16 & 0x10 == 0 { return None; }
-    let mut at = config(device, 0x34) as u8 & 0xFC;
+// Offset of the function's capability `id` in configuration space.
+unsafe fn capability_at(bus: u8, device: u8, function: u8, id: u8) -> Option<u8> {
+    if read(bus, device, function, 0x04) >> 16 & 0x10 == 0 { return None; }
+    let mut at = read(bus, device, function, 0x34) as u8 & 0xFC;
     for _ in 0..48 {
         if at < 0x40 { return None; }
-        let header = config(device, at);
+        let header = read(bus, device, function, at);
         if header as u8 == id { return Some(at); }
         at = (header >> 8) as u8 & 0xFC;
     }
     None
 }
+
+unsafe fn capability(device: &Device, id: u8) -> Option<u8> { capability_at(device.bus, device.device, device.function, id) }
 
 /// Address of MSI-X table entry `entry` of the device (in a memory BAR below 4 GiB), or None.
 pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {

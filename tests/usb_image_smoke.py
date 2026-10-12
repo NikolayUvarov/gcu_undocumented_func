@@ -121,6 +121,40 @@ def unplugged(vm, booted, name):
         time.sleep(1)
     require(saved, "DRIVE DOES NOT ANSWER")
     time.sleep(3)  # the journal's save after the replug, flushed
+    # 000-KRN-0079: another medium in its place, as a stick rewritten with another build elsewhere and put back: the
+    # same partition table and disk signature, another commit in the boot manifests. vfs_server, which saw the drive
+    # not answer, finds it is not the stick it mounted: nothing it cached is written to it, its volumes fail. The new
+    # stick gets another device ID: QEMU may not have let go of the old one yet.
+    vm.hmp("device_del usbstick")
+    require(vm.service_logs("usb_host", "DISCONNECTED"), "DISCONNECTED")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    require(vm.service_logs("vfs_server", "DRIVE DOES NOT ANSWER"), "DRIVE DOES NOT ANSWER")
+    other = booted.with_name(booted.stem + "-other" + booted.suffix)
+    shutil.copyfile(booted, other)
+    data = bytearray(other.read_bytes())
+    manifests = [m for m in re.finditer(rb"MIND-MANIFEST \d+\nkey [0-9a-f]{16}\ncommit ", data) if m.start() % 512 == 0]
+    assert manifests, "no boot manifest found in the image"
+    for m in manifests:
+        data[m.end()] = ord("0") if data[m.end()] != ord("0") else ord("1")
+    other.write_bytes(data)
+    assert other.read_bytes()[:512] == booted.read_bytes()[:512], "the copy keeps the stick's sector 0"
+    before = hashlib.sha256(other.read_bytes()).hexdigest()
+    for command in (f"drive_add 0 if=none,id=usbdisk3,format=raw,file={other}", "device_add usb-storage,drive=usbdisk3,id=usbstick3"):
+        answer = vm.hmp(command)
+        assert answer.strip() in ("", "OK"), (command, answer)
+    require(vm.service_logs("usb_host", "SUPER SPEED"), "SUPER SPEED")
+    for _ in range(40):  # vfs_server asks the drive again after its quiet time
+        time.sleep(2)
+        vm.command("ls log:", raw=True)
+        log = vm.service_logs("vfs_server")
+        if "ANOTHER MEDIUM" in log:
+            break
+    require(log, "CAME BACK WITH ANOTHER MEDIUM")
+    require(vm.command("run memmap"), "CANNOT READ THE PROGRAM")
+    vm.command("sync")
+    time.sleep(3)
+    assert hashlib.sha256(other.read_bytes()).hexdigest() == before, "the old volumes wrote to another medium"
+    other.unlink()
 
 
 def run(args, booted):
@@ -215,7 +249,7 @@ def run(args, booted):
     fsck_volume(booted, start, LOG_SECTORS)
     print(f"PASS ({args.arch}): exact image contents; UEFI boot from USB RAW image; CPUs, all programs, private heap, fg/exit/kill/reclaim; "
           "VFS over xHCI USB mass storage through usb_host; the disk unplugged (a program refused with the reason, the shell answering) "
-          "and plugged in again; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
+          "and plugged in again, another medium in its place left untouched; the boot's system log, the hardware report, the ACPI tables and a file on the log partition, read on the host")
 
 
 if __name__ == "__main__":

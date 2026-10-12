@@ -1,4 +1,34 @@
-# MIND CORE
+# MIND Core OS — a capability-based microkernel operating system in Rust
+
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+![Language: Rust](https://img.shields.io/badge/language-Rust%20(no__std)-orange.svg)
+![Platforms: x86_64, aarch64](https://img.shields.io/badge/platforms-x86__64%20%7C%20aarch64-lightgrey.svg)
+![Boot: UEFI](https://img.shields.io/badge/boot-UEFI-green.svg)
+
+**MIND Core** is an operating system written from scratch in Rust (`no_std`). It is a capability-based microkernel: every driver and service, the file system and the network stack among them, runs as an isolated user-space task with only the capabilities it was granted. It boots with its own UEFI bootloader on x86_64 and aarch64 (ARM64) and uses every processor (SMP). It runs in QEMU and boots on real hardware, a MacBook Pro among them.
+
+MIND Core — операционная система, написанная с нуля на Rust (`no_std`): микроядро на capabilities, где каждый драйвер и каждая служба, файловая система и сетевой стек в том числе, работают изолированными задачами пространства пользователя и получают только выданные им права. Свой UEFI-загрузчик, x86_64 и aarch64 (ARM64), многопроцессорность (SMP). Работает в QEMU и загружается на реальном железе, в том числе на MacBook Pro.
+
+**What is there today**, each part with its tests (details below):
+
+- **Kernel:** capabilities with derivation and revocation, synchronous IPC with lent pages, SMP scheduling with CPU budgets, a 1 ms tick on x86, memory quotas, SMEP, SMAP, UMIP and PAN.
+- **Boot and update:** its own UEFI bootloader, a signed boot manifest, A/B slots with a trial boot and fallback, reproducible builds, Secure Boot with our own keys (tested in QEMU).
+- **Drivers in user space:** AHCI (SATA), NVMe, VirtIO (block, network, input), xHCI and EHCI USB (keyboards, mice, storage, a UVC camera), Intel HDA sound, PS/2, TPM 2.0.
+- **Network:** a TCP/IP stack in user space with DHCP and DNS, a TLS 1.3 client, HTTPS downloads, a network policy that grants flows.
+- **Storage:** FAT12/16/32 with writes, a content-addressed block store (Merkle DAG), checkpoints.
+- **User space:** a shell with its own script language (msh), a window manager, a file manager, an editor, text-to-speech and voice commands, system monitors.
+- **Assurance:** a [Constitution](constitution/EN/MIND_CORE_Constitution_v1.6.md) of numbered requirements; QEMU test suites on x86_64 and aarch64; TLA+ models checked with TLC.
+
+**Quick start** (Ubuntu or WSL; details in [How to Build and Run](#how-to-build-and-run)):
+
+```bash
+sudo scripts/setup_build_env.sh                     # Ubuntu or WSL: QEMU, OVMF, the tools, Rust's pinned nightly
+./02_build.sh && ./03_run_qemu.sh                   # x86_64 in QEMU
+ARCH=aarch64 ./02_build.sh && ./03_run_qemu_aarch64.sh   # aarch64 (ARM64) in QEMU
+./04_make_usb_image.sh                              # a USB image for real hardware
+```
+
+### Why "MIND Core"
 
 The Minds of the Culture's spaceships — the ultra-powerful AIs controlling General Contact Units and Orbitals — must reside somewhere. No matter how multidimensional and advanced their hardware substrate may be, at a fundamental level, any computing architecture needs two basic things to wake up and become self-aware: a bootloader and an operating system.
 
@@ -17,6 +47,8 @@ Every Mind needs its first processor tick. We are providing exactly that.
 
 The normative requirements are in the [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md) and [RFC 001 Marain v0.4](constitution/EN/RFC_001_Marain_v0.4.md) (Russian texts in [constitution/RU](constitution/RU), index in [constitution/README.md](constitution/README.md)); the order of work, current gaps and the point from which parts can be developed in parallel are in [ROADMAP.md](ROADMAP.md) v1.2 ([Russian](ROADMAP_RU.md)); what the implementation guarantees and under which assumptions is in the platform profile [docs/profile](docs/profile/README.md); system calls, `libmind` and service interfaces are in [docs/api](docs/api/README.md); the storage format of track B (content identifiers, the block store, objects as a Merkle-DAG) is in [docs/storage](docs/storage/README.md); legacy hardware support, how `init` reports it at boot and how to drop it is in [docs/legacy.md](docs/legacy.md). Near-term work items are in [issues/](issues/README.md) (finished ones in [issues-done/](issues-done), ones that need a person in [issues-human/](issues-human/README.md)); background analyses are in [knowledge/](knowledge). The plan for system tools (file manager, editor, `top`, memory map, load monitor and others) is in [docs/tools](docs/tools/README.md) ([Russian](docs/tools/README_RU.md)). The plan for voice — speaking, listening and acting on what was heard — is in [docs/voice](docs/voice/README.md) ([Russian](docs/voice/README_RU.md)).
 
+**Repositories.** Development happens here. [mind-core-os](https://github.com/NikolayUvarov/mind-core-os) is the showcase, a copy of this repository's `main` under the OS's own name, refreshed when something changed: by the maintainer with `./06_sync_showcase.sh` (Windows: `06_sync_showcase_windows.ps1`), or at most every 48 hours by a workflow given a token (`scripts/mirror_showcase.sh`). [mind-core](https://github.com/NikolayUvarov/mind-core) is for the Mind itself, the intelligence module.
+
 The work runs in parallel **tracks** (kernel, porting, network, tools, drivers, storage, update, Marain, assurance, Apple Silicon, …). The registry of tracks — their codes, task numbers `NNN-TRK-MMMM`, ranges, owners and which are open to take, in parallel with the others — is [TRACKS.md](TRACKS.md).
 
 
@@ -31,7 +63,7 @@ The UEFI bootloader loads the kernel and only the system service images (`BOOT_F
 * **Capabilities:** Each task starts with 96 capability slots; the table grows on demand up to 4096 (issue 171). A capability names an IPC endpoint (with read/write/grant/keep rights), a shared memory block (read/write/grant rights), a DMA region, device registers (MMIO, mapped uncached), an I/O port range, an interrupt line, or a privilege (input, display, spawn, process control, platform). Drivers receive only the capabilities for their device; applications receive send-only endpoints of the RTC, VFS, audio, loader and TTS services. Every capability a task has was granted explicitly by its spawner (`init` for services, `loader` for applications). Capabilities are named by 64-bit handles `slot | generation << 24` (a 32-bit generation; issue 172): slots 1–25 are fixed by convention (generation 0), slots the kernel hands out get a new generation when freed, so a stale handle is rejected instead of naming a newer capability. Every capability has a parent: a copy (IPC transfer, spawn grant) or a `CAP_MINT` (narrower endpoint rights, a port sub-range or a page-aligned memory/DMA/MMIO sub-range) is a child of its source, a move (`CAP_TRANSFER_MOVE`, `GRANT_MOVE`) keeps it and empties the source slot. `CAP_REVOKE` removes every descendant from every task, including one waiting in a blocked send, and returns how many were removed; the holder keeps its own capability. A memory capability without the write right maps read-only; mappings made from a revoked memory, DMA or MMIO capability are removed, and when the holder runs on another CPU `CAP_REVOKE` returns only after that CPU has switched address space (a lease ends at a defined point). `MEM_DETACH` turns a heap block nobody else refers to into a memory object: the pages leave the caller's address space and the capability (read/write, no grant) can only be moved — copying a writable memory capability needs the grant right — or minted read-only. `CAP_INFO` reports a memory range as *sealed* when no writable capability, writable mapping or DMA region overlaps it, so a reader can check that nobody writes while it reads (`SHARE_RO`).
 * **Dynamic program memory:** Syscalls 8/9 allocate and free zeroed private page blocks (RW+NX, trailing guard page; up to 64 blocks). Task memory — images, stacks, screens, heap blocks and memory objects, and each task's kernel structures (its record, pages, page tables and capability table, charged to its spawner: 171-KRN-0032) — comes from a frame pool over the free RAM of the firmware map, not from the kernel's 64 MiB arena. Private memory is limited by a memory quota delegated at `SPAWN` (16 MiB by default; a program asks for more with `mind::request!(…, memory: MiB)`), charged to the task and to every spawner above it. Mapped shared memory has its own 256 MiB limit. The test program `memtest` takes 128 MiB of heap and shares a 64 MiB sealed object between two tasks (issue 150). Memory that another task still maps or holds by capability is retained by the kernel until the last reference is gone, so freeing, exiting or killing an owner cannot leave a dangling mapping.
 * **CPU configuration:** The QEMU launchers expose four cores. The kernel starts APs itself with INIT/SIPI and uses every enabled processor of the ACPI MADT, up to xAPIC's 255 (issue 171; x2APIC is not supported); an idle CPU gets no timer tick, only a wake IPI when one of its tasks is ready. Each CPU has its own GDT, TSS, interrupt-entry stack, idle stack, and double-fault/NMI stacks. `cpus` reports actual online CPUs and interrupt counters.
-* **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP takes the 100 Hz tick from its LAPIC timer, measured at boot on the ACPI PM timer (from the PIT through the 8259 and LAPIC ExtINT where there is no PM timer), and sends scheduling IPIs to online APs. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`; a CPU that sleeps while one of its tasks becomes ready (an IPC reply, an IRQ) gets a wake IPI instead of waiting for its next tick. The BSP idle loop reclaims exited tasks once no CPU runs them.
+* **Scheduling:** New applications are assigned to the CPU with the fewest applications and remain pinned there. Round-robin scheduling on each CPU preserves GPRs and x87/SSE state. The BSP takes a 1 ms tick from its LAPIC timer, measured at boot on the ACPI PM timer (from the PIT through the 8259 and LAPIC ExtINT where there is no PM timer), for the clock, sleeps and IPC timeouts; every tenth tick ends a 10 ms time slice and goes as a scheduling IPI to the APs that run a task. A spinlock with local interrupts disabled serializes scheduler/syscall work. Idle CPUs use `HLT`; a CPU that sleeps while one of its tasks becomes ready (an IPC reply, an IRQ) gets a wake IPI instead of waiting for its next tick. The BSP idle loop reclaims exited tasks once no CPU runs them.
 * **System calls and faults:** The DPL-3 `int 0x80` gate is the only user entry into kernel services. Every buffer pointer is checked against the calling task's user mappings. User exceptions terminate that task and appear in `faults`; a kernel exception remains fatal.
 
 ### System services
@@ -112,7 +144,7 @@ Add `libmind = { path = "../libmind" }` to the crate's `Cargo.toml`. Modules:
 | `keys` | ring 3 key decoders: `Ps2` (scan code set 1, modifiers, Caps/Num Lock, US and Russian layouts) and `Vt` (UART: VT100/xterm sequences, UTF-8); `Key::latin()` gives letter commands in either layout |
 | `ipc` | `Endpoint::{create, send, call, recv}`, `reply`, `drop_cap`, `Message` |
 | `mem` | `Pages` (private blocks, freed on drop, `share()`), `Mapping` (shared memory by capability), `dma_physical` |
-| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull`, `cap_info` — for drivers |
+| `dev` | `Ports`, `Irq`, `Mmio`, `Dma`, `Uart` (a 16550 or a PL011, by the slot's capability), `input_event`, `compositor_pull` (and `_frame`, `compositor_release`), `cap_info` — for drivers |
 | `keyboard` | the keyboard service (`idl/keyboard.wit`) and key delivery over the PS/2 decoder, shared by `ps2_kbd`, `virtio_input` and `usb_hid` |
 | `hid`, `usb` | USB HID reports (boot keyboards to PS/2 codes with key repeat, report descriptors of mice and tablets); a class driver's client of `usb_host` (`idl/usb.wit`: badges, the interface description, the lent buffer) |
 | `uvc` | USB video class (issue 158, with `alloc`): a camera's descriptors (formats, frame sizes, intervals, the streaming interface's alternate settings), the probe and commit controls, the choice of a YUY2 frame size, rate and setting, and frames assembled from payloads |
@@ -633,11 +665,11 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 52 | SCHED_SET | PID, budget µs; msg[0] = period µs, msg[1] = band or `BAND_KEEP` → 0 — lifecycle owner or process control (band changes: control/platform/restart) |
 | 51 | STAT | class, buffer; msg[0] = capacity, msg[1] = PID for VMAP/CAPS → records written (header: version, record size, count, total) — observe or control privilege; classes TASKS, CPUS, MEMORY, PHYSMAP, VMAP, CAPS, ENDPOINTS, IRQS, DEVICES (`common/abi.rs`) |
 | 50 | READ_INPUT | → next input event word of the focused task (key, modifiers, pressed, character, legacy byte; see `common/abi.rs`), 0 if none |
-| 21 | COMPOSITOR_PULL | slot → 0 unchanged, 1 dirty, 2 new screen in slot — needs the display capability |
+| 21 | COMPOSITOR_PULL | slot, mode → 0 unchanged, 1 dirty, 2 new screen in slot; in frame mode 3 while the focused task draws, and on 1 the task waits until the copy is released (000-KRN-0086) — needs the display capability |
 | 26 | MEM_PHYS | DMA slot → physical address |
 | 16 | MEM_MAP (MMIO) | device-register slot → address, mapped uncached |
 | 28 | TASK_ALIVE | PID → 1/0 |
-| 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: 10 ms tick) |
+| 44 | CLOCK | → monotonic ns since boot, arg2 = resolution ns, msg[2] = TSC Hz (0: the 1 ms tick) |
 | 48 | STAT | class (`STAT_*`), argument (PID); msg[0] = buffer, msg[1] = capacity → records after a `StatHeader`: tasks, CPUs, kernel memory, physical map, address space, capabilities, endpoints, IRQs, devices — observe or control privilege |
 | 29 | CAP_INFO | slot → kind, arg2 = port base, memory rights or endpoint badge, msg[2] = size/count/endpoint rights, msg[3] = 1 if the memory is sealed |
 

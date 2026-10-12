@@ -11,6 +11,7 @@ const WRITE: u64 = 2;
 const USER: u64 = 4;
 const NX: u64 = 1 << 63;
 const UNCACHED: u64 = 0x18; // PCD | PWT: uncached device registers
+const PWT: u64 = 0x08; // PWT alone: PAT entry 1, write-combining (000-KRN-0081)
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
 
@@ -18,12 +19,14 @@ static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
 pub fn leaf(physical: u64, writable: bool, executable: bool, device: bool) -> u64 {
     physical | VALID | USER | if writable { WRITE } else { 0 } | if executable { 0 } else { NX } | if device { UNCACHED } else { 0 }
 }
+/// A user page of a framebuffer: write-combining, so the CPU sends a run of pixel stores to the bus as one burst.
+pub fn write_combining(entry: u64) -> u64 { entry & !UNCACHED | PWT }
 /// Whether a table entry on the way to a user page lets the task through (x86 checks every level).
 pub fn user_table(entry: u64) -> bool { entry & (VALID | USER) == VALID | USER }
 pub fn user_readable(entry: u64) -> bool { entry & (VALID | USER) == VALID | USER }
 pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VALID | USER | WRITE }
 /// (writable, executable, device) of a user page.
-pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED != 0) }
+pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED == UNCACHED) }
 /// Root entry 0 of every space: the kernel's identity map.
 /// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB and of free RAM above.
 pub const KERNEL_ENTRIES: usize = 1;
@@ -113,6 +116,8 @@ pub unsafe fn enable_protection(bsp: bool) {
     lo = (lo | (1 << 11)) & !1;
     asm!("wrmsr", in("ecx") 0xc0000080u32, in("eax") lo, in("edx") hi);
     asm!("wrmsr", in("ecx") 0x174u32, in("eax") 0u32, in("edx") 0u32); // SYSENTER_CS=0 => #GP
+    // PAT: the power-on default but entry 1 write-combining, the same on every CPU; only framebuffer pages use it.
+    if core::arch::x86_64::__cpuid(1).edx & (1 << 16) != 0 { asm!("wrmsr", in("ecx") 0x277u32, in("eax") 0x0007_0106u32, in("edx") 0x0007_0406u32); }
     let mut cr0: usize;
     asm!("mov {}, cr0", out(reg) cr0);
     cr0 = (cr0 | (1 << 16) | 2) & !12; // WP, MP; clear EM/TS for FXSAVE.

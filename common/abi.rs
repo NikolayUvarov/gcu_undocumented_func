@@ -107,6 +107,12 @@ pub const SYSCALL_INPUT_POINTER: usize = 56;
 pub const SYSCALL_INPUT_LISTEN: usize = 57;
 pub const INPUT_LISTENERS: usize = 8;
 pub const SYSCALL_COMPOSITOR_PULL: usize = 21;
+// COMPOSITOR_PULL's arg2 (000-KRN-0086). 0: the focused screen's state, as before. COMPOSITOR_FRAME: the same, but a
+// changed screen whose task still runs gives COMPOSITOR_BUSY (it may be mid-frame); one whose task waits gives 1 and the
+// task is held, not run, until COMPOSITOR_RELEASE or 50 ms, so the copy is of one whole frame.
+pub const COMPOSITOR_FRAME: usize = 1;
+pub const COMPOSITOR_RELEASE: usize = 2;
+pub const COMPOSITOR_BUSY: usize = 3;
 pub const SYSCALL_IPC_CALL: usize = 22;
 pub const SYSCALL_IPC_REPLY: usize = 23;
 pub const SYSCALL_IRQ_BIND: usize = 24;
@@ -509,8 +515,8 @@ pub const SYSCALL_DEVICE_CONFIG: usize = 54;
 // REBOOT (process control, or the restart privilege: init, for a service that may ask it, 351-KRN-0022): stops all CPUs
 // and resets the machine: the ACPI reset register (FADT), else port 0xCF9,
 // else the 8042 controller, else a triple fault; on aarch64 PSCI SYSTEM_RESET. arg1 = REBOOT_POWER_OFF turns the
-// machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ERR_INVALID, no ACPI sleep states yet). It does not
-// return when it works.
+// machine off instead (aarch64: PSCI SYSTEM_OFF, issue 203; x86: ACPI S5 from the DSDT, 000-KRN-0080, ERR_INVALID
+// when the tables name none). It does not return when it works.
 pub const SYSCALL_REBOOT: usize = 55;
 // BOOT_CONFIRM (platform privilege: init, before it drops it): the boot is good. On a trial boot the kernel no longer
 // restarts the machine at the deadline; writing the confirmed boot record is the updater's (351-UPD-0007, 0008).

@@ -15,6 +15,7 @@
 | ID агента | Что это | Пользователь для работы | Для чего |
 |---|---|---|---|
 | `PCU_585240b00e8a` | Ubuntu 22.04.5, x86-64, 4 CPU, 15 ГБ ОЗУ | `un` | Сборки, тесты на хосте, наборы QEMU, гейты. **Без перезагрузок.** |
+| `i9_4e6882212251` | Ubuntu 24.04.3 под WSL2 в Windows, Intel Core i9-9900K (16 потоков), 48 ГБ ОЗУ для WSL, 920 ГБ свободно, `/dev/kvm` | собственный пользователь агента, `un`: **`run_as` не указывать** (агент не root, `runuser` не сработает) | Сборки, тесты на хосте, наборы QEMU под TCG. **Без перезагрузок**: это WSL2. |
 
 - **Что установлено на `PCU_585240b00e8a`** (кто и когда — в разделе 6):
   - Rust через rustup в `~un/.cargo`, с инструментарием из `rust-toolchain.toml`;
@@ -29,6 +30,30 @@
   - Его проверка окружения требует Java, а группе Secure Boot нужен `python3-virt-firmware`.
   - Весь гейт длиннее, чем может идти одна операция (раздел 3).
   - Сборки, тесты на хосте и отдельные группы QEMU там идут.
+
+- **Что есть на `i9_4e6882212251`** (раздел 6):
+  - всё, что ставит [`scripts/setup_build_env.sh`](../scripts/setup_build_env.sh), из Ubuntu 24.04:
+    - QEMU 8.2.2 для x86 и aarch64, OVMF и AAVMF 2024.02, ROM iPXE;
+    - `dosfstools`, `mtools`, `swtpm` 0.7.3;
+    - `sbsigntool`, `python3-virt-firmware` 24.1;
+    - среда Java;
+  - `git`, Python 3.12;
+  - Rust через rustup в `~un/.cargo`, с инструментарием из `rust-toolchain.toml`;
+  - клон трека ядра в `/home/un/mind-core/KRN/gcu_undocumented_func`.
+- **Пакеты на ней — те же, что в CI** (Ubuntu 24.04), в отличие от PCU. Так и пишите в отчёте о прогоне: «i9 через Effector, Ubuntu 24.04 под WSL2, QEMU 8.2.2 (Ubuntu), TCG».
+- **Настройки WSL** (`%UserProfile%\.wslconfig`, их задаёт сопровождающий): 48 ГБ памяти, все 16 потоков, вложенная виртуализация включена.
+- **KVM.** `/dev/kvm` есть, и `un` в группе `kvm`, но наборы идут под TCG, как в CI: KVM ни один не просит.
+- **Прокси.** Агент работает с заданными `HTTPS_PROXY` и `HTTP_PROXY` и без `NO_PROXY`. Тогда к тесту, который слушает на `127.0.0.1`, обращаются через прокси, и он падает: HTTPS-сервер из `release_test.py` уронил тесты на хосте с «Tunnel connection failed: 503». Начинайте операцию с `export NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1`.
+- **Замеры 2026-10-11** (762907d, слитая с `main` b0ca713, одна операция):
+
+  | Группа | i9 | Машина сессии ядра |
+  |---|---|---|
+  | build (x86) | 149 с | 240 с |
+  | build (x86 test programs) | 31 с | 28 с |
+  | x86: boot, display, network, TLS, shell, memory, clock | 952 с | 784 с |
+
+  Все три прошли. Сборка там быстрее. Наборы QEMU — нет: большую часть времени они ждут внутри гостевой системы.
+- **Подготовка другой машины.** `scripts/setup_build_env.sh` ставит всё, что нужно для сборки и `scripts/ci_local.sh`, и проверяет это. Скрипт идемпотентный: то, что уже есть, он не трогает. Запускайте его один раз от root, например из Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. Ключ
 
@@ -121,7 +146,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | Группа | Машина сессии ядра | PCU |
 |---|---|---|
 | build (aarch64) | 214 с | 248 с |
-| aarch64: boot and fault containment | 90 с | 8 с, не прошла: QEMU падает в `vvfat` |
+| aarch64: boot and fault containment | 90 с | 8 с, не прошла: QEMU падал в `vvfat` (106 с и проходит после 000-KRN-0067) |
 | aarch64: programs, shell and four CPUs | 339 с | 394 с |
 | aarch64: files, network and TLS | 1121 с | 1819 с |
 | aarch64: RAM, ACPI and PCI above 4 GiB | 826 с | 1063 с |
@@ -139,10 +164,10 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
   4. **Журналы.** Нужное скопируйте в каталог своего трека в той же операции. Следующий запуск чьего угодно `ci_local.sh` удаляет `/tmp/mind-core-*.log` и переписывает `/tmp/mind-ci-local`.
 - **В отчёте** указывается, где шла каждая часть: «x86-часть локально; aarch64-часть на PCU через Effector (Ubuntu 22.04, QEMU 8.2.x с qemu.org, AAVMF 2022.02)». Вместе они составляют один локальный гейт в смысле [AGENTS.md](../AGENTS.md), раздел 4, если все группы обеих частей прошли на одном и том же коммите.
 - **Всего около 86 минут на PCU** против 64 на машине сессии ядра, для проходящих групп.
-- **Известно: «aarch64: boot and fault containment» на PCU не проходит.**
-  - Драйвер `vvfat` в QEMU аварийно завершается, когда гостевая система пишет на свой загрузочный том (`fat:rw:`): `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
-  - Так ведут себя и QEMU 8.2.2, и 8.2.10 с qemu.org. На машине сессии ядра тот же тест проходит под 8.2.2 из Ubuntu, в которой нет патчей `vvfat`.
-  - Причину ищет [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Пока она не найдена, эту одну группу запускайте на своей машине.
+- **«aarch64: boot and fault containment» теперь тоже идёт на PCU** (с 2026-10-11, [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)).
+  - Раньше она там не проходила: драйвер `vvfat` в QEMU аварийно завершался, когда гостевая система писала на свой загрузочный том (`fat:rw:`): `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - Теперь тест загружается с готовых образов FAT, а `vvfat` обслуживает только подставной диск, открытый только для чтения. На PCU группа прошла за 106 с (cf0283f), на машине сессии ядра тоже.
+  - Запускайте её в aarch64-части вместе с остальными группами (шаг 3).
 
 ## 5. Если что-то пошло не так
 
@@ -158,3 +183,5 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-10 | `PCU_585240b00e8a` | Ubuntu Cloud Archive (caracal) добавлен ради QEMU 8.2 и убран: QEMU для 22.04 в нём нет | KRN, по просьбе сопровождающего |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 из релизного архива qemu.org, подпись проверена (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), собран для `x86_64` и `aarch64` с утилитами, в `/opt/qemu-8.2.2`, ссылки в `/usr/local/bin`. Зависимости сборки из Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, по просьбе сопровождающего (та же версия QEMU, что в CI) |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 из релиза qemu.org (тот же подписавший) собран в `~un/qemu-upstream/stage`, чтобы проверить тест загрузки aarch64 (000-KRN-0067), **не установлен**; список патчей QEMU из Ubuntu noble в `~un/qemu-noble-patches` (только чтение) | KRN |
+| 2026-10-11 | `i9_4e6882212251` | rustup 1.29.1 в `~un/.cargo` (профиль оболочки не менялся: `. ~/.cargo/env`) с инструментарием из `rust-toolchain.toml` (nightly-2026-10-02 и четыре его цели); клон трека ядра в `/home/un/mind-core/KRN/gcu_undocumented_func`; `/home/un/mind-core/setup_build_env.sh`, копия `scripts/setup_build_env.sh`, пока не запускалась (`sudo` спрашивает пароль) | KRN, по просьбе сопровождающего |
+| 2026-10-11 | `i9_4e6882212251` | `setup_build_env.sh` запущен от root: из Ubuntu 24.04 QEMU 8.2.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), `ovmf` и `qemu-efi-aarch64` 2024.02, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `python3-virt-firmware`, `un` в группе `kvm`; WSL выделено 48 ГБ и включена вложенная виртуализация, затем WSL перезапущен | сопровождающий |

@@ -18,20 +18,21 @@ Today the QEMU suites check the system only from outside, on the build machine. 
 
 One crate, `bench/`, with three console programs that share their tables, statistics and log writer:
 
-- [176-KRN-0062](176-KRN-0062-kbench.md) — **`kbench`**, the kernel's performance:
+- [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done) — **`kbench`**, the kernel's performance:
   - system calls, the clock, IPC round trips between two processes, with and without a lent page;
   - capability and endpoint operations;
   - page allocation;
   - timer accuracy;
   - process start and exit.
-- [176-KRN-0063](176-KRN-0063-check.md) — **`check`**, a self-test of what is done, component by component:
+- [176-KRN-0063](../issues-done/176-KRN-0063-check.done) — **`check`**, a self-test of what is done, component by component:
   - each check passes, fails with its reason, or is skipped with its reason (no such device, not granted);
   - a summary at the end.
-- [176-KRN-0064](176-KRN-0064-bench.md) — **`bench`**, the components' performance:
+- [176-KRN-0064](../issues-done/176-KRN-0064-bench.done) — **`bench`**, the components' performance:
   - files on each volume;
   - the services' round trips;
   - hashing;
   - the camera's frame rate.
+- [176-KRN-0087](176-KRN-0087-runs-on-real-hardware.md) — **`diag/quick.msh` and `diag/full.msh`**, the runs on real hardware (the maintainer, 2026-10-11): each collects what debugging needs into a directory of its own on the log volume; the quick one runs this stage's steps, the full one everything.
 
 What they have in common:
 
@@ -46,6 +47,10 @@ What they have in common:
 - Each prints its table and a summary, and writes its log.
 - `check` passes on QEMU with the devices of the suites, and says what it skipped and why.
 - The numbers of `kbench` and `bench` on the MacBook Pro are recorded in the profile's evidence, with the configuration they belong to (MC-12.1).
+
+## Progress
+
+**2026-10-11.** The three tasks are done. The MacBook Pro ran all three from the shell, and their numbers are recorded in [evidence.md](../docs/profile/evidence.md) ("Measurements on the MacBook Pro"). Two findings became kernel tasks: 000-KRN-0083 (sleeps on the 10 ms tick) and 000-KRN-0084 (an IPC round trip between two CPUs). Left: a run from `wm`'s menu on the MacBook Pro.
 
 ## Related
 

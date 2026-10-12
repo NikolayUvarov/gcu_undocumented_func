@@ -55,6 +55,8 @@ mod ipc {
     impl Endpoint {
         /// No server answers: only receivers are fuzzed here.
         pub fn call(&self, _message: &Message, _receive: usize) -> crate::sys::Result<Received> { Err(crate::sys::Error::Peer) }
+        /// `wire::call` waits with a timeout when a client sets one (`wire::with_timeout`, 211-APP-0044).
+        pub fn call_timeout(&self, message: &Message, receive: usize, _ms: u32) -> crate::sys::Result<Received> { self.call(message, receive) }
     }
     pub const SERVER_SLOT: usize = 9;
     thread_local! {

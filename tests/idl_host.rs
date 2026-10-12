@@ -66,6 +66,7 @@ mod ipc {
         // Slot -> (kind, memory) on either side of the loopback; dropped slots.
         pub static SLOTS: RefCell<HashMap<usize, (usize, Option<(usize, usize)>)>> = RefCell::new(HashMap::new());
         pub static DROPPED: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+        pub static WAITED: RefCell<Vec<u32>> = RefCell::new(Vec::new()); // each call's timeout (0: none)
     }
     pub const SERVER_SLOT: usize = 9;
     pub fn kind(slot: usize) -> usize { SLOTS.with(|s| s.borrow().get(&slot).map_or(CAP_KIND_NONE, |e| e.0)) }
@@ -75,6 +76,10 @@ mod ipc {
         Received { data, sender: 2, badge: 0, cap_received: cap.is_some(), is_call: true, irq: None }
     }
     impl Endpoint {
+        pub fn call_timeout(&self, message: &Message, receive: usize, ms: u32) -> crate::sys::Result<Received> {
+            WAITED.with(|w| w.borrow_mut().push(ms));
+            self.call(message, receive)
+        }
         pub fn call(&self, message: &Message, receive: usize) -> crate::sys::Result<Received> {
             let shared = crate::mem::SHARED.with(|s| s.borrow().iter().find(|e| e.0 == message.cap).map(|e| (e.1, e.2)));
             let request = request(message.data, (message.cap != 0).then_some(if shared.is_some() { CAP_KIND_MEMORY } else { CAP_KIND_ENDPOINT }));
@@ -148,6 +153,11 @@ fn word_calls_with_enums_options_and_system_errors() {
     assert_eq!(sample::mode(endpoint, Kind::Device), Ok(None));
     assert_eq!(sample::sys(endpoint, Kind::Device, false), Ok(Kind::Device));
     assert_eq!(sample::sys(endpoint, Kind::File, true), Err(sys::Error::Rights));
+    // A timeout for the calls in `with_timeout` only (211-APP-0044: wm asking a shell that may be busy).
+    ipc::WAITED.with(|w| w.borrow_mut().clear());
+    assert_eq!(wire::with_timeout(2000, || sample::ping(endpoint, 1, false)), Ok(1));
+    assert_eq!(sample::ping(endpoint, 1, false), Ok(1));
+    assert_eq!(ipc::WAITED.with(|w| w.borrow().clone()), [2000, 0]);
 }
 
 #[test]

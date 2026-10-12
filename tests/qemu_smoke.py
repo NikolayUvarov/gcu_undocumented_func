@@ -1285,6 +1285,8 @@ def kbench_check(vm):
     # A sleep is never shorter than asked and at most a tick longer, give or take QEMU's timing (000-KRN-0065).
     assert "shorter than asked" not in output, output[-3000:]
     assert rows["sleep 1 ms"][1] >= 1e6 and rows["sleep 10 ms"][1] >= 10e6 and rows["sleep 10 ms"][0] <= 40e6, rows
+    # The 1 ms tick on x86 (000-KRN-0083): a sleep of 1 ms no longer waits for a 10 ms tick.
+    assert vm.arch != "x86_64" or rows["sleep 1 ms"][0] < 8e6, rows
     assert rows["start to running"][0] >= rows["start (the loader)"][0], rows
     width = max(len(line) for line in output.splitlines() if line.startswith(("┌", "└")))
     assert width <= 79, width
@@ -1367,10 +1369,26 @@ def bench_tool_check(vm):
 
 
 def bench_suite(vm):
-    """176: the utilities that check the system and measure it, from the shell."""
+    """176: the utilities that check the system and measure it, from the shell, and the runs on real hardware."""
     check_tool_check(vm)
     kbench_check(vm)
     bench_tool_check(vm)
+    diag_check(vm)
+
+
+def diag_check(vm):
+    """176-KRN-0087: the quick run on real hardware runs here too, every step in its own file and a summary that names
+    each; the shell accepts the full run's script (the host test diag_host.rs runs it against a mock shell)."""
+    vm.send("diag/quick.msh\n")
+    output = vm.expect("MIND> ", timeout=900, after="diag/quick.msh\n")
+    done = re.search(r"DIAG QUICK: (\d+) STEPS, (\d+) FAILED, (\d+) S\. THE FILES: (\S+)", output)
+    assert done and done[2] == "0", output[-3000:]
+    steps, where = int(done[1]), done[4]
+    summary = vm.command(f"cat {where}/summary.txt")
+    assert len(re.findall(r"^\d\d ok \d+ ms ", summary, re.M)) == steps and "BUILD:" in summary and "RUNNING NOW" not in summary, summary[-3000:]
+    require(vm.command(f"cat {where}/16-kbench.txt"), "kbench: 4 measurements, 0 failed")
+    require(vm.command("msh --check diag/full.msh"), "OK, REQUIRES: files sysinfo log lifecycle network camera")
+    print(f"PASS: diag/quick.msh: {steps} steps in {done[3]} s, each in its file under {where} with summary.txt; diag/full.msh accepted", flush=True)
 
 
 def table_row(screen, pattern):
@@ -2101,6 +2119,27 @@ def isolation_suite(vm):
     pid, faults = family("x", 1, "LEASE REVOKED")
     assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
+    # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
+    # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
+    # copy runs from the top, so a screen caught during it may show the top newer.
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("F\n")
+    seen, until = [], time.monotonic() + 4
+    while time.monotonic() < until:
+        _, size, _, pixels = vm.screenshot().split(b"\n", 3)
+        width, height = map(int, size.split())
+        def number(y):
+            r, g, b = pixels[(y * width + width // 2) * 3:][:3]
+            return r << 8 | g if b == 0x80 else None
+        top, bottom = number(height // 4), number(3 * height // 4)
+        if top and bottom:
+            seen.append((top, bottom))
+            assert bottom <= top, f"a frame copied while it was drawn: top {top}, bottom {bottom}; {seen}"
+    require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=20), "FRAMES DONE")
+    assert len({top for top, _ in seen}) >= 5, f"the frames did not reach the screen: {seen}"
+    print(f"PASS: the compositor copies whole frames: {len(seen)} screens, frames {seen[0][0]} to {seen[-1][0]}", flush=True)
+    time.sleep(.1); vm.collect(); vm.output = ""
     # 000-KRN-0039: SGDT from a program faults (#GP) where UMIP is on.
     names = protection_check(vm)
     vm.send("run app2\n")
@@ -3678,13 +3717,11 @@ def vfs_suite(args):
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=90)
             vm.expect("MIND> ", timeout=60)
             require(vm.command("reboot now"), "USAGE: REBOOT [-F]")
-            # Power off (issue 203): PSCI SYSTEM_OFF ends QEMU on aarch64; x86 has no ACPI sleep states yet.
-            if vm.arch == "aarch64":
-                vm.send("reboot -f --off\n")
-                vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF", timeout=30)
-                vm.process.wait(timeout=30)
-            else:
-                require(vm.command("reboot -f --off"), "ERROR: POWER OFF REFUSED")
+            # Power off ends QEMU: PSCI SYSTEM_OFF on aarch64 (issue 203), ACPI S5 from the DSDT on x86 (000-KRN-0080).
+            require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+            vm.send("reboot -f --off\n")
+            vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+            vm.process.wait(timeout=30)
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-vfs-3-{args.cpus}cpu.log").write_text(vm.log)
@@ -4141,6 +4178,24 @@ def updater_suite(args, updater_elf):
         listing = subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True, text=True).stdout
         assert "kept" in listing and "reboot" in listing, listing
     print("PASS: updater: init grants it exactly its authorities; its restart through init resets the machine with the volume whole", flush=True)
+    # A policy broker that never answers (the stand-in in its place receives nothing) on a machine without a network
+    # card, as the MacBook Pro's boot of 2026-10-11: init gives up after its limit, and the updater and the shell start
+    # (000-KRN-0075).
+    with tempfile.TemporaryDirectory(prefix="smoke-silent-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"updater.elf": updater_elf, "netpolicy.elf": updater_elf}, extra={"netpolicy.txt": policy})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-nic", "none"])
+        try:
+            vm.expect("MIND> ", timeout=120)
+            log = vm.service_logs("init", "[INIT] STARTED shell")
+            for line in ["[INIT] updater: THE POLICY BROKER DID NOT ANSWER IN 10 S", "[INIT] updater: NO NETWORK GRANT", "[INIT] STARTED shell"]:
+                require(log, line)
+            report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
+            held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
+            assert held and " 18:" not in held[1] and " 3:1" in held[1], report  # no flow grant (slot 18); its file client
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-updater-silent-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
 def update_suite(args):
@@ -6463,6 +6518,10 @@ def main():
             for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
                 shutil.copyfile(ROOT / IMAGE / name, disk / name)
             shutil.copytree(ROOT / IMAGE / "voice", disk / "voice")  # the voice recognizer's model and grammar
+            if suite == "bench":
+                # The runs on real hardware (176-KRN-0087), where they are checked: elsewhere the disk stays as the
+                # suites know it (fm opens on the first directory).
+                shutil.copytree(ROOT / IMAGE / "diag", disk / "diag")
             if suite == "services":
                 # 12 KiB for cat: three times the console's queue (000-KRN-0030).
                 (disk / "lines.txt").write_text("".join(f"LINE {n:03} {'.' * 30}\n" for n in range(300)))

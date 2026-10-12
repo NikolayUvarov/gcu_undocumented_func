@@ -1,6 +1,6 @@
-# 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run
+# 550-DRV-0023 — `bcm_wifi`, stage 2: the BCM4331's microcode loaded and run — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (the kernel's stop, 550-KRN-0082, is on `fast-test`; a run on the MacBook Pro is next) · **Blocked by:** 550-KRN-0082 reaching `main` (on `fast-test` now) · **Main task:** [550](550-network-on-real-hardware.md), through [550-DRV-0006](550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — ([550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done) done) · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -48,10 +48,22 @@ Since then:
 
 Since then, on request only, stage 2 first reads two registers of the core as the pulse left it (nothing else changed), then goes on through the enable with the status logged, not obeyed. The last step in the log tells which access stops the machine, if one does.
 
-**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel (a request in [requests-KRN.md](requests-KRN.md)): stop the core with a reset pulse first, then turn bus mastering off.
+**2026-10-11, the cause:** after an SMC reset the status still read `00000002` before `bcm_wifi` did anything, so it is made anew at each boot. Every boot that read it was built with 550-KRN-0070, which turns the card's bus mastering off at enumeration while the core the firmware left running is still writing to memory; the two that read `00000000` were built without it. The fix belongs in the kernel (a request in [requests-KRN.md](../issues/requests-KRN.md)): stop the core with a reset pulse first, then turn bus mastering off.
 
 **2026-10-11:** the kernel track made 550-KRN-0082 (on `fast-test`): at enumeration the core is reset through its agent, after up to 300 µs for pending operations, before bus mastering is turned off. Stage 2 refuses again, at its start, when the agent still reports a pending operation, so a test boot cannot stop the machine that way.
 
+## Resolution
+
+`bcm_wifi/src/main.rs`; the kernel's stop of the core before bus mastering goes off is [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done). On the MacBook Pro (`fast-test` c420cea, LOG:boot0002.log, 2026-10-12, on request):
+- the kernel: `BCM4331: 802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF (RESET STATUS 00000000, NOW 00000000)`; `bcm_wifi`'s stage 1 read the same;
+- the file: 43224 bytes, SHA-256 `df16911e…`, the one `scripts/proprietary.sh` checks;
+- the idle core: `MAC CONTROL 80000000, CLOCK CONTROL 07030000`;
+- the core enabled: `PHY 9701 (TYPE 7, REVISION 1, ANALOG 9)`, an HT-PHY; `RADIO 2059 REVISION 0`;
+- `MICROCODE RUNS: 10804 WORDS LOADED; REVISION 784.2, DATE C80F, TIME AC73`: revision 784, patch level 2, built 2012-08-15 21:35:19, which is Broadcom wl 6.30.163.46's microcode for core revision 29;
+- then the core reset again (`STAGE 2 DONE: RESET PULSED`), and the machine ran on through `check`, `kbench` and `bench`.
+
+The stage runs only when `data/wifitest.txt` exists, step by step with 3 s between steps. This is evidence for this machine only (MC-12.1), not of Wi-Fi working: no initial values, PHY or radio set-up, DMA or interrupt yet.
+
 ## Related
 
-[550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), `bcm_wifi/`, `scripts/proprietary.sh`.
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0022](../issues-done/550-DRV-0022-bcm4331-core-reset-and-sprom.done), `bcm_wifi/`, `scripts/proprietary.sh`.

@@ -15,6 +15,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 | Agent ID | What it is | User for work | Use |
 |---|---|---|---|
 | `PCU_585240b00e8a` | Ubuntu 22.04.5, x86-64, 4 CPUs, 15 GB RAM | `un` | Builds, host tests, QEMU suites, gates. **No reboots.** |
+| `i9_4e6882212251` | Ubuntu 24.04.3 under WSL2 on Windows, Intel Core i9-9900K (16 threads), 48 GB RAM for WSL, 920 GB free, `/dev/kvm` | the agent's own, `un`: give **no `run_as`** (the agent is not root, so `runuser` fails) | Builds, host tests, QEMU suites under TCG. **No reboots**: it is WSL2. |
 
 - **What is installed on `PCU_585240b00e8a`** (and who did it is in section 6):
   - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
@@ -29,6 +30,30 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - Its prerequisites name a Java runtime, and the Secure Boot group needs `python3-virt-firmware`.
   - The whole gate takes longer than one operation may run (section 3).
   - Builds, host tests and single QEMU groups do run there.
+
+- **What is on `i9_4e6882212251`** (section 6):
+  - everything [`scripts/setup_build_env.sh`](../scripts/setup_build_env.sh) installs, from Ubuntu 24.04:
+    - QEMU 8.2.2 for x86 and aarch64, OVMF and AAVMF 2024.02, iPXE ROMs;
+    - `dosfstools`, `mtools`, `swtpm` 0.7.3;
+    - `sbsigntool`, `python3-virt-firmware` 24.1;
+    - a Java runtime;
+  - `git`, Python 3.12;
+  - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
+  - the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`.
+- **Its packages are CI's** (Ubuntu 24.04), unlike PCU's. Say so where you report a run: "i9 through Effector, Ubuntu 24.04 under WSL2, QEMU 8.2.2 (Ubuntu), TCG".
+- **WSL's settings** (`%UserProfile%\.wslconfig`, the maintainer's): 48 GB of memory, all 16 threads, nested virtualization on.
+- **KVM.** `/dev/kvm` is there and `un` is in the `kvm` group, but the suites run under TCG, as in CI: none asks for KVM.
+- **A proxy.** The agent runs with `HTTPS_PROXY` and `HTTP_PROXY` set and no `NO_PROXY`. A test that serves on `127.0.0.1` is then reached through the proxy and fails: `release_test.py`'s HTTPS server failed the host tests with "Tunnel connection failed: 503". Start an operation with `export NO_PROXY=127.0.0.1,localhost,::1 no_proxy=127.0.0.1,localhost,::1`.
+- **Measured on 2026-10-11** (762907d merged with `main` b0ca713, one operation):
+
+  | Group | i9 | The kernel session's machine |
+  |---|---|---|
+  | build (x86) | 149 s | 240 s |
+  | build (x86 test programs) | 31 s | 28 s |
+  | x86: boot, display, network, TLS, shell, memory, clock | 952 s | 784 s |
+
+  All three passed. The builds are faster there. The QEMU suites are not, as they mostly wait inside the guest.
+- **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. The key
 
@@ -121,7 +146,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | Group | The kernel session's machine | PCU |
 |---|---|---|
 | build (aarch64) | 214 s | 248 s |
-| aarch64: boot and fault containment | 90 s | 8 s, failed: QEMU aborts in `vvfat` |
+| aarch64: boot and fault containment | 90 s | 8 s, failed: QEMU aborted in `vvfat` (106 s and passing since 000-KRN-0067) |
 | aarch64: programs, shell and four CPUs | 339 s | 394 s |
 | aarch64: files, network and TLS | 1121 s | 1819 s |
 | aarch64: RAM, ACPI and PCI above 4 GiB | 826 s | 1063 s |
@@ -139,10 +164,10 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
   4. **The logs.** Copy what you need into your track's directory in the same operation. The next run of anyone's `ci_local.sh` removes `/tmp/mind-core-*.log` and rewrites `/tmp/mind-ci-local`.
 - **The report** says where each part ran: "x86 part local; aarch64 part on PCU through Effector (Ubuntu 22.04, QEMU 8.2.x from qemu.org, AAVMF 2022.02)". Together they are one local gate in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of both parts passed on the same commit.
 - **In all, about 86 minutes on PCU** against 64 on the kernel session's machine, for the groups that pass.
-- **Known: "aarch64: boot and fault containment" fails on PCU.**
-  - QEMU's `vvfat` driver aborts as the guest writes its boot volume (`fat:rw:`), with `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
-  - It does so with QEMU 8.2.2 and 8.2.10 from qemu.org alike. The same test passes on the kernel session's machine under Ubuntu's 8.2.2, which carries no `vvfat` patch.
-  - The cause is being looked for in [000-KRN-0067](../issues/000-KRN-0067-the-aarch64-boot-test-on-pcu.md). Until it is fixed, run that one group on your own machine.
+- **"aarch64: boot and fault containment" runs on PCU too** (since 2026-10-11, [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)).
+  - It used to fail there: QEMU's `vvfat` driver aborted as the guest wrote its boot volume (`fat:rw:`), with `handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed`.
+  - The test now boots raw FAT images of the build, and `vvfat` serves only a read-only decoy disk. It passed on PCU in 106 s (cf0283f) and on the kernel session's machine.
+  - Run it in the aarch64 part with the other groups (step 3).
 
 ## 5. When something goes wrong
 
@@ -158,3 +183,5 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.2 from the qemu.org release tarball, its signature verified (Michael Roth, `CEAC C9E1 5534 EBAB B82D 3FA0 3353 C9CE F108 B584`), built for `x86_64` and `aarch64` with the tools, in `/opt/qemu-8.2.2`, links in `/usr/local/bin`. Its build dependencies from Ubuntu 22.04: `ninja-build`, `python3-venv`, `python3-tomli`, `python3-distlib`, `flex`, `bison`, `libglib2.0-dev`, `zlib1g-dev`, `libpixman-1-dev`, `libslirp-dev`, `libfdt-dev`, `libpng-dev`, `libaio-dev` | KRN, at the maintainer's request (the same QEMU version as CI) |
 | 2026-10-10 | `PCU_585240b00e8a` | QEMU 8.2.10 from the qemu.org release (the same signer) built in `~un/qemu-upstream/stage` to try the aarch64 boot test (000-KRN-0067), **not installed**; Ubuntu noble's QEMU patch list in `~un/qemu-noble-patches` (read only) | KRN |
+| 2026-10-11 | `i9_4e6882212251` | rustup 1.29.1 in `~un/.cargo` (no change to the shell's profile: `. ~/.cargo/env`) with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02, its four targets); the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`; `/home/un/mind-core/setup_build_env.sh`, a copy of `scripts/setup_build_env.sh`, not run yet (`sudo` asks for a password) | KRN, at the maintainer's request |
+| 2026-10-11 | `i9_4e6882212251` | `setup_build_env.sh` run as root: Ubuntu 24.04's QEMU 8.2.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), `ovmf` and `qemu-efi-aarch64` 2024.02, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `python3-virt-firmware`, `un` in the `kvm` group; WSL given 48 GB and nested virtualization, then restarted | the maintainer |
