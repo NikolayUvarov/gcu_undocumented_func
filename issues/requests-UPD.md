@@ -47,3 +47,20 @@ The Effector server installs software by sending a package. MIND Core signs its 
 
 - The host tool signs a test package, and the routine accepts it.
 - The routine refuses a package with a changed file, a wrong key or a lower version than one already installed, in host tests.
+
+## The updater's checks in a parser of their own (109-NET-0010)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, for [109-NET-0010](109-NET-0010-a-parser-per-session.md), done by the kernel session at the maintainer's word.
+
+### Problem
+
+Each `download` now parses its heads in a `parse` process of its own, which holds only that session's endpoint and ends with it. The updater's channel, manifests and file heads still go to the shared `parse` service, so one check's input reaches the process that parses the next.
+
+### Plan (a proposal; the update track decides)
+
+- **In `updater/src/source.rs` and `updater/src/main.rs`,** a check or a fetch takes a `mind::parse::Session::start(loader, Endpoint(SLOT_PARSE))` and passes its `endpoint()` where `SLOT_PARSE` goes now. The session ends when it is dropped.
+- **What the updater needs from `init`,** which the kernel track adds when asked: a client of `loader` badged so that it may only start helpers (`loader.wit` 1.8 `helper`, [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)), and an endpoint quota of 1. It gets no right to start programs.
+
+### Acceptance criteria
+
+The `update` suite's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends.

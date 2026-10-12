@@ -2,11 +2,11 @@
 //! a `mind::http::Parser` that asks the service, so a program that holds the network and its files parses no response
 //! head itself (MC-11.11). `mind::http::get` checks whatever comes back against what it asked for (MC-11.5). Release
 //! channels and boot manifests to and from `mind::release` (351-NET-0011): the updater encodes what comes back again
-//! and compares it with the signed bytes.
+//! and compares it with the signed bytes. A `Session` is a parser process of one session's own (109-NET-0010).
 use crate::http::{self, Head, Range};
 use crate::idl::codec::{List, Text};
 use crate::idl::parse::{self, HttpHead};
-use crate::ipc::Endpoint;
+use crate::ipc::{Endpoint, Message};
 use crate::release;
 
 pub fn to_record(head: &Head) -> HttpHead {
@@ -38,6 +38,59 @@ impl http::Parser for Service {
             Err(_) => Err(http::Error::Parser),
         }
     }
+}
+
+/// A parser process of one session's own (109-NET-0010, Appendix B.6): the loader starts `parse` as a helper that holds
+/// nothing but this session's endpoint, and it ends when the session is dropped (or `end` is called), or after 30 s
+/// without a request. Where the loader starts no helper (an older loader, or no endpoint left in this program's quota),
+/// the session uses the shared service at `shared`.
+pub struct Session { endpoint: Endpoint, pid: Option<u64> }
+
+/// Why a session got no parser of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotOwn { Endpoint(crate::sys::Error), Loader(crate::idl::loader::Error), Call(crate::sys::Error) }
+
+impl Session {
+    /// A parser of the session's own, which the loader starts as a helper.
+    pub fn own(loader: Endpoint) -> Result<Self, NotOwn> {
+        let endpoint = Endpoint::create().map_err(NotOwn::Endpoint)?;
+        // The helper's copy can receive; this one only calls.
+        let started = crate::ipc::mint(endpoint.0, crate::abi::CAP_READ | crate::abi::CAP_WRITE, 0, 0).map_err(NotOwn::Endpoint).and_then(|lent| {
+            let pid = crate::idl::loader::helper(loader, crate::idl::loader::HelperKind::Parse, lent);
+            let _ = crate::ipc::drop_cap(lent);
+            match pid { Ok(Ok(pid)) => Ok(pid), Ok(Err(error)) => Err(NotOwn::Loader(error)), Err(error) => Err(NotOwn::Call(error)) }
+        });
+        match started {
+            Ok(pid) => Ok(Self { endpoint, pid: Some(pid) }),
+            Err(why) => { let _ = crate::ipc::drop_cap(endpoint.0); Err(why) }
+        }
+    }
+
+    /// The shared service at `endpoint`, for a session that got no parser of its own.
+    pub fn shared(endpoint: Endpoint) -> Self { Self { endpoint, pid: None } }
+
+    /// A parser of the session's own, else the shared service at `shared`.
+    pub fn start(loader: Endpoint, shared: Endpoint) -> Self { Self::own(loader).unwrap_or(Self::shared(shared)) }
+
+    /// Where the session's requests go: its own parser's endpoint, or the shared service's.
+    pub fn endpoint(&self) -> Endpoint { self.endpoint }
+
+    /// The PID of the session's own parser; None when it uses the shared service.
+    pub fn pid(&self) -> Option<u64> { self.pid }
+}
+
+/// Ends a session's own parser: a message that is not a call, then this program's capability goes.
+pub fn end_session(endpoint: Endpoint) {
+    let _ = endpoint.send_timeout(&Message::new(0, 0), 100);
+    let _ = crate::ipc::drop_cap(endpoint.0);
+}
+
+impl Drop for Session {
+    fn drop(&mut self) { if self.pid.take().is_some() { end_session(self.endpoint); } }
+}
+
+impl http::Parser for Session {
+    fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> { Service(self.endpoint).head(head) }
 }
 
 /// The record of a channel `mind::release` read.
