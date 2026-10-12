@@ -414,14 +414,15 @@ impl Init {
                 if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
-            // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports, and
-            // the SMBus host's base from the DSDT as an argument.
+            // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports; the
+            // SMBus host's base and the AC adapter's bit in the controller's space from the DSDT as arguments.
             "battery" => {
-                let (command, data, base) = hardware::battery_place().ok_or(Error::NotFound)?;
+                let (command, data, base, ac) = hardware::battery_place().ok_or(Error::NotFound)?;
                 grants.add(SLOT_DEV0, minted.ports(command as usize, 1)?, 0);
                 grants.add(SLOT_DEV1, minted.ports(data as usize, 1)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("smbus=0x{:02x}", base));
+                if let Some((byte, bit)) = ac { let _ = core::fmt::Write::write_fmt(&mut args, format_args!(" ac=0x{:02x}.{}", byte, bit)); }
             }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }

@@ -23,7 +23,10 @@ The MacBook Pro's tables, as `log:acpi/` holds them:
   - the controller's byte protocol (RD_EC, WR_EC: ACPI 6.5, 12.3);
   - the SMBus host interface in its space (12.9: Read Word, Read Block);
   - the battery's words (Smart Battery Data 1.1) and what they mean.
-- **The power source** comes from the charger's AC_PRESENT where the charger follows the specification (bit 4 set, not 0xFFFF). Otherwise it comes from the battery's own status: not discharging means on the mains. MacBooks' chargers answer 0xFFFF, and Linux's `sbs` driver ignores them the same way.
+- **The power source**, in this order:
+  - the charger's AC_PRESENT where the charger follows the specification (bit 4 set, not 0xFFFF). MacBooks' chargers answer 0xFFFF, and Linux's `sbs` driver ignores them the same way;
+  - else the AC adapter's bit in the controller's space: the one-bit field of the `EmbeddedControl` region that the adapter's `_PSR` (`_HID` "ACPI0003") returns, at once or through a name a `Store` fills from it, found in the AML as bytes by `init` and passed as `ac=0xNN.B`;
+  - else the battery's own status: not discharging means on the mains. This cannot tell a full battery on the mains: a TI gauge sets DISCHARGING at rest too.
 - **The kernel** hands out exactly the two ports the ECDT names (`PLATFORM_PORTS`), beside the platform profile's fixed ones.
 - **`init`** finds both while it holds the platform privilege. It then starts `battery` with the two ports and `smbus=0xNN` (211-KRN-0090).
 - **The service `battery`** (`idl/battery.wit`):
@@ -36,9 +39,10 @@ The MacBook Pro's tables, as `log:acpi/` holds them:
 ## Acceptance criteria
 
 - **Host tests** (`tests/battery_host.rs`, on a model of the controller with an SMBus host and a battery):
-  - the ports and the host's base are found in an ECDT and in AML; the MacBook Pro's tables were also checked once, outside the repository: 0x66, 0x62, 0x20;
+  - the ports, the host's base and the adapter's bit are found in an ECDT and in AML; the MacBook Pro's tables were also checked once, outside the repository: 0x66, 0x62, 0x20, and the adapter at 0x60 bit 1 (`EACP`; its SSDTs name none);
   - a battery on its own power and on the mains, charging and full;
   - a charger to the specification, and one answering 0xFFFF;
+  - a full battery at rest on the mains, told by the adapter's bit;
   - a transaction that waits for the firmware's;
   - a missing device, a host that stays busy and a controller that does not answer, told apart.
 - **QEMU** (no ECDT): `battery` is not started; the other suites pass.
@@ -47,6 +51,8 @@ The MacBook Pro's tables, as `log:acpi/` holds them:
 ## Progress
 
 **2026-10-12.** The host tests pass. QEMU x86: the boot, normal, services, shell, usb and vfs suites pass with `battery` not started.
+
+**2026-10-12, the MacBook Pro's first run** (the maintainer's photo): the controller at 66/62 and the SMBus host at 0x20 were found; the battery is an SMP bq20z451 (Li-ion, design 8460 mAh, 10950 mV, 358 cycles), the manager answers, the charger answers 0xFFFF. The reading at boot: 100 %, 0 mA, 12308 mV, no time to empty, and "on battery". With the adapter plugged in later, no line followed. The cause: at rest the bq20z451 sets DISCHARGING whether or not the mains are there, so the battery's status alone cannot tell a full battery on the mains. The MacBook Pro's DSDT says where the firmware looks: `ADP1` (`ACPI0003`) `_PSR` returns `PWRS`, which `PWRS = EACP` fills from the controller's byte 0x60 bit 1. `init` now finds that bit in the AML and the service reads it with each reading; the run with the adapter plugged in and out is left.
 
 ## Related
 

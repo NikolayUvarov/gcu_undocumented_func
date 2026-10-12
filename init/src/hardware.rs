@@ -78,20 +78,24 @@ pub fn report(keeper: usize) {
     let _ = mind::ipc::drop_cap(client);
 }
 
-/// The embedded controller's command/status and data ports (the ECDT) and its SMBus host's base (ACPI0001's `_EC` in the
-/// DSDT or an SSDT), for the battery service (211-PRT-0008); None where the tables do not name both.
-pub fn battery_place() -> Option<(u16, u16, u8)> {
-    let (mut ports, mut base) = (None, None);
+/// The embedded controller's command/status and data ports (the ECDT), its SMBus host's base (ACPI0001's `_EC` in the
+/// DSDT or an SSDT) and, where the tables name it, the AC adapter's bit in its space (`_PSR`), for the battery service
+/// (211-PRT-0008); None where the tables do not name the ports and the base.
+pub fn battery_place() -> Option<(u16, u16, u8, Option<(u8, u8)>)> {
+    let (mut ports, mut base, mut ac) = (None, None, None);
     for index in 0..256 {
         let Some(table) = object(PLATFORM_ACPI_TABLE, index) else { break };
         let bytes = table.1.as_slice();
         let length = bytes.get(4..8).map_or(0, |l| u32::from_le_bytes(l.try_into().unwrap()) as usize).min(bytes.len());
         if bytes.starts_with(b"ECDT") { ports = ports.or_else(|| mind::battery::ecdt_ports(&bytes[..length])); }
-        if (bytes.starts_with(b"DSDT") || bytes.starts_with(b"SSDT")) && length > 36 { base = base.or_else(|| mind::battery::smbus_base(&bytes[36..length])); }
+        if (bytes.starts_with(b"DSDT") || bytes.starts_with(b"SSDT")) && length > 36 {
+            base = base.or_else(|| mind::battery::smbus_base(&bytes[36..length]));
+            ac = ac.or_else(|| mind::battery::ac_bit(&bytes[36..length]));
+        }
         done(table);
     }
     let (command, data) = ports?;
-    Some((command, data, base?))
+    Some((command, data, base?, ac))
 }
 
 // Every ACPI table to log:acpi/<SIG>.bin (repeated signatures numbered: SSDT1.bin, SSDT2.bin, …).
