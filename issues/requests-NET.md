@@ -268,3 +268,21 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## The stack's third card in slot 4 (550-KRN-0097, for 550-NET-0018)
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, answering "The Wi-Fi station in the boot services" (requests-KRN.md on the network branch).
+
+### What the kernel track prepared
+
+550-KRN-0097, built and passing the `net` suite on the network branch's 40ba302 merged with the kernel branch; it reaches `main` once 550-NET-0017 and 550-NET-0018 are there:
+
+- `init` starts `wlansim` (where a test puts it) and `wlan` when a radio runs, and lends the radio's client to `wlan` alone, in slot 2;
+- `netstack` gets `wlan`'s client without a badge in **slot 4**;
+- the shell gets `wlan`'s client with `BADGE_WIFI_CHANGE` in `SLOT_WIFI`: 33, a launch slot, so `SLOT_DYNAMIC` moves to 34 (ABI 9), with `REQUEST_WIFI` = `1 << 22`;
+- the `net` suite puts the `wlansim` fixture on its disk as `wlansim.elf` (`--wlansim-elf`, or where `scripts/x86_fixtures.sh` and `build_aarch64.sh --fixtures` build it) and checks these grants with `stat caps`.
+
+### What is asked of the network track
+
+- **`netstack`:** read slot 4 as its third card (`CARDS` = 3). Slot 4 is empty without the station, as slot 3 is without a second card.
+- **The `net` suite:** with the station up, `netstack` finds three cards, and a join to `MIND-TEST` gets 10.0.3.15.
