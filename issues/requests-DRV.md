@@ -118,3 +118,27 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 ### Acceptance criteria
 
 On this machine a tone plays through its analog output, and the Ethernet card gets an address by DHCP.
+
+## The USB keyboard on the Ryzen machine's xHCI types nothing (213)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's fifth boot of the Ryzen 9 5900HX machine ([213](213-amd-ryzen-pc.md); `log:boot0001.log`–`boot0005.log`).
+
+### Problem
+
+On boot 5 the shell was on the screen and typing did nothing. What the logs show:
+- **The device:** 1C4F:000E, low speed, on port 4 of the first xHCI (05:00.3, AMD 1022:1639), slot 2.
+- **`usb_hid`:** it took interface 0 as a boot keyboard (endpoint 81) and left interface 1 (consumer and system control, report IDs 1 and 2, endpoint 82) alone.
+- **`usb_host`:** it polls slot 2 endpoint 3 (packet 8, interval 10). On boots 1–3 it logged a first report in the boot format, for example `[00, 00, 3B, 00, 00, 00, 00, 00]` (F2).
+- **Not in the logs:** whether later reports came, and whether `usb_hid` turned any of them into key events. The internal PS/2 controller also exists (`ps2_kbd` runs, "NO MOUSE"), so the shell's keyboard service is `ps2_kbd`.
+
+The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) work; this is a low-speed device on an AMD xHCI.
+
+### Plan (a proposal; the drivers track decides)
+
+- **Count it:** `usb_host` logs, once a second at most, the reports and completion codes of each interrupt endpoint after the first, and `usb_hid` the key events it sends.
+- **Low speed on xHCI:** check the endpoint context (the interval in 125 µs units for a low-speed device, Max ESIT Payload 8, Max Packet Size 8) and the re-queued transfer after each completion.
+- **The maintainer's next run:** the same keyboard on another port or behind a hub, and another keyboard.
+
+### Acceptance criteria
+
+On this machine the keyboard types in the shell, and the counters above are in the log.

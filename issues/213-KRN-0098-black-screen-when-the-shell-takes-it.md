@@ -39,3 +39,9 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 ## Related
 
 [213](213-amd-ryzen-pc.md), [000-KRN-0086](../issues-done/000-KRN-0086-the-compositor-copies-whole-frames.done), 211-KRN-0017 (service logs on the boot screen), 211-KRN-0018 (the compositor's quota and the screen).
+
+## Progress (2026-10-13, a fifth boot)
+
+- **The same machine showed the shell's green screen** on its fifth boot (`log:boot0005.log`, `hw0005.txt`: the same Ryzen 9 5900HX, devices and 2560 × 1440 screen, the same build 28d9c3d). The black screen is therefore not certain on this machine: it came on boots 1–3 and not on boot 5.
+- **What differed in the logs:** on boots 1–3 a key report came from the USB keyboard (at 25.6, 17.2 and 8.8 s; space and F2 among them). On boot 5 none came before the log ends at 13.8 s. A key pressed while the screen changes hands stays a suspect next to the three above; whether the keys came before or after the black is not in the log.
+- **The plan stands.** The next run also notes when a key was first pressed.

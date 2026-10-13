@@ -12,7 +12,8 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 - the boot stick on the first xHCI (05:00.3), the USB keyboard 1C4F:000E, the first NVMe disk (1ED0:2283), the log partition: each boot's log and hardware report were written.
 
 **What did not:**
-- **the screen:** the white boot lines showed, then the screen went black when the shell should have shown its green text ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md));
+- **the screen:** the white boot lines showed, then the screen went black when the shell should have shown its green text, on boots 1–3 but not on boot 5 ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md));
+- **the keyboard:** on boot 5, with the shell on the screen, typing did nothing. The low-speed USB keyboard 1C4F:000E was found and its boot reports reach `usb_host` on the first xHCI (a first report is logged on boots 1–3), but no key reached the shell (requests-DRV.md);
 - **sound:** `audio_gw` took the GPU's HDMI controller (05:00.1, codec 1002:AA01, no output path), not the analog one (05:00.6, 1022:15E3), which it did not try;
 - **the second xHCI** (05:00.4) and **the second NVMe disk** (04:00.0, 1F40:1202) have no driver;
 - **network:** a Realtek RTL8168 Ethernet card (10EC:8168) and an RTL8852BE Wi-Fi card (10EC:B852, its Bluetooth on USB as 0BDA:B85B) have no driver.
