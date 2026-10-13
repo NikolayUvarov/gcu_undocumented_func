@@ -96,3 +96,25 @@ In QEMU (`tests/usb_image_smoke.py`), the stick is swapped for a copy with anoth
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is steps 3a–3c (`virtio-gpu` first, testable in QEMU with two outputs; then Intel's display engine from its PRMs; then AMD), 4 and 5. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## The Ryzen 9 5900HX machine: sound, Ethernet, a second NVMe disk, a second xHCI (213)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's first run on an AMD machine ([213](213-amd-ryzen-pc.md); `log:hw0003.txt`).
+
+### Problem
+
+- **Sound:** `audio_gw` took the GPU's HDMI audio controller (05:00.1, 1002:1637, codec 1002:AA01: "NO OUTPUT PATH") and gave up. The analog controller (05:00.6, 1022:15E3, subsystem 1022:D270) was not tried.
+- **Ethernet:** a Realtek RTL8168 (10EC:8168 at 02:00.0) has no driver.
+- **A second NVMe disk** (04:00.0, 1F40:1202) has no driver: `nvme` drives the first (01:00.0).
+- **The second xHCI** (05:00.4): `usb_host` instances, [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md).
+
+### Plan (a proposal; the drivers track decides)
+
+- **`audio_gw`:** try each HDA controller and use the first codec with an output path; a GPU's HDMI audio only when nothing else plays.
+- **An RTL8168 driver** serving `idl/net.wit`, for the network on real hardware (550).
+- **`nvme` instances** for further controllers, `init`'s half asked of the kernel track then.
+- **`usb_host` and the class drivers** with more than one host controller.
+
+### Acceptance criteria
+
+On this machine a tone plays through its analog output, and the Ethernet card gets an address by DHCP.
