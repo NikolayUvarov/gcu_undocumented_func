@@ -83,6 +83,7 @@ X86_GROUPS=(
     "x86: x2APIC|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
     "x86: padded vector area|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
     "x86: protection probes|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
+    "x86: TSC measured again|$X86 --kernel $MIND_TEST_OUT/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"

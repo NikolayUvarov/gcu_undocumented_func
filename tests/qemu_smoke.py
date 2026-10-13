@@ -7677,6 +7677,30 @@ def display_suite(args, disk):
         no_serial_check(args, disk)
 
 
+def clock_suite(args, disk):
+    """000-KRN-0100, with the test kernel `tsc-skew-test`, whose first measure of the TSC is 9% high as a stretched
+    calibration left it on i9: the kernel measures the rate again on the ACPI PM timer (CLOCK reports it), and from then
+    on its clock keeps the host's time. Uncorrected, 30 s of the host's were about 27.5 of the guest's."""
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        was = int(re.search(r"TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC (\d+) MHZ", vm.log)[1])
+        time.sleep(10)  # past the measures at 1 s and 8 s
+
+        def clocks():
+            before = time.time()
+            line = vm.command("time", raw=True)
+            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+        host0, guest0, measured = clocks()
+        assert abs(was / measured - 1.09) < 0.02, (was, measured)
+        time.sleep(30)
+        host1, guest1, _ = clocks()
+        ratio = (guest1 - guest0) / (host1 - host0)
+        assert abs(ratio - 1) < 0.03, (ratio, was, measured)
+    finally:
+        vm.close()
+    print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
+          f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
+
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
     the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
@@ -8257,6 +8281,9 @@ def main():
                 continue
             if suite == "display":
                 display_suite(args, disk)
+                continue
+            if suite == "clock":
+                clock_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)
