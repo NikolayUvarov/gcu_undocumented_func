@@ -145,7 +145,7 @@ On this machine the keyboard types in the shell, and the counters above are in t
 
 ## The boot stick not set up on a high-speed xHCI port: no boot volume, no programs (the maintainer's photo, 2026-10-13)
 
-**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of another PC of the maintainer's (not the Ryzen machine: another device key, no log volume).
+**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of another PC of the maintainer's: an Intel Core i5 (not the Ryzen machine: another device key, no log volume). Its exact model and USB controller are not known yet.
 
 ### Problem
 
