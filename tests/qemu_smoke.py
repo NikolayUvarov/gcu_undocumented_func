@@ -5205,9 +5205,10 @@ def download_check(args, disk):
     _expired_certificate(certificates)
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
+    stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1]))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1]))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
@@ -5225,13 +5226,15 @@ def download_check(args, disk):
     try:
         download_runs(vm, release, port, big, small, cut)
         session_parsers_check(vm, held, small)
+        parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
         service_runs(vm, service_port)
         pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
         held.go.set()
-        for server in (release, secure, rogue, held, service, expired):
+        stall.go.set()
+        for server in (release, secure, rogue, held, service, expired, stall):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -5412,6 +5415,65 @@ def session_parsers_check(vm, held, body):
     for name in ("h1", "h2"):
         require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
     print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+
+
+def stall_server(body, cut):
+    """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
+    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
+    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    go, sent, ranges = threading.Event(), threading.Event(), []
+
+    class Stall(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ranged = self.headers.get("Range")
+            ranges.append(ranged)
+            if ranged:
+                start = int(ranged.split("=", 1)[1].split("-", 1)[0])
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                self.send_header("Content-Length", str(len(body) - start))
+                self.end_headers()
+                self.wfile.write(body[start:])
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[:cut])
+            sent.set()
+            go.wait(60)
+            self.close_connection = True
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
+    server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def parser_restart_check(vm, stall, body):
+    """109-NET-0010: a download's own parser that ends while the body comes (as it does after 30 s without a request,
+    which a slow transfer reaches) is followed by another, which parses the resumed response's head. Before, the call
+    went to an endpoint only the download itself could still receive on, and waited for ever."""
+    url = f"http://10.0.2.2:{stall.server_address[1]}"
+    service = vm.services()["parse"]
+    require(vm.command(f"run download ram:s.bin {url}/s.bin &"), "NAME=download BACKGROUND")
+    assert stall.sent.wait(30), stall.ranges
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
+    require(vm.command(f"kill {parsers[0]}"), f"KILLED PID={parsers[0]}")
+    stall.go.set()
+    for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
+        if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not re.search(r"^\d+ download ", listed, re.M), listed
+    assert stall.ranges == [None, "bytes=50000-"], stall.ranges
+    require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
+    print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
@@ -7609,6 +7671,46 @@ def display_suite(args, disk):
         finally:
             vm.close()
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    if args.arch == "x86_64":
+        no_serial_check(args, disk)
+
+
+def no_serial_check(args, disk):
+    """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
+    the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
+    black, as on the maintainer's Ryzen machine. Seen through QMP's screendump, as nothing else talks to this machine."""
+    with tempfile.TemporaryDirectory(prefix="mind-noserial-") as temp:
+        sock, picture = Path(temp) / "qmp.sock", Path(temp) / "screen.ppm"
+        process = subprocess.Popen([args.qemu, "-bios", args.firmware, "-drive", f"format=raw,file=fat:{disk.relative_to(ROOT).as_posix()}",
+                                    "-snapshot", "-m", "512", "-smp", str(args.cpus), "-serial", "none", "-monitor", "none", "-display", "none",
+                                    "-no-reboot", "-qmp", f"unix:{sock},server=on,wait=off"], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            lit, total = 0, 1
+            for _ in range(60):
+                time.sleep(2)
+                if not sock.exists():
+                    continue
+                with socket.socket(socket.AF_UNIX) as client:
+                    client.connect(str(sock))
+                    lines = client.makefile("rw")
+                    lines.readline()  # the greeting
+                    for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
+                        lines.write(json.dumps(command) + "\n"); lines.flush()
+                        while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
+                            pass
+                if not picture.exists():
+                    continue
+                _, size, _, pixels = picture.read_bytes().split(b"\n", 3)
+                width, height = map(int, size.split())
+                total = width * height
+                lit = sum(1 for i in range(0, total * 3, 3) if pixels[i:i + 3] != b"\0\0\0")
+                if lit > total // 2:  # the shell's background covers the screen
+                    break
+            assert lit > total // 2, f"{lit} of {total} pixels lit without COM1"
+        finally:
+            process.kill()
+            process.wait()
+    print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
 def store_disk_check(args, disk):
