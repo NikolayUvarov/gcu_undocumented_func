@@ -1,13 +1,13 @@
 // Stages 4 and 5 (550-DRV-0025, 550-DRV-0026), now a test of the radio's service calls (550-DRV-0027): the station's
 // view of a scan of channels 1 to 13 with every beacon let through; a broadcast probe request on channels 1 to 11 at 1
-// and at 6 Mbit/s; a probe request to each of the three strongest networks, which acknowledge it, at the service's
-// gain and at b43's (for 550-DRV-0028), with the filter following that network.
+// and at 6 Mbit/s; probe requests to every network heard, which acknowledge them, at two gains and two rates (for
+// 550-DRV-0028), with the filter following that network.
 use crate::radio::{Filter, Radio, FRAME_MAX, RADIO_HEADER, TX_GAIN};
 use crate::stage3::Core;
 
 const DWELL_MS: usize = 200; const ANSWER_MS: usize = 150; const TX_CHANNELS: u8 = 11;
-// b43's gain table entry, tried against the service's for the directed probes; the networks probed.
-const B43_GAIN: u16 = 40; const PROBED: usize = 3; const ATTEMPTS: u8 = 7;
+// The gain table entries the directed probes are sent at (b43's, and a higher gain); the networks probed, how often.
+const GAINS: [u16; 2] = [40, 20]; const PROBED: usize = 6; const REPEATS: u32 = 3; const ATTEMPTS: u8 = 7;
 
 struct Network { bssid: [u8; 6], ssid: [u8; 32], ssid_len: usize, channel: u8, signal: i8, security: u8, frames: u32 }
 const NONE: Network = Network { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, signal: -128, security: 0, frames: 0 };
@@ -114,9 +114,9 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
         let mut heard = Heard::default();
         listen(&mut radio, DWELL_MS, &mut seen, &mut heard);
         let after = radio.counts;
-        mind::println!("[BCM] CHANNEL {}: {} BEACONS, {} PROBE RESPONSES, {} OTHER TO US, {} OTHER; {} OF UNKNOWN RATE; {} FILTERED, {} BAD, {} OVER THE QUEUE, {} DMA ERRORS",
+        mind::println!("[BCM] CHANNEL {}: {} BEACONS, {} PROBE RESPONSES, {} OTHER TO US, {} OTHER; {} OF UNKNOWN RATE; {} FILTERED, {} BAD, {} DMA ERRORS",
                        ch, heard.beacons, heard.responses, heard.to_us, heard.other, heard.unknown_rate, after.filtered - before.filtered,
-                       after.bad - before.bad, after.overflow - before.overflow, after.dma_errors - before.dma_errors);
+                       after.bad - before.bad, after.dma_errors - before.dma_errors);
     }
 
     step(3, "THE NETWORKS HEARD");
@@ -145,34 +145,37 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
     step(5, "THE NETWORKS HEARD, WITH THE ANSWERS");
     mind::println!("[BCM] ACTIVE SCAN DONE: {} PROBE RESPONSES; {} NETWORKS IN ALL", answers, list(&seen));
 
-    step(6, "A PROBE REQUEST TO EACH OF THE THREE STRONGEST NETWORKS, ACKNOWLEDGED OR NOT, AT GAIN ENTRY 80 AND THEN 40");
+    step(6, "PROBE REQUESTS TO EVERY NETWORK HEARD, WHICH ACKNOWLEDGE THEM: 3 EACH AT GAIN ENTRIES 40 AND 20, AT 1 AND 6 MBIT/S");
     let mut order: [usize; SEEN] = core::array::from_fn(|i| i);
     order.sort_unstable_by_key(|&i| (seen[i].frames == 0, -(seen[i].signal as i16)));
     let targets = order.iter().copied().filter(|&i| seen[i].frames != 0 && (1..=13).contains(&seen[i].channel)).take(PROBED);
-    for gain in [TX_GAIN, B43_GAIN] {
+    for gain in GAINS {
         match radio.set_gain(gain) { Ok(t) => mind::println!("[BCM] GAIN ENTRY {} ({:08X})", gain, t), Err(e) => { mind::println!("[BCM] GAIN ENTRY {} NOT SET: {:?}", gain, e); break; } }
         for i in targets.clone() {
             let (bssid, ch, signal) = (seen[i].bssid, seen[i].channel, seen[i].signal);
             if radio.set_channel(ch).is_err() || radio.set_filter(Filter { all_beacons: false, bssid, own: [0; 6] }).is_err() { mind::println!("[BCM] CHANNEL {} OR FILTER NOT SET", ch); continue; }
-            sequence += 1;
-            let len = probe(&mut frame, &mac, &bssid, ch, sequence);
-            let sent = radio.send(&frame[..len], 2, ATTEMPTS);
-            let filtered = radio.counts.filtered;
-            let mut heard = Heard::default();
-            let mut ignore = [NONE; SEEN];
-            listen(&mut radio, ANSWER_MS, &mut ignore, &mut heard);
-            let b = bssid;
-            match sent {
-                Ok(s) => mind::println!("[BCM] {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (CHANNEL {}, {} DBM): {} AFTER {} TRIES; {} PROBE RESPONSES, {} BEACONS OF IT, {} OTHER; {} FILTERED OUT",
-                                        b[0], b[1], b[2], b[3], b[4], b[5], ch, signal, if s.acked { "ACKNOWLEDGED" } else { "NOT ACKNOWLEDGED" }, s.attempts,
-                                        heard.responses, heard.beacons, heard.to_us + heard.other, radio.counts.filtered - filtered),
-                Err(e) => mind::println!("[BCM] {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} (CHANNEL {}): NOT SENT ({:?})", b[0], b[1], b[2], b[3], b[4], b[5], ch, e),
+            for rate in [2u8, 12] {
+                let (mut acked, mut tries, mut failed) = (0, 0u32, 0);
+                let mut heard = Heard::default();
+                let mut ignore = [NONE; SEEN];
+                for _ in 0..REPEATS {
+                    sequence += 1;
+                    let len = probe(&mut frame, &mac, &bssid, ch, sequence);
+                    match radio.send(&frame[..len], rate, ATTEMPTS) {
+                        Ok(s) => { acked += s.acked as u32; tries += s.attempts as u32; }
+                        Err(_) => failed += 1,
+                    }
+                    listen(&mut radio, ANSWER_MS, &mut ignore, &mut heard);
+                }
+                let b = bssid;
+                mind::println!("[BCM] {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} CHANNEL {} ({} DBM), GAIN {}, {} MBIT/S: {} OF {} ACKNOWLEDGED, {} TRIES IN ALL, {} NOT SENT; {} PROBE RESPONSES, {} BEACONS OF IT",
+                               b[0], b[1], b[2], b[3], b[4], b[5], ch, signal, gain, rate / 2, acked, REPEATS, tries, failed, heard.responses, heard.beacons);
             }
         }
     }
     let _ = radio.set_gain(TX_GAIN);
     let _ = radio.set_filter(Filter::default());
     let k = radio.counts;
-    mind::println!("[BCM] TEST DONE: {} FRAMES QUEUED, {} FILTERED, {} BAD, {} OVER THE QUEUE, {} DMA ERRORS", k.queued, k.filtered, k.bad, k.overflow, k.dma_errors);
+    mind::println!("[BCM] TEST DONE: {} FRAMES QUEUED, {} FILTERED, {} BAD, {} DMA ERRORS", k.queued, k.filtered, k.bad, k.dma_errors);
     Some(radio)
 }
