@@ -5115,9 +5115,10 @@ def download_check(args, disk):
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
+    stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1])))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5134,11 +5135,13 @@ def download_check(args, disk):
     try:
         download_runs(vm, release, port, big, small, cut)
         session_parsers_check(vm, held, small)
+        parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
     finally:
         vm.close()
         held.go.set()
-        for server in (release, secure, rogue, held):
+        stall.go.set()
+        for server in (release, secure, rogue, held, stall):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -5266,6 +5269,65 @@ def session_parsers_check(vm, held, body):
     for name in ("h1", "h2"):
         require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
     print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+
+
+def stall_server(body, cut):
+    """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
+    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
+    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    go, sent, ranges = threading.Event(), threading.Event(), []
+
+    class Stall(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ranged = self.headers.get("Range")
+            ranges.append(ranged)
+            if ranged:
+                start = int(ranged.split("=", 1)[1].split("-", 1)[0])
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                self.send_header("Content-Length", str(len(body) - start))
+                self.end_headers()
+                self.wfile.write(body[start:])
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[:cut])
+            sent.set()
+            go.wait(60)
+            self.close_connection = True
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
+    server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def parser_restart_check(vm, stall, body):
+    """109-NET-0010: a download's own parser that ends while the body comes (as it does after 30 s without a request,
+    which a slow transfer reaches) is followed by another, which parses the resumed response's head. Before, the call
+    went to an endpoint only the download itself could still receive on, and waited for ever."""
+    url = f"http://10.0.2.2:{stall.server_address[1]}"
+    service = vm.services()["parse"]
+    require(vm.command(f"run download ram:s.bin {url}/s.bin &"), "NAME=download BACKGROUND")
+    assert stall.sent.wait(30), stall.ranges
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
+    require(vm.command(f"kill {parsers[0]}"), f"KILLED PID={parsers[0]}")
+    stall.go.set()
+    for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
+        if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not re.search(r"^\d+ download ", listed, re.M), listed
+    assert stall.ranges == [None, "bytes=50000-"], stall.ranges
+    require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
+    print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
 
 
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"

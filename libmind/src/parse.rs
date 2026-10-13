@@ -42,9 +42,10 @@ impl http::Parser for Service {
 
 /// A parser process of one session's own (109-NET-0010, Appendix B.6): the loader starts `parse` as a helper that holds
 /// nothing but this session's endpoint, and it ends when the session is dropped (or `end` is called), or after 30 s
-/// without a request. Where the loader starts no helper (an older loader, or no endpoint left in this program's quota),
-/// the session uses the shared service at `shared`.
-pub struct Session { endpoint: Endpoint, pid: Option<u64> }
+/// without a request. The session keeps only a copy that calls, so a call to a helper that has ended fails at once,
+/// and the session starts another and asks again. Where the loader starts no helper (an older loader, or no endpoint
+/// left in this program's quota), the session uses the shared service at `shared`.
+pub struct Session { endpoint: Endpoint, pid: Option<u64>, loader: Option<Endpoint>, restarts: u32 }
 
 /// Why a session got no parser of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,21 +54,24 @@ pub enum NotOwn { Endpoint(crate::sys::Error), Loader(crate::idl::loader::Error)
 impl Session {
     /// A parser of the session's own, which the loader starts as a helper.
     pub fn own(loader: Endpoint) -> Result<Self, NotOwn> {
-        let endpoint = Endpoint::create().map_err(NotOwn::Endpoint)?;
-        // The helper's copy can receive; this one only calls.
-        let started = crate::ipc::mint(endpoint.0, crate::abi::CAP_READ | crate::abi::CAP_WRITE, 0, 0).map_err(NotOwn::Endpoint).and_then(|lent| {
+        let created = Endpoint::create().map_err(NotOwn::Endpoint)?;
+        // The helper's copy alone can receive; this program keeps one that calls and lends its head's pages, so that with
+        // the helper gone the kernel finds no receiver and fails the call (ERR_PEER) instead of letting it wait for ever.
+        let calls = crate::ipc::mint(created.0, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT, 0, 0).map_err(NotOwn::Endpoint);
+        let started = calls.and_then(|calls| crate::ipc::mint(created.0, crate::abi::CAP_READ | crate::abi::CAP_WRITE, 0, 0).map_err(NotOwn::Endpoint).and_then(|lent| {
             let pid = crate::idl::loader::helper(loader, crate::idl::loader::HelperKind::Parse, lent);
             let _ = crate::ipc::drop_cap(lent);
-            match pid { Ok(Ok(pid)) => Ok(pid), Ok(Err(error)) => Err(NotOwn::Loader(error)), Err(error) => Err(NotOwn::Call(error)) }
-        });
-        match started {
-            Ok(pid) => Ok(Self { endpoint, pid: Some(pid) }),
-            Err(why) => { let _ = crate::ipc::drop_cap(endpoint.0); Err(why) }
-        }
+            match pid { Ok(Ok(pid)) => Ok((calls, pid)), Ok(Err(error)) => Err(NotOwn::Loader(error)), Err(error) => Err(NotOwn::Call(error)) }
+        }).inspect_err(|_| { let _ = crate::ipc::drop_cap(calls); }));
+        let _ = crate::ipc::drop_cap(created.0);
+        started.map(|(calls, pid)| Self { endpoint: Endpoint(calls), pid: Some(pid), loader: Some(loader), restarts: 0 })
     }
 
     /// The shared service at `endpoint`, for a session that got no parser of its own.
-    pub fn shared(endpoint: Endpoint) -> Self { Self { endpoint, pid: None } }
+    pub fn shared(endpoint: Endpoint) -> Self { Self { endpoint, pid: None, loader: None, restarts: 0 } }
+
+    /// How many times its own parser had ended (30 s without a request) and another was started.
+    pub fn restarts(&self) -> u32 { self.restarts }
 
     /// A parser of the session's own, else the shared service at `shared`.
     pub fn start(loader: Endpoint, shared: Endpoint) -> Self { Self::own(loader).unwrap_or(Self::shared(shared)) }
@@ -90,7 +94,20 @@ impl Drop for Session {
 }
 
 impl http::Parser for Session {
-    fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> { Service(self.endpoint).head(head) }
+    fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> {
+        match (Service(self.endpoint).head(head), self.loader) {
+            // Its own parser could not be reached, as when it ended after 30 s idle: another one, asked once more.
+            (Err(http::Error::Parser), Some(loader)) if self.pid.is_some() => {
+                end_session(self.endpoint);
+                self.pid = None;
+                let restarts = self.restarts + 1;
+                *self = Self::own(loader).map_err(|_| http::Error::Parser)?;
+                self.restarts = restarts;
+                Service(self.endpoint).head(head)
+            }
+            (result, _) => result,
+        }
+    }
 }
 
 /// The record of a channel `mind::release` read.

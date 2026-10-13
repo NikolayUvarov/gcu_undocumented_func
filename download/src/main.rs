@@ -265,8 +265,14 @@ fn main(_info: &'static BootInfo) {
             // A server that is not the one trusted, or a TLS service that cannot serve: asking again changes nothing.
             Connected::Fatal(error) => fail(format_args!("TLS: {:?}", error)),
         };
+        let restarts = parser.restarts();
         let result = http::get(&mut link, &url, offset, &mut output, &mut parser);
         drop(link);
+        // Its parser had ended meanwhile and another was started: the endpoint to end on the way out changed.
+        if parser.restarts() != restarts {
+            mind::println!("DOWNLOAD: ITS PARSER HAD ENDED, ANOTHER ONE PARSES");
+            OWN_PARSER.store(if parser.pid().is_some() { parser.endpoint().0 } else { 0 }, Ordering::Relaxed);
+        }
         if output.flush().is_err() || output.failed { fail(format_args!("CANNOT WRITE {}", path)); }
         match result {
             Ok(got) if got.start == 0 && offset > 0 && got.complete() => { mind::println!("DOWNLOAD: THE SERVER SENT THE WHOLE FILE AGAIN"); break got; }

@@ -28,6 +28,12 @@ Two downloads at once have their heads parsed in two processes, each holding onl
 - **Tested:** the network suite on x86 (QEMU 8.2, 4 CPUs, TCG, this session's machine) passes whole; the gate on i9 and PCU is left. `session_parsers_check`: two downloads held by the server at once, two parser processes besides the service, each with one capability, its endpoint in slot 1; once the server answers, both files arrive whole and both parsers are gone. A malformed head is refused in the download's own parser, so the shared service logs nothing of it. The shared service, killed, is restarted and serves `release` again.
 - **Left:** the updater's checks still use the shared service. The updater holds no loader client and may create no endpoint; the change is the update track's (requests-UPD.md).
 
+**2026-10-13: a download whose parser had ended waited for ever.**
+- **Seen:** on aarch64 (QEMU under TCG), the gate's 8 MiB download hung at its resume, twice: over HTTP on i9 and over HTTPS on PCU (`CONNECTION CUT AT 3145728 OF 8388608, RESUMING`, then nothing for 1200 s).
+- **Why:** the first 3 MiB took longer than 30 s with no head to parse, so the session's parser ended. The resumed response's head then went to the session's endpoint, which the download had created and could still receive on. The kernel therefore saw a receiver, and the call waited for the caller itself.
+- **The fix:** the session keeps a copy that calls and lends pages (`CAP_WRITE | CAP_GRANT`) and drops the one that could receive. A call to an ended parser now fails at once (`ERR_PEER`). `Session` then starts another parser and asks again, and `download` says so (`ITS PARSER HAD ENDED, ANOTHER ONE PARSES`) and ends the new one on its way out.
+- **Tested:** `parser_restart_check` in the network suite. A server sends the head and part of the body, the test kills the download's parser, then the server cuts. The download resumes, its new parser reads the head, and the file arrives whole.
+
 ## Related
 
 [docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](../issues-done/109-NET-0008-parser-service.done).
