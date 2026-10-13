@@ -5463,7 +5463,9 @@ def parser_restart_check(vm, stall, body):
     assert stall.sent.wait(30), stall.ranges
     parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
     assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
-    require(vm.command(f"kill {parsers[0]}"), f"KILLED PID={parsers[0]}")
+    # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
+    require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
+    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
     stall.go.set()
     for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
         if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
