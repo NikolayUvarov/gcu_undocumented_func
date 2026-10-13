@@ -4,9 +4,15 @@
 // behind its 16 KiB BAR0, the 802.11 core's state from its wrapper, and the SPROM. Stage 1b (550-DRV-0022) stops the
 // 802.11 core the firmware left running with a reset pulse, and frees the SPROM's pins while the SPROM is read. Stage 2
 // (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
+// Stage 3 sets up the radio; the radio module keeps it running for the station (550-DRV-0027), and stage 4 tests it.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
-use mind::abi::{BootInfo, SLOT_DEV0};
-use mind::dev::{device_config, Mmio};
+use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
+use mind::dev::{cap_info, device_config, Dma, Mmio};
+
+mod radio;
+mod stage3;
+mod stage4;
+mod tables;
 
 // PCI configuration: the backplane addresses BAR0's first two 4 KiB windows show.
 const CFG_WINDOW: usize = 0x80; const CFG_WINDOW2: usize = 0xAC;
@@ -90,6 +96,10 @@ fn main(_info: &'static BootInfo) {
     let id = device_config(SLOT_DEV0, 0x00).unwrap_or(0);
     let (window, window2) = (device_config(SLOT_DEV0, CFG_WINDOW).unwrap_or(0), device_config(SLOT_DEV0, CFG_WINDOW2).unwrap_or(0));
     mind::println!("[BCM] PCI {:04X}:{:04X}, BAR0 WINDOWS {:08X} AND {:08X}", id & 0xFFFF, id >> 16, window, window2);
+    // What stage 4 receives with (550-KRN-0091): the DMA region and the interrupt, only noted; neither starts the core.
+    match Dma::map(SLOT_MEM) { Ok(dma) => mind::println!("[BCM] DMA REGION AT {:#X}, {} KiB", dma.physical(0), dma.len() / 1024), Err(_) => mind::println!("[BCM] NO DMA REGION GRANTED") }
+    let (kind, line, _) = cap_info(SLOT_IRQ);
+    if kind == CAP_KIND_IRQ { mind::println!("[BCM] INTERRUPT GRANTED: LINE {}", line); } else { mind::println!("[BCM] NO INTERRUPT GRANTED (KIND {})", kind); }
 
     let chip = bar.read32(CC + CC_CHIP_ID);
     let (number, revision, package, cores, bus) = (chip & 0xFFFF, chip >> 16 & 0xF, chip >> 20 & 0xF, chip >> 24 & 0xF, chip >> 28);
@@ -121,14 +131,14 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[BCM] PCIE CORE: {:08X} {:08X} {:08X} {:08X}", bar.read32(PCIE), bar.read32(PCIE + 4), bar.read32(PCIE + 8), bar.read32(PCIE + 12));
     let _ = WINDOW;
 
-    sprom(&bar, capabilities);
-    if index == CORE_80211 { microcode(&bar); }
+    let mac = sprom(&bar, capabilities);
+    if index == CORE_80211 { microcode(&bar, mac); }
     idle()
 }
 
 // The SPROM, read where it may appear, its revision, CRC and MAC address logged.
-fn sprom(bar: &Mmio, capabilities: u32) {
-    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return; }
+fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
+    if capabilities & CAP_SPROM == 0 { mind::println!("[BCM] NO SPROM FITTED (OTP SIZE CODE {})", capabilities >> 19 & 7); return None; }
     // The SPROM's pins are shared with the external amplifier lines; they are given back as they were after the read.
     let chip_control = bar.read32(CC + CC_CHIP_CONTROL);
     if chip_control & CHIPCTL_EXTPA != 0 {
@@ -136,7 +146,7 @@ fn sprom(bar: &Mmio, capabilities: u32) {
         mind::time::sleep(1);
         mind::println!("[BCM] SPROM PINS TAKEN FROM THE AMPLIFIER LINES: CHIP CONTROL {:08X} -> {:08X}", chip_control, bar.read32(CC + CC_CHIP_CONTROL));
     }
-    let mut found = false;
+    let mut found = None;
     for at in SPROM_AT {
         let mut words = [0u16; SPROM_WORDS];
         for (i, w) in words.iter_mut().enumerate() { *w = bar.read16(CC + at + i * 2); }
@@ -146,7 +156,7 @@ fn sprom(bar: &Mmio, capabilities: u32) {
                 let mac = [words[0x46] >> 8, words[0x46] & 0xFF, words[0x47] >> 8, words[0x47] & 0xFF, words[0x48] >> 8, words[0x48] & 0xFF];
                 mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: REVISION {}, CRC GOOD, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, WORDS 0-3 {:04X} {:04X} {:04X} {:04X}",
                                at, revision, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], words[0], words[1], words[2], words[3]);
-                found = true;
+                found = Some(mac.map(|b| b as u8));
             }
             None => mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: NOT VALID (FIRST WORDS {:04X} {:04X} {:04X} {:04X}, LAST {:04X}, CRC OF THE REST {:02X})",
                                    at, words[0], words[1], words[2], words[3], words[SPROM_WORDS - 1], sprom_crc(&words)),
@@ -156,7 +166,8 @@ fn sprom(bar: &Mmio, capabilities: u32) {
         bar.write32(CC + CC_CHIP_CONTROL, chip_control);
         mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
     }
-    if !found { mind::println!("[BCM] NO VALID SPROM"); }
+    if found.is_none() { mind::println!("[BCM] NO VALID SPROM"); }
+    found
 }
 
 // About `n` microseconds: one read of a wrapper register over PCIe takes about one.
@@ -203,7 +214,7 @@ fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTR
 // revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
 fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(STEP_MS); }
 
-fn microcode(bar: &Mmio) {
+fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
     if mind::fs::File::open(STAGE2_FLAG).is_err() { mind::println!("[BCM] STAGE 2 NOT ASKED FOR ({} IS ABSENT): THE CORE STAYS IN RESET", STAGE2_FLAG); return; }
     let Ok(file) = mind::fs::File::open(MICROCODE) else { mind::println!("[BCM] NO MICROCODE AT {} (FILE ACCESS OR scripts/proprietary.sh copy): STAGE 2 SKIPPED", MICROCODE); return };
     let Some(mut pages) = mind::mem::Pages::new(MICROCODE_MAX) else { mind::println!("[BCM] NO MEMORY FOR THE MICROCODE"); return };
@@ -296,6 +307,14 @@ fn microcode(bar: &Mmio) {
         Ok(_) => {
             let (revision, patch, date, time) = (shared(0), shared(2), shared(4), shared(6));
             mind::println!("[BCM] MICROCODE RUNS: {} WORDS LOADED; REVISION {}.{}, DATE {:04X}, TIME {:04X}", count, revision, patch, date, time);
+            let core = stage3::Core::new(bar);
+            match mac {
+                Some(mac) => if stage3::run(&core, mac) {
+                    // The service's endpoint comes with init's start of the station (550-DRV-0027); until then the radio stops.
+                    if let Some(radio) = stage4::run(&core, mac) { mind::println!("[BCM] NO STATION TO SERVE YET: THE RADIO STOPS"); radio.stop(); }
+                },
+                None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
+            }
         }
         Err(v) => mind::println!("[BCM] MICROCODE DOES NOT ANSWER: {} WORDS LOADED; IRQ REASON {:08X}, MAC CONTROL {:08X}", count, v, bar.read32(D11_MAC_CONTROL)),
     }
