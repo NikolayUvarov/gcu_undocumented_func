@@ -7278,6 +7278,46 @@ def display_suite(args, disk):
         finally:
             vm.close()
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    if args.arch == "x86_64":
+        no_serial_check(args, disk)
+
+
+def no_serial_check(args, disk):
+    """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
+    the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
+    black, as on the maintainer's Ryzen machine. Seen through QMP's screendump, as nothing else talks to this machine."""
+    with tempfile.TemporaryDirectory(prefix="mind-noserial-") as temp:
+        sock, picture = Path(temp) / "qmp.sock", Path(temp) / "screen.ppm"
+        process = subprocess.Popen([args.qemu, "-bios", args.firmware, "-drive", f"format=raw,file=fat:{disk.relative_to(ROOT).as_posix()}",
+                                    "-snapshot", "-m", "512", "-smp", str(args.cpus), "-serial", "none", "-monitor", "none", "-display", "none",
+                                    "-no-reboot", "-qmp", f"unix:{sock},server=on,wait=off"], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            lit, total = 0, 1
+            for _ in range(60):
+                time.sleep(2)
+                if not sock.exists():
+                    continue
+                with socket.socket(socket.AF_UNIX) as client:
+                    client.connect(str(sock))
+                    lines = client.makefile("rw")
+                    lines.readline()  # the greeting
+                    for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
+                        lines.write(json.dumps(command) + "\n"); lines.flush()
+                        while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
+                            pass
+                if not picture.exists():
+                    continue
+                _, size, _, pixels = picture.read_bytes().split(b"\n", 3)
+                width, height = map(int, size.split())
+                total = width * height
+                lit = sum(1 for i in range(0, total * 3, 3) if pixels[i:i + 3] != b"\0\0\0")
+                if lit > total // 2:  # the shell's background covers the screen
+                    break
+            assert lit > total // 2, f"{lit} of {total} pixels lit without COM1"
+        finally:
+            process.kill()
+            process.wait()
+    print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
 def store_disk_check(args, disk):

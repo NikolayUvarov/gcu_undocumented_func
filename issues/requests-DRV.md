@@ -134,6 +134,8 @@ On boot 5 the shell was on the screen and typing did nothing. What the logs show
 The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) work; this is a low-speed device on an AMD xHCI.
 With the same build, a low-speed keyboard (046D:C31C) typed on the Intel Core i5 PC's xHCI (8086:8C31; [214](214-intel-core-i5-pc.md)). The difference is the AMD xHCI or this keyboard.
 
+**Possibly not a driver's fault (2026-10-13, evening):** the shell on this machine never got past reading COM1, which it does not have (its ports read all ones, "a byte is ready" for ever). That is the black screen of [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), fixed in the kernel track's `Uart::open` and `init`. A shell stuck there takes no key either. Check it again after the maintainer's next run with that fix.
+
 ### Plan (a proposal; the drivers track decides)
 
 - **Count it:** `usb_host` logs, once a second at most, the reports and completion codes of each interrupt endpoint after the first, and `usb_hid` the key events it sends.

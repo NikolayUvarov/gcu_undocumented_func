@@ -60,3 +60,25 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 - **Suspect 3 is weaker than it looked:** since 000-KRN-0081 the kernel maps the compositor's framebuffer write-combining through the PAT, which takes the place of the MTRRs' uncachable default.
 - **The keys on boots 1–3 may be a reaction, not a cause:** a black screen invites a key press, and no key came on boot 5, whose screen worked. The next run notes when the screen went black and when a key was first pressed.
 - **In QEMU** (`display` suite, VGA std, 1280 × 800) the shell's screen came in front at 0.4 s with 0 pixels not black, and its first drawn frames followed within the second, all 1024000 pixels not black: the shell's background is not pure black. The suite checks the two lines on each of its three adapters.
+
+## Progress (2026-10-13, evening: the cause found and fixed)
+
+**The maintainer's runs of `fast-test` 29fee23,** which has the compositor's lines:
+- **The MacBook Pro** (boot 1) drew as before. Its shell's first frame had 208424 pixels not black, then thousands of pixels were written each second.
+- **The Ryzen machine** (boots 2 and 3, the stick in a blue port and then a black one) showed a black screen both times. Its screen is now 3440 × 1440, stride 3456: another monitor. The compositor logged `SCREEN IN FRONT #1: FIRST FRAME IN 7 MS, 0 OF 4953600 PIXELS NOT BLACK` when the shell started, and then no second in which the screen changed.
+- **So the shell never drew.** No USB keyboard was found on either boot, so no key was pressed: the keys were not the cause.
+
+**The cause: COM1.**
+- The shell reads its serial line in `while let Some(byte) = uart.read()` before it renders.
+- A 16550's line status says whether a byte is ready. Ports that nothing decodes read 0xFF, which says "ready" for ever, so the loop never ended and the first frame never came.
+- The Ryzen machine's ACPI tables list no COM port (no PNP0501). The Intel Core i5's do (its board has a 16550). The MacBook Pro's list none either, but its ports evidently do not read all ones, as its shell draws.
+- **Reproduced in QEMU** with no 16550 (`-serial none`): the screen stayed black, 0 of 1024000 pixels lit after 45 s. With one, every pixel was lit.
+
+**The fix:**
+- `mind::dev::Uart::open` returns None where no 16550 answers: its scratch register does not keep what is written, or its line status reads 0xFF. `read` takes a status of 0xFF as no byte.
+- `init` lends the shell no serial line in that case and logs `[INIT] NO SERIAL LINE: NO 16550 ANSWERS AT COM1 (3F8), THE SHELL GETS NONE`.
+- **The `display` suite** boots once with no COM1 and checks through QMP's screendump that the shell draws.
+
+**Not explained yet:** boot 5 drew the shell, and then its keyboard typed nothing. A line that read "no byte" at first and "ready" later would do both. The maintainer's next run will tell.
+
+**Left for the acceptance criteria:** the shell's text on this machine's screen.
