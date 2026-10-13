@@ -142,3 +142,28 @@ The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) 
 ### Acceptance criteria
 
 On this machine the keyboard types in the shell, and the counters above are in the log.
+
+## The boot stick not set up on a high-speed xHCI port: no boot volume, no programs (the maintainer's photo, 2026-10-13)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of another PC of the maintainer's (not the Ryzen machine: another device key, no log volume).
+
+### Problem
+
+- **What happened:** the bootloader started from the stick ("starting MIND Core from its own volume"), the services started and the keyboard typed. But `usb_host` logged `PORT 8: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000E03, TRY 3 OF 3)`, then `NO MASS STORAGE DEVICE`. `vfs_server` found the boot volume "ON NO BLOCK DEVICE: NONE MOUNTED", so no program could start (`wm`: unknown command, `ls`: not found) and no log or hardware report was written.
+- **PORTSC 0x00000E03:** connected, enabled, U0, powered, high speed. The stick is a SuperSpeed one (7825:A2A4) that came up at high speed on port 8: a USB 2 port.
+- **The completion code shown is not Address Device's:** `enumerate` gives up at "ADDRESS DEVICE" and `discard` then disables the slot. That Disable Slot command overwrites `xhci.last`, so the line shows its success (1), not why Address Device failed.
+
+### Plan (a proposal; the drivers track decides)
+
+- **Keep the failing command's code** for the line: save it before `discard`, or log it in `enumerate`.
+- **A high-speed device on an xHCI USB 2 port:**
+  - the 10 ms reset recovery (USB 2.0 TRSTRCY) before Address Device;
+  - EP0's 64-byte packet;
+  - an Address Device with BSR=1 first, then without, where a device needs the time.
+- **The maintainer's next run on that PC:**
+  - the stick in a rear USB 3 port;
+  - photos of `devices` and `cpus` (shell commands, which need no program), to name the machine and its controller.
+
+### Acceptance criteria
+
+The stick is set up on that PC's USB 2 ports, and the line names Address Device's own completion code when it fails.
