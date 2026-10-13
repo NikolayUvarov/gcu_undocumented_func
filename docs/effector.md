@@ -104,7 +104,8 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 
 1. **Long or CPU-heavy work runs one operation at a time for each track.** That means a build, the host tests, a QEMU suite or a gate's group.
    - A machine runs as many operations at once as it has queues: `parallel_limit` in `GET /api/v1/endpoints`, with `occupied_queues` and `free_slots`. The maintainer sets it on the Agents page by the machine's cores: two QEMU groups at once need about twice the threads, and a 16-CPU group takes 16.
-   - **One queue** (`parallel_limit` 1, PCU today): set `"sequential": true`. All sequential operations for one machine, whichever agent sent them, wait in one first-in, first-out queue and run one at a time.
+   - **One queue** (`parallel_limit` 1): set `"sequential": true`. All sequential operations for one machine, whichever agent sent them, wait in one first-in, first-out queue and run one at a time.
+   - **PCU** (4 CPUs) has had `parallel_limit` 3 since 2026-10-12, but its QEMU groups and builds still go sequential. On 2026-10-12 two tracks' groups ran there at once as ordinary operations: the load rose to 15–20 and the kernel track's aarch64 groups timed out. Its other queues are for short, light work.
    - **More queues:** send the long work as ordinary operations (no `"sequential"`), one at a time: the next only when the last has ended. Work above the limit waits for a free queue. Sequential operations keep sharing one lane, so a track that marks its work sequential waits behind the others' sequential work.
    - Every track keeps its temporary files in its own `TMPDIR` (rule 4), whatever the queue.
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
