@@ -45,3 +45,18 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 - **The same machine showed the shell's green screen** on its fifth boot (`log:boot0005.log`, `hw0005.txt`: the same Ryzen 9 5900HX, devices and 2560 × 1440 screen, the same build 28d9c3d). The black screen is therefore not certain on this machine: it came on boots 1–3 and not on boot 5.
 - **What differed in the logs:** on boots 1–3 a key report came from the USB keyboard (at 25.6, 17.2 and 8.8 s; space and F2 among them). On boot 5 none came before the log ends at 13.8 s. A key pressed while the screen changes hands stays a suspect next to the three above; whether the keys came before or after the black is not in the log.
 - **The plan stands.** The next run also notes when a key was first pressed.
+
+## Progress (2026-10-13, plan step 1: the compositor's half)
+
+- **`compositor` logs its own half** without a new interface:
+  - once at start: `[COMPOSITOR] SCREEN 2560X1440, STRIDE 2560, FORMAT BGR`;
+  - each time another screen comes in front: `SCREEN IN FRONT #N: FIRST FRAME IN … MS, … OF … PIXELS NOT BLACK`. At boot, #1 is the shell's;
+  - for 10 s after that, each second in which the screen changed: the frames, the longest copy, the pixels written and those not black;
+  - at most 24 lines in all.
+- **Reading the next run's log:**
+  - no `SCREEN IN FRONT #1` line: the shell's screen never came in front;
+  - #1 with 0 pixels not black, and no frames after it: the shell did not draw (the shell's own first-frame line, asked of the tools track, will say so);
+  - frames and lit pixels but a black screen: the path to the framebuffer, or the display itself.
+- **Suspect 3 is weaker than it looked:** since 000-KRN-0081 the kernel maps the compositor's framebuffer write-combining through the PAT, which takes the place of the MTRRs' uncachable default.
+- **The keys on boots 1–3 may be a reaction, not a cause:** a black screen invites a key press, and no key came on boot 5, whose screen worked. The next run notes when the screen went black and when a key was first pressed.
+- **In QEMU** (`display` suite, VGA std, 1280 × 800) the shell's screen came in front at 0.4 s with 0 pixels not black, and its first drawn frames followed within the second, all 1024000 pixels not black: the shell's background is not pure black. The suite checks the two lines on each of its three adapters.

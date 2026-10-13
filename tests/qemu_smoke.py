@@ -7261,9 +7261,14 @@ def display_suite(args, disk):
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=display)
         try:
-            require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
-            vm.send("fg 1\n")
-            vm.expect("FOREGROUND PID=1")
+            # 213-KRN-0098: the compositor names the screen it found and the shell's screen put in front.
+            log = vm.command("dmesg -s compositor", raw=True)
+            assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
+            assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
+            assert started, (name, vm.output)
+            vm.send(f"fg {started[1]}\n")
+            vm.expect(f"FOREGROUND PID={started[1]}")
             time.sleep(.3)
             assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
             vm.serial()  # the screenshot switched the console to the QEMU monitor
@@ -7272,7 +7277,7 @@ def display_suite(args, disk):
             assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
 
 
 def store_disk_check(args, disk):
