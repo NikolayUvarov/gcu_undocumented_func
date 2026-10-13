@@ -132,6 +132,7 @@ On boot 5 the shell was on the screen and typing did nothing. What the logs show
 - **Not in the logs:** whether later reports came, and whether `usb_hid` turned any of them into key events. The internal PS/2 controller also exists (`ps2_kbd` runs, "NO MOUSE"), so the shell's keyboard service is `ps2_kbd`.
 
 The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) work; this is a low-speed device on an AMD xHCI.
+With the same build, a low-speed keyboard (046D:C31C) typed on the Intel Core i5 PC's xHCI (8086:8C31; [214](214-intel-core-i5-pc.md)). The difference is the AMD xHCI or this keyboard.
 
 ### Plan (a proposal; the drivers track decides)
 
@@ -143,15 +144,23 @@ The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) 
 
 On this machine the keyboard types in the shell, and the counters above are in the log.
 
-## The boot stick not set up on a high-speed xHCI port: no boot volume, no programs (the maintainer's photo, 2026-10-13)
+## The boot stick not set up on a USB 2 port of an Intel xHCI: no boot volume, no programs (214)
 
-**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of another PC of the maintainer's: an Intel Core i5 (not the Ryzen machine: another device key, no log volume). Its exact model and USB controller are not known yet.
+**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of the maintainer's Intel Core i5-4430 PC ([214](214-intel-core-i5-pc.md)). The PC's logs from two later boots name its controllers.
 
 ### Problem
 
-- **What happened:** the bootloader started from the stick ("starting MIND Core from its own volume"), the services started and the keyboard typed. But `usb_host` logged `PORT 8: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000E03, TRY 3 OF 3)`, then `NO MASS STORAGE DEVICE`. `vfs_server` found the boot volume "ON NO BLOCK DEVICE: NONE MOUNTED", so no program could start (`wm`: unknown command, `ls`: not found) and no log or hardware report was written.
-- **PORTSC 0x00000E03:** connected, enabled, U0, powered, high speed. The stick is a SuperSpeed one (7825:A2A4) that came up at high speed on port 8: a USB 2 port.
-- **The completion code shown is not Address Device's:** `enumerate` gives up at "ADDRESS DEVICE" and `discard` then disables the slot. That Disable Slot command overwrites `xhci.last`, so the line shows its success (1), not why Address Device failed.
+- **What happened:**
+  - The bootloader started from the stick ("starting MIND Core from its own volume"), the services started and the keyboard typed.
+  - Then `usb_host` logged `PORT 8: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000E03, TRY 3 OF 3)`, then `NO MASS STORAGE DEVICE`.
+  - `vfs_server` found the boot volume "ON NO BLOCK DEVICE: NONE MOUNTED". So no program could start (`wm`: unknown command, `ls`: not found), and no log or hardware report was written.
+- **The controller:** the H81's xHCI (8086:8C31) has 17 ports. Ports 1–10 are USB 2 and ports 11–15 are disabled. Ports 16–17 are USB 3. The kernel moved every port from EHCI to it ("USB 2 FFF OF MASK FFF, USB 3 3 OF MASK 3"), so the routing is not the cause.
+- **PORTSC 0x00000E03:** connected, enabled, U0, powered, high speed. The stick is a SuperSpeed one (7825:A2A4) that came up at high speed on port 8, a USB 2 port.
+- **Not every time:** on boot 1 (`log:boot0001.log`) the same stick was set up on the same port 8 at high speed, with the same build. On boot 2 it was in a blue port and was set up at SuperSpeed on port 16.
+- **The completion code shown is not Address Device's:**
+  - `enumerate` gives up at "ADDRESS DEVICE", and `discard` then disables the slot.
+  - That Disable Slot command overwrites `xhci.last`.
+  - So the line shows Disable Slot's success (1), not why Address Device failed.
 
 ### Plan (a proposal; the drivers track decides)
 
@@ -160,10 +169,32 @@ On this machine the keyboard types in the shell, and the counters above are in t
   - the 10 ms reset recovery (USB 2.0 TRSTRCY) before Address Device;
   - EP0's 64-byte packet;
   - an Address Device with BSR=1 first, then without, where a device needs the time.
-- **The maintainer's next run on that PC:**
-  - the stick in a rear USB 3 port;
-  - photos of `devices` and `cpus` (shell commands, which need no program), to name the machine and its controller.
+- **The maintainer's next run, after that:** several boots with the stick in a black port, from power-off and by `reboot`, until the line shows Address Device's own code.
 
 ### Acceptance criteria
 
-The stick is set up on that PC's USB 2 ports, and the line names Address Device's own completion code when it fails.
+- The stick is set up on that PC's USB 2 ports.
+- When Address Device fails, the line names its own completion code.
+
+## The Intel Core i5 PC: sound and Ethernet (214)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's two boots of that PC ([214](214-intel-core-i5-pc.md); `log:boot0001.log`, `boot0002.log`, `hw0001.txt`, `hw0002.txt`).
+
+### Problem
+
+- **Sound:**
+  - `audio_gw` took the processor's display audio (00:03.0, 8086:0C0C: 0 input and 2 output streams), and its codec did not answer ("CORBRP 1 RIRBWP 0"). The screen is on a GeForce GT 1030, so the processor's display, which that codec depends on, is likely off.
+  - It did not try the analog controller (00:1B.0, 8086:8C20, subsystem 1462:D817).
+  - The GT 1030's HDMI audio (01:00.1, 10DE:0FB8) is a third controller.
+- **Ethernet:** a Realtek RTL8168 (10EC:8168, revision 0C, at 03:00.0) has no driver.
+
+### Plan (a proposal; the drivers track decides)
+
+This is the Ryzen machine's request above, with one addition:
+- **`audio_gw`:** pass over a controller whose codec does not answer, as well as one with no output path.
+- **The RTL8168 driver:** this revision as well.
+
+### Acceptance criteria
+
+- On this PC a tone plays through its analog output.
+- Its Ethernet card gets an address by DHCP.

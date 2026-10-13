@@ -31,4 +31,4 @@ The shell shows on this machine's screen; its keyboard, its first NVMe disk and 
 
 ## Related
 
-[211](211-intel-pc-from-a-sata-ssd.md) (the first real x86 PC), [174](174-full-use-of-pc-hardware.md) (the PC's hardware, AMD included), [requests-DRV.md](requests-DRV.md).
+[211](211-intel-pc-from-a-sata-ssd.md) (the first real x86 PC), [214](214-intel-core-i5-pc.md) (an Intel PC run with the same build), [174](174-full-use-of-pc-hardware.md) (the PC's hardware, AMD included), [requests-DRV.md](requests-DRV.md).
