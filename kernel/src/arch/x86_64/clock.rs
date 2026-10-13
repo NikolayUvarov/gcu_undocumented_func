@@ -1,5 +1,6 @@
 // Monotonic clock (MC-5.6): the TSC calibrated against the ACPI PM timer, or the PIT tick without one, when it runs at
-// a constant rate, else the tick. The tick: the boot CPU's LAPIC timer measured on the PM timer, else the PIT.
+// a constant rate, else the tick. The tick: the boot CPU's LAPIC timer measured on the PM timer, else the PIT. The TSC's
+// rate is measured again on the PM timer at 1, 8 and 60 s, over all the time since the first measure (000-KRN-0100).
 use super::port::{inb, inl, outb};
 use crate::{cpu, interrupts};
 use core::arch::x86_64::{__cpuid, _rdtsc};
@@ -10,6 +11,13 @@ static TSC_HZ: AtomicU64 = AtomicU64::new(0); // 0: the tick is the clock
 static TSC_BASE: AtomicU64 = AtomicU64::new(0); // TSC value at uptime 0
 static LAST: [AtomicU64; cpu::MAX] = [const { AtomicU64::new(0) }; cpu::MAX]; // never go backwards on a CPU
 const PM_HZ: u64 = 3_579_545;
+// Measuring again: the PM timer (port << 32 | mask), its ticks counted since the first measure and its last value, the
+// TSC then, and a sequence number, odd while the base and the rate change.
+static PM: AtomicU64 = AtomicU64::new(0);
+static PM_TICKS: AtomicU64 = AtomicU64::new(0);
+static PM_LAST: AtomicU64 = AtomicU64::new(0);
+static TSC_FIRST: AtomicU64 = AtomicU64::new(0);
+static SEQ: AtomicU64 = AtomicU64::new(0);
 
 // Constant-rate TSC: CPUID invariant TSC, or running under a hypervisor (it provides a constant-rate TSC).
 fn constant_tsc() -> bool {
@@ -46,7 +54,12 @@ pub unsafe fn start_tick() {
         return;
     }
     let hz = (t1 - t0) * PM_HZ / elapsed;
-    if constant_tsc() && hz >= 1_000_000 { TSC_BASE.store(t1, Ordering::Relaxed); TSC_HZ.store(hz, Ordering::Release); }
+    // A test kernel starts 9% off, as a host that stretched these 50 ms left the clock on i9 (000-KRN-0100).
+    let hz = if cfg!(feature = "tsc-skew-test") { hz / 100 * 109 } else { hz };
+    if constant_tsc() && hz >= 1_000_000 {
+        TSC_BASE.store(t1, Ordering::Relaxed); TSC_HZ.store(hz, Ordering::Release);
+        PM.store((port as u64) << 32 | mask as u64, Ordering::Relaxed); PM_LAST.store(p0 as u64, Ordering::Relaxed); TSC_FIRST.store(t0, Ordering::Relaxed);
+    }
     interrupts::set_irq_masked(0, true);
     interrupts::tick_from_lapic();
     cpu::lapic_timer(per_tick as u32, true);
@@ -77,6 +90,33 @@ pub fn calibrate() {
 
 pub fn tsc_hz() -> u64 { TSC_HZ.load(Ordering::Acquire) }
 
+/// On the boot CPU's tick, every second: the PM timer's ticks are counted (it wraps every 4.7 s at 24 bits), and at 1, 8
+/// and 60 s the TSC's rate is measured again over all the time since the first measure. One 50 ms window a host, an
+/// SMI or a TSC that a hypervisor did not keep steady stretched no longer sets the clock for the whole boot.
+pub fn on_second(seconds: u64) {
+    let pm = PM.load(Ordering::Relaxed);
+    if pm == 0 { return; }
+    let (port, mask) = ((pm >> 32) as u16, pm as u32);
+    let (now, tsc) = unsafe { (inl(port) & mask, _rdtsc()) };
+    let ticks = PM_TICKS.load(Ordering::Relaxed) + (now.wrapping_sub(PM_LAST.load(Ordering::Relaxed) as u32) & mask) as u64;
+    PM_TICKS.store(ticks, Ordering::Relaxed); PM_LAST.store(now as u64, Ordering::Relaxed);
+    if !matches!(seconds, 1 | 8 | 60) || ticks == 0 { return; }
+    let (old, measured) = (tsc_hz(), ((tsc - TSC_FIRST.load(Ordering::Relaxed)) as u128 * PM_HZ as u128 / ticks as u128) as u64);
+    if measured.abs_diff(old) * 1000 <= old || measured < 1_000_000 { return; } // within 0.1%: kept
+    // The clock goes on from where it is, at the rate measured: the base moves so that now stays now.
+    let at = ((tsc - TSC_BASE.load(Ordering::Relaxed)) as u128 * 1_000_000_000 / old as u128) as u64;
+    SEQ.fetch_add(1, Ordering::AcqRel);
+    TSC_BASE.store(tsc - (at as u128 * measured as u128 / 1_000_000_000) as u64, Ordering::Relaxed);
+    TSC_HZ.store(measured, Ordering::Release);
+    SEQ.fetch_add(1, Ordering::AcqRel);
+    let _ = write!(Kept, "MIND CORE KERNEL: CLOCK: TSC {} MHZ, MEASURED AGAIN OVER {} MS OF THE ACPI PM TIMER (WAS {} MHZ)\n",
+                   measured / 1_000_000, ticks * 1000 / PM_HZ, old / 1_000_000);
+}
+
+// A line kept for the hardware report alone: by then the serial line is a shell's console, and the screen a task's.
+struct Kept;
+impl Write for Kept { fn write_str(&mut self, text: &str) -> core::fmt::Result { crate::klog::keep(text); Ok(()) } }
+
 /// Waits at least `us` microseconds; usable before the tick runs. The ACPI PM timer, bounded by the TSC as at most
 /// 10 GHz (a PM timer that does not count still ends); without the PM timer, the TSC bound alone.
 pub fn spin_us(us: u64) {
@@ -95,9 +135,14 @@ pub fn resolution_ns() -> u64 { match tsc_hz() { 0 => interrupts::milliseconds_p
 
 // Nanoseconds since boot on the calling CPU.
 pub fn now_ns() -> u64 {
-    let ns = match tsc_hz() {
-        0 => interrupts::milliseconds() * 1_000_000,
-        hz => (unsafe { _rdtsc() }.saturating_sub(TSC_BASE.load(Ordering::Relaxed)) as u128 * 1_000_000_000 / hz as u128) as u64,
+    let ns = loop {
+        // The base and the rate together: read again if `on_second` changed them meanwhile.
+        let seq = SEQ.load(Ordering::Acquire);
+        let ns = match tsc_hz() {
+            0 => interrupts::milliseconds() * 1_000_000,
+            hz => (unsafe { _rdtsc() }.saturating_sub(TSC_BASE.load(Ordering::Relaxed)) as u128 * 1_000_000_000 / hz as u128) as u64,
+        };
+        if seq & 1 == 0 && SEQ.load(Ordering::Acquire) == seq { break ns; }
     };
     let last = &LAST[cpu::id()];
     let ns = ns.max(last.load(Ordering::Relaxed));
