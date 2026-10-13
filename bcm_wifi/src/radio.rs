@@ -32,8 +32,9 @@ const SOF: u32 = 1 << 31; const EOF: u32 = 1 << 30; const IOC: u32 = 1 << 29; co
 const TXC_ACK: u32 = 0x01; const TXC_START: u32 = 0x08;
 // The receive-match slots of the station's own address and of the network's BSSID; the template copy of both.
 const MATCH_CONTROL: usize = 0x420; const MATCH_DATA: usize = 0x422; const TEMPLATE_CONTROL: usize = 0x130; const TEMPLATE_DATA: usize = 0x134;
-// The gain table entry for transmitting (b43 uses 40; a higher entry is a lower gain), until 550-DRV-0028.
-pub const TX_GAIN: u16 = 80;
+// The gain table entry for transmitting, b43's: at entry 80 no access point acknowledged a frame (2026-10-13). A higher
+// entry is a lower gain; 550-DRV-0028 replaces the fixed entry.
+pub const TX_GAIN: u16 = 40;
 // The longest frame without FCS (idl/wlanhw.wit), the header that leads a received one, the frames kept for the station.
 pub const FRAME_MAX: usize = 2346; pub const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 32; const QUEUE_STRIDE: usize = 2368;
@@ -54,7 +55,7 @@ pub struct Sent { pub acked: bool, pub attempts: u8 }
 
 // What the receive side did since the radio came up.
 #[derive(Clone, Copy, Default)]
-pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub overflow: u32, pub dma_errors: u32 }
+pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32 }
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
@@ -222,18 +223,19 @@ impl<'a> Radio<'a> {
         bss == self.filter.bssid
     }
 
-    // Received frames moved from the ring into the queue, filtered; the engine's index set one short of its current slot.
+    // Received frames moved from the ring into the queue, filtered, while the queue has room: the rest wait in the ring.
+    // The engine's index is set one short of the first slot not yet taken.
     pub fn poll(&mut self) {
         fence(Ordering::SeqCst);
         let current = ((self.c.r32(RX_STATUS) & 0x1FFF) as usize / 16) % SLOTS;
-        while self.next != current {
+        while self.next != current && self.count < QUEUE {
             let slot = self.next;
             self.take_slot(slot);
             self.poison(slot);
             self.next = (slot + 1) % SLOTS;
         }
         fence(Ordering::SeqCst);
-        self.c.w32(RX_INDEX, (((current + SLOTS - 1) % SLOTS) * 16) as u32);
+        self.c.w32(RX_INDEX, (((self.next + SLOTS - 1) % SLOTS) * 16) as u32);
         let reason = self.c.r32(DMA0_REASON);
         if reason != 0 { self.c.w32(DMA0_REASON, reason); if reason & 0xDC00 != 0 { self.counts.dma_errors += 1; } }
     }
@@ -253,7 +255,6 @@ impl<'a> Radio<'a> {
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
         if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
         if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
-        if self.count == QUEUE { self.counts.overflow += 1; return; }
         let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
         let weakness = if signal < 0 && signal > -128 { signal.unsigned_abs() } else { 0 };
         let channel = match (u16::from_le_bytes([s[22], s[23]]) >> 3) as u8 { 0 => self.channel, ch => ch };
