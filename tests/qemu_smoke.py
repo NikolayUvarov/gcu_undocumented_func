@@ -5174,7 +5174,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 4 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, and the held one
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 5 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, the held one and the stalling one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
