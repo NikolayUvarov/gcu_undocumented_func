@@ -136,6 +136,26 @@ The next run, to find where OFDM frames are lost:
 - **The next run** sends 1 and 6 Mbit/s with table 2 given b43's values, then 6 Mbit/s with each core's front end off.
 - **In the scan:** 0 OFDM frames on every channel again; `TP-LINK_POCKET` is on channel 6 again.
 
+**2026-10-14, the seventh run, `fast-test` 562b807: core 2 is the cause.** Directed requests at 6 Mbit/s, acknowledged of 3:
+
+| Network (channel, signal) | all cores | table 2 given b43's gains | core 0 off | core 1 off | core 2 off |
+|---|---|---|---|---|---|
+| `Xiaomi_7C34` (1, −43) | 0 | 0 | 0 | 0 | **3** |
+| `un2` (1, −43) | 1 | 1 | 0 | 1 | **3** (6 tries) |
+| `CoolNet2` (8, −43) | 3 (18 tries) | 3 (10) | 0 | 2 | **3** (3 tries) |
+| `Xiaomi_7C34` (6, −44) | 0 | 0 | 0 | 0 | **3** |
+
+- **Core 2 off: the access points' OFDM acknowledgements are received, nearly at the first try.** With core 2 on, OFDM is received only from strong senders.
+- **Per-core powers of the good OFDM frames:**
+  - core 0 about −44 dBm;
+  - core 1 about −72 to −85 dBm, 30 dB weaker (its antenna, or its gain);
+  - core 2 about −45 dBm when on.
+- **Table 2 given b43's gains changed nothing.** It moved core 0's reported power to about −61 dBm, so table 2 is read for core 0's report [inference]. The change is dropped.
+- **Core 2's front end is now off in the radio by default.** Its transmitter is not used (frames go out on cores 0 and 1).
+- **Why core 2 spoils OFDM is open:** its RX IQ, phase or gain, with no receive calibration in b43's path.
+- **`TP-LINK_POCKET` (channel 6) and `David_2.4G` (channel 1) acknowledged nothing in this run,** even at 1 Mbit/s; the other networks on channel 1 did. They were the first two probed.
+- **The next run** sends 1 Mbit/s and OFDM at 6, 12, 24 and 54 Mbit/s with core 2 off, then 6 Mbit/s with core 0 alone, and 6 and 1 Mbit/s with every core on.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.

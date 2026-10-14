@@ -42,6 +42,9 @@ const STATUS_MS: usize = 100;
 // The cores a frame leaves through (PHY control bits 6 up, core 0 at bit 6): b43's cores 0 and 1, in SISO mode. Single
 // cores and CDD on three did no better on 2026-10-14.
 const TX_CORES: u16 = 0x00C0;
+// The cores whose front ends stay off: with core 2's on, OFDM frames from access points at -43 dBm were not received;
+// with it off they were, every one (2026-10-14, 550-DRV-0028). Its transmitter is not among TX_CORES.
+pub const CORES_OFF: u8 = 0b100;
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,8 +80,6 @@ pub struct Radio<'a> {
     mac_extra: u32,
     // The cores' front-end words before a test switched one off.
     afe_saved: Option<[(u16, u16); 3]>,
-    // Table 2's words at offsets 8 to 11 before a test changed them.
-    table2_saved: Option<[u16; 4]>,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -134,7 +135,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, table2_saved: None, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -166,6 +167,10 @@ impl<'a> Radio<'a> {
         mind::println!("[BCM] RADIO UP: RX RING AT {:#X} ({} SLOTS), TX RING AT {:#X} ({} SLOTS); GAIN ENTRY {} ({:08X}); {} STALE TRANSMIT STATUSES; RX STATUS {:08X}, ERROR {:08X}",
                        rx_address, SLOTS, tx_address, TX_SLOTS, TX_GAIN, entry, stale, c.r32(RX_STATUS), c.r32(RX_ERROR));
         if r.set_channel(1).is_err() { mind::println!("[BCM] CHANNEL 1 NOT SET"); }
+        match r.cores_off(CORES_OFF) {
+            Ok(()) => mind::println!("[BCM] CORE 2'S FRONT END OFF: WITH IT ON, OFDM IS RECEIVED ONLY FROM STRONG SENDERS"),
+            Err(_) => mind::println!("[BCM] CORE 2'S FRONT END NOT SWITCHED OFF"),
+        }
         Some(r)
     }
 
@@ -234,23 +239,14 @@ impl<'a> Radio<'a> {
         self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
     }
 
-    // For a test: every core's front end as it was, then `core`'s switched off; None leaves all three on.
-    pub fn core_off(&mut self, core: Option<u16>) -> Result<(), Error> {
-        if core.is_none() && self.afe_saved.is_none() { return Ok(()); }
+    // The cores whose analog front ends are off (a bitmap, core 0 first): every core's words as they were, then those
+    // in `mask` switched off as b43 switches the analog part off.
+    pub fn cores_off(&mut self, mask: u8) -> Result<(), Error> {
+        if mask == 0 && self.afe_saved.is_none() { return Ok(()); }
         if !self.c.suspend() { return Err(Error::Failed); }
         let saved = *self.afe_saved.get_or_insert_with(|| [0, 1, 2].map(|i| self.c.afe(i)));
         for (i, words) in saved.into_iter().enumerate() { self.c.afe_restore(i as u16, words); }
-        if let Some(i) = core.filter(|&i| i < 3) { self.c.afe_off(i); }
-        self.c.enable();
-        Ok(())
-    }
-
-    // For a test: PHY table 2 at offsets 8 to 11 given b43's gain values of tables 0, 1 and 0x28, or its own back.
-    pub fn table2_gains(&mut self, fixed: bool) -> Result<(), Error> {
-        if !fixed && self.table2_saved.is_none() { return Ok(()); }
-        if !self.c.suspend() { return Err(Error::Failed); }
-        let saved = *self.table2_saved.get_or_insert_with(|| [8, 9, 10, 11].map(|o| self.c.table16_read(2, o)));
-        self.c.table16(2, 8, if fixed { &[9, 14, 19, 24] } else { &saved });
+        for i in (0..3u16).filter(|&i| mask & 1 << i != 0) { self.c.afe_off(i); }
         self.c.enable();
         Ok(())
     }
@@ -258,14 +254,6 @@ impl<'a> Radio<'a> {
     // What the MAC shows when it does not suspend: its control word, the interrupt reason, the microcode's status.
     pub fn state(&self) -> (u32, u32, u16) { (self.c.r32(MAC_CONTROL), self.c.r32(IRQ_REASON), self.c.shm16(0x0040)) }
 
-    // The per-core gain values b43 writes at offsets 8 to 11 of PHY tables 0, 1 and 0x28, with table 2's beside them.
-    // Read with the MAC suspended: the microcode uses the same table address registers.
-    pub fn rx_gain_tables(&self) -> Option<[[u16; 4]; 4]> {
-        if !self.c.suspend() { return None; }
-        let t = [0, 1, 2, 0x28].map(|t| [8, 9, 10, 11].map(|o| self.c.table16_read(t, o)));
-        self.c.enable();
-        Some(t)
-    }
 
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {

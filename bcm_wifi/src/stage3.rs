@@ -76,14 +76,14 @@ impl<'a> Core<'a> {
     }
 
     // PHY tables: the address word (table << 10 | offset) once, then entries; a 32-bit entry high half first.
-    pub(crate) fn table16(&self, table: u16, offset: u16, values: &[u16]) { self.phy_w(0x072, table << 10 | offset); for &v in values { self.phy_w(0x073, v); } }
+    fn table16(&self, table: u16, offset: u16, values: &[u16]) { self.phy_w(0x072, table << 10 | offset); for &v in values { self.phy_w(0x073, v); } }
     fn table32(&self, table: u16, offset: u16, values: &[u32]) {
         self.phy_w(0x072, table << 10 | offset);
         for &v in values { self.phy_w(0x074, (v >> 16) as u16); self.phy_w(0x073, v as u16); }
     }
     fn table16_fill(&self, table: u16, offset: u16, n: usize) { self.phy_w(0x072, table << 10 | offset); for _ in 0..n { self.phy_w(0x073, 0); } }
     fn table32_fill(&self, table: u16, offset: u16, n: usize) { self.phy_w(0x072, table << 10 | offset); for _ in 0..n { self.phy_w(0x074, 0); self.phy_w(0x073, 0); } }
-    pub(crate) fn table16_read(&self, table: u16, offset: u16) -> u16 { self.phy_w(0x072, table << 10 | offset); self.phy(0x073) }
+    fn table16_read(&self, table: u16, offset: u16) -> u16 { self.phy_w(0x072, table << 10 | offset); self.phy(0x073) }
     fn table32_read(&self, table: u16, offset: u16) -> u32 { self.phy_w(0x072, table << 10 | offset); let high = self.phy(0x074) as u32; high << 16 | self.phy(0x073) as u32 }
 
     // Shared memory takes byte offsets; scratch takes word indexes.
