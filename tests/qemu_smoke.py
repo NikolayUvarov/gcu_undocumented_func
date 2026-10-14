@@ -7901,6 +7901,9 @@ def display_suite(args, disk):
             log = vm.command("dmesg -s compositor", raw=True)
             assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
             assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            # 213-APP-0075: the shell names its first frame.
+            log = vm.command("dmesg -s shell", raw=True)
+            assert re.search(r"\[SHELL\] FIRST FRAME \d+X\d+ AT \d+\.\d S", log), (name, log)
             started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
@@ -7913,7 +7916,7 @@ def display_suite(args, disk):
             assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front, the shell its first frame", flush=True)
     if args.arch == "x86_64":
         no_serial_check(args, disk)
 

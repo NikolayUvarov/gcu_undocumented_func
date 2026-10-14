@@ -269,6 +269,8 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
 - `|` and `<` wait for the kernel's text input for programs ([000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)).
 
+**Its start in the system log** (213-APP-0075): `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S` once the shell has drawn its first frame, and `[SHELL] <STEP> TOOK <N> MS BEFORE THE FIRST FRAME` for a step before it that took longer than 5 s, naming what it called (the kernel, `logd`, the serial line, the keys and the commands typed, the drawing). With the compositor's `SCREEN IN FRONT` lines, `dmesg -s shell` tells a shell that never drew from one that waited (213-KRN-0098). A step that never returns leaves no line.
+
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
 - Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.
