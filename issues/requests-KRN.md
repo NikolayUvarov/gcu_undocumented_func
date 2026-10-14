@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-14, three of them for 750; a launch session holding every launch slot became [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md); a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (9 requests waiting, 2026-10-14, three of them for 750; a launch session holding every launch slot became [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md), `init` saying whether it confirmed a trial boot [000-KRN-0102](000-KRN-0102-init-says-how-the-boot-went.md), the tools stopping when their console is gone [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md); a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -24,47 +24,6 @@ The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-K
 
 The shell holds a client of `updater` (`caps` shows it), and `status` answers through it.
 
-## init says whether it confirmed a trial boot
-
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
-
-### Problem
-
-`init` confirms a healthy trial boot to the kernel (`BOOT_CONFIRM`, 351-KRN-0014), and the confirmed boot record is the updater's to write. The updater cannot ask whether the boot was confirmed. It waits until 5 s past the kernel's deadline (120 s): had the boot not been confirmed, the kernel would have restarted the machine by then. That is sound but slow. The other slot stays untouched for two minutes after every update, and the QEMU `update` check waits that long.
-
-### Plan (a proposal; the kernel track decides)
-
-- `init.wit` 1.4: `boot: func() -> result<boot, error>`, with the slot, whether it booted on trial and whether `init` confirmed it. Any client of `init` may call it, or only the `BADGE_REBOOT` one.
-- The updater asks for it every second while it waits, and keeps the deadline as the bound.
-
-### Acceptance criteria
-
-On a trial boot, the updater writes the confirmed record within a few seconds of `[INIT] TRIAL BOOT CONFIRMED`, and the `update` check passes.
-
-## A console program ends when its console is gone (000-APP-0056)
-
-**Recorded by:** the tools track (`APP`), 2026-10-10, from the walk through wm's menu in [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done).
-
-### Problem
-
-wm's menu has a category "Tests and performance": `check`, `bench` and `kbench` run there in a `console` window. Closing that window ends `console`, but not the program it ran:
-
-- `mind::output::send` stops sending when the launcher's endpoint answers `Peer`, and the program goes on.
-- A full `kbench` or `bench` then measures for minutes with nobody watching it, and takes processor time from whatever the user does next.
-- `console` cannot end its programs. Ending another program is the shell's (process control), and the shell asks the user first.
-
-000-APP-0056 asks that nothing started from the menu runs unseen. Until this is settled, the wm suite waits for these three to end before it closes their window (`RUN_TO_END` in `tests/qemu_smoke.py`).
-
-### Plan (a proposal; the kernel track decides)
-
-One of these:
-
-- **In libmind.** A program whose launcher's endpoint is gone ends at its next output, with a nonzero status, as a Unix program does on a hang-up. A program that must outlive its console (none is known) could opt out.
-- **In the three tools.** libmind says whether the output still reaches the launcher (`mind::output::open()`). `check`, `bench` and `kbench` look at it between rows, write the log they have, and say in it that they stopped because their console closed.
-
-### Acceptance criteria
-
-In QEMU, `kbench` started from wm's menu ends within one row after its window is closed, and the kernel's log shows it. The wm suite's walk then closes the window without waiting, and `RUN_TO_END` is empty.
 
 ## Boot images and `init`'s grants for `effector` and `effector_gw` (750)
 

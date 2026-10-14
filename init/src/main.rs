@@ -86,7 +86,8 @@ const ARGS_KEPT: usize = 24;
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>> }
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
+              boot: idl_init::Boot }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -676,6 +677,8 @@ impl Init {
             // Only the updater's badged client may restart the machine (351-KRN-0022).
             Request::Reboot if badge != mind::process::BADGE_REBOOT => idl_init::reply_reboot(call, Err(E::Denied)),
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
+            // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
+            Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
         }
     }
 
@@ -727,7 +730,8 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None };
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
+                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false } };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
@@ -776,7 +780,7 @@ fn boot(info: &'static BootInfo) {
     if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     let mounted = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
     if healthy && mounted {
-        if platform::confirm_boot() == Ok(true) { mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
+        if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
     } else if info.boot_slot.trial != 0 {
         mind::println!("[INIT] TRIAL BOOT NOT CONFIRMED: {}", if mounted { "A BOOT SERVICE FAILED" } else { "NO BOOT VOLUME MOUNTED" });
     }

@@ -109,6 +109,28 @@ fn kernel(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
     text_input(run);
     every_slot(run);
+    console_closes(run);
+}
+
+// A tool whose console is gone stops at its next row (176-KRN-0103): kbench, its output sent to an endpoint that goes.
+fn console_closes(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.report("a tool's console closes", fail(String::from("no endpoint created"))) };
+    let verdict = match child::start_with_console("kbench", "", endpoint) {
+        Err(why) => { let _ = ipc::drop_cap(endpoint.0); fail(why) }
+        Ok(pid) => {
+            let pieces = (0..4).take_while(|_| endpoint.recv_timeout(0, 10_000).is_ok()).count();
+            let t = now();
+            let _ = ipc::drop_cap(endpoint.0);
+            let gone = child::gone_within(pid, 30_000);
+            if !gone && granted(SLOT_LIFECYCLE) { let _ = lifecycle::stop_task(Endpoint(SLOT_LIFECYCLE), pid); }
+            match (pieces, gone) {
+                (4, true) => pass(format!("kbench ended {} after its console went", report::duration(now() - t))),
+                (4, false) => fail(String::from("kbench still ran 30 s after its console went")),
+                (n, _) => fail(format!("{} pieces of kbench's output came, not 4", n)),
+            }
+        }
+    };
+    run.report("a tool's console closes", verdict);
 }
 
 // A launch session that lends every launch slot at once (000-KRN-0101): the program holds them all.
@@ -312,8 +334,17 @@ fn files(run: &mut Run) {
     run.report("programs on the disk", verdict);
 }
 
-fn services(run: &mut Run) {
+fn services(run: &mut Run, info: &mind::BootInfo) {
     if !granted(SLOT_LIFECYCLE) { return run.report("boot services", skip(String::from("no lifecycle client: start check from the shell"))); }
+    // What init says of this boot (init.wit 1.4, 000-KRN-0102), against what the bootloader handed the kernel.
+    let slot = info.boot_slot;
+    run.report("the boot", match lifecycle::boot(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(b)) if b.slot as u32 != slot.slot || b.trial != (slot.trial != 0) => fail(format!("init says slot {}, trial {}; the bootloader said slot {}, trial {}", b.slot, b.trial, slot.slot, slot.trial != 0)),
+        Ok(Ok(b)) if b.trial && !b.confirmed => fail(String::from("a trial boot init did not confirm: the machine restarts at the deadline")),
+        Ok(Ok(b)) if !b.trial && b.confirmed => fail(String::from("init says it confirmed a boot that was not on trial")),
+        Ok(Ok(b)) => pass(format!("{}, {}", match b.slot as u32 { BOOT_SLOT_A => "slot A", BOOT_SLOT_B => "slot B", _ => "the volume's root" }, if b.trial { "on trial, confirmed" } else { "not on trial" })),
+        other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {
             let verdict = if s.running {
@@ -441,7 +472,7 @@ fn main(info: &'static mind::BootInfo) {
             "security" => security(&mut run, info),
             "clock" => clock(&mut run),
             "files" => files(&mut run),
-            "services" => services(&mut run),
+            "services" => services(&mut run, info),
             "devices" => devices(&mut run),
             "sound" => sound(&mut run),
             _ => network(&mut run),

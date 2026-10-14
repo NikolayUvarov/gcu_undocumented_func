@@ -4,7 +4,7 @@
 use alloc::format;
 use alloc::string::String;
 use core::hint::black_box;
-use mind::abi::{CAP_GRANT, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, LAUNCH_SLOTS, SLOT_INIT};
+use mind::abi::{CAP_GRANT, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, LAUNCH_SLOTS, SLOT_CONSOLE, SLOT_INIT};
 use mind::idl::loader;
 use mind::io::Writer;
 use mind::ipc::{self, Endpoint, Message};
@@ -60,6 +60,18 @@ pub fn start_in_every_slot(program: &str, args: &str, endpoint: Endpoint) -> Res
         });
         if !matches!(granted, Ok(Ok(Ok(())))) { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("the grant in slot {}: {:?}", slot, granted)); }
     }
+    loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// Starts `program args` with a send-only copy of `endpoint` as its console (SLOT_CONSOLE), where its output comes.
+pub fn start_with_console(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
+    let session = loader::begin(Endpoint::LOADER, program, args).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))?;
+    let lent = ipc::mint(endpoint.0, CAP_WRITE, 0, 0).map(|client| {
+        let granted = loader::grant(Endpoint::LOADER, session, SLOT_CONSOLE as u8, client);
+        let _ = ipc::drop_cap(client);
+        granted
+    });
+    if !matches!(lent, Ok(Ok(Ok(())))) { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("the console's grant: {:?}", lent)); }
     loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
 }
 
