@@ -241,7 +241,7 @@ fn read_file(path: &str, buffer: &mut [u8]) -> Option<usize> {
     (n == file.size() && n < buffer.len()).then_some(n)
 }
 
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 3, STEP {}: {}", n, what); mind::time::sleep(crate::step_wait()); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 3, STEP {}: {}", n, what); crate::serve::pause(crate::step_wait()); }
 
 // The stage, after the microcode answered; `mac` from the SPROM. True when it ran through with the MAC suspended at
 // the end; the core is left to the caller to reset.

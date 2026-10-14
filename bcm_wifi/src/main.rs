@@ -143,6 +143,8 @@ fn main(_info: &'static BootInfo) {
         let serving = cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT;
         if test { STEP_WAIT.store(STEP_MS, Ordering::Relaxed); }
         mind::println!("[BCM] TEST {} ({}), A STATION TO SERVE: {}", if test { "ASKED FOR" } else { "NOT ASKED FOR" }, STAGE2_FLAG, if serving { "YES" } else { "NO" });
+        // The station is answered during the test, so that it and the stack do not wait for the test's end.
+        if let (true, true, Some(own)) = (test, serving, mac) { serve::hold(own); mind::println!("[BCM] THE STATION IS ANSWERED BUSY UNTIL THE TEST ENDS"); }
         microcode(&bar, mac, test, serving);
         if test { test_done(); }
         if serving { serve::absent(); }
@@ -228,10 +230,10 @@ fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTR
 
 // Stage 2 (550-DRV-0023): the microcode read from the disk, the core enabled, the microcode loaded and started; its
 // revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(step_wait()); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); serve::pause(step_wait()); }
 
 // The maintainer's sign that the disk may go back: logged after a wait longer than the journal's save period.
-fn test_done() { mind::time::sleep(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
+fn test_done() { serve::pause(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
 
 fn microcode(bar: &Mmio, mac: Option<[u8; 6]>, test: bool, serving: bool) {
     if !test && !serving { mind::println!("[BCM] NO TEST AND NO STATION: THE CORE STAYS IN RESET"); return; }

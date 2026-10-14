@@ -33,6 +33,15 @@ The 550-DRV-0028 runs, 2026-10-14:
 
 Evidence for this machine only (MC-12.1).
 
+## Progress
+
+- **2026-10-14: plan item 4, the station answered during the test** (`bcm_wifi/src/serve.rs`, on `claude/ASR-DRV` and `fast-test` until its gate). With `data/wifitest.txt` and a station to serve, `bcm_wifi` answers the station's requests while the test's stages run:
+  - `info` is answered as it is (the SPROM's MAC address, 2.4 GHz, channels 1–13, no channel set);
+  - `set-channel`, `set-filter` and `send` answer `busy`;
+  - `receive` answers `empty`, and `wait` answers none.
+
+  So `wlan` starts and keeps its loop, and `netstack` no longer waits for the test's end. After the test the radio is served as before.
+
 ## Related
 
 [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), requests-NET.md (the station's rates; the stack's wait), `bcm_wifi/`.
