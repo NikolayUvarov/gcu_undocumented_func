@@ -65,6 +65,27 @@ Stage 4's last step now sends 3 directed probe requests to each network in eight
 
 It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 0x17E).
 
+**2026-10-14, the third run, `fast-test` eae3690** (`log:boot0001.log`, gain entry 40): three directed probe requests per way of sending, acknowledged of 3.
+
+| Network (channel, signal) | 1M, cores 0+1 | 1M, core 0 | 11M | 6M, cores 0+1 | 6M, core 0 | 6M, core 1 | 6M, core 2 | 6M, cores 0–2 CDD |
+|---|---|---|---|---|---|---|---|---|
+| `David_2.4G` (1, −37) | 3 | 3 | 3 | 1 | 2 | 1 | 2 | 0 |
+| `un2` (1, −41) | 3 | 3 | 3 | 2 | 3 | 1 | 3 | 3 |
+| `Tenda_E25140` (3, −41) | 2 | 3 | 3 | 1 | 0 | 1 | 1 | 0 |
+| `CoolNet2` (8, −38) | 3 | 3 | 3 | 1 | 1 | 3 | 3 | 2 |
+| `ZATV` (8, −38) | 3 | 3 | 3 | 3 | 3 | 3 | 2 | 2 |
+| `TP-LINK_POCKET` (6, −30) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+- **CCK at 1 and 11 Mbit/s is nearly always acknowledged at the first try.** So the power is enough for CCK.
+- **OFDM now gets through to every network but the pocket router, with many tries.** No core and no CDD is clearly better: the cores are not the cause.
+- **The PHY registers read as expected:** classifier `0DF7` (CCK and OFDM on), `C01` 0000, `C0A` 0100, `17E` 3830.
+- **The pocket router acknowledges nothing,** CCK at 11 Mbit/s included. That is the router's behaviour.
+- **What OFDM depends on that CCK does not:**
+  - the baseband multiplier (table 13), which scales OFDM only;
+  - and with it how the gain is split between the radio and the baseband (PA compression of OFDM's high peaks, or LO leakage at a high radio gain with a low multiplier);
+  - b43 runs no TX IQ/LO calibration either.
+- **The next run** sends 1 and 6 Mbit/s in five splits (radio gain word / multiplier): 1019/33 (entry 40), 1019/20, 1019/48, 1009/40, 1041/20.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.

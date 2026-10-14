@@ -126,15 +126,19 @@ impl<'a> Core<'a> {
 
     // The fixed transmit gain the channel switch sets from entry `gain` of the gain table; the entry is returned.
     pub(crate) fn tx_power_fix(&self) -> u32 {
-        let mut t = 0;
-        for i in 0..3u16 {
-            t = self.table32_read(0x1A, 0x0C0 + self.gain.get());
-            self.phy_w(0x908, 0);
-            self.table16(7, 0x110 + i, &[(t >> 16) as u16]);
-            self.phy_w(0x072, 0x0D << 10 | (0x63 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
-            self.phy_w(0x072, 0x0D << 10 | (0x73 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
-        }
+        let t = self.table32_read(0x1A, 0x0C0 + self.gain.get());
+        self.tx_gain_set((t >> 16) as u16, (t & 0xFF) as u16);
         t
+    }
+
+    // A transmit gain from its parts, on every core: the radio's gain word (table 7) and the baseband multiplier (table 13).
+    pub(crate) fn tx_gain_set(&self, radio: u16, bbmult: u16) {
+        for i in 0..3u16 {
+            self.phy_w(0x908, 0);
+            self.table16(7, 0x110 + i, &[radio]);
+            self.phy_w(0x072, 0x0D << 10 | (0x63 + 4 * i)); self.phy_w(0x073, bbmult);
+            self.phy_w(0x072, 0x0D << 10 | (0x73 + 4 * i)); self.phy_w(0x073, bbmult);
+        }
     }
 
     // A 2.4 GHz channel at 20 MHz (1 to 13): the radio's synthesizer and per-core values, its calibration pulse, the

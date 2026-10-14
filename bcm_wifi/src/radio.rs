@@ -39,8 +39,9 @@ pub const TX_GAIN: u16 = 40;
 pub const FRAME_MAX: usize = 2346; pub const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 32; const QUEUE_STRIDE: usize = 2368;
 const STATUS_MS: usize = 100;
-// b43's core field: cores 0 and 1, the mode SISO.
-const TX_CORES: u16 = 0x00C0; const MODE_CDD: u16 = 0x0008;
+// The cores a frame leaves through (PHY control bits 6 up, core 0 at bit 6): b43's cores 0 and 1, in SISO mode. Single
+// cores and CDD on three did no better on 2026-10-14.
+const TX_CORES: u16 = 0x00C0;
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,8 +68,6 @@ pub struct Radio<'a> {
     filter: Filter,
     queue: Pages, head: usize, count: usize,
     retry: u16,
-    // The cores a frame leaves through (PHY control bits 6 up: core 0 at bit 6), and whether OFDM uses cyclic delay.
-    tx_cores: u16, tx_cdd: bool,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -124,7 +123,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, tx_cores: TX_CORES, tx_cdd: false, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -214,11 +213,14 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
-    // The cores frames leave through (a bitmap, core 0 first) and whether OFDM frames use cyclic delay, for a test.
-    pub fn set_tx_cores(&mut self, cores: u16, cdd: bool) { self.tx_cores = (cores & 0xFF) << 6; self.tx_cdd = cdd; }
-
-    // PHY registers that decide OFDM reception: the classifier, the B-PHY's control, the test register, 0x17E.
-    pub fn phy_state(&self) -> [u16; 4] { [0x0B0, 0xC01, 0xC0A, 0x17E].map(|r| self.c.phy(r)) }
+    // A transmit gain from its parts, for a test: the radio's gain word and the baseband multiplier. Until the next
+    // channel switch, which sets the gain entry again.
+    pub fn set_gain_parts(&mut self, radio: u16, bbmult: u16) -> Result<(), Error> {
+        if !self.c.suspend() { return Err(Error::Failed); }
+        self.c.tx_gain_set(radio, bbmult);
+        self.c.enable();
+        Ok(())
+    }
 
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {
@@ -310,8 +312,7 @@ impl<'a> Radio<'a> {
         let mut header = [0u8; HEADER];
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
         header[0x04..0x06].copy_from_slice(&frame[0..2]);
-        header[0x08..0x0A].copy_from_slice(&(self.tx_cores | ofdm as u16).to_le_bytes()); // no per-frame power
-        let control1 = control1 | if ofdm && self.tx_cdd { MODE_CDD } else { 0 };
+        header[0x08..0x0A].copy_from_slice(&(TX_CORES | ofdm as u16).to_le_bytes()); // no per-frame power
         header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&control1.to_le_bytes());
         header[0x12] = code; header[0x14] = ofdm as u8; header[0x15] = self.channel;
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);
