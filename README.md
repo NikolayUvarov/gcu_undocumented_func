@@ -760,25 +760,24 @@ superseded editions only with `CONSTITUTION_ARCHIVE=1`):
 ./code_concat.sh
 ```
 
-The compact exporter needs only Bash and Python 3:
+The compact exporter needs only Bash and Python 3. It writes its two files beside those, with the suffix
+`_compact`: `code_context_compact.txt` and `constitution_context_compact.txt`; the rest goes to `code_handoff/compact/`:
 
 ```bash
 ./code_concat_compact.sh
 ```
 
-Compact results also go to `code_handoff/`:
-
-| File | Contents / when to paste |
+| File in `code_handoff/` | Contents / when to paste |
 |---|---|
-| `index.txt` | File inventory, scope, sizes and limitations; use it to choose relevant files. |
-| `code.txt` | Current Rust sources, including comments and inline tests, with short file markers. |
-| `build.txt` | Manifests, `.cargo/config.toml`, linkers, build/run/USB/export scripts and their helpers. |
-| `constitution.txt` | The Constitution and the RFCs in English and Russian (`constitution/`), unchanged; the superseded editions in `archive/` only with `--constitution-archive`. |
-| `agent.txt` | Compact Rust code for discussion: comments/formatting reduced; inline `#[cfg(test)] mod ...` blocks omitted by default. |
-| `parts/agent-001.txt`, etc. | The same agent bodies split for copy/paste, at most 16,000 Unicode characters per file including headers. |
-| `manifest.json` | Selected source paths/hashes, original/output sizes, estimates and explicit test-module omissions. |
+| `code_context_compact.txt` | Compact Rust code for discussion: comments/formatting reduced; inline `#[cfg(test)] mod ...` blocks omitted by default. |
+| `constitution_context_compact.txt` | The Constitution and the RFCs in English and Russian (`constitution/`), only trailing spaces and repeated blank lines removed; the superseded editions in `archive/` only with `--constitution-archive`. |
+| `compact/index.txt` | File inventory, scope, sizes and limitations; use it to choose relevant files. |
+| `compact/code.txt` | Current Rust sources, including comments and inline tests, with short file markers. |
+| `compact/build.txt` | Manifests, `.cargo/config.toml`, linkers, build/run/USB/export scripts and their helpers. |
+| `compact/parts/agent-001.txt`, etc. | The compact code split for copy/paste, at most 16,000 Unicode characters per file including headers. |
+| `compact/manifest.json` | Selected source paths/hashes, original/output sizes, estimates and explicit test-module omissions. |
 
-Paste **`agent.txt` OR the numbered parts in order**, not both. Keep the file
+Paste **`code_context_compact.txt` OR the numbered parts in order**, not both. Keep the file
 markers and part headers: parts identify the file and character offset in its
 compact body. Splits prefer line boundaries; a very long line/string can be
 split across parts without dropping any text. This is an analysis view, not a
@@ -797,7 +796,7 @@ data and runtime function bodies are preserved. The scanner handles nested
 comments and preserves operator separation. Python, shell, PowerShell, C#,
 TOML and linker file bodies are kept intact: their indentation, here-documents
 and strings are not subject to Rust minification. For comments, rationale or
-inline tests, use `code.txt` or enable the relevant option below.
+inline tests, use `compact/code.txt` or enable the relevant option below.
 
 For the largest reduction in context, select only the files needed for the
 question. The exporter does **not** automatically resolve their dependencies:
@@ -827,9 +826,9 @@ question. The exporter does **not** automatically resolve their dependencies:
 `--include` accepts a file, directory prefix or quoted glob and can be repeated.
 An unmatched selection is an error, not an empty or silently truncated export.
 `--agent-groups` defaults to `code`; enabling `--with-tests`/`--with-docs`
-creates `tests.txt`/`docs.txt` without automatically enlarging `agent.txt`.
+creates `compact/tests.txt`/`compact/docs.txt` without automatically enlarging `code_context_compact.txt`.
 Generated stale bundles/parts from a previous export in the same output
-directory are removed; unrelated files are retained. Identical inputs/options
+directory are removed, those of the older layout (`agent.txt`, `parts/` in `code_handoff/`) included; unrelated files are retained. Identical inputs/options
 produce identical output, and a source/selection error leaves the prior export
 intact.
 
