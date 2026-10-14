@@ -285,7 +285,11 @@ impl Manager {
                 }
             }
             let name = title(&live.surface);
-            if !name.is_empty() && name != win.title { win.title = name; dirty = true; }
+            if !name.is_empty() && name != win.title {
+                // A title written after wm adopted the window (the race of requests-APP, 2026-10-14) is logged once.
+                if win.title.is_empty() { mind::println!("[WM] TITLE {} \"{}\"", live.id, name); }
+                win.title = name; dirty = true;
+            }
             // A window draws at the size of its frame's inside (issue u009), or of the screen when full (211-APP-0014).
             let inner = if full == Some(live.id) { screen } else { win.rect.inner() };
             let wanted = match win.content { Content::Text => (inner.w, inner.h), Content::Pixels => (inner.w * 8, inner.h * 16) };
