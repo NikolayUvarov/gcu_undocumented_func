@@ -236,10 +236,10 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text, raw=False):
+    def command(self, text, raw=False, timeout=8):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
+        return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
         # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
@@ -457,6 +457,14 @@ def center_pixel(vm):
     return pixels[at:at + 3]
 
 
+def center_pixel_soon(vm, want, seconds=5):
+    # The centre pixel once it is `want` or the time is up: a loaded host shows a program's first frame late.
+    deadline = time.monotonic() + seconds
+    while (seen := center_pixel(vm)) != want and time.monotonic() < deadline:
+        time.sleep(.1)
+    return seen
+
+
 # aarch64 idle check (issue 208): an idle virt with 4 CPUs uses about 0.45-0.6 s of host processor time a second
 # under TCG, one vCPU that spins instead of waiting in WFI about 1 s on its own. The lowest of a few samples is
 # compared, so one sample that meets a busy host or a burst of wakeups does not fail the check.
@@ -491,7 +499,8 @@ def applications_until_memory_ends(vm, others=0):
     def clocks(most):
         pids = []
         while len(pids) < most:
-            output = vm.command("run clock &")
+            # Each start loads the program while every clock before it draws: a loaded host makes that slow.
+            output = vm.command("run clock &", timeout=60)
             started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
             if not started:
                 require(output, "OUT OF MEMORY")
@@ -7933,12 +7942,12 @@ def display_suite(args, disk):
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
             vm.expect(f"FOREGROUND PID={started[1]}")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\x00\xff\xff")
+            assert seen == b"\x00\xff\xff", (name, seen)
             vm.serial()  # the screenshot switched the console to the QEMU monitor
             vm.send(" \n")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\xff\x00\x00")
+            assert seen == b"\xff\x00\x00", (name, seen)
         finally:
             vm.close()
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front, the shell its first frame", flush=True)
