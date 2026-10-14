@@ -1,0 +1,41 @@
+# 750-NET-0021 — JSON in the parser service — done
+
+**Type:** network (service, interface, library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) (with 501) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, Appendix B.6
+
+The request in requests-NET.md ("JSON in the parser service", 2026-10-09).
+
+## Problem
+
+Effector's commands and replies are JSON. Under MC-11.11 the process that holds the server's token, the flow and the TLS client does not parse them; 109's `parse` reads HTTP heads, release metadata and model manifests only.
+
+## Plan
+
+- **`mind::json::walk`:** a whole JSON text (RFC 8259) read with `mind::json`'s reader into its values in document order. Each value comes with its kind, its parent's index, its member's key, and its text (a string decoded, a number as written). The bounds:
+  - 1024 values;
+  - nesting 16 deep;
+  - a key of 64 bytes and a string of 512 bytes once decoded.
+
+  Anything past them is malformed.
+- **`idl/parse.wit` 1.4 `json`:** the text (up to 16 KiB) in, the values out 16 at a time from `start`, and how many there are. A refusal is logged with the client's PID.
+- **The client still checks the tree against what it asked for (MC-11.5).** A key that comes twice is the client's to refuse.
+- **The library task of the Effector track** (750-EFF-0004, `mind::json` with a writer and the JSONTestSuite) is not taken here. This builds on the reader `mind::json` already has (251-STO-0014).
+
+## Acceptance criteria
+
+- **Host tests** (`tests/json_host.rs`): a command in document order; malformed texts refused; every bound reached and passed.
+- **In QEMU** (the `net` suite's download check, x86 and aarch64), with `webcheck --json`:
+  - `parse` turns a JSON answer and a command into their values;
+  - it refuses 20 levels of nesting and logs the refusal with the client's PID.
+- **The authority map** gains the agent's stage when 750-EFF-0006 lands (the request's last point, not this task's).
+
+## Related
+
+[docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](109-NET-0008-parser-service.done), [750-EFF-0004](../issues/750-EFF-0004-json.md).
+
+## Resolution
+
+- **Built** (039f930): `mind::json::walk` and `Reader::number`, `idl/parse.wit` 1.4 `json` (16 values a page since 58507fd), `webcheck --json`.
+- **Host tests:** `tests/json_host.rs`, 3 tests: a command in document order, malformed texts, every bound reached and passed.
+- **In QEMU,** the `net` suite's download check on x86 and aarch64: `parse` turned a JSON answer and an Effector-like command into their values with parents, keys and texts, and refused 20 levels of nesting, logged with the client's PID. Gate 14 on 5aa781c (the branch with `main` 6620165), every group passing: x86 on the session's machine (QEMU 8.2.2, Ubuntu 24.04), aarch64's network group on un-rizen-service through Effector (Ubuntu 24.04, QEMU 8.2.2 from Ubuntu, TCG); `main` aedea68.
+- **Fixed on the way** (9ddaa09): a session's own parser (109-NET-0010) writes no log line for a refused head or text, as for `http-head`.
+- **Not this task's:** the authority map's row for the agent's stage comes with 750-EFF-0006.

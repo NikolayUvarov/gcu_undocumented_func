@@ -1,0 +1,35 @@
+# 550-NET-0012 — The interface between a Wi-Fi driver and the station: `idl/wlanhw.wit` 1.0 — done
+
+**Type:** network (interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 (the drivers track waits for it) · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-12.4, Appendix B.6
+
+From the drivers track's request in requests-NET.md ("The raw-frame interface between `bcm_wifi` and the station", 2026-10-12), for [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md).
+
+## Problem
+
+`bcm_wifi` receives 802.11 frames on the MacBook Pro and will transmit them ([550-DRV-0026](../issues/550-DRV-0026-bcm4331-transmits.md)). The station service `wlan` will run the MAC layer above it. The drivers track builds the driver's side only once the network track agrees the interface between them ([550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), step 4).
+
+## Plan
+
+Take the drivers track's proposal as `idl/wlanhw.wit` 1.0, with what the station needs from it:
+- the driver keeps nothing of 802.11 but its channel and its receive filter;
+- scanning policy, authentication, association, keys, encryption and rates are the station's (Appendix B.6);
+- received frames carry their signal, channel and rate, one by one or through a ring the station lends, as `net.wit` 1.2 does.
+
+## Acceptance criteria
+
+The interface is in `idl/`, its bindings are generated, its decoder is fuzzed with the others, and the drivers track can build `bcm_wifi`'s side of it.
+
+## Resolution
+
+`idl/wlanhw.wit` 1.0 and its bindings (`libmind/src/idl/wlanhw.rs`):
+- `info`: the MAC address, the bands, the channels, the longest frame, the channel now set;
+- `set-channel`: a 20 MHz channel; the driver refuses one it cannot use, and the station decides which are allowed where it is;
+- `set-filter`: all beacons and probe responses (a scan), the network's BSSID, the station's own address, broadcast and multicast; nothing else passes;
+- `send`: one MPDU without its FCS, at a rate in 500 kb/s units and at most 1 to 15 attempts, answered with whether it was acknowledged and how many times it went out;
+- `receive`, `wait`, `attach` and `kick`: received frames one by one, or through a lent ring, each led by an 8-byte header with its length, signal (minus dBm), channel, rate and flags. The ring's layout is in the file. The driver drops a frame whose FCS is wrong.
+
+Compared with the proposal, `set-key` and `clear-key` are left out of 1.0. The station starts with software CCMP, and the chip's keys can come in a minor version (MC-12.4) when the station wants them.
+
+`tests/idl_fuzz_host.rs` fuzzes its decoder (500-ASR-0001), and `docs/idl/README.md` lists it.
+
+The station itself (`wlan`) is the network track's next part of the request "An 802.11 station and WPA2-PSK" (requests-NET.md). The driver's side is [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), and `init`'s grant of the endpoint to `wlan` alone is a kernel task when the station exists.

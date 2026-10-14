@@ -210,6 +210,67 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
 
+## `wifi` follows `idl/wifi.wit` 1.0 as agreed (550-APP-0033)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's proposal in requests-NET.md ("`idl/wifi.wit`: what `wifi` needs of the station").
+
+### Problem
+
+The network track agreed the interface in [`idl/wifi.wit`](../idl/wifi.wit) 1.0 (550-NET-0018), with these changes to the proposal:
+
+- **An SSID is `list<u8, 32>`, not `string<32>`.** An access point sends up to 32 bytes, and some send names that are not UTF-8 (GBK, Latin-1). As bytes, a network is listed and joined by its exact name; `wifi` shows it as it can (for example, with U+FFFD for bytes that are not UTF-8).
+- **`status` has no `address`, and `reason` no `no-address`.** The station does no DHCP: the address is the network stack's (`ip`, which the network page of `wm`'s Settings already opens). `status` gains the BSSID, the channel and the data rate.
+- **New cases:**
+  - `security.other`: TKIP, management frame protection required, or another AKM. Like WEP, WPA3 and enterprise, the station does not join it.
+  - `error.not-found` and `reason.not-found`: no network of that name in the last scan.
+  - `reason.unsupported`.
+  - `state.scanning`.
+- **`scan` answers when the scan ends** (about 2 s), with the list. While joining or joined, it answers the list as it stands and does not leave the channel.
+- **The badges.** The station's one endpoint also serves `idl/net.wit` to the network stack. A client with `BADGE_WIFI` (`mind::network`) speaks `wifi.wit` and only reads. With `BADGE_WIFI_CHANGE`, it may also join, leave and forget.
+
+### Plan (a proposal; the tools track decides)
+
+`wifi`'s `Station` and `Demo` follow 1.0 in a step of 550-APP-0033: the stand-in serves the agreed interface, and the passphrase rules stay as the program has them (the station checks them again).
+
+### Acceptance criteria
+
+The tools suite checks `wifi` against a stand-in station of `idl/wifi.wit` 1.0.
+
+## The shell lends a TLS client that cannot present the device certificate (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's request "A TLS client without the device certificate".
+
+### Problem
+
+`tls` refuses `client-certificate` to a client badged `BADGE_TLS_NO_DEVICE` (`mind::network`, `idl/tls.wit` 1.2). The shell lends its own unbadged client today, so a program can still sign in as the device.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell the right to badge its `SLOT_TLS` copy (requests-KRN.md, "The right to badge the shell's TLS client"), the shell does two things:
+- for `REQUEST_TLS`, it lends a copy minted with `BADGE_TLS_NO_DEVICE`;
+- it keeps the unbadged one for its own `https -c`.
+
+### Acceptance criteria
+
+In the `tls` suite, a program with the lent client gets `denied` for `client-certificate`, and the shell's `https -c` still sends the certificate.
+
+## `ip` shows each card's kind and the default card (550-NET-0025)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for the request "Several network interfaces" in requests-NET.md ("`ip` shows the default and the kind of each card").
+
+### Problem
+
+`netstack` now states which card is the default: the card the policy's `default card N` line prefers while its link is up and configured, else the first configured card, wired before the Wi-Fi station. `idl/socket.wit` 2.5 `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default. The shell's `ip` shows none of this yet.
+
+### Plan (a proposal; the tools track decides)
+
+- `ip` adds to each card's line its kind and the words `DEFAULT` and `PREFERRED` where they apply, from `cards`, and lists the station's card even when it is not there yet.
+- A live choice that does not outlast a restart, `ip prefer N|none`, through the operator's `prefer`, if the tools track wants one. The lasting choice stays the policy line, which `netpolicy add` asks the user for.
+
+### Acceptance criteria
+
+In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.
+
 ## The shell logs its first frame (213-KRN-0098)
 
 **Recorded by:** the kernel track (KRN), 2026-10-13, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md): on the maintainer's Ryzen machine the screen went black when the shell took it, and the system log cannot tell a shell that never drew from a screen that never showed it.
@@ -268,3 +329,27 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 
 - The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
 - `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## A window can be adopted before its title is written, and wm logs it with none (the wm suite fails once in a while)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 on i9 (`x86: keys, shell, tools`, the `wm` suite's `shell_window`).
+
+### Problem
+
+- **What failed.** The shell's window opened as `[WM] WINDOW 5 PID 24 TEXT 80X25 "" AT 80,25 80X24`, with an empty title. `open_shell` in tests/qemu_smoke.py waits for a window line ending `"shell"`, so it timed out. The same group passed on this branch's previous commit, on un-rizen-service and locally.
+- **Why** (from the code; the timing makes it rare):
+  - `libmind::windowed::Window::open` (and `windowed::open`) call `create`, then `surface`, and only then `surface.set_title(title)` in the shared memory.
+  - The broker (`windows/src/main.rs:113`) reads the title from that memory each time it lists the windows.
+  - `wm` adopts a window at the first sync where the broker can lend its surface, which is already true after `surface`, and logs it once (`wm/src/main.rs:244`).
+  - A sync that falls between `surface` and `set_title` therefore logs, and keeps, an empty title. On i9 the guest is slow: wm took 9.5 s to list its programs in that run.
+
+### Plan (a proposal; the tools track decides)
+
+One of:
+- **The title travels with `create`** (a new version of `idl/window.wit`), so the window is never listed without it.
+- **`wm` adopts a window only once its title is set**: an empty title waits for the next sync, as a surface not yet lendable already does. It needs a limit, for a program that sets none.
+- **`wm` logs the title again when it changes**, and the suite waits for that line.
+
+### Acceptance criteria
+
+The `wm` suite's `shell_window` passes under load. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.

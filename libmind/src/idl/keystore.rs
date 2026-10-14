@@ -3,6 +3,11 @@
 //! service's private directory of the boot disk, 351-NET-0005; never exported) and its self-signed client certificate. No call returns the private key. Signing is an
 //! operation with a purpose and a budget: only the signer's badge (the TLS service) may ask for it, the data must have
 //! the form the purpose names, and every signature and refusal goes to the system log. Anyone may read the certificate.
+//!
+//! 1.1 (550-NET-0024): the WPA2-PSK networks the Wi-Fi station remembers. Their PMKs are kept here, in the private
+//! directory, wrapped under a key derived from the device key (so sealed with it where a TPM seals it); no call returns
+//! one. Only the station's badge (`BADGE_KEY_STATION`, `mind::network`) may call these, and it gets each handshake's
+//! keys, within a budget per minute, each logged.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,7 +17,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -51,6 +56,15 @@ impl Wire for Usage {
     const MAX: usize = <u32 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.signatures.encode(w)?; self.budget.encode(w)?; self.refused.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { signatures: Wire::decode(r)?, budget: Wire::decode(r)?, refused: Wire::decode(r)? }) }
+}
+
+/// A network the station remembers (1.1): its name as the access point sends it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WifiNetwork { pub ssid: List<u8, 32> }
+impl Wire for WifiNetwork {
+    const MAX: usize = <List<u8, 32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.ssid.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { ssid: Wire::decode(r)? }) }
 }
 
 /// The device certificate (DER).
@@ -96,6 +110,73 @@ pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Usage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Keeps the PMK of WPA2-PSK network `ssid`, in place of one kept for the name (station badge only; `budget` when 16
+/// others are kept, `no-key` without the device key).
+pub fn wifi_remember(endpoint: Endpoint, ssid: &[u8], pmk: &[u8]) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<u8, 32>(pmk, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
+/// The networks kept (station badge only).
+pub fn wifi_networks(endpoint: Endpoint) -> Result<core::result::Result<List<WifiNetwork, 16>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 546, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<WifiNetwork, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The CCMP pairwise keys of one 4-way handshake with network `ssid` (KCK, KEK and TK, 16 bytes each), from its PMK,
+/// the access point's and the station's addresses (low 48 bits, first byte in bits 40-47) and their nonces (station
+/// badge only; `invalid` when the network is not kept, `budget` past 60 a minute).
+pub fn wifi_keys(endpoint: Endpoint, ssid: &[u8], authenticator: u64, supplicant: u64, anonce: &[u8], snonce: &[u8]) -> Result<core::result::Result<List<u8, 48>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
+        authenticator.encode(&mut w).ok_or(SysError::Invalid)?;
+        supplicant.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<u8, 32>(anonce, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<u8, 32>(snonce, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 50, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<u8, 48> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Forgets network `ssid`; false when none was kept (station badge only).
+pub fn wifi_forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Result<bool, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_slice::<u8, 32>(ssid, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 1, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 259;
 
@@ -105,6 +186,10 @@ pub enum Request<'a> {
     Certificate,
     Sign { purpose: Purpose, data: &'a [u8] },
     Usage,
+    WifiRemember { ssid: List<u8, 32>, pmk: List<u8, 32> },
+    WifiNetworks,
+    WifiKeys { ssid: List<u8, 32>, authenticator: u64, supplicant: u64, anonce: List<u8, 32>, snonce: List<u8, 32> },
+    WifiForget { ssid: List<u8, 32> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -138,6 +223,42 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Usage, call))
         }
+        4 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let ssid = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let pmk = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiRemember { ssid, pmk }, call))
+        }
+        5 => {
+            let (call, length) = wire::take_buffer(request, cap, 546, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiNetworks, call))
+        }
+        6 => {
+            let (call, length) = wire::take_buffer(request, cap, 50, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let ssid = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let authenticator = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let supplicant = <u64 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let anonce = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let snonce = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiKeys { ssid, authenticator, supplicant, anonce, snonce }, call))
+        }
+        7 => {
+            let (call, length) = wire::take_buffer(request, cap, 1, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let ssid = <List<u8, 32> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiForget { ssid }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -151,6 +272,22 @@ pub fn reply_sign(call: Call, value: core::result::Result<&[u8], Error>) -> Resu
     wire::reply_buffer(call, |w| codec::encode_bytes::<64>(value, w))
 }
 pub fn reply_usage(call: Call, value: core::result::Result<&Usage, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_wifi_remember(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_wifi_networks(call: Call, value: core::result::Result<&[WifiNetwork], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<WifiNetwork, 16>(value, w))
+}
+pub fn reply_wifi_keys(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<u8, 48>(value, w))
+}
+pub fn reply_wifi_forget(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

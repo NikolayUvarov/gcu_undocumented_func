@@ -7,5 +7,21 @@ pub const BADGE_POLICY: u16 = 0xFFFF;
 /// Flow grants of the broker use badges from 1 up to this one.
 pub const BADGE_GRANT_LAST: u16 = 0xFFFD;
 
+/// A network card driver's client that only reads the card (idl/net.wit 1.3, 000-NET-0015): `info`, `counters`,
+/// `offloads`.
+pub const BADGE_COUNTERS: u16 = 1;
+
+/// The 802.11 station's configuration client (idl/wifi.wit, 550-NET-0018): it reads; with BADGE_WIFI_CHANGE it may
+/// also join, leave and forget. A station client without BADGE_WIFI is the network stack's card (idl/net.wit).
+pub const BADGE_WIFI: u16 = 0x0100;
+pub const BADGE_WIFI_CHANGE: u16 = 0x0300;
+
+/// A client of the TLS service that may not offer the device certificate (idl/tls.wit 1.2, 351-NET-0022): the one a
+/// launcher lends to a program, so that it cannot sign in as the device.
+pub const BADGE_TLS_NO_DEVICE: u16 = 1;
+
 /// The key service's signer (idl/keystore.wit, issue 103): the TLS service's client may ask for signatures.
 pub const BADGE_KEY_SIGNER: u16 = 1;
+/// The key service's Wi-Fi station (idl/keystore.wit 1.1, 550-NET-0024): `wlan`'s client may keep, list and forget
+/// networks and ask for each handshake's keys.
+pub const BADGE_KEY_STATION: u16 = 2;

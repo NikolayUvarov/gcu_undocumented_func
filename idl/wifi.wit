@@ -36,8 +36,9 @@ interface wifi {
     /// or joined it does not leave the channel and answers the list as it stands.
     scan: func() -> result<list<network, 32>, error>;
     /// Starts joining the strongest access point of `ssid` from the last scan (`status` follows). `passphrase` empty for
-    /// an open network or one the station remembers. `remember` keeps the network's key through `keystore`, never in a
-    /// file (MC-11.9). The passphrase is never answered back. Change badge only.
+    /// an open network or one the station remembers. `remember` has `keystore` keep the network's key (550-NET-0024): it
+    /// alone holds it, and the station gets each handshake's keys from it (MC-11.9); `unsupported` when it cannot. The
+    /// passphrase is never answered back. Change badge only.
     join: func(ssid: list<u8, 32>, passphrase: string<64>, remember: bool) -> result<_, error>;
     status: func() -> status;
     /// Leaves the network (change badge only).

@@ -1,6 +1,6 @@
 # 750-EFF-0006 — `effector`: the session with the Effector server
 
-**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 0001–0004; [requests-NET.md](requests-NET.md) (an HTTP/1.1 client for a service, a pinned leaf certificate, a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
+**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 0001–0004; [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) (an HTTP/1.1 client for a service), [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done) (a pinned leaf certificate), [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON in `parse`); [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) (a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
 
 ## Problem
 
@@ -18,7 +18,7 @@ Something on the machine must keep the connection to the server, report the mach
   - an endpoint to `effector_gw`.
 - **Configuration** in `data/effector/` (written by the owner through the shell):
   - the server's HTTPS URL;
-  - the current and next certificate pins: SHA-256 of the server's public key (SPKI) for `tls.wit` 1.1 `connect-pinned`, or of the leaf certificate once `tls` takes that kind (requests-NET; Effector's task 75 publishes both);
+  - the current and next certificate pins: SHA-256 of the server's public key (SPKI) for `tls.wit` 1.1 `connect-pinned`, or of the leaf certificate with `tls.wit` 1.2 `connect-pins` (750-NET-0020; Effector's task 75 publishes both);
   - the token, taken into the private directory on first start, with the shell's copy removed;
   - the agent ID, made once from `mind::random` and kept.
 - **Trust both ways.** The server's pinned leaf certificate; the machine's token, and the device key's certificate (`tls` offers it), which identifies the machine once Effector accepts agents by device key.

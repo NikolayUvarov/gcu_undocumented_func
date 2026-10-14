@@ -1,6 +1,6 @@
 # 000-APP-0049 — The network traffic on `wm`'s background
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open · **Blocked by:** a read-only client of a card's counters ([requests-NET.md](requests-NET.md)) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open · **Blocked by:** `KRN`: a request flag and the right to mint the read-only client ([requests-KRN.md](requests-KRN.md)); the client itself is [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done) on 2026-10-10: the background's `show = net` is there and says "NET: NO COUNTERS".
 
