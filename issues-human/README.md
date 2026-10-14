@@ -128,3 +128,32 @@ This item is the board's firmware, built and tested on its own, against a script
   - `@HEALTH` from the failures `init` and `logd` see;
   - `@BEAT`.
 - **What it cannot cover:** the board shows nothing of the bootloader or of the first second or so, before `usb_host` runs. A kernel panic shows as the beats stopping, not as text, since USB runs in ring 3.
+
+## 9. The Constitution and RFC 001: changes the critique proposes
+
+The critique of 2026-10-14 ([issues-critica-done/01](../issues-critica-done/01_constitution_and_docs_analysis.md)) proposes changes to the founding documents. An agent may not make them on its own: each needs a new edition in English and Russian, with its reason, the guarantees affected, the alternatives and a migration plan ([AGENTS.md](../AGENTS.md), section 1). The kernel session checked each against the texts. Tick what you accept, and the kernel session drafts the edition.
+
+**Constitution 1.7, editorial (no guarantee changes):**
+
+- [ ] **Clause identifiers in the headings.** Write `**MC-2.6.**` in place of `**2.6.**` in Articles 1–12, 114 headings in each language. The preamble already defines `MC-2.6` (line 31), and AGENTS.md cites clauses that way, but a search for `MC-2.6` does not find the clause today.
+- [ ] **The links to `../const_discusstion_1.3/`.**
+  - Appendix E (lines 483–486) links files that are not in the repository. Make them plain text, as Appendix A already is.
+  - Appendix H (line 627) says Appendices A and E keep links; only E does.
+- [ ] **Optional: Appendix B.1 and F.1.** B.1 names Untyped pools and retype as the initial model, and F.1 rejects "a physical memory allocator … in the kernel". The kernel keeps a frame pool with per-task quotas. B.1 already allows that if the profile says so (line 354), and 000-KRN-0105 makes the profile say so. A note in B.1 would only spare readers the search.
+
+**Not an amendment.** The critique reads MC-3.6 (a revocation's observable completion) and MC-5.4 (long operations bounded, splittable or preemptible) as a conflict. They are not one:
+- MC-3.6 does not ask for a revocation in one step, and MC-5.4 leaves the bound to the profile;
+- MC-3.5 already asks for "the fate of operations in progress".
+
+The gap is in the kernel and the profile, and [000-KRN-0104](../issues/000-KRN-0104-revocation-bounded-by-the-profile.md) takes it.
+
+**RFC 001 0.5 (Marain; the `MRN` track is open, and the RFC goes through you):**
+
+- [ ] **§11–12, `append`'s example.** It returns `result<_, log-error>`, which cannot say an outcome is unknown, while §7.5 requires that for external effects.
+  - §16 and the review (§9, item 4) already plan `OutcomeUnknown` and an `operation_id` for M3–M4.
+  - Either bring the example there now, or say in it that the local ring's append is decided before it returns.
+- [ ] **§7.5, a counterparty that never answers.**
+  - `Uncertain` records count against a quota that limits new operations, and old obligations are not forgotten. If the counterparty is gone for good and cannot be fenced, the actor stops taking new work.
+  - The RFC leaves "the reaction to long unavailability" to the profile, and no profile defines it.
+  - Proposed: an explicit operation, held only by the lifecycle owner, that closes such a record as abandoned and writes it to the audit log (Article 10). Nothing is forgotten silently.
+- [ ] **The header's link** (line 8) to `../const_discusstion_1.3/`: make it plain text.
