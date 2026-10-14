@@ -122,7 +122,7 @@ after an error**:
 - A script runs with the authority of the shell session that starts it, **but no more than it declares**. The
   declaration is its first line after `#!msh` and comments: `requires: files network`, in the words of
   `mind::request!`:
-  - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`;
+  - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, and `>` or `>>` after a command (000-APP-0074);
   - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`;
   - `log`: `logger`, `log()`;
   - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.

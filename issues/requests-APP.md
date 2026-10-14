@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073), and redirection and pipes in the shell and `msh` (000-APP-0074, its pipes waiting for 000-KRN-0094). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -167,40 +167,6 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **In the `tools` suite**, the key writes a BMP to `data/media/` with the screen as it was, no shell in it.
 - **`record -s 2 -t 3`** writes an AVI whose frames are half the screen's size.
 - **On the MacBook Pro**, the maintainer takes a picture and a 30 s recording without the shell in them.
-
-## Redirection and pipes in the shell and in `msh` (the maintainer's request, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12. The kernel's part, a text input for programs, is [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md).
-
-### Problem
-
-The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s battery > file.txt` fails, as does `dmesg | grep BATTERY`.
-
-### Plan (a proposal; the tools track decides)
-
-- **`cmd > file` and `cmd >> file`:**
-  - a command of the shell's own writes what it would print;
-  - a program's output is read from its console queue (`SYSCALL_CONSOLE_READ`), as the shell reads it for the screen, and written to the file;
-  - the file is written through the shell's file client: `ram:`, `data/`, `log:`.
-  - This needs nothing from the kernel and can come first.
-- **`cmd < file` and `a | b`**, on [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md):
-  - the shell starts `b` with an input queue;
-  - it copies `a`'s output (or the file) into it, waiting when it is full, and closes it when `a` ends;
-  - `b`'s output goes to the screen, a file or the next `|`;
-  - Esc stops the whole line;
-  - the line's result is the last command's.
-- **Tools read their input when no file is named:** `grep`, `sha256`, `cat`, `find`, `view`.
-- **`msh`:** the same `>`, `>>`, `<` and `|` in a command's words, and a command's output as a value (`let text = output(dmesg -s battery)`).
-- **The help screen, `docs/msh.md` and `docs/tools`** (EN, RU).
-
-### Acceptance criteria
-
-- **In the `tools` suite:**
-  - `ls data > ram:l.txt`, then `cat ram:l.txt` shows the listing, and `>>` adds to it;
-  - `dmesg | grep SHELL` prints only matching lines;
-  - `cat log:boot0001.log | sha256` equals `sha256 log:boot0001.log`;
-  - 100 KiB through `|` arrive whole.
-- **On the MacBook Pro**, `dmesg -s battery > data/battery.txt` leaves the file on the stick.
 
 ## Display output over several monitors (177; the maintainer's request, 2026-10-12)
 
