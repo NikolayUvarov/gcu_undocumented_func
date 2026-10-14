@@ -10,7 +10,7 @@
 | SHA-256 of the archive | `d961c1b781627bf417f9b340693d64fc219e0113ad3a3af1a3424c7aa373ef79` |
 | Copyright | Copyright (C) 2020 Dimitar Toshkov Zhekov, with Reserved Font Name "Terminus Font" |
 | Licence | SIL Open Font License 1.1 — the font and this subset stay under the OFL; MIND CORE code that draws with it is not affected |
-| Changes | Only a subset of the glyphs is kept (775: ASCII, Latin-1, Cyrillic U+0400–U+045F and Ґ/ґ, general punctuation, €, №, ™, arrows, a few math signs, box drawing, block elements, geometric shapes, ✓✔✗✘, braille patterns, U+FFFD); the bitmaps are unchanged. Because a subset is a *Modified Version* under the OFL, it does not carry the reserved name: it is called **MIND Mono** (`FONT`, `FAMILY_NAME`, `FOUNDRY` and `NOTICE` properties changed, `COPYRIGHT` kept) |
+| Changes | Only a subset of the glyphs is kept (775: ASCII, Latin-1, Cyrillic U+0400–U+045F and Ґ/ґ, general punctuation, €, №, ™, arrows, a few math signs, box drawing, block elements, geometric shapes, ✓✔✗✘, braille patterns, U+FFFD); the bitmaps are unchanged. One glyph Terminus does not have is drawn for MIND Mono and added: ⚡ U+26A1 (`OWN` in `scripts/font_gen.py`, which keeps it when the subset is made again), 776 glyphs in all. Because a subset is a *Modified Version* under the OFL, it does not carry the reserved name: it is called **MIND Mono** (`FONT`, `FAMILY_NAME`, `FOUNDRY` and `NOTICE` properties changed, `COPYRIGHT` kept) |
 
 `scripts/font_gen.py` produces both files:
 

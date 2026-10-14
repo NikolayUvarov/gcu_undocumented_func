@@ -21,8 +21,8 @@ A launch session keeps 5 grants (`loader`; requests-KRN.md, "A launch session ho
   - the command `battery`: the status in one line; `help`; a client of its commands may run it at once (`console` passes it on).
 - **`wm`:**
   - asks for `REQUEST_BATTERY`; without the client after the launch, asks the shell (`[WM] BATTERY CLIENT FROM THE SHELL: …`); reads the status every 5 s; passes the client on to a program that asks for it;
-  - the top bar's right end: ` ▮ 87% ` on the battery, ` AC 87% ` on the mains; a click switches to the minutes (` ▮ 2:41 ` left, ` AC 0:45 ` to full) and back; red below 10 % on the battery; no item without a battery;
-  - the background: `show = … battery` and Settings' row `Battery` (off by default): the line `BAT 87% 2:41 LEFT`, `BAT 40% AC 0:45 TO FULL`, `BAT 100% AC`, `NO BATTERY`; on the analog face a third gauge.
+  - the top bar's right end: ` ▮ 87% ` on the battery, ` ⚡ 87% ` on the mains; a click switches to the minutes (` ▮ 2:41 ` left, ` ⚡ 0:45 ` to full) and back; red below 10 % on the battery; no item without a battery;
+  - the background: `show = … battery` and Settings' row `Battery` (off by default): the line `BAT 87% 2:41 LEFT`, `BAT 40% ⚡ 0:45 TO FULL`, `BAT 100% ⚡`, `NO BATTERY`; on the analog face a third gauge.
 - `docs/tools` (EN, RU), `docs/msh`, the IDL index.
 
 ## Acceptance criteria
@@ -39,6 +39,10 @@ In `main` (4500fd9) after the gate of 60653c1: the host tests, every x86 suite, 
 - Done as planned: the shell's `battery` command and its lending (after its commands, where the launch has room), `shell.wit` 1.4 `battery`, `wm`'s top bar item with the click for the minutes, the background's line and Settings' row, the third gauge, `console` passing `battery` on.
 - Checked in QEMU only, where no battery service runs: `battery` says so, `wm` asks the shell and gets none, the top bar has no item, Settings' row ticks and unticks. Nothing here was seen on a battery (MC-12.2).
 - **Left:** the last criterion, on the MacBook Pro (the maintainer): the item follows the adapter, a click shows the minutes, the background's line when ticked.
+
+## Progress: on the MacBook Pro (2026-10-14)
+
+The maintainer: the battery's state shows and changes from `AC` to the battery mark as the adapter goes; a click switches between the time left and the percentage. He asked for a lightning sign, one character, in place of `AC`. Terminus has none, so MIND Mono gained a glyph of its own, ⚡ U+26A1 (`scripts/font_gen.py` `OWN`, `fonts/README.md`, `THIRD_PARTY.md`), and the item, the background's line and the analog face's gauge show it on the mains. The background's line on the MacBook Pro is not reported yet.
 
 ## Related
 

@@ -30,6 +30,8 @@ impl Entry {
         match self.name.rfind('.') { Some(i) if i > 0 => &self.name[i + 1..], _ => "" }
     }
     pub fn is_program(&self) -> bool { !self.dir && self.extension().eq_ignore_ascii_case("elf") }
+    /// A script of the shell (`msh`, 000-APP-0067).
+    pub fn is_script(&self) -> bool { !self.dir && self.extension().eq_ignore_ascii_case("msh") }
 }
 
 /// A FAT date and time as (year, month, day, hour, minute, second).
