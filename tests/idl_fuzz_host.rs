@@ -421,7 +421,7 @@ types! {
     init: Error Service;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage;
-    loader: Error Program Needs;
+    loader: Error Program Needs HelperKind;
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;

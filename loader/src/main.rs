@@ -19,6 +19,10 @@ const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
+// Helpers (1.8, 109-KRN-0096): programs that serve one caller and hold nothing but its endpoint.
+const HELPER_MEMORY_MIB: u16 = 2;
+const HELPERS_EACH: usize = 4; // live helpers a caller may have at once
+const HELPERS: usize = 32;
 
 // Program name -> file: "clock" -> clock.elf; a path with a dot or directory is used as is.
 fn path_for(name: &[u8], path: &mut FixedBuf<64>) -> Result<(), Error> {
@@ -96,10 +100,7 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
 // With `front`, a program with a screen starts in front for that task, which must have the focus (issue 160).
 fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> Result<u64, Error> {
     let (file, task) = open(name)?;
-    let size = file.size();
-    if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
-    let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
-    if file.read_at(0, &mut image.as_mut_slice()[..size]).map_err(file_error)? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
+    let (image, size) = read_image(&file)?;
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
     let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
@@ -134,6 +135,33 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     result
 }
 
+// A program file read whole into memory, if it is an ELF of a size the loader takes.
+fn read_image(file: &File) -> Result<(Pages, usize), Error> {
+    let size = file.size();
+    if size < 64 || size > MAX_IMAGE { return Err(Error::Invalid); }
+    let mut image = Pages::new(size).ok_or(Error::NoMemory)?;
+    if file.read_at(0, &mut image.as_mut_slice()[..size]).map_err(file_error)? != size || &image.as_slice()[..4] != b"\x7fELF" { return Err(Error::Invalid); }
+    Ok((image, size))
+}
+
+// Starts helper `name` (1.8, 109-KRN-0096) with the endpoint in RECEIVED_CAP moved into its SLOT_INIT and nothing else:
+// no standard clients, no screen, no log even in debug mode, no tasks or endpoints of its own. `--session` tells it so.
+fn spawn_helper(name: &str) -> Result<u64, Error> {
+    let mut path = FixedBuf::<64>::new();
+    path_for(name.as_bytes(), &mut path)?;
+    let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?;
+    let (image, size) = read_image(&file)?;
+    let cap = image.share()?;
+    let mut text = [0u8; NAME_MAX + 1 + 16];
+    let len = name.len() + 1 + b"--session".len();
+    text[..name.len()].copy_from_slice(name.as_bytes());
+    text[name.len() + 1..len].copy_from_slice(b"--session");
+    let quota = Quota { tasks: 0, endpoints: 0, memory_mib: HELPER_MEMORY_MIB };
+    let result = mind::process::spawn_raw(&text[..len], Image::Memory { cap, len: size }, &[grant_moved(SLOT_INIT, RECEIVED_CAP, u8::MAX)], 0, quota);
+    let _ = ipc::drop_cap(cap);
+    result
+}
+
 // A launch in progress (idl/loader.wit): who started it, what to run, the capabilities lent for the program's slots.
 struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); 5], count: usize }
 
@@ -143,7 +171,7 @@ impl Session {
 
 const SESSIONS: usize = 4;
 
-struct Launcher { sessions: [Option<Session>; SESSIONS], next: u32 }
+struct Launcher { sessions: [Option<Session>; SESSIONS], next: u32, helpers: [Option<(u64, u64)>; HELPERS] }
 
 impl Launcher {
     fn find(&mut self, id: u32, owner: u64) -> Option<usize> { self.sessions.iter().position(|s| s.as_ref().is_some_and(|s| s.id == id && s.owner == owner)) }
@@ -209,6 +237,21 @@ impl Launcher {
         })
     }
 
+    // A helper for `owner` (1.8): the endpoint it serves must carry the right to receive; at most HELPERS_EACH live at once.
+    fn helper(&mut self, owner: u64, which: loader::HelperKind) -> Result<u64, loader::Error> {
+        let name = match which { loader::HelperKind::Parse => "parse" };
+        if mind::dev::cap_info(RECEIVED_CAP).2 & CAP_READ as usize == 0 { return Err(loader::Error::Rights); } // an endpoint's rights
+        for entry in self.helpers.iter_mut() { if entry.is_some_and(|(_, pid)| !mind::process::alive(pid)) { *entry = None; } }
+        if self.helpers.iter().flatten().filter(|&&(o, _)| o == owner).count() >= HELPERS_EACH { return Err(loader::Error::Limit); }
+        let free = self.helpers.iter().position(Option::is_none).ok_or(loader::Error::Limit)?;
+        let pid = spawn_helper(name).map_err(|error| match error {
+            Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory,
+            Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_IO) => loader::Error::Unreadable, _ => loader::Error::Invalid,
+        })?;
+        self.helpers[free] = Some((owner, pid));
+        Ok(pid)
+    }
+
     fn abort(&mut self, owner: u64, id: u32) -> Result<(), loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         self.sessions[index].take().unwrap().drop_grants();
@@ -245,7 +288,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let _ = fs::prepare();
     mind::println!("[LOADER] READY");
-    let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0 };
+    let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS] };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         let owner = request.sender;
@@ -262,6 +305,11 @@ fn main(_info: &'static BootInfo) {
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
             Ok((loader::Request::InspectRequests { name }, call)) => loader::reply_inspect_requests(call, requests(name.as_str())),
+            Ok((loader::Request::Helper { which, .. }, call)) => {
+                let started = launcher.helper(owner, which);
+                if started.is_err() { let _ = ipc::drop_cap(RECEIVED_CAP); } // not moved into a helper
+                loader::reply_helper(call, started)
+            }
             Err(reason) => if request.is_call { wire::reject(reason) } else { Ok(()) },
         };
     }

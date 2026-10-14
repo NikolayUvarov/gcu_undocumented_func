@@ -65,7 +65,9 @@ pub fn tick_from_lapic() { LAPIC_TICK.store(true, Ordering::Relaxed); }
 
 /// Counts a tick; true when it ends a time slice.
 pub fn advance() -> bool {
-    (TICKS.fetch_add(1, Ordering::Relaxed) + 1) % (QUANTUM_MS / TICK_MS) == 0
+    let ticks = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+    if ticks % (1000 / TICK_MS) == 0 { super::clock::on_second(ticks * TICK_MS / 1000); }
+    ticks % (QUANTUM_MS / TICK_MS) == 0
 }
 extern "x86-interrupt" fn spurious_master(_frame: &mut InterruptFrame) {}
 extern "x86-interrupt" fn spurious_slave(_frame: &mut InterruptFrame) {

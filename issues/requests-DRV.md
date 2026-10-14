@@ -96,3 +96,107 @@ In QEMU (`tests/usb_image_smoke.py`), the stick is swapped for a copy with anoth
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is steps 3a–3c (`virtio-gpu` first, testable in QEMU with two outputs; then Intel's display engine from its PRMs; then AMD), 4 and 5. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## The Ryzen 9 5900HX machine: sound, Ethernet, a second NVMe disk, a second xHCI (213)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's first run on an AMD machine ([213](213-amd-ryzen-pc.md); `log:hw0003.txt`).
+
+### Problem
+
+- **Sound:** `audio_gw` took the GPU's HDMI audio controller (05:00.1, 1002:1637, codec 1002:AA01: "NO OUTPUT PATH") and gave up. The analog controller (05:00.6, 1022:15E3, subsystem 1022:D270) was not tried.
+- **Ethernet:** a Realtek RTL8168 (10EC:8168 at 02:00.0) has no driver.
+- **A second NVMe disk** (04:00.0, 1F40:1202) has no driver: `nvme` drives the first (01:00.0).
+- **The second xHCI** (05:00.4): `usb_host` instances, [213-KRN-0099](213-KRN-0099-a-usb-host-for-every-xhci.md).
+
+### Plan (a proposal; the drivers track decides)
+
+- **`audio_gw`:** try each HDA controller and use the first codec with an output path; a GPU's HDMI audio only when nothing else plays.
+- **An RTL8168 driver** serving `idl/net.wit`, for the network on real hardware (550).
+- **`nvme` instances** for further controllers, `init`'s half asked of the kernel track then.
+- **`usb_host` and the class drivers** with more than one host controller.
+
+### Acceptance criteria
+
+On this machine a tone plays through its analog output, and the Ethernet card gets an address by DHCP.
+
+## The USB keyboard on the Ryzen machine's xHCI types nothing (213)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's fifth boot of the Ryzen 9 5900HX machine ([213](213-amd-ryzen-pc.md); `log:boot0001.log`–`boot0005.log`).
+
+### Problem
+
+On boot 5 the shell was on the screen and typing did nothing. What the logs show:
+- **The device:** 1C4F:000E, low speed, on port 4 of the first xHCI (05:00.3, AMD 1022:1639), slot 2.
+- **`usb_hid`:** it took interface 0 as a boot keyboard (endpoint 81) and left interface 1 (consumer and system control, report IDs 1 and 2, endpoint 82) alone.
+- **`usb_host`:** it polls slot 2 endpoint 3 (packet 8, interval 10). On boots 1–3 it logged a first report in the boot format, for example `[00, 00, 3B, 00, 00, 00, 00, 00]` (F2).
+- **Not in the logs:** whether later reports came, and whether `usb_hid` turned any of them into key events. The internal PS/2 controller also exists (`ps2_kbd` runs, "NO MOUSE"), so the shell's keyboard service is `ps2_kbd`.
+
+The xHCI interrupt endpoints of the MacBook Pro's full-speed mouse (Intel xHCI) work; this is a low-speed device on an AMD xHCI.
+With the same build, a low-speed keyboard (046D:C31C) typed on the Intel Core i5 PC's xHCI (8086:8C31; [214](214-intel-core-i5-pc.md)). The difference is the AMD xHCI or this keyboard.
+
+**Possibly not a driver's fault (2026-10-13, evening):** the shell on this machine never got past reading COM1, which it does not have (its ports read all ones, "a byte is ready" for ever). That is the black screen of [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md), fixed in the kernel track's `Uart::open` and `init`. A shell stuck there takes no key either. Check it again after the maintainer's next run with that fix.
+
+### Plan (a proposal; the drivers track decides)
+
+- **Count it:** `usb_host` logs, once a second at most, the reports and completion codes of each interrupt endpoint after the first, and `usb_hid` the key events it sends.
+- **Low speed on xHCI:** check the endpoint context (the interval in 125 µs units for a low-speed device, Max ESIT Payload 8, Max Packet Size 8) and the re-queued transfer after each completion.
+- **The maintainer's next run:** the same keyboard on another port or behind a hub, and another keyboard.
+
+### Acceptance criteria
+
+On this machine the keyboard types in the shell, and the counters above are in the log.
+
+## The boot stick not set up on a USB 2 port of an Intel xHCI: no boot volume, no programs (214)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from a photo of the screen of the maintainer's Intel Core i5-4430 PC ([214](214-intel-core-i5-pc.md)). The PC's logs from two later boots name its controllers.
+
+### Problem
+
+- **What happened:**
+  - The bootloader started from the stick ("starting MIND Core from its own volume"), the services started and the keyboard typed.
+  - Then `usb_host` logged `PORT 8: DEVICE NOT SET UP AT ADDRESS DEVICE (COMPLETION 1, PORTSC 00000E03, TRY 3 OF 3)`, then `NO MASS STORAGE DEVICE`.
+  - `vfs_server` found the boot volume "ON NO BLOCK DEVICE: NONE MOUNTED". So no program could start (`wm`: unknown command, `ls`: not found), and no log or hardware report was written.
+- **The controller:** the H81's xHCI (8086:8C31) has 17 ports. Ports 1–10 are USB 2 and ports 11–15 are disabled. Ports 16–17 are USB 3. The kernel moved every port from EHCI to it ("USB 2 FFF OF MASK FFF, USB 3 3 OF MASK 3"), so the routing is not the cause.
+- **PORTSC 0x00000E03:** connected, enabled, U0, powered, high speed. The stick is a SuperSpeed one (7825:A2A4) that came up at high speed on port 8, a USB 2 port.
+- **Not every time:** on boot 1 (`log:boot0001.log`) the same stick was set up on the same port 8 at high speed, with the same build. On boot 2 it was in a blue port and was set up at SuperSpeed on port 16.
+- **The completion code shown is not Address Device's:**
+  - `enumerate` gives up at "ADDRESS DEVICE", and `discard` then disables the slot.
+  - That Disable Slot command overwrites `xhci.last`.
+  - So the line shows Disable Slot's success (1), not why Address Device failed.
+
+### Plan (a proposal; the drivers track decides)
+
+- **Keep the failing command's code** for the line: save it before `discard`, or log it in `enumerate`.
+- **A high-speed device on an xHCI USB 2 port:**
+  - the 10 ms reset recovery (USB 2.0 TRSTRCY) before Address Device;
+  - EP0's 64-byte packet;
+  - an Address Device with BSR=1 first, then without, where a device needs the time.
+- **The maintainer's next run, after that:** several boots with the stick in a black port, from power-off and by `reboot`, until the line shows Address Device's own code.
+
+### Acceptance criteria
+
+- The stick is set up on that PC's USB 2 ports.
+- When Address Device fails, the line names its own completion code.
+
+## The Intel Core i5 PC: sound and Ethernet (214)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, from the maintainer's two boots of that PC ([214](214-intel-core-i5-pc.md); `log:boot0001.log`, `boot0002.log`, `hw0001.txt`, `hw0002.txt`).
+
+### Problem
+
+- **Sound:**
+  - `audio_gw` took the processor's display audio (00:03.0, 8086:0C0C: 0 input and 2 output streams), and its codec did not answer ("CORBRP 1 RIRBWP 0"). The screen is on a GeForce GT 1030, so the processor's display, which that codec depends on, is likely off.
+  - It did not try the analog controller (00:1B.0, 8086:8C20, subsystem 1462:D817).
+  - The GT 1030's HDMI audio (01:00.1, 10DE:0FB8) is a third controller.
+- **Ethernet:** a Realtek RTL8168 (10EC:8168, revision 0C, at 03:00.0) has no driver.
+
+### Plan (a proposal; the drivers track decides)
+
+This is the Ryzen machine's request above, with one addition:
+- **`audio_gw`:** pass over a controller whose codec does not answer, as well as one with no output path.
+- **The RTL8168 driver:** this revision as well.
+
+### Acceptance criteria
+
+- On this PC a tone plays through its analog output.
+- Its Ethernet card gets an address by DHCP.

@@ -28,10 +28,11 @@ const INITVALS: [&str; 2] = ["data/firmware/b43/ht0initvals29.fw", "data/firmwar
 // PHY writes in a row before one is read back to flush them.
 const WRITES_IN_ROW: u32 = 24;
 
-pub struct Core<'a> { bar: &'a Mmio, phy_writes: Cell<u32>, radio_writes: Cell<u32> }
+// `gain`: the entry of the transmit gain table (0x1A from 0xC0) the fixed transmit gain is taken from; b43 uses 40.
+pub struct Core<'a> { bar: &'a Mmio, phy_writes: Cell<u32>, radio_writes: Cell<u32>, pub(crate) gain: Cell<u16> }
 
 impl<'a> Core<'a> {
-    pub fn new(bar: &'a Mmio) -> Self { Self { bar, phy_writes: Cell::new(0), radio_writes: Cell::new(0) } }
+    pub fn new(bar: &'a Mmio) -> Self { Self { bar, phy_writes: Cell::new(0), radio_writes: Cell::new(0), gain: Cell::new(40) } }
     pub(crate) fn r16(&self, r: usize) -> u16 { self.bar.read16(r) }
     pub(crate) fn w16(&self, r: usize, v: u16) { self.bar.write16(r, v) }
     pub(crate) fn r32(&self, r: usize) -> u32 { self.bar.read32(r) }
@@ -43,7 +44,7 @@ impl<'a> Core<'a> {
     // About `n` microseconds: reads of the agent take about one each.
     fn us(&self, n: usize) { for _ in 0..n { let _ = self.r32(0x1500); } }
 
-    fn phy(&self, reg: u16) -> u16 { self.phy_writes.set(0); self.w16(PHY_CONTROL, reg); self.r16(PHY_DATA) }
+    pub(crate) fn phy(&self, reg: u16) -> u16 { self.phy_writes.set(0); self.w16(PHY_CONTROL, reg); self.r16(PHY_DATA) }
     fn phy_w(&self, reg: u16, v: u16) {
         if self.phy_writes.get() >= WRITES_IN_ROW { let _ = self.r16(PHY_VERSION); self.phy_writes.set(0); }
         self.phy_writes.set(self.phy_writes.get() + 1);
@@ -52,7 +53,7 @@ impl<'a> Core<'a> {
     // Keep `keep`, OR `or`, with the address written once.
     fn phy_ms(&self, reg: u16, keep: u16, or: u16) { self.w16(PHY_CONTROL, reg); let v = self.r16(PHY_DATA); self.w16(PHY_DATA, (v & keep) | or); }
     fn phy_set(&self, reg: u16, s: u16) { self.phy_ms(reg, 0xFFFF, s) }
-    fn phy_clear(&self, reg: u16, c: u16) { self.phy_ms(reg, !c, 0) }
+    pub(crate) fn phy_clear(&self, reg: u16, c: u16) { self.phy_ms(reg, !c, 0) }
 
     fn radio(&self, reg: u16) -> u16 { self.radio_writes.set(0); self.w16(RADIO_CONTROL, reg | 0x200); self.r16(RADIO_DATA) }
     fn radio_w(&self, reg: u16, v: u16) {
@@ -89,7 +90,7 @@ impl<'a> Core<'a> {
     pub(crate) fn shm16(&self, offset: u32) -> u16 { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.r16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }) }
     pub(crate) fn shm16_w(&self, offset: u32, v: u16) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w16(if offset % 4 == 2 { SHM_DATA_HIGH } else { SHM_DATA }, v) }
     fn shm32_w(&self, offset: u32, v: u32) { self.w32(SHM_CONTROL, SHARED << 16 | offset / 4); self.w32(SHM_DATA, v) }
-    fn scratch_w(&self, index: u32, v: u16) { self.w32(SHM_CONTROL, SCRATCH << 16 | index); self.w16(SHM_DATA, v) }
+    pub(crate) fn scratch_w(&self, index: u32, v: u16) { self.w32(SHM_CONTROL, SCRATCH << 16 | index); self.w16(SHM_DATA, v) }
 
     fn force_clock(&self, on: bool) { if on { self.set32(IO_CONTROL, 0x2) } else { self.clear32(IO_CONTROL, 0x2) } }
     // The RF sequencer driven through `bit`; true when its status bit cleared within 200 ms.
@@ -123,15 +124,17 @@ impl<'a> Core<'a> {
     }
     fn analog_on(&self) { for (control, over) in [(0x911, 0x910), (0x915, 0x914), (0x919, 0x918)] { self.phy_w(control, 0x00CD); self.phy_w(over, 0x0000); } }
 
-    // The transmit power fix the channel switch runs: per-core tables only, nothing is sent.
-    fn tx_power_fix(&self) {
+    // The fixed transmit gain the channel switch sets from entry `gain` of the gain table; the entry is returned.
+    pub(crate) fn tx_power_fix(&self) -> u32 {
+        let mut t = 0;
         for i in 0..3u16 {
-            let t = self.table32_read(0x1A, 0x0E8);
+            t = self.table32_read(0x1A, 0x0C0 + self.gain.get());
             self.phy_w(0x908, 0);
             self.table16(7, 0x110 + i, &[(t >> 16) as u16]);
             self.phy_w(0x072, 0x0D << 10 | (0x63 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
             self.phy_w(0x072, 0x0D << 10 | (0x73 + 4 * i)); self.phy_w(0x073, (t & 0xFF) as u16);
         }
+        t
     }
 
     // A 2.4 GHz channel at 20 MHz (1 to 13): the radio's synthesizer and per-core values, its calibration pulse, the

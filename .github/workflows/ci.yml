@@ -86,6 +86,9 @@ jobs:
           # The kernel reads and jumps into a program's page once: SMAP and SMEP must stop it (000-KRN-0039).
           - name: protection probes
             args: --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation
+          # The TSC's first measure 9% high: measured again on the ACPI PM timer, the clock keeps the host's time (000-KRN-0100).
+          - name: TSC measured again
+            args: --kernel /tmp/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})

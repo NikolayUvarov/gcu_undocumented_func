@@ -86,9 +86,10 @@ pub fn device_config_at(slot: usize, index: usize, offset: usize) -> Result<u32>
 pub enum Uart { Ns16550(Ports, u16), Pl011(Mmio) }
 
 impl Uart {
+    /// The line in `slot`; None where no 16550 answers at its ports (a PC without COM1, 213-KRN-0098).
     pub fn open(slot: usize) -> Option<Self> {
         match cap_info(slot) {
-            (CAP_KIND_PORTS, base, count) if count >= 8 => Some(Self::Ns16550(Ports(slot), base as u16)),
+            (CAP_KIND_PORTS, base, count) if count >= 8 => Some(Self::Ns16550(Ports(slot), base as u16)).filter(Self::answers),
             (CAP_KIND_MMIO, _, _) => Mmio::map(slot).ok().map(Self::Pl011),
             _ => None,
         }
@@ -99,9 +100,16 @@ impl Uart {
             Self::Pl011(registers) => { while registers.read32(0x18) & 1 << 5 != 0 {} registers.write32(0, byte as u32); } // FR.TXFF, DR
         }
     }
+    // A 16550 keeps what is written to its scratch register, and its line status is never all ones: ports that nothing
+    // decodes read 0xFF, which says "a byte is ready" for ever.
+    fn answers(&self) -> bool {
+        let Self::Ns16550(ports, base) = self else { return true };
+        let kept = [0x5A, 0xA5].iter().all(|&value| { ports.out8(base + 7, value); ports.in8(base + 7) == value });
+        kept && ports.in8(base + 5) != 0xFF
+    }
     pub fn read(&self) -> Option<u8> {
         match self {
-            Self::Ns16550(ports, base) => (ports.in8(base + 5) & 1 != 0).then(|| ports.in8(*base)),
+            Self::Ns16550(ports, base) => { let status = ports.in8(base + 5); (status != 0xFF && status & 1 != 0).then(|| ports.in8(*base)) }
             Self::Pl011(registers) => (registers.read32(0x18) & 1 << 4 == 0).then(|| registers.read32(0) as u8), // FR.RXFE
         }
     }

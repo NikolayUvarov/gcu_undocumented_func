@@ -122,7 +122,8 @@ class VM:
         if not prompt:
             return
         try:
-            self.expect("MIND> ", timeout=30)
+            # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
+            self.expect("MIND> ", timeout=90)
             global BASE
             BASE = len(self.services())
         except BaseException:
@@ -5179,9 +5180,11 @@ def download_check(args, disk):
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
+    held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
+    stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port)))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1])))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5197,10 +5200,14 @@ def download_check(args, disk):
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
+        session_parsers_check(vm, held, small)
+        parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
     finally:
         vm.close()
-        for server in (release, secure, rogue):
+        held.go.set()
+        stall.go.set()
+        for server in (release, secure, rogue, held, stall):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
@@ -5233,7 +5240,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 5 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, the held one and the stalling one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
@@ -5277,17 +5284,132 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
     print("PASS: download over HTTPS: a wrong pin and a server from an untrusted CA refused; a pinned key trusted whoever signed it; without the TLS client (a script without tls) https refused", flush=True)
 
 
+def hold_server(body):
+    """An HTTP server whose answers wait until `server.go` is set, then send `body` (109-NET-0010: two downloads that
+    run at once). `server.paths` lists the requests it holds or held."""
+    go, paths = threading.Event(), []
+
+    class Held(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            paths.append(self.path)
+            go.wait(60)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Held)
+    server.daemon_threads, server.go, server.paths = True, go, paths
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def session_parsers_check(vm, held, body):
+    """109-NET-0010: two downloads at once have their heads parsed in two processes of their own, each holding only its
+    own endpoint, and each ends with its download."""
+    url = f"http://10.0.2.2:{held.server_address[1]}"
+    service = vm.services()["parse"]
+    for name in ("h1", "h2"):
+        require(vm.command(f"run download ram:{name}.bin {url}/{name} &"), "NAME=download BACKGROUND")
+    for _ in range(80):  # both connected, both held by the server
+        if len(held.paths) >= 2:
+            break
+        time.sleep(.25)
+    assert sorted(held.paths) == ["/h1", "/h2"], held.paths
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 2, (parsers, vm.command("ps", raw=True))
+    for pid in parsers:
+        text = vm.command(f"stat caps {pid}", raw=True)
+        require(text, "STAT CAPS VERSION=2 COUNT=1 ")
+        assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    held.go.set()
+    for _ in range(80):  # each parser ends with its download
+        listed = vm.command("ps", raw=True)
+        if not re.search(r"^\d+ download ", listed, re.M) and not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers), listed
+    for name in ("h1", "h2"):
+        require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
+    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+
+
+def stall_server(body, cut):
+    """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
+    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
+    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    go, sent, ranges = threading.Event(), threading.Event(), []
+
+    class Stall(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ranged = self.headers.get("Range")
+            ranges.append(ranged)
+            if ranged:
+                start = int(ranged.split("=", 1)[1].split("-", 1)[0])
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                self.send_header("Content-Length", str(len(body) - start))
+                self.end_headers()
+                self.wfile.write(body[start:])
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[:cut])
+            sent.set()
+            go.wait(60)
+            self.close_connection = True
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
+    server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def parser_restart_check(vm, stall, body):
+    """109-NET-0010: a download's own parser that ends while the body comes (as it does after 30 s without a request,
+    which a slow transfer reaches) is followed by another, which parses the resumed response's head. Before, the call
+    went to an endpoint only the download itself could still receive on, and waited for ever."""
+    url = f"http://10.0.2.2:{stall.server_address[1]}"
+    service = vm.services()["parse"]
+    require(vm.command(f"run download ram:s.bin {url}/s.bin &"), "NAME=download BACKGROUND")
+    assert stall.sent.wait(30), stall.ranges
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
+    # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
+    require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
+    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
+    stall.go.set()
+    for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
+        if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not re.search(r"^\d+ download ", listed, re.M), listed
+    assert stall.ranges == [None, "bytes=50000-"], stall.ranges
+    require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
+    print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
+
+
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
 
 
 def parser_check(vm, url):
-    """109-NET-0008, 0009: every response head above was parsed in `parse`, which holds its endpoint and the log client
-    and nothing else; a malformed head is refused there, and download, given everything but the parser, refuses."""
+    """109-NET-0008, 0009, 0010: a malformed head is refused by the download's own parser, so the shared service logs
+    nothing of it; the shared service holds its endpoint and the log client and nothing else; download, given everything
+    but the parser, refuses; killed, the shared service is restarted and serves the shell's `release` again."""
     out = vm.command(f"download data/bad.bin {url}/bad.bin --tries 1")
     require(out, "DOWNLOAD: HTTP: Head")
     real = vm.services()
-    log, head = vm.command("dmesg -s parse"), len(BAD_HEAD.split(b"\r\n\r\n")[0])
-    assert re.search(fr"\[PARSE\] REFUSED AN HTTP HEAD FOR PID \d+: MALFORMED \({head} BYTES\)", log), log
+    log = vm.command("dmesg -s parse")
+    assert "REFUSED AN HTTP HEAD" not in log and "NO PARSER OF ITS OWN" not in out, (out, log)
     # Its capabilities: its own endpoint (served by it) and a client of logd; no memory, device, privilege or other client.
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
     text = vm.command(f"stat caps {real['parse']}", raw=True)
@@ -5304,9 +5426,8 @@ def parser_check(vm, url):
             break
         time.sleep(.25)
     assert vm.services()["parse"] != real["parse"], vm.services()
-    out = vm.command(f"download ram:again.bin {url}/small.bin")
-    require(out, "DOWNLOAD: DONE 200000 BYTES")
-    print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+    require(vm.command("release data/stable"), "CHANNEL stable: VERSION 7, MINIMUM 5")
+    print("PASS: parse: a malformed head refused in the download's own parser, the shared service none the wiser; the shared service holds only its endpoint and the log; download without it refuses; restarted after a kill, it serves release again", flush=True)
 
 
 def release_metadata_check(vm):
@@ -7333,9 +7454,14 @@ def display_suite(args, disk):
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=display)
         try:
-            require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
-            vm.send("fg 1\n")
-            vm.expect("FOREGROUND PID=1")
+            # 213-KRN-0098: the compositor names the screen it found and the shell's screen put in front.
+            log = vm.command("dmesg -s compositor", raw=True)
+            assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
+            assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
+            assert started, (name, vm.output)
+            vm.send(f"fg {started[1]}\n")
+            vm.expect(f"FOREGROUND PID={started[1]}")
             time.sleep(.3)
             assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
             vm.serial()  # the screenshot switched the console to the QEMU monitor
@@ -7344,7 +7470,73 @@ def display_suite(args, disk):
             assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    if args.arch == "x86_64":
+        no_serial_check(args, disk)
+
+
+def clock_suite(args, disk):
+    """000-KRN-0100, with the test kernel `tsc-skew-test`, whose first measure of the TSC is 9% high as a stretched
+    calibration left it on i9: the kernel measures the rate again on the ACPI PM timer (CLOCK reports it), and from then
+    on its clock keeps the host's time. Uncorrected, 30 s of the host's were about 27.5 of the guest's."""
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        was = int(re.search(r"TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC (\d+) MHZ", vm.log)[1])
+        time.sleep(10)  # past the measures at 1 s and 8 s
+
+        def clocks():
+            before = time.time()
+            line = vm.command("time", raw=True)
+            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+        host0, guest0, measured = clocks()
+        # Measured again below the first: 9% less where the first window was right, more or less where the host
+        # stretched it too (i9: 4043 -> 3639 MHz).
+        assert was / measured > 1.04, (was, measured)
+        time.sleep(30)
+        host1, guest1, _ = clocks()
+        ratio = (guest1 - guest0) / (host1 - host0)
+        assert abs(ratio - 1) < 0.03, (ratio, was, measured)
+    finally:
+        vm.close()
+    print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
+          f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
+
+def no_serial_check(args, disk):
+    """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
+    the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
+    black, as on the maintainer's Ryzen machine. Seen through QMP's screendump, as nothing else talks to this machine."""
+    with tempfile.TemporaryDirectory(prefix="mind-noserial-") as temp:
+        sock, picture = Path(temp) / "qmp.sock", Path(temp) / "screen.ppm"
+        process = subprocess.Popen([args.qemu, "-bios", args.firmware, "-drive", f"format=raw,file=fat:{disk.relative_to(ROOT).as_posix()}",
+                                    "-snapshot", "-m", "512", "-smp", str(args.cpus), "-serial", "none", "-monitor", "none", "-display", "none",
+                                    "-no-reboot", "-qmp", f"unix:{sock},server=on,wait=off"], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            lit, total = 0, 1
+            for _ in range(60):
+                time.sleep(2)
+                if not sock.exists():
+                    continue
+                with socket.socket(socket.AF_UNIX) as client:
+                    client.connect(str(sock))
+                    lines = client.makefile("rw")
+                    lines.readline()  # the greeting
+                    for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
+                        lines.write(json.dumps(command) + "\n"); lines.flush()
+                        while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
+                            pass
+                if not picture.exists():
+                    continue
+                _, size, _, pixels = picture.read_bytes().split(b"\n", 3)
+                width, height = map(int, size.split())
+                total = width * height
+                lit = sum(1 for i in range(0, total * 3, 3) if pixels[i:i + 3] != b"\0\0\0")
+                if lit > total // 2:  # the shell's background covers the screen
+                    break
+            assert lit > total // 2, f"{lit} of {total} pixels lit without COM1"
+        finally:
+            process.kill()
+            process.wait()
+    print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
 def store_disk_check(args, disk):
@@ -7889,6 +8081,9 @@ def main():
                 continue
             if suite == "display":
                 display_suite(args, disk)
+                continue
+            if suite == "clock":
+                clock_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)

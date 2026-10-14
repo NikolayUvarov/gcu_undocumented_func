@@ -235,7 +235,7 @@ The policy guide states the bounds. In the `net` suite, a service whose line giv
 
 ### Problem
 
-On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](550-DRV-0026-bcm4331-transmits.md)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
+On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
 
 ### Plan (a proposal; the network track decides)
 

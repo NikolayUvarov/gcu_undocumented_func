@@ -123,7 +123,7 @@ fn a_macbook_battery_on_its_own_power() {
     let mut bus = host(macbook());
     assert_eq!(fitted(&mut bus), Some(true));
     assert_eq!(charger(&mut bus), None, "a charger answering 0xFFFF is none");
-    let reading = read(&mut bus, false).expect("reading");
+    let reading = read(&mut bus, false, None).expect("reading");
     let state = reading.state();
     assert!(!state.on_ac && !state.ac_from_charger && state.discharging && !state.charging && !state.full);
     assert_eq!((state.percent, state.to_empty, state.to_full), (87, 161, 0xFFFF));
@@ -142,12 +142,12 @@ fn on_the_mains_charging_then_full() {
     model.words.insert((BATTERY, 0x13), 45);
     model.words.insert((BATTERY, 0x12), 0xFFFF);
     let mut bus = host(model);
-    let state = read(&mut bus, false).expect("reading").state();
+    let state = read(&mut bus, false, None).expect("reading").state();
     assert!(state.on_ac && state.charging && !state.discharging && !state.ac_from_charger);
     assert_eq!((state.to_full, state.to_empty, state.milliamps), (45, 0xFFFF, 2000));
     bus.ec.ports.words.insert((BATTERY, 0x16), 0x00A0); // fully charged
     bus.ec.ports.words.insert((BATTERY, 0x0A), 0);
-    let state = read(&mut bus, false).expect("reading").state();
+    let state = read(&mut bus, false, None).expect("reading").state();
     assert!(state.on_ac && state.full && !state.charging);
 }
 
@@ -158,7 +158,7 @@ fn a_charger_to_the_specification_says_where_the_power_comes_from() {
     let mut bus = host(model);
     let with_charger = charger(&mut bus).is_some();
     assert!(with_charger);
-    let state = read(&mut bus, with_charger).expect("reading").state();
+    let state = read(&mut bus, with_charger, None).expect("reading").state();
     assert!(state.on_ac && state.ac_from_charger && state.discharging, "the charger decides, though the battery discharges");
     assert!(!charger_answers(0x8000) && !charger_answers(0xFFFF) && charger_answers(0x0010));
 }
@@ -205,4 +205,66 @@ fn minutes_are_hours_and_minutes() {
     out.push(' ');
     write_minutes(&mut out, 5).unwrap();
     assert_eq!(out, "2:41 - 0:05");
+}
+
+// AML as iasl writes it: a PkgLength that counts itself, then `op`'s package.
+fn pkg_length(length: usize) -> Vec<u8> {
+    if length < 0x40 { vec![length as u8] } else { vec![0x40 | (length & 0x0F) as u8, (length >> 4) as u8] }
+}
+fn package(op: &[u8], body: &[u8]) -> Vec<u8> {
+    let small = body.len() + 1 < 0x40;
+    [op, &pkg_length(body.len() + if small { 1 } else { 2 }), body].concat()
+}
+// The MacBook Pro's: OperationRegion (ECOR, EmbeddedControl, 0x00, 0xFF), a field list with Offset (0x60), ELSW, EACP;
+// Device (ADP1) { Name (_HID, "ACPI0003") Method (_PSR) { Return (<psr>) } }; `PWRS = EACP` in a method.
+fn macbook_aml(psr: &[u8]) -> Vec<u8> {
+    let mut aml = vec![0x5B, 0x80, b'E', b'C', b'O', b'R', 0x03, 0x00, 0x0A, 0xFF];
+    let mut fields = b"ECOR\x11ECVS\x08".to_vec();
+    fields.extend([0x00]); fields.extend(pkg_length(0x60 * 8 - 8)); // Offset (0x60)
+    fields.extend(b"ELSW\x01EACP\x01ECDI\x01");
+    aml.extend(package(&[0x5B, 0x81], &fields));
+    let method = [b"_PSR\x00\xA4".as_slice(), psr].concat();
+    let device = [b"ADP1\x08_HID\x0DACPI0003\x00".as_slice(), &package(&[0x14], &method)].concat();
+    aml.extend(package(&[0x5B, 0x82], &device));
+    aml.extend(package(&[0x14], b"_Q20\x00\x70EACP\\PWRS"));
+    aml
+}
+
+#[test]
+fn the_adapters_bit_is_found_through_its_psr() {
+    assert_eq!(ac_bit(&macbook_aml(b"PWRS")), Some((0x60, 1)), "_PSR returns a name a Store fills from the field");
+    assert_eq!(ac_bit(&macbook_aml(b"\\PWRS")), Some((0x60, 1)));
+    assert_eq!(ac_bit(&macbook_aml(b"\\/\x05_SB_PCI0LPCBEC__EACP")), Some((0x60, 1)), "_PSR returns the field itself");
+    assert_eq!(ac_bit(&macbook_aml(b"ECDI")), Some((0x60, 2)));
+    assert_eq!(ac_bit(&macbook_aml(b"ECVS")), None, "an eight-bit field is not a bit");
+    assert_eq!(ac_bit(&macbook_aml(b"XXXX")), None, "a name nothing fills from the controller");
+    let mut other = macbook_aml(b"PWRS");
+    other[6] = 0x00; // the region in system memory, not the controller's space
+    assert_eq!(ac_bit(&other), None);
+    let no_adapter = macbook_aml(b"PWRS").windows(8).position(|w| w == b"ACPI0003").unwrap();
+    let mut gone = macbook_aml(b"PWRS");
+    gone[no_adapter + 7] = b'4';
+    assert_eq!(ac_bit(&gone), None, "no AC adapter device");
+}
+
+#[test]
+fn the_adapters_bit_decides_where_the_power_comes_from() {
+    // Full on the mains: a TI gauge at rest sets DISCHARGING as on the battery, with no current.
+    let mut model = macbook();
+    model.words.insert((BATTERY, 0x16), 0x0060);
+    model.words.insert((BATTERY, 0x0A), 0);
+    model.words.insert((BATTERY, 0x0D), 100);
+    model.space[0x60] = 0x02;
+    let mut bus = host(model);
+    let state = read(&mut bus, false, None).expect("reading").state();
+    assert!(!state.on_ac, "the battery's status alone says battery");
+    let state = read(&mut bus, false, Some((0x60, 1))).expect("reading").state();
+    assert!(state.on_ac && state.full && !state.charging && !state.ac_from_charger);
+    bus.ec.ports.space[0x60] = 0x01; // unplugged; the lid bit beside it stays
+    let state = read(&mut bus, false, Some((0x60, 1))).expect("reading").state();
+    assert!(!state.on_ac);
+    // A charger to the specification decides before the controller's bit.
+    bus.ec.ports.words.insert((CHARGER, 0x13), 0x8010);
+    let state = read(&mut bus, true, Some((0x60, 1))).expect("reading").state();
+    assert!(state.on_ac && state.ac_from_charger);
 }
