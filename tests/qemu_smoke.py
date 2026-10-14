@@ -1181,6 +1181,30 @@ def shell_suite(vm):
     keys(b"\r", "requires: files")
     print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
           "refused; Tab completed a path", flush=True)
+    # > and >> (000-APP-0074): what a command prints goes into a file, from the current directory; >> adds to it. A console
+    # program runs to its end into it (dmesg); a line that starts ERROR: stays on the screen; a script writes a file so
+    # only with `requires: files`.
+    require(vm.command("ls data > ram:l.txt"), "BYTES WRITTEN TO ram:l.txt")
+    listing = vm.command("cat ram:l.txt")
+    assert re.search(r"(?im)^sum\.msh ", listing) and listing.count("ENTRIES, ") == 1, listing
+    require(vm.command("ls data >> ram:l.txt"), "BYTES ADDED TO ram:l.txt")
+    assert vm.command("cat ram:l.txt").count("ENTRIES, ") == 2
+    at("cd ram:", "MIND ram:> ")
+    require(at("dmesg -s init > d.txt", "MIND ram:> "), "BYTES WRITTEN TO ram:d.txt")
+    at("cd", "MIND> ")
+    require(vm.command("cat ram:d.txt"), "[INIT] STARTED ")
+    out = vm.command("cat ram:missing.txt > ram:e.txt")
+    require(out, "ERROR: CAT: NOT FOUND")
+    require(out, "0 BYTES WRITTEN TO ram:e.txt")
+    require(vm.command("ls > data/no/such.txt"), "ERROR: > /data/no/such.txt: NOT FOUND")
+    require(vm.command("ls > a b"), "ERROR: ONE FILE AFTER > OR >>, AT THE END OF THE LINE")
+    out = vm.command("msh data/redirect0.msh")
+    require(out, "SCRIPT FAILED: > needs `requires: files` in the script (LINE 2)")
+    assert "not reached" not in out, out
+    require(vm.command("msh data/redirect1.msh"), "redirected")
+    require(vm.command("cat ram:script.txt"), "ENTRIES, ")
+    print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
+          "error line kept on the screen, a script writes one only with requires: files", flush=True)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -1262,6 +1286,15 @@ for task in ps()? {
 }
 if !contains(running, "logd") { fail("logd is not running") }
 print("vfs_server runs; {len(running)} services; ps printed {len(lines(out))} lines")
+""",
+    "redirect0.msh": """#!msh
+ls data > ram:script.txt
+print("not reached")
+""",
+    "redirect1.msh": """#!msh
+requires: files
+ls data > ram:script.txt
+print("redirected")
 """,
     "net0.msh": """#!msh
 ping 10.0.2.2

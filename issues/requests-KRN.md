@@ -205,3 +205,25 @@ The updater now parses each check's channel, manifest and heads in a `parse` hel
 ### Acceptance criteria
 
 In the `update` suite, the updater's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends. A `program` call with the updater's loader client is refused.
+
+## The shell's audio client that may change the levels (000-APP-0076, 000-APP-0077)
+
+**Recorded by:** the tools track (APP), 2026-10-14, at the maintainer's request: "the output volume and the microphone's sensitivity need settings".
+
+### Problem
+
+`audio.wit` is asked for the output volume and the microphone's gain, and for setting them only with a badge (requests-DRV.md, "The output volume and the microphone's sensitivity in `audio.wit`").
+
+- Today `init` lends the shell a plain client of `audio_gw` in `SLOT_AUDIO` (`init/src/main.rs`, the shell's grants), as it lends `tts` one.
+- Programs get their own plain client from the loader's standard grants (`loader/src/main.rs`:108).
+
+### Plan (a proposal; the kernel track decides)
+
+- **A badge that changes the levels,** for example `BADGE_AUDIO_LEVELS` in `mind::audio`, as the clock's `BADGE_SET` (211-KRN-0051):
+  - `init` mints it on the shell's client in `SLOT_AUDIO` only;
+  - `tts` and the loader's grants keep the plain client, so no program the shell starts gets the badge.
+
+### Acceptance criteria
+
+`caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it. With `audio.wit` 1.2, `say` cannot change the volume and the shell can.
+
