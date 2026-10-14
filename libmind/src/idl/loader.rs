@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 7, 0);
+pub const VERSION: (u8, u8, u8) = (1, 8, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
@@ -44,6 +44,20 @@ impl Wire for Needs {
     const MAX: usize = <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.console.encode(w)?; self.sysinfo.encode(w)?; self.file.encode(w)?; self.lifecycle.encode(w)?; self.log.encode(w)?; self.files.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { console: Wire::decode(r)?, sysinfo: Wire::decode(r)?, file: Wire::decode(r)?, lifecycle: Wire::decode(r)?, log: Wire::decode(r)?, files: Wire::decode(r)? }) }
+}
+
+/// A helper program the loader starts for its caller (1.8): `parse`, the parser of 109-NET-0010.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum HelperKind { #[default] Parse = 0 }
+impl HelperKind {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Parse), _ => None } }
+}
+impl Wire for HelperKind {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
 /// The `*.elf` programs in the root of the boot disk (at most 128, 1.4: 64 before); services are marked.
@@ -179,6 +193,18 @@ pub fn grant_firmware(endpoint: Endpoint, session: u32, cap: usize) -> Result<co
     Ok(Ok(()))
 }
 
+/// Starts helper `which` for the caller (1.8, 109-KRN-0096). It gets nothing but a copy of `served`, an endpoint
+/// that must carry the right to receive, in its SLOT_INIT: no standard clients, no screen, no log, no tasks or
+/// endpoints of its own, 2 MiB of memory. It serves that endpoint alone and ends when told or left idle; a caller
+/// may have 4 at once (`limit`). Returns its PID.
+pub fn helper(endpoint: Endpoint, which: HelperKind, served: usize) -> Result<core::result::Result<u64, Error>> {
+    let words = [12 | MAJOR << 8 | ((which) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, Some((served, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0x0, 0xffffffffffffffff], false)?;
+    Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -193,6 +219,7 @@ pub enum Request {
     GrantMemory { session: u32, slot: u8, cap: usize },
     CommitInFront { session: u32 },
     GrantFirmware { session: u32, cap: usize },
+    Helper { which: HelperKind, served: usize },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -267,6 +294,11 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_FIRMWARE, true)?;
             Ok((Request::GrantFirmware { session: wire::field(&words, 0, 16, 32) as u32, cap: cap }, Call::words(request, cap)))
         }
+        12 => {
+            wire::body(request, cap, [0xff0000, 0x0], CAP_KIND_ENDPOINT, true)?;
+            let Some(which) = HelperKind::from_code(wire::field(&words, 0, 16, 8)) else { wire::discard(request, cap); return Err(Reject::Invalid) };
+            Ok((Request::Helper { which, served: cap }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -313,4 +345,8 @@ pub fn reply_commit_in_front(call: Call, value: core::result::Result<u64, Error>
 pub fn reply_grant_firmware(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_helper(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, ((value) as usize) << 0])
 }

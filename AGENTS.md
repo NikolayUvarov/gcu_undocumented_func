@@ -77,7 +77,7 @@ The registry of tracks — current owners, branches, statuses and starting tasks
      - [THIRD_PARTY.md](THIRD_PARTY.md) names the script and the source, not the files.
 
      A disk that holds them is for the maintainer's own use.
-4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups, on the maintainer's remote machines through Effector (today PCU), in parallel with the x86 part ([docs/effector.md](docs/effector.md), section 4). `scripts/ci_local.sh` runs every CI group on your machine.
+4. **Test.** Run the suites the change touches. A kernel change runs all QEMU suites on 4 CPUs, and the SMP, isolation, heap and services suites on 1 CPU. A change to aarch64 also runs the aarch64 groups, on the maintainer's remote machines through Effector, in parallel with the x86 part: on the free machine that suits the work best when it starts ([docs/effector.md](docs/effector.md), sections 3 and 4). `scripts/ci_local.sh` runs every CI group on your machine.
 5. **Update the evidence.** If the change alters a statement in `docs/profile` (a guarantee, the TCB or evidence), update that statement in the same commit. Update the README and `docs/api` when behaviour or interfaces change.
 6. **Commit.** One task per commit where possible. The message says what changed and why, and cites the issue. An agent's commits carry a trailer naming the tool and, if there is one, a link to the session (for example `Co-Authored-By:` and a session URL). The person directing the agent is the author of record and accepts the [licence of contributions](CONTRIBUTING.md#licence-of-contributions).
 7. **Close the issue** when its acceptance criteria are met:
@@ -107,7 +107,7 @@ The gate is one of the following:
 **A text-only commit needs no gate** (the maintainer's decision, 2026-10-09).
 
 - **Which commits.** Those that change only Markdown documents that no build, image or test reads:
-  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted) and `docs/`;
+  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted), `issues-critica/`, `issues-critica-done/` and `docs/`;
   - the root's AGENTS.md, CONTRIBUTING.md, TRACKS.md, README.md, ROADMAP.md, ROADMAP_RU.md, SECURITY.md and CODE_OF_CONDUCT.md;
   - the Constitution's and RFCs' texts.
 - **Why.** A test run says nothing about such files.
@@ -134,7 +134,7 @@ The maintainer or the owning track reviews and merges it.
 
 **A maintainer's machine can run the gate continuously.** `scripts/ci_watch.sh` fetches `origin` every 10 minutes. It tests each new commit of `main`, and of every other branch merged with `main`, and keeps a history in `~/.cache/mind-ci-watch/history.log`. Run it with `--once` for a single pass.
 
-**The maintainer's remote machines (Effector).** Builds and tests on the maintainer's machines go through Effector, which several agents share: long work waits in each machine's sequential queue, each track has a directory of its own there, nothing runs detached, and no machine is rebooted. How to use them is in [docs/effector.md](docs/effector.md) (Russian: [docs/effector_RU.md](docs/effector_RU.md)).
+**The maintainer's remote machines (Effector).** Builds and tests on the maintainer's machines go through Effector, which several agents share: long work runs one operation at a time for each track in the machine's queues, each track has a directory and a `TMPDIR` of its own there, nothing runs detached, and no machine is rebooted. Machines are added and their queues fill: before each batch of work, look at which are free (`GET /api/v1/endpoints`, their active operations) and choose the one that suits the work best. How to use them is in [docs/effector.md](docs/effector.md) (Russian: [docs/effector_RU.md](docs/effector_RU.md)).
 
 ## 5. Working next to other tracks
 
@@ -177,7 +177,7 @@ Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given be
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
 Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
-Remote build machines (Effector): read docs/effector.md first; long work goes into a machine's sequential queue, in your track's own directory.
+Remote build machines (Effector): read docs/effector.md first; before each batch of work see which machines are free and choose the one that suits best (docs/effector.md, section 3); long work runs one operation at a time in a machine's queues, in your track's own directory and TMPDIR.
 Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.

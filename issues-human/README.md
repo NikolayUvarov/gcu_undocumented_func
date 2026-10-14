@@ -63,3 +63,115 @@ Main task [750](../issues/750-effector-agent.md): MIND Core gets an agent for th
 - [x] Decide whether the subset of the Effector agent protocol that MIND Core implements may be published in this public repository, as task [750-EFF-0001](../issues/750-EFF-0001-protocol-contract.md) proposes. The subset is the routes, fields and actions the agent uses, without the server's internal weaknesses. **Decided by the maintainer, 2026-10-09:** yes, it may be published; supporting MIND Core is a requirement on the server.
 - [ ] For task [750-EFF-0012](../issues/750-EFF-0012-run-against-the-effector-server.md), provide a test Effector server the QEMU host can reach. Name its build: at least 1.2.0.127, and a build with task 75's part A for the full run. Give the session its HTTPS address, its certificate pin, an agent token for the test machines and an operator account. Keep the token and the account out of the repository.
 - [ ] Say whether MIND Core endpoints may be registered on that server, and under which tag, so that they do not mix with the production terminals.
+
+## 8. A boot and health indicator on an RP2040 board
+
+The maintainer has a USB board with an RP2040 and an RGB LED (2026-10-14). Plugged into a machine that runs MIND Core, it is to:
+- show on its LED how far the boot has come and how healthy the system is;
+- pass the system log on to its own serial pins, so that a second computer can read it on a machine whose screen is black or that has no COM1 (the Ryzen machine of [213](../issues/213-amd-ryzen-pc.md)).
+
+This item is the board's firmware, built and tested on its own, against a script on a PC that plays MIND Core's part. MIND Core's own part is the agents' work afterwards (below).
+
+### What the firmware does
+
+- **USB:**
+  - it enumerates as a standard CDC-ACM serial port at full speed, so that no driver beyond the class driver is needed, on MIND Core, Linux, Windows or macOS;
+  - its product string is `MIND Core indicator`. MIND Core sends its log only to a device that says so, never to any serial port that happens to be plugged in;
+  - for development, Raspberry Pi's RP2040 vendor ID with a product ID it grants (2E8A); a product ID of its own before others use it.
+- **The protocol:** lines of UTF-8 text, LF-terminated, from the system to the board.
+  - `@STATE <stage>`, where `<stage>` is `KERNEL`, `SERVICES <started>/<all>`, `READY`, `REBOOT` or `OFF`;
+  - `@HEALTH OK|WARN|FAIL <reason>`;
+  - `@BEAT <uptime ms>`, once a second;
+  - any other line is a log line, as `log:bootNNNN.log` holds it.
+  - The board sends nothing the system acts on; MIND Core reads nothing from it.
+- **The LED:**
+
+  | Colour | Meaning |
+  | --- | --- |
+  | Off | No power |
+  | Dim blue | Powered, nobody talking to it (firmware, bootloader, the first second of the kernel, or another OS) |
+  | Yellow | `KERNEL` or `SERVICES`, brighter as more services start |
+  | Green | `READY` with `HEALTH OK` |
+  | Orange | `HEALTH WARN` |
+  | Red | `HEALTH FAIL` |
+  | Magenta, blinking | No `@BEAT` for 3 s after one came: the system or its USB stack stopped |
+  | White flash | `REBOOT` or `OFF` |
+
+  The same meanings drawn from one table in the firmware, at a brightness that does not dazzle.
+- **The serial pins:**
+  - every line received goes out of UART0 TX (3.3 V, 115200 8N1);
+  - the last 16 KiB are kept in RAM and sent again when its button is pressed, so that the start of a boot is not lost to a reader who plugged in late.
+- **The build:**
+  - its source in this repository, in a directory the maintainer names (for example `devices/rp2040-indicator/`);
+  - built to a UF2 file to flash with BOOTSEL, by one documented command;
+  - Rust (`rp2040-hal` or `embassy-rp`, `usb-device`, `usbd-serial`, PIO for a WS2812) or C with the Pico SDK and TinyUSB;
+  - every third-party part in [THIRD_PARTY.md](../THIRD_PARTY.md).
+
+### Done when
+
+- [ ] The board's model, its LED (WS2812 on which pin, or three PWM pins) and the chosen language are named.
+- [ ] The firmware builds from source by its documented command and flashes as UF2.
+- [ ] A PC test script (`--port`) plays a boot:
+  - `KERNEL`, `SERVICES 1/30` … `30/30`, `READY`, `HEALTH WARN`, `HEALTH FAIL`, `REBOOT`;
+  - log lines;
+  - then it stops its beats.
+- [ ] Each of the script's states shows its colour. Magenta comes within 3 s after the beats stop.
+- [ ] Every line reaches UART0, read by a USB-UART adapter on a second PC, and the button sends the kept 16 KiB again.
+- [ ] A page in `docs/` gives the pins, the colours, the protocol and how to flash it, in English and Russian.
+
+### Afterwards, MIND Core's part (agents' tasks, numbered when started)
+
+- **The drivers track:** a CDC-ACM class driver with `usb_host`.
+- **The kernel track:** a service that finds the indicator by its product string and sends it:
+  - the kernel's lines kept since the boot, and the system log from its start;
+  - `@STATE` from `init`'s start of the services;
+  - `@HEALTH` from the failures `init` and `logd` see;
+  - `@BEAT`.
+- **What it cannot cover:** the board shows nothing of the bootloader or of the first second or so, before `usb_host` runs. A kernel panic shows as the beats stopping, not as text, since USB runs in ring 3.
+
+## 9. The Constitution and RFC 001: changes the critique proposes
+
+The critique of 2026-10-14 ([issues-critica-done/01](../issues-critica-done/01_constitution_and_docs_analysis.md)) proposes changes to the founding documents. An agent may not make them on its own: each needs a new edition in English and Russian, with its reason, the guarantees affected, the alternatives and a migration plan ([AGENTS.md](../AGENTS.md), section 1). The kernel session checked each against the texts. Tick what you accept, and the kernel session drafts the edition.
+
+**Constitution 1.7, editorial (no guarantee changes):**
+
+- [ ] **Clause identifiers in the headings.** Write `**MC-2.6.**` in place of `**2.6.**` in Articles 1–12, 114 headings in each language. The preamble already defines `MC-2.6` (line 31), and AGENTS.md cites clauses that way, but a search for `MC-2.6` does not find the clause today.
+- [ ] **The links to `../const_discusstion_1.3/`.**
+  - Appendix E (lines 483–486) links files that are not in the repository. Make them plain text, as Appendix A already is.
+  - Appendix H (line 627) says Appendices A and E keep links; only E does.
+- [ ] **Optional: Appendix B.1 and F.1.** B.1 names Untyped pools and retype as the initial model, and F.1 rejects "a physical memory allocator … in the kernel". The kernel keeps a frame pool with per-task quotas. B.1 already allows that if the profile says so (line 354), and 000-KRN-0105 makes the profile say so. A note in B.1 would only spare readers the search.
+
+**Not an amendment.** The critique reads MC-3.6 (a revocation's observable completion) and MC-5.4 (long operations bounded, splittable or preemptible) as a conflict. They are not one:
+- MC-3.6 does not ask for a revocation in one step, and MC-5.4 leaves the bound to the profile;
+- MC-3.5 already asks for "the fate of operations in progress".
+
+The gap is in the kernel and the profile, and [000-KRN-0104](../issues/000-KRN-0104-revocation-bounded-by-the-profile.md) takes it.
+
+**RFC 001 0.5 (Marain; the `MRN` track is open, and the RFC goes through you):**
+
+- [ ] **§11–12, `append`'s example.** It returns `result<_, log-error>`, which cannot say an outcome is unknown, while §7.5 requires that for external effects.
+  - §16 and the review (§9, item 4) already plan `OutcomeUnknown` and an `operation_id` for M3–M4.
+  - Either bring the example there now, or say in it that the local ring's append is decided before it returns.
+- [ ] **§7.5, a counterparty that never answers.**
+  - `Uncertain` records count against a quota that limits new operations, and old obligations are not forgotten. If the counterparty is gone for good and cannot be fenced, the actor stops taking new work.
+  - The RFC leaves "the reaction to long unavailability" to the profile, and no profile defines it.
+  - Proposed: an explicit operation, held only by the lifecycle owner, that closes such a record as abandoned and writes it to the audit log (Article 10). Nothing is forgotten silently.
+- [ ] **The header's link** (line 8) to `../const_discusstion_1.3/`: make it plain text.
+
+## 10. A test rig for real machines: keyboard and mouse, the screen, power
+
+The maintainer's offer (2026-10-14): Effector drives a device that emulates a keyboard and a mouse, and a video capture module shows the machine's screen. With them, an agent runs a test on a real machine without a person present ([000-KRN-0108](../issues/000-KRN-0108-tests-on-a-real-machine-through-effector.md)).
+
+- [ ] **Name the parts:**
+  - the input device, and whether it is a USB HID boot-protocol keyboard and mouse (firmware menus need that) and whether it has an absolute (tablet) mode;
+  - the capture module, its native size, and whether a frame can come lossless;
+  - the test machine it is attached to.
+- [ ] **Effector operations for them,** on an agent of the rig's host:
+  - keys by name with modifiers (QEMU's `sendkey` names), and typing at a set pace;
+  - mouse moves, buttons and the wheel;
+  - one frame as PNG, and a short clip;
+  - their names and fields in docs/effector.md.
+- [ ] **Power,** so that a hung machine needs no one: power on, a hard reset and a forced off, through a relay on the front-panel header or a switched socket.
+- [ ] **Wanted: the boot medium.** A USB disk the rig writes with the image under test and switches to the machine.
+- [ ] **Wanted: the serial line,** where the machine has COM1 or a USB-UART.
+- [ ] **Say that this machine may be rebooted and powered off by agents.** The work machines' "no reboots" rule stays as it is.

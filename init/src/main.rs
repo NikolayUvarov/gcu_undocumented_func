@@ -414,14 +414,15 @@ impl Init {
                 if let Ok(slot) = minted.mint(PLATFORM_MMIO, PLATFORM_TPM, 0) { grants.add(SLOT_DEV0, slot, 0); }
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tpm")?, ALL);
             }
-            // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports, and
-            // the SMBus host's base from the DSDT as an argument.
+            // The Smart Battery System behind the embedded controller the ECDT names (211-PRT-0008): its two ports; the
+            // SMBus host's base and the AC adapter's bit in the controller's space from the DSDT as arguments.
             "battery" => {
-                let (command, data, base) = hardware::battery_place().ok_or(Error::NotFound)?;
+                let (command, data, base, ac) = hardware::battery_place().ok_or(Error::NotFound)?;
                 grants.add(SLOT_DEV0, minted.ports(command as usize, 1)?, 0);
                 grants.add(SLOT_DEV1, minted.ports(data as usize, 1)?, 0);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 let _ = core::fmt::Write::write_fmt(&mut args, format_args!("smbus=0x{:02x}", base));
+                if let Some((byte, bit)) = ac { let _ = core::fmt::Write::write_fmt(&mut args, format_args!(" ac=0x{:02x}.{}", byte, bit)); }
             }
             // The window broker holds nothing but its own program client, which it lends to window managers (issue 157).
             "windows" => { grants.add(SLOT_SERVICE, self.server(&mut minted, "windows")?, ALL); self.lend(&mut grants, 2, "windows")?; }
@@ -495,7 +496,10 @@ impl Init {
                 // The user's file client: writes on ram: and in the boot disk's data directory (applications read only).
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_USER)?, CLIENT);
                 grants.add(SLOT_CONTROL, minted.privilege(CAP_KIND_CONTROL)?, 0); grants.add(SLOT_INPUT, minted.privilege(CAP_KIND_INPUT)?, 0);
-                grants.add(SLOT_SERIAL, minted.serial()?, 0);
+                // A PC without COM1 lends none: its ports read all ones, and a shell reading them would never draw (213-KRN-0098).
+                let serial = minted.serial()?;
+                if mind::dev::Uart::open(serial).is_some() { grants.add(SLOT_SERIAL, serial, 0); }
+                else { mind::println!("[INIT] NO SERIAL LINE: NO 16550 ANSWERS AT COM1 (3F8), THE SHELL GETS NONE"); }
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
                 let keyboard = self.keyboard(); self.lend(&mut grants, SLOT_KEYBOARD, keyboard)?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
@@ -535,9 +539,9 @@ impl Init {
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
             // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
             "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
-            // The compositor's shadow copy of the framebuffer comes on top of the default: 20 MiB at 2880 × 1800 (a
-            // MacBook Pro's Retina panel, 211-PRT-0004).
-            "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + self.screen_mib, ..Quota::default() },
+            // On top of the default, three screens: the compositor's shadow copy of the framebuffer, and the two sealed
+            // copies `record` holds, the frame it codes and the one before (211-KRN-0095); 20 MiB each at 2880 × 1800.
+            "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + 3 * self.screen_mib, ..Quota::default() },
             _ => Quota::default(),
         };
         let mut kept = ([0u8; ARGS_KEPT], args.as_str().len());

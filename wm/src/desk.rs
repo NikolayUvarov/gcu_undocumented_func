@@ -2,7 +2,7 @@
 //! corner — stacked bottom to top with the top one focused; moving and resizing by keys and by the mouse; snapping to
 //! halves, quarters and the whole screen; what each cell of the screen shows. No system calls: tests/wm_host.rs.
 use crate::keys::{Code, Key};
-use crate::background::Config;
+use crate::background::{hours, Config, Power};
 use crate::menu::{self, Menu};
 use crate::settings::{Outcome, Settings};
 use crate::tui::widgets::{message, Edit, InputLine};
@@ -444,7 +444,7 @@ pub const HELP: [&str; 20] = [
     "Alt+P or a right click on the desktop — the programs by category: a click or Enter starts one",
     "Alt+Q — leave wm: the programs keep running, the next wm shows them where they were",
     "Alt+X — close every window and leave",
-    "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU)",
+    "Alt+S — Settings: the desktop background (none, a moving pattern, an image; the time, the date, the CPU, the memory)",
     "The items of the top bar can be clicked instead of their keys (\"wm\": the programs; those with no room: in more ▼)",
     "Mouse: a click brings a window to the front and goes to its program, as the wheel does;",
     "  drag the title to move a window (it snaps at the edges; a snapped one gets its size back),",
@@ -507,6 +507,15 @@ pub fn bar_layout(cols: usize, title: usize) -> (Vec<(usize, usize, Bar)>, Vec<B
 /// The top bar's items on a screen `cols` wide with no title at its right (`bar_layout`).
 pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> { bar_layout(cols, 0).0 }
 
+/// The battery's item at the top bar's right end (211-APP-0070): ` AC 87% ` on the mains, ` ▮ 87% ` on the battery, or
+/// once clicked the minutes (` ▮ 2:41 ` left, ` AC 0:45 ` to full, `-:--` when the battery gives none); none without
+/// a battery.
+pub fn battery_chip(power: Option<&Power>, minutes: bool) -> Option<String> {
+    let p = power?;
+    let mark = if p.on_ac { "AC" } else { "▮" };
+    Some(if minutes { format!(" {} {} ", mark, hours(p.minutes())) } else { format!(" {} {}% ", mark, p.percent) })
+}
+
 /// The window manager's state over the desk: modes, the drag of the mouse, the notice on the status line.
 pub struct Wm {
     pub desk: Desk,
@@ -524,6 +533,9 @@ pub struct Wm {
     pub background: Config,
     /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
     pub shell: bool,
+    /// The battery as last read (211-APP-0070), None without one; its item shows the minutes in place of the charge.
+    pub battery: Option<Power>,
+    pub battery_minutes: bool,
     /// The time in ms, as the caller last gave it: two presses on a title within `DOUBLE_MS` are a double click.
     pub now: usize,
     /// The screen in pixels and wm's scale in percent, which Settings' screen page shows and changes (000-APP-0061).
@@ -537,7 +549,7 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -603,6 +615,8 @@ impl Wm {
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                     // The shell sets the clock at once (000-APP-0060): Settings stay open and show the outcome.
                     Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                    // The network page's row (550-APP-0033): its program in a window, in front of the closed Settings.
+                    Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
                 };
             }
             Mode::Normal => {}
@@ -696,6 +710,8 @@ impl Wm {
             return self.to_window(id, x, y, buttons, wheel).unwrap_or(Action::Redraw);
         }
         if pressed && y == 0 && self.desk.full_screen().is_none() {
+            // The battery's item: a click shows the minutes, or the charge again (211-APP-0070).
+            if self.chip().is_some_and(|chip| x + chip.chars().count() >= self.desk.cols) { self.battery_minutes = !self.battery_minutes; return Action::Redraw; }
             if let Some(&(at, _, item)) = self.top_bar().0.iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
         }
         // `more ▼`'s menu: a click on an item does it, elsewhere closes the menu; the mouse over one chooses it.
@@ -720,6 +736,7 @@ impl Wm {
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                 Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
             };
         }
         // A click on an entry of the window list brings that window to the front; elsewhere it closes the list.
@@ -818,8 +835,15 @@ impl Wm {
         Some(format!(" {}{} ", title, if w.title.chars().count() > TITLE_MAX - 2 { "…" } else { "" }).chars().take(TITLE_MAX).collect())
     }
 
-    /// The top bar now: its items and those in `more ▼`'s menu, the title kept at its right (`bar_layout`).
-    pub fn top_bar(&self) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) { bar_layout(self.desk.cols, self.title_chip().map_or(0, |t| t.chars().count())) }
+    /// The battery's item now (`battery_chip`).
+    pub fn chip(&self) -> Option<String> { battery_chip(self.battery.as_ref(), self.battery_minutes) }
+
+    /// The top bar now: its items and those in `more ▼`'s menu, the title and the battery kept at its right
+    /// (`bar_layout`).
+    pub fn top_bar(&self) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) {
+        let right = self.title_chip().map_or(0, |t| t.chars().count()) + self.chip().map_or(0, |c| c.chars().count());
+        bar_layout(self.desk.cols, right)
+    }
 
     /// `more ▼`'s menu on the screen: its frame, under the bar's item and inside the screen.
     pub fn more_area(&self) -> Option<Rect> {
@@ -929,7 +953,15 @@ impl Wm {
                 grid.text_max(at, 0, &format!(" {} ", bar_label(item)), width, if hovered || (item == Bar::More && matches!(self.mode, Mode::More { .. })) { lit } else { bar });
             }
         }
-        if let Some(title) = title { grid.text_right(cols, 0, &title, Style::new(0xFFFFFF, 0x305070)); }
+        // The battery at the right end, marked when low; the title left of it.
+        let chip = self.chip();
+        let chip_w = chip.as_ref().map_or(0, |c| c.chars().count());
+        if let Some(chip) = &chip {
+            let low = self.battery.is_some_and(|p| p.low());
+            let hovered = self.pointer.is_some_and(|(x, y)| y == 0 && x + chip_w >= cols);
+            grid.text_right(cols, 0, chip, if low { Style::new(0xFFFFFF, 0xB02020) } else if hovered { lit } else { Style::new(0xFFFFFF, 0x203848) });
+        }
+        if let Some(title) = title { grid.text_right(cols.saturating_sub(chip_w), 0, &title, Style::new(0xFFFFFF, 0x305070)); }
         let status_y = grid.rows.saturating_sub(1);
         let status = match (&self.mode, &self.notice) {
             (Mode::Move { .. }, _) => String::from("MOVE: arrows move (Ctrl: 8 cells), Shift+arrows resize; Enter: done (snaps at the edges); Esc: back"),
@@ -991,9 +1023,10 @@ impl Wm {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
             Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
-            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
+            Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
-        format!("MODE={} {}{}{}", self.mode_name(), self.desk.status(), pointer, menu)
+        let battery = self.chip().map_or(String::new(), |c| format!(" BATTERY={}", c.trim()));
+        format!("MODE={} {}{}{}{}", self.mode_name(), self.desk.status(), pointer, menu, battery)
     }
 }

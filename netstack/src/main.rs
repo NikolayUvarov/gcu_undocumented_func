@@ -1,10 +1,11 @@
 #![no_std]
 #![no_main]
 // Network stack: IPv4 with DHCP (static QEMU fallback), ARP, ICMP echo, a DNS resolver, UDP and TCP (smoltcp) over the
-// network card drivers' frames. Serves idl/socket.wit 2.1. Holds clients of up to CARDS card drivers (slots 2 and 3)
-// and nothing of the devices themselves (Appendix B.6: packet and flow endpoints with quotas, no power over the
-// device); each card is an interface of its own (issue 105) and a flow goes out through the one its route names. What
-// each client may reach comes from the badge of its capability (policy.rs, MC-11.6).
+// network card drivers' frames. Serves idl/socket.wit 2.5. Holds clients of up to CARDS card drivers (slots 2 and 3,
+// and the Wi-Fi station `wlan` in slot 4) and nothing of the devices themselves (Appendix B.6: packet and flow
+// endpoints with quotas, no power over the device); each card is an interface of its own (issue 105) and a flow goes
+// out through the one its route names. What each client may reach comes from the badge of its capability (policy.rs,
+// MC-11.6).
 extern crate alloc;
 
 mod dns;
@@ -26,6 +27,7 @@ use smoltcp::socket::{dhcpv4, icmp, tcp, udp};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address, Ipv4Cidr};
 use policy::{Access, Policy};
+use mind::network::BADGE_OPERATOR;
 use socket::{Error, Protocol};
 
 const RECEIVED: usize = 9;
@@ -39,8 +41,11 @@ const POLL_MS: u32 = 10;
 const FALLBACK_MS: u64 = 3000; // without a DHCP lease by then: QEMU user networking's static setup
 const ICMP_IDENT: u16 = 0x4D49;
 const EPHEMERAL: u16 = 49152;
-const CARDS: usize = 2; // card drivers: SLOT_DEV0, SLOT_DEV1 (init starts one virtio_net instance per card)
-const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1];
+const SLOT_STATION: usize = 4; // the Wi-Fi station's client when one runs (550-NET-0018, 550-KRN-0097)
+const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per card) and the station, which answers once joined
+const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
+const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
+const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.
@@ -176,7 +181,7 @@ impl Device for Card {
 enum Kind { Udp, Tcp }
 // A client's socket: its interface (`link`) and its handle in that interface's socket set.
 #[derive(Clone, Copy)]
-struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32 }
+struct Slot { owner: (u64, u16), kind: Kind, link: usize, handle: SocketHandle, generation: u32, sent: u64, received: u64 }
 
 enum Waiting {
     Ping { call: wire::Call, link: usize, sequence: u16, sent: u64, deadline: u64 },
@@ -188,12 +193,18 @@ enum Waiting {
 struct Link {
     card: Card, iface: Interface, sockets: SocketSet<'static>, dhcp: SocketHandle, icmp: SocketHandle,
     mac: u64, address: Option<Ipv4Cidr>, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool, started: u64,
+    // Whether the card says its link is up, and when that was last asked (550-NET-0023).
+    up: bool, checked: u64,
 }
 
 struct Stack {
     links: [Option<Link>; CARDS], tried: [u64; CARDS],
     slots: [Option<Slot>; SOCKETS], generations: [u32; SOCKETS], waiting: Vec<Waiting>, closing: Vec<(usize, SocketHandle, u64)>,
     sequence: u16, next_port: u16,
+    // The card the default route goes out through, as last logged.
+    default: Option<usize>,
+    // The card the operator or the policy prefers as the default (socket.wit 2.5, 550-NET-0025).
+    preferred: Option<usize>,
 }
 
 fn now_ms() -> u64 { mind::time::monotonic_ns() / 1_000_000 }
@@ -220,7 +231,8 @@ impl Link {
         let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
         let icmp = sockets.add(echo);
         mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, if card.ring.is_some() { " (FRAME RING)" } else { "" }, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
-        Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms() })
+        Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
+                    up: info.link, checked: now_ms() })
     }
 
     fn configure(&mut self, address: Ipv4Cidr, gateway: Option<Ipv4Address>, dns: Option<Ipv4Address>, leased: bool) {
@@ -249,7 +261,7 @@ impl Link {
             Some(Some((address, router, dns))) => self.configure(address, router, dns, true),
             Some(None) => { self.address = None; self.leased = false; }
             // QEMU user networking's static setup, for the first card only (another card's network is unknown).
-            None => if self.card.index == 0 && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
+            None => if self.card.index == 0 && self.up && self.address.is_none() && now_ms() - self.started > FALLBACK_MS {
                 self.configure(Ipv4Cidr::new(Ipv4Address::new(10, 0, 2, 15), 24), Some(Ipv4Address::new(10, 0, 2, 2)), Some(Ipv4Address::new(10, 0, 2, 3)), false);
             },
         }
@@ -265,19 +277,74 @@ impl Link {
 impl Stack {
     fn new() -> Self {
         Self { links: [const { None }; CARDS], tried: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
-               sequence: 0, next_port: EPHEMERAL }
+               sequence: 0, next_port: EPHEMERAL, default: None, preferred: None }
     }
 
     fn link(&mut self, index: usize) -> &mut Link { self.links[index].as_mut().expect("sockets live only on present links") }
 
-    // The interface a flow to `address` goes out through: the one whose network holds it, else the first with a
-    // gateway, else the first configured one.
+    // The interface a flow to `address` goes out through, among the cards whose link is up: the one whose network holds
+    // it, else the first with a gateway (the default route: the lowest card), else the first configured one.
+    // The card a flow to `address` goes out through (0: the default card): the one whose network holds it; else the
+    // preferred card if it is up with a gateway; else the first, wired before the station, that is (550-NET-0025); else
+    // any card with an address.
     fn route(&self, address: u32) -> Option<usize> {
         let target = Ipv4Address::from(address);
-        let configured = |l: &Option<Link>| l.as_ref().and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
+        let configured = |l: &Option<Link>| l.as_ref().filter(|l| l.up).and_then(|l| l.address.map(|cidr| (cidr, l.gateway)));
+        let gateway = |card: usize| configured(&self.links[card]).is_some_and(|(_, gateway)| gateway.is_some());
         self.links.iter().position(|l| configured(l).is_some_and(|(cidr, _)| address != 0 && cidr.contains_addr(&target)))
-            .or_else(|| self.links.iter().position(|l| configured(l).is_some_and(|(_, gateway)| gateway.is_some())))
+            .or_else(|| self.preferred.filter(|&card| gateway(card)))
+            .or_else(|| (0..CARDS).find(|&card| gateway(card)))
             .or_else(|| self.links.iter().position(|l| configured(l).is_some()))
+    }
+
+    // Every card the stack has a slot for, as socket.wit 2.5 `cards` tells them.
+    fn cards(&self) -> List<socket::Card, 4> {
+        let mut list = List::default();
+        for card in 0..CARDS {
+            let link = self.links[card].as_ref();
+            let up = link.is_some_and(|l| l.up);
+            let configured = up && link.is_some_and(|l| l.address.is_some() && l.gateway.is_some());
+            list.push(socket::Card { card: card as u8, kind: KINDS[card], present: link.is_some(), up, configured,
+                                     preferred: self.preferred == Some(card), default: self.default == Some(card) });
+        }
+        list
+    }
+
+    fn prefer(&mut self, card: u8) -> Result<(), Error> {
+        let preferred = match card { NO_CARD => None, card if (card as usize) < CARDS => Some(card as usize), _ => return Err(Error::Invalid) };
+        if preferred != self.preferred {
+            self.preferred = preferred;
+            match preferred { Some(card) => mind::println!("[NETSTACK] CARD {} PREFERRED AS THE DEFAULT", card), None => mind::println!("[NETSTACK] NO CARD PREFERRED") }
+        }
+        Ok(())
+    }
+
+    // Asks card `index` once a second whether its link is up (550-NET-0023). Down: its address and routes go, so new flows
+    // take another card, and its TCP connections are aborted so their owners learn at once. Up again: DHCP starts over.
+    fn watch_link(&mut self, index: usize, now: u64) {
+        let Some(link) = self.links[index].as_mut() else { return };
+        if now - link.checked < 1000 { return; }
+        link.checked = now;
+        let up = matches!(net::info(link.card.endpoint), Ok(Ok(info)) if info.link);
+        if up == link.up { return; }
+        link.up = up;
+        if up {
+            mind::println!("[NETSTACK] CARD {} LINK UP, WAITING FOR DHCP", index);
+            link.sockets.get_mut::<dhcpv4::Socket>(link.dhcp).reset();
+            link.started = now;
+            return;
+        }
+        link.address = None;
+        link.gateway = None;
+        link.leased = false;
+        link.iface.update_ip_addrs(|addrs| addrs.clear());
+        link.iface.routes_mut().remove_default_ipv4_route();
+        let mut aborted = 0;
+        for slot in self.slots.iter().flatten().filter(|s| s.link == index && matches!(s.kind, Kind::Tcp)) {
+            let tcp = link.sockets.get_mut::<tcp::Socket>(slot.handle);
+            if tcp.state() != tcp::State::Closed { tcp.abort(); aborted += 1; }
+        }
+        mind::println!("[NETSTACK] CARD {} LINK DOWN: ADDRESS DROPPED, {} CONNECTIONS ABORTED", index, aborted);
     }
 
     fn port(&mut self) -> u16 { let port = self.next_port; self.next_port = if port == u16::MAX { EPHEMERAL } else { port + 1 }; port }
@@ -288,6 +355,12 @@ impl Stack {
         for index in 0..CARDS {
             if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index); }
             if let Some(link) = self.links[index].as_mut() { link.poll(); }
+            self.watch_link(index, now);
+        }
+        let default = self.route(0);
+        if default != self.default {
+            self.default = default;
+            match default { Some(card) => mind::println!("[NETSTACK] DEFAULT ROUTE: CARD {}", card), None => mind::println!("[NETSTACK] DEFAULT ROUTE: NONE") }
         }
         self.finish_pings();
         let mut index = 0;
@@ -368,7 +441,7 @@ impl Stack {
         let free = self.slots.iter().position(Option::is_none);
         let (false, Some(index)) = (full, free) else { self.link(link).sockets.remove(handle); return Err(Error::Limit) };
         self.generations[index] = (self.generations[index] + 1) & 0xFF_FFFF;
-        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index] });
+        self.slots[index] = Some(Slot { owner, kind, link, handle, generation: self.generations[index], sent: 0, received: 0 });
         Ok(index)
     }
     fn free(&mut self, index: usize) {
@@ -378,6 +451,28 @@ impl Stack {
             Kind::Udp => { link.sockets.remove(slot.handle); }
             Kind::Tcp => { link.sockets.get_mut::<tcp::Socket>(slot.handle).close(); self.closing.push((slot.link, slot.handle, now_ms())); }
         }
+    }
+    // The open sockets from table index `start` that a client may see (`only` its badge's, None every one), for
+    // socket.wit 2.4 `sockets`.
+    fn list(&self, start: u32, only: Option<u16>) -> List<socket::SocketInfo, 32> {
+        let mut list = List::default();
+        for index in (start as usize).min(SOCKETS)..SOCKETS {
+            let Some(slot) = self.slots[index] else { continue };
+            if only.is_some_and(|badge| badge != slot.owner.1) { continue; }
+            let Some(link) = self.links[slot.link].as_ref() else { continue };
+            let (protocol, local_port, remote, state) = match slot.kind {
+                Kind::Udp => (Protocol::Udp, link.sockets.get::<udp::Socket>(slot.handle).endpoint().port, None, socket::TcpState::None),
+                Kind::Tcp => {
+                    let tcp = link.sockets.get::<tcp::Socket>(slot.handle);
+                    (Protocol::Tcp, tcp.local_endpoint().map_or(0, |e| e.port), tcp.remote_endpoint(), tcp_state(tcp.state()))
+                }
+            };
+            let (remote_address, remote_port) = remote.map_or((0, 0), |e| { let IpAddress::Ipv4(address) = e.addr; (u32::from(address), e.port) });
+            let info = socket::SocketInfo { id: self.id(index), protocol, card: link.card.index as u8, local_port, remote_address, remote_port, state,
+                                            pid: slot.owner.0, badge: slot.owner.1, sent: slot.sent, received: slot.received };
+            if !list.push(info) { break; }
+        }
+        list
     }
     // Sockets of clients that ended.
     fn reap(&mut self) {
@@ -440,13 +535,26 @@ impl Stack {
     // Answers one request; returns the bytes it moved (sent, received). `source` tells which datagrams the client may see.
     fn handle(&mut self, request: socket::Request, call: wire::Call, owner: (u64, u16), source: &dyn Fn(u32, u16) -> bool) -> (usize, usize) {
         let mut moved = (0, 0);
+        // The socket the request moves data through: what it moved is counted on it too (socket.wit 2.4).
+        let through = match &request {
+            socket::Request::UdpSend { socket: id, .. } | socket::Request::UdpReceive { socket: id } | socket::Request::TcpSend { socket: id, .. }
+            | socket::Request::TcpReceive { socket: id, .. } => Some(*id),
+            _ => None,
+        };
         let _ = match request {
+            socket::Request::Sockets { start } => {
+                let only = (owner.1 != BADGE_OPERATOR).then_some(owner.1);
+                let list = self.list(start, only);
+                socket::reply_sockets(call, Ok(list.as_slice()))
+            }
             socket::Request::Config => socket::reply_config(call, self.config().as_ref().ok_or(Error::NoNetwork)),
             socket::Request::Interfaces => {
                 let mut list = List::<socket::Interface, 4>::default();
                 for link in self.links.iter().flatten() { list.push(link.describe()); }
                 socket::reply_interfaces(call, Ok(list.as_slice()))
             }
+            socket::Request::Prefer { card } => socket::reply_prefer(call, self.prefer(card)),
+            socket::Request::Cards => socket::reply_cards(call, Ok(self.cards().as_slice())),
             socket::Request::Offload { enable } => {
                 OFFLOAD.store(enable, Ordering::Relaxed);
                 let mut cards = 0;
@@ -538,6 +646,13 @@ impl Stack {
             // Policy requests are answered in main.
             _ => Ok(()),
         };
+        if let Some(id) = through {
+            let index = (id & 0xFF) as usize;
+            if let Some(slot) = (1..=SOCKETS).contains(&index).then(|| self.slots[index - 1].as_mut()).flatten().filter(|s| s.owner == owner) {
+                slot.sent += moved.0 as u64;
+                slot.received += moved.1 as u64;
+            }
+        }
         moved
     }
 
@@ -597,8 +712,10 @@ fn main(_info: &'static BootInfo) {
         let allowed = match policy::access(badge) {
             Access::Operator => Ok(()),
             // The broker reads the DNS server and looks up the host names of the policy (socket.wit 2.3).
-            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. }) { Ok(()) } else { Err(Error::Denied) },
-            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces) => Ok(()),
+            // It also applies the policy's preferred card (socket.wit 2.5).
+            Access::Policy => if matches!(decoded, socket::Request::Config | socket::Request::Resolve { .. } | socket::Request::Prefer { .. } | socket::Request::Cards) { Ok(()) } else { Err(Error::Denied) },
+            Access::Grant(_) if matches!(decoded, socket::Request::Interfaces | socket::Request::Cards) => Ok(()),
+            Access::Grant(_) if matches!(decoded, socket::Request::Prefer { .. }) => Err(Error::Denied),
             Access::Grant(_) if matches!(decoded, socket::Request::Offload { .. }) => Err(Error::Denied),
             Access::Nothing => Err(Error::Denied),
             Access::Grant(grant) => match &decoded {
@@ -643,5 +760,18 @@ fn refuse(request: socket::Request, call: wire::Call, error: Error) -> mind::sys
         socket::Request::PolicyUsage { .. } => socket::reply_policy_usage(call, Err(error)),
         socket::Request::Interfaces => socket::reply_interfaces(call, Err(error)),
         socket::Request::Offload { .. } => socket::reply_offload(call, Err(error)),
+        socket::Request::Sockets { .. } => socket::reply_sockets(call, Err(error)),
+        socket::Request::Prefer { .. } => socket::reply_prefer(call, Err(error)),
+        socket::Request::Cards => socket::reply_cards(call, Err(error)),
+    }
+}
+
+// smoltcp's TCP state as socket.wit 2.4 names it.
+fn tcp_state(state: tcp::State) -> socket::TcpState {
+    use socket::TcpState as S;
+    match state {
+        tcp::State::Closed => S::Closed, tcp::State::Listen => S::Listen, tcp::State::SynSent => S::SynSent, tcp::State::SynReceived => S::SynReceived,
+        tcp::State::Established => S::Established, tcp::State::FinWait1 => S::FinWait1, tcp::State::FinWait2 => S::FinWait2,
+        tcp::State::CloseWait => S::CloseWait, tcp::State::Closing => S::Closing, tcp::State::LastAck => S::LastAck, tcp::State::TimeWait => S::TimeWait,
     }
 }

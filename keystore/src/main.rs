@@ -5,13 +5,15 @@
 // directory of the boot disk, sealed by the TPM where there is one (351-NET-0006; else unencrypted, 351-NET-0005),
 // never exported. Serves
 // idl/keystore.wit: the certificate to anyone; signatures only to the signer's badge (the TLS service), only for data of
-// the form the purpose names, and at most BUDGET per boot. Holds: an RTC client (slot 2) for the certificate's start
+// the form the purpose names, and at most BUDGET per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) only
+// to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
 // (slot 4).
 extern crate alloc;
 
 mod certificate;
 mod stored;
+mod wifi;
 
 use alloc::vec::Vec;
 use ed25519_dalek::{Signer, SigningKey};
@@ -19,13 +21,14 @@ use mind::abi::BootInfo;
 use mind::idl::keystore::{self, Error, Purpose, Usage};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
-use mind::network::BADGE_KEY_SIGNER;
+use mind::idl::codec::List;
+use mind::network::{BADGE_KEY_SIGNER, BADGE_KEY_STATION};
 
 const RECEIVED: usize = 9;
 const BUDGET: u32 = 4096; // signatures per boot
 const TLS13_CLIENT: &[u8] = b"TLS 1.3, client CertificateVerify\0";
 
-struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage }
+struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, wifi: Option<wifi::Wifi> }
 
 impl Keys {
     fn new() -> Self {
@@ -46,7 +49,9 @@ impl Keys {
             }
             None => { mind::println!("[KEYSTORE] NO {}: NO DEVICE KEY", mind::random::SOURCE); Vec::new() }
         };
-        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 } }
+        // The remembered Wi-Fi networks open under the device key, so there are none without it.
+        let wifi = key.as_ref().map(|key| { let mut seed = key.to_bytes(); let wifi = wifi::Wifi::load(&seed); stored::wipe(&mut seed); wifi });
+        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, wifi }
     }
 
     // The stored seed, or a new one made and stored (351-NET-0005); false without the random source.
@@ -119,6 +124,12 @@ impl Keys {
         }
     }
 
+    // The remembered networks for a station's call: `denied` first to any other badge, then `no-key` without the key.
+    fn wifi(&mut self, badge: u16, pid: u64, what: &str) -> Result<&mut wifi::Wifi, Error> {
+        if badge != BADGE_KEY_STATION { mind::println!("[KEYSTORE] REFUSED WI-FI {} FOR PID {}: NOT THE STATION", what, pid); return Err(Error::Denied); }
+        self.wifi.as_mut().ok_or(Error::NoKey)
+    }
+
     // Whether `data` has the form `purpose` names (so the key cannot sign anything else).
     fn fits(purpose: Purpose, data: &[u8]) -> bool {
         match purpose {
@@ -169,6 +180,26 @@ fn main(_info: &'static BootInfo) {
                 keystore::reply_sign(call, signature.as_ref().map(|s| &s[..]).map_err(|e| *e))
             }
             Ok((keystore::Request::Usage, call)) => keystore::reply_usage(call, Ok(&keys.usage)),
+            // The station's calls (1.1): `denied` to any other badge, `no-key` without the device key.
+            Ok((keystore::Request::WifiRemember { ssid, pmk }, call)) => {
+                let result = keys.wifi(request.badge, request.sender, "REMEMBER").and_then(|w| w.remember(request.sender, ssid.as_slice(), pmk.as_slice()));
+                keystore::reply_wifi_remember(call, result)
+            }
+            Ok((keystore::Request::WifiNetworks, call)) => {
+                let mut list = List::default();
+                let result = keys.wifi(request.badge, request.sender, "LIST").and_then(|w| w.networks(&mut list));
+                keystore::reply_wifi_networks(call, result.map(|_| list.as_slice()))
+            }
+            Ok((keystore::Request::WifiKeys { ssid, authenticator, supplicant, anonce, snonce }, call)) => {
+                let result = keys.wifi(request.badge, request.sender, "KEYS").and_then(|w| w.keys(request.sender, ssid.as_slice(), authenticator, supplicant, anonce.as_slice(), snonce.as_slice()));
+                let reply = keystore::reply_wifi_keys(call, result.as_ref().map(|k| &k[..]).map_err(|e| *e));
+                if let Ok(mut k) = result { stored::wipe(&mut k); }
+                reply
+            }
+            Ok((keystore::Request::WifiForget { ssid }, call)) => {
+                let result = keys.wifi(request.badge, request.sender, "FORGET").and_then(|w| w.forget(request.sender, ssid.as_slice()));
+                keystore::reply_wifi_forget(call, result)
+            }
         };
     }
 }

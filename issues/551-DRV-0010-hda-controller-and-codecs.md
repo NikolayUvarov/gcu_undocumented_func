@@ -73,6 +73,22 @@ Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and th
   - **Measured in QEMU (2026-10-09).** The `tts` suite's recording has no silence of a buffer's length inside the speech, so the driver's ring did not run dry there. What it does have is the synthesizer's: onsets rising to 3000–5000 within two or three samples after its pauses, and the linear upsampler's images at 8–12 kHz, only 8 dB below the sibilants. Both are recorded for the tools track (requests-APP.md, the note for 252-APP-0041). The maintainer also hears a periodic hiss in the sounds, which fits those images. The Mac's polled ring is still to be counted.
 
 
+**2026-10-14: what the critique found in `hda.rs` and the run scripts** ([issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §2.3 and §4.2, checked against `main` dfc42ee). To do here, with the next change to `audio_gw`:
+- **A late response shifts every later answer (the real fault).**
+  - `verb` waits for its own response, up to about 300 polls. On a timeout it gives up, but the response may still come.
+  - That late response is then taken as the answer to the next verb, and every answer after it is one behind.
+  - **Fix:** on a timeout, bring `rirb_read` up to RIRBWP, or mark the codec dead and stop configuring it.
+  - The CORB's write pointer is also never compared with CORBRP (:125). The ring could fill only if the controller's DMA stalled for 255 verbs in a row, but the check costs nothing.
+- **Apple's and Cirrus's settings in a table.**
+  - `apple_amplifiers` (:216–218) and `cirrus_digital_microphone` (:231–237) write their vendor and subsystem IDs, GPIO masks and coefficients inline.
+  - **Fix:** a const table keyed by codec and subsystem ID, as Linux's `patch_cirrus` keeps one, so that the next machine adds a row, not a branch.
+  - The critique's `hwdocs/` would not fit: that directory holds facts the hardware cannot report, and these are keyed by IDs it does report.
+- **`unwrap()` in `configure` (:261, :283) cannot fail.** The path is built only from nodes found in the list. Keep the widget's index in the path and the `unwrap` goes.
+- **The run scripts.**
+  - `03_run_qemu.sh`:60, `03_run_qemu_wsl.sh`:50, `03_run_qemu_windows.bat`:7 and `03_run_qemu_windows_msys2.bat`:19 always give QEMU an AC97, and `03_run_qemu.sh`:39 still says `audio_gw` drives an AC97.
+  - **Fix:** `MIND_AUDIO_HW=hda|ac97` (`-device intel-hda -device hda-duplex,audiodev=snd0` for HDA), and the comment.
+  - There is nothing to add to `03_run_qemu_aarch64.sh`: `audio_gw` is built for x86 only (`scripts/build_aarch64.sh`'s `X86_ONLY`).
+
 ## Related
 
 [551](551-sound-on-pcs.md), the AC97 path in `audio_gw/src/main.rs`.

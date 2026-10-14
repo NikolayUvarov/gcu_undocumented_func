@@ -1,0 +1,16 @@
+[package]
+name = "dot11"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The 802.11 station's frames and state machine (550-NET-0017): no libmind, no allocation, so `cargo test` runs it on
+# the host against a simulated access point.
+[dependencies]
+wpa = { path = "../wpa" }
+
+
+[profile.release]
+panic = "abort"
+opt-level = 3

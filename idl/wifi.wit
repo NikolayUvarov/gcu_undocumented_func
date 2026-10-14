@@ -1,0 +1,48 @@
+/// The 802.11 station's configuration (`wlan`, 550-NET-0018): the networks around, joining one, the link, and the
+/// networks it remembers. Agreed with the tools track for `wifi` (550-APP-0033), from its proposal in requests-NET.md.
+///
+/// The station's endpoint serves two interfaces, told apart by the client's badge (`mind::network`): a client with
+/// `BADGE_WIFI` set speaks this one, any other `idl/net.wit` (the network stack's card). With `BADGE_WIFI_CHANGE` a
+/// client may join, leave and forget; with `BADGE_WIFI` alone it only reads (`denied`).
+///
+/// An SSID is up to 32 bytes as the access point sends them: most are UTF-8, some are not (GBK, Latin-1), so they travel
+/// as bytes and a program shows them as it can. An empty SSID is a hidden network's. The station does no DHCP: the
+/// address the link got is the network stack's (`ip`).
+package mind:wifi@1.0.0;
+
+interface wifi {
+    /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
+    /// `other` is any other RSN (TKIP, management frame protection required, another AKM).
+    enum security { open, wep, wpa2, wpa3, enterprise, other }
+    /// `no-device`: no radio; `busy`: a scan is under way; `invalid`: a passphrase outside the rules (WPA2-PSK: 8 to 63
+    /// printable ASCII characters, or 64 hexadecimal digits) or none for a WPA2 network; `denied`: the client may only
+    /// read; `unsupported`: the network's protection is one the station does not join, or remembering is not available;
+    /// `not-found`: no network of that name in the last scan.
+    enum error { no-device, busy, invalid, denied, unsupported, not-found }
+    enum state { off, scanning, joining, joined, failed }
+    /// Why joining failed or the link was lost: `wrong-passphrase` (the handshake was answered and never completed),
+    /// `no-answer`, `refused` (authentication, association, or an RSN element in the handshake other than the advertised
+    /// one), `not-found`, `unsupported`, `lost` (deauthenticated or silent; the station joins again by itself).
+    enum reason { none, wrong-passphrase, no-answer, refused, not-found, unsupported, lost }
+
+    /// An access point the last scan heard: its network's name, BSSID (low 48 bits, first byte in bits 40-47), channel,
+    /// signal as minus dBm (48: -48 dBm; 0 unknown), protection, and whether the station remembers a key for the name.
+    record network { ssid: list<u8, 32>, bssid: u64, channel: u8, weakness: u8, security: security, remembered: bool }
+    /// The link: its state, the network and access point joined or being joined, the signal, the data rate in 500 kb/s
+    /// units (0 before joining), and the reason of the last failure or loss.
+    record status { state: state, ssid: list<u8, 32>, bssid: u64, channel: u8, weakness: u8, rate: u8, reason: reason }
+
+    /// Starts a scan of every channel and answers when it ends (about 2 s), with the access points heard. While joining
+    /// or joined it does not leave the channel and answers the list as it stands.
+    scan: func() -> result<list<network, 32>, error>;
+    /// Starts joining the strongest access point of `ssid` from the last scan (`status` follows). `passphrase` empty for
+    /// an open network or one the station remembers. `remember` has `keystore` keep the network's key (550-NET-0024): it
+    /// alone holds it, and the station gets each handshake's keys from it (MC-11.9); `unsupported` when it cannot. The
+    /// passphrase is never answered back. Change badge only.
+    join: func(ssid: list<u8, 32>, passphrase: string<64>, remember: bool) -> result<_, error>;
+    status: func() -> status;
+    /// Leaves the network (change badge only).
+    leave: func() -> result<_, error>;
+    /// Forgets a remembered network; false when none had the name (change badge only).
+    forget: func(ssid: list<u8, 32>) -> result<bool, error>;
+}

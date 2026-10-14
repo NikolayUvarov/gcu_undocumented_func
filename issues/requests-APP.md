@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -54,29 +54,6 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
-## `poweroff` and `shutdown`, and a menu entry to turn the machine off ([000-KRN-0080](../issues-done/000-KRN-0080-power-off-on-x86.done))
-
-**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off". The maintainer asked again on 2026-10-12, once `reboot --off` had turned the MacBook Pro off: "a synonym `poweroff` is needed for this command".
-
-### Problem
-
-`reboot --off` writes the caches, stops the services and turns the machine off. Since 000-KRN-0080 it does so on x86 too (ACPI S5), not only on aarch64. But:
-
-- nobody looks for it under `reboot`;
-- `wm`'s menu has no entry for it;
-- `help reboot` and `shell/src/power.rs` still say "aarch64 only".
-
-### Plan (a proposal; the tools track decides)
-
-- **In the shell and `console`.** `poweroff` and `shutdown` as names for `reboot --off`, with `-f` as there; `help` names them.
-- **In `wm`.** A "Turn off" entry next to the restart, asking for confirmation as the restart does.
-- **The help texts and `docs/tools` (EN, RU).** Turning off works on x86 and aarch64. Where the firmware names no S5, it says why.
-
-### Acceptance criteria
-
-- **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
-- **In `wm`.** The menu entry is there.
 
 ## `wm`'s moving background: drawn by rows, paced to a deadline (000-KRN-0081)
 
@@ -155,50 +132,6 @@ The Effector agent is off by default, and only the owner may turn it on and say 
 
 In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.
 
-## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](../issues-done/176-KRN-0087-runs-on-real-hardware.done)) was run by its path.
-
-### Problem
-
-The maintainer:
-
-- "`cd diag` does not work: there is no such command."
-- "Tab does not complete a path: `diag/q` is not completed to the name, or part of it."
-- "No list of the programs that match what was typed is shown."
-
-What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
-
-- **No current directory.** The shell has none, so every path is written from the volume's root.
-- **Tab completes only the first word**, or the word after `run`, and only with command and program names. A word holding `/` or `:` matches nothing, so nothing happens.
-- **The list.** It is printed only when the matches share nothing beyond what was typed. `console` has no Tab at all. Which of the two the maintainer typed in is not known.
-
-### Plan (a proposal; the tools track decides)
-
-- **`cd` and `pwd`** in the shell and `console`:
-  - `cd PATH` checks that the directory exists and names it in the prompt (`MIND diag> `);
-  - `cd` alone goes back to the boot volume's root, and `cd ..` goes up one level;
-  - a relative path in every command (`ls`, `cat`, `msh`, `run`, `edit`…) is taken from the current directory.
-- **Tab on a path.** A word holding `/` or `:`, or any word after a command that takes a file, is completed from the directory it names (vfs `list`):
-  - a single match gets its full name, with `/` after a directory;
-  - several matches get their common part;
-  - a second Tab lists them.
-- **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
-- **`help`** names `cd`, `pwd` and the keys.
-- **A script by its name** (the maintainer, 2026-10-12: "I cannot run the script from fm by Enter, nor in its directory by typing its name"):
-  - in the shell, `full.msh` runs from the current directory, as `diag/full.msh` runs from the root now;
-  - in `fm`, Enter on a `.msh` file runs it in the shell's window, or in `console`, as `msh <path>` does. Today `fm` hands it to the loader, which answers `Cannot start full.msh: NotFound`.
-
-### Acceptance criteria
-
-- **In the shell suite (x86 and aarch64):**
-  - `cd diag` then `msh quick.msh --check` works, and the prompt names `diag`;
-  - `cd nowhere` says the directory does not exist;
-  - Tab after `msh diag/q` gives `msh diag/quick.msh`;
-  - Tab twice after `ch` lists `check` and the other matches.
-- **In `console`**, the same keys work.
-- **In the `fm` suite**, Enter on `diag/quick.msh` runs it, and its first line shows.
-
 ## Note: the shell shows what a script prints at once (176-KRN-0087; the maintainer's word, 2026-10-12)
 
 **Recorded by:** the kernel track (KRN), 2026-10-12.
@@ -209,36 +142,6 @@ The maintainer's full run (`diag/full.msh`) looked hung for 42 s, then printed e
 - so does a command a script runs without capturing it.
 
 The `shell` suite now checks the screen while a script sleeps. The tools track may do it otherwise.
-
-## The battery in `wm`'s top bar, and in the shell (211-PRT-0008; the maintainer's request, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12. The maintainer: "The battery's state must also be shown in the indicator: on the mains, % or minutes left, switched." Switching is by a click (the maintainer's choice). The maintainer gave this part to the tools track.
-
-### What the kernel track has made
-
-- **The service `battery`** reads the Smart Battery System behind the embedded controller on the MacBook Pro ([211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md)). Its interface, `idl/battery.wit`, has one call, `status`, which returns:
-  - `on-ac`, `charging`, `discharging`, `full`;
-  - `percent`;
-  - `to-empty` and `to-full` in minutes (65535: not discharging, or not charging);
-  - current, voltage, capacities and cycles;
-  - the reading's age.
-- **The shell holds a client** in `SLOT_BATTERY` (32). `REQUEST_BATTERY` (bit 21) asks for it ([211-KRN-0090](211-KRN-0090-a-slot-for-the-battery.md), ABI 8). `mind::battery::write_minutes` writes minutes as `2:41`.
-
-### Plan (a proposal; the tools track decides)
-
-- **The shell** lends `SLOT_BATTERY` for `REQUEST_BATTERY`, as it does `SLOT_GPIO`; `msh` gets the word `battery`.
-- **The shell's `battery` command** prints the status in one line, and `help` names it.
-- **`wm`** asks for `REQUEST_BATTERY`.
-  - At the right end of its top bar, every 5 s: `⚡ 87%` on the mains, `▮ 87%` on the battery.
-  - A click switches between the percentage and the minutes: `▮ 2:41` left, or `⚡ 0:45` to full while charging. The choice stays until the next click.
-  - Below 10 % on the battery it is marked.
-  - With no client, or `no-battery` (QEMU, a desktop), no item.
-- **`console`** passes the client on like the others.
-
-### Acceptance criteria
-
-- **In the `wm` suite**, with no battery service (QEMU), the top bar has no battery item and nothing else changes.
-- **On the MacBook Pro**, the item shows the charge and follows the adapter being plugged in and out; a click shows the minutes.
 
 ## Screenshots and recordings for the project's page (000-KRN-0093; the maintainer's request, 2026-10-12)
 
@@ -305,3 +208,134 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## `wifi` follows `idl/wifi.wit` 1.0 as agreed (550-APP-0033)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's proposal in requests-NET.md ("`idl/wifi.wit`: what `wifi` needs of the station").
+
+### Problem
+
+The network track agreed the interface in [`idl/wifi.wit`](../idl/wifi.wit) 1.0 (550-NET-0018), with these changes to the proposal:
+
+- **An SSID is `list<u8, 32>`, not `string<32>`.** An access point sends up to 32 bytes, and some send names that are not UTF-8 (GBK, Latin-1). As bytes, a network is listed and joined by its exact name; `wifi` shows it as it can (for example, with U+FFFD for bytes that are not UTF-8).
+- **`status` has no `address`, and `reason` no `no-address`.** The station does no DHCP: the address is the network stack's (`ip`, which the network page of `wm`'s Settings already opens). `status` gains the BSSID, the channel and the data rate.
+- **New cases:**
+  - `security.other`: TKIP, management frame protection required, or another AKM. Like WEP, WPA3 and enterprise, the station does not join it.
+  - `error.not-found` and `reason.not-found`: no network of that name in the last scan.
+  - `reason.unsupported`.
+  - `state.scanning`.
+- **`scan` answers when the scan ends** (about 2 s), with the list. While joining or joined, it answers the list as it stands and does not leave the channel.
+- **The badges.** The station's one endpoint also serves `idl/net.wit` to the network stack. A client with `BADGE_WIFI` (`mind::network`) speaks `wifi.wit` and only reads. With `BADGE_WIFI_CHANGE`, it may also join, leave and forget.
+
+### Plan (a proposal; the tools track decides)
+
+`wifi`'s `Station` and `Demo` follow 1.0 in a step of 550-APP-0033: the stand-in serves the agreed interface, and the passphrase rules stay as the program has them (the station checks them again).
+
+### Acceptance criteria
+
+The tools suite checks `wifi` against a stand-in station of `idl/wifi.wit` 1.0.
+
+## The shell lends a TLS client that cannot present the device certificate (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's request "A TLS client without the device certificate".
+
+### Problem
+
+`tls` refuses `client-certificate` to a client badged `BADGE_TLS_NO_DEVICE` (`mind::network`, `idl/tls.wit` 1.2). The shell lends its own unbadged client today, so a program can still sign in as the device.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell the right to badge its `SLOT_TLS` copy (requests-KRN.md, "The right to badge the shell's TLS client"), the shell does two things:
+- for `REQUEST_TLS`, it lends a copy minted with `BADGE_TLS_NO_DEVICE`;
+- it keeps the unbadged one for its own `https -c`.
+
+### Acceptance criteria
+
+In the `tls` suite, a program with the lent client gets `denied` for `client-certificate`, and the shell's `https -c` still sends the certificate.
+
+## `ip` shows each card's kind and the default card (550-NET-0025)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for the request "Several network interfaces" in requests-NET.md ("`ip` shows the default and the kind of each card").
+
+### Problem
+
+`netstack` now states which card is the default: the card the policy's `default card N` line prefers while its link is up and configured, else the first configured card, wired before the Wi-Fi station. `idl/socket.wit` 2.5 `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default. The shell's `ip` shows none of this yet.
+
+### Plan (a proposal; the tools track decides)
+
+- `ip` adds to each card's line its kind and the words `DEFAULT` and `PREFERRED` where they apply, from `cards`, and lists the station's card even when it is not there yet.
+- A live choice that does not outlast a restart, `ip prefer N|none`, through the operator's `prefer`, if the tools track wants one. The lasting choice stays the policy line, which `netpolicy add` asks the user for.
+
+### Acceptance criteria
+
+In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.
+
+## The shell logs its first frame (213-KRN-0098)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md): on the maintainer's Ryzen machine the screen went black when the shell took it, and the system log cannot tell a shell that never drew from a screen that never showed it.
+
+**Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
+
+**Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.
+
+## `app`, `app2` and `dzen-clock`: libmind's drawing, no `static mut`, the right words on exit (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §3, checked against `main` dfc42ee. TRACKS.md names no track for the demo programs. They are user programs, so they come here. If the tools track does not take them, say so here and the kernel track will.
+
+### Problem
+
+- **`app/src/main.rs`:**
+  - `MAIN_SP`, `THREAD_SP`, `WORK_COUNTER` and `THREAD_STACK` are `static mut` (:12–18). Every access goes through `addr_of_mut!` with volatile reads and writes, so nothing goes wrong today. It is still the pattern Rust is retiring.
+  - `background_task` (:36) never returns but is not `-> !`. Were it to return, it would jump to address 0. The critique's claim that the first thread's stack is misaligned is wrong: :47–48 leave the slot of a return address, and the stack is 16-aligned as SysV asks.
+  - It draws with its own `draw_char`, `draw_string` and `usize_to_str` (:63–80), with no bounds check, straight into `fb_ptr`. libmind has `mind::gfx::Screen` and `mind::util::Decimal` for this.
+- **`app2/src/main.rs`:**
+  - It has its own `fill_rect` and `draw_text` (:14–40).
+  - On Esc it logs `[APP2] ESC PRESSED. RETURNING TO KERNEL.` (:88), but it returns to the shell.
+  - It reads the sprite through `as_mut_slice()` (:118) where `as_slice()` does.
+- **`dzen-clock/src/main.rs:79, 183`** has the same "returning to kernel" wording. tests/qemu_smoke.py:2829 checks it, so the test changes with it.
+
+### Plan (a proposal; the tools track decides)
+
+- `app`: atomics for the three counters and pointers, and an `UnsafeCell` wrapper for the stack; `fn background_task() -> !`; `Screen` and `Decimal` for its drawing. Keep the pixel colours the `normal` suite checks (qemu_smoke.py:7461–7470: cyan, and red after Space).
+- `app2`: `Screen` for its rectangles and text; "RETURNING TO THE SHELL"; `as_slice()`.
+- `dzen-clock`: the same words, with its check in qemu_smoke.py.
+
+### Acceptance criteria
+
+- The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
+- `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## A window can be adopted before its title is written, and wm logs it with none (the wm suite fails once in a while)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 on i9 (`x86: keys, shell, tools`, the `wm` suite's `shell_window`).
+
+### Problem
+
+- **What failed.** The shell's window opened as `[WM] WINDOW 5 PID 24 TEXT 80X25 "" AT 80,25 80X24`, with an empty title. `open_shell` in tests/qemu_smoke.py waits for a window line ending `"shell"`, so it timed out. The same group passed on this branch's previous commit, on un-rizen-service and locally.
+- **Why** (from the code; the timing makes it rare):
+  - `libmind::windowed::Window::open` (and `windowed::open`) call `create`, then `surface`, and only then `surface.set_title(title)` in the shared memory.
+  - The broker (`windows/src/main.rs:113`) reads the title from that memory each time it lists the windows.
+  - `wm` adopts a window at the first sync where the broker can lend its surface, which is already true after `surface`, and logs it once (`wm/src/main.rs:244`).
+  - A sync that falls between `surface` and `set_title` therefore logs, and keeps, an empty title. On i9 the guest is slow: wm took 9.5 s to list its programs in that run.
+
+### Plan (a proposal; the tools track decides)
+
+One of:
+- **The title travels with `create`** (a new version of `idl/window.wit`), so the window is never listed without it.
+- **`wm` adopts a window only once its title is set**: an empty title waits for the next sync, as a surface not yet lendable already does. It needs a limit, for a program that sets none.
+- **`wm` logs the title again when it changes**, and the suite waits for that line.
+
+### Acceptance criteria
+
+The `wm` suite's `shell_window` passes under load.
+
+**A second race in the same suite (2026-10-14, the kernel track's gate of 62a2624 on un-rizen-service).**
+- **Where:** `every_entry_reacts` presses Enter on "System>Turn off" and `keys("ret")` waits for one `[WM] MODE=` line.
+- **What happened:**
+  - the shell logged `FOR PID 76 THE SHELL ASKS IN ITS WINDOW: "poweroff"` and opened its window;
+  - wm's `MODE=NORMAL` line never reached the serial line, because the shell passes wm's lines on no more while it asks (the test's own comment says so);
+  - the test then waited 12 s for that line, while the shell waited for the test's `n`.
+- **Why only sometimes:** whether wm's line gets out before the shell starts asking depends on timing. "Restart", just before it, passed.
+- **The fix, one of:**
+  - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
+  - the shell keeps passing the manager's lines while it asks. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.

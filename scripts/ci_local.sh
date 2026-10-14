@@ -5,20 +5,25 @@
 #     --main         origin/main;
 #     --ref BRANCH   origin/BRANCH merged with origin/main (repeatable);
 #     --all          origin/main, then every other origin branch merged with origin/main.
-#   Branches are fetched and tested in temporary worktrees ($CI_LOCAL_WORK, default /tmp/mind-ci-work); this tree is not touched.
+#   Branches are fetched and tested in temporary worktrees ($CI_LOCAL_WORK, default $TMPDIR/mind-ci-work); this tree is not touched.
 #   --only  the parts to run (default: all three); --tap  also the netbench group over a tap interface (sudo);
 #   --no-merge  test branches as they are; --keep  keep the worktrees; --list  print the groups and exit.
 #   --group TEXT  only the groups whose name contains TEXT (repeatable); a part's build runs only when named, so the
 #     groups after it use the tree's earlier build: a long part in steps of its own (docs/effector.md).
-# Logs: $CI_LOCAL_LOGS (default /tmp/mind-ci-local), one file per group, one directory per branch.
+# Logs: $CI_LOCAL_LOGS (default $TMPDIR/mind-ci-local), one file per group, one directory per branch.
+# Temporary files: under $TMPDIR (default /tmp). Two runs with different TMPDIR share no file and no lock, so two tracks'
+#   runs can share a machine (000-KRN-0092, docs/effector.md).
 # Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm,
 # rustup; the toolchain comes from rust-toolchain.toml. Keep the groups in step with ci.yml.
 set -uo pipefail
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
 source "$HOME/.cargo/env" 2>/dev/null || true
-LOGS="${CI_LOCAL_LOGS:-/tmp/mind-ci-local}"
-WORK="${CI_LOCAL_WORK:-/tmp/mind-ci-work}"
+TMP="${TMPDIR:-/tmp}"
+mkdir -p "$TMP" || exit 2
+export MIND_TEST_OUT="${MIND_TEST_OUT:-$TMP}" # where scripts/x86_fixtures.sh and host_tests.sh put what they build
+LOGS="${CI_LOCAL_LOGS:-$TMP/mind-ci-local}"
+WORK="${CI_LOCAL_WORK:-$TMP/mind-ci-work}"
 ONLY="host,x86,aarch64"
 TAP=0
 LIST=0
@@ -48,16 +53,16 @@ want() { [[ ",$ONLY," == *",$1,"* ]]; }
 
 OVMF=/usr/share/ovmf/OVMF.fd
 X86="python3 tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware $OVMF \
- --busy-elf /tmp/mind-core-busy_app.elf --isolation-elf /tmp/mind-core-isolation_app.elf \
- --heap-elf /tmp/mind-core-heap_app.elf --block-elf /tmp/mind-core-block_app.elf --updater-elf /tmp/mind-updater-target/x86_64-unknown-none/release/updater_stub \
- --panic-kernel /tmp/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel /tmp/mind-abi-target/x86_64-unknown-none/release/kernel \
- --loader-abi-kernel /tmp/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel /tmp/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel /tmp/mind-bar-target/x86_64-unknown-none/release/kernel"
+ --busy-elf $MIND_TEST_OUT/mind-core-busy_app.elf --isolation-elf $MIND_TEST_OUT/mind-core-isolation_app.elf \
+ --heap-elf $MIND_TEST_OUT/mind-core-heap_app.elf --block-elf $MIND_TEST_OUT/mind-core-block_app.elf --updater-elf $MIND_TEST_OUT/mind-updater-target/x86_64-unknown-none/release/updater_stub \
+ --panic-kernel $MIND_TEST_OUT/mind-panic-target/x86_64-unknown-none/release/kernel --abi-kernel $MIND_TEST_OUT/mind-abi-target/x86_64-unknown-none/release/kernel \
+ --loader-abi-kernel $MIND_TEST_OUT/mind-loader-abi-target/x86_64-unknown-none/release/kernel --trial-kernel $MIND_TEST_OUT/mind-trial-target/x86_64-unknown-none/release/kernel --bar-kernel $MIND_TEST_OUT/mind-bar-target/x86_64-unknown-none/release/kernel"
 A64="python3 tests/qemu_smoke.py --arch aarch64"
 
 # Group name | command; a failed "build" step skips the rest of its part.
 HOST_GROUPS=(
     "build (x86)|./02_build.sh"
-    "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir /tmp/virtio-net-modern-only)"
+    "network driver without legacy|(cd virtio_net && cargo build --release --no-default-features --target-dir $TMP/virtio-net-modern-only)"
     "host tests|scripts/host_tests.sh"
     "models (TLC)|scripts/model_check.sh"
 )
@@ -75,9 +80,10 @@ X86_GROUPS=(
     "x86: AVX state|$X86 --cpu-model max --suites busy,smp"
     "x86: AVX state, one CPU|$X86 --cpu-model max --cpus 1 --suites busy,smp"
     "x86: no PIT|$X86 --machine pit=off --suites normal,busy"
-    "x86: x2APIC|$X86 --cpu-model max --kernel /tmp/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
-    "x86: padded vector area|$X86 --cpu-model max --kernel /tmp/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
-    "x86: protection probes|$X86 --cpu-model max --kernel /tmp/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
+    "x86: x2APIC|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-x2apic-target/x86_64-unknown-none/release/kernel --suites normal,busy,smp,isolation"
+    "x86: padded vector area|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
+    "x86: protection probes|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
+    "x86: TSC measured again|$X86 --kernel $MIND_TEST_OUT/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
@@ -130,7 +136,7 @@ rustup toolchain install >/dev/null || exit 2
 # Branches: each in its own worktree, merged with main unless --no-merge, then this script with --tree.
 safe() { tr -c 'A-Za-z0-9._\n-' '_' <<<"$1"; }
 if [[ ${#REFS[@]} -gt 0 || $ALL == 1 ]]; then
-    exec 9>"${TMPDIR:-/tmp}/mind-ci-local.lock"
+    exec 9>"$TMP/mind-ci-local.lock"
     flock -n 9 || { echo "Another ci_local.sh run is in progress." >&2; exit 3; }
     git fetch origin --prune --quiet || { echo "git fetch failed" >&2; exit 2; }
     if [[ $ALL == 1 ]]; then
@@ -182,7 +188,7 @@ run_part() {
         NAMES+=("$name")
         if [[ $skip == 1 ]]; then RESULTS+=(SKIP); TIMES+=(-); echo "SKIP  $name"; continue; fi
         echo "....  $name"
-        rm -f /tmp/mind-core-*.log
+        rm -f "$TMP"/mind-core-*.log
         start=$(date +%s)
         eval "$cmd" >"$log" 2>&1; status=$?
         TIMES+=("$(( $(date +%s) - start ))s")
@@ -190,7 +196,7 @@ run_part() {
             RESULTS+=(PASS); echo "PASS  $name"
         else
             RESULTS+=(FAIL); FAILED=1; echo "FAIL  $name  (log: $log)"
-            cp /tmp/mind-core-*.log "$LOGS/" 2>/dev/null
+            cp "$TMP"/mind-core-*.log "$LOGS/" 2>/dev/null
             [[ $name == build* ]] && skip=1
         fi
     done

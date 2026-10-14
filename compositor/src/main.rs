@@ -4,8 +4,9 @@
 // idl/display.wit on its service endpoint: the mode, and a sealed copy of the screen in front (the shell's
 // `screenshot`, issue 086; `record`, issue 093). While the screen is being captured a red dot in its top right corner
 // says so (issue 165), and while a camera stream is open a green camera mark left of it (issue 158): drawn here, on the
-// framebuffer only, so no capture holds them and no program can hide them.
-use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, SLOT_MEM};
+// framebuffer only, so no capture holds them and no program can hide them. It logs the screen, each screen put in
+// front and its first seconds of frames (213-KRN-0098).
+use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
 use mind::idl::display::{self, Error, Mode, Request};
 use mind::idl::wire;
@@ -26,6 +27,22 @@ fn dot(width: usize, height: usize) -> impl Iterator<Item = (usize, usize, u32)>
     (cy - DOT_RADIUS..=cy + DOT_RADIUS).flat_map(move |y| (cx.saturating_sub(DOT_RADIUS)..=cx + DOT_RADIUS).map(move |x| (x, y)))
         .filter(move |&(x, y)| x < width && y < height && (x as isize - cx as isize).pow(2) + (y as isize - cy as isize).pow(2) <= r * r)
         .map(|(x, y)| (x, y, 0x00E0_2020))
+}
+
+// What the log says of the screen in front (213-KRN-0098): its first frame, then each second it changed in WATCH_MS.
+const WATCH_MS: usize = 10_000;
+const LOG_LINES: u32 = 24; // in all, so screens that change often cannot fill the system log's ring
+
+#[derive(Default)]
+struct Watch { screens: u32, since: usize, second: usize, frames: u32, longest: usize, written: usize, lines: u32 }
+
+// One line of the watch while lines are left.
+fn say(lines: &mut u32, line: core::fmt::Arguments) { if *lines < LOG_LINES { *lines += 1; mind::println!("{}", line); } }
+
+// Pixels of the visible screen that are not black, in the shadow copy.
+#[inline(never)]
+fn lit(info: &BootInfo, shadow: *const u32) -> usize {
+    (0..info.height).map(|y| (y * info.stride..y * info.stride + info.width).filter(|&i| unsafe { core::ptr::read(shadow.add(i)) } & 0xFF_FFFF != 0).count()).sum()
 }
 
 // The camera mark left of the dot: a green body 16 × 12 with a dark lens in its middle.
@@ -83,6 +100,9 @@ fn main(info: &'static BootInfo) {
     let mut captured = None::<usize>; // when the last capture was, while the dot is shown
     let mut filmed = None::<usize>; // when the video gateway last said a stream is open, while the mark is shown
     let mut busy = None::<usize>; // since when the screen changed while its task ran
+    let mut watch = Watch::default();
+    let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
+    say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN {}X{}, STRIDE {}, FORMAT {}", info.width, info.height, info.stride, format));
     loop {
         // Whole frames only: a changed screen is copied while its task waits, and the task is held meanwhile; one
         // whose task never waits is copied as it is after FORCE_MS (000-KRN-0086).
@@ -101,6 +121,7 @@ fn main(info: &'static BootInfo) {
         }
         if let (Some(screen), Frame::Dirty | Frame::NewSource) = (source.as_ref(), frame) {
             let screen = screen.as_ptr::<u32>();
+            let (start, mut written) = (mind::time::monotonic_ns(), 0usize);
             // The visible width of each row only: the stride may be far wider (4096 for 2880 on the MacBook Pro). Pixels
             // are compared one by one, as a slice comparison is a byte-wise memcmp here (000-KRN-0081).
             for y in 0..info.height {
@@ -110,12 +131,30 @@ fn main(info: &'static BootInfo) {
                     if !valid || pixel != unsafe { core::ptr::read(shadow.add(i)) } {
                         let device = if native { pixel } else { pixel_to_device(pixel, info.pixel_format, info.pixel_masks) };
                         unsafe { core::ptr::write_volatile(gop.add(i), device); core::ptr::write(shadow.add(i), pixel); }
+                        written += 1;
                     }
                 }
             }
             valid = true;
+            let (now, took) = (mind::time::uptime_ms(), (mind::time::monotonic_ns() - start) / 1_000_000);
+            if frame == Frame::NewSource {
+                watch.screens += 1; watch.since = now; watch.second = now; watch.frames = 0; watch.longest = 0; watch.written = 0;
+                let shown = lit(info, shadow);
+                say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN IN FRONT #{}: FIRST FRAME IN {} MS, {} OF {} PIXELS NOT BLACK", watch.screens, took, shown, info.width * info.height));
+            } else {
+                watch.frames += 1; watch.longest = watch.longest.max(took as usize); watch.written += written;
+            }
         }
         if held { let _ = compositor_release(SOURCE_SLOT); }
+        // Each watched second the screen changed, after the release: its frames, the longest copy, what it shows.
+        let now = mind::time::uptime_ms();
+        if watch.screens > 0 && now - watch.since < WATCH_MS + 1000 && now - watch.second >= 1000 {
+            if watch.written > 0 {
+                let shown = lit(info, shadow);
+                say(&mut watch.lines, format_args!("[COMPOSITOR] SCREEN IN FRONT #{}: {} FRAMES IN {} MS, LONGEST {} MS, {} PIXELS WRITTEN, {} NOT BLACK", watch.screens, watch.frames, now - watch.second, watch.longest, watch.written, shown));
+            }
+            watch.second = now; watch.frames = 0; watch.longest = 0; watch.written = 0;
+        }
         // The capture dot: drawn over every frame while captures come, then the screen under it put back once.
         if let Some(at) = captured {
             let capturing = mind::time::uptime_ms() - at < DOT_MS;

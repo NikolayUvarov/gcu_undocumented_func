@@ -52,3 +52,19 @@ The maintainer (2026-10-12) wants for the project's page on GitHub ([000-KRN-008
 ## Related
 
 [000-KRN-0088](000-KRN-0088-mind-core-os-a-copy-under-the-os-name.md), [docs/tools/README.md](../docs/tools/README.md) (`screenshot`, `record`), [requests-APP.md](requests-APP.md).
+
+## Progress (2026-10-12)
+
+- **`scripts/media.py`** (`shots`, `series`, `video`): its own BMP and AVI readers and PNG writer in Python; ffmpeg scales and writes WebP, GIF and MP4. On a 2880 × 1800 BMP made for the test, the PNG is the BMP pixel for pixel (both decoded by ffmpeg, the same SHA-256), 0.58 MB, and the 1600-wide copy 0.29 MB. A 3-second 2880 × 1800 AVI at 10 frames a second became an MP4 of 1.02 MB, 1920 × 1200, yuv420p.
+- **`tests/media_test.py`** (in `scripts/host_tests.sh`): the readers and the PNG writer on small files it makes, the AVI laid out as `libmind/src/avi.rs` writes it, with a repeated frame, an odd-length frame and a recording cut before its final header; the three commands where ffmpeg is installed. 8 tests pass here.
+- **`scripts/qemu_scenes.py`:** `boot`, `check`, `top`, `wm` and `series` at 1920 × 1080 (QEMU's VGA offers the size through EDID and OVMF takes it). Here (QEMU 8.2, TCG, 4 CPUs) every scene took 29 s.
+- **The guide:** [docs/media.md](../docs/media.md) and [docs/media_RU.md](../docs/media_RU.md), linked from the README.
+
+- **The page's animation** (the maintainer, 2026-10-12: "make a nice animation of them and put it on GitHub"): `qemu_scenes.py --scenes tour` plays the boot, `check kernel`, `hw`, `top`, `wm` and three of its windows full screen, and `media.py slideshow` joins them, each going into the next through dark, looping. `docs/media/tour.webp`: lossless, 1280 × 720, 8 pictures, 24.6 s, 1.39 MB (a crossfade of two screens of text came to 2.3–4.7 MB). The README shows it under its intro, saying it is QEMU and which build. The tour took 66 s here.
+
+**Still open:** the scenes on i9 (the second criterion); a picture from a real machine on the page (the third).
+
+## Progress (2026-10-14)
+
+- **The page's animation** (`docs/media/tour.webp`, the QEMU tour made by `qemu_scenes.py --scenes tour`, built from 73b3d33) is in `main` (8ae66ed), under the README's title, with its caption naming QEMU and the build.
+- **Left for the criteria:** a picture from a real machine on the page (`screenshot` or `record` on the MacBook Pro, then `media.py shots`).

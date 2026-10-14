@@ -140,7 +140,21 @@ fn the_command_line() {
     assert_eq!(parse("date set 2026-10-10 12:00"), Command::Shell("date"));
     assert_eq!(parse("date"), Command::Builtin { name: "date", args: "" });
     assert_eq!(parse("netpolicy add x"), Command::Shell("netpolicy"));
+    // Turning the machine off by its usual names (000-APP-0065): the shell asks in its window first.
+    for name in ["poweroff", "shutdown"] {
+        assert_eq!(parse(&format!("{} -f", name)), Command::Shell(name));
+        assert!(screen::ASKED.contains(&name), "{}", name);
+    }
     assert!(screen::ASKED.iter().all(|c| screen::SHELL_ONLY.contains(c)));
+    // The current directory (000-APP-0066): console's own; its line answers help.
+    assert_eq!(parse("cd diag"), Command::Cd("diag"));
+    assert_eq!(parse("cd"), Command::Cd(""));
+    assert_eq!(parse("pwd"), Command::Pwd);
+    assert_eq!(parse("help cd"), Command::About("cd"));
+    let mut screen = Screen::new();
+    assert_eq!(screen.prompt(), "> ");
+    screen.cwd = "diag".into();
+    assert_eq!(screen.prompt(), "diag> ");
 }
 
 #[test]

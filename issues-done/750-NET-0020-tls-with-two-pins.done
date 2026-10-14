@@ -1,0 +1,44 @@
+# 750-NET-0020 — A server known by one of two pins, its certificate still checked — done
+
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) (with 501) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-12.4
+
+The pin part of the request in requests-NET.md ("HTTP for a service, a certificate pin and long-lived sessions").
+
+## Problem
+
+Effector's agents pin the server by the SHA-256 of its leaf certificate, with a second pin for rotation, and still check the certificate's name. `idl/tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name, root or validity period.
+
+## Plan
+
+- **`idl/tls.wit` 1.2 `connect-pins`:** one or two pins, each of the leaf (its DER) or of its SPKI. A server matching neither is refused (`certificate`).
+- **Still checked with a pin:**
+  - the name against `name` (webpki);
+  - the validity period by the system clock;
+  - the server-authentication purpose when the certificate names purposes;
+  - `CA:false`;
+  - the handshake's signature by the certificate's key.
+
+  The issuer is not looked for: the pin is what is trusted, and a server may send its leaf alone. The fields are read with `x509-cert` (THIRD_PARTY.md).
+- **`connect-pinned` (1.1)** keeps its meaning.
+- **TLS 1.3 only,** as now.
+
+## Acceptance criteria
+
+In QEMU (the `net` suite's download check, x86 and aarch64), with `webcheck --pin`:
+- **Accepted:** a server trusted by its leaf pin; by its SPKI pin as the second of two (rotation); by a pin with its DNS name.
+- **Refused:**
+  - a server matching neither pin;
+  - a wrong name (`NotValidForName`);
+  - an expired certificate with its own leaf pin (`Expired`).
+
+  Each refusal is logged by `tls`.
+
+## Related
+
+[351-NET-0002](351-NET-0002-https-for-programs.done), [docs/network/downloads.md](../docs/network/downloads.md).
+
+## Resolution
+
+- **Built** (039f930): `idl/tls.wit` 1.2 `connect-pins`, `tls/src/pinned.rs` (x509-cert for the validity, `CA:false` and the purpose; webpki for the name), `webcheck --pin` and `--name`; THIRD_PARTY.md rows for `x509-cert`, `der_derive`, `flagset`.
+- **In QEMU,** the `net` suite's download check on x86 and aarch64: a server trusted by its leaf pin, by its SPKI pin as the second of two, and by a pin with its DNS name; a server matching neither pin, a wrong name and an expired certificate refused, each logged by `tls`. Gate 14 on 5aa781c (the branch with `main` 6620165), every group passing: x86 on the session's machine (QEMU 8.2.2, Ubuntu 24.04), aarch64's network group on un-rizen-service through Effector (Ubuntu 24.04, QEMU 8.2.2 from Ubuntu, TCG); `main` aedea68.
+- **Fixed on the way** (6d4b15e): `connect-pinned` (1.1) logs its refusal as before (`NOT THE PINNED KEY`); `connect-pins` has its own words.

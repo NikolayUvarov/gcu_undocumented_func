@@ -122,7 +122,8 @@ class VM:
         if not prompt:
             return
         try:
-            self.expect("MIND> ", timeout=30)
+            # Two tracks' suites may share a machine's CPUs (000-KRN-0092): a boot under that load takes longer.
+            self.expect("MIND> ", timeout=90)
             global BASE
             BASE = len(self.services())
         except BaseException:
@@ -1050,8 +1051,8 @@ def shell_suite(vm):
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
     keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
-    # Several matches are listed under the line: the shell's commands, then the programs (clock is one, issue u007);
-    # the prompt drawn again ends the listing.
+    # Several matches that share nothing more are listed under the line, the shell's commands and the programs in one
+    # sorted list (clock is one, issue u007; 000-APP-0066); the prompt drawn again ends the listing.
     vm.send_bytes(b"c\t")
     listing = vm.expect("MIND> ", after="cpus")
     for word in ("clear", "clock"):
@@ -1099,6 +1100,42 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
+    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
+    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    vm.send("wifi\n")
+    vm.expect("NO STATION", after="[WIFI] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("No Wi-Fi station:") in row for row in screen), screen
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    vm.send("wifi --demo\n")
+    vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
+    vm.send_bytes(b"correct horse")
+    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
+    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if dots(screen):
+            break
+    assert dots(screen) and not any("horse" in row for row in screen), screen
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
+    assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
+    require(vm.command("battery"), "NO BATTERY SERVICE")
+    require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
+    print("PASS: battery says there is no battery service", flush=True)
     # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
     # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
     import datetime
@@ -1109,6 +1146,36 @@ def shell_suite(vm):
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
     print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
+    # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
+    # names.
+    def at(line, prompt):
+        vm.send(line + "\n")
+        return vm.expect(prompt, after=to_ordinal(to_real(line)) + "\n")
+    # data/ holds this suite's scripts (MSH_SCRIPTS).
+    assert re.search(r"^/$", vm.command("pwd"), re.M)
+    at("cd data", "MIND data> ")
+    assert re.search(r"^/data$", at("pwd", "MIND data> "), re.M)
+    require(at("msh --check sum.msh", "MIND data> "), "MSH: data/sum.msh: OK, REQUIRES: files")
+    assert re.search(r"(?i)^sum\.msh ", at("ls", "MIND data> "), re.M)
+    require(at("cd nowhere", "MIND data> "), "ERROR: CD /data/nowhere: NOT FOUND")
+    at("cd ..", "MIND> ")
+    vm.send_bytes(b"cat data/su\t")
+    vm.expect("cat data/sum.msh ")
+    keys(b"\r", "requires: files")
+    print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
+          "refused; Tab completed a path", flush=True)
+    # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
+    # machine off without stopping the services: QEMU ends. The suite's last step.
+    for name in ("poweroff", "shutdown"):
+        require(vm.command(f"help {name}"), "- reboot [-f] [--off], poweroff [-f], shutdown [-f]: ")
+        require(vm.command(f"{name} now"), "USAGE: POWEROFF [-F] (OR SHUTDOWN [-F])")
+    require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+    vm.send("poweroff -f\n")
+    output = vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+    assert "POWERING OFF..." in output and "STOPPED" not in output, output
+    vm.process.wait(timeout=30)
+    print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
 
 
 def line_faces_check(vm):
@@ -5091,6 +5158,26 @@ def policy_edit_check(vm, web_port):
           "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
 
 
+def flow_bounds_check(vm, web_port):
+    """750-NET-0014: a policy line may give the largest term and volume its numbers hold, and a grant's own term, not a
+    default, ends a connection it holds while a lasting grant's connection goes on (brief and lasting copy netcheck)."""
+    lasting = int(re.search(r"PID=(\d+) NAME=lasting", vm.command(f"run lasting hold:10.0.2.2:{web_port}:40 &"))[1])
+    vm.program_logs(lasting, "NETCHECK HOLDING", 40)
+    require(vm.command("netgrants"), f"lasting RULES=1 LEFT={(2**32 - 1) // 1000} S")
+    require(vm.command("dmesg -s netpolicy"), f"TO lasting: 1 RULES, {2**32 - 1} S, {2**64 - 1} BYTES")
+    brief = int(re.search(r"PID=(\d+) NAME=brief", vm.command(f"run brief hold:10.0.2.2:{web_port}:60 &"))[1])
+    text = vm.program_logs(brief, "NETCHECK HOLDING", 40)
+    held = time.monotonic()
+    text += vm.program_logs(brief, f"NETCHECK hold:10.0.2.2:{web_port}:60 ", 120)
+    assert re.search(fr"NETCHECK hold:10.0.2.2:{web_port}:60 (NO GRANT|Denied|NoSocket|Closed)", text) and time.monotonic() - held < 30, text
+    badge = re.search(r"GRANT (\d+) TO brief: 1 RULES, 10 S", vm.command("dmesg -s netpolicy"))
+    assert badge, vm.command("dmesg -s netpolicy")
+    require(vm.command("dmesg -s netstack"), f"[NETSTACK] GRANT {badge[1]} ENDED, 1 SOCKETS CLOSED")
+    require(vm.program_logs(lasting, f"NETCHECK hold:10.0.2.2:{web_port}:40 ", 160), f"NETCHECK hold:10.0.2.2:{web_port}:40 OK")
+    print("PASS: flow bounds: a policy line gives the largest term and volume its numbers hold (4294967295 s, 2^64-1 bytes); "
+          "a 10 s term ends the connection its grant holds, while a lasting grant holds its connection for 40 s", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -5113,9 +5200,16 @@ def download_check(args, disk):
     secure = serve_release.serve(files, certificates / "server.pem", certificates / "server.key", cuts={"/big.bin": cut})
     rogue = serve_release.serve(files, certificates / "rogue.pem", certificates / "rogue.key")
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
+    held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
+    stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
+    service = _service_server(certificates)
+    _expired_certificate(certificates)
+    expired, _ = _https_server(certificates, "expired")
+    service_port, expired_port = service.server_address[1], expired.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port)))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1]))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5131,14 +5225,73 @@ def download_check(args, disk):
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         download_runs(vm, release, port, big, small, cut)
+        session_parsers_check(vm, held, small)
+        parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
+        service_runs(vm, service_port)
+        pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
-        for server in (release, secure, rogue):
+        held.go.set()
+        stall.go.set()
+        for server in (release, secure, rogue, held, stall, service, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def service_runs(vm, port):
+    """750-NET-0019: HTTP for services over one TLS session of the TLS service: a JSON POST with its chunked answer,
+    100 more requests on the same connection, and a stream the server holds for 55 s before its body."""
+    _Service.served, _Service.stream_seconds, _Service.held = 0, 55, 0.0
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/heartbeat --post {{\"agent\":\"mind\"}} --repeat 100 --stream --idle 75 --json\n")
+    out = vm.expect("MIND> ", timeout=600, after="WEBCHECK DONE")
+    require(out, 'WEBCHECK POST 200 20 BYTES {"ok":true,"got":16}')
+    # The answer's JSON as the parser service reads it (750-NET-0021).
+    for line in ('WEBCHECK JSON 0 Object IN -1 KEY "" TEXT ""', 'WEBCHECK JSON 1 True IN 0 KEY "ok" TEXT ""', 'WEBCHECK JSON 2 Number IN 0 KEY "got" TEXT "16"',
+                 "WEBCHECK JSON 3 VALUES"):
+        require(out, line)
+    require(out, "WEBCHECK 101 REQUESTS ON ONE CONNECTION")
+    # The hold is the host's to measure: the guest's clock under TCG may run a little slow (54 s for 55).
+    stream = re.search(r"WEBCHECK STREAM 5 BYTES IN (\d+) S woken", out)
+    assert stream and _Service.held >= 55 and int(stream[1]) >= 50, (_Service.held, out)
+    assert _Service.served == 101, _Service.served
+    print("PASS: HTTP for services: over one TLS session, a JSON POST answered chunked, 100 more requests on the same "
+          f"connection, and a stream held {_Service.held:.0f} s ({stream[1]} s by the guest's clock) to its end", flush=True)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/command --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    for line in ('WEBCHECK JSON 1 Number IN 0 KEY "id" TEXT "7"', 'WEBCHECK JSON 3 Array IN 0 KEY "argv" TEXT ""', 'WEBCHECK JSON 5 String IN 3 KEY "" TEXT "-a"',
+                 'WEBCHECK JSON 8 String IN 7 KEY "LANG" TEXT "C"', "WEBCHECK JSON 9 VALUES"):
+        require(out, line)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
+    require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
+    require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
+          "nesting refused and logged with the client's PID", flush=True)
+
+
+def pinned_runs(vm, certificates, port, rogue_port, expired_port):
+    """750-NET-0020: a server trusted by one of two pins (its leaf or its SPKI, tls.wit 1.2), its certificate's name,
+    validity and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused."""
+    leaf, spki = _leaf_pin(certificates / "server.pem"), _spki_pin(certificates / "server.pem")
+    url = f"https://10.0.2.2:{port}/pinned"
+
+    def run(arguments, until):
+        vm.send(f"webcheck {arguments}\n")
+        return vm.expect("MIND> ", timeout=60, after=until)
+    require(run(f"{url} --pin leaf:{leaf}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    # The next pin second: a stale first pin does not matter while the second matches (rotation).
+    require(run(f"{url} --pin leaf:{'00' * 32} --pin spki:{spki}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    require(run(f"{url} --pin spki:{spki} --name mind.test", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    for arguments in (f"https://10.0.2.2:{rogue_port}/small.bin --pin leaf:{leaf} --pin spki:{spki}", f"{url} --pin leaf:{leaf} --name other.test",
+                      f"https://10.0.2.2:{expired_port}/x --pin leaf:{_leaf_pin(certificates / 'expired.pem')}"):
+        require(run(arguments, "WEBCHECK: TLS CONNECT"), "Certificate")
+    log = vm.command("dmesg -s tls")
+    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired"):
+        require(log, line)
+    print("PASS: pinned servers: trusted by a leaf or an SPKI pin, the second pin of two accepted (rotation); a server matching "
+          "neither, a wrong name and an expired certificate refused", flush=True)
 
 
 def download_runs(vm, release, port, big, small, cut):
@@ -5167,7 +5320,7 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 3 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one
+    require(vm.command("dmesg -s netpolicy"), f"TO download: 5 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, the held one and the stalling one
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
@@ -5211,17 +5364,132 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
     print("PASS: download over HTTPS: a wrong pin and a server from an untrusted CA refused; a pinned key trusted whoever signed it; without the TLS client (a script without tls) https refused", flush=True)
 
 
+def hold_server(body):
+    """An HTTP server whose answers wait until `server.go` is set, then send `body` (109-NET-0010: two downloads that
+    run at once). `server.paths` lists the requests it holds or held."""
+    go, paths = threading.Event(), []
+
+    class Held(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            paths.append(self.path)
+            go.wait(60)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Held)
+    server.daemon_threads, server.go, server.paths = True, go, paths
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def session_parsers_check(vm, held, body):
+    """109-NET-0010: two downloads at once have their heads parsed in two processes of their own, each holding only its
+    own endpoint, and each ends with its download."""
+    url = f"http://10.0.2.2:{held.server_address[1]}"
+    service = vm.services()["parse"]
+    for name in ("h1", "h2"):
+        require(vm.command(f"run download ram:{name}.bin {url}/{name} &"), "NAME=download BACKGROUND")
+    for _ in range(80):  # both connected, both held by the server
+        if len(held.paths) >= 2:
+            break
+        time.sleep(.25)
+    assert sorted(held.paths) == ["/h1", "/h2"], held.paths
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 2, (parsers, vm.command("ps", raw=True))
+    for pid in parsers:
+        text = vm.command(f"stat caps {pid}", raw=True)
+        require(text, "STAT CAPS VERSION=2 COUNT=1 ")
+        assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    held.go.set()
+    for _ in range(80):  # each parser ends with its download
+        listed = vm.command("ps", raw=True)
+        if not re.search(r"^\d+ download ", listed, re.M) and not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers), listed
+    for name in ("h1", "h2"):
+        require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
+    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+
+
+def stall_server(body, cut):
+    """An HTTP server that sends the head and the first `cut` bytes of `body`, then waits until `server.go` is set and
+    cuts the connection; a request with a Range gets the rest. `server.sent` is set once the first part is out, and
+    `server.ranges` lists each request's Range header (109-NET-0010: a download's parser that ended meanwhile)."""
+    go, sent, ranges = threading.Event(), threading.Event(), []
+
+    class Stall(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            ranged = self.headers.get("Range")
+            ranges.append(ranged)
+            if ranged:
+                start = int(ranged.split("=", 1)[1].split("-", 1)[0])
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {start}-{len(body) - 1}/{len(body)}")
+                self.send_header("Content-Length", str(len(body) - start))
+                self.end_headers()
+                self.wfile.write(body[start:])
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body[:cut])
+            sent.set()
+            go.wait(60)
+            self.close_connection = True
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
+    server.daemon_threads, server.go, server.sent, server.ranges = True, go, sent, ranges
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def parser_restart_check(vm, stall, body):
+    """109-NET-0010: a download's own parser that ends while the body comes (as it does after 30 s without a request,
+    which a slow transfer reaches) is followed by another, which parses the resumed response's head. Before, the call
+    went to an endpoint only the download itself could still receive on, and waited for ever."""
+    url = f"http://10.0.2.2:{stall.server_address[1]}"
+    service = vm.services()["parse"]
+    require(vm.command(f"run download ram:s.bin {url}/s.bin &"), "NAME=download BACKGROUND")
+    assert stall.sent.wait(30), stall.ranges
+    parsers = [int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M) if int(pid) != service]
+    assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
+    # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
+    require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
+    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
+    stall.go.set()
+    for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
+        if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
+            break
+        time.sleep(.25)
+    listed = vm.command("ps", raw=True)
+    assert not re.search(r"^\d+ download ", listed, re.M), listed
+    assert stall.ranges == [None, "bytes=50000-"], stall.ranges
+    require(vm.command("sha256 ram:s.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:s.bin")
+    print("PASS: parse per session: a download whose parser ended while its body came starts another for the resumed response's head", flush=True)
+
+
 BAD_HEAD = b"HTTP/1.1 200 OK\r\nContent-Length: twelve\r\nContent-Type: text/plain\r\n\r\nhello, world"
 
 
 def parser_check(vm, url):
-    """109-NET-0008, 0009: every response head above was parsed in `parse`, which holds its endpoint and the log client
-    and nothing else; a malformed head is refused there, and download, given everything but the parser, refuses."""
+    """109-NET-0008, 0009, 0010: a malformed head is refused by the download's own parser, so the shared service logs
+    nothing of it; the shared service holds its endpoint and the log client and nothing else; download, given everything
+    but the parser, refuses; killed, the shared service is restarted and serves the shell's `release` again."""
     out = vm.command(f"download data/bad.bin {url}/bad.bin --tries 1")
     require(out, "DOWNLOAD: HTTP: Head")
     real = vm.services()
-    log, head = vm.command("dmesg -s parse"), len(BAD_HEAD.split(b"\r\n\r\n")[0])
-    assert re.search(fr"\[PARSE\] REFUSED AN HTTP HEAD FOR PID \d+: MALFORMED \({head} BYTES\)", log), log
+    log = vm.command("dmesg -s parse")
+    assert "REFUSED AN HTTP HEAD" not in log and "NO PARSER OF ITS OWN" not in out, (out, log)
     # Its capabilities: its own endpoint (served by it) and a client of logd; no memory, device, privilege or other client.
     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
     text = vm.command(f"stat caps {real['parse']}", raw=True)
@@ -5238,9 +5506,8 @@ def parser_check(vm, url):
             break
         time.sleep(.25)
     assert vm.services()["parse"] != real["parse"], vm.services()
-    out = vm.command(f"download ram:again.bin {url}/small.bin")
-    require(out, "DOWNLOAD: DONE 200000 BYTES")
-    print("PASS: parse: download's heads parsed in a service that holds only its endpoint and the log; a malformed head refused and logged there; download without it refuses; restarted after a kill, it serves again", flush=True)
+    require(vm.command("release data/stable"), "CHANNEL stable: VERSION 7, MINIMUM 5")
+    print("PASS: parse: a malformed head refused in the download's own parser, the shared service none the wiser; the shared service holds only its endpoint and the log; download without it refuses; restarted after a kill, it serves release again", flush=True)
 
 
 def release_metadata_check(vm):
@@ -5272,9 +5539,10 @@ def net_suite(args, disk):
     # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing;
     # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
-                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n")
-    shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
-    shutil.copyfile(disk / "netcheck.elf", disk / "named.elf")
+                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
+                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
+    for copy in ("rogue", "named", "brief", "lasting"):
+        shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5330,6 +5598,14 @@ def net_suite(args, disk):
         for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
             require(log, line)
         policy_edit_check(vm, web_port)
+        # The stack's sockets (000-NET-0013, socket.wit 2.4): a grant lists its own open connection, established, with
+        # the address, port, badge and the bytes it moved; a program without a grant lists nothing.
+        listed = vm.command(f"netcheck open:10.0.2.2:{web_port} sockets")
+        require(listed, f"NETCHECK open:10.0.2.2:{web_port} OK")
+        assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+ CARD 0\n", listed.replace("\r", "")), listed
+        require(listed, "NETCHECK 1 SOCKETS")
+        require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
+        flow_bounds_check(vm, web_port)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -5384,7 +5660,10 @@ def net_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
     download_check(args, disk)
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
-    # and one driver's restart leaves the other card working and gives the new instance its own card back.
+    # and one driver's restart leaves the other card working and gives the new instance its own card back. netcheck
+    # sends datagrams to a TEST-NET address, on neither card's network, to show which card is the default (550-NET-0025).
+    with open(disk / "netpolicy.txt", "a") as policy:
+        policy.write("netcheck 192.0.2.1 udp 9\n")
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
     web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
@@ -5410,6 +5689,45 @@ def net_suite(args, disk):
         assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
         require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
         assert frames()[0][0] - after[0][0] >= 3, (after, frames())
+        # A card's link down and up again (550-NET-0023): its address and its connections go, the default route moves
+        # to the other card; back up, it gets a lease again and the default route returns.
+        vm.hmp("set_link n0 off")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+        require(vm.command(f"fetch 10.0.3.2:{web_port} /while-down"), "hello from the host: /while-down")
+        vm.hmp("set_link n0 on")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
+        require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
+        # The default card (550-NET-0025): wired cards before the station, the first with a gateway; the policy's
+        # `default card 1` makes card 1 the default while its link is up, and the rule takes over while it is down.
+        def default_sends(card):
+            before = frames()
+            require(vm.command("netcheck " + " ".join(["udp:192.0.2.1:9"] * 6)), "NETCHECK udp:192.0.2.1:9 OK")
+            after = frames()
+            other = 1 - card
+            assert after[card][0] - before[card][0] >= 6 and after[other][0] - before[other][0] < 3, (card, before, after)
+        cards = vm.command("netcheck cards")
+        for line in ("NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT", "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED", "NETCHECK CARD 2 Wireless"):
+            require(cards, line)
+        assert "PREFERRED" not in cards, cards
+        default_sends(0)
+        require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] DEFAULT CARD 1 FROM THE POLICY")
+        require(vm.command("netcheck cards"), "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED PREFERRED DEFAULT")
+        default_sends(1)
+        vm.hmp("set_link n1 off")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
+        default_sends(0)
+        vm.hmp("set_link n1 on")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1"), "DEFAULT ROUTE: CARD 1")
+        require(policy_answer(vm, "netpolicy add default card 3", "y"), "NETPOLICY: Invalid")
+        require(policy_answer(vm, "netpolicy remove default card 1", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] NO CARD PREFERRED")
+        default_sends(0)
         # The second driver dies: the first card keeps working, the restarted instance drives the second card again.
         require(vm.command(f"kill {vm.services()['virtio_net#1']}", raw=True), "KILLED PID=")
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
@@ -5475,12 +5793,84 @@ def _certificates(directory):
         run("x509", "-req", "-in", f"{server}.csr", "-CA", f"{ca}.pem", "-CAkey", f"{ca}.key", "-CAcreateserial", "-out", f"{server}.pem", "-days", "2", "-extfile", "names.cnf")
 
 
+def _expired_certificate(directory):
+    # A server certificate from the test CA for the same names, valid only in January 2020 (750-NET-0020): `openssl ca`
+    # takes explicit dates, which `openssl x509 -req` of OpenSSL 3.0 does not.
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    (directory / "index.txt").write_text("")
+    (directory / "serial.txt").write_text("1000\n")
+    (directory / "ca.cnf").write_text("[ca]\ndefault_ca = test\n[test]\ndatabase = index.txt\nnew_certs_dir = .\nserial = serial.txt\n"
+                                      "default_md = sha256\npolicy = any\nunique_subject = no\n[any]\ncommonName = supplied\n")
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "expired.key", "-out", "expired.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "expired.csr", "-out", "expired.pem", "-notext",
+        "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-extfile", "names.cnf")
+
+
+def _leaf_pin(pem):
+    # The SHA-256 of a certificate's DER (a leaf pin, tls.wit 1.2).
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem.read_text())).hexdigest()
+
+
 class _Https(_Http):
     def do_GET(self):
         peer = self.request.getpeercert()
         client = dict(item[0] for item in peer["subject"])["commonName"] if peer else "nobody"
         body = f"hello from the host: {self.path} to {client}\n".encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+
+class _Service(http.server.BaseHTTPRequestHandler):
+    """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
+    protocol_version = "HTTP/1.1"
+    stream_seconds = 55
+    held = 0.0  # how long the last stream was silent, by the host's clock
+    served = 0
+
+    def _chunked(self, body):
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for piece in (body[:7], body[7:]):
+            if piece:
+                self.wfile.write(b"%x;piece=1\r\n%s\r\n" % (len(piece), piece))
+        self.wfile.write(b"0\r\nX-Served: %d\r\n\r\n" % type(self).served)
+        type(self).served += 1
+
+    def do_POST(self):
+        data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        ok = self.headers.get("Authorization") == "Bearer webcheck" and json.loads(data) == {"agent": "mind"}
+        self._chunked(json.dumps({"ok": ok, "got": len(data)}, separators=(",", ":")).encode())
+
+    def do_GET(self):
+        if self.headers.get("X-Stream"):
+            # A wake-up stream: the head at once, the body only after stream_seconds of silence.
+            self.send_response(200); self.send_header("Transfer-Encoding", "chunked"); self.end_headers(); self.wfile.flush()
+            started = time.monotonic()
+            time.sleep(type(self).stream_seconds)
+            self.wfile.write(b"5\r\nwoken\r\n0\r\n\r\n"); self.wfile.flush()
+            type(self).held = time.monotonic() - started
+            return
+        if self.path.endswith("/command"):
+            # A command as the Effector agent would get one (750-NET-0021).
+            self._chunked(b'{"id":7,"kind":"exec","argv":["uname","-a"],"timeout":30,"env":{"LANG":"C"}}')
+            return
+        if self.path.endswith("/deep"):
+            self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        self._chunked(b"request %d" % type(self).served)
+
+    def log_message(self, *args):
+        pass
+
+
+def _service_server(directory):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / "server.pem", directory / "server.key")
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Service)
+    server.daemon_threads = True
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def _https_server(directory, certificate):
@@ -5965,15 +6355,17 @@ def wm_suite(vm):
         rows = typed(long, "LOGGED")
         assert any(canon("MIND> " + long) in row for row in rows), rows
         assert keys("alt-ret")[2][shell] == quarter
-        # reboot asks there; n keeps the machine running (the answer through wm's keyboard: the shell is busy asking).
-        typed("reboot", "RESTART THE MACHINE? (Y/N)")
-        keys("n")
-        for _ in range(20):
-            time.sleep(.3)
-            rows = inside(shell)
-            if any(canon("MIND> ") == row[:6] for row in rows[-3:]):
-                break
-        assert canon("RESTART THE MACHINE? (Y/N) N") in "".join(rows), rows
+        # reboot and poweroff (000-APP-0065) ask there; n keeps the machine running (the answer through wm's keyboard:
+        # the shell is busy asking).
+        for command, question in (("reboot", "RESTART THE MACHINE? (Y/N)"), ("poweroff", "TURN THE MACHINE OFF? (Y/N)")):
+            typed(command, question)
+            keys("n")
+            for _ in range(20):
+                time.sleep(.3)
+                rows = inside(shell)
+                if canon(f"{question} N") in "".join(rows) and any(canon("MIND> ") == row[:6] for row in rows[-3:]):
+                    break
+            assert canon(f"{question} N") in "".join(rows), rows
         # fg is the screen's, not the window's.
         typed("fg 1", "FG WORKS IN A CONSOLE")
         # Closed, the window goes and wm goes on; Ctrl+Alt+F5 opens it again.
@@ -6168,7 +6560,10 @@ def wm_suite(vm):
     assert canon(" clock ") in screen[y][x:x + w], screen[y]
     # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
     # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
-    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right")
+    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
+    # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
+    require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
@@ -6579,6 +6974,8 @@ def wm_suite(vm):
         close_menu()
         started, said, unseen = [], [], []
         RUN_TO_END = {"check", "bench", "kbench"}
+        POWER = {"Restart": ("reboot", "RESTART THE MACHINE? (Y/N)"), "Turn off": ("poweroff", "TURN THE MACHINE OFF? (Y/N)")}
+        assert {"System>Restart", "System>Turn off"} <= {name for _, name in tree}, tree
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6593,6 +6990,23 @@ def wm_suite(vm):
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
+                if name.split(">")[-1] in POWER:
+                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
+                    command, question = POWER[name.split(">")[-1]]
+                    screen = []
+                    for _ in range(40):
+                        time.sleep(.3)
+                        screen = screen_text(vm)
+                        vm.serial(enter=False)
+                        if any(canon(question) in row for row in screen):
+                            break
+                    else:
+                        raise AssertionError((name, screen))
+                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                    vm.hmp("sendkey n")
+                    vm.serial(enter=False)
+                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -6634,7 +7048,8 @@ def wm_suite(vm):
         # box again), and the image's file with nothing typed says what to do; each page to read says so on Enter; Enter
         # on a field of the date page sets the clock at once.
         kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
-        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"]
+        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date", "CPU load",
+                "Free memory", "Battery", "Network", "Text size", "Place", "Face"]
         keys("alt-s", text="MODE=SETTINGS")
         keys("ret", text="SETTINGS=Background:Picture")
         changed = 0
@@ -6647,15 +7062,39 @@ def wm_suite(vm):
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
-            keys("ret" if row in ("Time", "Date", "CPU load", "Network") else "left", text="[WM] SETTINGS ")
+            keys("ret" if row in ("Time", "Seconds", "Date", "CPU load", "Free memory", "Battery", "Network") else "left", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        for page in ("Keyboard", "Network", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
-            keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
+        for page in ("Keyboard", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
+            keys(*["down"] * (3 if page == "Sound" else 1), text=f"SETTINGS={page}")
             keys("ret")
             screen_has(f"{page}: a page to read; nothing is set here yet")
-        keys("up", "up", text="SETTINGS=Date and time")
+        # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
+        # window, which says there is no station here.
+        keys("up", text="SETTINGS=Network")
+        keys("ret", text="SETTINGS=Network:Wi-Fi")
+        screen_has("console netpolicy")
+        keys("ret", text="[WM] STARTED wifi PID")
+        pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
+        while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+            time.sleep(.1)
+            wait(lines=0)
+        wifi = int(next(m[0] for m in windows_re.findall("".join(seen)) if m[1] == pid))
+        while wifi not in state()[2]:
+            wait()
+        for _ in range(30):
+            if any(canon("No Wi-Fi station:") in row for row in inside(wifi)):
+                break
+            time.sleep(.3)
+        else:
+            raise AssertionError(inside(wifi))
+        keys("alt-w", text=f"CLOSE {wifi}")
+        until(f"GONE {wifi}")
+        while wifi in state()[2]:
+            wait()
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("down", "down", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
         # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
         # stays as it was; no window of the shell's opens, and Settings stay open on the field.
@@ -6676,7 +7115,7 @@ def wm_suite(vm):
         assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
         keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
-              "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
+              "file with nothing typed says what to do, each page to read says so, the network page's Wi-Fi row starts wifi, and Enter on each of the date page's "
               "six fields set the clock at once, with no window of the shell's", flush=True)
 
     def console_joined(console):
@@ -6709,6 +7148,20 @@ def wm_suite(vm):
         vm.send_bytes(b"fm --help\r")
         console_has("fm — file manager")
         console_has("(fm ended)")
+        # cd, pwd and Tab in console too (000-APP-0066): the prompt names the directory, ls lists it, Tab completes a
+        # name there, and cd alone goes back to the boot disk's root (docs/notes.txt is on this suite's disk).
+        vm.send_bytes(b"cd docs\r")
+        console_has("docs> ")
+        vm.send_bytes(b"ls\r")
+        console_has(None, r"(?i)notes\.txt +\d+")
+        vm.send_bytes(b"cat no\t")
+        console_has("docs> cat notes.txt")
+        vm.send_bytes(b"\r")
+        # The file's lines are wider than the window and wrap; console cuts the long output with a line of its own.
+        console_has(None, r"\.\.\. \d+ more bytes")
+        vm.send_bytes(b"cd\r")
+        vm.send_bytes(b"pwd\r")
+        console_has(None, r"/ *$")
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
@@ -6814,7 +7267,7 @@ def wm_suite(vm):
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
     keys("right", text="[WM] SETTINGS background = none")
-    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")
     time.sleep(.5)
     screen = screen_text(vm)
@@ -7204,9 +7657,14 @@ def display_suite(args, disk):
     for name, display in [("std", ["-vga", "std"]), ("virtio", ["-vga", "virtio"]), ("ramfb", ["-vga", "none", "-device", "ramfb"])]:
         vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=display)
         try:
-            require(vm.command("run app &"), "PID=1 NAME=app BACKGROUND")
-            vm.send("fg 1\n")
-            vm.expect("FOREGROUND PID=1")
+            # 213-KRN-0098: the compositor names the screen it found and the shell's screen put in front.
+            log = vm.command("dmesg -s compositor", raw=True)
+            assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
+            assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
+            assert started, (name, vm.output)
+            vm.send(f"fg {started[1]}\n")
+            vm.expect(f"FOREGROUND PID={started[1]}")
             time.sleep(.3)
             assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
             vm.serial()  # the screenshot switched the console to the QEMU monitor
@@ -7215,7 +7673,73 @@ def display_suite(args, disk):
             assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    if args.arch == "x86_64":
+        no_serial_check(args, disk)
+
+
+def clock_suite(args, disk):
+    """000-KRN-0100, with the test kernel `tsc-skew-test`, whose first measure of the TSC is 9% high as a stretched
+    calibration left it on i9: the kernel measures the rate again on the ACPI PM timer (CLOCK reports it), and from then
+    on its clock keeps the host's time. Uncorrected, 30 s of the host's were about 27.5 of the guest's."""
+    vm = VM(args, disk.relative_to(ROOT).as_posix())
+    try:
+        was = int(re.search(r"TICK: LAPIC TIMER, \d+ PER TICK, MEASURED ON THE ACPI PM TIMER; TSC (\d+) MHZ", vm.log)[1])
+        time.sleep(10)  # past the measures at 1 s and 8 s
+
+        def clocks():
+            before = time.time()
+            line = vm.command("time", raw=True)
+            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+        host0, guest0, measured = clocks()
+        # Measured again below the first: 9% less where the first window was right, more or less where the host
+        # stretched it too (i9: 4043 -> 3639 MHz).
+        assert was / measured > 1.04, (was, measured)
+        time.sleep(30)
+        host1, guest1, _ = clocks()
+        ratio = (guest1 - guest0) / (host1 - host0)
+        assert abs(ratio - 1) < 0.03, (ratio, was, measured)
+    finally:
+        vm.close()
+    print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
+          f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
+
+def no_serial_check(args, disk):
+    """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
+    the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
+    black, as on the maintainer's Ryzen machine. Seen through QMP's screendump, as nothing else talks to this machine."""
+    with tempfile.TemporaryDirectory(prefix="mind-noserial-") as temp:
+        sock, picture = Path(temp) / "qmp.sock", Path(temp) / "screen.ppm"
+        process = subprocess.Popen([args.qemu, "-bios", args.firmware, "-drive", f"format=raw,file=fat:{disk.relative_to(ROOT).as_posix()}",
+                                    "-snapshot", "-m", "512", "-smp", str(args.cpus), "-serial", "none", "-monitor", "none", "-display", "none",
+                                    "-no-reboot", "-qmp", f"unix:{sock},server=on,wait=off"], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            lit, total = 0, 1
+            for _ in range(60):
+                time.sleep(2)
+                if not sock.exists():
+                    continue
+                with socket.socket(socket.AF_UNIX) as client:
+                    client.connect(str(sock))
+                    lines = client.makefile("rw")
+                    lines.readline()  # the greeting
+                    for command in ({"execute": "qmp_capabilities"}, {"execute": "screendump", "arguments": {"filename": str(picture)}}):
+                        lines.write(json.dumps(command) + "\n"); lines.flush()
+                        while not any(key in json.loads(lines.readline()) for key in ("return", "error")):
+                            pass
+                if not picture.exists():
+                    continue
+                _, size, _, pixels = picture.read_bytes().split(b"\n", 3)
+                width, height = map(int, size.split())
+                total = width * height
+                lit = sum(1 for i in range(0, total * 3, 3) if pixels[i:i + 3] != b"\0\0\0")
+                if lit > total // 2:  # the shell's background covers the screen
+                    break
+            assert lit > total // 2, f"{lit} of {total} pixels lit without COM1"
+        finally:
+            process.kill()
+            process.wait()
+    print("PASS: without COM1 (no 16550 at 3F8) the shell still draws: init lends it no serial line", flush=True)
 
 
 def store_disk_check(args, disk):
@@ -7760,6 +8284,9 @@ def main():
                 continue
             if suite == "display":
                 display_suite(args, disk)
+                continue
+            if suite == "clock":
+                clock_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)
