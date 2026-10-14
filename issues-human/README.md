@@ -157,3 +157,21 @@ The gap is in the kernel and the profile, and [000-KRN-0104](../issues/000-KRN-0
   - The RFC leaves "the reaction to long unavailability" to the profile, and no profile defines it.
   - Proposed: an explicit operation, held only by the lifecycle owner, that closes such a record as abandoned and writes it to the audit log (Article 10). Nothing is forgotten silently.
 - [ ] **The header's link** (line 8) to `../const_discusstion_1.3/`: make it plain text.
+
+## 10. A test rig for real machines: keyboard and mouse, the screen, power
+
+The maintainer's offer (2026-10-14): Effector drives a device that emulates a keyboard and a mouse, and a video capture module shows the machine's screen. With them, an agent runs a test on a real machine without a person present ([000-KRN-0108](../issues/000-KRN-0108-tests-on-a-real-machine-through-effector.md)).
+
+- [ ] **Name the parts:**
+  - the input device, and whether it is a USB HID boot-protocol keyboard and mouse (firmware menus need that) and whether it has an absolute (tablet) mode;
+  - the capture module, its native size, and whether a frame can come lossless;
+  - the test machine it is attached to.
+- [ ] **Effector operations for them,** on an agent of the rig's host:
+  - keys by name with modifiers (QEMU's `sendkey` names), and typing at a set pace;
+  - mouse moves, buttons and the wheel;
+  - one frame as PNG, and a short clip;
+  - their names and fields in docs/effector.md.
+- [ ] **Power,** so that a hung machine needs no one: power on, a hard reset and a forced off, through a relay on the front-panel header or a switched socket.
+- [ ] **Wanted: the boot medium.** A USB disk the rig writes with the image under test and switches to the machine.
+- [ ] **Wanted: the serial line,** where the machine has COM1 or a USB-UART.
+- [ ] **Say that this machine may be rebooted and powered off by agents.** The work machines' "no reboots" rule stays as it is.

@@ -155,8 +155,8 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 | Request | Track | Needed by |
 |---|---|---|
-| HTTP for a service, a certificate pin and long-lived sessions (shared with 501): [750-NET-0019](750-NET-0019-http-for-services.md), [750-NET-0020](750-NET-0020-tls-with-two-pins.md) | `NET` | 0006 |
-| JSON in the parser service: [750-NET-0021](750-NET-0021-json-in-the-parser-service.md) | `NET` | 0006 |
+| HTTP for a service, a certificate pin and long-lived sessions (shared with 501): [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done), [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done) | `NET` | 0006 |
+| JSON in the parser service: [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done) | `NET` | 0006 |
 | A flow for a long-running service: [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) | `NET` | 0006 |
 | Boot images and `init`'s grants for `effector` and `effector_gw`, with their private directories | `KRN` | 0006, 0007 |
 | A writable `vfs` client scoped to a service's directories | `KRN` | 0007, 0008 |

@@ -1,12 +1,12 @@
-# 550-NET-0025 — The default card by a stated rule, and the policy's preferred card
+# 550-NET-0025 — The default card by a stated rule, and the policy's preferred card — done
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4, Appendix B.6
 
 From the request "Several network interfaces" in requests-NET.md: "The default interface follows a stated rule (for example, a wired link that is up before Wi-Fi), and the user can override it. `ip` shows the default and the kind of each card."
 
 ## Problem
 
-`netstack` takes as its default the first card with a gateway, whatever its kind. With the Wi-Fi station as a third card ([550-NET-0018](550-NET-0018-the-station-service.md)), which card a machine's traffic leaves through then follows the order of `init`'s slots. Nothing says so, nobody can choose otherwise, and no client can tell a card's kind.
+`netstack` takes as its default the first card with a gateway, whatever its kind. With the Wi-Fi station as a third card ([550-NET-0018](../issues/550-NET-0018-the-station-service.md)), which card a machine's traffic leaves through then follows the order of `init`'s slots. Nothing says so, nobody can choose otherwise, and no client can tell a card's kind.
 
 ## Plan
 
@@ -37,4 +37,10 @@ In the `net` suite's two-card check (x86, aarch64):
 
 ## Related
 
-[550](550-network-on-real-hardware.md), [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.md), [550-NET-0018](550-NET-0018-the-station-service.md), [108](../issues-done/108-editable-network-policy.done), [docs/network/policy.md](../docs/network/policy.md).
+[550](../issues/550-network-on-real-hardware.md), [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.done), [550-NET-0018](../issues/550-NET-0018-the-station-service.md), [108](108-editable-network-policy.done), [docs/network/policy.md](../docs/network/policy.md).
+
+## Resolution
+
+- **Built** (4779443): `idl/socket.wit` 2.5 `prefer` and `cards`; `netstack`'s rule (the local network, then the preferred card with a gateway, then wired before the station); the policy line `default card N` in `netpolicy`; `netcheck cards` and each socket's card. The guide is [docs/network/policy.md](../docs/network/policy.md) 0.3.
+- **In QEMU,** the `net` suite's two-card check on x86 and aarch64, every point of the criteria: the cards as `netcheck cards` lists them; datagrams to a TEST-NET address counted on card 0, on card 1 after `netpolicy add default card 1`, on card 0 while card 1's link was down and on card 1 again once it was back; `default card 3` refused; card 0 again after the line was removed. The IDL fuzzer runs with 2.5. Gate 14 on 5aa781c (the branch with `main` 6620165), every group passing: x86 on the session's machine (QEMU 8.2.2, Ubuntu 24.04), aarch64's network group on un-rizen-service through Effector (Ubuntu 24.04, QEMU 8.2.2 from Ubuntu, TCG); `main` aedea68.
+- **Left to the tools track:** `ip` showing each card's kind and the default (requests-APP.md).
