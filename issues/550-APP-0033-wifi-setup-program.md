@@ -1,6 +1,6 @@
 # 550-APP-0033 — `wifi`: choosing a Wi-Fi network and typing its passphrase
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the program follows the agreed `idl/wifi.wit` 1.0, against a stand-in, 2026-10-12) · **Blocked by:** a slot for the station's client ([requests-KRN.md](requests-KRN.md)); the station running on the MacBook Pro (550-NET-0018, 550-DRV-0027) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the station's client is lent to `wifi`, from the shell and from `wm`'s Settings, on the task branch `claude/550-APP-0033-wifi-station-client` and in `fast-test`, 2026-10-14) · **Blocked by:** the kernel track's ABI 10 in `main` (550-KRN-0097); the MacBook Pro's check · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
 
 _Numbered 550-APP-0017 in the tools branch's commits until main's own 351-APP-0017 (2026-10-09); renumbered at the merge._
 
@@ -55,6 +55,18 @@ The network track agreed the interface (550-NET-0018) with changes it asked of t
 - **[`view.rs`](../wifi/src/view.rs):** a `remember` the station answers with `unsupported` is asked again without, and the line says the key was not kept; `forget` answered so says the station does not remember networks yet. The passphrase is no longer copied: the line it was typed in is overwritten after the call.
 - **[`service.rs`](../wifi/src/service.rs):** `Station` over the station's client with `mind::idl::wifi`. It builds and is not run: no launcher lends the client yet (requests-KRN.md, "A slot for the Wi-Fi station's configuration client"), so `wifi` without `--demo` says so. The kernel track has prepared it (550-KRN-0097, requests-NET.md): the shell's client with `BADGE_WIFI_CHANGE` in `SLOT_WIFI` (33) and `REQUEST_WIFI`, reaching `main` with 550-NET-0018. Then `wifi` asks for it and uses `Service`, and `wm` passes it on.
 - **Tests:** [`tests/wifi_host.rs`](../tests/wifi_host.rs), 8 tests (SSIDs as bytes, the stand-in's answers, a station that does not remember); the shell suite's `wifi --demo` check names the access point joined. What is tested is the program against the stand-in, not the station (MC-12.2).
+
+## Progress: the station's client (2026-10-14)
+
+- **The kernel's side** (550-KRN-0097, ABI 10, on `claude/youthful-mendel-mf1soy` and in `fast-test`): `init` gives the shell `wlan`'s configuration client, with `BADGE_WIFI_CHANGE`, in `SLOT_WIFI` (33) while a radio runs. A program asks for it with `REQUEST_WIFI`.
+- **The shell** lends its `SLOT_WIFI` to a program that asks for it: starting `wifi` is the user's request to choose a network. A script declares it as `requires: wifi`.
+- **`shell.wit` 1.5** adds `wifi`: a copy of the shell's client for the window manager the shell started with its commands; any other client is `refused`, and without a station it is `unavailable`. `wm` asks for it at its start, as for the battery's (`[WM] WI-FI CLIENT FROM THE SHELL: …`), and lends it to `wifi` from Settings, Network.
+- **`wifi`** asks for `REQUEST_WIFI` and, holding the client, scans and joins through `wlan` instead of the stand-in. Without it, it says how to start it.
+- **Tests:**
+  - the net suite, whose disk has QEMU's stand-in radio (`wlansim`, 550-NET-0018), lists `MIND-TEST`, joins it through `wlan`'s WPA2 handshake with the passphrase typed, and leaves it;
+  - the shell and `wm` suites, with no radio, still see no station (`[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)`).
+- **Where:** the task branch `claude/550-APP-0033-wifi-station-client` (the tools branch with the kernel track's ABI 10 merged) and `fast-test`. It reaches `main` after the kernel track's ABI 10 does, through this track's gate.
+- **Left:** the maintainer's check on the MacBook Pro (`wifi` lists the networks around, and joins one).
 
 ## Related
 

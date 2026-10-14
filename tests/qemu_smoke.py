@@ -1107,8 +1107,21 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
-    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
-    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    # wifi (550-APP-0033): this suite's disk has no radio, so no station runs and the shell has no client of it to lend
+    # (the net suite joins wlansim's network); the screen says so. With --demo, against a stand-in of idl/wifi.wit 1.0
+    # and no radio, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    dots = lambda screen, n: any(canon("•" * n) in row or canon("◘" * n) in row for row in screen)  # • or its inverse ◘
+
+    def typed_as_dots(text):
+        vm.send_bytes(text.encode())
+        for _ in range(30):
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if dots(screen, len(text)):
+                break
+        assert dots(screen, len(text)) and not any(canon(text) in row for row in screen), screen
+
     vm.send("wifi\n")
     vm.expect("NO STATION", after="[WIFI] READY")
     time.sleep(.3)
@@ -1122,16 +1135,7 @@ def shell_suite(vm):
     vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
     vm.send_bytes(b"\r")
     vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
-    vm.send_bytes(b"correct horse")
-    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
-    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
-    for _ in range(30):
-        time.sleep(.3)
-        screen = screen_text(vm)
-        vm.serial(enter=False)
-        if dots(screen):
-            break
-    assert dots(screen) and not any("horse" in row for row in screen), screen
+    typed_as_dots("correct horse")
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
@@ -5634,6 +5638,28 @@ def wifi_boot_check(vm):
           "in slot 3, netstack's third card in slot 4, the shell's configuration client with BADGE_WIFI_CHANGE in SLOT_WIFI", flush=True)
 
 
+
+def wifi_join_check(vm):
+    """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
+    MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
+    through the WPA2 handshake; d leaves it, q ends wifi."""
+    vm.send("wifi\n")
+    vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-TEST REMEMBER=")
+    vm.send_bytes(b"mind test passphrase")
+    time.sleep(1)
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-TEST 02:00:00:57:4C:A0", timeout=60)
+    assert "mind test passphrase" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"d")
+    vm.expect("LINK=OFF", timeout=20)
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
+          "with wlansim's access point, and left", flush=True)
+
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
     CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
@@ -5893,6 +5919,9 @@ def net_suite(args, disk):
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
         require(vm.command("net"), "NET: NO NETWORK CARD")
         require(vm.command("ip"), "IP: NoNetwork")
+        # The station needs no wired card: the suite's last VM, so the join changes nothing after it (550-APP-0033).
+        if args.wlansim_elf:
+            wifi_join_check(vm)
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
@@ -6690,6 +6719,7 @@ def wm_suite(vm):
     require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
     # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
     require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    require(out, "[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)")  # no radio on this disk (550-APP-0033)
     assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
