@@ -5706,6 +5706,7 @@ def net_suite(args, disk):
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
         # 550-APP-0078: passphrase files for `wifi join` without a screen: the right one, a wrong one, another network's.
+        (disk / "data").mkdir(exist_ok=True)
         for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
             (disk / "data" / f"{name}.txt").write_text(text)
         sign_manifest.sign_volume(disk)
