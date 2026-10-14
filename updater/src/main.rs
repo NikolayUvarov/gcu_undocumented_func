@@ -26,7 +26,7 @@ use mind::idl::update::{self as api, Error, Offer, State};
 use mind::idl::codec::Text;
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
-use mind::parse::{read_channel, read_manifest, Refused};
+use mind::parse::{read_channel, read_manifest, Refused, Session};
 use mind::release::{self, Channel, CHANNEL_MAX, MANIFEST_MAX};
 use slots::{Record, RECORD};
 use source::{sha256, Source};
@@ -97,17 +97,25 @@ fn verified(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
 
 fn refused(why: Refused) -> Error { match why { Refused::Service => Error::NoParser, Refused::Malformed | Refused::Lied => Error::Malformed } }
 
-/// A channel file whose fields the parser read and whose signature is the release key's.
-fn channel_of(file: &[u8]) -> Result<Channel, Error> {
-    let (channel, signed) = read_channel(PARSE, file).map_err(refused)?;
+/// A parser of the check's own, which the loader starts as a helper holding nothing but its endpoint, and which ends
+/// when the check does (109-NET-0010). Only with a loader client in SLOT_LOADER (asked of `init`, requests-KRN.md);
+/// the shared service without one, or where the loader starts none.
+fn parser() -> Session {
+    if mind::dev::cap_info(SLOT_LOADER).0 != CAP_KIND_ENDPOINT { return Session::shared(PARSE); }
+    Session::start(Endpoint::LOADER, PARSE)
+}
+
+/// A channel file whose fields `parser` read and whose signature is the release key's.
+fn channel_of(file: &[u8], parser: Endpoint) -> Result<Channel, Error> {
+    let (channel, signed) = read_channel(parser, file).map_err(refused)?;
     if !verified(&keys::RELEASE_KEY, &file[..signed.body], &signed.signature) { return Err(Error::Signature); }
     Ok(channel)
 }
 
 /// The boot files of a manifest: the kernel and the services the bootloader loads, by name, size and SHA-256.
-fn boot_files(text: &[u8]) -> Result<Vec<release::File>, Error> {
+fn boot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error> {
     let mut files = Vec::new();
-    read_manifest(PARSE, text, |file| files.push(*file)).map_err(refused)?;
+    read_manifest(parser, text, |file| files.push(*file)).map_err(refused)?;
     files.retain(|f| f.path.as_str() == "kernel.elf" || BOOT_FILES.contains(&f.path.as_str()));
     // The bootloader loads neither a slot without these.
     if !["kernel.elf", "init.elf"].iter().all(|name| files.iter().any(|f| f.path.as_str() == *name)) { return Err(Error::Malformed); }
@@ -156,7 +164,7 @@ impl Updater {
         let Ok(file) = File::open(&format!("MIND/{}/CHANNEL", slot)) else { return (0, 0) };
         let mut bytes = alloc::vec![0u8; file.size().min(CHANNEL_MAX)];
         if file.read_at(0, &mut bytes) != Ok(bytes.len()) { return (0, 0); }
-        let Ok(channel) = channel_of(&bytes) else { return (0, 0) };
+        let Ok(channel) = channel_of(&bytes, parser().endpoint()) else { return (0, 0) };
         let digest = digest.or_else(|| {
             let manifest = File::open(&format!("MIND/{}/MANIFEST", slot)).ok()?;
             (manifest.size() <= MANIFEST_MAX).then(|| sha256(&manifest)).flatten()
@@ -177,10 +185,10 @@ impl Updater {
     }
 
     /// The channel, its signature, form and expiry, and its version against the running one; with the file as read.
-    fn read_channel(&mut self) -> Result<(Channel, Vec<u8>), Error> {
+    fn read_channel(&mut self, parser: &mut Session) -> Result<(Channel, Vec<u8>), Error> {
         let Some(source) = &self.config.source else { return Err(Error::NoSource) };
-        let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX)?;
-        let channel = channel_of(&bytes)?;
+        let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
+        let channel = channel_of(&bytes, parser.endpoint())?;
         if channel.name.as_str() != self.config.channel { return Err(Error::Malformed); }
         // A clock that cannot be read cannot show the channel current (MC-9.4: expiry handled by a set policy).
         let now = mind::rtc::unix_time().ok_or(Error::Expired)?;
@@ -190,7 +198,8 @@ impl Updater {
     }
 
     fn check(&mut self) -> Result<Offer, Error> {
-        let (channel, _) = match self.read_channel() { Ok(read) => read, Err(error) => return self.fail("check", error) };
+        let mut parser = parser();
+        let (channel, _) = match self.read_channel(&mut parser) { Ok(read) => read, Err(error) => return self.fail("check", error) };
         let expires = core::str::from_utf8(&channel.expires).unwrap_or("");
         mind::println!("[UPDATER] CHECK {}: VERSION {}, MINIMUM {}, EXPIRES {}; RUNNING {}{}", channel.name.as_str(), channel.version, channel.minimum, expires,
             self.running, if self.running != 0 && self.running < channel.minimum { " (BELOW THE MINIMUM)" } else { "" });
@@ -214,16 +223,17 @@ impl Updater {
 
     fn stage(&mut self) -> Result<u64, Error> {
         self.may_stage()?;
-        let (channel, channel_file) = self.read_channel()?;
+        let mut parser = parser();
+        let (channel, channel_file) = self.read_channel(&mut parser)?;
         if channel.version <= self.running { return Err(Error::Older); }
         let digest = channel.manifest(ARCH).ok_or(Error::Missing)?;
         let Some(source) = &self.config.source else { return Err(Error::NoSource) };
         let release = format!("releases/{}/{}", channel.version, ARCH);
-        let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX)?;
+        let manifest = source.small(&format!("{}/MANIFEST", release), MANIFEST_MAX, &mut parser)?;
         if mind::sha256::digest(&manifest) != digest { return Err(Error::Digest); }
-        let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64)?;
+        let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64, &mut parser)?;
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
-        let files = boot_files(&manifest)?;
+        let files = boot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
         mind::println!("[UPDATER] FETCH: VERSION {} INTO SLOT {}: {} BOOT FILES, MANIFEST {}", channel.version, slot, files.len(), short(&digest));
         // The channel goes first and comes back last: a slot holds one only once all of it is there. A boot file the
@@ -242,12 +252,12 @@ impl Updater {
             let mut file = File::open_mode(&path, MODE_WRITE | MODE_CREATE).map_err(|_| Error::Write)?;
             let blob = format!("blobs/{}", f.digest.iter().map(|b| format!("{:02x}", b)).collect::<String>());
             let resumed = file.size() > 0;
-            fetched += source.file(&blob, &mut file, f.size)?;
+            fetched += source.file(&blob, &mut file, f.size, &mut parser)?;
             let whole = |file: &File| file.size() as u64 == f.size && sha256(file) == Some(f.digest);
             // What was there before may be another file's start: fetched again whole, once.
             if !whole(&file) && resumed {
                 file.truncate(0).map_err(|_| Error::Write)?;
-                fetched += source.file(&blob, &mut file, f.size)?;
+                fetched += source.file(&blob, &mut file, f.size, &mut parser)?;
             }
             if !whole(&file) {
                 // Not the file: the next fetch starts it again.
@@ -278,7 +288,7 @@ impl Updater {
         };
         let (manifest, signature) = (read("MANIFEST", MANIFEST_MAX)?, read("MANIFEST.SIG", 64)?);
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
-        let files = boot_files(&manifest)?;
+        let files = boot_files(&manifest, parser().endpoint())?;
         for name in BOOT_FILES.iter().chain(["kernel.elf"].iter()) {
             let path = format!("MIND/{}/{}", slot, name);
             match (files.iter().find(|f| f.path.as_str() == *name), File::open(&path)) {

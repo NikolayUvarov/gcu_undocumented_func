@@ -346,3 +346,20 @@ The service `ssh` (351-NET-0027) reads release files over SFTP for programs, as 
 ### Acceptance criteria
 
 In the `net` suite, `ssh` runs and holds `keystore`'s client with `BADGE_KEY_SSH`, and `stat caps` shows the shell's client in `SLOT_SSH`. The SFTP check of the `net` suite comes from the network track.
+
+## A loader client for the updater's parsers (109-UPD-0017, for 109-NET-0010)
+
+**Recorded by:** the update track (`UPD`), 2026-10-14, for [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), from the kernel track's request in requests-UPD.md.
+
+### Problem
+
+The updater now parses each check's channel, manifest and heads in a `parse` helper of the check's own, as `download` does (109-NET-0010), when it holds a loader client in `SLOT_LOADER`. `init` gives it none, and no endpoint quota, so it uses the shared service.
+
+### Plan (a proposal; the kernel track decides)
+
+- **A loader client that only starts helpers.** For example a badge on `loader`'s clients (`loader.wit` minor) with which only `helper` is served, and nothing that starts a program.
+- **`init` lends it to the updater** in `SLOT_LOADER`, with an endpoint quota of 1: the session's endpoint, which the helper serves.
+
+### Acceptance criteria
+
+In the `update` suite, the updater's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends. A `program` call with the updater's loader client is refused.
