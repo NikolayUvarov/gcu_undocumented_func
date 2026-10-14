@@ -109,6 +109,24 @@ while op["status"] not in FINAL:
 print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).get("stdout", "")[-3000:])
 ```
 
+### Choosing a machine (the maintainer, 2026-10-14)
+
+Machines join, leave and change: the maintainer adds them and may move an agent to a service (its ID then changes), and other tracks fill their queues. So choose the machine afresh:
+
+- **When.** Before each batch of long work (a build, a suite, a gate's part), and again when a batch waits in a queue or runs much slower than it used to.
+- **How.**
+  1. `GET /api/v1/endpoints`: each machine's `online`, `parallel_limit`, `occupied_queues` and `free_slots`.
+  2. `GET /api/v1/operations?agent_id=…&status=active` for the candidates: whose work is queued or running there, and for how long.
+  3. Section 1: what each machine has (the aarch64 tools, CI's packages or others), the user to give, and how fast it is.
+- **Which.** The machine that has what the work needs and the most room for it:
+  - a free queue first: work queued behind other tracks' costs more than a slower machine that is free;
+  - among the free ones, the faster: today `un-rizen-service` (4 queues), then `i9` (5 queues, but shared and under WSL), then PCU (its QEMU work goes sequential), then `DESKTOP-i7-930-wsl-u24`;
+  - a machine already loaded with other tracks' QEMU groups only when nothing else is free: under load a group runs past its timeouts, and its failure says nothing of the change (on 2026-10-14 i9 at a load of 39 took over an hour on a group that takes 16 minutes);
+  - the parts of a gate may run on different machines, and every group must pass on the same commit.
+- **A machine missing from section 1** has a configuration nobody described: describe it there, with the maintainer, before its runs count as evidence.
+- **Your own operation that waits long** may be cancelled by its ID (rule 7) and sent where there is room.
+- **The report** says where each part ran (section 4).
+
 ### The rules for working together
 
 1. **Long or CPU-heavy work runs one operation at a time for each track.** That means a build, the host tests, a QEMU suite or a gate's group.
@@ -157,7 +175,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 
 ### The aarch64 part of a gate runs on a remote machine (the maintainer's decision, 2026-10-10)
 
-- **Where.** On a machine of section 1 that has the aarch64 tools: today `PCU_585240b00e8a`. Since 2026-10-14 also `un-rizen-service`, which is faster and has four queues (section 3, rule 1). The maintainer is adding more machines; each comes into section 1 with its configuration.
+- **Where.** On a machine of section 1 that has the aarch64 tools, chosen when the part starts (section 3, "Choosing a machine"): `PCU_585240b00e8a` and, since 2026-10-14, `un-rizen-service`, which is faster and has four queues (section 3, rule 1). The maintainer is adding more machines; each comes into section 1 with its configuration.
 - **Why.** On an agent's own machine the x86 part of the local gate takes about 70 minutes and the aarch64 part about 65 more. PCU runs the aarch64 groups 1.2–1.6 times slower, but **in parallel** with the x86 part. A gate then takes about as long as its longer half, and the agent's machine does only the x86 part.
 - **Measured on 2026-10-10** (the kernel track's tree 9c843b4, one group to an operation, seconds):
 

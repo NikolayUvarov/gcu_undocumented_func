@@ -7081,8 +7081,20 @@ def wm_suite(vm):
             if index:
                 keys("down", text=f"SETTINGS=Background:{row}")
             if row == "Image file":
-                keys("ret")
-                screen_has("Type the image's file here (BMP, PNG or JPEG), then Enter")
+                # Enter with nothing typed browses data/ for the picture (000-APP-0072); Esc goes back, Enter on a
+                # picture sets it; the picture row puts none back.
+                keys("ret", text="BROWSE=data:..")
+                screen_has("Choose the picture (BMP, PNG, JPEG): data")
+                keys("esc", text="SETTINGS=Background:Image file")
+                keys("f3", text="BROWSE=data:..")
+                keys("down", text="BROWSE=data:sky.bmp")
+                keys("down", text="BROWSE=data:sky.jpg")
+                keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
+                assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
+                keys("up", text="SETTINGS=Background:Picture")
+                keys("right", text="[WM] SETTINGS ")
+                assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
+                keys("down", text="SETTINGS=Background:Image file")
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])

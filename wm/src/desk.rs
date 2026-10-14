@@ -538,6 +538,8 @@ pub struct Wm {
     pub background: Config,
     /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
     pub shell: bool,
+    /// How Settings read a directory when browsing for the picture (000-APP-0072).
+    pub lister: crate::settings::Lister,
     /// The battery as last read (211-APP-0070), None without one; its item shows the minutes in place of the charge.
     pub battery: Option<Power>,
     pub battery_minutes: bool,
@@ -554,7 +556,7 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -926,7 +928,7 @@ impl Wm {
     /// Settings (000-APP-0048), at the page of the background.
     pub fn open_settings(&mut self) {
         let mut settings = Settings::new(&self.background, (self.desk.cols, self.desk.rows));
-        settings.shell = self.shell;
+        (settings.shell, settings.lister) = (self.shell, self.lister);
         (settings.pixels, settings.scale) = (self.pixels, self.scale);
         self.mode = Mode::Settings(settings);
     }
@@ -1028,6 +1030,7 @@ impl Wm {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
             Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
+            Mode::Settings(s) if s.browser.is_some() => { let b = s.browser.as_ref().unwrap(); format!(" SETTINGS=Background:Image file BROWSE={}:{}", b.dir, b.entries.get(b.selected).map_or("-", |e| e.0.as_str())) }
             Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
