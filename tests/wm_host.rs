@@ -1460,6 +1460,8 @@ fn every_page_and_row_of_settings_reacts() {
         for _ in 0..row { s.key(key(KEY_DOWN), &config); }
         match s.key(key(KEY_ENTER), &config) {
             Outcome::Changed(c) => assert_ne!(c, config, "{}", ROWS[row]),
+            // The image file's row with nothing typed opens the picture browser (000-APP-0072).
+            Outcome::Stay if row == 1 => assert!(s.browser.is_some() && screen(&s).contains("Choose the picture"), "{}", ROWS[row]),
             Outcome::Stay => assert!(s.message.is_some() && screen(&s).contains(s.message.as_deref().unwrap()), "{}", ROWS[row]),
             other => panic!("{}: {:?}", ROWS[row], other),
         }
@@ -1469,7 +1471,9 @@ fn every_page_and_row_of_settings_reacts() {
     s.key(key(KEY_ENTER), &config);
     s.key(key(KEY_DOWN), &config);
     assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-    assert_eq!(s.message.as_deref(), Some("Type the image's file here (BMP, PNG or JPEG), then Enter"));
+    assert!(s.browser.is_some(), "nothing typed: Enter browses for the picture (000-APP-0072)");
+    assert_eq!(s.key(key(KEY_ESC), &config), Outcome::Stay);
+    assert!(s.browser.is_none() && s.row == 1, "Esc: back to the rows, Settings open");
     s.key(key(KEY_DOWN), &config);
     s.key(key(KEY_DOWN), &config);
     assert!(s.message.is_none(), "moved: the line goes");
@@ -1513,10 +1517,15 @@ fn a_window_back_to_its_contents_size() {
     assert_eq!(wm.notice.as_deref(), Some("Fit to content: \"camera\" has its content's first size already"));
     // Maximized, it leaves that (the top bar's item does the same); full screen, it leaves that too.
     wm.desk.maximize(1);
-    let (at, _, item) = desk::bar_items(160)[10];
-    assert_eq!(item, desk::Bar::Fit);
-    wm.pointer(at + 1, 0, 1, 0);
-    wm.pointer(at + 1, 0, 0, 0);
+    // With the window's title on the bar, `Alt+0 fit` is in `more ▼`'s menu (Settings stays on the bar).
+    let (bar, moved) = wm.top_bar();
+    let more = bar.iter().find(|i| i.2 == desk::Bar::More).unwrap().0;
+    let row = moved.iter().position(|&b| b == desk::Bar::Fit).unwrap();
+    wm.pointer(more + 1, 0, 1, 0);
+    wm.pointer(more + 1, 0, 0, 0);
+    let area = wm.more_area().unwrap();
+    wm.pointer(area.x + 3, area.y + 1 + row, 1, 0);
+    wm.pointer(area.x + 3, area.y + 1 + row, 0, 0);
     let w = wm.desk.get(1).unwrap();
     assert!(w.restore.is_none() && (w.rect.w, w.rect.h) == (42, 17), "{:?}", w.rect);
     wm.desk.toggle_full(1);
@@ -1703,15 +1712,18 @@ fn the_top_bar_folds_into_more() {
     use desk::Bar;
     let (items, moved) = desk::bar_layout(160, 0);
     assert!(items.len() == 12 && moved.is_empty() && items[11] == (144, 16, Bar::Settings), "{:?}", items);
+    // Settings leaves last and stays at the bar's end, `more ▼` left of it (the maintainer's word, 2026-10-14).
     let (items, moved) = desk::bar_layout(160, 7);
-    assert_eq!((items.last().copied(), moved), (Some((144, 8, Bar::More)), Vec::from([Bar::Settings])), "a title of 7 cells");
+    assert_eq!((&items[items.len() - 2..], moved), (&[(119, 8, Bar::More), (128, 16, Bar::Settings)][..], Vec::from([Bar::Full, Bar::Fit])), "a title of 7 cells");
     let (items, moved) = desk::bar_layout(106, 0);
-    assert_eq!(moved, [Bar::Leave, Bar::List, Bar::Full, Bar::Fit, Bar::Settings]);
-    assert_eq!(items.iter().map(|i| i.2).collect::<Vec<_>>(), [Bar::Programs, Bar::Next, Bar::Programs, Bar::Run, Bar::Move, Bar::Close, Bar::Help, Bar::More]);
-    assert_eq!(items.last().copied(), Some((89, 8, Bar::More)));
+    assert_eq!(moved, [Bar::Help, Bar::Leave, Bar::List, Bar::Full, Bar::Fit]);
+    assert_eq!(items.iter().map(|i| i.2).collect::<Vec<_>>(), [Bar::Programs, Bar::Next, Bar::Programs, Bar::Run, Bar::Move, Bar::Close, Bar::More, Bar::Settings]);
+    assert_eq!(items[items.len() - 2..], [(76, 8, Bar::More), (85, 16, Bar::Settings)]);
     let (items, moved) = desk::bar_layout(84, 0);
-    assert!(moved.contains(&Bar::Help) && items.last().unwrap().0 + items.last().unwrap().1 <= 84, "{:?} {:?}", items, moved);
-    // Drawn: the items that fit, `more ▼`, and the title at the right.
+    assert!(moved.contains(&Bar::Help) && !moved.contains(&Bar::Settings) && items.last().unwrap().0 + items.last().unwrap().1 <= 84, "{:?} {:?}", items, moved);
+    let (items, moved) = desk::bar_layout(60, 0);
+    assert!(items.last().unwrap().2 == Bar::Settings && items[items.len() - 2].2 == Bar::More && !moved.contains(&Bar::Settings), "{:?}", items);
+    // Drawn: the items that fit, `more ▼`, Settings, and the title at the right.
     let draw = |wm: &mut Wm, cols: usize| {
         let mut cells = vec![Cell::BLANK; cols * 33];
         let mut grid = Grid::new(&mut cells, cols, 33);
@@ -1721,41 +1733,45 @@ fn the_top_bar_folds_into_more() {
     let mut wm = Wm::new(106, 33);
     wm.desk.add(text(1, "clock"));
     let screen = draw(&mut wm, 106);
-    assert!(screen[0].starts_with(" wm │ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ Alt+W close │ Alt+H help │ more ▼ ") && screen[0].ends_with(" clock "), "{}", screen[0]);
-    // A click on it opens its menu under it; ↓ and Enter do the item, as its key does.
+    assert!(screen[0].starts_with(" wm │ Alt+Tab next │ Alt+P programs │ Alt+R run │ Alt+M move │ more ▼ │ Alt+S settings ") && screen[0].ends_with(" clock "), "{}", screen[0]);
+    // A click on `more ▼` opens its menu under it; ↓ and Enter do the item, as its key does.
     let click = |wm: &mut Wm, x: usize, y: usize| { let action = wm.pointer(x, y, 1, 0); wm.pointer(x, y, 0, 0); action };
-    click(&mut wm, 92, 0);
-    assert!(wm.status().starts_with("MODE=MORE") && wm.status().contains("MORE=Alt+Q leave"), "{}", wm.status());
+    click(&mut wm, 65, 0);
+    assert!(wm.status().starts_with("MODE=MORE") && wm.status().contains("MORE=Alt+W close"), "{}", wm.status());
     let screen = draw(&mut wm, 106);
-    for (row, label) in ["Alt+Q leave", "Alt+L windows", "Alt+F full", "Alt+0 fit", "Alt+S settings"].iter().enumerate() {
+    for (row, label) in ["Alt+W close", "Alt+H help", "Alt+Q leave", "Alt+L windows", "Alt+F full", "Alt+0 fit"].iter().enumerate() {
         assert!(screen[2 + row].contains(&format!("│ {}", label)), "{}: {}", label, screen[2 + row]);
     }
-    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
-    assert!(wm.status().contains("MORE=Alt+S settings"), "{}", wm.status());
+    for _ in 0..3 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().contains("MORE=Alt+L windows"), "{}", wm.status());
     wm.key(key(KEY_ENTER));
+    assert!(wm.status().starts_with("MODE=LIST"), "{}", wm.status());
+    wm.key(key(KEY_ESC));
+    // Settings on the bar: a click opens it.
+    click(&mut wm, 78, 0);
     assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
     wm.key(key(KEY_ESC));
-    // A click on its item does it; Alt+L closes the menu and does its own; Esc and a click elsewhere close it.
-    click(&mut wm, 92, 0);
+    // A click on a menu item does it; Alt+S closes the menu and does its own; Esc and a click elsewhere close it.
+    click(&mut wm, 65, 0);
     let area = wm.more_area().unwrap();
-    click(&mut wm, area.x + 3, area.y + 2);
+    click(&mut wm, area.x + 3, area.y + 4);
     assert!(wm.status().starts_with("MODE=LIST"), "Alt+L windows from the menu: {}", wm.status());
     wm.key(key(KEY_ESC));
-    click(&mut wm, 92, 0);
+    click(&mut wm, 65, 0);
     wm.key(alt_char('s'));
     assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
     wm.key(key(KEY_ESC));
-    click(&mut wm, 92, 0);
+    click(&mut wm, 65, 0);
     wm.key(key(KEY_ESC));
     assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
-    click(&mut wm, 92, 0);
+    click(&mut wm, 65, 0);
     click(&mut wm, 50, 20);
     assert!(wm.status().starts_with("MODE=NORMAL"), "{}", wm.status());
-    // At 160 cells the title leaves no room for Settings: it is in the menu, not under the title.
+    // At 160 cells with a title, the items before Settings leave; Settings stays at the bar's end before the title.
     let mut wm = Wm::new(160, 33);
     wm.desk.add(text(1, "fm"));
     let screen = draw(&mut wm, 160);
-    assert!(screen[0].contains("│ Alt+0 fit │ more ▼ ") && screen[0].ends_with(" fm ") && !screen[0].contains("settings"), "{}", screen[0]);
+    assert!(screen[0].contains("│ Alt+L windows │ more ▼ │ Alt+S settings ") && screen[0].ends_with(" fm ") && !screen[0].contains("Alt+0 fit"), "{}", screen[0]);
 }
 
 #[test]
@@ -1773,8 +1789,8 @@ fn the_battery_on_the_background_and_in_the_top_bar() {
     let charging = Power { on_ac: true, charging: true, percent: 40, to_empty: NO_MINUTES, to_full: 45 };
     let full = Power { on_ac: true, charging: false, percent: 100, to_empty: NO_MINUTES, to_full: NO_MINUTES };
     assert_eq!(battery_line(Some(&on_battery)), "BAT 87% 2:41 LEFT");
-    assert_eq!(battery_line(Some(&charging)), "BAT 40% AC 0:45 TO FULL");
-    assert_eq!(battery_line(Some(&full)), "BAT 100% AC");
+    assert_eq!(battery_line(Some(&charging)), "BAT 40% ⚡ 0:45 TO FULL");
+    assert_eq!(battery_line(Some(&full)), "BAT 100% ⚡");
     assert_eq!(battery_line(Some(&Power { to_empty: NO_MINUTES, ..on_battery })), "BAT 87%");
     assert_eq!(battery_line(None), "NO BATTERY");
     assert_eq!((hours(Some(161)), hours(Some(5)), hours(None)), ("2:41".into(), "0:05".into(), "-:--".into()));
@@ -1811,11 +1827,11 @@ fn the_battery_on_the_background_and_in_the_top_bar() {
     wm.pointer(157, 0, 0, 0);
     assert_eq!(wm.chip().as_deref(), Some(" ▮ 2:41 "), "clicked: the time left");
     wm.battery = Some(charging);
-    assert_eq!(wm.chip().as_deref(), Some(" AC 0:45 "), "charging: the time to full");
+    assert_eq!(wm.chip().as_deref(), Some(" ⚡ 0:45 "), "charging: the time to full");
     wm.battery = Some(full);
-    assert_eq!(wm.chip().as_deref(), Some(" AC -:-- "));
+    assert_eq!(wm.chip().as_deref(), Some(" ⚡ -:-- "));
     wm.pointer(157, 0, 1, 0);
-    assert_eq!(wm.chip().as_deref(), Some(" AC 100% "), "clicked again: the charge");
+    assert_eq!(wm.chip().as_deref(), Some(" ⚡ 100% "), "clicked again: the charge");
     // Below 10 % on the battery it is marked.
     wm.battery = Some(Power { percent: 7, ..on_battery });
     wm.draw(&mut grid, &DARK, &mut none, None);
@@ -1824,4 +1840,74 @@ fn the_battery_on_the_background_and_in_the_top_bar() {
     wm.battery = Some(on_battery);
     wm.draw(&mut grid, &DARK, &mut none, None);
     assert_ne!(grid.get(158, 0).style, low, "marked only when low");
+}
+
+#[test]
+fn the_picture_is_chosen_by_browsing() {
+    // 000-APP-0072: Enter on the empty Image file row, or F3 on it, opens a list of directories and pictures.
+    use settings::{Outcome, Settings};
+    fn files(dir: &str) -> Result<Vec<(String, bool)>, String> {
+        let list: &[(&str, bool)] = match dir {
+            "" => &[("data", true), ("docs", true), ("kernel.elf", false)],
+            "data" => &[("sky.bmp", false), ("notes.txt", false), ("pics", true), ("Moon.PNG", false)],
+            "data/pics" => &[("a.jpg", false), ("b.JPEG", false), ("c.gif", false)],
+            _ => return Err("NotFound".into()),
+        };
+        Ok(list.iter().map(|&(n, d)| (String::from(n), d)).collect())
+    }
+    let config = Config::default();
+    let mut s = Settings::new(&config, (160, 50));
+    s.lister = files;
+    s.on_pages = false;
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!(s.row, 1, "the Image file row");
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    let names = |s: &Settings| s.browser.as_ref().unwrap().entries.iter().map(|e| e.0.clone()).collect::<Vec<_>>();
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), names(&s)), ("data", vec!["..".into(), "pics".into(), "Moon.PNG".into(), "sky.bmp".into()]), "data/ first: its directories, then its pictures");
+    // Into pics and back: the cursor on the directory left.
+    s.key(key(KEY_DOWN), &config);
+    s.key(key(KEY_ENTER), &config);
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), names(&s)), ("data/pics", vec!["..".into(), "a.jpg".into(), "b.JPEG".into()]));
+    s.key(key(KEY_ENTER), &config);
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), s.browser.as_ref().unwrap().selected), ("data", 1));
+    // Backspace up to the boot disk's root, which lists the RAM disk too; one that cannot be read says so.
+    s.key(key(KEY_BACKSPACE), &config);
+    assert_eq!(names(&s), vec![String::from("data"), "docs".into(), "ram:".into()]);
+    s.key(key(KEY_END), &config);
+    s.key(key(KEY_ENTER), &config);
+    assert!(s.browser.as_ref().unwrap().problem.is_some() && s.browser.as_ref().unwrap().dir == "ram:");
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &config);
+    let text: String = (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
+    assert!(text.contains("Choose the picture (BMP, PNG, JPEG): ram:") && text.contains("ram: cannot be read: NotFound"), "{}", text);
+    // Back to data/ and a picture taken: it is the background, the row names it, the list closes.
+    s.key(key(KEY_BACKSPACE), &config);
+    s.key(key(KEY_HOME), &config);
+    s.key(key(KEY_ENTER), &config);
+    for _ in 0..3 { s.key(key(KEY_DOWN), &config); }
+    match s.key(key(KEY_ENTER), &config) { Outcome::Changed(c) => assert_eq!(c.picture, Picture::Image("data/sky.bmp".into())), other => panic!("{:?}", other) }
+    assert!(s.browser.is_none() && s.file.as_str() == "data/sky.bmp");
+    // F3 opens it again where the file is, on it; Esc goes back to the rows, Settings still open.
+    s.key(Key(event(KEY_F1 + 2, 0, 0)), &config); // F3
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), s.browser.as_ref().unwrap().selected), ("data", 3));
+    assert_eq!(s.key(key(KEY_ESC), &config), Outcome::Stay);
+    assert!(s.browser.is_none());
+    // A click: on an entry it does what Enter does, outside the window it goes back; on the empty row it browses.
+    let inner = s.area().inner();
+    s.key(key(KEY_F1 + 2), &config);
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &config), Outcome::Stay);
+    assert_eq!(s.browser.as_ref().unwrap().dir, "data/pics", "the second entry, pics, opened");
+    assert_eq!(s.click(0, 0, &config), Outcome::Stay);
+    assert!(s.browser.is_none());
+    s.file = tui::widgets::InputLine::new();
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &config), Outcome::Stay);
+    assert_eq!(s.browser.as_ref().unwrap().dir, "data");
+    // wm's state line names it while it is open.
+    let mut wm = Wm::new(160, 50);
+    wm.lister = files;
+    wm.open_settings();
+    if let Mode::Settings(s) = &mut wm.mode { s.on_pages = false; s.row = 1; }
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().contains("BROWSE=data:.."), "{}", wm.status());
 }

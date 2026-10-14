@@ -24,8 +24,8 @@ use mind::tui::viewer::Source;
 use mind::tui::{Terminal, CLASSIC};
 
 // The user's files to work on; system information only to lend to the monitors it starts; the block store as the
-// volume `store:` (300-APP-0038).
-mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_BLOCKSTORE);
+// volume `store:` (300-APP-0038); the shell's commands, to run a script in the shell's window (000-APP-0067).
+mind::request!(REQUEST_FILES | REQUEST_SYSINFO | REQUEST_BLOCKSTORE | REQUEST_SHELL);
 
 struct DiskFile(File);
 impl Source for DiskFile {
@@ -121,6 +121,26 @@ impl Disk for Vfs {
         Ok(entries)
     }
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> { File::open(path).ok().map(|file| Box::new(DiskFile(file)) as Box<dyn Source>) }
+    // A script runs in the shell's window, on its authority, once the user agrees there (shell.wit `run`); without
+    // the shell's commands (fm on the shell's screen) Enter says how to run it.
+    fn script(&mut self, path: &str) -> Result<String, String> {
+        // From the boot disk's root whatever the window's current directory is.
+        let full = if fs::split(path).0.is_empty() { alloc::format!("/{}", path) } else { String::from(path) };
+        if mind::dev::cap_info(SLOT_SHELL).0 != CAP_KIND_ENDPOINT {
+            return Err(alloc::format!("Type msh {} in the shell: fm here holds no shell's commands (in wm it does)", full));
+        }
+        if full.contains(char::is_whitespace) { return Err(alloc::format!("A name with spaces: type msh \"{}\" in the shell", full)); }
+        let mut out = alloc::vec![0u8; 7000];
+        use mind::idl::shell::{self as commands, Error as Why};
+        match commands::run(Endpoint(SLOT_SHELL), &alloc::format!("msh {}", full), &mut out) {
+            Ok(Ok(len)) => Ok(String::from(String::from_utf8_lossy(&out[..len]))),
+            Ok(Err(Why::Declined)) => Err(alloc::format!("{}: not run: the answer in the shell's window was no, or none came", full)),
+            Ok(Err(Why::Busy)) => Err(alloc::format!("{}: the shell's window is running a program; try again when it ends", full)),
+            Ok(Err(Why::Refused)) => Err(alloc::format!("{}: the shell does not take scripts from fm; type msh {} in it", full, full)),
+            Ok(Err(_)) => Err(alloc::format!("{}: the shell could not open its window to ask", full)),
+            Err(_) => Err(alloc::format!("{}: the shell does not answer", full)),
+        }
+    }
     // As the shell and wm do: of what the program asks for, what fm holds. In a window of wm fm lends its broker client,
     // so the program opens a window of its own next to fm's instead of a screen in the background (issue 099).
     fn run(&mut self, path: &str, args: &str) -> Result<Started, String> {
@@ -176,11 +196,15 @@ fn main(info: &'static mind::BootInfo) {
     // The viewer's window lives as long as the program; the viewer gives it back when it closes.
     let window: &'static mut [u8] = Box::leak(alloc::vec![0u8; 64 * 1024].into_boxed_slice());
     let mut fm = Fm::new(window, &mut disk);
-    // `fm <directory>` opens the left panel there (`fm /` at the boot disk's root); `fm` alone in data/, where the user
-    // may write, when it exists (000-APP-0062).
+    // `fm <directory>` opens the left panel there (`fm /` at the boot disk's root), `fm <file>` its directory with the
+    // cursor on it (000-APP-0067); `fm` alone in data/, where the user may write, when it exists (000-APP-0062).
     let args = mind::process::args_str().trim();
     let start = if args.is_empty() { if fs::Dir::open(fm::fm::DATA).is_ok() { fm::fm::DATA } else { "" } } else { args.trim_matches('/') };
-    if !start.is_empty() { fm.load(0, start, None, &mut disk); }
+    match fs::metadata(start) {
+        Ok(found) if !found.is_dir && !start.is_empty() => { let (dir, name) = panel::parent(start); fm.load(0, &dir, Some(&name), &mut disk); }
+        _ if !start.is_empty() => fm.load(0, start, None, &mut disk),
+        _ => {}
+    }
     mind::println!("[FM] READY {}", fm.status());
     // The mouse (issue u001): on a screen the cell under it is shown inverted; in a window wm draws the pointer.
     mind::input::pointer(true);

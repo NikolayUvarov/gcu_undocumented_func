@@ -116,3 +116,26 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - `wlansim` reports CCK only, and the station associates offering 1–11 Mb/s alone and sends at 11 Mb/s at most.
 - On the MacBook Pro, with `bcm_wifi` reporting CCK, a WPA2 network is joined and DHCP answers.
+
+## The stack waits for the station, and the station for its radio, with no deadline (550-NET-0018)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from reading `fast-test` fee095e, which carries `init`'s part (550-KRN-0097) and `bcm_wifi` as a radio (550-DRV-0027). Not seen on a machine yet.
+
+### Problem
+
+- **`wlan`'s first act is `wlanhw::info(RADIO)`** (`wlan/src/main.rs`:320), with no deadline. It serves its own endpoint only after the radio answers.
+- **`bcm_wifi` receives on `SLOT_SERVICE` only once the radio is up:**
+  - after the microcode is loaded from the disk and stage 3 has run;
+  - with `data/wifitest.txt` on the disk, after its whole stage 4 test as well (`bcm_wifi/src/main.rs`:333–337), which waits 3 s between steps.
+- **`netstack` calls `net::info` on each card's slot from its `poll`, with no deadline** (`netstack/src/main.rs`:219). Its first poll comes before its first receive (:684), and the loop does nothing else while a call waits.
+- **So on the MacBook Pro:**
+  - every socket call waits until `bcm_wifi` is up: for the microcode and stage 3, and for the whole test when the test is asked for;
+  - a radio that stays alive and never answers holds the stack for ever.
+- **A radio or station that exits is not the problem:** the kernel fails a waiting sender with `ERR_PEER` once no task can receive on the endpoint.
+- **QEMU does not show it:** `wlansim` answers at once.
+
+### Asked (the network track decides)
+
+- **`wlan` serves before its radio answers.** `net::info` answers `no-device`, as before a join, until the radio has answered. The radio is asked with a deadline, and again later.
+- **`netstack` bounds its calls to a card** (`mind::idl::wire::with_timeout`, as `init` does for 000-KRN-0075). A card that does not answer in time counts as absent for that second.
+- **A QEMU check:** a `wlansim` that answers late (a fixture flag), with the wired card's sockets working meanwhile.
