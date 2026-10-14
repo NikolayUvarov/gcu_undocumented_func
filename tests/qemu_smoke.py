@@ -1464,7 +1464,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 

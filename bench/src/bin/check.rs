@@ -312,8 +312,17 @@ fn files(run: &mut Run) {
     run.report("programs on the disk", verdict);
 }
 
-fn services(run: &mut Run) {
+fn services(run: &mut Run, info: &mind::BootInfo) {
     if !granted(SLOT_LIFECYCLE) { return run.report("boot services", skip(String::from("no lifecycle client: start check from the shell"))); }
+    // What init says of this boot (init.wit 1.4, 000-KRN-0102), against what the bootloader handed the kernel.
+    let slot = info.boot_slot;
+    run.report("the boot", match lifecycle::boot(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(b)) if b.slot as u32 != slot.slot || b.trial != (slot.trial != 0) => fail(format!("init says slot {}, trial {}; the bootloader said slot {}, trial {}", b.slot, b.trial, slot.slot, slot.trial != 0)),
+        Ok(Ok(b)) if b.trial && !b.confirmed => fail(String::from("a trial boot init did not confirm: the machine restarts at the deadline")),
+        Ok(Ok(b)) if !b.trial && b.confirmed => fail(String::from("init says it confirmed a boot that was not on trial")),
+        Ok(Ok(b)) => pass(format!("{}, {}", match b.slot as u32 { BOOT_SLOT_A => "slot A", BOOT_SLOT_B => "slot B", _ => "the volume's root" }, if b.trial { "on trial, confirmed" } else { "not on trial" })),
+        other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {
             let verdict = if s.running {
@@ -441,7 +450,7 @@ fn main(info: &'static mind::BootInfo) {
             "security" => security(&mut run, info),
             "clock" => clock(&mut run),
             "files" => files(&mut run),
-            "services" => services(&mut run),
+            "services" => services(&mut run, info),
             "devices" => devices(&mut run),
             "sound" => sound(&mut run),
             _ => network(&mut run),
