@@ -303,6 +303,8 @@ In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's cl
 
 The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the network branch, `netstack` now reads slot 4 as its third card (`CARDS` = 3), and `wlansim`'s network moved to 10.0.4.0/24 (the station's lease 10.0.4.15, its gateway 10.0.4.1), apart from the second card's 10.0.3.0/24 in the same suite. The join check of the `net` suite comes from the network track once 550-KRN-0097 is on `main`.
 
+**On `main` since aedea68 (2026-10-14):** the code of 550-NET-0017 and 550-NET-0018 (`wpa`, `dot11`, `wlan`, `tests/wlansim`, `idl/wifi.wit`), `netstack`'s slot 4, and `keystore.wit` 1.1 for the station's client (550-NET-0024), gated on x86 and aarch64. 550-KRN-0097 can follow.
+
 ## The right to badge the shell's TLS client (351-NET-0022)
 
 **Recorded by:** the network track (`NET`), 2026-10-12, for [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md).
