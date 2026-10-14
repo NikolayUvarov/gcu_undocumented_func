@@ -320,3 +320,26 @@ Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST
 ### Acceptance criteria
 
 In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
+
+## `wifi join` without a screen, and the shell's start script `data/autorun.msh` (550-ASR-0007)
+
+**Recorded by:** the assurance track (ASR), 2026-10-14, at the maintainer's request: Wi-Fi joins tested on the MacBook Pro without typing.
+
+### Problem
+
+- **`wifi` is interactive only.** A join needs the passphrase typed into its screen, so no test can join a network on real hardware.
+- **Nothing starts at boot on the maintainer's request.** The `diag/` scripts run when typed in the shell, so a hardware test needs someone at the keyboard.
+
+### Plan (a proposal; the tools track decides)
+
+- **`wifi join <name> --passphrase-file <path>`.** It joins without a screen and reads the passphrase from the file's second line (the first line is the name), so the passphrase never appears in a command line or a log.
+  - It logs `[WIFI] JOINED <name>` with the channel, or `[WIFI] REFUSED <name>: <the station's reason>`.
+  - Its exit status says which.
+  - `wifi status` prints the link's state the same way.
+- **The shell runs `data/autorun.msh` once at start when it exists,** in its own window, as if typed. With no such file nothing changes. `build-and-write.sh` puts it there for a hardware test, as it puts `data/wifitest.txt`.
+
+### Acceptance criteria
+
+- **In QEMU, a join without typing.** With `wlansim`, a script holding `wifi join MIND-TEST --passphrase-file data/wifijoin.txt` joins, and `ip` then shows 10.0.4.15.
+- **A wrong passphrase** logs the refusal's reason.
+- **The start script.** `data/autorun.msh` runs once at the shell's start, and only when present.
