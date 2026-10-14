@@ -140,6 +140,7 @@ USER_CRATES=(
     "record:record:record.elf"
     "pins:pins:pins.elf"
     "pins:pinmap:pinmap.elf"
+    "wifi:wifi:wifi.elf"
     "camera:camera:camera.elf"
     "efivar:efivar:efivar.elf"
     "dictate:dictate:dictate.elf"

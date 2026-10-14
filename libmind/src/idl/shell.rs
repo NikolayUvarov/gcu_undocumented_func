@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -72,12 +72,25 @@ pub fn set_clock(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::re
     Ok(Ok(()))
 }
 
+/// A copy of the shell's client of the battery service (`idl/battery.wit`, which only reads and answers any client)
+/// (1.4, 211-APP-0070): for a window manager whose launch had no room left for it (`REQUEST_BATTERY`); a word call,
+/// so it can carry the capability. `unavailable`: the shell holds none (no battery service).
+pub fn battery(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [4 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
     Window,
     Run { line: Text<240> },
     SetClock { date: u32, seconds: u32 },
+    Battery,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -103,6 +116,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0xffffffff0000, 0xffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::SetClock { date: wire::field(&words, 0, 16, 32) as u32, seconds: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
         }
+        4 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Battery, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -118,4 +135,9 @@ pub fn reply_run(call: Call, value: core::result::Result<&[u8], Error>) -> Resul
 pub fn reply_set_clock(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_battery(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
 }

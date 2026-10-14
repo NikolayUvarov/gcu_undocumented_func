@@ -1051,8 +1051,8 @@ def shell_suite(vm):
     # Tab completion of a program name after RUN, and of a command.
     keys(b"run dzen-c\t&\r", "PID=1 NAME=dzen-clock BACKGROUND")
     keys(f"kil\t{BASE + 1}\r".encode(), "KILLED PID=1")  # raw bytes: the harness does not translate the PID
-    # Several matches are listed under the line: the shell's commands, then the programs (clock is one, issue u007);
-    # the prompt drawn again ends the listing.
+    # Several matches that share nothing more are listed under the line, the shell's commands and the programs in one
+    # sorted list (clock is one, issue u007; 000-APP-0066); the prompt drawn again ends the listing.
     vm.send_bytes(b"c\t")
     listing = vm.expect("MIND> ", after="cpus")
     for word in ("clear", "clock"):
@@ -1100,6 +1100,42 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
+    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
+    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    vm.send("wifi\n")
+    vm.expect("NO STATION", after="[WIFI] READY")
+    time.sleep(.3)
+    screen = screen_text(vm)
+    vm.serial(enter=False)
+    assert any(canon("No Wi-Fi station:") in row for row in screen), screen
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    vm.send("wifi --demo\n")
+    vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
+    vm.send_bytes(b"correct horse")
+    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
+    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
+    for _ in range(30):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if dots(screen):
+            break
+    assert dots(screen) and not any("horse" in row for row in screen), screen
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
+    assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
+    require(vm.command("battery"), "NO BATTERY SERVICE")
+    require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
+    print("PASS: battery says there is no battery service", flush=True)
     # date set (211-APP-0042): the shell's rtc client may set the clock (rtc.wit 1.2); date reads it back; a date that
     # does not exist or is past 2099 is refused; the clock goes back to the host's time for what follows.
     import datetime
@@ -1110,6 +1146,36 @@ def shell_suite(vm):
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
     print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
+    # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
+    # names.
+    def at(line, prompt):
+        vm.send(line + "\n")
+        return vm.expect(prompt, after=to_ordinal(to_real(line)) + "\n")
+    # data/ holds this suite's scripts (MSH_SCRIPTS).
+    assert re.search(r"^/$", vm.command("pwd"), re.M)
+    at("cd data", "MIND data> ")
+    assert re.search(r"^/data$", at("pwd", "MIND data> "), re.M)
+    require(at("msh --check sum.msh", "MIND data> "), "MSH: data/sum.msh: OK, REQUIRES: files")
+    assert re.search(r"(?i)^sum\.msh ", at("ls", "MIND data> "), re.M)
+    require(at("cd nowhere", "MIND data> "), "ERROR: CD /data/nowhere: NOT FOUND")
+    at("cd ..", "MIND> ")
+    vm.send_bytes(b"cat data/su\t")
+    vm.expect("cat data/sum.msh ")
+    keys(b"\r", "requires: files")
+    print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
+          "refused; Tab completed a path", flush=True)
+    # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
+    # machine off without stopping the services: QEMU ends. The suite's last step.
+    for name in ("poweroff", "shutdown"):
+        require(vm.command(f"help {name}"), "- reboot [-f] [--off], poweroff [-f], shutdown [-f]: ")
+        require(vm.command(f"{name} now"), "USAGE: POWEROFF [-F] (OR SHUTDOWN [-F])")
+    require(vm.log, "MIND CORE KERNEL: ACPI: S5 FOUND" if vm.arch != "aarch64" else "MIND CORE KERNEL: INIT STARTED")
+    vm.send("poweroff -f\n")
+    output = vm.expect("MIND CORE KERNEL: POWER OFF VIA PSCI SYSTEM_OFF" if vm.arch == "aarch64" else "MIND CORE KERNEL: POWER OFF VIA ACPI S5", timeout=30)
+    assert "POWERING OFF..." in output and "STOPPED" not in output, output
+    vm.process.wait(timeout=30)
+    print("PASS: poweroff and shutdown: help names them, another word gets the usage, poweroff -f turns the machine off", flush=True)
 
 
 def line_faces_check(vm):
@@ -6289,15 +6355,17 @@ def wm_suite(vm):
         rows = typed(long, "LOGGED")
         assert any(canon("MIND> " + long) in row for row in rows), rows
         assert keys("alt-ret")[2][shell] == quarter
-        # reboot asks there; n keeps the machine running (the answer through wm's keyboard: the shell is busy asking).
-        typed("reboot", "RESTART THE MACHINE? (Y/N)")
-        keys("n")
-        for _ in range(20):
-            time.sleep(.3)
-            rows = inside(shell)
-            if any(canon("MIND> ") == row[:6] for row in rows[-3:]):
-                break
-        assert canon("RESTART THE MACHINE? (Y/N) N") in "".join(rows), rows
+        # reboot and poweroff (000-APP-0065) ask there; n keeps the machine running (the answer through wm's keyboard:
+        # the shell is busy asking).
+        for command, question in (("reboot", "RESTART THE MACHINE? (Y/N)"), ("poweroff", "TURN THE MACHINE OFF? (Y/N)")):
+            typed(command, question)
+            keys("n")
+            for _ in range(20):
+                time.sleep(.3)
+                rows = inside(shell)
+                if canon(f"{question} N") in "".join(rows) and any(canon("MIND> ") == row[:6] for row in rows[-3:]):
+                    break
+            assert canon(f"{question} N") in "".join(rows), rows
         # fg is the screen's, not the window's.
         typed("fg 1", "FG WORKS IN A CONSOLE")
         # Closed, the window goes and wm goes on; Ctrl+Alt+F5 opens it again.
@@ -6492,7 +6560,10 @@ def wm_suite(vm):
     assert canon(" clock ") in screen[y][x:x + w], screen[y]
     # The default background (000-APP-0047): the pattern moves between two screenshots in the empty bottom right
     # quarter, and the time, the date and the CPU graph are drawn there in their low-contrast colours.
-    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right")
+    require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
+    # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
+    require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
     vm.serial(enter=False)
@@ -6903,6 +6974,8 @@ def wm_suite(vm):
         close_menu()
         started, said, unseen = [], [], []
         RUN_TO_END = {"check", "bench", "kbench"}
+        POWER = {"Restart": ("reboot", "RESTART THE MACHINE? (Y/N)"), "Turn off": ("poweroff", "TURN THE MACHINE OFF? (Y/N)")}
+        assert {"System>Restart", "System>Turn off"} <= {name for _, name in tree}, tree
         for path, name in tree:
             keys("alt-p", text="MODE=MENU")
             for level, index in enumerate(path):
@@ -6917,6 +6990,23 @@ def wm_suite(vm):
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
+                if name.split(">")[-1] in POWER:
+                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
+                    command, question = POWER[name.split(">")[-1]]
+                    screen = []
+                    for _ in range(40):
+                        time.sleep(.3)
+                        screen = screen_text(vm)
+                        vm.serial(enter=False)
+                        if any(canon(question) in row for row in screen):
+                            break
+                    else:
+                        raise AssertionError((name, screen))
+                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                    vm.hmp("sendkey n")
+                    vm.serial(enter=False)
+                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -6958,7 +7048,8 @@ def wm_suite(vm):
         # box again), and the image's file with nothing typed says what to do; each page to read says so on Enter; Enter
         # on a field of the date page sets the clock at once.
         kept = re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", "".join(seen))[-1]
-        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Date", "CPU load", "Network", "Place"]
+        rows = ["Picture", "Image file", "Pattern", "Speed", "Contrast", "Complexity", "Brightness", "Time", "Seconds", "Time size", "Date", "CPU load",
+                "Free memory", "Battery", "Network", "Text size", "Place", "Face"]
         keys("alt-s", text="MODE=SETTINGS")
         keys("ret", text="SETTINGS=Background:Picture")
         changed = 0
@@ -6971,15 +7062,39 @@ def wm_suite(vm):
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
-            keys("ret" if row in ("Time", "Date", "CPU load", "Network") else "left", text="[WM] SETTINGS ")
+            keys("ret" if row in ("Time", "Seconds", "Date", "CPU load", "Free memory", "Battery", "Network") else "left", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
             changed += 1
         keys("tab", text="SETTINGS=Background")
-        for page in ("Keyboard", "Network", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
-            keys(*["down"] * (2 if page == "Network" else 1), text=f"SETTINGS={page}")
+        for page in ("Keyboard", "Sound"):  # the screen page sets the scale (000-APP-0061, scale_from_settings)
+            keys(*["down"] * (3 if page == "Sound" else 1), text=f"SETTINGS={page}")
             keys("ret")
             screen_has(f"{page}: a page to read; nothing is set here yet")
-        keys("up", "up", text="SETTINGS=Date and time")
+        # The network page (550-APP-0033) names what each row opens; Enter on Wi-Fi closes Settings and starts wifi in a
+        # window, which says there is no station here.
+        keys("up", text="SETTINGS=Network")
+        keys("ret", text="SETTINGS=Network:Wi-Fi")
+        screen_has("console netpolicy")
+        keys("ret", text="[WM] STARTED wifi PID")
+        pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
+        while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
+            time.sleep(.1)
+            wait(lines=0)
+        wifi = int(next(m[0] for m in windows_re.findall("".join(seen)) if m[1] == pid))
+        while wifi not in state()[2]:
+            wait()
+        for _ in range(30):
+            if any(canon("No Wi-Fi station:") in row for row in inside(wifi)):
+                break
+            time.sleep(.3)
+        else:
+            raise AssertionError(inside(wifi))
+        keys("alt-w", text=f"CLOSE {wifi}")
+        until(f"GONE {wifi}")
+        while wifi in state()[2]:
+            wait()
+        keys("alt-s", text="MODE=SETTINGS")
+        keys("down", "down", text="SETTINGS=Date and time")
         keys("ret", text="SETTINGS=Date and time:Year")
         # Enter on each field sets the clock to the fields too, at once (000-APP-0060): the fields show the clock, so it
         # stays as it was; no window of the shell's opens, and Settings stay open on the field.
@@ -7000,7 +7115,7 @@ def wm_suite(vm):
         assert not [m for m in windows_re.findall("".join(seen)) if m[0] not in known], "no window opened"
         keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: each of the {changed} rows of the background page changed and changed back, the image's "
-              "file with nothing typed says what to do, each page to read says so, and Enter on each of the date page's "
+              "file with nothing typed says what to do, each page to read says so, the network page's Wi-Fi row starts wifi, and Enter on each of the date page's "
               "six fields set the clock at once, with no window of the shell's", flush=True)
 
     def console_joined(console):
@@ -7033,6 +7148,20 @@ def wm_suite(vm):
         vm.send_bytes(b"fm --help\r")
         console_has("fm — file manager")
         console_has("(fm ended)")
+        # cd, pwd and Tab in console too (000-APP-0066): the prompt names the directory, ls lists it, Tab completes a
+        # name there, and cd alone goes back to the boot disk's root (docs/notes.txt is on this suite's disk).
+        vm.send_bytes(b"cd docs\r")
+        console_has("docs> ")
+        vm.send_bytes(b"ls\r")
+        console_has(None, r"(?i)notes\.txt +\d+")
+        vm.send_bytes(b"cat no\t")
+        console_has("docs> cat notes.txt")
+        vm.send_bytes(b"\r")
+        # The file's lines are wider than the window and wrap; console cuts the long output with a line of its own.
+        console_has(None, r"\.\.\. \d+ more bytes")
+        vm.send_bytes(b"cd\r")
+        vm.send_bytes(b"pwd\r")
+        console_has(None, r"/ *$")
         run_line("clock", "STARTED clock")
         target = int(re.findall(r"\[WM\] STARTED clock PID (\d+)", "".join(seen))[-1])
         front(console)
@@ -7138,7 +7267,7 @@ def wm_suite(vm):
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
     keys("right", text="[WM] SETTINGS background = none")
-    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, date, cpu; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
+    require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")
     time.sleep(.5)
     screen = screen_text(vm)
