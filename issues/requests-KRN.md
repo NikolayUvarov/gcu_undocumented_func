@@ -225,6 +225,20 @@ The same build passed the whole suite when it ran again. Nothing in the tools tr
 
 The `wm` suite types its lines with no press lost in repeated runs, or a drop is logged where it happens.
 
+### Progress (the kernel track, 2026-10-14)
+
+No cause found yet. What was ruled out, and what is left:
+
+- **QEMU's PS/2 queue.** QEMU 8.2.2 keeps at most 16 bytes of keyboard data and drops what comes beyond them (`ps2_queue` in `hw/input/ps2.c`). With the translated scan code set a key is one byte down and one up, so `reboot` and Enter are 14 bytes: they fit even if the driver read nothing meanwhile.
+- **The interrupt.** IRQ 1 goes through the 8259 PIC. The kernel masks the line until `ps2_kbd` acks it, and a masked 8259 still latches an edge (QEMU's `pic_set_irq` too), so a byte that arrives between the driver's last read and its ack still interrupts once the line is unmasked.
+- **`ps2_kbd` and the decoder** read every byte while the controller has one, and only Pause's six bytes are skipped.
+- **Where the kernel can drop a key** on its way to the task in front:
+  - a full ring of 64 events (`INPUT_QUEUE`) gives up its oldest;
+  - a change of focus empties both tasks' rings (`focus`).
+
+  Neither fits one press in seven while `wm` keeps the focus.
+- **Asked of the tools track if it fails again:** the run's serial log and `wm`'s state lines around the lost key, and whether `wm` logs one line for each event it reads or one for each read. If it can read two presses in one call, "6 lines for 7 presses" may be two presses in one line, and the press that went missing may be the Enter the shell needed.
+
 ## A slot for the Wi-Fi station's configuration client (550-APP-0033)
 
 **Recorded by:** the tools track (APP), 2026-10-12, for `wifi` and the station's configuration interface proposed to `NET` (requests-NET.md, "`idl/wifi.wit`: what `wifi` needs of the station").
