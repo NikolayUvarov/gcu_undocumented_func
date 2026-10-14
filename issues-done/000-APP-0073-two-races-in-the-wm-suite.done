@@ -1,6 +1,6 @@
-# 000-APP-0073 — Two races in the `wm` suite: a title written after adoption, and Turn off's Enter
+# 000-APP-0073 — Two races in the `wm` suite: a title written after adoption, and Turn off's Enter — done
 
-**Type:** tools (`wm`, tests) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.2
+**Type:** tools (`wm`, tests) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.2
 
 **Recorded by:** the kernel track (KRN), 2026-10-14, in `requests-APP.md`, from its gates of 63ef648 on i9 and 62a2624 on un-rizen-service. Numbered by the tools track.
 
@@ -33,3 +33,15 @@ Two checks of the `wm` suite fail now and then, on a slow or busy guest.
 ## Related
 
 [000-APP-0065](../issues-done/000-APP-0065-poweroff-shutdown-and-turn-off-in-wm.done) (Restart and Turn off), [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done) (the shell's window), [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done) (every entry reacts).
+
+## Resolution
+
+- `wm/src/main.rs` (`follow`): a title written after `wm` adopted the window is logged once, `[WM] TITLE <id> "<title>"`. The frame already took the title from the surface; only the log line kept the empty one.
+- tests/qemu_smoke.py, the `wm` suite:
+  - the shell's window is found by its `WINDOW` line or its `TITLE` line (`shells()`);
+  - Enter on Restart and Turn off waits for no state line. The test reads the question from the screen, answers no, waits for `THE SHELL RAN`, and then for `wm`'s reaction line, which the shell passes on once it has its answer.
+- Commit 70764d5. The gate of 70764d5 (2026-10-14):
+  - every local group (scripts/ci_local.sh, x86 and host), "keys, shell, tools" on 70764d5 and the others on 9419487 (70764d5 and text only);
+  - the x86 groups on i9 through Effector, with "RAM above 4 GiB" on un-rizen-service (on i9 it stopped after the display suite until Effector's hour ended it, as in [requests-NET.md](../issues/requests-NET.md));
+  - the aarch64 groups on un-rizen-service.
+- All under TCG; tests, not proofs (MC-12.2). The races were timing-dependent, so a passing gate shows they did not occur in these runs, not that they cannot.
