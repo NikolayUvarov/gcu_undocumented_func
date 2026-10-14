@@ -1,6 +1,6 @@
 # 550-ASR-0007 — Joining a Wi-Fi network, tested: in QEMU on every gate, and on the MacBook Pro on request
 
-**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** open · **Blocked by:** `APP`: a join without a screen and a start script ([requests-APP.md](requests-APP.md)); `NET`: the `net` suite's join check · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** open · **Blocked by:** `APP`: a join without a screen and a start script (asked on `internal-dev-messages`, `APP/2026-10-14…-ASR-wifi-join-without-a-screen-and-a-start-script.md`); `NET`: the `net` suite's join check · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 
@@ -34,4 +34,4 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
 
 ## Related
 
-[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), requests-APP.md, requests-NET.md, `tests/wlansim/`.
+[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), the requests to `APP` and `NET` on `internal-dev-messages` (2026-10-14), `tests/wlansim/`.
