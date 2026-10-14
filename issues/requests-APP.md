@@ -338,4 +338,5 @@ The `wm` suite's `shell_window` passes under load.
 - **Why only sometimes:** whether wm's line gets out before the shell starts asking depends on timing. "Restart", just before it, passed.
 - **The fix, one of:**
   - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
-  - the shell keeps passing the manager's lines while it asks. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
+  - the shell keeps passing the manager's lines while it asks.
+- **It is in `main` too** (the kernel track, 2026-10-14). The `wm` suite alone on `main` 720ab26, on this session's machine, failed the same way at "Turn off" in one of two runs, and the keys group passed there once. On the kernel branch (62a2624) the same step failed in three of four runs. The wm log of a passing run has `[WM] STARTED console PID 76 …` and wm's state line before the shell's question; a failing one has neither. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
