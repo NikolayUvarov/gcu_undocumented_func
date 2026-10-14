@@ -228,7 +228,7 @@ The service `ssh` (351-NET-0027) reads release files over SFTP for programs, as 
 
 ### Plan (a proposal; the kernel track decides)
 
-- **Starting it.** `init` starts `ssh` after `keystore` and the network stack, as it starts `tls`.
+- **Starting it.** `init` starts `ssh` (`ssh.elf`, built from `ssh_service/` since 2026-10-14) after `keystore` and the network stack, as it starts `tls`.
 - **`keystore`'s client.** `init` mints a client of `keystore` with `BADGE_KEY_SSH` (`mind::network`, value 3) and lends it to `ssh` alone, in slot 4 as `tls` holds `BADGE_KEY_SIGNER`. With it, `ssh` may ask for `ssh-login` signatures only (`idl/keystore.wit` 1.2, 351-NET-0027); nothing else gets that badge.
 - **The log.** `ssh` gets the log client, for its record of sessions, refusals and pin mismatches.
 - **Its clients:**

@@ -29,3 +29,6 @@ pub const BADGE_KEY_SIGNER: u16 = 1;
 /// The key service's Wi-Fi station (idl/keystore.wit 1.1, 550-NET-0024): `wlan`'s client may keep, list and forget
 /// networks and ask for each handshake's keys.
 pub const BADGE_KEY_STATION: u16 = 2;
+/// The key service's SSH service (idl/keystore.wit 1.2, 351-NET-0027): `ssh`'s client may ask for `ssh-login`
+/// signatures, and nothing else of the device key.
+pub const BADGE_KEY_SSH: u16 = 3;

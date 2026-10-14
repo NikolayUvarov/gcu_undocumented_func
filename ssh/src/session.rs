@@ -1,5 +1,6 @@
 //! After the transport: public-key login (RFC 4252), one session channel with the `sftp` subsystem (RFC 4254), and SFTP
 //! version 3 (draft-ietf-secsh-filexfer-02) to open a file for reading, learn its size, read it and close it.
+use crate::login::{self, USERAUTH_REQUEST};
 use crate::transport::Transport;
 use crate::wire::{Reader, Writer};
 use crate::{Error, Io, Keys};
@@ -7,7 +8,6 @@ use alloc::vec::Vec;
 
 const SERVICE_REQUEST: u8 = 5;
 const SERVICE_ACCEPT: u8 = 6;
-const USERAUTH_REQUEST: u8 = 50;
 const USERAUTH_FAILURE: u8 = 51;
 const USERAUTH_SUCCESS: u8 = 52;
 const USERAUTH_BANNER: u8 = 53;
@@ -70,16 +70,12 @@ pub fn connect<I: Io>(io: I, user: &str, pin: &[u8; 32], keys: &mut dyn Keys, ra
     if t.next(&mut rnd)?.first() != Some(&SERVICE_ACCEPT) { return Err(Error::Protocol); }
 
     // What a public-key login signs (RFC 4252 section 7), then the request carrying the signature.
-    let mut key = Writer::default();
-    key.string(b"ssh-ed25519").string(&keys.public());
-    let mut signed = Writer::default();
-    signed.string(&t.session_id).u8(USERAUTH_REQUEST).string(user.as_bytes()).string(b"ssh-connection").string(b"publickey").bool(true)
-        .string(b"ssh-ed25519").string(&key.data);
-    let signature = keys.sign(&signed.data).ok_or(Error::NoKey)?;
+    let signed = login::signed_data(&t.session_id, user.as_bytes(), &keys.public());
+    let signature = keys.sign(&signed).ok_or(Error::NoKey)?;
     let mut blob = Writer::default();
     blob.string(b"ssh-ed25519").string(&signature);
     let mut auth = Writer::new(USERAUTH_REQUEST);
-    auth.raw(&signed.data[4 + 32 + 1..]).string(&blob.data);
+    auth.raw(&signed[4 + t.session_id.len() + 1..]).string(&blob.data);
     t.send(&auth.data, &mut rnd)?;
     loop {
         match t.next(&mut rnd)?.first() {

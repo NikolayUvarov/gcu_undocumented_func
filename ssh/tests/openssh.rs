@@ -49,6 +49,8 @@ impl Keys for Key {
     fn public(&self) -> [u8; 32] { self.0.verifying_key().to_bytes() }
     fn sign(&mut self, data: &[u8]) -> Option<[u8; 64]> {
         use ed25519_dalek::Signer;
+        // The data OpenSSH's server takes is what the key service checks before it signs (351-NET-0027).
+        assert!(ssh::login::fits(data, &self.public()), "a login's data that the key service would refuse");
         self.1 += 1;
         Some(self.0.sign(data).to_bytes())
     }

@@ -19,6 +19,7 @@ pub mod parse;
 pub mod rtc;
 pub mod shell;
 pub mod socket;
+pub mod ssh;
 pub mod sysinfo;
 pub mod tls;
 pub mod tpm;
