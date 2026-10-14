@@ -16,6 +16,7 @@ Two checks of the `wm` suite fail now and then, on a slow or busy guest.
 - **Turn off's Enter waits for a line the shell holds.**
   - `every_entry_reacts` presses Enter on "System>Turn off" and waits for one `[WM] MODE=` line.
   - The shell asks in its window, and meanwhile passes `wm`'s lines on no more. The line came only after the test's answer, which waited for it.
+  - It fails on `main` too (the kernel track, 2026-10-14): the `wm` suite alone on 720ab26 failed at "Turn off" in one of two runs, and on the kernel branch (62a2624) in three of four. A passing run's log has `[WM] STARTED console PID …` and `wm`'s state line before the shell's question; a failing one has neither.
 
 ## Plan
 
