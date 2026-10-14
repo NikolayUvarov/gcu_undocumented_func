@@ -35,6 +35,8 @@ SIGNED = ("MANIFEST", "MANIFEST.SIG")
 VOICE = ("voice/model.bin", "voice/commands.txt")
 # The runs on real hardware (176-KRN-0087).
 DIAG = tuple(sorted(f"diag/{p.name}" for p in (ROOT / "diag").glob("*.msh")))
+# Desktop pictures for wm's background: baseline JPEGs of at most 4 MiB (wallpapers/README.md).
+WALLPAPERS = tuple(sorted(f"wallpapers/{p.name}" for p in (ROOT / "wallpapers").glob("*.jpg")))
 SECTOR = 512
 # The log partition after the boot one (211-PRT-0006): FAT16 with an ordinary MBR type (0x0E, FAT16 LBA), which Windows,
 # macOS and Linux mount and write. vfs_server mounts it as log: by its label and saves each boot's system log there.
@@ -70,7 +72,7 @@ def files(arch, source=None):
     source = Path(source or ROOT / spec["root"])
     names = listed(source)
     boot = tuple(name for name in BOOT_FILES if name not in spec["missing"] and (names is None or name in names))
-    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *SIGNED)
+    return (spec["efi"], "kernel.elf", *boot, *applications(source), *LICENSES, *VOICE, *DIAG, *WALLPAPERS, *SIGNED)
 
 
 def find_qemu_img(requested):
@@ -111,6 +113,9 @@ def read_payloads(source, arch="x86_64"):
         data = file.read_bytes()
         if name in LICENSES or name in VOICE or name in DIAG or name in SIGNED:
             pass
+        elif name in WALLPAPERS:
+            if data[:3] != b"\xff\xd8\xff":
+                raise ValueError(f"{file} is not a JPEG.")
         elif name.endswith(".elf"):
             if len(data) < 64 or data[:6] != b"\x7fELF\x02\x01" or data[18:20] != machine:
                 raise ValueError(f"{file} is not an ELF64 {arch} little-endian binary.")
