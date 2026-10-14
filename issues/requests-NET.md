@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](351-NET-0029-download-calls-with-a-deadline.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -75,24 +75,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## A download hung once at its resume on x86 with 6 GiB, after 109-NET-0010's fix (8ae66ed)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 (main 4996148 merged) on i9: "x86: RAM above 4 GiB", the network suite's `download_check`.
-
-### What was seen
-
-- `download data/big.bin …/big.bin --sha256 …` (30 MiB): `DOWNLOAD: CONNECTION CUT AT 10485760 OF 31457280, RESUMING`, then nothing on the serial line for 900 s, until the test gave up.
-- No `ITS PARSER HAD ENDED, ANOTHER ONE PARSES`, so it is not the path 109-NET-0010 fixed, or that path did not log.
-- `WATCHDOG: NONE` on that machine type: no reset was involved.
-- In the same gate, the same check passed:
-  - in x86's "boot, display, network, TLS" group on i9, `parser_restart_check` included;
-  - in aarch64's "files, network and TLS" on un-rizen-service;
-  - and the 6 GiB group itself when run again on un-rizen-service (505 s).
-- The serial log is on i9: `/home/un/mind-core/KRN/logs/g63ef/13/mind-core-download-4cpu.log`.
-
-### Asked (the network track decides)
-
-- Whether a resumed response can still wait for ever, and where: the session's call to its parser, the parser's reply, or `netstack`'s flow after the cut.
-- A deadline on that wait, so that a stalled resume ends with an error instead of hanging the program.
-- A line in the log when the resume's request goes out and when its head is parsed, so that the next hang shows which step it stopped at.

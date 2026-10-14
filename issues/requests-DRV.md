@@ -240,7 +240,7 @@ This is the Ryzen machine's request above, with one addition:
 
 ### Plan (a proposal; the drivers track decides)
 
-Once `bcm_wifi` receives OFDM (the gain table on the third path, 550-DRV-0028), it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, and the station offers 802.11g's rates again. A radio that sends at a rate it cannot use answers `send` with `invalid`, as the interface says.
+Once `bcm_wifi` receives OFDM, it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, and the station offers 802.11g's rates again. The drivers track's ffcf2b5 (in `fast-test`) reports OFDM received with core 2's front end off, so the bit may follow that commit. A radio that sends at a rate it cannot use answers `send` with `invalid`, as the interface says.
 
 ### Acceptance criteria
 
