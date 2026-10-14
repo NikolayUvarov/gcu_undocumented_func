@@ -13,8 +13,6 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CODE_ROOTS = {"kernel", "bootloader", "common", "libmind", "app", "app2", "clock", "dzen-clock", "ping", "pong", "files", "beep",
-              "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "say"}
 SKIP = {"target", "build", "dist", "out", "code_handoff", "code-handoff", "usb_root", "legacy", "patches_seq",
         "issues", "issues-done", "knowledge", "node_modules", "vendor", "__pycache__"}
 GROUPS = ("code", "build", "tests", "docs")
@@ -155,9 +153,14 @@ def minify_rust(source, keep_tests=False):
     return "".join(output) + "\n", removed
 
 
-def classify(path):
+def code_roots(root):
+    """Every crate at the top level (a directory with a Cargo.toml), and common/, which kernel and libmind include."""
+    return {p.parent.name for p in root.glob("*/Cargo.toml")} | {"common"}
+
+
+def classify(path, roots):
     parts, suffix = path.parts, path.suffix
-    if parts[0] in CODE_ROOTS:
+    if parts[0] in roots:
         if suffix == ".rs":
             return "code"
         if suffix in (".toml", ".ld") or path.name == "config":
@@ -177,7 +180,7 @@ def classify(path):
 
 
 def discover(root, enabled, patterns, out_dir):
-    found, matched = [], set()
+    found, matched, roots = [], set(), code_roots(root)
     for directory, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in SKIP and (not d.startswith(".") or d == ".cargo")
                          and not (Path(directory) / d).is_symlink()
@@ -185,7 +188,7 @@ def discover(root, enabled, patterns, out_dir):
         for name in sorted(names):
             path = Path(directory) / name
             relative = path.relative_to(root)
-            group = classify(relative)
+            group = classify(relative, roots)
             if group not in enabled or path.is_symlink():
                 continue
             rel = relative.as_posix()
@@ -201,6 +204,21 @@ def discover(root, enabled, patterns, out_dir):
         raise ValueError("Paths not found in the selected groups: " + ", ".join(sorted(set(patterns) - matched)))
     if not found:
         raise ValueError("No current sources found.")
+    return sorted(found, key=lambda item: item["path"])
+
+
+def constitution(root, archive):
+    """The Constitution and the RFCs in both languages (constitution/), the superseded editions in archive/ only on request."""
+    found, base = [], root / "constitution"
+    for directory, dirs, names in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if archive or d != "archive")
+        for name in sorted(names):
+            path = Path(directory) / name
+            if path.suffix != ".md" or path.is_symlink():
+                continue
+            data = path.read_bytes()
+            found.append({"path": path.relative_to(root).as_posix(), "group": "constitution", "text": data.decode("utf-8"),
+                          "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
     return sorted(found, key=lambda item: item["path"])
 
 
@@ -289,7 +307,7 @@ def publish(directory, outputs):
             temporary.unlink(missing_ok=True)
     if previous.get("generator") == "mind-core-context-v1":
         for name in previous.get("outputs", {}):
-            if name not in outputs and re.fullmatch(r"(?:code|build|tests|docs|agent|index)\.txt|parts/agent-\d{3,}\.txt", name):
+            if name not in outputs and re.fullmatch(r"(?:code|build|tests|docs|constitution|agent|index)\.txt|parts/agent-\d{3,}\.txt", name):
                 (directory / name).unlink(missing_ok=True)
 
 
@@ -303,6 +321,7 @@ def main():
     parser.add_argument("--agent-groups", default="code", help="groups for agent.txt: code,build,tests,docs")
     parser.add_argument("--keep-tests-in-agent", action="store_true", help="keep cfg(test) modules in Rust")
     parser.add_argument("--chunk-chars", type=int, default=16000, help="character limit per part; 0 disables parts")
+    parser.add_argument("--constitution-archive", action="store_true", help="add the superseded editions to constitution.txt")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     out_dir = (args.out_dir or root / "code_handoff").resolve()
@@ -320,6 +339,10 @@ def main():
         subset = [f for f in files if f["group"] == group]
         if subset:
             outputs[f"{group}.txt"] = render(f"MIND CORE {group}: original contents; @@ path; identical files referenced.\n", blocks(subset))
+    charter = constitution(root, args.constitution_archive)
+    if charter:
+        outputs["constitution.txt"] = render("MIND CORE constitution: the Constitution and the RFCs, English and Russian, original "
+                                             "contents; @@ path. Only its articles are normative (AGENTS.md).\n", blocks(charter))
     full_bundle_names = ", ".join(outputs)
     agent_files = [f for f in files if f["group"] in agent_groups]
     if not agent_files:
@@ -343,17 +366,18 @@ def main():
              "Token counts are characters/4 estimates, NOT counts for a particular model/tokenizer.",
              f"Selection: {args.include or 'all enabled live sources'}; agent groups: {scope}", "", "Files:"]
     index.extend(f"{f['group']:5} {f['path']} ({f['bytes']} bytes)" for f in files)
+    index.extend(f"constitution {f['path']} ({f['bytes']} bytes)" for f in charter)
     index += ["", "Outputs (bytes / estimated tokens):"]
     index.extend(f"{name}: {stats(text)['bytes']} / ~{stats(text)['estimated_tokens']}" for name, text in outputs.items())
     outputs["index.txt"] = "\n".join(index) + "\n"
     manifest = {"generator": "mind-core-context-v1", "token_estimate": "ceil(characters / 4); not model-specific",
                 "selection": args.include, "agent_groups": agent_groups, "source_bytes": original_bytes,
-                "agent_input_bytes": agent_input_bytes, "files": [{k: v for k, v in f.items() if k != "text"} for f in files],
+                "agent_input_bytes": agent_input_bytes, "files": [{k: v for k, v in f.items() if k != "text"} for f in files + charter],
                 "outputs": {name: stats(text) for name, text in outputs.items()}}
     outputs["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     publish(out_dir, outputs)
     print(f"Done: {out_dir}\nFiles: {len(files)}; {original_bytes:,} bytes of sources selected.")
-    for name in ("code.txt", "build.txt", "tests.txt", "docs.txt", "agent.txt"):
+    for name in ("code.txt", "build.txt", "tests.txt", "docs.txt", "constitution.txt", "agent.txt"):
         if name in outputs:
             info = stats(outputs[name])
             print(f"{name}: {info['bytes']:,} bytes; ~{info['estimated_tokens']:,} tokens (estimate: chars/4)")

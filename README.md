@@ -773,6 +773,7 @@ Compact results also go to `code_handoff/`:
 | `index.txt` | File inventory, scope, sizes and limitations; use it to choose relevant files. |
 | `code.txt` | Current Rust sources, including comments and inline tests, with short file markers. |
 | `build.txt` | Manifests, `.cargo/config.toml`, linkers, build/run/USB/export scripts and their helpers. |
+| `constitution.txt` | The Constitution and the RFCs in English and Russian (`constitution/`), unchanged; the superseded editions in `archive/` only with `--constitution-archive`. |
 | `agent.txt` | Compact Rust code for discussion: comments/formatting reduced; inline `#[cfg(test)] mod ...` blocks omitted by default. |
 | `parts/agent-001.txt`, etc. | The same agent bodies split for copy/paste, at most 16,000 Unicode characters per file including headers. |
 | `manifest.json` | Selected source paths/hashes, original/output sizes, estimates and explicit test-module omissions. |
@@ -783,8 +784,9 @@ compact body. Splits prefer line boundaries; a very long line/string can be
 split across parts without dropping any text. This is an analysis view, not a
 patch to apply to the repository. Original source files are never modified.
 
-The default selection includes `kernel`, `bootloader`, `common`, `libmind`, all
-applications and services, and current tooling. It excludes historical patches, `legacy`, issue
+The default selection includes every crate at the top level (a directory with a
+`Cargo.toml`: `kernel`, `bootloader`, `libmind`, all drivers, services and
+applications), `common`, and current tooling. It excludes historical patches, `legacy`, issue
 files, old `knowledge` snapshots, dependencies/build outputs, `Cargo.lock`,
 symlinks and previous context dumps. Files do not need to be committed to Git.
 Byte-identical files (such as shared linker/config files) are included once per
