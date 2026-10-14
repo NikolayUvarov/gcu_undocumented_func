@@ -5304,7 +5304,9 @@ def download_runs(vm, release, port, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    # The resume's request and its head are logged (351-NET-0029), so a stall shows the step it stopped at.
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
@@ -5344,7 +5346,8 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/tls.bin {url}/big.bin --pin {pins['server']} --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=1200)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert secure.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], secure.requests
     log = vm.command("dmesg -s tls")
