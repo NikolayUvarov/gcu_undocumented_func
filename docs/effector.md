@@ -104,16 +104,20 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 
 ### The rules for working together
 
-1. **Long or CPU-heavy work is sequential.** That means a build, the host tests, a QEMU suite or a gate's group: set `"sequential": true`.
-   - All sequential operations for one machine, whichever agent sent them, wait in one first-in, first-out queue, and run one at a time.
+1. **Long or CPU-heavy work runs one operation at a time for each track.** That means a build, the host tests, a QEMU suite or a gate's group.
+   - A machine runs as many operations at once as it has queues: `parallel_limit` in `GET /api/v1/endpoints`, with `occupied_queues` and `free_slots`. The maintainer sets it on the Agents page by the machine's cores: two QEMU groups at once need about twice the threads, and a 16-CPU group takes 16.
+   - **One queue** (`parallel_limit` 1): set `"sequential": true`. All sequential operations for one machine, whichever agent sent them, wait in one first-in, first-out queue and run one at a time.
+   - **PCU** (4 CPUs) has had `parallel_limit` 3 since 2026-10-12, but its QEMU groups and builds still go sequential. On 2026-10-12 two tracks' groups ran there at once as ordinary operations: the load rose to 15–20 and the kernel track's aarch64 groups timed out. Its other queues are for short, light work.
+   - **More queues:** send the long work as ordinary operations (no `"sequential"`), one at a time: the next only when the last has ended. Work above the limit waits for a free queue. Sequential operations keep sharing one lane, so a track that marks its work sequential waits behind the others' sequential work.
+   - Every track keeps its temporary files in its own `TMPDIR` (rule 4), whatever the queue.
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
-   - Short read-only checks (versions, free space, a log's tail) are not sequential and run beside the queue.
+   - Short read-only checks (versions, free space, a log's tail) are not sequential. They still take a queue: with one queue they wait for the running operation.
 2. **Nothing outlives its operation.** No `nohup`, `&`, `setsid`, `screen`, `tmux` or `systemd-run` for work. A detached job runs outside the queue and collides with the next agent's build or test.
 3. **One operation runs at most an hour** (`timeout_seconds` ≤ 3600). Split longer work into operations that each fit, and queue them one after another: for example, one QEMU group or one build each.
 4. **Each track works in its own directory:** `/home/un/mind-core/<TRK>/` (for example `/home/un/mind-core/NET/`), with its own clone and its own `target/` directories.
    - Never build in, clean or change another track's directory.
    - The kernel track's clone is still at `/home/un/mind-core/gcu_undocumented_func` and moves to `KRN/`.
-   - The test scripts write fixed paths under `/tmp` (`/tmp/mind-core-*`, `/tmp/mind-*-target`). That is a further reason why builds and QEMU runs must be sequential even in different directories.
+   - **Each operation exports `TMPDIR=/tmp/mind-<TRK>`** (`mkdir -p` it first). `scripts/ci_local.sh`, the test programs, the kernel variants, the logs and the QEMU suites' files then go there ([000-KRN-0092](../issues/000-KRN-0092-two-tracks-test-side-by-side.md)), so two tracks' runs on one machine share no file and no lock. Keep the path short: the suites put QEMU's control sockets under it, and a Unix socket's path must stay under 108 bytes. A test or script that still writes a fixed path under `/tmp` is a bug: report it to the track that owns it.
 5. **Name your operations.**
    - `idempotency_key` starts with your track's code and is unique for each new submission.
    - `reason` names the track, the task and what runs (`"STO 300-STO-0002: the store suite on x86"`). The maintainer reads it on the dashboard.

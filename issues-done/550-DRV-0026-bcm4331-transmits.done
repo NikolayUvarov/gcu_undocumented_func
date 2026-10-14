@@ -1,0 +1,43 @@
+# 550-DRV-0026 — `bcm_wifi`, stage 5: frames transmitted, within the power the SPROM allows — done
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+
+## Problem
+
+Stage 4 ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)) receives by DMA and lists the networks that send beacons. Nothing is transmitted yet, so no probe request (an active scan), authentication or association can happen. Stage 3 left out the transmit power steps on purpose.
+
+## Plan
+
+`bcm_wifi`, on request and step by step as the earlier stages:
+
+- **Transmit power.** The per-core 2.4 GHz maximum power and PA parameters from the SPROM (revision 9), the idle TSSI measured, and the HT-PHY's power control on, as the fact sheet describes. A frame is never sent above the SPROM's maximum.
+- **The transmit ring.** One 64-bit transmit ring in the DMA region; the transmit header the microcode expects (format 598 and later) in front of each frame; a fixed basic rate (1 Mbit/s CCK or 6 Mbit/s OFDM).
+- **Completion.** The transmit status the microcode reports read back for each frame.
+- **A test.** An active scan: one probe request with the broadcast SSID on each of channels 1 to 11 (allowed everywhere; 12 and 13 stay receive-only until the region is known), and the probe responses that answer it.
+
+The facts come from a fact sheet written from Linux's `b43` (transmit header, rings, SPROM layout, power control), under 550-DRV-0006's rule.
+
+## Acceptance criteria
+
+On the MacBook Pro, one boot on request logs each probe request's transmit status and the probe responses received for it, with the transmit power used. The machine runs on. Evidence for this machine only (MC-12.1).
+
+## Progress
+
+**2026-10-12:** written in `bcm_wifi/src/stage4.rs` after the passive scan, from a fact sheet on transmitting. Two choices differ from the plan above, both towards less power:
+- **No closed-loop power control yet.** b43's HT-PHY power control writes its TSSI-to-power table wrongly (64 16-bit entries taken from an array of 32-bit values), so it is not copied. The transmit gain is fixed instead, from entry 80 of the gain table (b43's fixed gain uses entry 40; a higher entry is a lower gain), with power control off. Power control from the SPROM's per-core maximum and PA parameters becomes its own step once transmitting is shown to work.
+- **Broadcast probe requests only,** one per channel 1 to 11, at 1 Mbit/s CCK on engine 1 (the BCM4331 sends everything there), one descriptor per frame with the 118-byte transmit header; the channel code in the header matches shared memory 0xA0. The station's address is in the address match during this step, so the probe responses addressed to it are kept, and acknowledged by the card as any station does.
+
+## Resolution
+
+`bcm_wifi/src/stage4.rs` (`transmit`, `probe`, `tx_status`). On the MacBook Pro (`fast-test` 5676979, LOG:boot0001.log, 2026-10-12, on request):
+- the fixed gain from entry 80 of the gain table (`10090010`), power control off (PHY 0x1E7 = `0020`); the transmit ring at 0x758FE000 on engine 1;
+- channels 1 to 11, one broadcast probe request each (45 bytes, 163 with the header): every one **sent once, not suppressed**, the sequence numbers 1 to 11 filled in by the microcode, PHY status 0;
+- on channel 1, **three probe responses** came back, from `un2`, `David_2.4G` and a network the passive scan had not heard (`Xiaomi_7C34`, 44:F7:70:03:74:9E, −57 dBm): access points hear the card;
+- on channels 2 to 11 no probe response came within 150 ms, though networks there sent beacons at −39 to −54 dBm. Whether the low gain, the short wait or the channel switch is the cause is open: [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md);
+- both engines disabled before the core was reset; the machine ran on.
+
+The transmit power is a table entry, not a calibrated figure in dBm. Evidence for this machine only (MC-12.1).
+
+## Related
+
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.

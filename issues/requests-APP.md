@@ -366,3 +366,11 @@ In the `tls` suite, a program with the lent client gets `denied` for `client-cer
 ### Acceptance criteria
 
 In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.
+
+## The shell logs its first frame (213-KRN-0098)
+
+**Recorded by:** the kernel track (KRN), 2026-10-13, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md): on the maintainer's Ryzen machine the screen went black when the shell took it, and the system log cannot tell a shell that never drew from a screen that never showed it.
+
+**Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
+
+**Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.

@@ -134,7 +134,7 @@ The maintainer or the owning track reviews and merges it.
 
 **A maintainer's machine can run the gate continuously.** `scripts/ci_watch.sh` fetches `origin` every 10 minutes. It tests each new commit of `main`, and of every other branch merged with `main`, and keeps a history in `~/.cache/mind-ci-watch/history.log`. Run it with `--once` for a single pass.
 
-**The maintainer's remote machines (Effector).** Builds and tests on the maintainer's machines go through Effector, which several agents share: long work waits in each machine's sequential queue, each track has a directory of its own there, nothing runs detached, and no machine is rebooted. How to use them is in [docs/effector.md](docs/effector.md) (Russian: [docs/effector_RU.md](docs/effector_RU.md)).
+**The maintainer's remote machines (Effector).** Builds and tests on the maintainer's machines go through Effector, which several agents share: long work runs one operation at a time for each track in the machine's queues, each track has a directory and a `TMPDIR` of its own there, nothing runs detached, and no machine is rebooted. How to use them is in [docs/effector.md](docs/effector.md) (Russian: [docs/effector_RU.md](docs/effector_RU.md)).
 
 ## 5. Working next to other tracks
 
@@ -177,7 +177,7 @@ Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given be
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
 Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
-Remote build machines (Effector): read docs/effector.md first; long work goes into a machine's sequential queue, in your track's own directory.
+Remote build machines (Effector): read docs/effector.md first; long work runs one operation at a time in a machine's queues, in your track's own directory and TMPDIR.
 Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.
 Comments in English, one line. One task per commit, citing the issue; close finished issues as issues/README.md says.
