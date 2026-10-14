@@ -4,6 +4,7 @@
 use crate::radio::{Error, Filter, Radio, FRAME_MAX, RADIO_HEADER};
 use mind::idl::codec::List;
 use mind::idl::{wire, wlanhw};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::ipc::Endpoint;
 
 // The slot a request's capability lands in; the receive timeout, which is also the polling period; deferred waits.
@@ -20,6 +21,7 @@ fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
 fn mac(v: u64) -> [u8; 6] { core::array::from_fn(|i| (v >> (40 - 8 * i)) as u8) }
 
 pub fn run(radio: &mut Radio) -> ! {
+    HOLDING.store(false, Ordering::Relaxed);
     mind::println!("[BCM] SERVING idl/wlanhw.wit {}.{}.{}: MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, CHANNELS 1-13", wlanhw::VERSION.0, wlanhw::VERSION.1,
                    wlanhw::VERSION.2, radio.mac[0], radio.mac[1], radio.mac[2], radio.mac[3], radio.mac[4], radio.mac[5]);
     let mut scratch = [0u8; wlanhw::REQUEST_MAX];
@@ -94,4 +96,45 @@ pub fn absent() -> ! {
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(no)),
         };
     }
+}
+
+// While the test runs before the station is served (550-DRV-0029): its requests are answered at once, so that it and
+// the stack waiting on it are not held up. `info` is answered as it is, the rest as if the radio were busy.
+static HOLDING: AtomicBool = AtomicBool::new(false);
+static HOLD_MAC: AtomicU64 = AtomicU64::new(0);
+
+pub fn hold(own: [u8; 6]) { HOLD_MAC.store(mac64(&own), Ordering::Relaxed); HOLDING.store(true, Ordering::Relaxed); }
+
+// Waits `ms`, answering the station's requests meanwhile when they are held.
+pub fn pause(ms: usize) {
+    if !HOLDING.load(Ordering::Relaxed) { if ms != 0 { mind::time::sleep(ms); } return; }
+    let end = mind::time::uptime_ms() + ms;
+    let mut scratch = [0u8; wlanhw::REQUEST_MAX];
+    loop {
+        let wait = end.saturating_sub(mind::time::uptime_ms()).clamp(1, 50) as u32;
+        if let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, wait) { busy(&request, &mut scratch); }
+        if mind::time::uptime_ms() >= end { return; }
+    }
+}
+
+fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) {
+    let (request, call) = match wlanhw::decode(request, RECEIVED_CAP, scratch) {
+        Ok(decoded) => decoded,
+        Err(reason) => { if request.is_call { let _ = wire::reject(reason); } return; }
+    };
+    let busy = wlanhw::Error::Busy;
+    let _ = match request {
+        wlanhw::Request::Info => {
+            let mut channels = List::default();
+            for c in 1..=13 { channels.push(c); }
+            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: 1, channels, frame_max: FRAME_MAX as u16, channel: 0 }))
+        }
+        wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(busy)),
+        wlanhw::Request::SetFilter { .. } => wlanhw::reply_set_filter(call, Err(busy)),
+        wlanhw::Request::Send { .. } => wlanhw::reply_send(call, Err(busy)),
+        wlanhw::Request::Receive => wlanhw::reply_receive(call, Err(wlanhw::Error::Empty)),
+        wlanhw::Request::Wait => wlanhw::reply_wait(call, 0),
+        wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
+        wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
+    };
 }

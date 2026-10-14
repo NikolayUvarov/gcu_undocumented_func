@@ -1,6 +1,6 @@
-# 000-APP-0067 — `fm` runs a script: Enter on a `.msh` file
+# 000-APP-0067 — `fm` runs a script: Enter on a `.msh` file — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 **Recorded by:** the tools track, 2026-10-12, split from the maintainer's report in [000-APP-0066](../issues-done/000-APP-0066-cd-pwd-and-tab-completing-paths.done): "I cannot run the script from fm by Enter".
 
@@ -29,3 +29,12 @@ This widens what a client of the shell's commands may ask for: running a script 
 ## Related
 
 [000-APP-0066](../issues-done/000-APP-0066-cd-pwd-and-tab-completing-paths.done), 211-APP-0044 (the shell's commands for clients), [094](../issues-done/094-shell-script-language.done) (`msh`).
+
+## Resolution
+
+- `fm`: Enter on a `.msh` file runs it through the shell (`fm/src/fm.rs` `open`, `Disk::script`). In `wm`, where `fm` holds the shell's commands (`REQUEST_SHELL`), it sends `msh <path>` with `shell.wit` `run`. The shell asks in its window, and `fm` shows the script's last line or why it did not run. On the shell's screen `fm` holds no shell's commands and says to type `msh <path>` there.
+- The shell (`shell/src/clients.rs`): `msh <file>` from a client is asked in its window; `msh -c`, `--check` and more words are refused.
+- `fm <file>` opens the file's directory with the cursor on it.
+- Tests: `tests/fm_host.rs` and `tests/shell_host.rs`; the `wm` suite answers no and then yes in the shell's window; the tools suite (x86 and aarch64) checks the hint on the shell's screen.
+- Commits 51c6221, with the suites' fixes 4307985 (the RAM disk emptied after `fm`'s check) and a7eb8a2 (`fm` started `WITH window,files,sysinfo,shell`).
+- The gate of eda1c74 (2026-10-14): every local group (scripts/ci_local.sh, x86 and host); the x86 groups on PCU through Effector, with Secure Boot on i9 (PCU has no `python3-virt-firmware`) and the reproducible build on DESKTOP-i7-930-wsl-u24 (an hour was not enough on PCU); the aarch64 groups on DESKTOP-i7-930-wsl-u24, with "files, network and TLS" on un-rizen-service (the store's check outran its 240 s on the slower machine, [requests-STO.md](../issues/requests-STO.md)). All under TCG; tests, not proofs (MC-12.2).

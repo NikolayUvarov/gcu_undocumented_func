@@ -20,7 +20,7 @@ const SEEN: usize = 48;
 #[derive(Default)]
 struct Heard { beacons: u32, responses: u32, to_us: u32, other: u32, unknown_rate: u32 }
 
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 4, STEP {}: {}", n, what); mind::time::sleep(crate::step_wait()); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 4, STEP {}: {}", n, what); crate::serve::pause(crate::step_wait()); }
 
 // One received frame as the service hands it (header, then the MPDU without FCS), counted; a network it names noted.
 fn note(f: &[u8], mac: &[u8; 6], seen: &mut [Network; SEEN], heard: &mut Heard) {
@@ -66,7 +66,7 @@ fn listen(radio: &mut Radio, ms: usize, seen: &mut [Network; SEEN], heard: &mut 
         radio.poll();
         while let Ok(n) = radio.take(&mut buffer) { note(&buffer[..n], &radio.mac, seen, heard); }
         if mind::time::uptime_ms() >= end { return; }
-        mind::time::sleep(2);
+        crate::serve::pause(2);
     }
 }
 
