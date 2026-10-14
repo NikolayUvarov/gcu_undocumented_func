@@ -29,6 +29,11 @@ The kernel fails a call to a parser that has ended (ERR_PEER), but not one to a 
 
 What this does not show: why the call on i9 got no answer. If it happens again, the log names the step and the run goes on.
 
+## Progress (2026-10-14)
+
+- **The same hang again, before this change:** the tools track's gate of 70764d5 (which changes only `wm`) saw "x86: RAM above 4 GiB" stop on i9 after the display suite, until Effector's hour ended it. Its QEMU logs were cleared before they were read, so the step is not known (message to NET on `internal-dev-messages`, 2026-10-14).
+- **With this change,** gate 15 (bb81a81) passed the network suite on x86 locally (both new lines required after each cut) and on aarch64 on un-rizen-service, and "x86: RAM above 4 GiB" locally (856 s). One pass is not a proof that the hang is gone; it shows the new lines and bounds do not break the suite.
+
 ## Related
 
 [351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [109-NET-0010](109-NET-0010-a-parser-per-session.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done).
