@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -304,39 +304,3 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 - The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
 - `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
-
-## A window can be adopted before its title is written, and wm logs it with none (the wm suite fails once in a while)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 on i9 (`x86: keys, shell, tools`, the `wm` suite's `shell_window`).
-
-### Problem
-
-- **What failed.** The shell's window opened as `[WM] WINDOW 5 PID 24 TEXT 80X25 "" AT 80,25 80X24`, with an empty title. `open_shell` in tests/qemu_smoke.py waits for a window line ending `"shell"`, so it timed out. The same group passed on this branch's previous commit, on un-rizen-service and locally.
-- **Why** (from the code; the timing makes it rare):
-  - `libmind::windowed::Window::open` (and `windowed::open`) call `create`, then `surface`, and only then `surface.set_title(title)` in the shared memory.
-  - The broker (`windows/src/main.rs:113`) reads the title from that memory each time it lists the windows.
-  - `wm` adopts a window at the first sync where the broker can lend its surface, which is already true after `surface`, and logs it once (`wm/src/main.rs:244`).
-  - A sync that falls between `surface` and `set_title` therefore logs, and keeps, an empty title. On i9 the guest is slow: wm took 9.5 s to list its programs in that run.
-
-### Plan (a proposal; the tools track decides)
-
-One of:
-- **The title travels with `create`** (a new version of `idl/window.wit`), so the window is never listed without it.
-- **`wm` adopts a window only once its title is set**: an empty title waits for the next sync, as a surface not yet lendable already does. It needs a limit, for a program that sets none.
-- **`wm` logs the title again when it changes**, and the suite waits for that line.
-
-### Acceptance criteria
-
-The `wm` suite's `shell_window` passes under load.
-
-**A second race in the same suite (2026-10-14, the kernel track's gate of 62a2624 on un-rizen-service).**
-- **Where:** `every_entry_reacts` presses Enter on "System>Turn off" and `keys("ret")` waits for one `[WM] MODE=` line.
-- **What happened:**
-  - the shell logged `FOR PID 76 THE SHELL ASKS IN ITS WINDOW: "poweroff"` and opened its window;
-  - wm's `MODE=NORMAL` line never reached the serial line, because the shell passes wm's lines on no more while it asks (the test's own comment says so);
-  - the test then waited 12 s for that line, while the shell waited for the test's `n`.
-- **Why only sometimes:** whether wm's line gets out before the shell starts asking depends on timing. "Restart", just before it, passed.
-- **The fix, one of:**
-  - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
-  - the shell keeps passing the manager's lines while it asks.
-- **It is in `main` too** (the kernel track, 2026-10-14). The `wm` suite alone on `main` 720ab26, on this session's machine, failed the same way at "Turn off" in one of two runs, and the keys group passed there once. On the kernel branch (62a2624) the same step failed in three of four runs. The wm log of a passing run has `[WM] STARTED console PID 76 …` and wm's state line before the shell's question; a failing one has neither. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.

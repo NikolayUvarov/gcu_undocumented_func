@@ -33,6 +33,23 @@ The 550-DRV-0028 runs, 2026-10-14:
 
 Evidence for this machine only (MC-12.1).
 
+- **2026-10-14, the eighth run, `fast-test` f1f30f6 (plan item 1): OFDM is received with core 2 off.** Directed requests, acknowledged of 3, with core 2's front end off:
+
+  | Network (channel, signal) | 1M | 6M | 12M | 24M | 54M | 6M, core 0 alone | 6M, all cores on |
+  |---|---|---|---|---|---|---|---|
+  | `Tenda_E25140` (3, −38) | 3 | 3 | 3 | 3 | 3 | 3 | 1 |
+  | `David_2.4G` (1, −43) | 3 | 3 | 3 | 3 | 0 | 3 | 1 |
+  | `un2` (1, −44) | 3 | 3 | 2 | 3 | 3 | 3 | 0 |
+  | a network at 4A:5D:F8:22:99:39 (6, −44) | 3 | 3 | 3 | 3 | 2 | 3 | 0 |
+  | `Xiaomi_7C34` (6, −45) | 3 | 2 | 3 | 3 | 2 | 2 | 0 |
+  | `TP-LINK_POCKET` (6, −38) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+  - **Every OFDM acknowledgement counted reached the host as a good OFDM frame**, at about −40 to −49 dBm on core 0 and 30 dB less on core 1.
+  - **Core 0 alone does as well as cores 0 and 1.**
+  - **With every core on, OFDM fails again.**
+  - **`TP-LINK_POCKET` answers nothing on channel 6,** as in every run there.
+- **Plan item 2 waits for `idl/wlanhw.wit` 1.1 on `main`** (`BAND_2GHZ_OFDM` is in `libmind/src/network.rs` on `fast-test` only). The criterion's first half is met at −45 dBm in most tries, up to 24 Mbit/s and mostly at 54.
+- **The same boot: `wlan` got the radio's `info` 2 s after it started** (`[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`), during the test, and `bcm_wifi` served it after the test. No scan was asked of the station afterwards: no program holds its configuration client yet (the tools track's part, `SLOT_WIFI`).
 ## Progress
 
 - **2026-10-14: plan item 4, the station answered during the test** (`bcm_wifi/src/serve.rs`, on `claude/ASR-DRV` and `fast-test` until its gate). With `data/wifitest.txt` and a station to serve, `bcm_wifi` answers the station's requests while the test's stages run:
