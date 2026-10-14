@@ -68,7 +68,8 @@ impl Wire for State {
 
 /// Why joining failed or the link was lost: `wrong-passphrase` (the handshake was answered and never completed),
 /// `no-answer`, `refused` (authentication, association, or an RSN element in the handshake other than the advertised
-/// one), `not-found`, `unsupported`, `lost` (deauthenticated or silent; the station joins again by itself).
+/// one), `not-found`, `unsupported` (a protection the station does not join, or an access point that refused it for
+/// lacking one of its basic rates), `lost` (deauthenticated or silent; the station joins again by itself).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Reason { #[default] None = 0, WrongPassphrase = 1, NoAnswer = 2, Refused = 3, NotFound = 4, Unsupported = 5, Lost = 6 }

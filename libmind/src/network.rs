@@ -15,6 +15,10 @@ pub const BADGE_COUNTERS: u16 = 1;
 /// also join, leave and forget. A station client without BADGE_WIFI is the network stack's card (idl/net.wit).
 pub const BADGE_WIFI: u16 = 0x0100;
 pub const BADGE_WIFI_CHANGE: u16 = 0x0300;
+/// A radio's bands (idl/wlanhw.wit 1.1 `info`): 2.4 GHz, 5 GHz, and OFDM on 2.4 GHz (802.11g; without it 802.11b there).
+pub const BAND_2GHZ: u8 = 1;
+pub const BAND_5GHZ: u8 = 2;
+pub const BAND_2GHZ_OFDM: u8 = 4;
 
 /// A client of the TLS service that may not offer the device certificate (idl/tls.wit 1.2, 351-NET-0022): the one a
 /// launcher lends to a program, so that it cannot sign in as the device.

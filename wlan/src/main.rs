@@ -320,8 +320,11 @@ fn main(_info: &'static BootInfo) {
     let info = match wlanhw::info(RADIO) { Ok(Ok(info)) => info, _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) } };
     let own = mac(info.mac);
     let channels = info.channels.as_slice();
-    mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS", own[0], own[1], own[2], own[3], own[4], own[5], channels.len());
-    let mut wlan = Wlan { station: Station::new(own, channels), own, tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX], radio_frame: [0; FRAME_MAX + RADIO_HEADER],
+    // Without OFDM on 2.4 GHz (a 1.0 radio says nothing of it) the station keeps to 802.11b's rates there (550-NET-0028).
+    let ofdm = info.bands & mind::network::BAND_2GHZ_OFDM != 0;
+    mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS, 2.4 GHZ {}", own[0], own[1], own[2], own[3], own[4], own[5],
+                   channels.len(), if ofdm { "802.11G" } else { "802.11B" });
+    let mut wlan = Wlan { station: Station::new(own, channels, ofdm), own, tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX], radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS] };
     let mut scratch = [0u8; net::REQUEST_MAX];

@@ -3,7 +3,9 @@
 // A stand-in radio for QEMU (550-NET-0018), which has no Wi-Fi device: serves idl/wlanhw.wit as a radio within reach of
 // one access point, `MIND-TEST` on channel 6, WPA2-PSK with the passphrase "mind test passphrase". The access point is
 // simulated here (its handshake from wpa::authenticator) with a small network behind it: it answers DHCP (10.0.4.15/24,
-// gateway and DNS 10.0.4.1), ARP for the gateway and ICMP echo to it. A test service: in no image but the tests'.
+// gateway and DNS 10.0.4.1), ARP for the gateway and ICMP echo to it. Like `bcm_wifi` today, the radio has no OFDM on
+// 2.4 GHz (550-NET-0028): it refuses a frame at an OFDM rate, and the access point logs the rates the station offers.
+// A test service: in no image but the tests'.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA, TYPE_MANAGEMENT};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
@@ -14,7 +16,9 @@ use wpa::ccmp::{self, Replay};
 use wpa::eapol::Gtk;
 
 extern crate alloc;
+use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt::Write;
 
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 10;
@@ -30,6 +34,8 @@ const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 16;
 const BEACON_MS: u64 = 100;
 const FRAME_MAX: usize = 2346;
+// The rates the radio sends at, in 500 kb/s units: DSSS and CCK alone.
+const RATES: [u8; 4] = [2, 4, 11, 22];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Expect { Nothing, Message2, Message4 }
@@ -50,6 +56,8 @@ struct Sim {
     pn: u64,
     gtk: Gtk,
     group_pn: u64,
+    // Whether a frame at a rate the radio lacks was refused (logged once).
+    refused: bool,
 }
 
 fn mac64(m: &Mac) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -138,6 +146,7 @@ impl Sim {
                     self.hear(&r);
                 }
                 frame::ASSOCIATION_REQUEST if h.a1 == BSSID => {
+                    mind::println!("[WLANSIM] OFFERED RATES{}", offered(f.get(h.len + 4..).unwrap_or(&[])));
                     let mut r = self.header(frame::ASSOCIATION_RESPONSE, &h.a2);
                     r.extend_from_slice(&[0x01, 0x04, 0, 0, 0x01, 0xC0, 1, 8, 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6C]);
                     self.hear(&r);
@@ -299,6 +308,19 @@ fn ipv4(protocol: u8, source: [u8; 4], destination: [u8; 4], payload: &[u8]) -> 
     p
 }
 
+// The rates of an association request's elements, in Mb/s: " 1 2 5.5 11".
+fn offered(elements: &[u8]) -> String {
+    let mut text = String::new();
+    for (id, body) in frame::Elements::new(elements) {
+        if id != frame::RATES && id != frame::EXTENDED_RATES { continue; }
+        for &r in body {
+            let r = r & 0x7F;
+            let _ = if r % 2 == 1 { write!(text, " {}.5", r / 2) } else { write!(text, " {}", r / 2) };
+        }
+    }
+    text
+}
+
 // An ANonce: RDRAND where there is one; the uptime otherwise (a test access point, not a security boundary).
 fn random32() -> [u8; 32] {
     let mut r = [0u8; 32];
@@ -310,7 +332,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0 };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
     let mut scratch = [0u8; wlanhw::REQUEST_MAX];
     let mut out = [0u8; FRAME_MAX + RADIO_HEADER];
@@ -327,11 +349,15 @@ fn main(_info: &'static BootInfo) {
             wlanhw::Request::Info => {
                 let mut channels = List::default();
                 for c in 1..=13 { channels.push(c); }
-                wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: mac64(&OWN), bands: 1, channels, frame_max: FRAME_MAX as u16, channel: sim.channel }))
+                wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: mac64(&OWN), bands: mind::network::BAND_2GHZ, channels, frame_max: FRAME_MAX as u16, channel: sim.channel }))
             }
             wlanhw::Request::SetChannel { channel } if (1..=13).contains(&channel) => { sim.channel = channel; wlanhw::reply_set_channel(call, Ok(())) }
             wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(wlanhw::Error::Invalid)),
             wlanhw::Request::SetFilter { filter } => { sim.filter = filter; wlanhw::reply_set_filter(call, Ok(())) }
+            wlanhw::Request::Send { rate, .. } if !RATES.contains(&rate) => {
+                if !sim.refused { mind::println!("[WLANSIM] REFUSED A FRAME AT RATE {} (500 KB/S UNITS)", rate); sim.refused = true; }
+                wlanhw::reply_send(call, Err(wlanhw::Error::Invalid))
+            }
             wlanhw::Request::Send { frame: f, attempts, .. } => {
                 let acked = sim.channel == CHANNEL && sim.station_sent(f);
                 wlanhw::reply_send(call, Ok(&wlanhw::Sent { acked, attempts: if acked { 1 } else { attempts.max(1) } }))

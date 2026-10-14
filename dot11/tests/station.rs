@@ -1,6 +1,6 @@
 //! Host tests of the 802.11 station (550-NET-0017) against a simulated access point on one channel: a scan, joining
 //! an open and a WPA2-PSK network (the access point's handshake from `wpa::authenticator`), data both ways under CCMP,
-//! and what makes the station refuse, fail or join again.
+//! what makes the station refuse, fail or join again, and a radio without OFDM on 2.4 GHz (550-NET-0028).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
 use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
@@ -36,6 +36,10 @@ struct Ap {
     /// The EAPOL-Key frame the access point waits for, and an RSN element message 3 carries instead of the beacon's.
     expect: Expect,
     handshake_rsne: Option<Vec<u8>>,
+    /// The rates an association request offered; the status and rate elements of the association response.
+    offered: Vec<u8>,
+    status: u8,
+    rates: Vec<u8>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -46,7 +50,8 @@ impl Ap {
         Ap { channel: 6, rsne, pmk: keys::pmk(PASSPHRASE, SSID).unwrap(), authenticator: None, gtk: Gtk { id: 1, key: [0x77; 16] },
              // The GTK's RSC in message 3 is 5: the last group PN the access point used.
              tk: None, pn: 0, group_pn: 5, sequence: 0, silent: false, refuse: false, received: Vec::new(), confirmed: false,
-             expect: Expect::Nothing, handshake_rsne: None }
+             expect: Expect::Nothing, handshake_rsne: None, offered: Vec::new(), status: 0,
+             rates: vec![1, 4, 0x82, 0x84, 0x0C, 0x18, 50, 2, 0x30, 0x6C] }
     }
 
     fn header(&mut self, subtype: u8, to: &Mac) -> Vec<u8> {
@@ -121,8 +126,12 @@ impl Ap {
                     assert_eq!(frame::Elements::find(elements, frame::SSID), Some(SSID));
                     assert_eq!(frame::Elements::find_whole(elements, frame::RSN).map(|r| r.to_vec()),
                                self.rsne.as_ref().map(|_| scan::own_rsne().to_vec()));
+                    self.offered = frame::Elements::new(elements).filter(|(id, _)| *id == frame::RATES || *id == frame::EXTENDED_RATES)
+                        .flat_map(|(_, rates)| rates.iter().copied()).collect();
                     let mut r = self.header(frame::ASSOCIATION_RESPONSE, &h.a2);
-                    r.extend_from_slice(&[0x01, 0x04, 0, 0, 0x01, 0xC0, 1, 4, 0x82, 0x84, 0x0C, 0x18, 50, 2, 0x30, 0x6C]);
+                    r.extend_from_slice(&[0x01, 0x04, self.status, 0, 0x01, 0xC0]);
+                    r.extend_from_slice(&self.rates);
+                    if self.status != 0 { return vec![r]; }
                     let mut frames = vec![r];
                     if let Some(rsne) = self.handshake_rsne.clone().or(self.rsne.clone()) {
                         let mut a = Authenticator::new(self.pmk, BSSID, OWN, &rsne, [0xA5; 32]).unwrap();
@@ -191,8 +200,10 @@ impl Pairwise for Service {
 struct Air { station: Station, ap: Ap, now: u64, channel: u8, tx: Vec<u8>, rx: Vec<u8>, delivered: Vec<Vec<u8>>, sent: Vec<(Vec<u8>, u8)>, service: Service }
 
 impl Air {
-    fn new(ap: Ap) -> Self {
-        Air { station: Station::new(OWN, &CHANNELS), ap, now: 1000, channel: 0, tx: vec![0; FRAME_MAX], rx: vec![0; ETHERNET_MAX],
+    fn new(ap: Ap) -> Self { Air::with(ap, true) }
+    /// The air with a station whose radio has OFDM on 2.4 GHz or not.
+    fn with(ap: Ap, ofdm: bool) -> Self {
+        Air { station: Station::new(OWN, &CHANNELS, ofdm), ap, now: 1000, channel: 0, tx: vec![0; FRAME_MAX], rx: vec![0; ETHERNET_MAX],
               delivered: Vec::new(), sent: Vec::new(), service: Service { pmk: keys::pmk(PASSPHRASE, SSID).unwrap(), asked: 0, refuse: false } }
     }
     fn apply(&mut self, out: Out) {
@@ -269,6 +280,8 @@ fn joins_a_wpa2_network_and_carries_data_both_ways() {
     air.run(|s, _, out, tx| s.send(&ethernet, out, tx)).unwrap();
     let (last, rate) = air.sent.last().unwrap();
     assert!(last[1] & PROTECTED != 0 && *rate == 48); // 24 Mb/s to start
+    // The station offered 802.11b's and 802.11g's rates, DSSS and CCK basic.
+    assert_eq!(air.ap.offered, [0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 0x30, 0x48, 0x60, 0x6C]);
     assert_eq!(air.ap.received, vec![(0x0806, b"an ARP request, say".to_vec())]);
     // A frame claiming another source is not sent (no bridging).
     let mut other = ethernet.clone();
@@ -326,6 +339,51 @@ fn group_rekey_and_rate_control() {
     assert_eq!(air.station.data_rate(), 24); // the next rate both support: 12 Mb/s
     for _ in 0..10 { air.station.sent(true); }
     assert_eq!(air.station.data_rate(), 48);
+}
+
+#[test]
+fn a_radio_without_ofdm_joins_as_an_802_11b_station() {
+    let mut ap = wpa2();
+    ap.rates = vec![1, 8, 0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6C];
+    let mut air = Air::with(ap, false);
+    air.scan();
+    // Probe requests offer 1, 2, 5.5 and 11 Mb/s alone.
+    for (f, _) in &air.sent {
+        assert_eq!(frame::Elements::find(&f[24..], frame::RATES), Some(&[0x82, 0x84, 0x8B, 0x96][..]));
+        assert_eq!(frame::Elements::find(&f[24..], frame::EXTENDED_RATES), None);
+    }
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+    assert_eq!(air.ap.offered, [0x82, 0x84, 0x8B, 0x96]);
+    // The association request claims no short slot time, which is 802.11g's.
+    let request = air.sent.iter().find(|(f, _)| f[0] == frame::ASSOCIATION_REQUEST << 4).unwrap();
+    assert_eq!(u16::from_le_bytes([request.0[24], request.0[25]]) & frame::CAPABILITY_SHORT_SLOT, 0);
+    // Data goes at 11 Mb/s, steps down to 5.5 and back, and never reaches an OFDM rate.
+    assert_eq!(air.station.data_rate(), 22);
+    air.station.sent(false);
+    air.station.sent(false);
+    assert_eq!(air.station.data_rate(), 11);
+    for _ in 0..30 { air.station.sent(true); }
+    assert_eq!(air.station.data_rate(), 22);
+    let mut ethernet = BSSID.to_vec();
+    ethernet.extend_from_slice(&OWN);
+    ethernet.extend_from_slice(&[0x08, 0x00]);
+    ethernet.extend_from_slice(b"at 11 Mb/s");
+    air.run(|s, _, out, tx| s.send(&ethernet, out, tx)).unwrap();
+    assert!(air.sent.iter().all(|(_, rate)| *rate <= 22));
+    assert_eq!(air.ap.received.last().map(|(t, p)| (*t, p.as_slice())), Some((0x0800, &b"at 11 Mb/s"[..])));
+}
+
+#[test]
+fn an_access_point_that_wants_ofdm_refuses_an_802_11b_station() {
+    let mut ap = wpa2();
+    ap.status = frame::STATUS_BASIC_RATES as u8;
+    let mut air = Air::with(ap, false);
+    air.scan();
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!((air.station.state(), air.station.reason()), (State::Failed, Reason::Unsupported));
 }
 
 #[test]

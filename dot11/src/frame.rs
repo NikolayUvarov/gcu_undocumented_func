@@ -35,6 +35,8 @@ pub const CAPABILITY_ESS: u16 = 0x0001;
 pub const CAPABILITY_PRIVACY: u16 = 0x0010;
 pub const CAPABILITY_SHORT_PREAMBLE: u16 = 0x0020;
 pub const CAPABILITY_SHORT_SLOT: u16 = 0x0400;
+/// An association refused because the station lacks one of the network's basic rates (802.11 status 18).
+pub const STATUS_BASIC_RATES: u16 = 18;
 
 /// The LLC/SNAP header before an Ethernet type in a data frame's body (RFC 1042).
 pub const SNAP: [u8; 6] = [0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00];
@@ -137,28 +139,31 @@ pub fn management(w: &mut Writer, subtype: u8, a1: &Mac, own: &Mac, bssid: &Mac,
 }
 
 /// The rates the station offers, in 500 kb/s units with the basic-rate bit where the band requires it: on 2.4 GHz the
-/// DSSS rates are basic and the OFDM ones follow; on 5 GHz only OFDM, 6, 12 and 24 Mb/s basic.
-pub fn rates(channel: u8) -> (&'static [u8], &'static [u8]) {
-    if channel <= 14 {
+/// DSSS rates are basic and the OFDM ones follow when the radio has OFDM there (`ofdm`; without it, 802.11b's four
+/// alone); on 5 GHz only OFDM, 6, 12 and 24 Mb/s basic.
+pub fn rates(channel: u8, ofdm: bool) -> (&'static [u8], &'static [u8]) {
+    if channel > 14 {
+        (&[0x8C, 0x12, 0x98, 0x24, 0xB0, 0x48, 0x60, 0x6C], &[])
+    } else if ofdm {
         (&[0x82, 0x84, 0x8B, 0x96, 0x0C, 0x12, 0x18, 0x24], &[0x30, 0x48, 0x60, 0x6C])
     } else {
-        (&[0x8C, 0x12, 0x98, 0x24, 0xB0, 0x48, 0x60, 0x6C], &[])
+        (&[0x82, 0x84, 0x8B, 0x96], &[])
     }
 }
 
-fn put_rates(w: &mut Writer, channel: u8) -> Result<(), Error> {
-    let (rates, extended) = rates(channel);
+fn put_rates(w: &mut Writer, channel: u8, ofdm: bool) -> Result<(), Error> {
+    let (rates, extended) = rates(channel, ofdm);
     w.element(RATES, rates)?;
     if !extended.is_empty() { w.element(EXTENDED_RATES, extended)?; }
     Ok(())
 }
 
 /// A probe request for `ssid` (empty: any network), broadcast.
-pub fn probe_request(out: &mut [u8], own: &Mac, ssid: &[u8], channel: u8, sequence: u16) -> Result<usize, Error> {
+pub fn probe_request(out: &mut [u8], own: &Mac, ssid: &[u8], channel: u8, ofdm: bool, sequence: u16) -> Result<usize, Error> {
     let mut w = Writer::new(out);
     management(&mut w, PROBE_REQUEST, &BROADCAST, own, &BROADCAST, sequence, 0)?;
     w.element(SSID, ssid)?;
-    put_rates(&mut w, channel)?;
+    put_rates(&mut w, channel, ofdm)?;
     Ok(w.len())
 }
 
@@ -172,14 +177,14 @@ pub fn authentication(out: &mut [u8], own: &Mac, bssid: &Mac, sequence: u16, dur
 
 /// An association request for an ESS: its capability, a listen interval of 10 beacons, the SSID, the rates, and the
 /// station's RSN element when the network is protected.
-pub fn association_request(out: &mut [u8], own: &Mac, bssid: &Mac, capability: u16, ssid: &[u8], channel: u8, rsne: Option<&[u8]>,
-                           sequence: u16, duration: u16) -> Result<usize, Error> {
+pub fn association_request(out: &mut [u8], own: &Mac, bssid: &Mac, capability: u16, ssid: &[u8], channel: u8, ofdm: bool,
+                           rsne: Option<&[u8]>, sequence: u16, duration: u16) -> Result<usize, Error> {
     let mut w = Writer::new(out);
     management(&mut w, ASSOCIATION_REQUEST, bssid, own, bssid, sequence, duration)?;
     w.put(&capability.to_le_bytes())?;
     w.put(&10u16.to_le_bytes())?;
     w.element(SSID, ssid)?;
-    put_rates(&mut w, channel)?;
+    put_rates(&mut w, channel, ofdm)?;
     if let Some(rsne) = rsne { w.put(rsne)?; }
     Ok(w.len())
 }
