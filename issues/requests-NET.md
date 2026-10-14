@@ -90,6 +90,7 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
   - in aarch64's "files, network and TLS" on un-rizen-service;
   - and the 6 GiB group itself when run again on un-rizen-service (505 s).
 - The serial log is on i9: `/home/un/mind-core/KRN/logs/g63ef/13/mind-core-download-4cpu.log`.
+- **Again on i9, the same day** (the tools track's gate of 70764d5, which changes only `wm` and its suite): "x86: RAM above 4 GiB" logged the display suite's PASS four minutes in and nothing more until Effector's hour ended it. The network suite comes next in that group; its QEMU logs were cleared by the next group, so the step is not known. The group passed when run again on un-rizen-service (659 s). A deadline and the log lines asked below would have shown where it stopped.
 
 ### Asked (the network track decides)
 
