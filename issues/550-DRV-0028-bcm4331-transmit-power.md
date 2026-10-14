@@ -30,6 +30,41 @@ On the MacBook Pro, one boot on request logs the SPROM's power data, the idle TS
 - **Still open.** The networks on channel 6 heard nothing, though they are the strongest and are received well there. This is the third run in which only channel 1 has answered.
 - **The next run tells these apart:** the channel, the access point, the rate or the gain. It sends three directed probe requests to every network heard (channels 1, 3 and 6 here), at entries 40 and 20 and at 1 and 6 Mbit/s.
 
+**2026-10-13, the second run, `fast-test` 29fee23** (`log:boot0001.log`, gain entry 40): directed probe requests, 3 to each network, up to 7 tries each.
+
+| Network (channel, signal) | 1 Mbit/s CCK, entry 40 / 20 | 6 Mbit/s OFDM, entry 40 / 20 |
+|---|---|---|
+| `ZATV` (8, −39 dBm) | 3/3, 3/3 acknowledged | 3/3, 3/3 |
+| `CoolNet2` (8, −40 dBm, the same device) | 2/3, 3/3 | 2/3, 2/3 |
+| `TP-Link_5EB3` (13, −41 dBm) | 3/3, 3/3 | 0/3, 0/3 |
+| `Tenda_E25140` (11, −42 dBm) | 2/3, 2/3 | 0/3, 0/3 |
+| `David_2.4G` (1, −44 dBm) | 3/3, 3/3 | 0/3, 0/3 |
+| `TP-LINK_POCKET` (6, −32 dBm) | 0/3, 0/3 | 0/3, 0/3 |
+
+Broadcast probe requests at 1 Mbit/s were answered on channels 1, 2, 8 and 11: 20 probe responses, and 9 networks in all.
+
+- **CCK works on every channel tried.** At entry 40, 1 Mbit/s frames are acknowledged by five of the six networks, on channels 1, 8, 11 and 13. The "channel 1 only" of the earlier runs came from the gain at entry 80.
+- **Entry 20 adds nothing visible.** Entry 40 stays.
+- **The pocket router on channel 6 acknowledges nothing at any rate or gain**, though it is the strongest. Its beacons are received. It is one access point's behaviour, not the channel's: no other network on channel 6 was among the six probed.
+- **OFDM is the defect.** Only one device acknowledges 6 Mbit/s frames, and four that acknowledge CCK ignore them. The frames go out (tries counted, not suppressed), so their content or quality is wrong for most receivers. The suspects are, in order:
+  - the TX IQ/LO calibration, which is not done (OFDM is far less tolerant of it than CCK);
+  - the OFDM PLCP or PHY control words;
+  - the per-rate power.
+- **Until OFDM is fixed** the station should send at CCK rates only (1, 2, 5.5, 11 Mbit/s): told to `NET`.
+
+**2026-10-14, the next run.** The OFDM fact sheet (b43, brcmsmac, described) finds our OFDM header equal to b43's field for field. What it does point to:
+- the core field 0x00C0 is a bitmap of cores 0 and 1 in brcmsmac's reading;
+- b43 sends OFDM through both cores in SISO mode, the same signal without cyclic delay, which cancels towards some receivers;
+- Broadcom's driver uses CDD (PHY control 1, mode 1) on several cores.
+
+Stage 4's last step now sends 3 directed probe requests to each network in eight ways:
+- 1 Mbit/s on cores 0+1, and on core 0;
+- 11 Mbit/s on cores 0+1 (a power check: a weak signal hurts it too);
+- 6 Mbit/s on cores 0+1, on core 0, on core 1 and on core 2 alone;
+- 6 Mbit/s on cores 0–2 with CDD.
+
+It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 0x17E).
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.
