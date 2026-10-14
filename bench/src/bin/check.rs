@@ -267,7 +267,7 @@ fn clock(run: &mut Run) {
         _ => fail(String::from("the RTC service did not answer")),
     });
     let (_, resolution, hz) = mind::time::clock_info();
-    run.report("the monotonic clock", if hz != 0 { pass(format!("{} ns resolution, {} MHz counter", resolution, hz / 1_000_000)) } else { skip(format!("the 10 ms tick only (resolution {})", report::duration(resolution))) });
+    run.report("the monotonic clock", if hz != 0 { pass(format!("{} ns resolution, {} MHz counter", resolution, hz / 1_000_000)) } else { skip(format!("the tick only (resolution {})", report::duration(resolution))) });
     let shorter = (0..20).filter(|_| { let t = now(); mind::time::sleep(10); now() - t < 10_000_000 }).count();
     run.report("sleeps last as asked", if shorter == 0 { pass(String::from("20 sleeps of 10 ms, none shorter")) } else { fail(format!("{}/20 sleeps of 10 ms shorter (000-KRN-0065)", shorter)) });
 }

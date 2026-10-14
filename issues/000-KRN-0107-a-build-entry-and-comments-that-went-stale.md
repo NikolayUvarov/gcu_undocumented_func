@@ -1,6 +1,6 @@
 # 000-KRN-0107 — `02_build.sh` stages `virtio_input` twice; comments that went stale with the 1 ms tick
 
-**Type:** build script and comments (code: through the gate) · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.3
+**Type:** build script and comments (code: through the gate) · **Owner:** kernel session · **Priority:** P3 · **Status:** in progress (made on the branch; the gate left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.3
 
 ## Problem
 
