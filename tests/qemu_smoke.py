@@ -2015,9 +2015,26 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
+    # A script (000-APP-0067): `fm <file>` opens its directory on it; on the shell's screen fm holds no shell's commands,
+    # so Enter says how to run it, and views nothing.
+    require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")
+    vm.send("fm ram:fmrun.msh\n")
+    vm.expect("CURRENT=fmrun.msh", after="[FM] READY")
+    vm.send_bytes(b"\r")
+    for _ in range(20):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("Type msh ram:fmrun.msh in the shell") in row for row in screen):
+            break
+    assert any(canon("Type msh ram:fmrun.msh in the shell") in row for row in screen), screen
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("rm ram:fmrun.msh"), "OK")  # the RAM disk empty again for vfs_check
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel in front and fm back after it, "
           "Ctrl+Z from it to the shell, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
-          "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
+          "the mouse (click, double click, wheel, the cell under it inverted); Enter on a script says to run it in the shell", flush=True)
     vfs_check(vm)
     console_check(vm)
 
@@ -6290,16 +6307,18 @@ def wm_suite(vm):
         x, y, w, h = state()[2][window]
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
-    shell_re = re.compile(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"')
+    # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
         # Ctrl+Alt+F5: the shell opens its window (it takes the key; wm never sees it); in front, as a new window is.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         vm.hmp("sendkey ctrl-alt-f5")
         vm.serial(enter=False)
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        window = int((set(shell_re.findall("".join(seen))) - before).pop())
+        window = int((shells("".join(seen)) - before).pop())
         while window not in state()[2] or state()[1] != window:
             wait()
         return window
@@ -6380,13 +6399,13 @@ def wm_suite(vm):
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
         # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
         keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        menu_shell = int((set(shell_re.findall("".join(seen))) - before).pop())
+        menu_shell = int((shells("".join(seen)) - before).pop())
         until(f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
@@ -6521,6 +6540,7 @@ def wm_suite(vm):
     moved = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for py in range(48, 400, 8) for px in range(0, 1280, 8))
     assert moved > 16, moved
     require(vm.command("rm data/wm.conf"), "OK")
+    require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
           "desktop; the aurora pattern at speed 20 moves fast", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
@@ -6532,7 +6552,7 @@ def wm_suite(vm):
         out = wait("[WM] WINDOW", lines=0)
     out = "".join(seen)
     # wm starts without the shell's window: it opens only when asked (211-APP-0045).
-    assert not shell_re.findall(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
+    assert not shells(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
     started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
     wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
     windows = {int(m[0]): m for m in windows_re.findall(out)}
@@ -6540,7 +6560,7 @@ def wm_suite(vm):
     fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
     # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
     # lifecycle client, which wm does not hold.
-    require(out, f"STARTED fm PID {started['fm']} WITH window,files")
+    require(out, f"STARTED fm PID {started['fm']} WITH window,files,sysinfo,shell")
     require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
     assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
     time.sleep(1.5)  # the text programs drew at the size of their frames
@@ -6786,19 +6806,22 @@ def wm_suite(vm):
         # at that cell, and data/wm.conf keeps it; then back to 100% and auto.
         require("".join(seen), "[WM] SCALE 100% (AUTO): CELLS OF 8X16 PIXELS ON 1280X800")
         before = state()[2]
-        # With a window in front, its title leaves the top bar no room for Settings: they are in more ▼'s menu, which a
-        # click opens; a click on their entry opens them, as Alt+S does.
+        # With a window in front, its title leaves the top bar no room for every item: those before Settings go into
+        # more ▼'s menu, which a click opens; Settings stay on the bar, right of more ▼ (the maintainer's word), and a click
+        # on them opens them, as Alt+S does.
         bar = screen_has("more ▼")[0]
+        assert bar.index(canon("more ▼")) < bar.index(canon("Alt+S settings")), bar
         point(bar.index(canon("more ▼")) + 1, 0)
         mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
         assert mode == "MORE", mode
-        rows = screen_has("Alt+S settings")
-        y = next(i for i, row in enumerate(rows) if i > 0 and canon("Alt+S settings") in row)
-        point(rows[y].index(canon("Alt+S settings")) + 2, y)
+        rows = screen_has("Alt+0 fit")
+        assert any(canon("Alt+0 fit") in row for row in rows[1:]) and not any(canon("Alt+S settings") in row for row in rows[1:]), rows[:12]
+        keys("esc", text="MODE=NORMAL")
+        point(bar.index(canon("Alt+S settings")) + 2, 0)
         mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
         assert mode == "SETTINGS", mode
-        print("PASS: wm top bar: with a window in front, Settings are in more ▼'s menu, opened by a click, and a click on "
-              "their entry opens them", flush=True)
+        print("PASS: wm top bar: with a window in front, the items before Settings are in more ▼'s menu, opened by a click; "
+              "Settings stay on the bar right of it, and a click opens them", flush=True)
         keys(*["down"] * 5, text="SETTINGS=Screen")
         keys("ret", text="SETTINGS=Screen:Scale")
         screen_has("Scale       < auto (100%) >")
@@ -6987,29 +7010,39 @@ def wm_suite(vm):
                 if index + (level == 0):
                     keys(*["down"] * (index + (level == 0)))
             assert at() == name, (at(), name)
-            keys("ret")
-            found = reaction_re.findall(seen[-1])
-            assert found, (name, seen[-1][-1500:])
+            mark = len("".join(seen))
+            if name.split(">")[-1] in POWER:
+                # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                # window, in front as a new window is; meanwhile it passes wm's lines on no more, so Enter waits for no
+                # state line (the race of requests-APP, 2026-10-14). No: nothing happens, and wm's lines come again.
+                vm.hmp("sendkey ret")
+                vm.serial(enter=False)
+                command, question = POWER[name.split(">")[-1]]
+                screen = []
+                for _ in range(40):
+                    time.sleep(.3)
+                    screen = screen_text(vm)
+                    vm.serial(enter=False)
+                    if any(canon(question) in row for row in screen):
+                        break
+                else:
+                    raise AssertionError((name, screen))
+                assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                vm.hmp("sendkey n")
+                vm.serial(enter=False)
+                until(f'THE SHELL RAN "{command}"')
+                for _ in range(100):
+                    if reaction_re.findall("".join(seen)[mark:]):
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
+            else:
+                keys("ret")
+            found = reaction_re.findall("".join(seen)[mark:])
+            assert found, (name, "".join(seen)[mark:][-1500:])
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
-                if name.split(">")[-1] in POWER:
-                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
-                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
-                    command, question = POWER[name.split(">")[-1]]
-                    screen = []
-                    for _ in range(40):
-                        time.sleep(.3)
-                        screen = screen_text(vm)
-                        vm.serial(enter=False)
-                        if any(canon(question) in row for row in screen):
-                            break
-                    else:
-                        raise AssertionError((name, screen))
-                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
-                    vm.hmp("sendkey n")
-                    vm.serial(enter=False)
-                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -7060,8 +7093,20 @@ def wm_suite(vm):
             if index:
                 keys("down", text=f"SETTINGS=Background:{row}")
             if row == "Image file":
-                keys("ret")
-                screen_has("Type the image's file here (BMP, PNG or JPEG), then Enter")
+                # Enter with nothing typed browses data/ for the picture (000-APP-0072); Esc goes back, Enter on a
+                # picture sets it; the picture row puts none back.
+                keys("ret", text="BROWSE=data:..")
+                screen_has("Choose the picture (BMP, PNG, JPEG): data")
+                keys("esc", text="SETTINGS=Background:Image file")
+                keys("f3", text="BROWSE=data:..")
+                keys("down", text="BROWSE=data:sky.bmp")
+                keys("down", text="BROWSE=data:sky.jpg")
+                keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
+                assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
+                keys("up", text="SETTINGS=Background:Picture")
+                keys("right", text="[WM] SETTINGS ")
+                assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
+                keys("down", text="SETTINGS=Background:Image file")
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
@@ -7170,7 +7215,7 @@ def wm_suite(vm):
         front(console)
 
         # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
-        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_ids = shells("".join(seen))
         shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
         for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
             known = {m[0] for m in windows_re.findall("".join(seen))}
@@ -7207,7 +7252,7 @@ def wm_suite(vm):
         console_has("KILLED PID=")
 
     def run_line(command, text):
-        names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
+        names = [{" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}.get(c, c) for c in command]
         return keys("alt-r", *names, "ret", text=text)
 
     camera_window(lambda: run_line("camera", "STARTED camera"))
@@ -7223,6 +7268,64 @@ def wm_suite(vm):
     camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
     assert state()[1] == console, state()
     console_joined(console)
+
+    def fm_runs_a_script():
+        # 000-APP-0067: Enter on a script in fm asks in the shell's window; yes runs it there and fm shows its last line;
+        # no leaves it.
+        run_line("fm ram:fmrun.msh", "STARTED fm")
+        started_fm = re.findall(r"\[WM\] STARTED fm PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
+        assert "shell" in started_fm[1].split(","), started_fm
+        while not any(m[1] == started_fm[0] for m in windows_re.findall("".join(seen))):
+            wait("[WM] WINDOW", lines=0)
+        files = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == started_fm[0])
+        while state()[1] != files:
+            wait()
+        time.sleep(1)  # fm drew its panels, the cursor on the script
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shells("".join(seen)))
+        for answer, logged_text, shown in (("n", 'THE SHELL DECLINED "msh ram:fmrun.msh"', "not run: the answer in the shell's window was no"),
+                                           ("y", 'THE SHELL RAN "msh ram:fmrun.msh"', "fmrun.msh ran in the shell's window: FM RAN IT")):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            vm.hmp("sendkey ret")
+            screen = []
+            for _ in range(40):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
+                    break
+            else:
+                raise AssertionError(screen)
+            assert any(canon("msh ram:fmrun.msh    (ASKED BY PID") in row for row in screen), screen
+            vm.hmp(f"sendkey {answer}")
+            vm.serial(enter=False)
+            until(logged_text)
+            opened = []
+            for _ in range(100):
+                wait(lines=0)
+                opened = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if opened:
+                    break
+                time.sleep(.1)
+            asking = opened[-1]
+            while state()[1] != asking:
+                wait()
+            if answer == "y":
+                assert any(canon("FM RAN IT") in row for row in inside(asking)), inside(asking)
+            close_shell(asking)
+            front(files)
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(files)
+                if any(canon(shown) in row for row in rows):
+                    break
+            else:
+                raise AssertionError((shown, rows))
+        keys("alt-w", text=f"CLOSE {files}")
+        until(f"GONE {files}")
+        print("PASS: wm: Enter on a script in fm asks in the shell's window; no leaves it, yes runs it there and fm shows "
+              "what it printed last", flush=True)
+
+    fm_runs_a_script()
     keys("alt-w", text=f"CLOSE {console}")
     until(f"GONE {console}")
     while console in state()[2]:

@@ -52,7 +52,7 @@ The registry of tracks — current owners, branches, statuses and starting tasks
 
 **Branches.** The branch name carries the tool and then the track code or the task number: `<tool>/<TRK>-<name>` for a track's long-lived branch (`claude/NET-stack`), `<tool>/<NNN-TRK-MMMM>-<name>` for one task (`codex/300-STO-0002-cid`). CI runs on pushes to `main`, to `claude/**` and to branches named this way under any tool prefix, and on pull requests. An agent:
 
-- pushes only to its own branch;
+- pushes only to its own branch, to `fast-test` (section 4) and to `internal-dev-messages` (section 5);
 - never force-pushes a branch another session uses;
 - never rewrites history that has reached `main`.
 
@@ -64,7 +64,7 @@ The registry of tracks — current owners, branches, statuses and starting tasks
    - the sections Problem, Plan, Acceptance criteria, Related.
 
    Add the issue to the table in `issues/README.md` in the same commit.
-2. **Bring in `main` first** (`git fetch origin && git merge origin/main`), so that you build on the other tracks' latest work.
+2. **Bring in `main` first** (`git fetch origin && git merge origin/main`), so that you build on the other tracks' latest work. Read the new messages to your track and to `ALL` on `internal-dev-messages` (section 5).
 3. **Implement it, following the rules in CONTRIBUTING.md:**
    - comments in English, one line, the essence only;
    - code that exists only for superseded hardware is marked `LEGACY:` and listed in [docs/legacy.md](docs/legacy.md);
@@ -116,6 +116,7 @@ The gate is one of the following:
   - source, scripts, build and CI files, IDL, tests and their data, `.gitignore`;
   - the files the build copies into images: THIRD_PARTY.md, the LICENSE files, `LICENSES/`, `hwdocs/`.
 - **A commit that mixes both** passes the gate.
+- **Messages between tracks** do not go to `main` at all. They go to `internal-dev-messages` (section 5), which needs no gate.
 
 **Everyone else** opens a pull request from a fork or branch. The pull request:
 
@@ -153,12 +154,30 @@ The maintainer or the owning track reviews and merges it.
 - **ABI changes are made only in `KRN` tasks.** A task blocked by a `KRN` task waits for it.
 - **Resolving conflicts.** When `main` brings a conflict, merge (do not rebase shared history) and keep both sides' behaviour. Regenerate generated files with their tools (`scripts/mind_idl.py`), never by hand. If both sides changed the same logic and choosing one loses behaviour, ask the owner of the other change.
 - **Reports from people.** A user report that belongs to another track is passed to that track as described in the first point. It is not fixed silently in passing.
-- **Tasks only a person can do** go to [issues-human/](issues-human/README.md): repository settings, legal questions, coordination between agent sessions.
+- **Messages between tracks** go to the branch `internal-dev-messages` (the maintainer's decision, 2026-10-14). Its `README.md` says how to read and write it.
+  - **What goes there:**
+    - questions and their answers;
+    - notices ("the change is in `fast-test`", "the request is recorded");
+    - remarks on another track's text or code.
+  - **Who they go to:** a track, `ALL` (every track, or several named in the header) or the maintainer (`HUMAN`).
+  - **One file per message:** `<TO>/<YYYY-MM-DDTHHMMZ>-<FROM>-<subject>.md`, in English. It is never edited once pushed. An answer is a new file in the asker's directory that names the question.
+  - **Read** your track's directory and `ALL` at the start of every session and before each task (section 3, step 2).
+  - **Write** from a worktree of that branch, never from your track's branch. Push one message per commit. If the branch moved, rebase only your unpushed message and push again. Never force-push it, and never merge it into another branch or another branch into it.
+  - **Nothing binding lives there.** The message points to the record on `main`:
+    - a request is still recorded in `issues/requests-<TRK>.md`;
+    - a decision is recorded in its issue;
+    - a task for a person goes in `issues-human/`.
+  - **It is as public as the repository.** No secrets, keys, credentials or proprietary files go there, and no vulnerability details ([SECURITY.md](SECURITY.md)).
+  - **Why a branch:**
+    - messages on `main` would move it, and each move sends the tracks with code back to merge `main` and run their gate again;
+    - CI does not run on it, and the mirror copies only `main`.
+- **Tasks only a person can do** go to [issues-human/](issues-human/README.md): repository settings, legal questions, and coordination between agent sessions that messages cannot settle.
 
 ## 6. What an agent must not do
 
 - Push to `main` without a green gate, except a text-only commit (section 4), or push to another track's branch.
 - Build, test or run a gate on `fast-test`: it only receives merges of the agents' branches (section 4).
+- Put code, secrets or vulnerability details on `internal-dev-messages`, force-push it, edit a pushed message, or merge it with another branch (section 5).
 - Skip, disable or weaken a test to get a green result, or push an empty commit to re-trigger CI.
 - Change the system-call ABI outside a kernel issue, or change a service interface without a new IDL version.
 - Claim a guarantee, profile entry or acceptance criterion that it has not tested on the stated configuration.
@@ -176,7 +195,8 @@ You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <n
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
-Never push to other branches but fast-test; reach main only through the gate in AGENTS.md section 4.
+Never push to other branches but fast-test and internal-dev-messages; reach main only through the gate in AGENTS.md section 4.
+Messages to and from other tracks and the maintainer: the branch internal-dev-messages (its README.md; AGENTS.md section 5). Read <TRK>/ and ALL/ there at the start of every session and before each task; write one file per message, from a worktree of that branch.
 Remote build machines (Effector): read docs/effector.md first; before each batch of work see which machines are free and choose the one that suits best (docs/effector.md, section 3); long work runs one operation at a time in a machine's queues, in your track's own directory and TMPDIR.
 Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.
 Every change serves a cited Constitution clause (MC-x.y) or roadmap item; do not present plans as guarantees.

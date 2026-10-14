@@ -2,7 +2,7 @@
 
 **Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
 
-**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done)) was run by its path ([requests-APP.md](../issues/requests-APP.md), taken from there). Enter on a script in `fm` is [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md).
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done)) was run by its path ([requests-APP.md](../issues/requests-APP.md), taken from there). Enter on a script in `fm` is [000-APP-0067](000-APP-0067-fm-runs-a-script.done).
 
 ## Problem
 
@@ -59,8 +59,8 @@ Done on `claude/wizardly-franklin-kec1a9` and in `main` after the gate of 60653c
 - The shell: `cd`, `pwd`, the prompt `MIND data> `; paths from the current directory in its file commands, in `msh` (`files()`, `glob()`, a script by its name, a script's `cd` lasting while it runs) and in a program's arguments; Tab completes commands, programs and paths, and lists the choices.
 - `console`: the same `cd`, `pwd`, prompt and Tab.
 - Tests: `tests/path_host.rs`, `tests/console_host.rs`, `tests/shell_host.rs`; the shell suite (x86, aarch64) and the `wm` suite's `console` step (whose `cat` check now looks for `console`'s long-output line, as the file's lines wrap: 1c0e028). `help` and `docs/tools` (EN, RU).
-- Enter on a script in `fm` is [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md), which waits for the maintainer's decision.
+- Enter on a script in `fm` is [000-APP-0067](000-APP-0067-fm-runs-a-script.done), which waits for the maintainer's decision.
 
 ## Related
 
-[176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done) (the diagnostic scripts), [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md), [094](094-shell-script-language.done) (`msh`), [u006](u006-console-commands.done) (`console`'s commands).
+[176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done) (the diagnostic scripts), [000-APP-0067](000-APP-0067-fm-runs-a-script.done), [094](094-shell-script-language.done) (`msh`), [u006](u006-console-commands.done) (`console`'s commands).
