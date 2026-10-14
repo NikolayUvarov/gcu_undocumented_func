@@ -5,6 +5,7 @@
 #                                                       (Windows, from WSL), under DEST (for example data/firmware)
 #        scripts/disk_copy.sh SOURCE DEST TAG VOLUME   under VOLUME/DEST (a mounted boot volume on Linux)
 # SOURCE's files are copied with their subdirectories; with ONLY=PATTERN (a find -name pattern), only those matching.
+# Each file copied is listed with its size once all are read back.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,6 +20,7 @@ mapfile -t names < <(cd "$SOURCE" && find . -type f -name "${ONLY:-*}" | sed 's|
 if [[ $# -ge 4 ]]; then
     for name in "${names[@]}"; do mkdir -p "$4/$DEST/$(dirname -- "$name")" && cp "$SOURCE/$name" "$4/$DEST/$name"; done
     (cd "$SOURCE" && sha256sum "${names[@]}") | (cd "$4/$DEST" && sha256sum --quiet -c -) || fail "the copies under $4/$DEST differ"
+    for name in "${names[@]}"; do echo "$TAG:   $4/$DEST/$name, $(stat -c%s "$4/$DEST/$name") bytes"; done
     echo "$TAG: copied under $4/$DEST, ${#names[@]} files read back with their SHA-256"
     exit 0
 fi
@@ -45,7 +47,10 @@ for ($try = 1; $try -le 3; $try++) {
     Write-VolumeCache -DriveLetter $v.DriveLetter
     Start-Sleep 2
     $bad = @($files | Where-Object { $sum, $name = $_ -split ' ', 2; $path = Join-Path $to $name; -not (Test-Path $path) -or (Get-FileHash $path).Hash -ne $sum })
-    if ($bad.Count -eq 0) { Write-Output "__TAG__: copied to $to, $($files.Count) files read back with their SHA-256"; exit 0 }
+    if ($bad.Count -eq 0) {
+        foreach ($f in $files) { $name = ($f -split ' ', 2)[1]; Write-Output ("__TAG__:   {0}\{1}, {2} bytes" -f $to, $name, (Get-Item (Join-Path $to $name)).Length) }
+        Write-Output "__TAG__: copied to $to, $($files.Count) files read back with their SHA-256"; exit 0
+    }
     Write-Output "__TAG__: try ${try}: $($bad.Count) files missing or different on $to"
 }
 exit 1

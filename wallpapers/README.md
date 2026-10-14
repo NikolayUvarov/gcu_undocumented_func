@@ -34,6 +34,7 @@ Each picture is listed here: its file, who made it and how, and its licence. A p
 |---|---|---|---|
 | `mind-01-ship.jpg` | a colleague of the maintainer, 2026-10-14 | an image generator, from prompt 1 below; 1586 × 992 PNG converted to a baseline JPEG | MIT or Apache-2.0 |
 | `mind-02-orbital.jpg` | the same | prompt 2 (the fourth of four tries) | MIT or Apache-2.0 |
+| `mind-02-orbital-2.jpg` | the same | prompt 2 (the second try) | MIT or Apache-2.0 |
 | `mind-03-mind.jpg` | the same | prompt 3 | MIT or Apache-2.0 |
 
 Every prompt ended with: *16:10 widescreen desktop wallpaper, 2880×1800, dark and calm, low contrast in the upper-left third (clock and gauges are drawn there in pale text), no text, no letters, no logos, no people, no watermark, cinematic lighting, high detail, sRGB.*
