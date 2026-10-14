@@ -11,6 +11,6 @@ for fixture in busy_app isolation_app heap_app block_app; do
         "tests/$fixture.rs" -o "$OUT/mind-core-$fixture.elf"
 done
 (cd tests/updater_stub && cargo build --release --target-dir "$OUT/mind-updater-target")
-for variant in panic:panic abi:abi loader-abi:loader-abi trial:trial x2apic:x2apic bar-move:bar xsave-pad:xsave-pad protection:protection tsc-skew:tsc-skew; do
+for variant in panic:panic abi:abi loader-abi:loader-abi trial:trial x2apic:x2apic bar-move:bar xsave-pad:xsave-pad protection:protection tsc-skew:tsc-skew watchdog:watchdog; do
     (cd kernel && cargo build --release --features "${variant%%:*}-test" --target-dir "$OUT/mind-${variant#*:}-target")
 done

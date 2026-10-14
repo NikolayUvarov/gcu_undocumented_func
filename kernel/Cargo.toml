@@ -18,6 +18,7 @@ x2apic-test = [] # the boot CPU switches to x2APIC before the kernel reads the m
 bar-move-test = [] # packs a small BAR into another device's page, as Apple's firmware does, then grants it (211-KRN-0021)
 protection-test = [] # x86: the kernel reads and jumps into a program's page once; SMAP and SMEP must fault (000-KRN-0039)
 xsave-pad-test = [] # the vector area padded to AMX's size (11 KiB), for the larger frames QEMU cannot emulate (174-KRN-0037)
+watchdog-test = [] # x86: every CPU stopped for good 20 s after boot, unless the watchdog restarted the last run (000-KRN-0076)
 tsc-skew-test = [] # x86: the TSC's first measure 9% high, as a stretched calibration left it; measured again at 1 s (000-KRN-0100)
 
 [profile.release]
