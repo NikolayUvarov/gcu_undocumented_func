@@ -81,5 +81,5 @@ RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` 
 
 - OVMF (EDK II UEFI firmware, BSD-2-Clause-Patent) to boot QEMU; installed by the system package manager or placed next to the launch scripts.
 - QEMU, Rust toolchain, Python.
-- The TLA+ tools (`tla2tools.jar` 1.8.0, MIT licence, [tlaplus/tlaplus](https://github.com/tlaplus/tlaplus)) to check the models of `docs/assurance`; `scripts/model_check.sh` fetches them and checks their SHA-256; Java.
+- The TLA+ tools (`tla2tools.jar` 1.7.4, MIT licence, [tlaplus/tlaplus](https://github.com/tlaplus/tlaplus)) to check the models of `docs/assurance`; `scripts/model_check.sh` fetches them and checks their SHA-256; Java.
 - Optional: a Vosk speech model for the `tts` test (`--asr-model`).
