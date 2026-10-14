@@ -1,6 +1,6 @@
 # Requests for the state and recovery track (STO), not numbered yet
 
-**Owner:** state and recovery track · **Status:** open (1 request and a note waiting, 2026-10-14; the `blocks check` timeout became [300-STO-0016](300-STO-0016-a-dag-walked-once.md), the collection check's wait [303-STO-0017](303-STO-0017-the-lease-waited-by-the-guests-clock.md))
+**Owner:** state and recovery track · **Status:** open (1 request and a note waiting, 2026-10-14; the `blocks check` timeout became [300-STO-0016](../issues-done/300-STO-0016-a-dag-walked-once.done), the collection check's wait [303-STO-0017](../issues-done/303-STO-0017-the-lease-waited-by-the-guests-clock.done))
 
 The STO track numbers its own tasks (`NNN-STO-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 

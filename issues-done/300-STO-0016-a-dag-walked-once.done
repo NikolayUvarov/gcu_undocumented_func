@@ -1,6 +1,6 @@
-# 300-STO-0016 — An object's tree walked once, and `blocks check` in one pass
+# 300-STO-0016 — An object's tree walked once, and `blocks check` in one pass — done
 
-**Type:** storage (library, tool, tests) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (built and host-tested; the aarch64 group on the slowest machine is left) · **Blocked by:** — · **Main task:** [300](../issues-done/300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-5.2, MC-12.2
+**Type:** storage (library, tool, tests) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [300](300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.2, MC-5.2, MC-12.2
 
 From the request "The store suite's `blocks check` of the 4 MiB object outruns its 240 s on a slower machine" in requests-STO.md (recorded by the tools track, 2026-10-14, from its gate of eda1c74).
 
@@ -31,6 +31,15 @@ From the request "The store suite's `blocks check` of the 4 MiB object outruns i
 - The store and storefaults suites pass on x86 and aarch64, and print the check's time.
 - The group "aarch64: files, network and TLS" passes on `DESKTOP-i7-930-wsl-u24` with nothing else running there.
 
+
+## Resolution
+
+Done on the storage track's branch and in `main` (gate 16b, 2037dad).
+- **`dag::walk`** (c92246b) steps by the bytes under a node of height 1: for an object of 260 chunks, 263 visits instead of 65 813. `dag::complete` and the store's marking use it.
+- **`dag::each_chunk`** reads an object in order with one get for each chunk and each node once; **`blocks check`** uses it in one pass.
+- **Host tests** (`tests/dag_host.rs`, 12): `walk` visits each block once (the old code fails this test with 65 813), `each_chunk`'s order, gets and refusals.
+- **Measured** (the suite prints it, by the host's clock): the 4 MiB object's check took 2 s on x86 locally and 3 to 4 s on aarch64 under TCG on DESKTOP-i7-930-wsl-u24, where it had run past 240 s. That group passed there with nothing else running (c92246b; the `dag`, `blocks` and suite code is the same in 2037dad), and on un-rizen-service and in the x86 groups of gate 16b. The suite waits 900 s for each.
+
 ## Related
 
-[300-STO-0003](../issues-done/300-STO-0003-blocks-tool-and-store-suite.done) (`blocks` and the store suite), [303](../issues-done/303-retention-and-collection.done) (the collection's marking).
+[300-STO-0003](300-STO-0003-blocks-tool-and-store-suite.done) (`blocks` and the store suite), [303](303-retention-and-collection.done) (the collection's marking).

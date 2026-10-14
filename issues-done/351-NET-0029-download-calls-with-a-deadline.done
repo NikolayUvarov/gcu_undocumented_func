@@ -1,6 +1,6 @@
-# 351-NET-0029 — `download`'s calls with a deadline, and its resume in the log
+# 351-NET-0029 — `download`'s calls with a deadline, and its resume in the log — done
 
-**Type:** network (program) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, MC-6.6, MC-12.2
+**Type:** network (program) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, MC-6.6, MC-12.2
 
 From the request "A download hung once at its resume on x86 with 6 GiB, after 109-NET-0010's fix" in requests-NET.md (recorded by the kernel track, 2026-10-14, from its gate of 63ef648 on i9).
 
@@ -34,6 +34,15 @@ What this does not show: why the call on i9 got no answer. If it happens again, 
 - **The same hang again, before this change:** the tools track's gate of 70764d5 (which changes only `wm`) saw "x86: RAM above 4 GiB" stop on i9 after the display suite, until Effector's hour ended it. Its QEMU logs were cleared before they were read, so the step is not known (message to NET on `internal-dev-messages`, 2026-10-14).
 - **With this change,** gate 15 (bb81a81) passed the network suite on x86 locally (both new lines required after each cut) and on aarch64 on un-rizen-service, and "x86: RAM above 4 GiB" locally (856 s). One pass is not a proof that the hang is gone; it shows the new lines and bounds do not break the suite.
 
+
+## Resolution
+
+Done on the network branch and in `main` (gate 16b, 2037dad).
+- **`download`** (d1c8698): every call of an attempt runs under `wire::with_timeout` at 60 s; a call that times out counts as a connection that did not answer; the file's writes keep no limit. A resume logs its request and its head.
+- **The `net` suite** requires both new lines after each cut, over HTTP and HTTPS. It passed with them on x86 (locally, gates 15 and 16b, and in "RAM above 4 GiB" with 6 GiB) and on aarch64 (un-rizen-service, PCU, DESKTOP-i7-930-wsl-u24).
+- **Read from the code, not tested:** that no call of an attempt waits more than 60 s; the suite has no service that stops answering.
+- **Not known:** why the call on i9 got no answer. Should it happen again, the log names the step and the run goes on.
+
 ## Related
 
-[351-NET-0001](../issues-done/351-NET-0001-http-downloads.done), [109-NET-0010](109-NET-0010-a-parser-per-session.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done).
+[351-NET-0001](351-NET-0001-http-downloads.done), [109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md), [351-NET-0002](351-NET-0002-https-for-programs.done).
