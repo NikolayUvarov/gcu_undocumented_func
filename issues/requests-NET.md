@@ -96,3 +96,23 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 - Whether a resumed response can still wait for ever, and where: the session's call to its parser, the parser's reply, or `netstack`'s flow after the cut.
 - A deadline on that wait, so that a stalled resume ends with an error instead of hanging the program.
 - A line in the log when the resume's request goes out and when its head is parsed, so that the next hang shows which step it stopped at.
+
+## The station offers only the rates the radio can receive: CCK while `bcm_wifi` cannot receive OFDM (550-DRV-0028)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, at the maintainer's word, from the drivers track's findings (550-DRV-0028's runs on the MacBook Pro).
+
+### Problem
+
+- **The radio.** `bcm_wifi` does not yet receive OFDM: acknowledgements and frames come through in CCK, and OFDM goes unheard below about -40 dBm. The drivers track's test in `fast-test` checks its main suspect, a wrong gain table on the third path.
+- **The station.** On 2.4 GHz, `dot11::frame::rates` offers 1, 2, 5.5 and 11 Mb/s (CCK) and also 6–54 Mb/s (OFDM), and `Station::take_rates` picks a data rate up to 24 Mb/s. An access point then sends in OFDM, and the station receives nothing after the association.
+
+### Plan (a proposal; the network track decides, with the drivers track for the radio's side)
+
+- **`idl/wlanhw.wit` 1.1:** `info` names the rates the radio can receive and send (500 kb/s units). `bcm_wifi` names 1, 2, 5.5 and 11 until OFDM works; `wlansim` names all of them.
+- **`dot11`:** the station offers, and picks its data rate from, only the rates both it and the radio have. With CCK alone it joins as an 802.11b station, and the access point keeps to CCK for it.
+- **Until 1.1:** a station built to offer CCK alone on 2.4 GHz would let the maintainer's MacBook Pro join now.
+
+### Acceptance criteria
+
+- `wlansim` reports CCK only, and the station associates offering 1–11 Mb/s alone and sends at 11 Mb/s at most.
+- On the MacBook Pro, with `bcm_wifi` reporting CCK, a WPA2 network is joined and DHCP answers.

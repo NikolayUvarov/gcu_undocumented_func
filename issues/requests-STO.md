@@ -1,6 +1,6 @@
 # Requests for the state and recovery track (STO), not numbered yet
 
-**Owner:** state and recovery track · **Status:** open (2 requests and a note waiting, 2026-10-12)
+**Owner:** state and recovery track · **Status:** open (3 requests and a note waiting, 2026-10-14)
 
 The STO track numbers its own tasks (`NNN-STO-MMMM`), so requests from other tracks wait here. It turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -47,3 +47,27 @@ Wait by the guest's clock: read `uptime` after the put, then poll it until 61 s 
 
 The check passes under a full local gate as it does alone, without a longer fixed sleep standing in for the guest's clock.
 
+## The store suite's `blocks check` of the 4 MiB object outruns its 240 s on a slower machine
+
+**Recorded by:** the tools track (APP), 2026-10-14, from its gate of `claude/wizardly-franklin-kec1a9` at eda1c74.
+
+### Problem
+
+`tests/qemu_smoke.py`, the store suite: `blocks(args, timeout=240)` sends `blocks check <root> pattern` for the object of 4 MiB + 1 byte and waits 240 s for the prompt.
+
+- On `DESKTOP-i7-930-wsl-u24` through Effector (aarch64 under TCG, an i7-930 without AVX, nothing else running there) the group "aarch64: files, network and TLS" failed there: `Timeout waiting for 'MIND> ': blocks check bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai pattern`.
+- The same commit passed the group on `un-rizen-service` (20 minutes for the group). The branch does not touch the store, `blocks` or `libmind`'s `sha256` and `dag`.
+- The same check timed out once on `i9` at a load of 46, during the tools track's gate of 211-APP-0070, and passed when the group ran again.
+
+`docs/effector.md` lists `DESKTOP-i7-930-wsl-u24` for QEMU suites under TCG, aarch64 too, at about 1.6 times i9's time, so the check is near its limit even where it passes.
+
+### Plan (a proposal; the STO track decides)
+
+Measure the check's time on aarch64 under TCG (the guest's `uptime` before and after, in the suite's output), then either:
+
+- give it a timeout that holds on the slowest machine listed for the group;
+- or make the check cheaper where it can be.
+
+### Acceptance criteria
+
+The group "aarch64: files, network and TLS" passes on `DESKTOP-i7-930-wsl-u24` with nothing else running there, and the suite prints how long the check took.

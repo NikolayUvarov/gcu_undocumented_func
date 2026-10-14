@@ -6308,16 +6308,18 @@ def wm_suite(vm):
         x, y, w, h = state()[2][window]
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
-    shell_re = re.compile(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"')
+    # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
         # Ctrl+Alt+F5: the shell opens its window (it takes the key; wm never sees it); in front, as a new window is.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         vm.hmp("sendkey ctrl-alt-f5")
         vm.serial(enter=False)
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        window = int((set(shell_re.findall("".join(seen))) - before).pop())
+        window = int((shells("".join(seen)) - before).pop())
         while window not in state()[2] or state()[1] != window:
             wait()
         return window
@@ -6398,13 +6400,13 @@ def wm_suite(vm):
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
         # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
         keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        menu_shell = int((set(shell_re.findall("".join(seen))) - before).pop())
+        menu_shell = int((shells("".join(seen)) - before).pop())
         until(f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
@@ -6551,7 +6553,7 @@ def wm_suite(vm):
         out = wait("[WM] WINDOW", lines=0)
     out = "".join(seen)
     # wm starts without the shell's window: it opens only when asked (211-APP-0045).
-    assert not shell_re.findall(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
+    assert not shells(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
     started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
     wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
     windows = {int(m[0]): m for m in windows_re.findall(out)}
@@ -7009,29 +7011,39 @@ def wm_suite(vm):
                 if index + (level == 0):
                     keys(*["down"] * (index + (level == 0)))
             assert at() == name, (at(), name)
-            keys("ret")
-            found = reaction_re.findall(seen[-1])
-            assert found, (name, seen[-1][-1500:])
+            mark = len("".join(seen))
+            if name.split(">")[-1] in POWER:
+                # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                # window, in front as a new window is; meanwhile it passes wm's lines on no more, so Enter waits for no
+                # state line (the race of requests-APP, 2026-10-14). No: nothing happens, and wm's lines come again.
+                vm.hmp("sendkey ret")
+                vm.serial(enter=False)
+                command, question = POWER[name.split(">")[-1]]
+                screen = []
+                for _ in range(40):
+                    time.sleep(.3)
+                    screen = screen_text(vm)
+                    vm.serial(enter=False)
+                    if any(canon(question) in row for row in screen):
+                        break
+                else:
+                    raise AssertionError((name, screen))
+                assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                vm.hmp("sendkey n")
+                vm.serial(enter=False)
+                until(f'THE SHELL RAN "{command}"')
+                for _ in range(100):
+                    if reaction_re.findall("".join(seen)[mark:]):
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
+            else:
+                keys("ret")
+            found = reaction_re.findall("".join(seen)[mark:])
+            assert found, (name, "".join(seen)[mark:][-1500:])
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
-                if name.split(">")[-1] in POWER:
-                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
-                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
-                    command, question = POWER[name.split(">")[-1]]
-                    screen = []
-                    for _ in range(40):
-                        time.sleep(.3)
-                        screen = screen_text(vm)
-                        vm.serial(enter=False)
-                        if any(canon(question) in row for row in screen):
-                            break
-                    else:
-                        raise AssertionError((name, screen))
-                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
-                    vm.hmp("sendkey n")
-                    vm.serial(enter=False)
-                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -7204,7 +7216,7 @@ def wm_suite(vm):
         front(console)
 
         # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
-        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_ids = shells("".join(seen))
         shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
         for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
             known = {m[0] for m in windows_re.findall("".join(seen))}
@@ -7270,7 +7282,7 @@ def wm_suite(vm):
         while state()[1] != files:
             wait()
         time.sleep(1)  # fm drew its panels, the cursor on the script
-        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in set(shell_re.findall("".join(seen))))
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shells("".join(seen)))
         for answer, logged_text, shown in (("n", 'THE SHELL DECLINED "msh ram:fmrun.msh"', "not run: the answer in the shell's window was no"),
                                            ("y", 'THE SHELL RAN "msh ram:fmrun.msh"', "fmrun.msh ran in the shell's window: FM RAN IT")):
             known = {m[0] for m in windows_re.findall("".join(seen))}
