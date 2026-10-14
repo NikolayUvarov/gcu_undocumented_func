@@ -1,12 +1,12 @@
-# 000-APP-0069 — `wm`'s background: an analog face, and gauges of the CPU load and the memory
+# 000-APP-0069 — `wm`'s background: an analog face, and gauges of the CPU load and the memory — done
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
 
 **Recorded by:** the maintainer, 2026-10-12: "for the clock on the background, add an analog variant, with gauges for the CPU and the memory." It follows the maintainer's question on transparent windows, which this answers without a new window protocol (a clock drawn on the background, not in a window).
 
 ## Problem
 
-`wm`'s background ([000-APP-0064](000-APP-0064-wms-background-information-in-one-column.md), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.md)) shows the time in digits, the CPU load as a graph, and the free memory as a line. There is no analog variant.
+`wm`'s background ([000-APP-0064](000-APP-0064-wms-background-information-in-one-column.done), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.done)) shows the time in digits, the CPU load as a graph, and the free memory as a line. There is no analog variant.
 
 ## Plan
 
@@ -29,6 +29,14 @@
 - The QEMU `wm` suite: the background's line names `face = digital`, and Settings' rows walk includes "Face".
 - `docs/tools` (EN, RU).
 
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9` and in `main` after the gate of 60653c1 (all host tests; every x86 suite here and on the i9; every aarch64 suite on the i9, and 16 CPUs on the PCU), `main` at 4500fd9.
+
+- `wm/src/background.rs`: `face = analog` draws a dial with twelve marks and the hands (the second's with `seconds`), its radius following `time-size`; the date under it; and a half-circle gauge for the CPU load and for the memory in use, lit from the left, with a needle and a label, following `text-size`. A third gauge, the battery's, came with [211-APP-0070](../issues/211-APP-0070-the-battery-in-wm-and-the-shell.md).
+- `wm/src/settings.rs`: the row `Face`.
+- Tests: `tests/wm_host.rs` (`the_analog_face_has_a_dial_and_gauges`); the `wm` suite's background line and Settings walk. `docs/tools` (EN, RU).
+
 ## Related
 
-[000-APP-0064](000-APP-0064-wms-background-information-in-one-column.md), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.md), [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done).
+[000-APP-0064](000-APP-0064-wms-background-information-in-one-column.done), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.done), [000-APP-0047](000-APP-0047-wm-desktop-background.done).
