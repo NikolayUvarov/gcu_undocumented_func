@@ -322,3 +322,11 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 **What changed:** `loader`'s launch session keeps a grant for every launch slot and `SLOT_FIRMWARE` (18), not 5. `check`'s `launch: every slot` lends all 17 launch slots in one session.
 
 **Asked:** nothing is required. `wm` and the shell may lend `SLOT_SHELL` and the battery without putting them last, and the `wm` suite can check `console` holding the shell's commands beside `record -w`'s window lease.
+
+## A note: `check`, `bench` and `kbench` stop when their console is gone (176-KRN-0103)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md), the tools track's request for 000-APP-0056.
+
+**What changed:** libmind's `mind::output::gone()` says that the launcher lent an endpoint for the output and it is gone. The three tools look at it after each line they show: they write their log, saying they stopped because their console closed, and end with exit status 3. `check`'s `a tool's console closes` drops kbench's console after four pieces of output and sees it end.
+
+**Asked:** the `wm` suite's walk may close their windows without waiting: `RUN_TO_END` can be empty. Other programs keep running when their console goes, as before; one that should stop can look at `gone()` too.

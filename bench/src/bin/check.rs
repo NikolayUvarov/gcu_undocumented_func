@@ -109,6 +109,28 @@ fn kernel(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
     text_input(run);
     every_slot(run);
+    console_closes(run);
+}
+
+// A tool whose console is gone stops at its next row (176-KRN-0103): kbench, its output sent to an endpoint that goes.
+fn console_closes(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.report("a tool's console closes", fail(String::from("no endpoint created"))) };
+    let verdict = match child::start_with_console("kbench", "", endpoint) {
+        Err(why) => { let _ = ipc::drop_cap(endpoint.0); fail(why) }
+        Ok(pid) => {
+            let pieces = (0..4).take_while(|_| endpoint.recv_timeout(0, 10_000).is_ok()).count();
+            let t = now();
+            let _ = ipc::drop_cap(endpoint.0);
+            let gone = child::gone_within(pid, 30_000);
+            if !gone && granted(SLOT_LIFECYCLE) { let _ = lifecycle::stop_task(Endpoint(SLOT_LIFECYCLE), pid); }
+            match (pieces, gone) {
+                (4, true) => pass(format!("kbench ended {} after its console went", report::duration(now() - t))),
+                (4, false) => fail(String::from("kbench still ran 30 s after its console went")),
+                (n, _) => fail(format!("{} pieces of kbench's output came, not 4", n)),
+            }
+        }
+    };
+    run.report("a tool's console closes", verdict);
 }
 
 // A launch session that lends every launch slot at once (000-KRN-0101): the program holds them all.
