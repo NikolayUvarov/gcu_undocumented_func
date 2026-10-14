@@ -11,6 +11,9 @@ use mind::ipc::Endpoint;
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 2;
 const WAITERS: usize = 4;
+// 2.4 GHz with OFDM there too (bands bits 0 and 2, idl/wlanhw.wit 1.1, 550-NET-0028; the wire is 1.0's): OFDM is
+// received up to 54 Mbit/s with core 2's front end off (550-DRV-0029), so the station offers 802.11g's rates.
+const BANDS: u8 = 1 | 4;
 
 fn error(e: Error) -> wlanhw::Error {
     match e { Error::NoDevice => wlanhw::Error::NoDevice, Error::Empty => wlanhw::Error::Empty, Error::Invalid => wlanhw::Error::Invalid, Error::Failed => wlanhw::Error::Failed }
@@ -42,7 +45,7 @@ pub fn run(radio: &mut Radio) -> ! {
             wlanhw::Request::Info => {
                 let mut channels = List::default();
                 for c in 1..=13 { channels.push(c); }
-                wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: mac64(&radio.mac), bands: 1, channels, frame_max: FRAME_MAX as u16, channel: radio.channel() }))
+                wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: mac64(&radio.mac), bands: BANDS, channels, frame_max: FRAME_MAX as u16, channel: radio.channel() }))
             }
             wlanhw::Request::SetChannel { channel } => wlanhw::reply_set_channel(call, radio.set_channel(channel).map_err(error)),
             wlanhw::Request::SetFilter { filter } => {
@@ -127,7 +130,7 @@ fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) 
         wlanhw::Request::Info => {
             let mut channels = List::default();
             for c in 1..=13 { channels.push(c); }
-            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: 1, channels, frame_max: FRAME_MAX as u16, channel: 0 }))
+            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: BANDS, channels, frame_max: FRAME_MAX as u16, channel: 0 }))
         }
         wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(busy)),
         wlanhw::Request::SetFilter { .. } => wlanhw::reply_set_filter(call, Err(busy)),
