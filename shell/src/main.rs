@@ -21,6 +21,7 @@ mod redirect;
 mod release;
 mod ring;
 mod screenshot;
+mod start;
 mod tpm;
 mod voicectl;
 
@@ -1128,20 +1129,26 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
+    let mut start = start::Start::new(mind::time::uptime_ms() as u64);
     let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
+    if !term.has_screen() { start.stop(); mind::println!("[SHELL] NO SCREEN TO DRAW ON: THE SERIAL LINE ONLY"); }
+    step(&mut start, "THE SCREEN AND THE SERIAL LINE (THE KERNEL)");
     let own = control::focus(0, false).unwrap_or(0);
+    step(&mut start, "THE FOCUS (THE KERNEL)");
     // The shell's window has memory for the screen's cells, as a program's window has (`Terminal::open`).
     let room = ((info.width / 8).clamp(1, mind::window::MAX_COLUMNS), (info.height / 16).clamp(1, mind::window::MAX_ROWS));
     let mut shell = new_shell(term, own, room);
     // Ctrl+Alt+F1…F4 come to the shell whatever program has the focus, and never to that program (INPUT_LISTEN);
     // Ctrl+Alt+F5 opens the shell's window (211-APP-0040, 211-APP-0045).
     for index in 0..SESSIONS { let _ = mind::input::listen(KEY_F1 + index as u16, MOD_CTRL | MOD_ALT, true); }
+    step(&mut start, "THE CONSOLES' KEYS (THE KERNEL)");
     let (used, free, _) = control::kernel_heap();
     let _ = writeln!(shell.term, "MIND CORE v1.6 [Build: 2026-10-03]. SMP / RING 3 SERVICES / RING 3 SHELL.");
     let _ = writeln!(shell.term, "MEMORY MANAGER: {} MB HEAP.", (used + free) / 1024 / 1024);
     let _ = writeln!(shell.term, "LIST: PROGRAMS. RUN <NAME> [&]. PS. FG <ID>. HELP. TAB COMPLETES, ↑/↓ HISTORY, CTRL+SHIFT: EN/RU.");
     // The boot's log after the banner, which stays the first line of the scrollback.
     shell.log_next = Some(0); shell.show_log(true);
+    step(&mut start, "THE BOOT'S LOG (LOGD)");
     shell.beat.0 = shell.term.position().line;
     shell.prompt();
     let mut vt = Vt::new();
@@ -1159,14 +1166,17 @@ fn main(info: &'static BootInfo) {
             let _ = writeln!(shell.term, "\nPID={} {}. SHELL RESUMED.", pid, what);
             shell.prompt();
         }
+        step(&mut start, "THE CONSOLES' PROGRAMS AND NOTICES (THE KERNEL)");
         // UART: terminal input decoded into key events (VT100/xterm sequences, UTF-8, a lone Esc after a timeout), for
         // the first console.
         shell.activate(0);
         shell.show_log(false);
+        step(&mut start, "NEW LINES OF THE LOG (LOGD)");
         let now = mind::time::uptime_ms() as u64;
         while let Some(byte) = shell.term.serial.as_ref().and_then(Uart::read) {
             vt.feed(byte, now, &mut |event| events.push(event));
         }
+        step(&mut start, "THE SERIAL LINE");
         vt.poll(now, &mut |event| events.push(event));
         for &event in events.as_slice() { shell.log_next = None; shell.uart(event); }
         events.clear();
@@ -1184,8 +1194,12 @@ fn main(info: &'static BootInfo) {
                 _ => {}
             }
         }
+        step(&mut start, "THE KEYS AND THE COMMANDS TYPED");
         let cursor = (shell.focused.is_none() && shell.console.is_none()).then(|| shell.cursor());
-        shell.term.render(cursor);
+        if shell.term.render(cursor) && !start.drawn() {
+            step(&mut start, "DRAWING THE FIRST FRAME");
+            if let Some(line) = start.frame(info.width, info.height, mind::time::uptime_ms() as u64) { mind::println!("{}", line); }
+        }
         // Wait for the next tick, or for the voice program's call or the window manager's.
         match shell.voice.endpoint {
             Some(endpoint) => {
@@ -1197,6 +1211,12 @@ fn main(info: &'static BootInfo) {
             None => { let _ = mind::time::sleep(10); }
         }
     }
+}
+
+// A step on the way to the first frame, named in the system log when it took longer than 5 s (213-APP-0075).
+fn step(start: &mut start::Start, what: &str) {
+    if start.drawn() { return; }
+    if let Some(line) = start.step(what, mind::time::uptime_ms() as u64) { mind::println!("{}", line); }
 }
 
 // Upper-case display of an ASCII word.

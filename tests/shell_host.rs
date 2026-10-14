@@ -1,6 +1,7 @@
 //! Host tests of the shell console's lines (shell/src/ring.rs): wrapping, the input line's positions, truncation, the
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
-//! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074).
+//! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074); the lines on
+//! the way to the first frame (shell/src/start.rs, 000-APP-0075).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -9,6 +10,8 @@ mod ring;
 mod redirect;
 #[path = "../shell/src/clients.rs"]
 mod clients;
+#[path = "../shell/src/start.rs"]
+mod start;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -147,4 +150,24 @@ fn a_client_is_asked_before_its_output_goes_into_a_file() {
     assert_eq!(taken("logs 7 >> ram:logs.txt"), Taken::Asked);
     assert_eq!(taken("ls > ram:x"), Taken::Refused, "ls is console's own");
     assert_eq!(taken("ps > a b"), Taken::Refused, "a line that is wrong");
+}
+
+#[test]
+fn the_first_frame_and_a_slow_step_before_it_are_logged_once() {
+    let mut start = start::Start::new(1_000);
+    assert_eq!(start.step("THE FOCUS (THE KERNEL)", 1_200), None);
+    assert_eq!(start.step("THE BOOT'S LOG (LOGD)", 1_200 + start::SLOW_MS), None, "exactly 5 s is not slow");
+    assert_eq!(start.step("THE SERIAL LINE", 7_300), None, "1.1 s since the last step");
+    let mut start = start::Start::new(500);
+    assert_eq!(start.step("THE BOOT'S LOG (LOGD)", 6_501).as_deref(), Some("[SHELL] THE BOOT'S LOG (LOGD) TOOK 6001 MS BEFORE THE FIRST FRAME"));
+    assert_eq!(start.step("THE SERIAL LINE", 7_000), None, "each step is timed from the last one");
+    assert!(!start.drawn());
+    assert_eq!(start.frame(2560, 1440, 7_949).as_deref(), Some("[SHELL] FIRST FRAME 2560X1440 AT 7.9 S"));
+    assert!(start.drawn());
+    assert_eq!(start.frame(2560, 1440, 8_000), None, "one line for the first frame");
+    assert_eq!(start.step("THE SERIAL LINE", 60_000), None, "nothing after the first frame");
+    let mut start = start::Start::new(0);
+    start.stop();
+    assert_eq!(start.step("THE SERIAL LINE", 60_000), None, "nothing is timed without a screen");
+    assert_eq!(start.frame(640, 480, 60_000), None);
 }
