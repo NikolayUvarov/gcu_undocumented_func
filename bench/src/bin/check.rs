@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::child::{self, ECHO, PEEK, SURVIVED};
+use bench::child::{self, ECHO, HASH, PEEK, READ, READ_END, SURVIVED};
 use bench::out::{self, Log};
 use bench::report::{self, Align, Table, Verdict};
 use mind::abi::*;
@@ -23,6 +23,9 @@ const GROUPS: [(&str, &str); 8] = [
 ];
 const USAGE: &str = "usage: check [kernel|security|clock|files|services|devices|sound|network …]";
 const SYSMON: Endpoint = Endpoint(SLOT_SYSINFO);
+// Where a text input's writer arrives from the loader, as record's copies do: an application holds no SLOT_WINDOWS.
+const RECEIVE: usize = SLOT_WINDOWS;
+const FED_BYTES: usize = 100 * 1024; // more than the kernel queues (TEXT_QUEUE)
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 
 fn now() -> u64 { mind::time::monotonic_ns() }
@@ -103,6 +106,74 @@ fn kernel(run: &mut Run) {
         None => fail(String::from("no page to lend")),
     });
     run.report("a program ends", if child::stop(endpoint, pid) { pass(format!("PID {} ended when told", pid)) } else { fail(format!("PID {} still runs", pid)) });
+    let _ = ipc::drop_cap(endpoint.0);
+    text_input(run);
+}
+
+// What a `--reader` child said: the bytes it read, their hash and how its input ended.
+fn reader_said(endpoint: Endpoint) -> Result<(usize, u64, usize), String> {
+    let read = endpoint.recv_timeout(0, 10_000).map_err(|e| format!("no answer from the reader: {:?}", e))?;
+    let hash = endpoint.recv_timeout(0, 5000).map_err(|e| format!("no hash from the reader: {:?}", e))?;
+    if read.data[0] & 0xFF != READ || hash.data[0] != HASH { return Err(format!("the reader said {:?} {:?}", read.data, hash.data)); }
+    Ok((read.data[1], hash.data[1] as u64, read.data[0] >> 8))
+}
+
+// A program's text input (000-KRN-0094): none without one; 100 KiB through the kernel's 4 KiB queue to its end; the
+// writer's rights; and the end once no writer is left.
+fn text_input(run: &mut Run) {
+    let t = now();
+    let none = mind::io::read(&mut [0u8; 16]);
+    run.report("text input: none", match none {
+        Err(mind::Error::NotFound) if !mind::io::has_input() => pass(format!("a program started without one is told so in {}", report::duration(now() - t))),
+        other => fail(format!("a read without one: {:?}", other)),
+    });
+    let Ok(endpoint) = Endpoint::create() else { return run.report("text input: to its end", fail(String::from("no endpoint created"))) };
+    let data: Vec<u8> = (0..FED_BYTES).map(|i| (i * 31 + i / 4096) as u8).collect();
+    let fed = child::start_fed("check", "--reader", endpoint, RECEIVE).and_then(|(pid, writer)| child::hello(endpoint).map(|()| (pid, writer)));
+    let (pid, spare) = match fed {
+        Err(why) => { run.report("text input: to its end", fail(why)); let _ = ipc::drop_cap(endpoint.0); return; }
+        Ok((pid, writer)) => {
+            // A copy kept past the close: written through once the reader ended.
+            let spare = ipc::mint(writer.handle(), u8::MAX, 0, 0).ok().and_then(mind::io::Writer::new);
+            let t = now();
+            let written = writer.write_all(&data).and_then(|()| writer.close());
+            let verdict = match (written, reader_said(endpoint)) {
+                (Err(e), _) => fail(format!("writing: {:?}", e)),
+                (_, Err(why)) => fail(why),
+                (Ok(()), Ok((count, hash, how))) if count == data.len() && hash == child::fnv(child::FNV_START, &data) && how == READ_END =>
+                    pass(format!("{} KiB through a {} KiB queue in {}, every byte; the end seen, and again", count / 1024, TEXT_QUEUE / 1024, report::duration(now() - t))),
+                (Ok(()), Ok((count, hash, how))) => fail(format!("{} of {} bytes, hash {}, ended {}", count, data.len(), if hash == child::fnv(child::FNV_START, &data) { "right" } else { "wrong" }, how)),
+            };
+            run.report("text input: to its end", verdict);
+            (pid, spare)
+        }
+    };
+    // Only a writer writes; and nobody once the reader ended.
+    let refused = mind::sys::syscall(SYSCALL_TEXT_WRITE, endpoint.0, 0, [data.as_ptr() as usize, 16, 0, 0]).result;
+    let gone = child::gone_within(pid, 3000);
+    let late = spare.as_ref().map(|w| w.write_some(&data[..16]));
+    run.report("text input: rights", match (refused, gone, late) {
+        (ERR_RIGHTS, true, Some(Err(mind::Error::Peer))) => pass(String::from("refused through an endpoint, and to a reader that ended")),
+        (code, gone, late) => fail(format!("through an endpoint: {:#x}; reader gone: {}; to it then: {:?}", code, gone, late)),
+    });
+    drop(spare);
+    // A writer dropped without a close: the reader still comes to its end, after the bytes queued.
+    let verdict = match child::start_fed("check", "--reader", endpoint, RECEIVE).and_then(|(pid, writer)| child::hello(endpoint).map(|()| (pid, writer))) {
+        Err(why) => fail(why),
+        Ok((pid, writer)) => {
+            let written = writer.write_all(&data[..1000]);
+            drop(writer);
+            let said = reader_said(endpoint);
+            let _ = child::gone_within(pid, 2000);
+            match (written, said) {
+                (Err(e), _) => fail(format!("writing: {:?}", e)),
+                (_, Err(why)) => fail(why),
+                (Ok(()), Ok((1000, hash, READ_END))) if hash == child::fnv(child::FNV_START, &data[..1000]) => pass(String::from("1000 bytes, then the end once no writer was left")),
+                (Ok(()), Ok((count, _, how))) => fail(format!("{} of 1000 bytes, ended {}", count, how)),
+            }
+        }
+    };
+    run.report("text input: writer gone", verdict);
     let _ = ipc::drop_cap(endpoint.0);
 }
 
@@ -327,6 +398,7 @@ fn main(info: &'static mind::BootInfo) {
     mind::about!("check — a self-test of what is done: the kernel, security, clocks, files and programs, boot services, devices, sound, the network.\nUsage: check [kernel|security|clock|files|services|devices|sound|network …]   (default: every group)\n✓ passed, ✗ failed with the reason, ○ skipped with the reason; the exit status is 1 if any failed. Details in log:checkNNNN.txt (ram: without the log volume).");
     let args = mind::process::args_str().trim();
     if args == "--child" { return child::serve(); }
+    if args == "--reader" { return child::read_input(); }
     if let Some(kind) = args.strip_prefix("--probe ") { return child::probe(kind); }
     let chosen: Vec<&str> = args.split_whitespace().collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("check: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }

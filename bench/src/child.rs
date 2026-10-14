@@ -1,10 +1,11 @@
-//! A copy of the tool itself that it starts and talks to: an echo for IPC (`--child`) and the memory probes of `check`
-//! (`--probe kernel|code|null`), which must be stopped by a fault.
+//! A copy of the tool itself that it starts and talks to: an echo for IPC (`--child`), the memory probes of `check`
+//! (`--probe kernel|code|null`), which must be stopped by a fault, and a reader of its text input (`--reader`).
 use alloc::format;
 use alloc::string::String;
 use core::hint::black_box;
 use mind::abi::{CAP_GRANT, CAP_READ, CAP_WRITE, SLOT_INIT};
 use mind::idl::loader;
+use mind::io::Writer;
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Mapping;
 
@@ -15,10 +16,20 @@ pub const EXIT: usize = 3;
 pub const SURVIVED: usize = 4;
 /// The word at the start of a lent page, as the echo read it, in data[1] of its reply when data[0] asks for it.
 pub const PEEK: usize = 5;
+/// The reader's answer (`--reader`): data[0] = READ | how it ended << 8 (READ_* below), data[1] = the bytes it read;
+/// then data[0] = HASH, data[1] = their FNV-1a hash.
+pub const READ: usize = 6;
+pub const HASH: usize = 7;
+/// The input ended, and a read after its end ended it again.
+pub const READ_END: usize = 0;
+/// The input ended, but a read after its end did not answer 0.
+pub const READ_END_LOST: usize = 1;
+/// A read failed.
+pub const READ_ERROR: usize = 2;
 const RECEIVED: usize = 9; // the child's fixed slot for a lent page (it has no console)
 
-/// Starts `program args` holding `endpoint` (receive and send) in its SLOT_INIT; its PID.
-pub fn start(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
+// A launch session of `program args` with `endpoint` (receive and send) granted in its SLOT_INIT.
+fn session(program: &str, args: &str, endpoint: Endpoint) -> Result<u32, String> {
     let session = loader::begin(Endpoint::LOADER, program, args).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))?;
     let lent = ipc::mint(endpoint.0, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0).and_then(|client| {
         let granted = loader::grant(Endpoint::LOADER, session, SLOT_INIT as u8, client);
@@ -26,7 +37,46 @@ pub fn start(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, Strin
         granted?.map_err(|_| mind::Error::Invalid)
     });
     if let Err(e) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("grant: {:?}", e)); }
+    Ok(session)
+}
+
+/// Starts `program args` holding `endpoint` (receive and send) in its SLOT_INIT; its PID.
+pub fn start(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
+    let session = session(program, args, endpoint)?;
     loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// `start` with a text input (loader 1.9, 000-KRN-0094): its PID and the input's writer, which arrives in the fixed
+/// slot `receive` and moves to a slot of its own.
+pub fn start_fed(program: &str, args: &str, endpoint: Endpoint, receive: usize) -> Result<(u64, Writer), String> {
+    let session = session(program, args, endpoint)?;
+    loader::commit_with_input(Endpoint::LOADER, session, false, receive).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))?;
+    let copy = ipc::mint(receive, u8::MAX, 0, 0);
+    let _ = ipc::drop_cap(receive);
+    let writer = copy.ok().and_then(Writer::new).ok_or_else(|| String::from("the loader gave no writer of a text input"))?;
+    Ok((writer.reader(), writer))
+}
+
+/// FNV-1a over `bytes`, from `hash` (`FNV_START` first).
+pub const FNV_START: u64 = 0xCBF2_9CE4_8422_2325;
+pub fn fnv(hash: u64, bytes: &[u8]) -> u64 { bytes.iter().fold(hash, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01B3)) }
+
+/// The reader: says hello, reads its text input to the end in pieces that cut across the writer's, then once more, and
+/// tells its parent what it read and how it ended.
+pub fn read_input() {
+    let parent = Endpoint::INIT;
+    if parent.send_timeout(&Message::new(HELLO, 0), 10_000).is_err() { return; }
+    let (mut count, mut hash, mut buffer) = (0usize, FNV_START, [0u8; 1000]);
+    let ended = loop {
+        match mind::io::read(&mut buffer) {
+            Ok(0) => break true,
+            Ok(n) => { count += n; hash = fnv(hash, &buffer[..n]); }
+            Err(_) => break false,
+        }
+    };
+    let how = match (ended, mind::io::read(&mut buffer)) { (true, Ok(0)) => READ_END, (true, _) => READ_END_LOST, (false, _) => READ_ERROR };
+    let _ = parent.send_timeout(&Message::new(READ | how << 8, count), 5000);
+    let _ = parent.send_timeout(&Message::new(HASH, hash as usize), 5000);
 }
 
 /// Waits for a started child's hello.

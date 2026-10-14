@@ -47,13 +47,32 @@ impl Accounting {
 struct Orphan { region: Region, owner: Option<(usize, u64)> }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8), Firmware }
+pub enum Capability { Endpoint(usize, u8, u16), Memory(usize, usize, u8), Dma(usize, usize), Mmio(usize, usize), IoPorts(u16, u16), Interrupt(u8), Input, Display, Spawn, Reply(usize, u64, u64), Platform, Control, Restart, Observe, Escrow(u8), Firmware, Text(usize, u64) }
 
 // Task name (for ps and spawn requests); application images are not indexed by a kernel table.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Name { bytes: [u8; NAME_MAX], len: u8 }
 impl Name {
     pub fn new(text: &[u8]) -> Self { let len = text.len().min(NAME_MAX); let mut bytes = [0; NAME_MAX]; bytes[..len].copy_from_slice(&text[..len]); Self { bytes, len: len as u8 } }
+}
+
+// A task's text input (SPAWN_TEXT, 000-KRN-0094): bytes its writer queued, whether it was closed, and whether the task
+// waits in TEXT_READ (only then does a write wake it).
+struct Text { bytes: [u8; TEXT_QUEUE], head: usize, len: usize, closed: bool, waiting: bool }
+impl Text {
+    const fn new() -> Self { Self { bytes: [0; TEXT_QUEUE], head: 0, len: 0, closed: false, waiting: false } }
+    // Appends what fits of `data`; how much.
+    fn push(&mut self, data: &[u8]) -> usize {
+        let n = data.len().min(TEXT_QUEUE - self.len);
+        for (i, &byte) in data[..n].iter().enumerate() { self.bytes[(self.head + self.len + i) % TEXT_QUEUE] = byte; }
+        self.len += n; n
+    }
+    // Takes up to `out.len()` bytes from the front; how many.
+    fn pop(&mut self, out: &mut [u8]) -> usize {
+        let n = out.len().min(self.len);
+        for (i, byte) in out[..n].iter_mut().enumerate() { *byte = self.bytes[(self.head + i) % TEXT_QUEUE]; }
+        self.head = (self.head + n) % TEXT_QUEUE; self.len -= n; n
+    }
 }
 
 // Where the ELF comes from: a boot image from the UEFI bootloader or a buffer passed by the spawner.
@@ -77,6 +96,7 @@ struct Task {
     space: paging::Space, heap: crate::user_heap::Heap, context: Region, _exit: Region,
     runs: u64, ticks: u64, calls: u64, run_ns: u64, sends: u64, receives: u64, started_ns: u64, _image: Region, _stack: Region, screen: Option<Region>, abi: Region,
     input: Events<INPUT_QUEUE>, pointer: bool, log: Queue<4096>, console: Queue<4096>, console_read_ns: u64, dirty: bool,
+    text: Option<alloc::boxed::Box<Text, Frames>>, // its text input, if it was started with one (SPAWN_TEXT)
     // Capability table, grown on demand up to CAP_SLOTS_MAX (issue 171); the generation of each kernel-allocated slot.
     cspace: Vec<Option<Capability>, Frames>, generations: Vec<u32, Frames>,
     nodes: Vec<Node, Frames>,
@@ -99,7 +119,7 @@ struct Task {
 fn kernel_bytes(task: &Task) -> usize {
     core::mem::size_of::<Task>() + task.context.len() + task._exit.len() + task.abi.len() + task.space.table_count() * paging::PAGE
         + task.cspace.capacity() * core::mem::size_of::<Option<Capability>>() + task.generations.capacity() * core::mem::size_of::<u32>()
-        + task.nodes.capacity() * core::mem::size_of::<Node>()
+        + task.nodes.capacity() * core::mem::size_of::<Node>() + task.text.as_ref().map_or(0, |_| core::mem::size_of::<Text>())
 }
 // A copy of `list` with room for exactly its elements, if the kernel heap has it.
 fn exact_copy(list: &[usize]) -> Option<Vec<usize>> { let mut copy = Vec::new(); copy.try_reserve_exact(list.len()).ok()?; copy.extend_from_slice(list); Some(copy) }
@@ -795,6 +815,7 @@ impl Scheduler {
         let mut space = paging::Space::new()?;
         for (offset, size, flags) in elf.segments() { space.map(paging::USER_IMAGE + offset, image.ptr() as usize + offset, size, flags & 2 != 0, flags & 1 != 0)?; }
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::task(8192, 4096)?;
+        let text = if flags & SPAWN_TEXT != 0 { Some(alloc::boxed::Box::try_new_in(Text::new(), Frames).map_err(|_| "OUT OF MEMORY: TEXT")?) } else { None };
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
         let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
@@ -813,7 +834,7 @@ impl Scheduler {
         if cspace.try_reserve_exact(CAP_SLOTS).is_err() || generations.try_reserve_exact(CAP_SLOTS).is_err() || table.try_reserve_exact(CAP_SLOTS).is_err() { return Err("OUT OF MEMORY: CAPABILITY TABLE"); }
         cspace.extend_from_slice(&caps); cspace.resize(CAP_SLOTS, None); generations.resize(CAP_SLOTS, 1); table.extend_from_slice(&nodes); table.resize(CAP_SLOTS, Node::default());
         let nodes = table;
-        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, kernel: 0 }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
+        let mut task = alloc::boxed::Box::try_new_in(Task { pid, name, service, state: State::Ready, sp, cpu, space, heap: crate::user_heap::Heap::with_limit(quotas.2), context, _exit: exit, runs: 0, ticks: 0, calls: 0, run_ns: 0, sends: 0, receives: 0, started_ns: crate::clock::now_ns(), _image: image, _stack: stack, screen, abi, input: Events::new(), pointer: false, log: Queue::new(), console: Queue::new(), console_read_ns: if service { 0 } else { crate::clock::now_ns() }, dirty: true, text, cspace, generations, nodes, pending_cap: None, pending_call: false, pending_badge: 0, send_seq: 0, reply_to: None, call_seq: 0, deadline: 0, watch: None, band: if service { BAND_SYSTEM as u8 } else { BAND_APPLICATION as u8 }, budget_ns: 0, period_ns: 0, period_start: 0, consumed: 0, parent, quota_tasks: quotas.0, quota_endpoints: quotas.1, memory_quota: quotas.2, memory_tree: 0, payer: parent, exit_reason: 0, handed_by: None, kernel: 0 }, Frames).map_err(|_| "OUT OF MEMORY: TASK")?;
         // Image, stack, screen and the task's kernel structures are charged to the spawner and every payer above it,
         // after the last fallible step (issue 168, 171-KRN-0032).
         task.kernel = kernel_bytes(&task);
@@ -1025,10 +1046,15 @@ impl Scheduler {
         matches!(self.cap(slot, index), Some(Capability::IoPorts(base, count)) if port >= base as usize && port + width <= base as usize + count as usize)
     }
     fn holds(&self, slot: usize, cap: Capability) -> bool { self.tasks[slot].as_ref().unwrap().cspace.contains(&Some(cap)) }
+    // A live task holds the writer of `slot`'s text input, or carries it in a message not yet received (000-KRN-0094).
+    fn fed(&self, slot: usize, pid: u64) -> bool {
+        let writer = Capability::Text(slot, pid);
+        self.tasks.iter().flatten().any(|t| t.state != State::Exited && (t.cspace.contains(&Some(writer)) || t.pending_cap.as_ref().is_some_and(|p| p.cap == writer)))
+    }
 
     // SPAWN: the image comes from a memory capability or (platform only) a boot image; the child's capabilities are
     // exactly the grant list.
-    unsafe fn spawn(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
+    unsafe fn spawn(&mut self, slot: usize, request: &SyscallMailbox, ptr: *mut SyscallMailbox) -> Result<usize, usize> {
         if !self.holds(slot, Capability::Spawn) { return Err(ERR_RIGHTS); }
         // Boot images and services: the platform privilege, or the narrower restart privilege init keeps after boot.
         let platform = self.holds(slot, Capability::Platform) || self.holds(slot, Capability::Restart);
@@ -1080,9 +1106,16 @@ impl Scheduler {
                 _ => return Err(ERR_INVALID),
             }
         };
+        // A text input's writer needs a slot in the spawner's table (000-KRN-0094).
+        if flags & SPAWN_TEXT != 0 && Self::room(self.tasks[slot].as_mut().unwrap()).is_none() { return Err(ERR_NO_SLOT); }
         let pid = self.spawn_internal(source, Name::new(&text[..name_len]), args, flags, caps, nodes, parent, quotas).map_err(spawn_error)?;
         // Moved capabilities leave the spawner only once the child exists.
         for index in moves.into_iter().flatten() { Self::clear(self.tasks[slot].as_mut().unwrap(), index); }
+        if flags & SPAWN_TEXT != 0 {
+            let (child, node) = (self.find(pid).unwrap(), self.root());
+            let writer = Self::insert(self.tasks[slot].as_mut().unwrap(), Capability::Text(child, pid), node).unwrap(); // room checked above
+            core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), writer);
+        }
         if let Some(owner) = front {
             let child = self.find(pid).unwrap();
             self.tasks[child].as_mut().unwrap().handed_by = Some(owner); self.focus(child);
@@ -1225,6 +1258,51 @@ impl Scheduler {
                     Ok(length)
                 }
             }
+            SYSCALL_TEXT_WRITE => match self.cap(slot, request.arg1) {
+                Some(Capability::Text(target, pid)) if self.tasks[target].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) => {
+                    let length = request.msg[1].min(TEXT_QUEUE);
+                    if !task.space.validate_read(request.msg[0], length) { Err(ERR_INVALID) } else {
+                        // Copied first: the writer may be the task itself.
+                        let mut buffer = [0u8; TEXT_QUEUE];
+                        for (i, byte) in buffer[..length].iter_mut().enumerate() { *byte = core::ptr::read_volatile(task.space.readable(request.msg[0] + i).unwrap() as *const u8); }
+                        let reader = self.tasks[target].as_mut().unwrap();
+                        match reader.text.as_mut() {
+                            Some(text) if !text.closed => {
+                                let taken = text.push(&buffer[..length]);
+                                if request.arg2 & TEXT_CLOSE != 0 && taken == length { text.closed = true; }
+                                // A reader waiting in TEXT_READ goes on.
+                                if text.waiting && (taken > 0 || text.closed) && matches!(reader.state, State::Sleeping(_)) { text.waiting = false; reader.state = State::Ready; self.readied.mark(reader.cpu); }
+                                Ok(taken)
+                            }
+                            _ => Err(ERR_INVALID),
+                        }
+                    }
+                }
+                Some(Capability::Text(..)) => Err(ERR_PEER),
+                _ => Err(ERR_RIGHTS),
+            },
+            SYSCALL_TEXT_READ => {
+                let (pid, capacity) = (task.pid, request.arg2.min(TEXT_QUEUE));
+                let ended = task.text.as_ref().is_some_and(|text| text.len == 0 && !text.closed) && !self.fed(slot, pid);
+                let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
+                match task.text.as_mut() {
+                    None => Err(ERR_NOT_FOUND),
+                    _ if capacity == 0 => Err(ERR_INVALID),
+                    Some(text) if text.len > 0 => {
+                        let mut buffer = [0u8; TEXT_QUEUE]; let n = text.pop(&mut buffer[..capacity]);
+                        if copy_out(&task.space, request.arg1, &buffer[..n]) { Ok(n) } else { Err(ERR_INVALID) }
+                    }
+                    // Closed, or no writer is left anywhere: the end.
+                    Some(text) if text.closed || ended => { text.closed = true; Ok(0) }
+                    Some(text) => {
+                        // Nothing yet: wait for bytes, the close or an input event, at most TEXT_WAIT_MS; asked again then.
+                        text.waiting = true;
+                        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), ERR_BUSY);
+                        let deadline = crate::clock::now_ns() + TEXT_WAIT_MS * 1_000_000;
+                        task.state = State::Sleeping(deadline); task.dirty = true; self.next_wake = self.next_wake.min(deadline); return self.select(sp, cpu);
+                    }
+                }
+            }
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
                 Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
                     let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
@@ -1273,7 +1351,7 @@ impl Scheduler {
                 None => Err(ERR_INVALID),
             },
             SYSCALL_CAP_DROP => match self.index(slot, request.arg1) { Some(index) => { self.remove(slot, index); Ok(0) } None => Err(ERR_INVALID) },
-            SYSCALL_SPAWN => self.spawn(slot, &request),
+            SYSCALL_SPAWN => self.spawn(slot, &request, ptr),
             SYSCALL_PLATFORM_CAP => {
                 if !self.holds(slot, Capability::Platform) { Err(ERR_RIGHTS) } else {
                     match (Self::room(task), self.platform_cap(request.arg1, request.arg2, request.msg[0])) {
@@ -1500,6 +1578,7 @@ impl Scheduler {
                     Some(Capability::Restart) => (CAP_KIND_RESTART, 0, 0),
                     Some(Capability::Observe) => (CAP_KIND_OBSERVE, 0, 0),
                     Some(Capability::Firmware) => (CAP_KIND_FIRMWARE, 0, 0),
+                    Some(Capability::Text(_, pid)) => (CAP_KIND_TEXT, pid as usize, 0),
                     Some(Capability::Escrow(kind)) => (CAP_KIND_ESCROW, kind as usize, 0),
                 };
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).arg2), base); core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), size);
