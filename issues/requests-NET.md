@@ -96,3 +96,13 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 - Whether a resumed response can still wait for ever, and where: the session's call to its parser, the parser's reply, or `netstack`'s flow after the cut.
 - A deadline on that wait, so that a stalled resume ends with an error instead of hanging the program.
 - A line in the log when the resume's request goes out and when its head is parsed, so that the next hang shows which step it stopped at.
+
+## Note: the kernel's side of 550-NET-0018, 550-NET-0024, 000-NET-0015 and 351-NET-0022 (550-KRN-0097, 000-KRN-0109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14. On the kernel branch, and in `main` after its gate (ABI 10):
+- `init` starts `wlan` over `bcm_wifi`, else `wlansim`, with the radio's client in slot 2 and `keystore`'s (`BADGE_KEY_STATION`) in slot 3;
+- `netstack` gets `wlan` in slot 4;
+- the `net` suite puts `wlansim` on its disk;
+- the shell's `SLOT_NET` and `SLOT_TLS` copies carry `CAP_BADGE`.
+
+The network track's QEMU checks of the station, the remembered networks, the read-only card client and TLS without the device certificate can follow.

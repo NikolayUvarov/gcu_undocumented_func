@@ -364,3 +364,12 @@ The `wm` suite's `shell_window` passes under load.
 - **The fix, one of:**
   - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
   - the shell keeps passing the manager's lines while it asks. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
+
+## Note: the station's client in `SLOT_WIFI`, a read-only card client and a badged TLS client for the shell to lend (550-KRN-0097, 000-KRN-0109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14. The kernel's side is on its branch and reaches `main` with its next gate (ABI 10).
+
+- **`SLOT_WIFI` (33)** holds `wlan`'s client with `BADGE_WIFI_CHANGE` while the station runs. The shell lends it in the same slot to a program that asks for `REQUEST_WIFI` (`wifi`, 550-APP-0033).
+- **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
+- **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
+- ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
