@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -54,29 +54,6 @@ The kernel track added `unreadable` to the loader's errors. The shell's match on
 ## Note: the camera is lent without a question (158; the maintainer's rule, 2026-10-09)
 
 The maintainer ruled that a program the user starts gets the devices it is for without a question (CONTRIBUTING.md, "No question about a tool's own purpose"). At that instruction the kernel session removed the shell's `ASKS FOR THE CAMERA. ALLOW?` and changed `shell/src/main.rs`, `docs/tools` (EN, RU), `camera`'s help and the `video` suite's camera check. The tools track may revise the wording. Questions stay where an action goes beyond the tool's purpose: the firmware's boot settings, the network policy.
-
-## `poweroff` and `shutdown`, and a menu entry to turn the machine off ([000-KRN-0080](../issues-done/000-KRN-0080-power-off-on-x86.done))
-
-**Recorded by:** the kernel track (KRN), 2026-10-11, at the maintainer's request: "there is no shutdown, and it is needed while we have to turn the system off". The maintainer asked again on 2026-10-12, once `reboot --off` had turned the MacBook Pro off: "a synonym `poweroff` is needed for this command".
-
-### Problem
-
-`reboot --off` writes the caches, stops the services and turns the machine off. Since 000-KRN-0080 it does so on x86 too (ACPI S5), not only on aarch64. But:
-
-- nobody looks for it under `reboot`;
-- `wm`'s menu has no entry for it;
-- `help reboot` and `shell/src/power.rs` still say "aarch64 only".
-
-### Plan (a proposal; the tools track decides)
-
-- **In the shell and `console`.** `poweroff` and `shutdown` as names for `reboot --off`, with `-f` as there; `help` names them.
-- **In `wm`.** A "Turn off" entry next to the restart, asking for confirmation as the restart does.
-- **The help texts and `docs/tools` (EN, RU).** Turning off works on x86 and aarch64. Where the firmware names no S5, it says why.
-
-### Acceptance criteria
-
-- **In the shell suite.** `poweroff -f` ends QEMU on x86 and aarch64 (the kernel track's check does it for `reboot -f --off`).
-- **In `wm`.** The menu entry is there.
 
 ## `wm`'s moving background: drawn by rows, paced to a deadline (000-KRN-0081)
 
@@ -155,50 +132,6 @@ The Effector agent is off by default, and only the owner may turn it on and say 
 
 In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite sees it online. `policy deny` takes effect on the next request; `disable` stops both services.
 
-## `cd` and `pwd`, and Tab completing paths (the maintainer's report, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](../issues-done/176-KRN-0087-runs-on-real-hardware.done)) was run by its path.
-
-### Problem
-
-The maintainer:
-
-- "`cd diag` does not work: there is no such command."
-- "Tab does not complete a path: `diag/q` is not completed to the name, or part of it."
-- "No list of the programs that match what was typed is shown."
-
-What the kernel track reads in the shell (`shell/src/main.rs`, `complete`):
-
-- **No current directory.** The shell has none, so every path is written from the volume's root.
-- **Tab completes only the first word**, or the word after `run`, and only with command and program names. A word holding `/` or `:` matches nothing, so nothing happens.
-- **The list.** It is printed only when the matches share nothing beyond what was typed. `console` has no Tab at all. Which of the two the maintainer typed in is not known.
-
-### Plan (a proposal; the tools track decides)
-
-- **`cd` and `pwd`** in the shell and `console`:
-  - `cd PATH` checks that the directory exists and names it in the prompt (`MIND diag> `);
-  - `cd` alone goes back to the boot volume's root, and `cd ..` goes up one level;
-  - a relative path in every command (`ls`, `cat`, `msh`, `run`, `edit`…) is taken from the current directory.
-- **Tab on a path.** A word holding `/` or `:`, or any word after a command that takes a file, is completed from the directory it names (vfs `list`):
-  - a single match gets its full name, with `/` after a directory;
-  - several matches get their common part;
-  - a second Tab lists them.
-- **Tab on the first word.** If the matches share nothing beyond what was typed, the first Tab lists them, as now. If they share more, the first Tab completes the shared part and a second Tab lists them (as in bash). The same in `console`.
-- **`help`** names `cd`, `pwd` and the keys.
-- **A script by its name** (the maintainer, 2026-10-12: "I cannot run the script from fm by Enter, nor in its directory by typing its name"):
-  - in the shell, `full.msh` runs from the current directory, as `diag/full.msh` runs from the root now;
-  - in `fm`, Enter on a `.msh` file runs it in the shell's window, or in `console`, as `msh <path>` does. Today `fm` hands it to the loader, which answers `Cannot start full.msh: NotFound`.
-
-### Acceptance criteria
-
-- **In the shell suite (x86 and aarch64):**
-  - `cd diag` then `msh quick.msh --check` works, and the prompt names `diag`;
-  - `cd nowhere` says the directory does not exist;
-  - Tab after `msh diag/q` gives `msh diag/quick.msh`;
-  - Tab twice after `ch` lists `check` and the other matches.
-- **In `console`**, the same keys work.
-- **In the `fm` suite**, Enter on `diag/quick.msh` runs it, and its first line shows.
-
 ## Note: the shell shows what a script prints at once (176-KRN-0087; the maintainer's word, 2026-10-12)
 
 **Recorded by:** the kernel track (KRN), 2026-10-12.
@@ -209,36 +142,6 @@ The maintainer's full run (`diag/full.msh`) looked hung for 42 s, then printed e
 - so does a command a script runs without capturing it.
 
 The `shell` suite now checks the screen while a script sleeps. The tools track may do it otherwise.
-
-## The battery in `wm`'s top bar, and in the shell (211-PRT-0008; the maintainer's request, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12. The maintainer: "The battery's state must also be shown in the indicator: on the mains, % or minutes left, switched." Switching is by a click (the maintainer's choice). The maintainer gave this part to the tools track.
-
-### What the kernel track has made
-
-- **The service `battery`** reads the Smart Battery System behind the embedded controller on the MacBook Pro ([211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md)). Its interface, `idl/battery.wit`, has one call, `status`, which returns:
-  - `on-ac`, `charging`, `discharging`, `full`;
-  - `percent`;
-  - `to-empty` and `to-full` in minutes (65535: not discharging, or not charging);
-  - current, voltage, capacities and cycles;
-  - the reading's age.
-- **The shell holds a client** in `SLOT_BATTERY` (32). `REQUEST_BATTERY` (bit 21) asks for it ([211-KRN-0090](211-KRN-0090-a-slot-for-the-battery.md), ABI 8). `mind::battery::write_minutes` writes minutes as `2:41`.
-
-### Plan (a proposal; the tools track decides)
-
-- **The shell** lends `SLOT_BATTERY` for `REQUEST_BATTERY`, as it does `SLOT_GPIO`; `msh` gets the word `battery`.
-- **The shell's `battery` command** prints the status in one line, and `help` names it.
-- **`wm`** asks for `REQUEST_BATTERY`.
-  - At the right end of its top bar, every 5 s: `⚡ 87%` on the mains, `▮ 87%` on the battery.
-  - A click switches between the percentage and the minutes: `▮ 2:41` left, or `⚡ 0:45` to full while charging. The choice stays until the next click.
-  - Below 10 % on the battery it is marked.
-  - With no client, or `no-battery` (QEMU, a desktop), no item.
-- **`console`** passes the client on like the others.
-
-### Acceptance criteria
-
-- **In the `wm` suite**, with no battery service (QEMU), the top bar has no battery item and nothing else changes.
-- **On the MacBook Pro**, the item shows the charge and follows the adapter being plugged in and out; a click shows the minutes.
 
 ## Screenshots and recordings for the project's page (000-KRN-0093; the maintainer's request, 2026-10-12)
 

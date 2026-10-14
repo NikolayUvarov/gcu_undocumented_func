@@ -624,6 +624,11 @@ fn the_programs_by_category() {
     let menu = menu::with_shell(catalogue(&programs(true)));
     assert_eq!(labels(&menu), ["Shell", "Files", "System", "Clocks", "Other"]);
     assert_eq!(menu[0].command.as_deref(), Some(menu::SHELL));
+    // Restart and Turn off at the end of System, through console to the shell, which asks first (000-APP-0065); not
+    // without console to pass them on.
+    assert_eq!(labels(&menu[2].children), ["console", "top", "uptime", "Restart", "Turn off"]);
+    assert_eq!(menu[2].children[3..].iter().map(|i| i.command.as_deref().unwrap()).collect::<Vec<_>>(), ["console reboot", "console poweroff"]);
+    assert_eq!(labels(&menu::with_shell(catalogue(&programs(false)))[2].children), ["top"]);
     let mut open = menu::Menu::new(10, 5);
     assert_eq!(open.key(&menu, key(KEY_DOWN)), menu::Outcome::Stay);
     assert_eq!(open.key(&menu, key(KEY_ENTER)), menu::Outcome::Run(String::from("shell")));
@@ -736,7 +741,7 @@ fn a_dragged_window_is_marked() {
 }
 
 // The desktop background (000-APP-0047, 000-APP-0050).
-use background::{colours, cover, ink, layout, overlay, pattern, Backdrop, Config, Info, Pattern, Picture, Place};
+use background::{colours, cover, ink, layout, overlay, pattern, used_percent, Backdrop, Config, Face, Info, Pattern, Picture, Place};
 
 fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 
@@ -744,7 +749,7 @@ fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 fn the_background_configuration_is_read_and_written() {
     assert_eq!(Config::parse("").0, Config::default());
     let d = Config::default();
-    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.net, d.place), (Picture::Abstract, true, true, true, false, Place::BottomRight));
+    assert_eq!((d.picture.clone(), d.time, d.date, d.cpu, d.memory, d.net, d.place), (Picture::Abstract, true, true, true, true, false, Place::BottomRight));
     assert_eq!((d.pattern, d.speed, d.contrast, d.complexity, d.info), (Pattern::Waves, 1, 20, 2, 30));
     let (c, problems) = Config::parse("# a comment\nbackground = image data/sky.bmp\nshow = cpu, time\nplace = top-left  # here\n");
     assert!(problems.is_empty(), "{:?}", problems);
@@ -752,6 +757,24 @@ fn the_background_configuration_is_read_and_written() {
     assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
     assert_eq!(Config::parse("background = none").0.picture, Picture::None);
     assert_eq!(Config::parse("show = none").0.time, false);
+    // The free memory (000-APP-0064): `memory` among `show`'s words; a file that never names it, written before it
+    // could be chosen, shows it; `none` hides it too.
+    assert!(c.memory, "an old show line");
+    assert!(!Config::parse("show = none").0.memory);
+    assert!(Config::parse("show = time, memory").0.memory);
+    let off = Config { memory: false, ..Config::default() };
+    assert!(off.format().contains("show = time, seconds, date, cpu\n") && !Config::parse(&off.format()).0.memory, "{}", off.format());
+    assert!(Config::default().format().contains("show = time, seconds, date, cpu, memory\n"));
+    // The seconds apart from the time, and the sizes (000-APP-0068): an old file shows the seconds; each is kept.
+    assert!(c.seconds && Config::parse("show = time, memory").0.seconds, "a file that never named the seconds");
+    let no_seconds = Config::parse("show = time, date").0;
+    assert!(no_seconds.time && no_seconds.seconds, "no `seconds` word anywhere: an old file");
+    let written = Config { seconds: false, time_size: 200, text_size: 50, ..Config::default() };
+    assert!(written.format().contains("show = time, date, cpu, memory\ntime-size = 200\ntext-size = 50\n"), "{}", written.format());
+    assert_eq!(Config::parse(&written.format()).0, written);
+    assert_eq!((Config::default().time_size, Config::default().text_size), (100, 100));
+    let (c, problems) = Config::parse("time-size = 80\ntext-size = 75%");
+    assert_eq!((c.time_size, c.text_size, problems.len()), (100, 100, 2), "{:?}", problems);
     // The pattern, its speed, contrast and complexity, the information's brightness; parts of a line between `;`.
     let (c, problems) = Config::parse("pattern = blobs; speed = 20 ; contrast = 45%\ncomplexity = 5; info = 0  # hidden");
     assert!(problems.is_empty(), "{:?}", problems);
@@ -935,6 +958,79 @@ fn png_and_jpeg_pictures_cover_the_desktop() {
     assert!(b.moving());
 }
 
+// 000-APP-0068: the time without its seconds is narrower; the time's digits and the other lines have sizes of their own.
+#[test]
+fn the_time_and_the_lines_have_their_sizes() {
+    let only_time = Config { date: false, cpu: false, memory: false, ..Config::default() };
+    let ((_, _, w, h), big, _) = layout(&only_time, 1280, 800, 1, 100).unwrap();
+    assert_eq!((w, h, big), (8 * 8 * 6, 16 * 6, 6), "HH:MM:SS at the first size");
+    let ((_, _, w, _), _, _) = layout(&Config { seconds: false, ..only_time.clone() }, 1280, 800, 1, 100).unwrap();
+    assert_eq!(w, 5 * 8 * 6, "HH:MM");
+    for (size, digits) in [(50, 3), (75, 4), (100, 6), (200, 12), (300, 18)] {
+        let (_, big, small) = layout(&Config { time_size: size, ..Config::default() }, 2560, 1600, 1, 100).unwrap();
+        assert_eq!((big, small), (digits, 2), "time-size {}", size);
+    }
+    for (size, pixels) in [(50, 1), (100, 2), (150, 3), (300, 6)] {
+        let (_, big, small) = layout(&Config { text_size: size, ..Config::default() }, 2560, 1600, 1, 100).unwrap();
+        assert_eq!((big, small), (6, pixels), "text-size {}", size);
+    }
+    // The CPU graph follows the other lines' size: 24 glyphs wide, as wide as HH:MM:SS at the first sizes.
+    let cpu = Config { time: false, date: false, memory: false, ..Config::default() };
+    let ((_, _, w, _), _, _) = layout(&cpu, 1280, 800, 1, 100).unwrap();
+    let ((_, _, w2, _), _, _) = layout(&Config { text_size: 50, ..cpu.clone() }, 1280, 800, 1, 100).unwrap();
+    assert_eq!((w, w2), (24 * 8 * 2, 24 * 8));
+    // Drawn: the time's line without the seconds, at the size asked.
+    let info = Info { seconds: Some(20 * 3600 + 5 * 60 + 9), ..Info::default() };
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &Config { seconds: false, ..only_time.clone() }, &info, &glyph);
+    let ((x, y, w, h), _, _) = layout(&Config { seconds: false, ..only_time.clone() }, 1280, 800, 1, 100).unwrap();
+    let inked = |x0: usize, x1: usize| (y..y + h).any(|py| (x0..x1).any(|px| frame[py * 1280 + px] != 0));
+    assert!(inked(x, x + w) && !inked(x + w + 8, 1280), "five glyphs, nothing right of them");
+}
+
+// 000-APP-0069: the analog face, a dial with hands and gauges of the CPU load and the memory in use.
+#[test]
+fn the_analog_face_has_a_dial_and_gauges() {
+    assert_eq!(Config::default().face, Face::Digital);
+    let analog = Config { face: Face::Analog, ..Config::default() };
+    assert!(analog.format().contains("\nface = analog\n"), "{}", analog.format());
+    assert_eq!(Config::parse(&analog.format()).0, analog);
+    assert_eq!(Config::parse("face = round").1.len(), 1);
+    assert_eq!((used_percent(Some(25), Some(100)), used_percent(Some(0), Some(100)), used_percent(Some(5), None), used_percent(Some(9), Some(0))), (Some(75), Some(100), None, None));
+    // The block: the dial (its radius in place of the glyph scale), the date, the two gauges side by side.
+    let ((x, y, w, h), radius, small) = layout(&analog, 1280, 800, 1, 100).unwrap();
+    assert_eq!((radius, small), (72, 2));
+    assert!(w >= 2 * 72 && w >= 2 * 8 * 8 * 2 + 16 && h >= 2 * 72 + 16 * 2 + 56, "{} {}", w, h);
+    assert_eq!((x + w, y + h), (1280 - 32, 800 - 32));
+    let ((_, _, _, h2), radius2, _) = layout(&Config { time_size: 200, ..analog.clone() }, 1280, 800, 1, 100).unwrap();
+    assert!(radius2 == 144 && h2 > h);
+    // Drawn at 3:00:00 with the CPU at 50 % and three quarters of the memory in use: the hour hand points right, the
+    // minute hand up; the CPU gauge is lit to its top, the memory's beyond it.
+    let only_dial = Config { date: false, cpu: false, memory: false, ..analog.clone() };
+    let ((dx, dy, _, _), r, _) = layout(&only_dial, 1280, 800, 1, 100).unwrap();
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &only_dial, &Info { seconds: Some(3 * 3600), ..Info::default() }, &glyph);
+    let (cx, cy) = (dx + r, dy + r);
+    let lit = |frame: &[u32], x: usize, y: usize| frame[y * 1280 + x] != 0;
+    assert!(lit(&frame, cx + r / 3, cy) && !lit(&frame, cx - r / 3, cy), "the hour hand to the right");
+    assert!(lit(&frame, cx, cy - r / 2) && !lit(&frame, cx, cy + r / 2), "the minute hand up");
+    assert!(lit(&frame, cx, dy + 1) && lit(&frame, dx + 1, cy), "the rim");
+    let gauges = Config { time: false, date: false, ..analog.clone() };
+    let ((gx, gy, _, _), _, small) = layout(&gauges, 1280, 800, 1, 100).unwrap();
+    let mut frame = vec![0u32; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &gauges, &Info { cpu: &[50], free: Some(25), total: Some(100), ..Info::default() }, &glyph);
+    let (colour, _, _) = ink(gauges.info);
+    let gauge = 56;
+    let cell = (2 * gauge).max(8 * 8 * small);
+    let top = |i: usize| (gx + i * (cell + 16) + cell / 2, gy + 3);
+    let right = |i: usize| (gx + i * (cell + 16) + cell / 2 + gauge - 4, gy + gauge - 1);
+    let at = |frame: &[u32], (x, y): (usize, usize)| frame[y * 1280 + x];
+    assert_eq!(at(&frame, top(0)), colour, "the CPU's arc lit to its top");
+    assert!(at(&frame, right(0)) != colour && at(&frame, right(0)) != 0, "the track beyond it, darker");
+    assert!(at(&frame, right(1)) != colour && at(&frame, right(1)) != 0, "the memory's arc not lit to its end at 75 %");
+    assert_eq!(at(&frame, top(1)), colour);
+}
+
 #[test]
 fn the_information_has_its_place() {
     let c = Config::default();
@@ -953,24 +1049,45 @@ fn the_information_has_its_place() {
     }
     // Nothing to show, or no room: no block.
     assert!(layout(&Config { picture: Picture::None, ..c.clone() }, 1280, 800, 1, 100).is_none());
-    assert!(layout(&Config { time: false, date: false, cpu: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
+    assert!(layout(&Config { time: false, date: false, cpu: false, memory: false, ..c.clone() }, 1280, 800, 1, 100).is_none());
     assert!(layout(&c, 200, 120, 1, 100).is_none());
     // The drawing stays inside the block and puts the text's colour there.
     let (fw, fh) = (640, 400);
     let mut frame = vec![background::DARK; fw * fh];
-    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], net: None }, &glyph);
-    let ((bx, by, bw, bh), _, _) = layout(&c, fw, fh, 1, 100).unwrap();
+    overlay(&mut frame, fw, fh, 1, 100, &c, &Info { seconds: Some(12 * 3600 + 34 * 60 + 56), date: Some((2026, 10, 10)), cpu: &[10, 50, 90], free: Some(336 << 20), total: None, battery: None, net: None }, &glyph);
+    let ((bx, by, bw, bh), big, small) = layout(&c, fw, fh, 1, 100).unwrap();
     let inside = |i: usize| { let (px, py) = (i % fw, i / fw); px >= bx && px < bx + bw + 4 && py >= by && py < by + bh + 4 };
     assert!(frame.iter().enumerate().all(|(i, &p)| p == background::DARK || inside(i)));
     let (text, graph, _) = ink(c.info);
     assert!(frame.iter().filter(|&&p| p == text).count() > 500);
     assert!(frame.contains(&graph));
+    // One column (000-APP-0064): in the bottom right corner too, each line's text starts in the block's first glyph cell;
+    // the time has its seconds, eight glyphs; the free memory has its line under the CPU graph.
+    let gap = 8;
+    let bands = [("time", by, 16 * big, big), ("date", by + 16 * big + gap, 16 * small, small),
+                 ("cpu", by + 16 * big + gap + 16 * small + gap, 16 * small, small),
+                 ("memory", by + 16 * big + gap + 16 * small + gap + 16 * small + gap / 2 + 48 + gap, 16 * small, small)];
+    for (name, top, tall, scale) in bands {
+        let frame = &frame;
+        let lit: Vec<usize> = (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| frame[py * fw + px] == text)).collect();
+        let first = *lit.iter().min().unwrap_or_else(|| panic!("{}: nothing drawn", name));
+        assert!(first + big >= bx + small && first < bx + 8 * scale, "{} starts at {}, the block at {}", name, first, bx);
+        if name == "time" { assert!(*lit.iter().max().unwrap() >= bx + 7 * 8 * big, "the seconds"); }
+    }
+    // The large digits' edge is the smaller lines' edge: "2026" and "12" both start in their glyph's second column.
+    let edge = |f: &[u32], top: usize, tall: usize| (top..top + tall).flat_map(|py| (0..fw).filter(move |&px| f[py * fw + px] == text)).min().unwrap();
+    let mut evening = vec![background::DARK; fw * fh];
+    overlay(&mut evening, fw, fh, 1, 100, &c, &Info { seconds: Some(20 * 3600), date: Some((2026, 10, 10)), cpu: &[10], free: None, total: None, battery: None, net: None }, &glyph);
+    assert_eq!(edge(&evening, by, 16 * big), edge(&evening, by + 16 * big + gap, 16 * small), "20:00:00 over 2026-10-10");
+    assert_eq!(background::memory_line(Some(336 << 20)), "MEM 336 MiB FREE");
+    assert_eq!(background::memory_line(Some(47 << 30 | 1 << 29)), "MEM 47.5 GiB FREE");
+    assert_eq!(background::memory_line(None), "MEM - FREE");
     // Paler than it was (0x7890A8), brighter with `info`, and gone at 0.
     let blue = |p: u32| p & 0xFF;
     assert!(blue(text) < 0xA8 && blue(text) > blue(background::LIGHT) + 0x10, "{:06x}", text);
     assert!(blue(ink(80).0) > blue(text) + 0x40);
     let mut hidden = vec![background::DARK; fw * fh];
-    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], net: None }, &glyph);
+    overlay(&mut hidden, fw, fh, 1, 100, &Config { info: 0, ..c.clone() }, &Info { seconds: Some(0), date: None, cpu: &[50], free: None, total: None, battery: None, net: None }, &glyph);
     let (none, _, _) = ink(0);
     assert!(hidden.iter().all(|&p| p == background::DARK || p == none));
 }
@@ -1063,16 +1180,41 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     // The time off, the place moved, an image's file typed.
     wm.key(key(KEY_DOWN));
     assert!(wm.status().ends_with(":Time"), "{}", wm.status());
-    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu), other => panic!("{:?}", other) }
-    for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.time && c.date && c.cpu && c.memory), other => panic!("{:?}", other) }
+    // The seconds and the time's size (000-APP-0068).
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Seconds"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.seconds), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.seconds), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Time size"), "{}", wm.status());
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.time_size, 125), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.time_size, 100), other => panic!("{:?}", other) }
+    for _ in 0..3 { wm.key(key(KEY_DOWN)); }
+    // The free memory (000-APP-0064): its own box.
+    assert!(wm.status().ends_with(":Free memory"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.memory && c.cpu), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.memory), other => panic!("{:?}", other) }
+    // The battery (211-APP-0070): a box, off until ticked.
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Battery"), "{}", wm.status());
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(c.battery && c.memory), other => panic!("{:?}", other) }
+    match wm.key(chr(' ')) { Action::Settings(c) => assert!(!c.battery), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
+    wm.key(key(KEY_DOWN));
+    assert!(wm.status().ends_with(":Text size"), "{}", wm.status());
+    match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.text_size, 50), other => panic!("{:?}", other) }
+    assert_eq!(wm.key(key(KEY_LEFT)), Action::Redraw, "50% is the smallest");
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.text_size, 100), other => panic!("{:?}", other) }
+    wm.key(key(KEY_DOWN));
     match wm.key(key(KEY_LEFT)) { Action::Settings(c) => assert_eq!(c.place, Place::BottomLeft), other => panic!("{:?}", other) }
-    for _ in 0..10 { wm.key(key(KEY_UP)); }
+    for _ in 0..15 { wm.key(key(KEY_UP)); }
     assert!(wm.status().ends_with(":Image file"), "{}", wm.status());
     for ch in "sky.bmp".chars() { assert_eq!(wm.key(chr(ch)), Action::Redraw); }
     match wm.key(key(KEY_ENTER)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("sky.bmp".into())), other => panic!("{:?}", other) }
     assert_eq!(wm.background.picture, Picture::Image("sky.bmp".into()));
     assert!((wm.background.time, wm.background.place) == (false, Place::BottomLeft));
-    // The system's pages say where the setting is made today; a click outside closes.
+    // The network page names what each row opens (550-APP-0033); a click outside closes.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
     let inner = s.area().inner();
     assert_eq!(s.click(inner.x + 2, inner.y + 3, &wm.background), settings::Outcome::Stay);
@@ -1081,10 +1223,10 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     let mut grid = Grid::new(&mut cells, 160, 50);
     s.draw(&mut grid, &DARK, &wm.background);
     let text: String = (inner.y..inner.bottom()).map(|y| (inner.x..inner.right()).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
-    assert!(text.contains("netpolicy") && text.contains("To read: the network is set in the shell") && text.contains("Shell in the menu"), "{}", text);
+    assert!(text.contains("console netpolicy") && text.contains("wifi --demo") && text.contains("a change asks in its window."), "{}", text);
     // A click on a row of the background page changes it.
     let mut s = settings::Settings::new(&wm.background, (160, 50));
-    match s.click(inner.x + 20, inner.y + 1 + 8, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
+    match s.click(inner.x + 20, inner.y + 1 + 10, &wm.background) { settings::Outcome::Changed(c) => assert!(!c.date), other => panic!("{:?}", other) }
     match s.click(inner.x + 20, inner.y + 1 + 2, &wm.background) { settings::Outcome::Changed(c) => assert_eq!(c.pattern, Pattern::Waves), other => panic!("{:?}", other) }
     // Every row fits the window.
     let mut cells = vec![Cell::BLANK; 160 * 50];
@@ -1280,7 +1422,7 @@ fn every_page_and_row_of_settings_reacts() {
         let mut s = Settings::new(&config, (160, 50));
         for _ in 0..page { s.key(key(KEY_DOWN), &config); }
         assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-        if page == 0 || page == DATE || page == settings::SCREEN { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
+        if page == 0 || page == DATE || page == settings::SCREEN || page == settings::NETWORK { assert!(!s.on_pages, "{}", PAGES[page]); continue; }
         assert!(s.on_pages && s.message.as_deref().is_some_and(|m| m.contains("a page to read")), "{}: {:?}", PAGES[page], s.message);
         assert!(s.page_text()[0].starts_with("To read:"), "{:?}", s.page_text());
         assert!(screen(&s).contains(&format!("{}: a page to read", PAGES[page])));
@@ -1294,6 +1436,23 @@ fn every_page_and_row_of_settings_reacts() {
         // Every line of the page fits its column.
         for line in s.page_text() { assert!(line.chars().count() <= 63, "{:?}", line); }
     }
+    // The network page (550-APP-0033): each row starts what it opens, by Enter and by a click; ← goes back to the pages.
+    for (row, (name, command, what)) in settings::NETWORK_ROWS.iter().enumerate() {
+        let mut s = Settings::new(&config, (160, 50));
+        for _ in 0..settings::NETWORK { s.key(key(KEY_DOWN), &config); }
+        s.key(key(KEY_ENTER), &config);
+        assert!(screen(&s).contains("The network: each row opens what shows or sets it."));
+        for _ in 0..row { s.key(key(KEY_DOWN), &config); }
+        assert!(screen(&s).contains(&format!("{:<11} {:<17} {}", name, command, what)), "the whole row fits");
+        assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Run(command.to_string()), "{}", name);
+        let inner = s.area().inner();
+        let mut c = Settings::new(&config, (160, 50));
+        c.click(inner.x + 2, inner.y + settings::NETWORK, &config);
+        assert_eq!(c.click(inner.x + 30, inner.y + 1 + row, &config), Outcome::Run(command.to_string()), "{}", name);
+        s.key(key(KEY_LEFT), &config);
+        assert!(s.on_pages && s.page == settings::NETWORK);
+    }
+    assert_eq!(settings::NETWORK_ROWS[0].1, "wifi");
     // Each row of the background page: Enter changes it, or a line says why not.
     for row in 0..ROWS.len() {
         let mut s = Settings::new(&config, (160, 50));
@@ -1469,7 +1628,7 @@ fn the_scale_follows_the_screen_and_settings() {
     wm.rescale(180, 56, 200);
     assert_eq!((wm.desk.cols, wm.desk.rows, wm.scale), (180, 56, 200));
     let Mode::Settings(open) = &wm.mode else { panic!() };
-    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 17));
+    assert_eq!(open.area(), Rect::new(0, 0, 180, 56).centered(84, 23));
 }
 
 // The pointer (000-APP-0061): its size with the scale or of its own, its colour, kept in data/wm.conf and set from
@@ -1597,4 +1756,72 @@ fn the_top_bar_folds_into_more() {
     wm.desk.add(text(1, "fm"));
     let screen = draw(&mut wm, 160);
     assert!(screen[0].contains("│ Alt+0 fit │ more ▼ ") && screen[0].ends_with(" fm ") && !screen[0].contains("settings"), "{}", screen[0]);
+}
+
+#[test]
+fn the_battery_on_the_background_and_in_the_top_bar() {
+    use background::{battery_line, hours, Power, NO_MINUTES};
+    // 211-APP-0070: `show` names it; off by default and in a file written before it could be chosen.
+    assert!(!Config::default().battery);
+    let (c, problems) = Config::parse("show = time, battery\n");
+    assert!(problems.is_empty() && c.battery && c.time && !c.cpu, "{:?}", problems);
+    assert!(c.format().contains("show = time, seconds, memory, battery"), "{}", c.format());
+    assert_eq!(Config::parse(&c.format()).0, c);
+    assert!(!Config::parse("show = time, date, cpu, memory\n").0.battery);
+    // The line: on the battery the time left, on the mains the time to full while charging, or neither.
+    let on_battery = Power { on_ac: false, charging: false, percent: 87, to_empty: 161, to_full: NO_MINUTES };
+    let charging = Power { on_ac: true, charging: true, percent: 40, to_empty: NO_MINUTES, to_full: 45 };
+    let full = Power { on_ac: true, charging: false, percent: 100, to_empty: NO_MINUTES, to_full: NO_MINUTES };
+    assert_eq!(battery_line(Some(&on_battery)), "BAT 87% 2:41 LEFT");
+    assert_eq!(battery_line(Some(&charging)), "BAT 40% AC 0:45 TO FULL");
+    assert_eq!(battery_line(Some(&full)), "BAT 100% AC");
+    assert_eq!(battery_line(Some(&Power { to_empty: NO_MINUTES, ..on_battery })), "BAT 87%");
+    assert_eq!(battery_line(None), "NO BATTERY");
+    assert_eq!((hours(Some(161)), hours(Some(5)), hours(None)), ("2:41".into(), "0:05".into(), "-:--".into()));
+    assert!(Power { percent: 9, ..on_battery }.low() && !Power { percent: 9, ..charging }.low() && !on_battery.low());
+    // On the digital face its line comes under the memory's, a line more; on the analog face a third gauge.
+    let digital = Config { battery: true, ..Config::default() };
+    let ((_, _, w0, h0), _, small) = layout(&Config::default(), 1280, 800, 1, 100).unwrap();
+    let ((_, _, _, h1), _, _) = layout(&digital, 1280, 800, 1, 100).unwrap();
+    assert_eq!(h1, h0 + 8 + 16 * small);
+    let mut frame = vec![background::DARK; 1280 * 800];
+    overlay(&mut frame, 1280, 800, 1, 100, &digital, &Info { battery: Some(on_battery), ..Info::default() }, &glyph);
+    let ((bx, by, _, bh), _, _) = layout(&digital, 1280, 800, 1, 100).unwrap();
+    let (text, _, _) = ink(digital.info);
+    let band = by + bh - 16 * small..by + bh;
+    assert!(band.clone().any(|y| (bx..bx + w0).any(|x| frame[y * 1280 + x] == text)), "the battery's line drawn last");
+    let analog = Config { face: Face::Analog, time: false, date: false, battery: true, ..Config::default() };
+    let ((_, _, w3, _), _, _) = layout(&analog, 1280, 800, 1, 100).unwrap();
+    let ((_, _, w2, _), _, _) = layout(&Config { battery: false, ..analog.clone() }, 1280, 800, 1, 100).unwrap();
+    assert!(w3 > w2, "three gauges are wider than two");
+    // The top bar: no item without a battery; with one, at the right end, and a click shows the minutes.
+    let mut wm = Wm::new(160, 50);
+    assert!(wm.chip().is_none() && !wm.status().contains("BATTERY"));
+    wm.battery = Some(on_battery);
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 87% "));
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    let mut none = |_: u32, _: usize, _: usize| None;
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    let bar: String = (153..160).map(|x| grid.get(x, 0).ch).collect();
+    assert_eq!(bar, " ▮ 87% ");
+    assert!(wm.top_bar().0.iter().all(|&(at, width, _)| at + width <= 153), "the items leave it room");
+    assert!(wm.status().ends_with("BATTERY=▮ 87%"), "{}", wm.status());
+    assert_eq!(wm.pointer(157, 0, 1, 0), Action::Redraw);
+    wm.pointer(157, 0, 0, 0);
+    assert_eq!(wm.chip().as_deref(), Some(" ▮ 2:41 "), "clicked: the time left");
+    wm.battery = Some(charging);
+    assert_eq!(wm.chip().as_deref(), Some(" AC 0:45 "), "charging: the time to full");
+    wm.battery = Some(full);
+    assert_eq!(wm.chip().as_deref(), Some(" AC -:-- "));
+    wm.pointer(157, 0, 1, 0);
+    assert_eq!(wm.chip().as_deref(), Some(" AC 100% "), "clicked again: the charge");
+    // Below 10 % on the battery it is marked.
+    wm.battery = Some(Power { percent: 7, ..on_battery });
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    assert_ne!(grid.get(158, 0).style, grid.get(140, 0).style);
+    let low = grid.get(158, 0).style;
+    wm.battery = Some(on_battery);
+    wm.draw(&mut grid, &DARK, &mut none, None);
+    assert_ne!(grid.get(158, 0).style, low, "marked only when low");
 }

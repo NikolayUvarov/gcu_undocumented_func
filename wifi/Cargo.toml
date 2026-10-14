@@ -1,0 +1,22 @@
+[package]
+name = "wifi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# wifi (550-APP-0033): the Wi-Fi networks around, joining one with a passphrase, the link's state; the screen and the
+# station's calls in the library, tested on the host (tests/wifi_host.rs).
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "wifi"
+path = "src/main.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

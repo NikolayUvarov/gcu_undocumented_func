@@ -18,6 +18,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
 | `i9_4e6882212251` | Ubuntu 24.04.3 under WSL2 on Windows, Intel Core i9-9900K (16 threads), 48 GB RAM for WSL, 920 GB free, `/dev/kvm` | the agent's own, `un`: give **no `run_as`** (the agent is not root, so `runuser` fails) | Builds, host tests, QEMU suites under TCG. **No reboots**: it is WSL2. |
 | `DESKTOP-i7-930-wsl-u24` | Ubuntu 24.04.5 under WSL2 on Windows 10 22H2, Intel Core i7-930 (4 cores, 8 threads, 2.8 GHz, SSE4.2, no AVX), 15 GB RAM for WSL, 955 GB free, no `/dev/kvm` | the agent runs as root: give `"run_as": "un"` for work | Builds, host tests, QEMU suites under TCG (x86 and aarch64), with CI's packages; runs that want memory. About 1.6 times i9's time. **No reboots**: it is WSL2. |
 | `DESKTOP-i7-930-wsl-u26` | Ubuntu 26.04.1 on the same machine | the agent's own, `un`: give **no `run_as`** | Rust only (rustup, the kernel track's clone): no C linker, QEMU or firmware until `setup_build_env.sh` runs as root there. |
+| `un-rizen_2a8b108d5593` (`un-rizen-service`) | Ubuntu 24.04.1 on the machine itself (no WSL; Linux 7.0), AMD Ryzen 9 5900HX (8 cores, 16 threads), 30 GB RAM, 97 GB free on NVMe, `/dev/kvm` | the agent runs as root, as a service: give `"run_as": "un"` for work | Builds, host tests, QEMU suites under TCG (x86 and aarch64), gates: **4 queues for every track and agent** (section 3, rule 1). **No reboots.** |
 
 - **What is installed on `PCU_585240b00e8a`** (and who did it is in section 6):
   - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`;
@@ -55,6 +56,12 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   | x86: boot, display, network, TLS, shell, memory, clock | 952 s | 784 s |
 
   All three passed. The builds are faster there. The QEMU suites are not, as they mostly wait inside the guest.
+- **What is on `un-rizen_2a8b108d5593`**, the maintainer's Ryzen machine, added on 2026-10-14 (section 6):
+  - everything `scripts/setup_build_env.sh` installs, from Ubuntu 24.04, as on i9: QEMU 8.2.2 for x86 and aarch64, OVMF and AAVMF 2024.02, iPXE ROMs, `dosfstools`, `mtools`, `swtpm` 0.7.3, `sbsigntool`, `python3-virt-firmware` 24.1, OpenJDK 21, `build-essential` (gcc 13.3), `git`;
+  - Rust through rustup in `~un/.cargo`, with the toolchain of `rust-toolchain.toml`; `un` is in the `kvm` group;
+  - the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`. Another track clones its own into `/home/un/mind-core/<TRK>/` as `un` the first time (rule 4): the toolchain in `~un/.rustup` is shared, and nothing needs installing.
+- **Its packages are CI's** (Ubuntu 24.04), and no proxy is set for the agent. Say so where you report a run: "un-rizen-service through Effector, Ubuntu 24.04 (native), QEMU 8.2.2 (Ubuntu), TCG".
+- **Its first agent,** `un-rizen_f5809c60f795`, ran in a console; the maintainer moved it to a service on 2026-10-14. Send nothing to the old ID: an operation there does not run.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. The key
@@ -102,12 +109,35 @@ while op["status"] not in FINAL:
 print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).get("stdout", "")[-3000:])
 ```
 
+### Choosing a machine (the maintainer, 2026-10-14)
+
+Machines join, leave and change: the maintainer adds them and may move an agent to a service (its ID then changes), and other tracks fill their queues. So choose the machine afresh:
+
+- **When.** Before each batch of long work (a build, a suite, a gate's part), and again when a batch waits in a queue or runs much slower than it used to.
+- **How.**
+  1. `GET /api/v1/endpoints`: each machine's `online`, `parallel_limit`, `occupied_queues` and `free_slots`.
+  2. `GET /api/v1/operations?agent_id=…&status=active` for the candidates: whose work is queued or running there, and for how long.
+  3. Section 1: what each machine has (the aarch64 tools, CI's packages or others), the user to give, and how fast it is.
+- **Which.** The machine that has what the work needs and the most room for it:
+  - a free queue first: work queued behind other tracks' costs more than a slower machine that is free;
+  - among the free ones, the faster: today `un-rizen-service` (4 queues), then `i9` (5 queues, but shared and under WSL), then PCU (its QEMU work goes sequential), then `DESKTOP-i7-930-wsl-u24`;
+  - a machine already loaded with other tracks' QEMU groups only when nothing else is free: under load a group runs past its timeouts, and its failure says nothing of the change (on 2026-10-14 i9 at a load of 39 took over an hour on a group that takes 16 minutes);
+  - the parts of a gate may run on different machines, and every group must pass on the same commit.
+- **A machine missing from section 1** has a configuration nobody described: describe it there, with the maintainer, before its runs count as evidence.
+- **Your own operation that waits long** may be cancelled by its ID (rule 7) and sent where there is room.
+- **The report** says where each part ran (section 4).
+
 ### The rules for working together
 
 1. **Long or CPU-heavy work runs one operation at a time for each track.** That means a build, the host tests, a QEMU suite or a gate's group.
    - A machine runs as many operations at once as it has queues: `parallel_limit` in `GET /api/v1/endpoints`, with `occupied_queues` and `free_slots`. The maintainer sets it on the Agents page by the machine's cores: two QEMU groups at once need about twice the threads, and a 16-CPU group takes 16.
    - **One queue** (`parallel_limit` 1): set `"sequential": true`. All sequential operations for one machine, whichever agent sent them, wait in one first-in, first-out queue and run one at a time.
    - **PCU** (4 CPUs) has had `parallel_limit` 3 since 2026-10-12, but its QEMU groups and builds still go sequential. On 2026-10-12 two tracks' groups ran there at once as ordinary operations: the load rose to 15–20 and the kernel track's aarch64 groups timed out. Its other queues are for short, light work.
+   - **`un-rizen-service`** (16 threads) has `parallel_limit` 4, **for every track and agent** (the maintainer, 2026-10-14). Use it for builds, host tests, QEMU groups and gates, x86 and aarch64:
+     - send long work there as ordinary operations, never `"sequential"`: the sequential lane is one queue and would leave three idle;
+     - each track runs one long operation there at a time, so four tracks build and test at once;
+     - a track may take a second queue only while two are free, from a second clone and a `TMPDIR` of its own (`/home/un/mind-core/<TRK>-2/`, `/tmp/mind-<TRK>-2`): two groups in one clone or one `TMPDIR` overwrite each other's images and logs;
+     - a QEMU group takes about as many threads as its guest has CPUs (four for most groups), so four fit; a 16-CPU group takes the whole machine while it runs, and the other groups then go slower.
    - **More queues:** send the long work as ordinary operations (no `"sequential"`), one at a time: the next only when the last has ended. Work above the limit waits for a free queue. Sequential operations keep sharing one lane, so a track that marks its work sequential waits behind the others' sequential work.
    - Every track keeps its temporary files in its own `TMPDIR` (rule 4), whatever the queue.
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
@@ -145,7 +175,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 
 ### The aarch64 part of a gate runs on a remote machine (the maintainer's decision, 2026-10-10)
 
-- **Where.** On a machine of section 1 that has the aarch64 tools: today `PCU_585240b00e8a`. The maintainer is adding more machines; each comes into section 1 with its configuration.
+- **Where.** On a machine of section 1 that has the aarch64 tools, chosen when the part starts (section 3, "Choosing a machine"): `PCU_585240b00e8a` and, since 2026-10-14, `un-rizen-service`, which is faster and has four queues (section 3, rule 1). The maintainer is adding more machines; each comes into section 1 with its configuration.
 - **Why.** On an agent's own machine the x86 part of the local gate takes about 70 minutes and the aarch64 part about 65 more. PCU runs the aarch64 groups 1.2–1.6 times slower, but **in parallel** with the x86 part. A gate then takes about as long as its longer half, and the agent's machine does only the x86 part.
 - **Measured on 2026-10-10** (the kernel track's tree 9c843b4, one group to an operation, seconds):
 
@@ -193,3 +223,4 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 | 2026-10-11 | `i9_4e6882212251` | `setup_build_env.sh` run as root: Ubuntu 24.04's QEMU 8.2.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), `ovmf` and `qemu-efi-aarch64` 2024.02, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `python3-virt-firmware`, `un` in the `kvm` group; WSL given 48 GB and nested virtualization, then restarted | the maintainer |
 | 2026-10-12 | `DESKTOP-3CNRULI_075845e7423d`, now `DESKTOP-i7-930-wsl-u26` | rustup in `~un/.cargo` with the toolchain of `rust-toolchain.toml` (nightly-2026-10-02); the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`. A first build stopped at `linker cc not found`: `scripts/setup_build_env.sh` (in that clone) is to be run as root, `sudo` asks for a password | KRN, at the maintainer's request |
 | 2026-10-12 | `DESKTOP-i7-930-wsl-u24` | The kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`; `scripts/setup_build_env.sh un` run as root (the agent's own user): Ubuntu 24.04's QEMU 8.2.2, OVMF and AAVMF 2024.02, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `sbsigntool`, `python3-virt-firmware`, `build-essential`, a Java runtime (OpenJDK 21), rustup and the pinned toolchain for `un`. Measured on `main` e028538: `02_build.sh` from nothing 710 s, the test programs 72 s, "x86: scheduling, isolation, heap" 180 s (i9: 111 s). No nested virtualization: Windows 10 has none for WSL2, and the guest sees no VMX | KRN, at the maintainer's request |
+| 2026-10-14 | `un-rizen_f5809c60f795`, now `un-rizen_2a8b108d5593` (`un-rizen-service`) | `git` and `ca-certificates`; the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`; `scripts/setup_build_env.sh un` run as root (138 s): Ubuntu 24.04's QEMU 8.2.2, OVMF and AAVMF 2024.02, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm` 0.7.3, `sbsigntool`, `python3-virt-firmware` 24.1, `build-essential`, OpenJDK 21, rustup and the pinned toolchain for `un`, `un` in the `kvm` group. The maintainer then moved the agent from a console to a service with 4 queues | KRN, at the maintainer's request |

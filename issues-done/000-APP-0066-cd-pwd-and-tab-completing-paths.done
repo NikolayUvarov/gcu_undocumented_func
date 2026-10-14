@@ -1,0 +1,66 @@
+# 000-APP-0066 — `cd` and `pwd`, and Tab completing paths, in the shell and `console` — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+
+**Recorded by:** the kernel track (KRN), 2026-10-12, from the maintainer's run of `fast-test` c548a85 on the MacBook Pro, where `diag/quick.msh` ([176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done)) was run by its path ([requests-APP.md](../issues/requests-APP.md), taken from there). Enter on a script in `fm` is [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md).
+
+## Problem
+
+The maintainer:
+
+- "`cd diag` does not work: there is no such command."
+- "Tab does not complete a path: `diag/q` is not completed to the name, or part of it."
+- "No list of the programs that match what was typed is shown."
+- "I cannot run the script … in its directory by typing its name."
+
+In the shell (`shell/src/main.rs`, `complete`):
+
+- **There is no current directory**, so every path is written from the volume's root.
+- **Tab completes only the first word**, or the word after `run`, and only with command and program names. A word holding `/` or `:` matches nothing.
+- **The list** is printed only when the matches share nothing beyond what was typed.
+- **`console` has no Tab at all.**
+
+## Plan
+
+- **`mind::path`** (`libmind/src/path.rs`), shared by the shell and `console`:
+  - a path taken from the current directory: a volume or a leading `/` starts at a root, `.` and `..` work; one that climbs above its root goes to the file service as typed, which refuses it (`INVALID PATH`, as before `cd`);
+  - `pwd`'s form (`/`, `/diag`, `ram:notes`) and the prompt's (`MIND diag> `);
+  - Tab's completion of a name from a list.
+- **The shell:**
+  - `cd [directory]` and `pwd`. Each console and the shell's window has its own directory. `cd` alone goes to the boot disk's root, `cd ..` one level up, and `cd` to a missing directory says so.
+  - A path without a volume starts at the current directory in `ls`, `cat`, `write`, `mkdir`, `rm`, `mv`, `msh`, a script by its name (`quick.msh`), `release`, `screenshot`, and the scripts' `files()` and `glob()`.
+  - A program has no directory of its own, so the shell passes it full paths: a word of its arguments that names a file or directory in the current directory, and the first word of a program that asks for its file (`edit new.txt`).
+  - A script's `cd` lasts while the script runs.
+- **Tab:**
+  - The first word, and the one after `run`, are completed from the commands and programs.
+  - A word holding `/` or `:`, or any later word, is completed from the directory it names.
+  - One match gets its full name, with `/` after a directory. Several get the part they share; once they share nothing more, Tab lists them, sorted.
+- **`console`:** `cd`, `pwd`, the prompt `diag> `, the same paths for its own commands and the programs it starts, and the same Tab.
+- **`help`** (the shell and `console`) names `cd`, `pwd` and Tab; `docs/tools` (EN, RU).
+
+## Acceptance criteria
+
+- **Host tests:**
+  - `tests/path_host.rs`: paths from a directory, `..` above a root refused (as typed), the volumes; `pwd`'s and the prompt's forms; Tab's completion, its shared part, its list, letter case, Cyrillic.
+  - `tests/console_host.rs`: `cd`, `pwd` and the prompt.
+- **The shell suite** (x86 and aarch64):
+  - `cd data`, and the prompt is `MIND data> `; `pwd` says `/data` (the suite's scripts are in `data/`; `diag/` is on the `bench` suite's disk only);
+  - `msh --check sum.msh` works there, and `ls` lists it;
+  - `cd nowhere` says the directory is not found; `cd ..` goes back;
+  - Tab after `cat data/su` gives `cat data/sum.msh`;
+  - Tab after `c` lists the commands and programs.
+- **The `wm` suite:** in `console`, `cd docs`, `ls`, Tab after `cat no`, `cd` and `pwd`.
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9` and in `main` after the gate of 60653c1 (all host tests; every x86 suite here and on the i9; every aarch64 suite on the i9, and 16 CPUs on the PCU), `main` at 4500fd9.
+
+- `libmind/src/path.rs` (`mind::path`): a path from the current directory, `pwd`'s and the prompt's forms, Tab's completion. A path that climbs above its volume's root comes back as typed, and the file service refuses it (`INVALID PATH`), as before `cd`: the tools suite's check that paths cannot climb out found the first version cutting it at the root, and it was fixed (e0ad314).
+- The shell: `cd`, `pwd`, the prompt `MIND data> `; paths from the current directory in its file commands, in `msh` (`files()`, `glob()`, a script by its name, a script's `cd` lasting while it runs) and in a program's arguments; Tab completes commands, programs and paths, and lists the choices.
+- `console`: the same `cd`, `pwd`, prompt and Tab.
+- Tests: `tests/path_host.rs`, `tests/console_host.rs`, `tests/shell_host.rs`; the shell suite (x86, aarch64) and the `wm` suite's `console` step (whose `cat` check now looks for `console`'s long-output line, as the file's lines wrap: 1c0e028). `help` and `docs/tools` (EN, RU).
+- Enter on a script in `fm` is [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md), which waits for the maintainer's decision.
+
+## Related
+
+[176-KRN-0087](176-KRN-0087-runs-on-real-hardware.done) (the diagnostic scripts), [000-APP-0067](../issues/000-APP-0067-fm-runs-a-script.md), [094](094-shell-script-language.done) (`msh`), [u006](u006-console-commands.done) (`console`'s commands).

@@ -1,0 +1,42 @@
+# 000-APP-0069 — `wm`'s background: an analog face, and gauges of the CPU load and the memory — done
+
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.5
+
+**Recorded by:** the maintainer, 2026-10-12: "for the clock on the background, add an analog variant, with gauges for the CPU and the memory." It follows the maintainer's question on transparent windows, which this answers without a new window protocol (a clock drawn on the background, not in a window).
+
+## Problem
+
+`wm`'s background ([000-APP-0064](000-APP-0064-wms-background-information-in-one-column.done), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.done)) shows the time in digits, the CPU load as a graph, and the free memory as a line. There is no analog variant.
+
+## Plan
+
+- **`face = digital | analog`** in `data/wm.conf` (digital by default), and Settings' row "Face".
+- **The analog face,** in one column at the block's place:
+  - **the dial:** twelve marks (longer at 3, 6, 9 and 12), the hour and minute hands, and the second hand with `seconds`. Its radius (72 pixels at the first size) follows `time-size`.
+  - **the date** under it, as a line.
+  - **a gauge** for `cpu` and one for `memory`: a half circle on a darker track, lit from the left as far as the CPU load or the memory in use (of the frame pool `sysinfo` `pool` gives), with a needle and a label (`CPU  47%`, `MEM  75%`). Its radius (56 pixels) follows `text-size`.
+  - **the network's line** last.
+- **Drawn with the background's sine table** (Bhaskara's approximation, within about 1 %). No new interface: `wm` already reads the pool's size with its free memory.
+
+## Acceptance criteria
+
+- `tests/wm_host.rs`:
+  - `face` is read and written, and a word not offered is refused;
+  - the memory in use is figured from the free and the total;
+  - the block holds the dial, the date and two gauges, and grows with `time-size`;
+  - at 3:00 the hour hand points right and the minute hand up;
+  - a gauge at 50 % is lit to its top and not beyond; one at 75 % is lit past its top.
+- The QEMU `wm` suite: the background's line names `face = digital`, and Settings' rows walk includes "Face".
+- `docs/tools` (EN, RU).
+
+## Resolution
+
+Done on `claude/wizardly-franklin-kec1a9` and in `main` after the gate of 60653c1 (all host tests; every x86 suite here and on the i9; every aarch64 suite on the i9, and 16 CPUs on the PCU), `main` at 4500fd9.
+
+- `wm/src/background.rs`: `face = analog` draws a dial with twelve marks and the hands (the second's with `seconds`), its radius following `time-size`; the date under it; and a half-circle gauge for the CPU load and for the memory in use, lit from the left, with a needle and a label, following `text-size`. A third gauge, the battery's, came with [211-APP-0070](../issues/211-APP-0070-the-battery-in-wm-and-the-shell.md).
+- `wm/src/settings.rs`: the row `Face`.
+- Tests: `tests/wm_host.rs` (`the_analog_face_has_a_dial_and_gauges`); the `wm` suite's background line and Settings walk. `docs/tools` (EN, RU).
+
+## Related
+
+[000-APP-0064](000-APP-0064-wms-background-information-in-one-column.done), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.done), [000-APP-0047](000-APP-0047-wm-desktop-background.done).

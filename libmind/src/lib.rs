@@ -80,6 +80,8 @@ pub mod script;
 #[cfg(feature = "alloc")]
 pub mod pattern;
 #[cfg(feature = "alloc")]
+pub mod path;
+#[cfg(feature = "alloc")]
 pub mod voice;
 #[cfg(feature = "alloc")]
 pub mod nn;
