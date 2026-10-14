@@ -217,3 +217,25 @@ The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the netwo
 ### Acceptance criteria
 
 `stat caps` shows the shell's TLS client with the right to badge (or the second client). The `tls` suite's check comes with the tools track's lending.
+
+## The SSH service in the boot services (351-NET-0027)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
+
+### Problem
+
+The service `ssh` (351-NET-0027) reads release files over SFTP for programs, as `tls` runs HTTPS for them (351-NET-0002). Its logins are signed by `keystore`, so the device key never leaves it (MC-11.9). Only `init` can start the service and hand out its clients, and no slot or request flag names it yet.
+
+### Plan (a proposal; the kernel track decides)
+
+- **Starting it.** `init` starts `ssh` after `keystore` and the network stack, as it starts `tls`.
+- **`keystore`'s client.** `init` mints a client of `keystore` with `BADGE_KEY_SSH` (`mind::network`, value 3) and lends it to `ssh` alone, in slot 4 as `tls` holds `BADGE_KEY_SIGNER`. With it, `ssh` may ask for `ssh-login` signatures only (`idl/keystore.wit` 1.2, 351-NET-0027); nothing else gets that badge.
+- **The log.** `ssh` gets the log client, for its record of sessions, refusals and pin mismatches.
+- **Its clients:**
+  - the shell's, in a new fixed slot (`SLOT_SSH`), for the `download` command and for lending;
+  - for programs, a request flag (`REQUEST_SSH`) that lends the launcher's client in the program's same slot, for a program that also gets a flow grant, as `REQUEST_TLS` does. A new slot in `LAUNCH_SLOTS` is an ABI change, so it is the kernel track's.
+- **Restarts.** `ssh` restarts like `tls`.
+
+### Acceptance criteria
+
+In the `net` suite, `ssh` runs and holds `keystore`'s client with `BADGE_KEY_SSH`, and `stat caps` shows the shell's client in `SLOT_SSH`. The SFTP check of the `net` suite comes from the network track.

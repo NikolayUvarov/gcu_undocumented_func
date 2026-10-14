@@ -329,3 +329,19 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 - The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
 - `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## The shell lends a client of the SSH service (351-NET-0027)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
+
+### Problem
+
+The service `ssh` (351-NET-0027) reads files over SFTP for programs, logged in as the device with a key that only `keystore` holds. A program reaches it as it reaches `tls`: through a client the shell lends.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST_SSH` exists (requests-KRN.md, "The SSH service in the boot services"), the shell lends a copy of its client in the program's same slot for `REQUEST_SSH`, together with the program's flow grant, as it does for `REQUEST_TLS`. `download` (the network track's) then reads `sftp://` addresses through it.
+
+### Acceptance criteria
+
+In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
