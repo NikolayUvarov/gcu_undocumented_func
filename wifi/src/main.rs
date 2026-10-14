@@ -9,6 +9,7 @@ use alloc::string::String;
 use mind::abi::{CAP_KIND_ENDPOINT, SLOT_WIFI};
 use mind::ipc::Endpoint;
 use mind::tui::{Terminal, DARK};
+use wifi::headless::{self, Command};
 use wifi::service::Service;
 use wifi::station::{Absent, Demo, Station};
 use wifi::view::{Flow, Wifi};
@@ -21,9 +22,13 @@ const SCAN_MS: usize = 15_000;
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("wifi — the Wi-Fi networks around: their names, signal and protection; Enter joins one, with a passphrase typed\nwithout echo that the station may keep (in keystore, never in a file).\nUsage: wifi [--demo]\n↑↓ choose, Enter: join, r or F5: scan again, d: leave, f: forget, q or Esc: quit.\nThe 802.11 station that serves it is the network track's wlan (idl/wifi.wit), whose client the shell lends when a radio\nruns; --demo shows the program with a stand-in station and no radio.");
-    let demo = mind::process::args_str().split_whitespace().any(|w| w == "--demo");
-    let Some(mut term) = Terminal::open(info, "wifi") else { return };
+    mind::about!("wifi — the Wi-Fi networks around: their names, signal and protection; Enter joins one, with a passphrase typed\nwithout echo that the station may keep (in keystore, never in a file).\nUsage: wifi [--demo]\n↑↓ choose, Enter: join, r or F5: scan again, d: leave, f: forget, q or Esc: quit.\nWithout a screen (scripts, tests): wifi join <name> [--passphrase-file <file>] [--remember]: the file's first line is\nthe name, its second the passphrase; it logs JOINED, REFUSED with the station's reason, or NO ANSWER after 60 s, and\nends with 0, 1 or 2 (3: no station); wifi status: the link as one line; wifi leave.\nThe 802.11 station that serves it is the network track's wlan (idl/wifi.wit), whose client the shell lends when a radio\nruns; --demo shows the program with a stand-in station and no radio.");
+    let args = mind::process::args_str();
+    let demo = args.split_whitespace().any(|w| w == "--demo");
+    let command = match headless::parse(args) {
+        Ok(command) => command,
+        Err(usage) => { mind::println!("{}", usage); mind::process::exit_with(headless::NO_STATION) }
+    };
     let mut stand_in = Demo::new();
     // The station's client, as the shell lends it; without one (no radio, so no station; or a launcher that does not
     // lend it) the screen says so.
@@ -31,6 +36,8 @@ fn main(info: &'static mind::BootInfo) {
     let held = mind::dev::cap_info(SLOT_WIFI).0 == CAP_KIND_ENDPOINT;
     let mut absent = Absent(String::from("this program holds no client of the 802.11 station (wlan). The shell lends it when a radio runs: start wifi from the shell, or from wm's Settings, Network."));
     let station: &mut dyn Station = if demo { &mut stand_in } else if held { &mut service } else { &mut absent };
+    if let Some(command) = command { mind::process::exit_with(without_screen(command, station)) }
+    let Some(mut term) = Terminal::open(info, "wifi") else { return };
     let mut view = Wifi::new(demo);
     view.refresh(station);
     view.poll(station);
@@ -59,3 +66,36 @@ fn main(info: &'static mind::BootInfo) {
     }
     mind::println!("[WIFI] DONE");
 }
+
+// `wifi join`, `status` or `leave` (550-APP-0078): one line for the log and the console, and the exit status.
+fn without_screen(command: Command, station: &mut dyn Station) -> u32 {
+    let (code, line) = match command {
+        Command::Status => headless::status(station),
+        Command::Leave => headless::leave(station),
+        Command::Join { ssid, file, remember } => {
+            let mut secret = match file.as_deref().map(|path| read_passphrase(path, &ssid)) {
+                None => String::new(),
+                Some(Ok(secret)) => secret,
+                Some(Err(why)) => { mind::println!("[WIFI] REFUSED {}: {}", wifi::station::shown(&ssid), why); return headless::REFUSED; }
+            };
+            let (mut now, mut pause) = (|| mind::time::uptime_ms() as u64, |ms: u64| { let _ = mind::time::sleep(ms as usize); });
+            let result = headless::join(station, &ssid, &secret, remember, &mut now, &mut pause);
+            unsafe { secret.as_bytes_mut().fill(0); }
+            result
+        }
+    };
+    mind::println!("{}", line);
+    code
+}
+
+// The passphrase from the file at `path` (its first line `ssid`, its second the passphrase); the buffer is cleared.
+fn read_passphrase(path: &str, ssid: &[u8]) -> Result<String, &'static str> {
+    let mut file = mind::fs::File::open(path).map_err(|_| "the passphrase file cannot be opened")?;
+    let mut text = alloc::vec![0u8; file.size().min(1024)];
+    let mut got = 0;
+    while got < text.len() { match file.read(&mut text[got..]) { Ok(0) | Err(_) => break, Ok(n) => got += n } }
+    let secret = headless::passphrase(&text[..got], ssid);
+    text.fill(0);
+    secret
+}
+

@@ -1,5 +1,6 @@
 //! Host tests of `wifi` (550-APP-0033): the rows a scan makes, the passphrase's rules, SSIDs as bytes, and the screen's
-//! keys against the stand-in of idl/wifi.wit 1.0 (wifi/src/station.rs), as the QEMU test runs it with `--demo`.
+//! keys against the stand-in of idl/wifi.wit 1.0 (wifi/src/station.rs), as the QEMU test runs it with `--demo`; `wifi join`,
+//! `status` and `leave` without a screen (wifi/src/headless.rs, 550-APP-0078).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../common/abi.rs"]
@@ -14,6 +15,8 @@ mod tui;
 mod station;
 #[path = "../wifi/src/view.rs"]
 mod view;
+#[path = "../wifi/src/headless.rs"]
+mod headless;
 use keys::Key;
 use station::*;
 use view::*;
@@ -186,3 +189,78 @@ fn without_a_station_the_screen_says_why() {
     assert!(shown_now.iter().any(|row| row.contains("No Wi-Fi station")) && shown_now.iter().any(|row| row.contains("wifi --demo")));
     assert!(matches!(w.key(key(abi::KEY_ENTER), &mut absent), Flow::Quit));
 }
+
+// A clock that moves only when the join pauses.
+fn join_with(station: &mut dyn Station, ssid: &[u8], passphrase: &str, remember: bool) -> (u32, String, u64) {
+    let clock = std::cell::Cell::new(0u64);
+    let (code, line) = headless::join(station, ssid, passphrase, remember, &mut || clock.get(), &mut |ms| clock.set(clock.get() + ms));
+    (code, line, clock.get())
+}
+
+#[test]
+fn the_command_line_without_a_screen() {
+    use headless::{parse, Command};
+    assert_eq!(parse(""), Ok(None));
+    assert_eq!(parse("--demo"), Ok(None));
+    assert_eq!(parse("status"), Ok(Some(Command::Status)));
+    assert_eq!(parse("--demo leave"), Ok(Some(Command::Leave)));
+    assert_eq!(parse("join MIND-TEST --passphrase-file /data/wifijoin.txt"),
+               Ok(Some(Command::Join { ssid: b"MIND-TEST".to_vec(), file: Some("/data/wifijoin.txt".into()), remember: false })));
+    assert_eq!(parse("join \"Cafe guests\" --remember"), Ok(Some(Command::Join { ssid: b"Cafe guests".to_vec(), file: None, remember: true })));
+    for wrong in ["join", "join --remember", "join A --passphrase-file", "join A --passphrase-file f --passphrase-file g", "join A B", "scan", "status now"] {
+        assert_eq!(parse(wrong), Err(headless::USAGE), "{wrong}");
+    }
+}
+
+#[test]
+fn the_passphrase_file_names_its_network_first() {
+    assert_eq!(headless::passphrase(b"MIND-TEST\nmind test passphrase\n", b"MIND-TEST").as_deref(), Ok("mind test passphrase"));
+    assert_eq!(headless::passphrase(b"MIND-TEST\r\nmind test passphrase\r\n", b"MIND-TEST").as_deref(), Ok("mind test passphrase"));
+    let other = headless::passphrase(b"Home\nsecret words\n", b"MIND-TEST");
+    assert!(other.is_err() && !other.unwrap_err().contains("secret"), "the error never holds the file's lines");
+    assert!(headless::passphrase(b"MIND-TEST\n", b"MIND-TEST").is_err());
+    assert!(headless::passphrase(b"MIND-TEST\n\xFF\xFE\n", b"MIND-TEST").is_err());
+}
+
+#[test]
+fn a_join_without_a_screen_reports_its_end_and_never_the_passphrase() {
+    let mut demo = Demo::new();
+    let (code, line, _) = join_with(&mut demo, b"MIND-Lab", DEMO_PASSPHRASE, false);
+    assert_eq!((code, line.as_str()), (headless::JOINED, "[WIFI] JOINED MIND-Lab 02:4D:49:4E:44:01 CHANNEL 6 54 MB/S"));
+    assert_eq!(headless::status(&mut demo), (headless::JOINED, String::from("[WIFI] STATUS JOINED MIND-Lab 02:4D:49:4E:44:01 CHANNEL 6 54 MB/S -48 DBM")));
+    assert_eq!(headless::leave(&mut demo), (headless::JOINED, String::from("[WIFI] LEFT")));
+    assert_eq!(headless::status(&mut demo).1, "[WIFI] STATUS OFF");
+
+    let (code, line, _) = join_with(&mut Demo::new(), b"MIND-Lab", "wrong horse", false);
+    assert_eq!(code, headless::REFUSED);
+    assert!(line.starts_with("[WIFI] REFUSED MIND-Lab: the passphrase is wrong") && !line.contains("horse"), "{line}");
+    let (code, line, _) = join_with(&mut Demo::new(), b"Nowhere", DEMO_PASSPHRASE, false);
+    assert_eq!((code, line.starts_with("[WIFI] REFUSED Nowhere:")), (headless::REFUSED, true));
+    // A station that does not remember networks is asked again without.
+    let mut forgetful = Demo::new();
+    forgetful.remembers = false;
+    let (code, line, _) = join_with(&mut forgetful, b"MIND-Lab", DEMO_PASSPHRASE, true);
+    assert_eq!(code, headless::JOINED);
+    assert!(line.ends_with(", NOT REMEMBERED: THE STATION KEEPS NO NETWORKS"), "{line}");
+    // No station at all.
+    let (code, line, _) = join_with(&mut Absent(String::from("no radio")), b"MIND-Lab", DEMO_PASSPHRASE, false);
+    assert_eq!((code, line.as_str()), (headless::NO_STATION, "[WIFI] NO STATION: no radio"));
+}
+
+// A station that starts joining and never ends.
+struct Stuck;
+impl Station for Stuck {
+    fn scan(&mut self) -> Result<Vec<Network>, Refusal> { Ok(Vec::new()) }
+    fn join(&mut self, _: &[u8], _: &str, _: bool) -> Result<(), Refusal> { Ok(()) }
+    fn status(&mut self) -> Result<Link, Refusal> { Ok(Link::Joining { ssid: b"Slow".to_vec() }) }
+    fn leave(&mut self) -> Result<(), Refusal> { Ok(()) }
+    fn forget(&mut self, _: &[u8]) -> Result<bool, Refusal> { Ok(false) }
+}
+
+#[test]
+fn a_join_that_never_ends_gives_no_answer_after_a_minute() {
+    let (code, line, waited) = join_with(&mut Stuck, b"Slow", "", false);
+    assert_eq!((code, line.as_str()), (headless::NO_ANSWER, "[WIFI] NO ANSWER Slow IN 60 S"));
+    assert_eq!(waited, headless::JOIN_MS);
+}
+
