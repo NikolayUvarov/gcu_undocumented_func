@@ -52,6 +52,56 @@ pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
     pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize,
     pub message: Option<String>, pub shell: bool, pub screen_row: usize, pub pixels: (usize, usize), pub scale: u16, pub net_row: usize,
+    /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
+    pub browser: Option<Browser>, pub lister: Lister,
+}
+
+/// Reads a directory: its entries' names and whether each is a directory, or why not.
+pub type Lister = fn(&str) -> Result<Vec<(String, bool)>, String>;
+
+/// No files to read (the default; `wm` gives the file system's).
+pub fn no_files(_: &str) -> Result<Vec<(String, bool)>, String> { Err(String::from("no files")) }
+
+/// The pictures `wm` reads (000-APP-0050).
+pub const PICTURES: [&str; 4] = ["bmp", "png", "jpg", "jpeg"];
+
+/// Browsing for the picture (000-APP-0072): a directory (`""` the boot disk's root, `ram:`, `data/x`), its directories
+/// and pictures, the one chosen, and why it could not be read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Browser { pub dir: String, pub entries: Vec<(String, bool)>, pub selected: usize, pub problem: Option<String> }
+
+impl Browser {
+    /// `dir` read through `lister`: `..` first below a root, then its directories and its pictures, each sorted; the
+    /// boot disk's root lists the RAM disk too.
+    pub fn open(dir: &str, lister: Lister) -> Self {
+        let mut entries = Vec::new();
+        let root = dir.is_empty() || dir.ends_with(':');
+        if !root { entries.push((String::from(".."), true)); }
+        let mut problem = None;
+        match lister(dir) {
+            Ok(found) => {
+                let mut dirs: Vec<String> = found.iter().filter(|e| e.1 && e.0 != "." && e.0 != "..").map(|e| e.0.clone()).collect();
+                let picture = |n: &str| n.rsplit_once('.').is_some_and(|(_, ext)| PICTURES.iter().any(|p| p.eq_ignore_ascii_case(ext)));
+                let mut files: Vec<String> = found.iter().filter(|e| !e.1 && picture(&e.0)).map(|e| e.0.clone()).collect();
+                dirs.sort_by_key(|n| n.to_lowercase());
+                files.sort_by_key(|n| n.to_lowercase());
+                entries.extend(dirs.into_iter().map(|d| (d, true)));
+                entries.extend(files.into_iter().map(|f| (f, false)));
+            }
+            Err(why) => problem = Some(why),
+        }
+        if dir.is_empty() { entries.push((String::from("ram:"), true)); }
+        Self { dir: String::from(dir), entries, selected: 0, problem }
+    }
+    /// The path of entry `name` here.
+    pub fn path(&self, name: &str) -> String {
+        if name.ends_with(':') { return String::from(name); }
+        if self.dir.is_empty() || self.dir.ends_with(':') { format!("{}{}", self.dir, name) } else { format!("{}/{}", self.dir, name) }
+    }
+    /// The directory above.
+    pub fn up(&self) -> String {
+        match self.dir.rfind('/') { Some(i) => String::from(&self.dir[..i]), None => match self.dir.find(':') { Some(i) if i + 1 < self.dir.len() => String::from(&self.dir[..=i]), _ => String::new() } }
+    }
 }
 
 /// What a key or a click did.
@@ -75,7 +125,7 @@ impl Settings {
         let mut file = InputLine::new();
         if let Picture::Image(name) = &config.picture { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, message: None, shell: false,
-               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0 }
+               screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, browser: None, lister: no_files }
     }
 
     /// The grid became `screen` cells at `scale` (000-APP-0061): the window is centred on it anew.
@@ -215,6 +265,7 @@ impl Settings {
     /// A key: arrows move (Tab between the pages and the page), Left/Right step the row's value, Space or Enter
     /// change it on (and tick a box), typing edits the image's file on its row (Enter takes it), Esc or Alt+S closes.
     pub fn key(&mut self, key: Key, config: &Config) -> Outcome {
+        if self.browser.is_some() { return self.browse_key(key, config); }
         if key.code() == Code::Esc || (key.alt() && key.letter() == Some('s')) { return Outcome::Close; }
         let enterable = [0, DATE, NETWORK, SCREEN].contains(&self.page);
         if key.code() == Code::Tab { self.on_pages = !self.on_pages || !enterable; return Outcome::Stay; }
@@ -254,7 +305,9 @@ impl Settings {
         match key.code() {
             Code::Up => { (self.row, self.message) = (self.row.saturating_sub(1), None); Outcome::Stay }
             Code::Down => { (self.row, self.message) = ((self.row + 1).min(ROWS.len() - 1), None); Outcome::Stay }
+            Code::F(3) if self.row == FILE => { self.browse(); Outcome::Stay }
             _ if self.row == FILE => match self.file.key(key) {
+                Edit::Submit if self.file.as_str().trim().is_empty() => { self.browse(); Outcome::Stay }
                 Edit::Submit => self.changed(config, FILE, 0),
                 _ => Outcome::Stay,
             },
@@ -265,6 +318,57 @@ impl Settings {
             Code::Char if key.char() == Some(' ') => self.changed(config, self.row, 0),
             _ => Outcome::Stay,
         }
+    }
+
+    // Browsing for the picture (000-APP-0072): from the directory of the file named, else data/.
+    fn browse(&mut self) {
+        let named = self.file.as_str().trim();
+        let dir = match named.rfind('/') { Some(i) => String::from(&named[..i]), None => match named.find(':') { Some(i) => String::from(&named[..=i]), None => String::from(if named.is_empty() { "data" } else { "" }) } };
+        let mut browser = Browser::open(&dir, self.lister);
+        if browser.problem.is_some() && !dir.is_empty() { browser = Browser::open("", self.lister); }
+        if let Some(at) = browser.entries.iter().position(|e| !e.1 && self.file.as_str().trim().ends_with(e.0.as_str())) { browser.selected = at; }
+        (self.browser, self.message) = (Some(browser), None);
+    }
+
+    // A key while browsing: ↑↓ PgUp PgDn Home End choose, Enter opens a directory or takes a picture, Backspace goes up,
+    // Esc goes back to the rows.
+    fn browse_key(&mut self, key: Key, config: &Config) -> Outcome {
+        let Some(b) = self.browser.as_mut() else { return Outcome::Stay };
+        let last = b.entries.len().saturating_sub(1);
+        match key.code() {
+            Code::Esc => { self.browser = None; return Outcome::Stay }
+            Code::Up => b.selected = b.selected.saturating_sub(1),
+            Code::Down => b.selected = (b.selected + 1).min(last),
+            Code::PageUp => b.selected = b.selected.saturating_sub(10),
+            Code::PageDown => b.selected = (b.selected + 10).min(last),
+            Code::Home => b.selected = 0,
+            Code::End => b.selected = last,
+            Code::Backspace => { let up = b.up(); self.browser = Some(Browser::open(&up, self.lister)); }
+            Code::Enter => return self.browse_enter(config),
+            _ => {}
+        }
+        Outcome::Stay
+    }
+
+    // Enter on the entry chosen: a directory is opened (`..` the one above), a picture becomes the background.
+    fn browse_enter(&mut self, config: &Config) -> Outcome {
+        let Some(b) = self.browser.as_ref() else { return Outcome::Stay };
+        let Some((name, dir)) = b.entries.get(b.selected).cloned() else { return Outcome::Stay };
+        if dir {
+            let (from, to) = (b.dir.clone(), if name == ".." { b.up() } else { b.path(&name) });
+            let mut next = Browser::open(&to, self.lister);
+            // Back up: the cursor on the directory left.
+            if name == ".." { if let Some(at) = next.entries.iter().position(|e| e.1 && next.path(&e.0) == from) { next.selected = at; } }
+            self.browser = Some(next);
+            return Outcome::Stay;
+        }
+        let path = b.path(&name);
+        self.browser = None;
+        self.file = InputLine::new();
+        for ch in path.chars() { self.file.insert(ch); }
+        self.row = FILE;
+        let config = Config { picture: Picture::Image(String::from("")), ..config.clone() };
+        self.changed(&config, FILE, 0)
     }
 
     // The network page's row: what it starts, Settings closed so its window is in front.
@@ -306,7 +410,7 @@ impl Settings {
             _ => String::new(),
         };
         match row {
-            FILE if file.is_empty() => String::from("Type the image's file here (BMP, PNG or JPEG), then Enter"),
+            FILE if file.is_empty() => String::from("Type the image's file here (BMP, PNG or JPEG), then Enter; F3 or Enter: browse"),
             FILE => format!("{} is the picture already", file),
             3..=6 | 9 | 15 => format!("{} is at its {} already: {}", ROWS[row], if step < 0 { "lowest" } else { "highest" }, value),
             _ => format!("{} stays as it is", ROWS[row]),
@@ -320,6 +424,17 @@ impl Settings {
     /// a page to read says so, a click outside the window closes it.
     pub fn click(&mut self, x: usize, y: usize, config: &Config) -> Outcome {
         let inner = self.area().inner();
+        if let Some(b) = self.browser.as_mut() {
+            // A click on an entry chooses it and does what Enter does; elsewhere in the window nothing, outside it Esc.
+            if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() { self.browser = None; return Outcome::Stay; }
+            let room = inner.h.saturating_sub(4);
+            let first = b.selected.saturating_sub(room.saturating_sub(1));
+            if x >= inner.x + LIST + 1 && y > inner.y && first + y - inner.y - 1 < b.entries.len() && y - inner.y - 1 < room {
+                b.selected = first + y - inner.y - 1;
+                return self.browse_enter(config);
+            }
+            return Outcome::Stay;
+        }
         if x < inner.x || x >= inner.right() || y < inner.y || y >= inner.bottom() { return Outcome::Close; }
         let (cx, cy) = (x - inner.x, y - inner.y);
         if cx < LIST {
@@ -329,6 +444,7 @@ impl Settings {
         if self.page == 0 && (1..=ROWS.len()).contains(&cy) {
             (self.row, self.on_pages, self.message) = (cy - 1, false, None);
             if self.row != FILE { return self.changed(config, self.row, 0); }
+            if self.file.as_str().trim().is_empty() { self.browse(); return Outcome::Stay; }
         }
         // A page to read says so.
         if ![0, DATE, NETWORK, SCREEN].contains(&self.page) { self.to_read(); }
@@ -356,7 +472,7 @@ impl Settings {
         let picture = match config.picture { Picture::None => "none (the ░ desktop)", Picture::Abstract => "abstract (a moving pattern)", Picture::Image(_) => "image (BMP, PNG or JPEG)" };
         let pattern = PATTERNS.iter().find(|p| p.1 == config.pattern).map_or("waves", |p| p.0);
         let place = match config.place { Place::TopLeft => "top left", Place::TopRight => "top right", Place::Center => "centre", Place::BottomLeft => "bottom left", Place::BottomRight => "bottom right" };
-        Vec::from([(ROWS[0], format!("< {} >", picture)), (ROWS[1], String::from(self.file.as_str())), (ROWS[2], format!("< {} >", pattern)),
+        Vec::from([(ROWS[0], format!("< {} >", picture)), (ROWS[1], if self.file.as_str().is_empty() { String::from("(type it, or Enter or F3: browse)") } else { String::from(self.file.as_str()) }), (ROWS[2], format!("< {} >", pattern)),
                    (ROWS[3], format!("< {} >  1 slow (for work) to 50 fast (for a show)", config.speed)), (ROWS[4], format!("< {}% >", config.contrast)),
                    (ROWS[5], format!("< {} >  1 to 5: more waves, rings, curtains, blobs", config.complexity)),
                    (ROWS[6], format!("< {}% >  of what is shown over the picture", config.info)),
@@ -378,7 +494,23 @@ impl Settings {
         for y in inner.y..inner.bottom() { grid.put(inner.x + LIST - 1, y, '│', theme.dialog); }
         let (x, w) = (inner.x + LIST + 1, inner.w.saturating_sub(LIST + 2));
         let mut cursor = None;
-        if self.page == 0 {
+        if let (0, Some(b)) = (self.page, &self.browser) {
+            // The picture's file (000-APP-0072): the directory, its directories and pictures, the one chosen.
+            let shown = if b.dir.is_empty() { String::from("/") } else { b.dir.clone() };
+            grid.text_max(x, inner.y, &format!("Choose the picture (BMP, PNG, JPEG): {}", shown), w, theme.dialog);
+            let room = inner.h.saturating_sub(4);
+            let first = b.selected.saturating_sub(room.saturating_sub(1));
+            for (i, (name, dir)) in b.entries.iter().enumerate().skip(first).take(room) {
+                let line = if *dir && !name.ends_with(':') { format!(" {}/", name) } else { format!(" {}", name) };
+                grid.text_padded(x, inner.y + 1 + i - first, &line, w, if i == b.selected { theme.selected } else if *dir { theme.accent } else { theme.dialog });
+            }
+            let note = match (&b.problem, b.entries.iter().any(|e| !e.1)) {
+                (Some(why), _) => format!("{} cannot be read: {}", shown, why),
+                (None, false) => String::from("No picture here: a directory, or Backspace to go up"),
+                (None, true) => format!("{} pictures here", b.entries.iter().filter(|e| !e.1).count()),
+            };
+            grid.text_max(x, inner.bottom().saturating_sub(2), &note, w, theme.accent);
+        } else if self.page == 0 {
             grid.text(x, inner.y, "The desktop background, kept in data/wm.conf:", theme.dialog);
             for (i, (name, value)) in self.rows(config).iter().enumerate() {
                 let chosen = !self.on_pages && self.row == i;
@@ -436,11 +568,12 @@ impl Settings {
             for (i, line) in lines.iter().enumerate() { grid.text_max(x, inner.y + i, line, w, if i == 0 { theme.accent } else { theme.dialog }); }
             if let Some(message) = &self.message { grid.text_max(x, inner.y + 1 + lines.len(), message, w, theme.accent); }
         }
-        let help = if self.on_pages && ![0, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
+        let help = if self.browser.is_some() { "↑↓: choose · Enter: open it or take the picture · Backspace: up · Esc: back" }
+            else if self.on_pages && ![0, DATE, NETWORK, SCREEN].contains(&self.page) { "↑↓: page · this page is to read · Esc: close" }
             else if !self.on_pages && self.page == NETWORK { "↑↓: rows · Enter: open it in a window · Tab: pages · Esc: close" }
             else if !self.on_pages && self.page == SCREEN { "↑↓: rows · ← → Enter Space: change, used at once · Tab: pages · Esc: close" }
             else if self.on_pages { "↑↓: page · Enter or →: its settings · Esc: close" } else if self.page == DATE { "↑↓: rows · ← → or digits: change · Enter: set the clock · Tab: pages · Esc: close" }
-            else if self.row == FILE { "type the file · Enter: use it · ↑↓: rows · Esc: close" } else { "↑↓: rows · ← → Space: change · Tab: pages · Esc: close" };
+            else if self.row == FILE { "type the file · Enter: use it (nothing typed: browse) · F3: browse · ↑↓: rows · Esc: close" } else { "↑↓: rows · ← → Space: change · Tab: pages · Esc: close" };
         grid.text_max(inner.x + 1, inner.bottom() - 1, help, inner.w - 2, theme.dialog);
         cursor
     }

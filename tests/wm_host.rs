@@ -1460,6 +1460,8 @@ fn every_page_and_row_of_settings_reacts() {
         for _ in 0..row { s.key(key(KEY_DOWN), &config); }
         match s.key(key(KEY_ENTER), &config) {
             Outcome::Changed(c) => assert_ne!(c, config, "{}", ROWS[row]),
+            // The image file's row with nothing typed opens the picture browser (000-APP-0072).
+            Outcome::Stay if row == 1 => assert!(s.browser.is_some() && screen(&s).contains("Choose the picture"), "{}", ROWS[row]),
             Outcome::Stay => assert!(s.message.is_some() && screen(&s).contains(s.message.as_deref().unwrap()), "{}", ROWS[row]),
             other => panic!("{}: {:?}", ROWS[row], other),
         }
@@ -1469,7 +1471,9 @@ fn every_page_and_row_of_settings_reacts() {
     s.key(key(KEY_ENTER), &config);
     s.key(key(KEY_DOWN), &config);
     assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
-    assert_eq!(s.message.as_deref(), Some("Type the image's file here (BMP, PNG or JPEG), then Enter"));
+    assert!(s.browser.is_some(), "nothing typed: Enter browses for the picture (000-APP-0072)");
+    assert_eq!(s.key(key(KEY_ESC), &config), Outcome::Stay);
+    assert!(s.browser.is_none() && s.row == 1, "Esc: back to the rows, Settings open");
     s.key(key(KEY_DOWN), &config);
     s.key(key(KEY_DOWN), &config);
     assert!(s.message.is_none(), "moved: the line goes");
@@ -1836,4 +1840,74 @@ fn the_battery_on_the_background_and_in_the_top_bar() {
     wm.battery = Some(on_battery);
     wm.draw(&mut grid, &DARK, &mut none, None);
     assert_ne!(grid.get(158, 0).style, low, "marked only when low");
+}
+
+#[test]
+fn the_picture_is_chosen_by_browsing() {
+    // 000-APP-0072: Enter on the empty Image file row, or F3 on it, opens a list of directories and pictures.
+    use settings::{Outcome, Settings};
+    fn files(dir: &str) -> Result<Vec<(String, bool)>, String> {
+        let list: &[(&str, bool)] = match dir {
+            "" => &[("data", true), ("docs", true), ("kernel.elf", false)],
+            "data" => &[("sky.bmp", false), ("notes.txt", false), ("pics", true), ("Moon.PNG", false)],
+            "data/pics" => &[("a.jpg", false), ("b.JPEG", false), ("c.gif", false)],
+            _ => return Err("NotFound".into()),
+        };
+        Ok(list.iter().map(|&(n, d)| (String::from(n), d)).collect())
+    }
+    let config = Config::default();
+    let mut s = Settings::new(&config, (160, 50));
+    s.lister = files;
+    s.on_pages = false;
+    s.key(key(KEY_DOWN), &config);
+    assert_eq!(s.row, 1, "the Image file row");
+    assert_eq!(s.key(key(KEY_ENTER), &config), Outcome::Stay);
+    let names = |s: &Settings| s.browser.as_ref().unwrap().entries.iter().map(|e| e.0.clone()).collect::<Vec<_>>();
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), names(&s)), ("data", vec!["..".into(), "pics".into(), "Moon.PNG".into(), "sky.bmp".into()]), "data/ first: its directories, then its pictures");
+    // Into pics and back: the cursor on the directory left.
+    s.key(key(KEY_DOWN), &config);
+    s.key(key(KEY_ENTER), &config);
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), names(&s)), ("data/pics", vec!["..".into(), "a.jpg".into(), "b.JPEG".into()]));
+    s.key(key(KEY_ENTER), &config);
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), s.browser.as_ref().unwrap().selected), ("data", 1));
+    // Backspace up to the boot disk's root, which lists the RAM disk too; one that cannot be read says so.
+    s.key(key(KEY_BACKSPACE), &config);
+    assert_eq!(names(&s), vec![String::from("data"), "docs".into(), "ram:".into()]);
+    s.key(key(KEY_END), &config);
+    s.key(key(KEY_ENTER), &config);
+    assert!(s.browser.as_ref().unwrap().problem.is_some() && s.browser.as_ref().unwrap().dir == "ram:");
+    let mut cells = vec![Cell::BLANK; 160 * 50];
+    let mut grid = Grid::new(&mut cells, 160, 50);
+    s.draw(&mut grid, &DARK, &config);
+    let text: String = (0..50).map(|y| (0..160).map(|x| grid.get(x, y).ch).collect::<String>()).collect();
+    assert!(text.contains("Choose the picture (BMP, PNG, JPEG): ram:") && text.contains("ram: cannot be read: NotFound"), "{}", text);
+    // Back to data/ and a picture taken: it is the background, the row names it, the list closes.
+    s.key(key(KEY_BACKSPACE), &config);
+    s.key(key(KEY_HOME), &config);
+    s.key(key(KEY_ENTER), &config);
+    for _ in 0..3 { s.key(key(KEY_DOWN), &config); }
+    match s.key(key(KEY_ENTER), &config) { Outcome::Changed(c) => assert_eq!(c.picture, Picture::Image("data/sky.bmp".into())), other => panic!("{:?}", other) }
+    assert!(s.browser.is_none() && s.file.as_str() == "data/sky.bmp");
+    // F3 opens it again where the file is, on it; Esc goes back to the rows, Settings still open.
+    s.key(Key(event(KEY_F1 + 2, 0, 0)), &config); // F3
+    assert_eq!((s.browser.as_ref().unwrap().dir.as_str(), s.browser.as_ref().unwrap().selected), ("data", 3));
+    assert_eq!(s.key(key(KEY_ESC), &config), Outcome::Stay);
+    assert!(s.browser.is_none());
+    // A click: on an entry it does what Enter does, outside the window it goes back; on the empty row it browses.
+    let inner = s.area().inner();
+    s.key(key(KEY_F1 + 2), &config);
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &config), Outcome::Stay);
+    assert_eq!(s.browser.as_ref().unwrap().dir, "data/pics", "the second entry, pics, opened");
+    assert_eq!(s.click(0, 0, &config), Outcome::Stay);
+    assert!(s.browser.is_none());
+    s.file = tui::widgets::InputLine::new();
+    assert_eq!(s.click(inner.x + 20, inner.y + 2, &config), Outcome::Stay);
+    assert_eq!(s.browser.as_ref().unwrap().dir, "data");
+    // wm's state line names it while it is open.
+    let mut wm = Wm::new(160, 50);
+    wm.lister = files;
+    wm.open_settings();
+    if let Mode::Settings(s) = &mut wm.mode { s.on_pages = false; s.row = 1; }
+    wm.key(key(KEY_ENTER));
+    assert!(wm.status().contains("BROWSE=data:.."), "{}", wm.status());
 }
