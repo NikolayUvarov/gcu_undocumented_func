@@ -258,6 +258,15 @@ impl Shell {
                     self.note(format_args!("FOR PID {} THE SHELL {}", message.sender, if held { "LENT ITS BATTERY CLIENT" } else { "HAS NO BATTERY CLIENT TO LEND" }));
                     let _ = commands::reply_battery(call, if held { Ok(SLOT_BATTERY) } else { Err(commands::Error::Unavailable) });
                 }
+                commands::Request::Wifi => {
+                    // A copy of the station's client (shell.wit 1.5, 550-APP-0033) for the window manager the shell
+                    // started, whose Settings start `wifi`: it joins and forgets networks, so no other client gets it.
+                    let manager = self.managers.contains(&message.sender);
+                    let held = mind::dev::cap_info(SLOT_WIFI).0 != 0;
+                    self.note(format_args!("FOR PID {} THE SHELL {}", message.sender,
+                        if !manager { "REFUSED ITS WI-FI CLIENT: NOT ITS WINDOW MANAGER" } else if held { "LENT ITS WI-FI CLIENT" } else { "HAS NO WI-FI CLIENT TO LEND" }));
+                    let _ = commands::reply_wifi(call, if !manager { Err(commands::Error::Refused) } else if held { Ok(SLOT_WIFI) } else { Err(commands::Error::Unavailable) });
+                }
                 commands::Request::Run { line } => {
                     let result = self.client_line(line.as_str(), message.sender);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };

@@ -6699,6 +6699,7 @@ def wm_suite(vm):
     require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
     # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
     require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    require(out, "[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)")  # no radio on this disk (550-APP-0033)
     assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
