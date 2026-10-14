@@ -277,3 +277,54 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 **Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
 
 **Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.
+
+## `app`, `app2` and `dzen-clock`: libmind's drawing, no `static mut`, the right words on exit (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §3, checked against `main` dfc42ee. TRACKS.md names no track for the demo programs. They are user programs, so they come here. If the tools track does not take them, say so here and the kernel track will.
+
+### Problem
+
+- **`app/src/main.rs`:**
+  - `MAIN_SP`, `THREAD_SP`, `WORK_COUNTER` and `THREAD_STACK` are `static mut` (:12–18). Every access goes through `addr_of_mut!` with volatile reads and writes, so nothing goes wrong today. It is still the pattern Rust is retiring.
+  - `background_task` (:36) never returns but is not `-> !`. Were it to return, it would jump to address 0. The critique's claim that the first thread's stack is misaligned is wrong: :47–48 leave the slot of a return address, and the stack is 16-aligned as SysV asks.
+  - It draws with its own `draw_char`, `draw_string` and `usize_to_str` (:63–80), with no bounds check, straight into `fb_ptr`. libmind has `mind::gfx::Screen` and `mind::util::Decimal` for this.
+- **`app2/src/main.rs`:**
+  - It has its own `fill_rect` and `draw_text` (:14–40).
+  - On Esc it logs `[APP2] ESC PRESSED. RETURNING TO KERNEL.` (:88), but it returns to the shell.
+  - It reads the sprite through `as_mut_slice()` (:118) where `as_slice()` does.
+- **`dzen-clock/src/main.rs:79, 183`** has the same "returning to kernel" wording. tests/qemu_smoke.py:2829 checks it, so the test changes with it.
+
+### Plan (a proposal; the tools track decides)
+
+- `app`: atomics for the three counters and pointers, and an `UnsafeCell` wrapper for the stack; `fn background_task() -> !`; `Screen` and `Decimal` for its drawing. Keep the pixel colours the `normal` suite checks (qemu_smoke.py:7461–7470: cyan, and red after Space).
+- `app2`: `Screen` for its rectangles and text; "RETURNING TO THE SHELL"; `as_slice()`.
+- `dzen-clock`: the same words, with its check in qemu_smoke.py.
+
+### Acceptance criteria
+
+- The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
+- `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## A window can be adopted before its title is written, and wm logs it with none (the wm suite fails once in a while)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 on i9 (`x86: keys, shell, tools`, the `wm` suite's `shell_window`).
+
+### Problem
+
+- **What failed.** The shell's window opened as `[WM] WINDOW 5 PID 24 TEXT 80X25 "" AT 80,25 80X24`, with an empty title. `open_shell` in tests/qemu_smoke.py waits for a window line ending `"shell"`, so it timed out. The same group passed on this branch's previous commit, on un-rizen-service and locally.
+- **Why** (from the code; the timing makes it rare):
+  - `libmind::windowed::Window::open` (and `windowed::open`) call `create`, then `surface`, and only then `surface.set_title(title)` in the shared memory.
+  - The broker (`windows/src/main.rs:113`) reads the title from that memory each time it lists the windows.
+  - `wm` adopts a window at the first sync where the broker can lend its surface, which is already true after `surface`, and logs it once (`wm/src/main.rs:244`).
+  - A sync that falls between `surface` and `set_title` therefore logs, and keeps, an empty title. On i9 the guest is slow: wm took 9.5 s to list its programs in that run.
+
+### Plan (a proposal; the tools track decides)
+
+One of:
+- **The title travels with `create`** (a new version of `idl/window.wit`), so the window is never listed without it.
+- **`wm` adopts a window only once its title is set**: an empty title waits for the next sync, as a surface not yet lendable already does. It needs a limit, for a program that sets none.
+- **`wm` logs the title again when it changes**, and the suite waits for that line.
+
+### Acceptance criteria
+
+The `wm` suite's `shell_window` passes under load. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
