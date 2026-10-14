@@ -77,6 +77,8 @@ pub struct Radio<'a> {
     mac_extra: u32,
     // The cores' front-end words before a test switched one off.
     afe_saved: Option<[(u16, u16); 3]>,
+    // Table 2's words at offsets 8 to 11 before a test changed them.
+    table2_saved: Option<[u16; 4]>,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -132,7 +134,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, table2_saved: None, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -230,6 +232,7 @@ impl<'a> Radio<'a> {
 
     // For a test: every core's front end as it was, then `core`'s switched off; None leaves all three on.
     pub fn core_off(&mut self, core: Option<u16>) -> Result<(), Error> {
+        if core.is_none() && self.afe_saved.is_none() { return Ok(()); }
         if !self.c.suspend() { return Err(Error::Failed); }
         let saved = *self.afe_saved.get_or_insert_with(|| [0, 1, 2].map(|i| self.c.afe(i)));
         for (i, words) in saved.into_iter().enumerate() { self.c.afe_restore(i as u16, words); }
@@ -238,8 +241,27 @@ impl<'a> Radio<'a> {
         Ok(())
     }
 
+    // For a test: PHY table 2 at offsets 8 to 11 given b43's gain values of tables 0, 1 and 0x28, or its own back.
+    pub fn table2_gains(&mut self, fixed: bool) -> Result<(), Error> {
+        if !fixed && self.table2_saved.is_none() { return Ok(()); }
+        if !self.c.suspend() { return Err(Error::Failed); }
+        let saved = *self.table2_saved.get_or_insert_with(|| [8, 9, 10, 11].map(|o| self.c.table16_read(2, o)));
+        self.c.table16(2, 8, if fixed { &[9, 14, 19, 24] } else { &saved });
+        self.c.enable();
+        Ok(())
+    }
+
+    // What the MAC shows when it does not suspend: its control word, the interrupt reason, the microcode's status.
+    pub fn state(&self) -> (u32, u32, u16) { (self.c.r32(MAC_CONTROL), self.c.r32(IRQ_REASON), self.c.shm16(0x0040)) }
+
     // The per-core gain values b43 writes at offsets 8 to 11 of PHY tables 0, 1 and 0x28, with table 2's beside them.
-    pub fn rx_gain_tables(&self) -> [[u16; 4]; 4] { [0, 1, 2, 0x28].map(|t| [8, 9, 10, 11].map(|o| self.c.table16_read(t, o))) }
+    // Read with the MAC suspended: the microcode uses the same table address registers.
+    pub fn rx_gain_tables(&self) -> Option<[[u16; 4]; 4]> {
+        if !self.c.suspend() { return None; }
+        let t = [0, 1, 2, 0x28].map(|t| [8, 9, 10, 11].map(|o| self.c.table16_read(t, o)));
+        self.c.enable();
+        Some(t)
+    }
 
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {

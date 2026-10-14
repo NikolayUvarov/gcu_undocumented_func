@@ -124,6 +124,18 @@ The next run, to find where OFDM frames are lost:
 - PHY tables 0, 1, 2 and 0x28 at offsets 8–11 (b43 writes 0, 1 and 0x28, and doubts 0x28 against 2);
 - the SPROM's board flags, chains and front-end words.
 
+**2026-10-14, the sixth run, `fast-test` a36d9a7:**
+- **Step 6 stalled.** With control frames and bad frames kept (MAC control bits 21, 22, 23), the first send got no transmit status. After that the MAC no longer suspended, so the step's other parts were skipped.
+- **Suspects.** The bad-frame bits, or the reads of PHY tables 0/1/2/0x28 made with the MAC running. The microcode uses the same table address registers.
+- **The next run avoids both.** Bad frames are not kept, the tables are read with the MAC suspended, and when the MAC does not suspend its state is logged.
+- **SPROM, as read:**
+  - board flags `1201` / `1040` (bytes 0x84, 0x86);
+  - chains `0077` (byte 0xA2: three for TX, three for RX);
+  - front end `2449` (byte 0xAE).
+- **PHY tables at offsets 8–11.** Tables 0, 1 and 0x28 hold 9, 14, 19, 24 (b43's writes); table 2 holds 0, 1, 2, 3. If table 2 is the third core's gains (b43 doubts its own 0x28), core 2's gain steps are wrong, which would hurt OFDM, which uses every core.
+- **The next run** sends 1 and 6 Mbit/s with table 2 given b43's values, then 6 Mbit/s with each core's front end off.
+- **In the scan:** 0 OFDM frames on every channel again; `TP-LINK_POCKET` is on channel 6 again.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.
