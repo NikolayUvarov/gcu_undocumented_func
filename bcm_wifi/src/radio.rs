@@ -194,6 +194,10 @@ impl<'a> Radio<'a> {
         }
     }
 
+    // The channel set (0: none yet) and how many received frames wait.
+    pub fn channel(&self) -> u8 { self.channel }
+    pub fn waiting(&self) -> usize { self.count }
+
     // Tunes to a 2.4 GHz channel at 20 MHz with the MAC suspended meanwhile.
     pub fn set_channel(&mut self, ch: u8) -> Result<(), Error> {
         if !(1..=13).contains(&ch) { return Err(Error::Invalid); }
