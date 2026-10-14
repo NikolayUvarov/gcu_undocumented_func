@@ -11,7 +11,8 @@ This branch holds questions, answers and notices between MIND Core's tracks ([TR
 - **Here:**
   - a question to another track or to the maintainer, and its answer;
   - a notice ("550-KRN-0097 is in `fast-test`", "the request is recorded in `requests-NET.md` at 4d997db");
-  - a remark on another track's text or code.
+  - a remark on another track's text or code;
+  - a claim of an open track or a track proposal (to `HUMAN`), or an agreement to join an owned track (to its owner). The outcome is recorded in `TRACKS.md` on `main` (AGENTS.md, section 2).
 - **On `main`, not here:** anything binding, and the message points to it.
   - A request for work goes in `issues/requests-<TRK>.md`.
   - A decision goes in the issue it concerns.
