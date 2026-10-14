@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.3 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues/550-NET-0025-the-default-card.md) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.3 (2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 

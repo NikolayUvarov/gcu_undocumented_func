@@ -1,6 +1,6 @@
 # HTTP, pinned servers and JSON for services
 
-**Version:** 0.1 (2026-10-12) · **Track:** `NET`, tasks [750-NET-0019](../../issues/750-NET-0019-http-for-services.md) (HTTP), [750-NET-0020](../../issues/750-NET-0020-tls-with-two-pins.md) (pins) and [750-NET-0021](../../issues/750-NET-0021-json-in-the-parser-service.md) (JSON) for main tasks [750](../../issues/750-effector-agent.md) and [501](../../issues/501-effector.md) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, MC-12.4, Appendix B.6
+**Version:** 0.1 (2026-10-12) · **Track:** `NET`, tasks [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done) (HTTP), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done) (pins) and [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON) for main tasks [750](../../issues/750-effector-agent.md) and [501](../../issues/501-effector.md) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, MC-12.4, Appendix B.6
 
 A service that talks to one server for as long as the machine runs, such as the Effector agent, needs more than `download` does. It posts JSON, reads chunked answers, keeps one connection, holds a long stream, trusts a server by a pin that can rotate, and has the JSON it receives read by a process that holds nothing (MC-11.11). This page describes what the network track gives it. The downloads guide ([downloads.md](downloads.md)) still describes `get` and `download`.
 
@@ -70,7 +70,7 @@ With `--pin` it connects by `connect-pins`; with `--json` it prints a JSON body 
 
 ## Tested
 
-The tests and their results are in each task's resolution: [750-NET-0019](../../issues/750-NET-0019-http-for-services.md), [750-NET-0020](../../issues/750-NET-0020-tls-with-two-pins.md), [750-NET-0021](../../issues/750-NET-0021-json-in-the-parser-service.md).
+The tests and their results are in each task's resolution: [750-NET-0019](../../issues-done/750-NET-0019-http-for-services.done), [750-NET-0020](../../issues-done/750-NET-0020-tls-with-two-pins.done), [750-NET-0021](../../issues-done/750-NET-0021-json-in-the-parser-service.done).
 
 ## Not provided
 

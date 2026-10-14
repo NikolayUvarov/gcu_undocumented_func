@@ -1,6 +1,6 @@
-# 750-NET-0021 — JSON in the parser service
+# 750-NET-0021 — JSON in the parser service — done
 
-**Type:** network (service, interface, library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) (with 501) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, Appendix B.6
+**Type:** network (service, interface, library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) (with 501) · **Roadmap:** track D · **Constitution:** MC-11.5, MC-11.11, Appendix B.6
 
 The request in requests-NET.md ("JSON in the parser service", 2026-10-09).
 
@@ -30,4 +30,12 @@ Effector's commands and replies are JSON. Under MC-11.11 the process that holds 
 
 ## Related
 
-[docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](../issues-done/109-NET-0008-parser-service.done), [750-EFF-0004](750-EFF-0004-json.md).
+[docs/network/airlock.md](../docs/network/airlock.md), [109-NET-0008](109-NET-0008-parser-service.done), [750-EFF-0004](../issues/750-EFF-0004-json.md).
+
+## Resolution
+
+- **Built** (039f930): `mind::json::walk` and `Reader::number`, `idl/parse.wit` 1.4 `json` (16 values a page since 58507fd), `webcheck --json`.
+- **Host tests:** `tests/json_host.rs`, 3 tests: a command in document order, malformed texts, every bound reached and passed.
+- **In QEMU,** the `net` suite's download check on x86 and aarch64: `parse` turned a JSON answer and an Effector-like command into their values with parents, keys and texts, and refused 20 levels of nesting, logged with the client's PID. Gate 14 on 5aa781c (the branch with `main` 6620165), every group passing: x86 on the session's machine (QEMU 8.2.2, Ubuntu 24.04), aarch64's network group on un-rizen-service through Effector (Ubuntu 24.04, QEMU 8.2.2 from Ubuntu, TCG); `main` aedea68.
+- **Fixed on the way** (9ddaa09): a session's own parser (109-NET-0010) writes no log line for a refused head or text, as for `http-head`.
+- **Not this task's:** the authority map's row for the agent's stage comes with 750-EFF-0006.
