@@ -18,6 +18,8 @@ On the MacBook Pro, one boot on request logs the SPROM's power data, the idle TS
 
 ## Progress
 
+The work on receiving OFDM moved to [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) on 2026-10-14. It is not part of this task's plan, and its record stays here up to then. This task keeps the transmit power: nothing of the SPROM's power data or of power control is done yet, and the runs used the fixed gain entry 40 with power control off.
+
 The code these runs tested is on `claude/ASR-DRV` and `fast-test`, and reaches `main` after its gate: gain entry 40, the directed-probe tests, core 2's front end off, and the radio's calls of 550-DRV-0027. Until then `main`'s `bcm_wifi` has 550-DRV-0026's stage 5.
 
 **2026-10-13, the maintainer's run of `fast-test` 28d9c3d** (`log:boot0004.log`, stage 4 through the radio's calls of 550-DRV-0027):
@@ -48,7 +50,7 @@ Broadcast probe requests at 1 Mbit/s were answered on channels 1, 2, 8 and 11: 2
 - **CCK works on every channel tried.** At entry 40, 1 Mbit/s frames are acknowledged by five of the six networks, on channels 1, 8, 11 and 13. The "channel 1 only" of the earlier runs came from the gain at entry 80.
 - **Entry 20 adds nothing visible.** Entry 40 stays.
 - **The pocket router on channel 6 acknowledges nothing at any rate or gain**, though it is the strongest. Its beacons are received. It is one access point's behaviour, not the channel's: no other network on channel 6 was among the six probed.
-- **OFDM is the defect.** Only one device acknowledges 6 Mbit/s frames, and four that acknowledge CCK ignore them. The frames go out (tries counted, not suppressed), so their content or quality is wrong for most receivers. The suspects are, in order:
+- **OFDM is the defect.** Only one device (`ZATV` and `CoolNet2`, two networks of one access point) acknowledges 6 Mbit/s frames, and three that acknowledge CCK ignore them (`TP-Link_5EB3`, `Tenda_E25140`, `David_2.4G`). The frames go out (tries counted, not suppressed), so their content or quality is wrong for most receivers. The suspects are, in order:
   - the TX IQ/LO calibration, which is not done (OFDM is far less tolerant of it than CCK);
   - the OFDM PLCP or PHY control words;
   - the per-rate power.
@@ -107,7 +109,7 @@ It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 
 
 - **Every acknowledgement the microcode counted reached the host, and no other.** So the ACK timeout is not the cause: an OFDM ACK either is received and counts, or is never received at all.
 - **Receiving OFDM is the defect.**
-  - The access points answer our 6 Mbit/s requests with probe responses (CCK), so they received them and sent an OFDM ACK.
+  - Most access points answer our 6 Mbit/s requests with probe responses (CCK): `CoolNet2` and `ZATV` 6 or 7 times, `un2` 3 or 4. They received our frames and sent an OFDM ACK. `David_2.4G` answered once and `Tenda_E25140` never, so for those two it is open whether our frames reached them.
   - We decode that ACK only from the strongest access point (−31 dBm, all of them), rarely at −40 dBm, never at −42 to −44 dBm. CCK is received at all these levels.
   - In the scan, not one OFDM frame was received on any channel.
   - OFDM reception is therefore at least 10 dB less sensitive than it should be.
