@@ -41,6 +41,7 @@ Evidence for this machine only (MC-12.1).
   - `receive` answers `empty`, and `wait` answers none.
 
   So `wlan` starts and keeps its loop, and `netstack` no longer waits for the test's end. After the test the radio is served as before.
+- **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request (`requests-DRV.md` on `fast-test`). On `claude/ASR-DRV` and `fast-test` until its gate.
 
 ## Related
 
