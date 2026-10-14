@@ -39,16 +39,19 @@ The tracks — codes, ranges, directories, owners, branches and starting tasks �
 
 The registry of tracks — current owners, branches, statuses and starting tasks — is [TRACKS.md](TRACKS.md), the authoritative record. Open tracks can be taken in parallel.
 
-**To join:**
+**To join.** A claim, an agreement or a proposal is a message on the branch `internal-dev-messages` (section 5). The outcome is recorded in [TRACKS.md](TRACKS.md) on `main`, which stays the authoritative record: a track is yours once the maintainer's commit there says so.
 
-1. **Take an open track** (status "open" in [TRACKS.md](TRACKS.md)): tell the maintainer, who records you as its owner there. Start from the track's main task, if it has one, or propose one.
-2. **Or join an owned track** by agreeing with its owner. You use the track's code and counter, and work on your own branch, never on the owner's.
-3. **Or ask for a new track.** Open a GitHub issue titled `Track proposal: <name>` that names:
+1. **Take an open track** (status "open" in [TRACKS.md](TRACKS.md)):
+   - send a message to `HUMAN/` naming the track, your tool and your branch;
+   - the maintainer records you as its owner in TRACKS.md;
+   - start from the track's main task, if it has one, or propose one.
+2. **Or join an owned track** by agreeing with its owner, in a message to the owner's track directory; the owner answers there. You use the track's code and counter, and work on your own branch, never on the owner's.
+3. **Or ask for a new track.** Send a message to `HUMAN/` with the subject `Track proposal: <name>`. A contributor who cannot push to this repository opens a GitHub issue with that title instead. Either way it names:
    - the roadmap track or Constitution articles it serves;
    - the directories it will change;
    - what it needs from other tracks.
 
-   The maintainer gives it a code and a range (from 600, in blocks of 50) and records it in [TRACKS.md](TRACKS.md). Until then, propose work as GitHub issues and do not create files in `issues/`.
+   The maintainer gives it a code and a range (from 600, in blocks of 50) and records it in [TRACKS.md](TRACKS.md). Until then, propose work in messages or GitHub issues and do not create files in `issues/`.
 
 **Branches.** The branch name carries the tool and then the track code or the task number: `<tool>/<TRK>-<name>` for a track's long-lived branch (`claude/NET-stack`), `<tool>/<NNN-TRK-MMMM>-<name>` for one task (`codex/300-STO-0002-cid`). CI runs on pushes to `main`, to `claude/**` and to branches named this way under any tool prefix, and on pull requests. An agent:
 
@@ -158,7 +161,8 @@ The maintainer or the owning track reviews and merges it.
   - **What goes there:**
     - questions and their answers;
     - notices ("the change is in `fast-test`", "the request is recorded");
-    - remarks on another track's text or code.
+    - remarks on another track's text or code;
+    - claims of tracks, agreements to join one and track proposals (section 2).
   - **Who they go to:** a track, `ALL` (every track, or several named in the header) or the maintainer (`HUMAN`).
   - **One file per message:** `<TO>/<YYYY-MM-DDTHHMMZ>-<FROM>-<subject>.md`, in English. It is never edited once pushed. An answer is a new file in the asker's directory that names the question.
   - **Read** your track's directory and `ALL` at the start of every session and before each task (section 3, step 2).
