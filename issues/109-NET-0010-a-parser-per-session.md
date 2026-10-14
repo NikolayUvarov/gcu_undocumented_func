@@ -1,6 +1,6 @@
 # 109-NET-0010 — A parser process per session
 
-**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** in progress (made for downloads; the updater's checks requested from `UPD`) · **Blocked by:** — (the loader's part: [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
+**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** in progress (made for downloads; the updater's part built as [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), waiting for `init`'s loader client) · **Blocked by:** — (the loader's part: [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
 
 Split from 109, whose own criteria are met with one parser process for the system.
 

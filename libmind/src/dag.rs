@@ -248,6 +248,44 @@ pub fn read_at<B: Blocks>(blocks: &mut B, root: &Cid, offset: u64, out: &mut [u8
     Ok(done)
 }
 
+/// Reads the object `root` in order, a chunk at a time, into `each` with the chunk's offset: each node is read and
+/// checked once for the chunks under it, and each chunk against its CID and its place in the shape, in one `get` (as
+/// `read_at` checks them, without going down from the root for every chunk). `chunk` holds each chunk in turn. Returns
+/// the object's size.
+pub fn each_chunk<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], chunk: &mut [u8; CHUNK],
+                             mut each: impl FnMut(u64, &[u8]) -> Result<(), Error>) -> Result<u64, Error> {
+    let total = size(blocks, root, buffer)?;
+    if root.codec() == Codec::Raw {
+        let len = fetch(blocks, root, chunk)?;
+        each(0, &chunk[..len])?;
+        return Ok(total);
+    }
+    let span = capacity(2) as u64;
+    for under in 0..total.div_ceil(span) {
+        // Down from the root to the node of height 1 over these chunks.
+        let (mut cid, mut h, mut held, mut within) = (*root, height(total), total, under * span);
+        let n = loop {
+            let n = node(blocks, &cid, buffer)?;
+            n.check(h, held)?;
+            if h == 1 { break n; }
+            let capacity = capacity(h) as u64;
+            let child = (within / capacity) as usize;
+            cid = n.link(child);
+            held = capacity.min(held - child as u64 * capacity);
+            within -= child as u64 * capacity;
+            h -= 1;
+        };
+        for i in 0..n.len() {
+            let link = n.link(i);
+            let expected = (CHUNK as u64).min(held - i as u64 * CHUNK as u64);
+            let len = fetch(blocks, &link, chunk)?;
+            if link.codec() != Codec::Raw || len as u64 != expected { return Err(Error::Shape); }
+            each(under * span + i as u64 * CHUNK as u64, &chunk[..len])?;
+        }
+    }
+    Ok(total)
+}
+
 /// Visits every block of the object `root`: each node (then read and checked against its CID and the shape) and each
 /// chunk (named, not read). It descends from the root again for each node of height 1, so it needs no stack of nodes,
 /// and a node above height 1 is visited once for each node of height 1 under it. Returns the object's size.
@@ -255,7 +293,9 @@ pub fn walk<B: Blocks>(blocks: &mut B, root: &Cid, buffer: &mut [u8; CHUNK], mut
     visit(blocks, root)?;
     let total = size(blocks, root, buffer)?;
     if root.codec() == Codec::Raw { return Ok(total); }
-    let span = capacity(1) as u64;
+    // The bytes under one node of height 1 (300-STO-0016: it was a chunk's, so each node of height 1 was gone down to,
+    // and its chunks visited, once for each of its chunks).
+    let span = capacity(2) as u64;
     for leaf in 0..total.div_ceil(span) {
         let (mut cid, mut h, mut held, mut within) = (*root, height(total), total, leaf * span);
         loop {

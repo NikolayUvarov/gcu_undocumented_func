@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -75,67 +75,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## A download hung once at its resume on x86 with 6 GiB, after 109-NET-0010's fix (8ae66ed)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 (main 4996148 merged) on i9: "x86: RAM above 4 GiB", the network suite's `download_check`.
-
-### What was seen
-
-- `download data/big.bin …/big.bin --sha256 …` (30 MiB): `DOWNLOAD: CONNECTION CUT AT 10485760 OF 31457280, RESUMING`, then nothing on the serial line for 900 s, until the test gave up.
-- No `ITS PARSER HAD ENDED, ANOTHER ONE PARSES`, so it is not the path 109-NET-0010 fixed, or that path did not log.
-- `WATCHDOG: NONE` on that machine type: no reset was involved.
-- In the same gate, the same check passed:
-  - in x86's "boot, display, network, TLS" group on i9, `parser_restart_check` included;
-  - in aarch64's "files, network and TLS" on un-rizen-service;
-  - and the 6 GiB group itself when run again on un-rizen-service (505 s).
-- The serial log is on i9: `/home/un/mind-core/KRN/logs/g63ef/13/mind-core-download-4cpu.log`.
-
-### Asked (the network track decides)
-
-- Whether a resumed response can still wait for ever, and where: the session's call to its parser, the parser's reply, or `netstack`'s flow after the cut.
-- A deadline on that wait, so that a stalled resume ends with an error instead of hanging the program.
-- A line in the log when the resume's request goes out and when its head is parsed, so that the next hang shows which step it stopped at.
-
-## The station offers only the rates the radio can receive: CCK while `bcm_wifi` cannot receive OFDM (550-DRV-0028)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, at the maintainer's word, from the drivers track's findings (550-DRV-0028's runs on the MacBook Pro).
-
-### Problem
-
-- **The radio.** `bcm_wifi` does not yet receive OFDM: acknowledgements and frames come through in CCK, and OFDM goes unheard below about -40 dBm. The drivers track's test in `fast-test` checks its main suspect, a wrong gain table on the third path.
-- **The station.** On 2.4 GHz, `dot11::frame::rates` offers 1, 2, 5.5 and 11 Mb/s (CCK) and also 6–54 Mb/s (OFDM), and `Station::take_rates` picks a data rate up to 24 Mb/s. An access point then sends in OFDM, and the station receives nothing after the association.
-
-### Plan (a proposal; the network track decides, with the drivers track for the radio's side)
-
-- **`idl/wlanhw.wit` 1.1:** `info` names the rates the radio can receive and send (500 kb/s units). `bcm_wifi` names 1, 2, 5.5 and 11 until OFDM works; `wlansim` names all of them.
-- **`dot11`:** the station offers, and picks its data rate from, only the rates both it and the radio have. With CCK alone it joins as an 802.11b station, and the access point keeps to CCK for it.
-- **Until 1.1:** a station built to offer CCK alone on 2.4 GHz would let the maintainer's MacBook Pro join now.
-
-### Acceptance criteria
-
-- `wlansim` reports CCK only, and the station associates offering 1–11 Mb/s alone and sends at 11 Mb/s at most.
-- On the MacBook Pro, with `bcm_wifi` reporting CCK, a WPA2 network is joined and DHCP answers.
-
-## The stack waits for the station, and the station for its radio, with no deadline (550-NET-0018)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, from reading `fast-test` fee095e, which carries `init`'s part (550-KRN-0097) and `bcm_wifi` as a radio (550-DRV-0027). Not seen on a machine yet.
-
-### Problem
-
-- **`wlan`'s first act is `wlanhw::info(RADIO)`** (`wlan/src/main.rs`:320), with no deadline. It serves its own endpoint only after the radio answers.
-- **`bcm_wifi` receives on `SLOT_SERVICE` only once the radio is up:**
-  - after the microcode is loaded from the disk and stage 3 has run;
-  - with `data/wifitest.txt` on the disk, after its whole stage 4 test as well (`bcm_wifi/src/main.rs`:333–337), which waits 3 s between steps.
-- **`netstack` calls `net::info` on each card's slot from its `poll`, with no deadline** (`netstack/src/main.rs`:219). Its first poll comes before its first receive (:684), and the loop does nothing else while a call waits.
-- **So on the MacBook Pro:**
-  - every socket call waits until `bcm_wifi` is up: for the microcode and stage 3, and for the whole test when the test is asked for;
-  - a radio that stays alive and never answers holds the stack for ever.
-- **A radio or station that exits is not the problem:** the kernel fails a waiting sender with `ERR_PEER` once no task can receive on the endpoint.
-- **QEMU does not show it:** `wlansim` answers at once.
-
-### Asked (the network track decides)
-
-- **`wlan` serves before its radio answers.** `net::info` answers `no-device`, as before a join, until the radio has answered. The radio is asked with a deadline, and again later.
-- **`netstack` bounds its calls to a card** (`mind::idl::wire::with_timeout`, as `init` does for 000-KRN-0075). A card that does not answer in time counts as absent for that second.
-- **A QEMU check:** a `wlansim` that answers late (a fixture flag), with the wired card's sockets working meanwhile.
