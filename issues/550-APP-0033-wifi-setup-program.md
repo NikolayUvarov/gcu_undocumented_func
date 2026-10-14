@@ -65,6 +65,11 @@ The network track agreed the interface (550-NET-0018) with changes it asked of t
 - **Tests:**
   - the net suite, whose disk has QEMU's stand-in radio (`wlansim`, 550-NET-0018), lists `MIND-TEST`, joins it through `wlan`'s WPA2 handshake with the passphrase typed, and leaves it;
   - the shell and `wm` suites, with no radio, still see no station (`[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)`).
+- **The join in QEMU** (2026-10-14):
+  - **The first run** (PCU, c874f13) listed `MIND-TEST`, but the join ended at once with `LINK=OFF`. The suite's last x86 VM ran QEMU's `qemu64` CPU, which has no RDRAND, and `wlan` refuses WPA2 without it (issue 103).
+  - **The fix is in the test:** that VM now gets `-cpu qemu64,+rdrand`, as the TLS VM has (2683f51). `wifi` also logs the line under its list as `[WIFI] NOTICE …` (df50186), so a failed join says why.
+  - **On 2683f51** the net group passed on `un-rizen-service` (`x86: boot, display, network, TLS, shell, memory, clock`, 864 s). `wifi` listed `MIND-TEST`, joined it through `wlan`'s WPA2 handshake with `wlansim`'s access point, and left it.
+  - This is QEMU's stand-in radio, not the MacBook Pro's (MC-12.1). The MacBook Pro 10,1's Ivy Bridge CPU has RDRAND; a run without it would log `[WLAN] NO RDRAND: WPA2 REFUSED`.
 - **Where:** the task branch `claude/550-APP-0033-wifi-station-client` (the tools branch with the kernel track's ABI 10 merged) and `fast-test`. It reaches `main` after the kernel track's ABI 10 does, through this track's gate.
 - **Left:** the maintainer's check on the MacBook Pro (`wifi` lists the networks around, and joins one).
 
