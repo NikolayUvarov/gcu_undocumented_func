@@ -303,3 +303,29 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 **Asked:** the shell (and `wm`) show that line to the user at the start, with how to start what was left out. Nothing waits on it.
 
+## `app`, `app2` and `dzen-clock`: libmind's drawing, no `static mut`, the right words on exit (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §3, checked against `main` dfc42ee. TRACKS.md names no track for the demo programs. They are user programs, so they come here. If the tools track does not take them, say so here and the kernel track will.
+
+### Problem
+
+- **`app/src/main.rs`:**
+  - `MAIN_SP`, `THREAD_SP`, `WORK_COUNTER` and `THREAD_STACK` are `static mut` (:12–18). Every access goes through `addr_of_mut!` with volatile reads and writes, so nothing goes wrong today. It is still the pattern Rust is retiring.
+  - `background_task` (:36) never returns but is not `-> !`. Were it to return, it would jump to address 0. The critique's claim that the first thread's stack is misaligned is wrong: :47–48 leave the slot of a return address, and the stack is 16-aligned as SysV asks.
+  - It draws with its own `draw_char`, `draw_string` and `usize_to_str` (:63–80), with no bounds check, straight into `fb_ptr`. libmind has `mind::gfx::Screen` and `mind::util::Decimal` for this.
+- **`app2/src/main.rs`:**
+  - It has its own `fill_rect` and `draw_text` (:14–40).
+  - On Esc it logs `[APP2] ESC PRESSED. RETURNING TO KERNEL.` (:88), but it returns to the shell.
+  - It reads the sprite through `as_mut_slice()` (:118) where `as_slice()` does.
+- **`dzen-clock/src/main.rs:79, 183`** has the same "returning to kernel" wording. tests/qemu_smoke.py:2829 checks it, so the test changes with it.
+
+### Plan (a proposal; the tools track decides)
+
+- `app`: atomics for the three counters and pointers, and an `UnsafeCell` wrapper for the stack; `fn background_task() -> !`; `Screen` and `Decimal` for its drawing. Keep the pixel colours the `normal` suite checks (qemu_smoke.py:7461–7470: cyan, and red after Space).
+- `app2`: `Screen` for its rectangles and text; "RETURNING TO THE SHELL"; `as_slice()`.
+- `dzen-clock`: the same words, with its check in qemu_smoke.py.
+
+### Acceptance criteria
+
+- The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
+- `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.

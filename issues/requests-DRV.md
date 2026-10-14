@@ -200,3 +200,32 @@ This is the Ryzen machine's request above, with one addition:
 
 - On this PC a tone plays through its analog output.
 - Its Ethernet card gets an address by DHCP.
+
+## `ata` and `ahci`: waits with a deadline, and checks that do not lean on the caller (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §2.1–2.2, checked against `main` dfc42ee.
+
+### Problem
+
+- **`ata/src/main.rs`:**
+  - `command` (:46) and `flush` (:89) wait `while self.io.in8(COMMAND) & BSY != 0 {}` with no bound. A drive stuck busy hangs the driver, and every request of `vfs_server` with it (MC-6.1). The likeliest trigger is the next command after `wait_data` gave up part way through a transfer.
+  - `probe` (:26), `wait_ready` (:38) and `wait_data` (:55) count port reads instead of time. Each read is a system call, so how long they wait depends on the machine (MC-5.6). `mind::time::monotonic_ns` is there, and `nvme`'s `wait_ms` and `usb_host`'s xHCI already wait to a deadline.
+  - `count as u8` (:48) and `chunks_exact(512).take(count)` (:71, :81) would go wrong for a `count` of 0 (which ATA reads as 256 sectors), above 256, or longer than the buffer. Today `block_protocol::span` holds every request to 1–128 sectors and a buffer of exactly that size, so nothing reaches it. The comment at :67 ("up to 256 sectors") is stale.
+- **`ahci/src/main.rs`:**
+  - The BIOS/OS handoff (:32) ignores what `wait` returns, and does not wait for BOHC.BB (BIOS busy) to clear, as the AHCI specification's handoff procedure asks. Where the firmware keeps the controller, the driver programs it anyway after about 10 s (MC-1.5, MC-6.3).
+  - `read` and `write` (:87–90) slice the DMA region at `DATA` (64 KiB) plus `count × 512` with no check. That holds only because `BLOCK_MAX_SECTORS` (128) and `init`'s `AHCI_DMA_BYTES` (128 KiB) happen to fit together. A change to either makes the driver panic (MC-2.4).
+  - `wait` (:21) spins 1000 times, then sleeps in 10 ms steps. On x86 the tick is 1 ms since 000-KRN-0083, so a slow completion costs up to 10 ms more than it needs.
+- **`usb_host/src/xhci.rs:53`**: its comment says "a sleep is a 10 ms tick". On x86 it is 1 ms now.
+
+### Plan (a proposal; the drivers track decides)
+
+- One deadline helper in each driver, on `monotonic_ns`, for every wait. `command` and `flush` return an error on timeout, and `read` and `write` pass it on as `ERR_IO`.
+- Each `read` and `write` checks `count` against the DMA region and the buffer itself, and refuses rather than panics.
+- `ahci`: log the handoff's result; wait for BB; if the firmware keeps the controller, leave it and say so.
+- `ahci`'s `wait` sleeps in 1 ms steps to its deadline, as `nvme` does.
+
+### Acceptance criteria
+
+- The `vfs`, `disk` and `block` suites pass on IDE and AHCI disks.
+- A request on a drive that never leaves BSY ends with `ERR_IO` within the stated time. A host test with a stand-in for the ports, or a QEMU disk made to stall, shows it.
+- No path in either driver indexes the DMA region or the buffer without a check of its own.

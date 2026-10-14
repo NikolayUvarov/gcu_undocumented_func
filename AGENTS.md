@@ -107,7 +107,7 @@ The gate is one of the following:
 **A text-only commit needs no gate** (the maintainer's decision, 2026-10-09).
 
 - **Which commits.** Those that change only Markdown documents that no build, image or test reads:
-  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted) and `docs/`;
+  - `issues/`, `issues-done/`, `issues-human/`, `issues-audit/` (its `repro/` code excepted), `issues-critica/`, `issues-critica-done/` and `docs/`;
   - the root's AGENTS.md, CONTRIBUTING.md, TRACKS.md, README.md, ROADMAP.md, ROADMAP_RU.md, SECURITY.md and CODE_OF_CONDUCT.md;
   - the Constitution's and RFCs' texts.
 - **Why.** A test run says nothing about such files.
