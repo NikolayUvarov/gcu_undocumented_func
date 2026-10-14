@@ -1,16 +1,17 @@
 // Stages 4 and 5 (550-DRV-0025, 550-DRV-0026), now a test of the radio's service calls (550-DRV-0027): the station's
 // view of a scan of channels 1 to 13 with every beacon let through; a broadcast probe request on channels 1 to 11 at 1
-// and at 6 Mbit/s; probe requests to every network heard at 1 and 6 Mbit/s, control and bad frames kept, with each
-// core's front end switched off in turn (550-DRV-0028), the filter following that network.
+// and at 6 Mbit/s; probe requests to every network heard at 1 and 6 Mbit/s, control frames kept, with each core's front
+// end switched off in turn and with table 2's gains set (550-DRV-0028), the filter following that network.
 use crate::radio::{Filter, Radio, FRAME_MAX, RADIO_HEADER, TX_GAIN};
 use crate::stage3::Core;
 
 const DWELL_MS: usize = 200; const ANSWER_MS: usize = 150; const TX_CHANNELS: u8 = 11;
-// The networks probed and how often, and the ways (550-DRV-0028): 1 Mbit/s, then 6 Mbit/s with all cores' front ends
-// on and with each switched off in turn.
+// The networks probed and how often, and the ways (550-DRV-0028): 1 and 6 Mbit/s as set up, 6 Mbit/s with each core's
+// front end off in turn, and both with PHY table 2 at 8-11 given b43's gains (it reads 0, 1, 2, 3, the others 9, 14, 19, 24).
 const PROBED: usize = 6; const REPEATS: u32 = 3; const ATTEMPTS: u8 = 7;
-const WAYS: [(&str, u8, Option<u16>); 5] = [("1 MBIT/S            ", 2, None), ("6 MBIT/S            ", 12, None),
-    ("6 MBIT/S, CORE 0 OFF", 12, Some(0)), ("6 MBIT/S, CORE 1 OFF", 12, Some(1)), ("6 MBIT/S, CORE 2 OFF", 12, Some(2))];
+const WAYS: [(&str, u8, Option<u16>, bool); 7] = [("1 MBIT/S                ", 2, None, false), ("6 MBIT/S                ", 12, None, false),
+    ("1 MBIT/S, TABLE 2 FIXED ", 2, None, true), ("6 MBIT/S, TABLE 2 FIXED ", 12, None, true),
+    ("6 MBIT/S, CORE 0 OFF    ", 12, Some(0), false), ("6 MBIT/S, CORE 1 OFF    ", 12, Some(1), false), ("6 MBIT/S, CORE 2 OFF    ", 12, Some(2), false)];
 
 struct Network { bssid: [u8; 6], ssid: [u8; 32], ssid_len: usize, channel: u8, signal: i8, security: u8, frames: u32 }
 const NONE: Network = Network { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, signal: -128, security: 0, frames: 0 };
@@ -149,10 +150,10 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
     step(5, "THE NETWORKS HEARD, WITH THE ANSWERS");
     mind::println!("[BCM] ACTIVE SCAN DONE: {} PROBE RESPONSES; {} NETWORKS IN ALL", answers, list(&seen));
 
-    step(6, "PROBE REQUESTS TO EVERY NETWORK HEARD AT 1 AND 6 MBIT/S, BAD FRAMES KEPT, WITH EACH CORE'S FRONT END OFF IN TURN");
-    let t = radio.rx_gain_tables();
-    mind::println!("[BCM] RX GAIN TABLES AT 8-11: T0 {:?}, T1 {:?}, T2 {:?}, T28 {:?}", t[0], t[1], t[2], t[3]);
-    radio.keep(true, true);
+    step(6, "PROBE REQUESTS TO EVERY NETWORK HEARD AT 1 AND 6 MBIT/S: TABLE 2 AS LEFT AND GIVEN B43'S GAINS, EACH CORE'S FRONT END OFF IN TURN");
+    if let Some(t) = radio.rx_gain_tables() { mind::println!("[BCM] RX GAIN TABLES AT 8-11: T0 {:?}, T1 {:?}, T2 {:?}, T28 {:?}", t[0], t[1], t[2], t[3]); }
+    // Bad frames are not kept: with MAC control bits 21 and 23 set the microcode stopped answering (2026-10-14).
+    radio.keep(true, false);
     let mut order: [usize; SEEN] = core::array::from_fn(|i| i);
     order.sort_unstable_by_key(|&i| (seen[i].frames == 0, -(seen[i].signal as i16)));
     let targets = order.iter().copied().filter(|&i| seen[i].frames != 0 && (1..=13).contains(&seen[i].channel)).take(PROBED);
@@ -162,8 +163,12 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
         let b = bssid;
         mind::println!("[BCM] {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} CHANNEL {} ({} DBM): ACKED OF {} (TRIES, RESPONSES; ACKS CCK/OFDM; OFDM GOOD/BAD FCS/BAD PLCP; OFDM CLIPPED; OFDM POWER BY CORE)",
                        b[0], b[1], b[2], b[3], b[4], b[5], ch, signal, REPEATS);
-        for (name, rate, off) in WAYS {
-            if radio.core_off(off).is_err() { mind::println!("[BCM]   {}: FRONT END NOT SET", name); continue; }
+        for (name, rate, off, fixed) in WAYS {
+            if radio.core_off(off).is_err() || radio.table2_gains(fixed).is_err() {
+                let (control, reason, status) = radio.state();
+                mind::println!("[BCM]   {}: NOT SET, THE MAC DOES NOT SUSPEND (MAC CONTROL {:08X}, IRQ REASON {:08X}, MICROCODE STATUS {})", name, control, reason, status);
+                continue;
+            }
             let (mut acked, mut tries) = (0, 0u32);
             let mut heard = Heard::default();
             let mut ignore = [NONE; SEEN];
@@ -182,6 +187,7 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
                            k.frames[1][2] - before.frames[1][2], k.ofdm_clipped - before.ofdm_clipped, power);
         }
         let _ = radio.core_off(None);
+        let _ = radio.table2_gains(false);
     }
     radio.keep(false, false);
     let _ = radio.set_gain(TX_GAIN);

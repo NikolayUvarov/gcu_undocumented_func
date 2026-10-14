@@ -76,7 +76,7 @@ impl<'a> Core<'a> {
     }
 
     // PHY tables: the address word (table << 10 | offset) once, then entries; a 32-bit entry high half first.
-    fn table16(&self, table: u16, offset: u16, values: &[u16]) { self.phy_w(0x072, table << 10 | offset); for &v in values { self.phy_w(0x073, v); } }
+    pub(crate) fn table16(&self, table: u16, offset: u16, values: &[u16]) { self.phy_w(0x072, table << 10 | offset); for &v in values { self.phy_w(0x073, v); } }
     fn table32(&self, table: u16, offset: u16, values: &[u32]) {
         self.phy_w(0x072, table << 10 | offset);
         for &v in values { self.phy_w(0x074, (v >> 16) as u16); self.phy_w(0x073, v as u16); }
