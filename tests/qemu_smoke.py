@@ -1526,7 +1526,8 @@ def kbench_check(vm):
 # The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
 # a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
-               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "text input: none",
+               "text input: to its end", "text input: rights", "text input: writer gone", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
                "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
@@ -1552,6 +1553,8 @@ def check_tool_check(vm):
     skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
     print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
           f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    texts = [name for name in rows if name.startswith("text input: ")]
+    print(f"PASS: check: text input (000-KRN-0094): {'; '.join(f'{n[12:]}: {rows[n][1]}' for n in texts)}", flush=True)
     output = vm.command("check kernel")
     assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
     require(vm.command("check nosuch"), "check: no group nosuch")

@@ -1,6 +1,6 @@
 # 000-KRN-0094 — A text input for programs, for the shell's pipes and `<`
 
-**Type:** kernel ABI (system calls, ABI 9), `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — (the tools track's redirection and pipes wait for it: [requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.4, MC-2.6
+**Type:** kernel ABI (system calls, ABI 9), `loader.wit` 1.9, `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made; the `bench` suite passes on x86; the gate left) · **Blocked by:** — (the tools track's redirection and pipes wait for it: [requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.4, MC-2.6, MC-3.3
 
 ## Problem
 
@@ -15,19 +15,25 @@ So `>` and `>>` need nothing from the kernel. `<` and `|` need a text input with
 
 ## Plan
 
-1. **Each task gets an input queue** in the kernel, beside its console queue, bounded the same way (4 KiB a call).
-2. **`SYSCALL_CONSOLE_WRITE (pid, bytes)`**, for the holder of the control capability (the shell): appends to the task's input queue. It answers how many bytes fit, as `SYSCALL_LOG` does, so the shell waits instead of losing bytes. `SYSCALL_CONSOLE_WRITE (pid, close)` marks the end.
-3. **`SYSCALL_INPUT_READ (buffer)`**, for the task itself: what is queued; 0 at the end. It waits while the queue is empty and not closed, and a key or the close wakes it.
-4. **A task started without a pipe** has no input queue: the read answers `ERR_NOT_FOUND`, and keys stay its input.
-5. **`libmind` `mind::io`:** `stdin()`, an iterator of lines (`read_line`) and `read_to_end` into a buffer, for the tools that take input when no file is named.
-6. **ABI 9:** the two system calls; docs/api/README.md; tests/runtime.rs.
+The first plan let the holder of the control capability write any task's input. As made, the right to write one task's input is a capability of its own, given only to the program's launcher (MC-3.3): no other task can write it, and the shell needs no new privilege.
+
+1. **`SPAWN_TEXT`:** a task spawned with it gets a text input, a queue of `TEXT_QUEUE` (4096) bytes in the kernel, charged with its kernel structures. Its writer, a `CAP_KIND_TEXT` capability, goes to the spawner, its handle in `arg2` of the reply; `CAP_INFO` names the reader's PID.
+2. **`TEXT_WRITE (writer, bytes, close)`:** queues what fits and answers how many, 0 while the queue is full, so the writer waits instead of losing bytes. `TEXT_CLOSE` with every byte queued ends the input after them. `ERR_PEER` once the reader ended, `ERR_RIGHTS` without a writer.
+3. **`TEXT_READ (buffer)`,** for the task itself: what is queued; 0 at the end, which comes when the input was closed or no copy of the writer is left, and stays. With nothing queued it waits up to `TEXT_WAIT_MS` (1 s) for bytes, the close or a key, then answers `ERR_BUSY`: the caller asks again, and can look at its keys meanwhile.
+4. **A task started without one** has no text input: the read answers `ERR_NOT_FOUND` at once, and keys stay its input.
+5. **`loader.wit` 1.9 `commit-with-input (session, front)`:** `commit`, or with `front` `commit-in-front`, with `SPAWN_TEXT`; the writer is moved to the caller in the reply, and dropped if the caller does not take it, so the program's input ends.
+6. **`libmind`:** `mind::io` (`has_input`, `read`, `read_ready`, `read_to_end`, `Lines`, and the launcher's `Writer` with `write_some`, `write_all`, `close`); `mind::process::spawn_fed`.
+7. **ABI 9:** `common/abi.rs`, docs/api/README.md, docs/idl/README.md (`own<text>`), docs/profile (kernel objects, bootstrap), tests/runtime.rs.
 
 ## Acceptance criteria
 
-- **A QEMU suite** (`isolation` or `shell`): a test program reads its input to the end and prints what it counted; the shell writes 100 KiB to it, more than the queue holds, then closes. Every byte arrives, and the end is seen once.
-- **A program that does not hold the control capability** cannot write another's input.
-- **A read with no queue** answers `ERR_NOT_FOUND` at once, and keys still reach the program.
-- **The tools track's `|` and `<`** run on it ([requests-APP.md](requests-APP.md)).
+- [ ] **The `bench` suite's `check`, on x86 and aarch64:**
+  - [ ] a copy of `check` reads its input to the end and reports the bytes, their hash and how it ended; its parent writes 100 KiB to it, more than the queue holds, then closes. Every byte arrives, the end is seen, and a read after it answers the end again (`text input: to its end`);
+  - [ ] `check` itself, started without an input, is told `ERR_NOT_FOUND` at once (`text input: none`);
+  - [ ] a write through an endpoint instead of a writer is refused with `ERR_RIGHTS`, and a write to a reader that ended with `ERR_PEER` (`text input: rights`);
+  - [ ] a writer dropped without a close still brings the reader to its end, after the bytes queued (`text input: writer gone`).
+- [x] **`Lines`** cuts lines across any reads, with `\r\n`, a last line without its end, and a line longer than `LINE_MAX` in pieces (tests/io_host.rs).
+- [ ] **The tools track's `|` and `<`** run on it ([requests-APP.md](requests-APP.md)).
 
 ## Related
 

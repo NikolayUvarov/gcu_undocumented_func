@@ -184,8 +184,9 @@ The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s
   - the file is written through the shell's file client: `ram:`, `data/`, `log:`.
   - This needs nothing from the kernel and can come first.
 - **`cmd < file` and `a | b`**, on [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md):
-  - the shell starts `b` with an input queue;
-  - it copies `a`'s output (or the file) into it, waiting when it is full, and closes it when `a` ends;
+  - the shell starts `b` with a text input: `loader.wit` 1.9 `commit-with-input` (or with `front`, as `commit-in-front`) returns the input's writer, a `mind::io::Writer`;
+  - it copies `a`'s output (or the file) into it with `write_all`, which waits while the kernel's 4 KiB queue is full, and closes it with `close` when `a` ends (dropping the writer ends the input too);
+  - `b` reads it with `mind::io::read` or `Lines`, to 0 at its end; a program started without one gets `Error::NotFound` (`has_input`);
   - `b`'s output goes to the screen, a file or the next `|`;
   - Esc stops the whole line;
   - the line's result is the last command's.

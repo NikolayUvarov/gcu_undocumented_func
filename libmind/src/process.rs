@@ -138,10 +138,23 @@ pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota,
     spawn_packed(name, image, grants, SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
 }
 
+/// `spawn_raw`, or `spawn_in_front` when `front` is not 0, with a text input (SPAWN_TEXT, 000-KRN-0094): the PID and the
+/// handle of the input's writer (`crate::io::Writer::new`), which stays with the caller.
+pub fn spawn_fed(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<(u64, usize)> {
+    if front >> 32 != 0 { return Err(crate::sys::Error::Other(ERR_FOCUS)); }
+    let flags = flags | SPAWN_TEXT | if front != 0 { SPAWN_SCREEN | SPAWN_FOREGROUND } else { 0 };
+    let raw = spawn_call(name, image, grants, flags, quota, front);
+    check(raw.result).map(|pid| (pid as u64, raw.arg2))
+}
+
 fn spawn_packed(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<u64> {
+    check(spawn_call(name, image, grants, flags, quota, front).result).map(|pid| pid as u64)
+}
+
+fn spawn_call(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> crate::sys::Raw {
     let (source, len) = match image { Image::Memory { cap, len } => (cap, len | (front as usize) << 32), Image::Boot(index) => (SPAWN_BOOT | index, (front as usize) << 32) };
     let packed = grants.len() | flags << 8 | (quota.tasks as usize) << 16 | (quota.endpoints as usize) << 32 | (quota.memory_mib as usize) << 48;
-    check(syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed]).result).map(|pid| pid as u64)
+    syscall(SYSCALL_SPAWN, name.as_ptr() as usize, name.len(), [source, len, grants.as_ptr() as usize, packed])
 }
 
 pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 }

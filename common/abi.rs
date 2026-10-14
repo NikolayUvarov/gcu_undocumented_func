@@ -39,7 +39,7 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
 // where it expects it.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 9;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32 }
 // BootInfo.photo_pause_s: seconds to wait for a photo of the screen, from data/pause.txt on the boot volume (at most
@@ -210,6 +210,8 @@ pub const CAP_KIND_ESCROW: usize = 15;
 // Reading and writing the firmware's variables (FIRMWARE_VARIABLE): BootNext, BootOrder, Boot####; init gives it to
 // the shell, which lends it once the user agrees, and later to the updater (ABI 4, 351-KRN-0027).
 pub const CAP_KIND_FIRMWARE: usize = 16;
+// The writer of one task's text input (SPAWN_TEXT, TEXT_WRITE; ABI 9, 000-KRN-0094): CAP_INFO's arg2 is that task's PID.
+pub const CAP_KIND_TEXT: usize = 17;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -386,6 +388,9 @@ pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take
 // ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
 // (the loader) names the task it starts the program for.
 pub const SPAWN_FOREGROUND: usize = 4;
+// The task gets a text input (000-KRN-0094, ABI 9): its writer, a CAP_KIND_TEXT capability, goes to the spawner, its
+// handle in arg2 of the reply. Without the flag the task has none: TEXT_READ answers ERR_NOT_FOUND.
+pub const SPAWN_TEXT: usize = 8;
 pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
@@ -540,6 +545,18 @@ pub const FIRMWARE_GET: usize = 0;
 pub const FIRMWARE_SET: usize = 1;
 pub const FIRMWARE_BUFFER: usize = 65536; // room for a signed dbx update (351-KRN-0028)
 pub const FIRMWARE_HEADER: usize = 26;
+// TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
+// fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With
+// TEXT_CLOSE in arg2 and every byte taken, the input ends after them. ERR_PEER when the task ended, ERR_INVALID once
+// closed, ERR_RIGHTS without the writer.
+pub const SYSCALL_TEXT_WRITE: usize = 62;
+// TEXT_READ (the task itself): arg1 = buffer, arg2 = its length → the bytes queued, up to it; 0 at the end, which comes
+// once the input was closed or no writer is left. With nothing queued yet it waits up to TEXT_WAIT_MS for bytes, a
+// close or any input event and answers ERR_BUSY: the caller asks again. ERR_NOT_FOUND for a task started without one.
+pub const SYSCALL_TEXT_READ: usize = 63;
+pub const TEXT_CLOSE: usize = 1;
+pub const TEXT_QUEUE: usize = 4096;
+pub const TEXT_WAIT_MS: u64 = 1000;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;

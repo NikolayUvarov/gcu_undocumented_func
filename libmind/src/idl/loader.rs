@@ -11,7 +11,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 8, 0);
+pub const VERSION: (u8, u8, u8) = (1, 9, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
@@ -205,6 +205,18 @@ pub fn helper(endpoint: Endpoint, which: HelperKind, served: usize) -> Result<co
     Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
 }
 
+/// `commit`, or with `front` `commit-in-front`, the program started with a text input (1.9, 000-KRN-0094): returns
+/// the writer of that input (`mind::io::Writer`), whose `CAP_INFO` names the program's PID. The program reads it with
+/// `mind::io` to its end, which comes when the writer closes it or no copy of the writer is left.
+pub fn commit_with_input(endpoint: Endpoint, session: u32, front: bool, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [13 | MAJOR << 8 | ((session) as usize) << 16 | ((front) as usize) << 48, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -220,6 +232,7 @@ pub enum Request {
     CommitInFront { session: u32 },
     GrantFirmware { session: u32, cap: usize },
     Helper { which: HelperKind, served: usize },
+    CommitWithInput { session: u32, front: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -299,6 +312,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             let Some(which) = HelperKind::from_code(wire::field(&words, 0, 16, 8)) else { wire::discard(request, cap); return Err(Reject::Invalid) };
             Ok((Request::Helper { which, served: cap }, Call::words(request, cap)))
         }
+        13 => {
+            wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::CommitWithInput { session: wire::field(&words, 0, 16, 32) as u32, front: wire::field(&words, 0, 48, 1) != 0 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -349,4 +366,9 @@ pub fn reply_grant_firmware(call: Call, value: core::result::Result<(), Error>) 
 pub fn reply_helper(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, ((value) as usize) << 0])
+}
+/// `value` is the handle of the capability to send (moved).
+pub fn reply_commit_with_input(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, true)
 }
