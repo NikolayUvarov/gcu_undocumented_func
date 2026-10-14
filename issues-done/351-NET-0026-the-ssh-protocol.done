@@ -1,8 +1,8 @@
-# 351-NET-0026 — The SSH protocol as a host-tested library
+# 351-NET-0026 — The SSH protocol as a host-tested library — done
 
-**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.2
+**Type:** network (library) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) (phase 3), for [351-NET-0004](../issues/351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.2
 
-The first part of [351-NET-0004](351-NET-0004-ssh-client.md), an SSH client that reads release files over SFTP. The service that runs it in the system, and the key service's purpose for its logins, are [351-NET-0027](351-NET-0027-the-ssh-service.md).
+The first part of [351-NET-0004](../issues/351-NET-0004-ssh-client.md), an SSH client that reads release files over SFTP. The service that runs it in the system, and the key service's purpose for its logins, are [351-NET-0027](../issues/351-NET-0027-the-ssh-service.md).
 
 ## Problem
 
@@ -37,6 +37,15 @@ The crate builds for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.
 
 What this does not show: the client inside the system, through the network stack and the key service. That is 351-NET-0027.
 
+
+## Resolution
+
+Done on the network branch and in `main` (gate 16b, 2037dad).
+- **`ssh/`** (fef5f29): the transport, login, one SFTP channel and SFTP version 3 reads as planned, `no_std` with `alloc`, no libmind. Its `login` module (fb7b5a5, 351-NET-0027) builds what a login signs and checks that form for the key service.
+- **Tests:** `ssh/tests/openssh.rs` against OpenSSH's server on 127.0.0.1 passes in `scripts/host_tests.sh`: a file of 100 008 bytes whole and in pieces, "no such file", a wrong pin refused with nothing signed, an unknown key refused, a silent signer ending the login, and each login's data the form the key service takes. `ssh/tests/login.rs` checks that form.
+- **Builds** for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat` with the soft crypto cfgs; CI, `setup_build_env.sh` and `ci_local.sh` install or ask for OpenSSH's server.
+- **What this does not show:** the client inside the system, which is 351-NET-0027.
+
 ## Related
 
-[351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done).
+[351-NET-0004](../issues/351-NET-0004-ssh-client.md), [351-NET-0005](351-NET-0005-persistent-device-key.done), [351-NET-0002](351-NET-0002-https-for-programs.done).

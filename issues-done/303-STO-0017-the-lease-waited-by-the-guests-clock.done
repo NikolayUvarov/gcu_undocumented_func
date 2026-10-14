@@ -1,6 +1,6 @@
-# 303-STO-0017 — The collection check waits for the lease by the guest's clock
+# 303-STO-0017 — The collection check waits for the lease by the guest's clock — done
 
-**Type:** storage (tests) · **Owner:** `STO` track · **Priority:** P3 · **Status:** in progress (made; the gate's runs are left) · **Blocked by:** — · **Main task:** [303](../issues-done/303-retention-and-collection.done) · **Roadmap:** track B · **Constitution:** MC-5.6, MC-12.2
+**Type:** storage (tests) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [303](303-retention-and-collection.done) · **Roadmap:** track B · **Constitution:** MC-5.6, MC-12.2
 
 From the request "The block store's collection check waits 61 s by the host's clock for a 60 s lease" in requests-STO.md (recorded by the drivers track, 2026-10-12).
 
@@ -16,6 +16,13 @@ Read the guest's `uptime` right after the put, sleep 55 s, then poll `uptime` ev
 
 The check passes under a full local gate as it does alone.
 
+
+## Resolution
+
+Done on the storage track's branch and in `main` (gate 16b, 2037dad).
+- **The store suite** (c92246b) reads the guest's `uptime` after the put and polls it until 62 s have passed there.
+- **It passed** in gate 16b's full runs: "x86: files and block writes" on un-rizen-service, beside other tracks' groups; "aarch64: files, network and TLS" on un-rizen-service and on DESKTOP-i7-930-wsl-u24; and locally.
+
 ## Related
 
-[303-STO-0001](../issues-done/303-STO-0001-collection-by-reachability.done), [300-STO-0016](300-STO-0016-a-dag-walked-once.md) (the same suite's timing on a slower machine).
+[303-STO-0001](303-STO-0001-collection-by-reachability.done), [300-STO-0016](300-STO-0016-a-dag-walked-once.done) (the same suite's timing on a slower machine).

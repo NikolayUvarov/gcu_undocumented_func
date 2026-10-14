@@ -28,7 +28,7 @@ In QEMU, against OpenSSH on the host, a service logs in with the device key, che
 ## Progress (2026-10-14)
 
 Split in two:
-- [351-NET-0026](351-NET-0026-the-ssh-protocol.md): the protocol as a host-tested library (`ssh/`), tested against OpenSSH's server;
+- [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done): the protocol as a host-tested library (`ssh/`), tested against OpenSSH's server;
 - [351-NET-0027](351-NET-0027-the-ssh-service.md): the service, `keystore`'s `ssh-login` purpose and `download`'s `sftp://`, which this task's QEMU criterion needs, with `KRN`'s part asked in requests-KRN.md.
 
 OpenSSH's server for the tests is now in CI and `scripts/setup_build_env.sh`. On the maintainer's machines: PCU and `un-rizen-service` have it; `i9` does not yet.

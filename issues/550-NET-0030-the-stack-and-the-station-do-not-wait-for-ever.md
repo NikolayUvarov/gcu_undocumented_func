@@ -36,4 +36,4 @@ Built for x86_64 and aarch64 (`wlan/src/main.rs`, `netstack/src/main.rs`). The Q
 
 ## Related
 
-[550-NET-0018](550-NET-0018-the-station-service.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [351-NET-0029](351-NET-0029-download-calls-with-a-deadline.md) (the same bound for `download`).
+[550-NET-0018](550-NET-0018-the-station-service.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done) (the same bound for `download`).

@@ -2,7 +2,7 @@
 
 **Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (the service and the key service's part built; `download` and the QEMU check wait for `KRN`) · **Blocked by:** `KRN` for starting the service, its slot and request flag ([requests-KRN.md](requests-KRN.md), "The SSH service in the boot services") · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.4, Appendix B.6
 
-The second part of [351-NET-0004](351-NET-0004-ssh-client.md): the protocol of [351-NET-0026](351-NET-0026-the-ssh-protocol.md) inside the system.
+The second part of [351-NET-0004](351-NET-0004-ssh-client.md): the protocol of [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done) inside the system.
 
 ## Problem
 
@@ -57,4 +57,4 @@ Built, for x86_64 and aarch64:
 
 ## Related
 
-[351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0026](351-NET-0026-the-ssh-protocol.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) (the same design for TLS).
+[351-NET-0004](351-NET-0004-ssh-client.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) (the same design for TLS).
