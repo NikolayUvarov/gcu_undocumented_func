@@ -4,9 +4,9 @@
 // RDRAND once (no RDRAND: no key, every request answers no-key) and kept across boots in this service's private
 // directory of the boot disk, sealed by the TPM where there is one (351-NET-0006; else unencrypted, 351-NET-0005),
 // never exported. Serves
-// idl/keystore.wit: the certificate to anyone; signatures only to the signer's badge (the TLS service), only for data of
-// the form the purpose names, and at most BUDGET per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) only
-// to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
+// idl/keystore.wit: the certificate and the public key to anyone; signatures only to the signer's badge (the TLS
+// service) for TLS and to the SSH service's badge for SSH logins (1.2), only for data of the form the purpose names, and
+// within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) only to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
 // (slot 4).
 extern crate alloc;
@@ -22,13 +22,14 @@ use mind::idl::keystore::{self, Error, Purpose, Usage};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
 use mind::idl::codec::List;
-use mind::network::{BADGE_KEY_SIGNER, BADGE_KEY_STATION};
+use mind::network::{BADGE_KEY_SIGNER, BADGE_KEY_SSH, BADGE_KEY_STATION};
 
 const RECEIVED: usize = 9;
-const BUDGET: u32 = 4096; // signatures per boot
+const BUDGET: u32 = 4096; // TLS signatures per boot
+const SSH_BUDGET: u32 = 256; // SSH logins per boot (1.2)
 const TLS13_CLIENT: &[u8] = b"TLS 1.3, client CertificateVerify\0";
 
-struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, wifi: Option<wifi::Wifi> }
+struct Keys { key: Option<SigningKey>, certificate: Vec<u8>, usage: Usage, ssh_logins: u32, wifi: Option<wifi::Wifi> }
 
 impl Keys {
     fn new() -> Self {
@@ -51,7 +52,7 @@ impl Keys {
         };
         // The remembered Wi-Fi networks open under the device key, so there are none without it.
         let wifi = key.as_ref().map(|key| { let mut seed = key.to_bytes(); let wifi = wifi::Wifi::load(&seed); stored::wipe(&mut seed); wifi });
-        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, wifi }
+        Self { key, certificate, usage: Usage { signatures: 0, budget: BUDGET, refused: 0 }, ssh_logins: 0, wifi }
     }
 
     // The stored seed, or a new one made and stored (351-NET-0005); false without the random source.
@@ -130,26 +131,36 @@ impl Keys {
         self.wifi.as_mut().ok_or(Error::NoKey)
     }
 
-    // Whether `data` has the form `purpose` names (so the key cannot sign anything else).
-    fn fits(purpose: Purpose, data: &[u8]) -> bool {
+    // Whether `data` has the form `purpose` names (so the key cannot sign anything else): an SSH login only with this key.
+    fn fits(purpose: Purpose, data: &[u8], key: &SigningKey) -> bool {
         match purpose {
             Purpose::TlsClient => {
                 let hash = data.len().wrapping_sub(64 + TLS13_CLIENT.len());
                 (hash == 32 || hash == 48) && data[..64].iter().all(|&b| b == b' ') && &data[64..64 + TLS13_CLIENT.len()] == TLS13_CLIENT
             }
+            Purpose::SshLogin => ssh::login::fits(data, &key.verifying_key().to_bytes()),
+        }
+    }
+
+    // The badge a purpose is for, and its signatures and budget this boot.
+    fn allowance(&self, purpose: Purpose) -> (u16, &'static str, u32, u32) {
+        match purpose {
+            Purpose::TlsClient => (BADGE_KEY_SIGNER, "NOT THE SIGNER", self.usage.signatures, self.usage.budget),
+            Purpose::SshLogin => (BADGE_KEY_SSH, "NOT THE SSH SERVICE", self.ssh_logins, SSH_BUDGET),
         }
     }
 
     fn sign(&mut self, badge: u16, pid: u64, purpose: Purpose, data: &[u8]) -> Result<[u8; 64], Error> {
-        let result = if badge != BADGE_KEY_SIGNER { Err(("NOT THE SIGNER", Error::Denied)) }
+        let (allowed, stranger, made, budget) = self.allowance(purpose);
+        let result = if badge != allowed { Err((stranger, Error::Denied)) }
             else if self.key.is_none() { Err(("NO KEY", Error::NoKey)) }
-            else if self.usage.signatures >= self.usage.budget { Err(("BUDGET USED", Error::Budget)) }
-            else if !Self::fits(purpose, data) { Err(("DATA DOES NOT FIT THE PURPOSE", Error::Invalid)) }
+            else if made >= budget { Err(("BUDGET USED", Error::Budget)) }
+            else if !self.key.as_ref().is_some_and(|key| Self::fits(purpose, data, key)) { Err(("DATA DOES NOT FIT THE PURPOSE", Error::Invalid)) }
             else { Ok(()) };
         match (result, &self.key) {
             (Ok(()), Some(key)) => {
-                self.usage.signatures += 1;
-                mind::println!("[KEYSTORE] SIGNED {:?} FOR PID {} ({} OF {})", purpose, pid, self.usage.signatures, self.usage.budget);
+                match purpose { Purpose::TlsClient => self.usage.signatures += 1, Purpose::SshLogin => self.ssh_logins += 1 }
+                mind::println!("[KEYSTORE] SIGNED {:?} FOR PID {} ({} OF {})", purpose, pid, made + 1, budget);
                 Ok(key.sign(data).to_bytes())
             }
             (Err((why, error)), _) => {
@@ -180,6 +191,10 @@ fn main(_info: &'static BootInfo) {
                 keystore::reply_sign(call, signature.as_ref().map(|s| &s[..]).map_err(|e| *e))
             }
             Ok((keystore::Request::Usage, call)) => keystore::reply_usage(call, Ok(&keys.usage)),
+            Ok((keystore::Request::PublicKey, call)) => {
+                let public = keys.key.as_ref().map(|key| key.verifying_key().to_bytes());
+                keystore::reply_public_key(call, public.as_ref().map(|p| &p[..]).ok_or(Error::NoKey))
+            }
             // The station's calls (1.1): `denied` to any other badge, `no-key` without the device key.
             Ok((keystore::Request::WifiRemember { ssid, pmk }, call)) => {
                 let result = keys.wifi(request.badge, request.sender, "REMEMBER").and_then(|w| w.remember(request.sender, ssid.as_slice(), pmk.as_slice()));

@@ -1,0 +1,33 @@
+/// SSH service (`ssh`, 351-NET-0027, Appendix B.6): files read over SFTP for programs, through the client's own network
+/// flow, logged in as the device. A client lends its network stack capability (`attach`), so the network policy that
+/// applies to the client applies to its SSH connections; the service holds no network access of its own. The server is
+/// known by its host key alone: the SHA-256 of its ssh-ed25519 host key blob is the client's `pin`, and nothing is
+/// signed for a server that does not match. The login is the device key's: the key service signs each one
+/// (`ssh-login`, idl/keystore.wit 1.2), and the SSH service never sees the private key. Every session, refusal and pin
+/// mismatch goes to the system log. A session belongs to the process that attached it, and ends with it; the service
+/// serves one request at a time.
+package mind:ssh@1.0.0;
+
+interface ssh {
+    /// Why a request failed. `refused`: the server refused the connection, the login, the channel or SFTP;
+    /// `host-key`: the server's host key is not the pinned one; `no-key`: the key service gave no signature (no device
+    /// key, or its budget for logins used); `protocol`: the server broke the protocol or a bound; `no-entropy`: no
+    /// random source (the service fails closed); `permission`: SFTP's "permission denied"; `failed`: another SFTP status.
+    enum error { no-network, refused, timeout, closed, invalid, limit, not-found, denied, host-key, no-key, protocol, no-entropy, permission, failed }
+
+    /// A new session on the client's network flow (its socket client, idl/socket.wit).
+    attach: func(flow: borrow<endpoint>) -> result<u32, error>;
+    /// TCP to `address`:`port`, the key exchange with the server whose host key blob has SHA-256 `pin` (32 bytes), the
+    /// login as `user` with the device key, and SFTP version 3.
+    connect: func(session: u32, address: u32, port: u16, user: string<64>, pin: bytes<32>, timeout-ms: u32) -> result<_, error>;
+    /// Opens `path` for reading: a file number of the session. `not-found`: no such file.
+    open: func(session: u32, path: string<255>) -> result<u32, error>;
+    /// The file's size; `not-found` when the server does not tell it.
+    size: func(session: u32, file: u32) -> result<u64, error>;
+    /// Up to `length` bytes (at most 32768) from `offset`; none at the end of the file.
+    read: func(session: u32, file: u32, offset: u64, length: u32) -> result<bytes<32768>, error>;
+    /// Closes file `file`.
+    close-file: func(session: u32, file: u32) -> result<_, error>;
+    /// Ends the session: the connection closed and the lent flow freed.
+    close: func(session: u32) -> result<_, error>;
+}

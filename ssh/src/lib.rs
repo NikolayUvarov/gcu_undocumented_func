@@ -2,17 +2,23 @@
 //! key exchange, an ssh-ed25519 host key that must match a pin, chacha20-poly1305@openssh.com, public-key login with an
 //! ssh-ed25519 key whose signatures come from the caller (the key service, MC-11.9), one session channel and the SFTP
 //! subsystem (version 3) to open, size, read and close files. It does no I/O of its own: the caller's `Io` moves the
-//! bytes. No libmind, so `cargo test` runs it on the host against OpenSSH's server.
+//! bytes. No libmind, so `cargo test` runs it on the host against OpenSSH's server. Without its `client` feature it is
+//! `login` and `wire` alone: what a login signs, for the key service's check (351-NET-0027).
 #![no_std]
 #![forbid(unsafe_code)]
 
 extern crate alloc;
 
+#[cfg(feature = "client")]
 pub mod cipher;
+pub mod login;
+#[cfg(feature = "client")]
 pub mod session;
+#[cfg(feature = "client")]
 pub mod transport;
 pub mod wire;
 
+#[cfg(feature = "client")]
 pub use session::{connect, Handle, Session};
 
 /// Why a session failed or a request was refused.

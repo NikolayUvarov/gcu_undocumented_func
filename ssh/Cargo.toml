@@ -7,12 +7,17 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 # An SSH 2 client for reading files over SFTP (351-NET-0026): no libmind and no I/O of its own, so `cargo test` runs it
 # on the host against OpenSSH's server.
+[features]
+default = ["client"]
+# The client; without it only `login` and `wire`, which the key service takes to check what it signs (351-NET-0027).
+client = ["dep:sha2", "dep:x25519-dalek", "dep:ed25519-dalek", "dep:chacha20", "dep:poly1305"]
+
 [dependencies]
-sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # no SHA-NI: the target has no SSE in its ABI
-x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
-ed25519-dalek = { version = "2", default-features = false }
-chacha20 = { version = "0.9", default-features = false }
-poly1305 = { version = "0.8", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"], optional = true } # no SHA-NI: the target has no SSE in its ABI
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"], optional = true }
+ed25519-dalek = { version = "2", default-features = false, optional = true }
+chacha20 = { version = "0.9", default-features = false, optional = true }
+poly1305 = { version = "0.8", default-features = false, optional = true }
 
 [dev-dependencies]
 ed25519-dalek = { version = "2", default-features = false, features = ["fast"] }

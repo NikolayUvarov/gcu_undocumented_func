@@ -8,6 +8,10 @@
 //! directory, wrapped under a key derived from the device key (so sealed with it where a TPM seals it); no call returns
 //! one. Only the station's badge (`BADGE_KEY_STATION`, `mind::network`) may call these, and it gets each handshake's
 //! keys, within a budget per minute, each logged.
+//!
+//! 1.2 (351-NET-0027): SSH logins. The purpose `ssh-login` signs only what a public-key login with the device key
+//! signs, only for the SSH service's badge (`BADGE_KEY_SSH`, `mind::network`), within its own budget per boot; and
+//! anyone may read the device's public key (`public-key`), as the certificate.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -17,7 +21,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -35,13 +39,16 @@ impl Wire for Error {
 }
 
 /// What a signature is for. `tls-client`: a TLS 1.3 client CertificateVerify (RFC 8446 4.4.3): 64 spaces, the
-/// context string "TLS 1.3, client CertificateVerify", a zero byte and a SHA-256 or SHA-384 transcript hash.
+/// context string "TLS 1.3, client CertificateVerify", a zero byte and a SHA-256 or SHA-384 transcript hash; for the
+/// signer's badge. `ssh-login` (1.2): what an SSH public-key login signs (RFC 4252 section 7): a 32-byte session
+/// identifier, SSH_MSG_USERAUTH_REQUEST, a user of 1 to 64 printable characters without space, "ssh-connection",
+/// "publickey", TRUE, "ssh-ed25519" and the device key's own blob, nothing after; for the SSH service's badge.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Purpose { #[default] TlsClient = 0 }
+pub enum Purpose { #[default] TlsClient = 0, SshLogin = 1 }
 impl Purpose {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::TlsClient), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::TlsClient), 1 => Some(Self::SshLogin), _ => None } }
 }
 impl Wire for Purpose {
     const MAX: usize = 1;
@@ -49,7 +56,7 @@ impl Wire for Purpose {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// Signatures made, the budget for this boot, requests refused.
+/// The TLS signer's signatures made, its budget for this boot, requests refused (`ssh-login` has its own budget).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage { pub signatures: u32, pub budget: u32, pub refused: u32 }
 impl Wire for Usage {
@@ -81,7 +88,8 @@ pub fn certificate(endpoint: Endpoint, out: &mut [u8]) -> Result<core::result::R
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<512>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
-/// An Ed25519 signature of `data` for `purpose` (signer badge only).
+/// An Ed25519 signature of `data` for `purpose` (`tls-client`: the signer's badge only; `ssh-login`: the SSH
+/// service's badge only).
 pub fn sign(endpoint: Endpoint, purpose: Purpose, data: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
@@ -177,6 +185,20 @@ pub fn wifi_forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Resu
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The device's Ed25519 public key (1.2), which an SSH server lists as an authorized key.
+pub fn public_key(endpoint: Endpoint) -> Result<core::result::Result<List<u8, 32>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 34, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<u8, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 259;
 
@@ -190,6 +212,7 @@ pub enum Request<'a> {
     WifiNetworks,
     WifiKeys { ssid: List<u8, 32>, authenticator: u64, supplicant: u64, anonce: List<u8, 32>, snonce: List<u8, 32> },
     WifiForget { ssid: List<u8, 32> },
+    PublicKey,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -259,6 +282,13 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::WifiForget { ssid }, call))
         }
+        8 => {
+            let (call, length) = wire::take_buffer(request, cap, 34, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PublicKey, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -290,4 +320,8 @@ pub fn reply_wifi_keys(call: Call, value: core::result::Result<&[u8], Error>) ->
 pub fn reply_wifi_forget(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_public_key(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<u8, 32>(value, w))
 }
