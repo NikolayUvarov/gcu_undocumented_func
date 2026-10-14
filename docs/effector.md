@@ -62,6 +62,20 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - the kernel track's clone in `/home/un/mind-core/KRN/gcu_undocumented_func`. Another track clones its own into `/home/un/mind-core/<TRK>/` as `un` the first time (rule 4): the toolchain in `~un/.rustup` is shared, and nothing needs installing.
 - **Its packages are CI's** (Ubuntu 24.04), and no proxy is set for the agent. Say so where you report a run: "un-rizen-service through Effector, Ubuntu 24.04 (native), QEMU 8.2.2 (Ubuntu), TCG".
 - **Its first agent,** `un-rizen_f5809c60f795`, ran in a console; the maintainer moved it to a service on 2026-10-14. Send nothing to the old ID: an operation there does not run.
+- **Measured on 2026-10-14** (the kernel track's e2e1133 merged with `main` 39f5199, one group to an ordinary operation, the track's two lanes at once, seconds):
+
+  | Part | Groups and times |
+  |---|---|
+  | aarch64, 51 min in all | build 185; boot and fault containment 93; programs, shell and four CPUs 567; files, network and TLS 1026; RAM, ACPI and PCI above 4 GiB 467; GICv2 410; NVMe 102; 16 CPUs 220 |
+  | x86, 87 min in all | build 325; test programs 34; services, storage, audio 185; scheduling, isolation, heap 97; NVMe 170; 16 CPUs 113; RAM above 4 GiB 468; one CPU 113; AVX 33 and 33; no PIT 120; x2APIC 168; padded vector area 73; protection probes 32; TSC 47; USB image 82; Secure Boot 20; reproducible build 355; boot, display, network, TLS 717; keys, shell, tools 1267; files and block writes 791 |
+
+  All passed. Three x86 groups needed a second run, below.
+- **Two of one track's QEMU groups at once can fail the short waits.** On 2026-10-14 the kernel track ran two lanes. These three groups failed while the other lane ran a QEMU group or the reproducible build, and passed when run again:
+  - "boot, display, network, TLS": `run tlsclock &` waits 8 s for the prompt;
+  - "keys, shell, tools";
+  - "files and block writes".
+
+  Run those three with no second group of your own beside them. Rerun one that failed under load once, with nothing of yours beside it, before you call it a fault in the code.
 - **Setting up another machine.** `scripts/setup_build_env.sh` installs everything a build and `scripts/ci_local.sh` need, and checks it. It is idempotent: what is there is left alone. Run it once as root, for example from Windows: `wsl -u root -- bash scripts/setup_build_env.sh USER CLONE`.
 
 ## 2. The key
@@ -138,6 +152,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
      - each track runs one long operation there at a time, so four tracks build and test at once;
      - a track may take a second queue only while two are free, from a second clone and a `TMPDIR` of its own (`/home/un/mind-core/<TRK>-2/`, `/tmp/mind-<TRK>-2`): two groups in one clone or one `TMPDIR` overwrite each other's images and logs;
      - a QEMU group takes about as many threads as its guest has CPUs (four for most groups), so four fit; a 16-CPU group takes the whole machine while it runs, and the other groups then go slower.
+     - x86's "boot, display, network, TLS", "keys, shell, tools" and "files and block writes" go in your first lane only, with no second group of yours beside them: two at once failed their short waits (section 1, measured on 2026-10-14).
    - **More queues:** send the long work as ordinary operations (no `"sequential"`), one at a time: the next only when the last has ended. Work above the limit waits for a free queue. Sequential operations keep sharing one lane, so a track that marks its work sequential waits behind the others' sequential work.
    - Every track keeps its temporary files in its own `TMPDIR` (rule 4), whatever the queue.
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.

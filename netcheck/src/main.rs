@@ -3,7 +3,9 @@
 // netcheck <check>...: tries network access with the flow grant its launcher got from the policy broker (issue 102)
 // and prints one line per check: OK, or why not. Checks: tcp:A.B.C.D:PORT (connect), udp:A.B.C.D:PORT (send a
 // datagram), ping:A.B.C.D, dns:NAME, hold:A.B.C.D:PORT:SECONDS (keep a connection and send once a second until it
-// fails or the time is up). A console program; without a grant every check reports NO GRANT.
+// fails or the time is up), open:A.B.C.D:PORT (connect and keep the connection until the program ends), sockets (the
+// stack's list of this grant's open sockets, socket.wit 2.4), cards (each card's kind and state, which one is preferred
+// and which is the default, socket.wit 2.5). A console program; without a grant every check reports NO GRANT.
 use mind::abi::{BootInfo, SLOT_NETWORK};
 use mind::idl::socket;
 use mind::ipc::Endpoint;
@@ -38,6 +40,28 @@ fn hold(address: u32, port: u16, seconds: u32) -> mind::sys::Result<Result<(), s
     Ok(Ok(()))
 }
 
+// One line per socket the stack lists for this grant (socket.wit 2.4).
+fn sockets() -> mind::sys::Result<Result<(), socket::Error>> {
+    let list = match socket::sockets(STACK, 0)? { Ok(list) => list, Err(error) => return Ok(Err(error)) };
+    for s in list.as_slice() {
+        let [a, b, c, d] = s.remote_address.to_be_bytes();
+        mind::println!("NETCHECK SOCKET {} {:?} LOCAL {} REMOTE {}.{}.{}.{}:{} {:?} BADGE {} SENT {} RECEIVED {} CARD {}",
+            s.id, s.protocol, s.local_port, a, b, c, d, s.remote_port, s.state, s.badge, s.sent, s.received, s.card);
+    }
+    mind::println!("NETCHECK {} SOCKETS", list.as_slice().len());
+    Ok(Ok(()))
+}
+
+fn cards() -> mind::sys::Result<Result<(), socket::Error>> {
+    let list = match socket::cards(STACK)? { Ok(list) => list, Err(error) => return Ok(Err(error)) };
+    for c in list.as_slice() {
+        let flag = |on: bool, word: &'static str| if on { word } else { "" };
+        mind::println!("NETCHECK CARD {} {:?}{}{}{}{}{}", c.card, c.kind, flag(c.present, " PRESENT"), flag(c.up, " UP"), flag(c.configured, " CONFIGURED"),
+                       flag(c.preferred, " PREFERRED"), flag(c.default, " DEFAULT"));
+    }
+    Ok(Ok(()))
+}
+
 fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
     let mut parts = text.split(':');
     let (kind, a, b, c) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
@@ -52,12 +76,17 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "ping" => socket::ping(STACK, address, 1000)?.map(drop),
         "dns" => socket::resolve(STACK, a, 0, 0, 3000)?.map(drop),
         "hold" => return hold(address, port, c.parse().unwrap_or(10)),
+        // A request's first line only, so the connection has moved bytes and a web server waits for the rest; left
+        // open for a later `sockets`.
+        "open" => socket::tcp_connect(STACK, address, port, 3000)?.map(|handle| { let _ = socket::tcp_send(STACK, handle, b"GET / HTTP/1.0\r\n"); }),
+        "sockets" => return sockets(),
+        "cards" => return cards(),
         _ => Err(socket::Error::Invalid),
     })
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards");
     for word in mind::process::args_str().split_whitespace() { report(word, check(word)); }
 }

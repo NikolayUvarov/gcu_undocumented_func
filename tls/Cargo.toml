@@ -24,6 +24,8 @@ ecdsa = { version = "0.16", default-features = false, features = ["verifying", "
 ed25519-dalek = { version = "2", default-features = false }
 rsa = { version = "0.9", default-features = false, features = ["sha2"] }
 signature = { version = "2", default-features = false }
+# The fields of a pinned certificate that are still checked (750-NET-0020): validity, purpose, CA:false.
+x509-cert = { version = "0.2", default-features = false }
 
 [profile.release]
 panic = "abort"

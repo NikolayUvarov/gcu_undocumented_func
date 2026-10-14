@@ -25,6 +25,7 @@ use mind::idl::socket;
 use mind::idl::tls::{self as api, Error, Peer};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
+use mind::network::BADGE_TLS_NO_DEVICE;
 use rustls::client::{UnbufferedClientConnection, WebPkiServerVerifier};
 use rustls::unbuffered::{ConnectionState, EncodeError, UnbufferedStatus};
 use rustls::crypto::CryptoProvider;
@@ -236,12 +237,12 @@ impl Service {
         Ok(self.next)
     }
 
-    // The server verified against the root store, or by its pinned key alone.
-    fn config(&self, device: Option<Arc<device::Device>>, pin: Option<[u8; 32]>) -> Result<ClientConfig, Error> {
+    // The server verified against the root store, or by its pins.
+    fn config(&self, device: Option<Arc<device::Device>>, pins: Option<pinned::Pinned>) -> Result<ClientConfig, Error> {
         let builder = ClientConfig::builder_with_details(self.provider.clone(), Arc::new(provider::Rtc))
             .with_protocol_versions(&[&rustls::version::TLS13]).map_err(|_| Error::Handshake)?;
-        let builder = match pin {
-            Some(pin) => builder.dangerous().with_custom_certificate_verifier(Arc::new(pinned::Pinned { pin, provider: self.provider.clone() })),
+        let builder = match pins {
+            Some(pins) => builder.dangerous().with_custom_certificate_verifier(Arc::new(pins)),
             None => {
                 let roots = roots();
                 if roots.is_empty() { return Err(Error::NoRoots); }
@@ -251,12 +252,15 @@ impl Service {
         Ok(match device { Some(device) => builder.with_client_cert_resolver(device), None => builder.with_no_client_auth() })
     }
 
-    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, pin: Option<[u8; 32]>, timeout: u32) -> Result<Peer, Error> {
+    fn connect(&mut self, id: u32, pid: u64, name: &str, address: u32, port: u16, client_certificate: bool, pins: Option<pinned::Pinned>, timeout: u32) -> Result<Peer, Error> {
         if !mind::random::available() { return Err(Error::NoEntropy); }
         let server = pki_types::ServerName::try_from(name).map_err(|_| Error::Invalid)?.to_owned();
         let device = if client_certificate { Some(Arc::new(device::Device::new(KEYS).ok_or(Error::Denied)?)) } else { None };
-        let config = Arc::new(self.config(device.clone(), pin)?);
-        let how = if pin.is_some() { " BY ITS PINNED KEY" } else { "" };
+        let how = match &pins { Some(p) if p.checked => " BY ITS PIN", Some(_) => " BY ITS PINNED KEY", None => "" };
+        // connect-pinned (1.1) logs its refusal as it always did; connect-pins (1.2) has one or two pins of either kind.
+        let unmatched = match &pins { Some(p) if p.checked => "NOT A PINNED KEY OR CERTIFICATE", _ => "NOT THE PINNED KEY" };
+        let pinned = pins.is_some();
+        let config = Arc::new(self.config(device.clone(), pins)?);
         let session = self.session(id, pid)?;
         if session.conn.is_some() { return Err(Error::Invalid); }
         let deadline = now() + timeout.clamp(100, 60_000) as u64;
@@ -280,8 +284,8 @@ impl Service {
             }
             Err(failure) => {
                 let error = match &failure {
-                    Failure::Tls(rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)) if pin.is_some() => {
-                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: NOT THE PINNED KEY", id, pid, name); Error::Certificate
+                    Failure::Tls(rustls::Error::InvalidCertificate(rustls::CertificateError::ApplicationVerificationFailure)) if pinned => {
+                        mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: {}", id, pid, name, unmatched); Error::Certificate
                     }
                     Failure::Tls(rustls::Error::InvalidCertificate(why)) => { mind::println!("[TLS] SESSION {} OF PID {}: {} REFUSED: CERTIFICATE {:?}", id, pid, name, why); Error::Certificate }
                     Failure::Tls(error) => { mind::println!("[TLS] SESSION {} OF PID {}: HANDSHAKE WITH {} FAILED: {:?}", id, pid, name, error); Error::Handshake }
@@ -358,20 +362,36 @@ fn main(_info: &'static BootInfo) {
         if now() - checked >= 1000 { checked = now(); service.expire(); }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) else { continue };
         if !request.is_call { continue; }
-        let pid = request.sender;
+        let (pid, badge) = (request.sender, request.badge);
         let _ = match api::decode(&request, RECEIVED, &mut scratch) {
             Err(reason) => wire::reject(reason),
             Ok((api::Request::Attach { flow }, call)) => api::reply_attach(call, service.attach(flow, pid)),
             Ok((api::Request::Connect { session, name, address, port, client_certificate, timeout_ms }, call)) => {
-                let peer = service.connect(session, pid, name.as_str(), address, port, client_certificate, None, timeout_ms);
+                // A client badged BADGE_TLS_NO_DEVICE may not present the device certificate (351-NET-0022).
+                let peer = if client_certificate && badge & BADGE_TLS_NO_DEVICE != 0 {
+                    mind::println!("[TLS] PID {}: THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT", pid);
+                    Err(Error::Denied)
+                } else { service.connect(session, pid, name.as_str(), address, port, client_certificate, None, timeout_ms) };
                 api::reply_connect(call, peer.as_ref().map_err(|e| *e))
             }
             Ok((api::Request::ConnectPinned { session, name, address, port, pin, timeout_ms }, call)) => {
                 let peer = match <[u8; 32]>::try_from(pin) {
-                    Ok(pin) => service.connect(session, pid, name.as_str(), address, port, false, Some(pin), timeout_ms),
+                    Ok(pin) => service.connect(session, pid, name.as_str(), address, port, false, Some(pinned::Pinned::key(pin, service.provider.clone())), timeout_ms),
                     Err(_) => Err(Error::Invalid),
                 };
                 api::reply_connect_pinned(call, peer.as_ref().map_err(|e| *e))
+            }
+            Ok((api::Request::ConnectPins { session, name, address, port, pins, timeout_ms }, call)) => {
+                let list = pins.as_slice();
+                let mut chosen = pinned::Pinned { pins: [(pinned::Kind::Leaf, [0; 32]); 2], count: 0, checked: true, provider: service.provider.clone() };
+                let mut valid = (1..=2).contains(&list.len());
+                for (slot, pin) in chosen.pins.iter_mut().zip(list) {
+                    let kind = if pin.kind == api::PinKind::Leaf { pinned::Kind::Leaf } else { pinned::Kind::Spki };
+                    match <[u8; 32]>::try_from(pin.digest.as_slice()) { Ok(digest) => *slot = (kind, digest), Err(_) => valid = false }
+                }
+                chosen.count = list.len().min(2);
+                let peer = if valid { service.connect(session, pid, name.as_str(), address, port, false, Some(chosen), timeout_ms) } else { Err(Error::Invalid) };
+                api::reply_connect_pins(call, peer.as_ref().map_err(|e| *e))
             }
             Ok((api::Request::Send { session, data }, call)) => api::reply_send(call, service.send(session, pid, data)),
             Ok((api::Request::Receive { session, length }, call)) => {

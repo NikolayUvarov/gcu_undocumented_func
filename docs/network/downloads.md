@@ -92,6 +92,6 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
 
 - **Roots shipped with a release** and covered by its signature: the roots are whatever `tlsroots.pem` holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
-- **Chunked bodies, redirects, keep-alive, several connections at once, IPv6.**
+- **In `get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6. A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
 - **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.
-- **A parser instance per session.** One `parse` process serves every program, one request at a time, and keeps nothing between requests; a fresh process per session needs a kernel and loader change ([109](../../issues-done/109-session-parsers.done)).
+- **A parser instance per session** is the kernel track's 109-NET-0010, on its branch (requests-NET.md, the notice).
