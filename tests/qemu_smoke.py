@@ -4706,6 +4706,9 @@ def update_suite(args):
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
         out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
+        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", out)
+        print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {max(fetched, key=lambda l: int(re.search(r'IN (\d+) MS', l)[1]), default='none')}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)

@@ -53,7 +53,7 @@ pub enum Error {
 }
 
 /// The connection's bytes, moved by the caller: `send` takes them all or fails; `receive` gives at least one byte, or
-/// 0 once the connection is closed.
+/// 0 once the connection is closed. A read a signal interrupts is the caller's to retry.
 pub trait Io {
     fn send(&mut self, data: &[u8]) -> Result<(), Error>;
     fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Error>;
