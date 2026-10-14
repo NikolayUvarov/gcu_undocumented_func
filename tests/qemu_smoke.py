@@ -5893,7 +5893,9 @@ def net_suite(args, disk):
             vm.close()
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else ())
+    # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
+    rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
