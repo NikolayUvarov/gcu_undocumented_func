@@ -330,3 +330,12 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 **What changed:** libmind's `mind::output::gone()` says that the launcher lent an endpoint for the output and it is gone. The three tools look at it after each line they show: they write their log, saying they stopped because their console closed, and end with exit status 3. `check`'s `a tool's console closes` drops kbench's console after four pieces of output and sees it end.
 
 **Asked:** the `wm` suite's walk may close their windows without waiting: `RUN_TO_END` can be empty. Other programs keep running when their console goes, as before; one that should stop can look at `gone()` too.
+
+## A note: the safe start after a run that stopped early (000-KRN-0076)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).
+
+**What changed:** a run that did not end as a task asked (a freeze the chipset's watchdog reset, a cut power) leaves a mark in a firmware variable, and the next boot is a safe start: `init` logs `[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts` and leaves those stopped; `svc start` starts each.
+
+**Asked:** the shell (and `wm`) show that line to the user at the start, with how to start what was left out. Nothing waits on it.
+

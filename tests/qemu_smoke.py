@@ -7377,10 +7377,13 @@ def clock_suite(args, disk):
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
 
 def watchdog_suite(args, disk):
-    """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after boot unless the
-    watchdog restarted the last run. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick:
-    the chipset resets the frozen machine at its second expiry, 30 s on, and the next boot says so and runs on."""
+    """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
+    boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
+    machine at its second expiry, 30 s on, and the next boot says so. init finds the mark the stopped run left in a
+    firmware variable and starts safely, without radios, cameras and sound; it clears the mark a minute after READY, and
+    the boot after a reboot is a normal one."""
     armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
+    safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
     try:
         vm.expect(armed + "\n", timeout=90)
@@ -7389,15 +7392,28 @@ def watchdog_suite(args, disk):
         vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
         took = time.monotonic() - frozen
         vm.expect("MIND> ", timeout=120)
-        time.sleep(25)  # past the 20 s at which the first run stopped
+        log = vm.command("dmesg -s init", raw=True)
+        require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
+        assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
+        deadline = time.monotonic() + 150
+        while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
+            assert time.monotonic() < deadline, log[-2000:]
+            time.sleep(5)
+            log = vm.command("dmesg -s init", raw=True)
         uptime = int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) / 1e9
         assert uptime > 25, uptime
+        vm.send("reboot\n")
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        assert safe not in log and "STARTED audio_gw" in log, log[-2000:]
     finally:
         vm.close()
     # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
     assert took > 25, took
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
-          f"({took:.0f} s from the stop to the next kernel's line); it ran on past {uptime:.0f} s", flush=True)
+          f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
+          f"sound or speech), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows

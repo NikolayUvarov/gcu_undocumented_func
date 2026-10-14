@@ -724,6 +724,18 @@ fn boot_order() -> impl Iterator<Item = usize> {
 }
 
 
+// What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
+// run was most likely in. `svc start` still starts each.
+const SAFE_LEFT_OUT: [&str; 4] = ["bcm_wifi", "video_gw", "audio_gw", "tts"];
+// The run's mark is cleared this long after READY: a run that got that far ended well enough.
+const MARK_CLEAR_MS: usize = 60_000;
+
+// The mark of an unfinished run (RUN_MARK_NAME): whether the last run left it, and whether this one set it.
+fn run_mark(firmware: usize) -> (bool, bool) {
+    let found = mind::firmware::get_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, &mut [0u8; 8]).is_ok();
+    (found, mind::firmware::set_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &[1]).is_ok())
+}
+
 mind::entry!(main);
 // A service that does not answer never stops the boot or the supervision of the others (000-KRN-0075).
 fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(info)) }
@@ -745,8 +757,20 @@ fn boot(info: &'static BootInfo) {
         mind::println!("[INIT] LAUNCH: MANIFEST {} KEY {}{} VERIFIED, {} IMAGES CHECKED; {}{}", core::str::from_utf8(manifest.as_bytes()).unwrap_or("?"), key,
                        if launch.test_key != 0 { " (THE TEST KEY)" } else { "" }, launch.images, name, if slot.trial != 0 { " ON TRIAL" } else { "" });
     }
+    // The last run's mark found: it stopped early, and this one starts safely (000-KRN-0076). The privilege is kept until
+    // the mark is cleared, a minute after READY.
+    let firmware = platform::cap(PLATFORM_PRIVILEGE, CAP_KIND_FIRMWARE, 0).ok();
+    let (safe, marked) = firmware.map_or((false, false), run_mark);
+    if safe {
+        mind::println!("[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: {}, {}, {}, {}",
+                       SAFE_LEFT_OUT[0], SAFE_LEFT_OUT[1], SAFE_LEFT_OUT[2], SAFE_LEFT_OUT[3]);
+    }
+    if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
+    let mut mark = firmware.filter(|_| marked);
+    if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
     let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
+        if safe && SAFE_LEFT_OUT.contains(&unit_name(index)) { init.stopped[index] = true; continue; }
         // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
         // before the compositor takes the screen (211-PRT-0004).
         if unit_name(index) == "compositor" && info.photo_pause_s > 0 {
@@ -789,10 +813,18 @@ fn boot(info: &'static BootInfo) {
         Err(error) => mind::println!("[INIT] KEEPS PLATFORM PRIVILEGE: {:?}", error),
     }
     mind::println!("[INIT] READY");
+    let ready = mind::time::uptime_ms();
     // Exit notices of the services, and lifecycle requests (idl/init.wit) from the shell and the programs it lends
-    // init's endpoint to.
+    // init's endpoint to; until the run's mark is cleared, a look at the clock every second.
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        let received = if mark.is_some() { Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) } else { Endpoint::SERVICE.recv(RECEIVED) };
+        if let Some(f) = mark.filter(|_| mind::time::uptime_ms() - ready >= MARK_CLEAR_MS) {
+            let cleared = mind::firmware::set_in(f, RUN_MARK_NAME, &RUN_MARK_GUID, 0, &[]).is_ok();
+            let _ = ipc::drop_cap(f);
+            mark = None;
+            mind::println!("[INIT] A MINUTE PAST READY: THE RUN'S MARK {}", if cleared { "CLEARED" } else { "COULD NOT BE CLEARED" });
+        }
+        let Ok(request) = received else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
         let badge = request.badge;

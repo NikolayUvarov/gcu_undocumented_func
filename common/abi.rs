@@ -545,6 +545,11 @@ pub const FIRMWARE_GET: usize = 0;
 pub const FIRMWARE_SET: usize = 1;
 pub const FIRMWARE_BUFFER: usize = 65536; // room for a signed dbx update (351-KRN-0028)
 pub const FIRMWARE_HEADER: usize = 26;
+// The mark of a run that has not ended well (000-KRN-0076): a firmware variable init sets at boot and clears a minute
+// after READY, and the kernel clears at a reboot or power-off a task asked for. Found at boot, the last run stopped early
+// (a freeze the watchdog reset, a cut power), and init starts safely. GUID {444E494D-4F43-4552-8076-52554E4D4152}.
+pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
+pub const RUN_MARK_NAME: &str = "MindCoreRun";
 // TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
 // fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With
 // TEXT_CLOSE in arg2 and every byte taken, the input ends after them. ERR_PEER when the task ended, ERR_INVALID once

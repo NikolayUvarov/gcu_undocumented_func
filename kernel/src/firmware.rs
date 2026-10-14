@@ -57,6 +57,13 @@ pub fn set(name: &[u16], guid: &[u8; 16], attributes: u32, data: &[u8]) -> Resul
     if status == 0 { Ok(()) } else { Err(status) }
 }
 
+/// Deletes init's mark of an unfinished run (000-KRN-0076): this run ends as a task asked.
+pub fn clear_run_mark() {
+    let mut name = [0u16; 32];
+    for (unit, byte) in name.iter_mut().zip(crate::abi::RUN_MARK_NAME.bytes()) { *unit = byte as u16; }
+    let _ = set(&name[..crate::abi::RUN_MARK_NAME.len() + 1], &crate::abi::RUN_MARK_GUID, 0, &[]);
+}
+
 const FDT_MAGIC: u32 = 0xd00d_feed;
 
 /// The device tree the bootloader found (210-KRN-0029): its header checked and named; the board code reads it (210-APL-0002).
