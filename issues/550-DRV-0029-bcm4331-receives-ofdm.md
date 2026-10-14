@@ -33,6 +33,14 @@ The 550-DRV-0028 runs, 2026-10-14:
 
 Evidence for this machine only (MC-12.1).
 
+## Progress
+
+- **2026-10-14: plan item 4, the station answered during the test** (`bcm_wifi/src/serve.rs`, on `claude/ASR-DRV` and `fast-test` until its gate). With `data/wifitest.txt` and a station to serve, `bcm_wifi` answers the station's requests while the test's stages run:
+  - `info` is answered as it is (the SPROM's MAC address, 2.4 GHz, channels 1–13, no channel set);
+  - `set-channel`, `set-filter` and `send` answer `busy`;
+  - `receive` answers `empty`, and `wait` answers none.
+
+  So `wlan` starts and keeps its loop, and `netstack` no longer waits for the test's end. After the test the radio is served as before.
 - **2026-10-14, the eighth run, `fast-test` f1f30f6 (plan item 1): OFDM is received with core 2 off.** Directed requests, acknowledged of 3, with core 2's front end off:
 
   | Network (channel, signal) | 1M | 6M | 12M | 24M | 54M | 6M, core 0 alone | 6M, all cores on |
@@ -50,14 +58,6 @@ Evidence for this machine only (MC-12.1).
   - **`TP-LINK_POCKET` answers nothing on channel 6,** as in every run there.
 - **Plan item 2 waits for `idl/wlanhw.wit` 1.1 on `main`** (`BAND_2GHZ_OFDM` is in `libmind/src/network.rs` on `fast-test` only). The criterion's first half is met at −45 dBm in most tries, up to 24 Mbit/s and mostly at 54.
 - **The same boot: `wlan` got the radio's `info` 2 s after it started** (`[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`), during the test, and `bcm_wifi` served it after the test. No scan was asked of the station afterwards: no program holds its configuration client yet (the tools track's part, `SLOT_WIFI`).
-## Progress
-
-- **2026-10-14: plan item 4, the station answered during the test** (`bcm_wifi/src/serve.rs`, on `claude/ASR-DRV` and `fast-test` until its gate). With `data/wifitest.txt` and a station to serve, `bcm_wifi` answers the station's requests while the test's stages run:
-  - `info` is answered as it is (the SPROM's MAC address, 2.4 GHz, channels 1–13, no channel set);
-  - `set-channel`, `set-filter` and `send` answer `busy`;
-  - `receive` answers `empty`, and `wait` answers none.
-
-  So `wlan` starts and keeps its loop, and `netstack` no longer waits for the test's end. After the test the radio is served as before.
 - **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request (`requests-DRV.md` on `fast-test`). On `claude/ASR-DRV` and `fast-test` until its gate.
 
 ## Related
