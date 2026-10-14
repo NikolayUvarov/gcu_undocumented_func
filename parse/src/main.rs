@@ -43,7 +43,7 @@ fn main(_info: &'static BootInfo) {
             }
             Ok((parse::Request::HttpResponse { head }, call)) => {
                 let typed = http::parse_head(head).map(|head| mind::parse::to_response(&head)).map_err(|_| {
-                    mind::println!("[PARSE] REFUSED AN HTTP HEAD FOR PID {}: MALFORMED ({} BYTES)", request.sender, head.len());
+                    if !session { mind::println!("[PARSE] REFUSED AN HTTP HEAD FOR PID {}: MALFORMED ({} BYTES)", request.sender, head.len()); }
                     Error::Malformed
                 });
                 parse::reply_http_response(call, typed.as_ref().map_err(|e| *e))
@@ -66,7 +66,7 @@ fn main(_info: &'static BootInfo) {
                 let typed = match walked {
                     Ok(values) => { page.values = values as u32; Ok(&page) }
                     Err(_) => {
-                        mind::println!("[PARSE] REFUSED JSON FOR PID {}: MALFORMED OR PAST ITS BOUNDS ({} BYTES)", request.sender, text.len());
+                        if !session { mind::println!("[PARSE] REFUSED JSON FOR PID {}: MALFORMED OR PAST ITS BOUNDS ({} BYTES)", request.sender, text.len()); }
                         Err(Error::Malformed)
                     }
                 };
