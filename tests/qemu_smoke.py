@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -5552,6 +5552,40 @@ def release_metadata_check(vm):
           f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
+def wifi_boot_check(vm):
+    """550-KRN-0097: with QEMU's stand-in radio on the disk, init starts wlansim and the station wlan. wlan holds the
+    radio's client in slot 2, and nobody else does (MC-2.3), and keystore's with BADGE_KEY_STATION in slot 3; netstack
+    holds the station's client without a badge in slot 4, its third card; the shell holds the configuration client with
+    BADGE_WIFI_CHANGE (0x300) in SLOT_WIFI (33)."""
+    real = vm.services()
+    assert "wlansim" in real and "wlan" in real, real
+    started = vm.command("dmesg -s init")
+    require(started, "[INIT] STARTED wlansim PID"); require(started, "[INIT] STARTED wlan PID")
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+
+    def clients(name):
+        # (slot, rights, badge, the endpoint's server) of each endpoint client `name` holds.
+        caps = vm.command(f"stat caps {real[name]}", raw=True)
+        return [(int(s), int(r), int(b), servers.get(int(e))) for s, r, b, e in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) SIZE=0 BADGE=(\d+) EP=(\d+)", caps, re.M)]
+    assert (2, 6, 0, real["wlansim"]) in clients("wlan"), clients("wlan")
+    assert (3, 6, 2, real["keystore"]) in clients("wlan"), clients("wlan")
+    assert (4, 6, 0, real["wlan"]) in clients("netstack"), clients("netstack")
+    assert (33, 6, 0x300, real["wlan"]) in clients("shell"), clients("shell")
+    holders = [name for name in real if name not in ("init", "wlansim", "wlan") and any(c[3] == real["wlansim"] for c in clients(name))]
+    assert not holders, holders
+    print("PASS: the Wi-Fi station in the boot services: wlan over wlansim's client in slot 2 (nobody else's) with keystore's "
+          "in slot 3, netstack's third card in slot 4, the shell's configuration client with BADGE_WIFI_CHANGE in SLOT_WIFI", flush=True)
+
+
+def shell_badge_rights_check(vm):
+    """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
+    CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
+    caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+    rights = {int(slot): int(r) for slot, r in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) ", caps, re.M)}
+    assert (rights.get(16), rights.get(20)) == (22, 22), rights
+    print("PASS: the shell's network card and TLS clients carry the right to badge, for the read-only and no-device copies", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -5567,6 +5601,10 @@ def net_suite(args, disk):
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
+    if args.wlansim_elf:
+        # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
+        shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
+        sign_manifest.sign_volume(disk)
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5580,6 +5618,11 @@ def net_suite(args, disk):
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
+        shell_badge_rights_check(vm)
+        if args.wlansim_elf:
+            wifi_boot_check(vm)
+        else:
+            print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
@@ -8277,6 +8320,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8300,6 +8344,10 @@ def main():
         fixture = ROOT / IMAGE / "fixture-updater.elf"
         args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
+    # The stand-in radio where the fixture scripts build it (550-KRN-0097): aarch64 beside the image, x86 in MIND_TEST_OUT.
+    radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
+        Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
+    args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:

@@ -20,12 +20,18 @@ const ALL: u8 = CAP_READ | CAP_WRITE | CAP_GRANT;
 const RECEIVED: usize = 9; // fixed slot for the buffer of an idl/init.wit call
 const INIT_PID: u64 = 1; // the kernel's first task
 // What each boot service holds, for `svc` (the grants below, in short).
-const HOLDS: [&str; BOOT_IMAGES] = ["restart and process control", "observe privilege",
-    "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input", "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
-    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA", "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)", "spawn privilege", "AC97 ports and IRQ; DMA",
-    "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)", "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA", "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode)", "a client of the network card driver", "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the TPM's registers (if the firmware names a TPM)", "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory",
-    "the key service's signer client; RTC and VFS clients", "its own program client", "observe privilege",
-    "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
+const HOLDS: [&str; BOOT_IMAGES] = [
+    "restart and process control", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input",
+    "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
+    "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
+    "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
+    "spawn privilege", "AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
+    "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
+    "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
+    "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
+    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "its own program client",
+    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -37,6 +43,12 @@ const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list;
 const HDA_DMA_BYTES: usize = (32 + 16 + 3) * 4096; // the same rings, two buffer lists, CORB and RIRB (551-DRV-0010)
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 const WIFI_DMA_BYTES: usize = 512 * 1024; // bcm_wifi: the 64-bit descriptor rings and their frame buffers (550-DRV-0025)
+// The Wi-Fi station's slots (550-KRN-0097): the radio's client and keystore's in wlan, wlan's client in netstack (its third card).
+const WIFI_RADIO: usize = 2;
+const WIFI_KEYS: usize = 3;
+const WIFI_CARD: usize = 4;
+// The radios wlan may drive (idl/wlanhw.wit): the MacBook Pro's bcm_wifi (550-DRV-0027), else QEMU's stand-in.
+const RADIOS: [&str; 2] = ["bcm_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
@@ -318,6 +330,8 @@ impl Init {
                 }
                 // A reader's client of vfs_server for the microcode in data/firmware/b43/ (550-KRN-0061), badged so no other badge can be set on it.
                 if self.running(service_index("vfs_server")) { grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT); }
+                // Its idl/wlanhw.wit endpoint, whose client goes to wlan alone (550-DRV-0027, 550-KRN-0097): with it the driver brings the radio up.
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
             }
             "nvme" => {
                 // The first NVMe controller (class 01:08:02): registers in BAR0; commands are polled, so no interrupt.
@@ -398,6 +412,18 @@ impl Init {
             "netstack" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "netstack")?, ALL);
                 self.lend(&mut grants, SLOT_DEV0, "virtio_net")?; self.lend(&mut grants, SLOT_DEV1, "virtio_net#1")?; // one client per card
+                // The Wi-Fi station as its third card: a client without BADGE_WIFI, which serves idl/net.wit (550-KRN-0097).
+                if self.running(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
+            }
+            // QEMU's stand-in radio (550-NET-0018): only the tests' images carry it, and it holds nothing but its endpoint.
+            "wlansim" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
+            // The 802.11 station (550-NET-0018) over the radio that runs: its client in slot 2, the station's alone (MC-2.3);
+            // keystore's client for remembered networks in slot 3 (550-NET-0024). No radio, no station.
+            "wlan" => {
+                let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r))).ok_or(Error::NotFound)?;
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+                self.lend(&mut grants, WIFI_RADIO, radio)?;
+                if self.running(service_index("keystore")) { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
             }
             // The broker mints flow grants from an unbadged stack client that may badge (which itself may open nothing),
             // registers them through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge
@@ -504,13 +530,18 @@ impl Init {
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 grants.add(SLOT_AUTHORITY, self.badged(&mut minted, "sysmon", mind::stat::BADGE_AUTHORITY)?, CLIENT);
                 let keyboard = self.keyboard(); self.lend(&mut grants, SLOT_KEYBOARD, keyboard)?; self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
-                self.lend(&mut grants, SLOT_NET, "virtio_net")?; // diagnostics; ERR_PEER without a network card
+                // Diagnostics (ERR_PEER without a network card), with the right to mint the read-only BADGE_COUNTERS copy it
+                // lends for REQUEST_NET_COUNTERS (000-NET-0015): virtio_net's badge only narrows a client.
+                grants.copy(SLOT_NET, self.keeper("virtio_net")?, CLIENT | CAP_BADGE);
                 grants.add(SLOT_SOCKET, self.badged(&mut minted, "netstack", mind::network::BADGE_OPERATOR)?, CLIENT); // every destination
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
                 self.lend(&mut grants, SLOT_PARSE, "parse")?;
                 self.lend(&mut grants, SLOT_TPM, "tpm")?;
                 if self.running(service_index("battery")) { self.lend(&mut grants, SLOT_BATTERY, "battery")?; }
-                self.lend(&mut grants, SLOT_TLS, "tls")?;
+                // The station's configuration client that may join, leave and forget, lent on for REQUEST_WIFI (550-KRN-0097).
+                if self.running(service_index("wlan")) { grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT); }
+                // With the right to mint the BADGE_TLS_NO_DEVICE copy it lends to programs (351-NET-0022): tls's badge only narrows.
+                grants.copy(SLOT_TLS, self.keeper("tls")?, CLIENT | CAP_BADGE);
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.running(service_index("blockstore")) {

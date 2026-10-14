@@ -189,6 +189,8 @@ pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser servi
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
 pub const REQUEST_SHELL: u32 = 1048576; // a client of the shell's commands (idl/shell.wit) in SLOT_SHELL: a window manager (211-APP-0044)
 pub const REQUEST_BATTERY: u32 = 2097152; // the battery service's client in SLOT_BATTERY (211-KRN-0090, for 211-PRT-0008)
+pub const REQUEST_WIFI: u32 = 4194304; // the Wi-Fi station's configuration client in SLOT_WIFI (550-KRN-0097, for 550-APP-0033)
+pub const REQUEST_NET_COUNTERS: u32 = 8388608; // a network card's read-only client (BADGE_COUNTERS) in SLOT_NET (000-NET-0015, for 000-APP-0049)
 
 /// Whether a program with these requests, started with `args`, runs as a console program (no screen): the loader and
 /// the launchers decide alike (issue u016).
