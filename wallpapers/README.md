@@ -1,15 +1,22 @@
 # Desktop pictures
 
-The pictures in this directory go onto every image as `wallpapers/NAME.jpg`, signed with the rest of the boot volume (`02_build.sh`, `scripts/build_aarch64.sh`, `scripts/make_usb_image.py`). In `wm`, Settings → Background → image, with the file `wallpapers/NAME.jpg`, or in `data/wm.conf`:
+The pictures in this directory are not part of an image. After an image is written, they are copied onto the disk's boot volume under `data/wallpapers/` and read back by SHA-256, as the proprietary files are:
 
 ```
-background = image wallpapers/NAME.jpg
+ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers            # Windows, from WSL, after the writer
+ONLY='*.jpg' scripts/disk_copy.sh wallpapers data/wallpapers wallpapers /media/x   # a boot volume mounted on Linux
+```
+
+In `wm`: Settings → Background → image, with the file `data/wallpapers/NAME.jpg`, or in `data/wm.conf`:
+
+```
+background = image data/wallpapers/NAME.jpg
 ```
 
 ## What a picture must be
 
-- **Format.** A baseline JPEG (not progressive), sRGB, `.jpg`; `wm` reads BMP, PNG and baseline JPEG, and the image takes JPEG only, to stay small.
-- **Size.** 16:10 like the MacBook Pro's panel (2880 × 1800 at most is useful), at most 4 MiB (the image's limit per file). `wm` scales a picture to cover the screen and cuts its longer sides, so another 16:10 or 16:9 size works too.
+- **Format.** A baseline JPEG (not progressive), sRGB, `.jpg`; `wm` reads BMP, PNG and baseline JPEG, and only `*.jpg` is copied, to stay small.
+- **Size.** 16:10 like the MacBook Pro's panel (2880 × 1800 at most is useful), at most a few MiB. `wm` scales a picture to cover the screen and cuts its longer sides, so another 16:10 or 16:9 size works too.
 - **Content.**
   - Dark and calm towards the left and the top: `wm` draws the time, the date and the gauges there, pale.
   - No text, no logos, no people, no trademarks.
