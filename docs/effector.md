@@ -33,6 +33,10 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - Its prerequisites name a Java runtime, and the Secure Boot group needs `python3-virt-firmware`.
   - The whole gate takes longer than one operation may run (section 3).
   - Builds, host tests and single QEMU groups do run there.
+  - Two x86 groups go to another machine, as measured on 2026-10-14 (the tools track's gate of eda1c74):
+    - "x86: Secure Boot with our keys" stops at once with `No module named 'virt'`;
+    - "x86: reproducible build" builds the image twice and ran past an operation's hour. It took 7 minutes on i9 and 26 on `DESKTOP-i7-930-wsl-u24`.
+    - Send them to a machine with CI's packages: `i9`, `un-rizen-service` or `DESKTOP-i7-930-wsl-u24`.
 
 - **What is on `i9_4e6882212251`** (section 6):
   - everything [`scripts/setup_build_env.sh`](../scripts/setup_build_env.sh) installs, from Ubuntu 24.04:

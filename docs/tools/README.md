@@ -261,6 +261,14 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A script's `cd` lasts while the script runs.
 - Tab completes the first word, and the one after `run`, from the commands and programs; a word holding `/` or `:`, or any later word, from the directory it names (`libmind/src/path.rs`). One match gets its full name, `/` after a directory; several get the part they share; once they share nothing more, Tab lists them, sorted.
 
+**Redirection** (000-APP-0074), in the shell:
+
+- `command > file` writes what the command prints into the file, from the current directory; `>>` adds to it. It works for the shell's own commands, for a console program (which runs to its end there; Esc or Ctrl+C stops it sooner) and for a script.
+- A line that starts `ERROR: ` stays on the screen, and so does the shell's `STARTED` line. The shell says how many bytes went in (`312 BYTES WRITTEN TO ram:list.txt`).
+- The file is written through the shell's file client: `ram:`, `log:` and `data/`.
+- A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
+- `|` and `<` wait for the kernel's text input for programs ([000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)).
+
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
 - Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.
