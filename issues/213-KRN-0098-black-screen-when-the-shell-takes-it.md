@@ -82,3 +82,5 @@ On the maintainer's Ryzen 9 5900HX machine (2026-10-13, `fast-test` 28d9c3d) the
 **Not explained yet:** boot 5 drew the shell, and then its keyboard typed nothing. A line that read "no byte" at first and "ready" later would do both. The maintainer's next run will tell.
 
 **Left for the acceptance criteria:** the shell's text on this machine's screen.
+
+**2026-10-14:** the compositor's lines and the fix for a PC without COM1 are in `main` (8ae66ed), gated on i9 (x86) and PCU (aarch64), and in `fast-test`. What is left is the maintainer's run on the Ryzen machine.
