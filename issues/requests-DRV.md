@@ -51,22 +51,41 @@ The kernel session has set the Cirrus codec's amplifier GPIOs for Apple's machin
 - Its MAC address matches the one macOS shows for Wi-Fi.
 - Chip control reads back as it was before.
 
-## A volume in `audio.wit`, for `wm`'s Settings (000-APP-0048)
+## The output volume and the microphone's sensitivity in `audio.wit` (000-APP-0076, 000-APP-0077)
 
-**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0048](000-APP-0048-wm-settings.md) (the maintainer's request: one place for settings, the sound among them).
+**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0048](000-APP-0048-wm-settings.md), and widened on 2026-10-14 at the maintainer's request: "the output volume and the microphone's sensitivity need settings". The tools track's parts are [000-APP-0076](000-APP-0076-output-volume.md) (the volume) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) (the microphone).
 
 ### Problem
 
-`audio.wit` plays, records and makes tones, but has no volume: a program can only scale its own samples. Settings has nothing to set for the sound.
+`audio.wit` 1.1 plays, records and makes tones, but has no level:
+
+- **Output.** `audio_gw` leaves AC'97's master volume at 0 dB and its PCM output at the default, and unmutes HDA's output amplifiers at 0 dB. A program can only scale its own samples.
+- **Capture.** It fixes the gain at start: AC'97's microphone at 0 dB without its +20 dB boost and the record gain at 0 dB (`audio_gw/src/main.rs`:64), HDA's input amplifiers at 0 dB.
+- **So** neither the shell nor `wm`'s Settings can set how loud the sound is or how sensitive the microphone is.
 
 ### Plan (a proposal; the drivers track decides)
 
-- `audio.wit` 1.x: `volume: func() -> u8` and `set-volume: func(percent: u8)`, on the codec's mixer where it has one (AC'97 master volume, the HDA output amplifier) and by scaling in `audio_gw` otherwise; setting it only with a badge the shell holds.
-- The shell sets it for Settings (the tools track's part).
+- **`audio.wit` 1.2:**
+  - `levels: func() -> levels`: the output's level in per cent and muted or not, the capture's gain in per cent and the boost on or off, each with its range in dB where the device has one (none: scaled in `audio_gw`, or absent);
+  - `set-volume: func(percent: u8, muted: bool) -> result<_, error-code>`;
+  - `set-gain: func(percent: u8, boost: bool) -> result<_, error-code>`.
+- **On the device:**
+  - AC'97: the master volume (0x02) and the PCM output (0x18); the record gain (0x1C), and the microphone's boost (0x0E bit 6);
+  - HDA: the output path's amplifier gain and mute; the input path's amplifier, the ADC's gain and the pin's boost where the codec has them; the digital microphone's gain on Apple's Cirrus codecs, if their coefficients have one;
+  - where the device has no amplifier, `audio_gw` scales the samples, and `levels` says so.
+- **Authority** (MC-3.11, MC-11.5):
+  - `set-volume` and `set-gain` take a client with a badge that `init` gives the shell alone (requests-KRN.md, "The shell's audio client that may change the levels");
+  - any other client gets `rights`;
+  - `levels` answers every client.
+- **Not kept by `audio_gw`.** The shell keeps the levels in `data/sound.conf` and sets them again when it starts (000-APP-0076).
 
 ### Acceptance criteria
 
-The `audio` suite sets the volume to 50 % and the recorded tone's level falls by about 6 dB; a client without the badge is refused.
+- **The `audio` suite** (AC'97 and HDA):
+  - `set-volume(50)` lowers the level QEMU's audio backend records for the same tone, by about 6 dB, or by what the codec's step allows;
+  - `set-gain` reads back through `levels`, and raises the captured level where QEMU's capture has an input;
+  - a client without the badge gets `rights`.
+- **On the MacBook Pro:** the speaker's volume follows `set-volume`, and the internal microphone's level follows `set-gain`.
 
 ## `usb_storage` reports a device that came back, rather than running the command on it (000-KRN-0079, 000-KRN-0085)
 

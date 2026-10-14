@@ -50,6 +50,8 @@ impl ShellHost<'_> {
         if let Some(need) = needs(word) {
             if !self.allowed(need) { return Err(alloc::format!("{} needs `requires: {}` in the script", word, need)); }
         }
+        // `>` and `>>` write a file (000-APP-0074).
+        if matches!(crate::redirect::split(line), Ok(Some(_))) && !self.allowed("files") { return Err(String::from("> needs `requires: files` in the script")); }
         let shell = &mut *self.shell;
         let outer = shell.term.capture.replace(Vec::new());
         shell.command(line.as_bytes());
@@ -91,7 +93,7 @@ impl ShellHost<'_> {
 
 // Esc or Ctrl+C on either keyboard, Ctrl+Z on the serial line (the kernel keeps PS/2 Ctrl+Z for the focus): a
 // script stops. What else was typed meanwhile is dropped.
-fn interrupted(shell: &mut Shell) -> bool {
+pub fn interrupted(shell: &mut Shell) -> bool {
     let mut stop = false;
     while let Some(byte) = shell.term.serial.as_ref().and_then(mind::dev::Uart::read) { if matches!(byte, 0x1A | 0x03 | 0x1B) { stop = true; } }
     while let Some(key) = shell.next_key() { if key.is_escape() || key.is_ctrl('c') || key.is_ctrl('z') { stop = true; } }
