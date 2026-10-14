@@ -1527,7 +1527,8 @@ def kbench_check(vm):
 # a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
                "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "text input: none",
-               "text input: to its end", "text input: rights", "text input: writer gone", "kernel memory unreadable",
+               "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
+               "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
                "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary

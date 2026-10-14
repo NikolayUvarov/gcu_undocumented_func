@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (12 requests waiting, 2026-10-12, three of them for 750; a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (11 requests waiting, 2026-10-14, three of them for 750; a launch session holding every launch slot became [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md); a program started with no standard clients is covered by 109-KRN-0096 (on the kernel branch); one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -40,36 +40,6 @@ The shell holds a client of `updater` (`caps` shows it), and `status` answers th
 ### Acceptance criteria
 
 On a trial boot, the updater writes the confirmed record within a few seconds of `[INIT] TRIAL BOOT CONFIRMED`, and the `update` check passes.
-
-## A launch session holds as many grants as there are launch slots (211-APP-0044)
-
-**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done).
-
-### Problem
-
-`loader`'s launch session keeps at most 5 grants (`Session.grants: [(u8, usize); 5]` in `loader/src/main.rs`). A sixth `grant` is refused with `limit`. `LAUNCH_SLOTS` (211-KRN-0058) names 16 slots a launcher may fill.
-
-`console` started by `wm` now asks for the shell's commands too, so it may need six grants:
-
-- the window;
-- the user's files;
-- system information;
-- the camera;
-- the shell's commands (`SLOT_SHELL`);
-- for `record -w`, the window to see.
-
-The `wm` suite's `record -w` lost its window lease to the limit. The tools track now grants `SLOT_SHELL` last and lets a start go on without it (wm and the shell), so the program runs without the shell's commands when the session is full.
-
-On the MacBook Pro `wm` itself now asks for six: the window manager's client, the user's files, system information, the camera, the shell's commands and the battery (211-APP-0070). The battery comes last and `wm` asks the shell for a copy when it did not fit (`shell.wit` 1.4 `battery`), so nothing waits on this; a larger session would make that call unneeded.
-
-### Plan (a proposal; the kernel track decides)
-
-- **The session's array** holds `LAUNCH_SLOTS.len()` grants, or `SPAWN_GRANTS_MAX` less the loader's own.
-- **A refused grant** still answers `limit`.
-
-### Acceptance criteria
-
-A launcher grants each of `LAUNCH_SLOTS` in one session and the program holds them all. `console` from `wm` gets the shell's commands beside the window lease of `record -w`.
 
 ## A console program ends when its console is gone (000-APP-0056)
 
