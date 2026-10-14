@@ -752,7 +752,9 @@ From WSL with the supplied Windows setup, use `--qemu /mnt/c/msys64/ucrt64/bin/q
 
 Both exporters write to `code_handoff/` in the project root by default,
 independently of the working directory. The directory is ignored by Git.
-The full exporter keeps its original file markers and writes `code_context.txt`:
+The full exporter keeps its original file markers and writes two files: `code_context.txt` with everything but
+`constitution/`, and `constitution_context.txt` with the Constitution and the RFCs in both languages (its `archive/` of
+superseded editions only with `CONSTITUTION_ARCHIVE=1`):
 
 ```bash
 ./code_concat.sh
