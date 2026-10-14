@@ -58,7 +58,7 @@ Evidence for this machine only (MC-12.1).
   - **`TP-LINK_POCKET` answers nothing on channel 6,** as in every run there.
 - **Plan item 2 waits for `idl/wlanhw.wit` 1.1 on `main`** (`BAND_2GHZ_OFDM` is in `libmind/src/network.rs` on `fast-test` only). The criterion's first half is met at −45 dBm in most tries, up to 24 Mbit/s and mostly at 54.
 - **The same boot: `wlan` got the radio's `info` 2 s after it started** (`[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`), during the test, and `bcm_wifi` served it after the test. No scan was asked of the station afterwards: no program holds its configuration client yet (the tools track's part, `SLOT_WIFI`).
-- **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request (`requests-DRV.md` on `fast-test`). On `claude/ASR-DRV` and `fast-test` until its gate.
+- **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request, now taken from `requests-DRV.md`. Since `main` 3be9671 brought 1.1, it is written with `mind::network`'s constants.
 
 ## Related
 
