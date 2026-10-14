@@ -518,7 +518,7 @@ pub const SYSCALL_STAT: usize = 51;
 // SCHED_SET (the task's lifecycle owner, or process control): arg1 = PID, arg2 = budget in microseconds per period
 // (0: no limit), msg[0] = period in microseconds (>= 10 000), msg[1] = band (BAND_*, or BAND_KEEP; changing the band
 // needs process control or the platform/restart privilege). A task that spent its budget waits for its next period;
-// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the 10 ms tick.
+// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the end of each 10 ms slice.
 pub const SYSCALL_SCHED_SET: usize = 52;
 // DEVICE_CONFIG: arg1 = an MMIO or port capability over a BAR of a PCI function, arg2 = offset (< 256) -> the
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
