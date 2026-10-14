@@ -7691,7 +7691,9 @@ def clock_suite(args, disk):
             line = vm.command("time", raw=True)
             return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
         host0, guest0, measured = clocks()
-        assert abs(was / measured - 1.09) < 0.02, (was, measured)
+        # Measured again below the first: 9% less where the first window was right, more or less where the host
+        # stretched it too (i9: 4043 -> 3639 MHz).
+        assert was / measured > 1.04, (was, measured)
         time.sleep(30)
         host1, guest1, _ = clocks()
         ratio = (guest1 - guest0) / (host1 - host0)
