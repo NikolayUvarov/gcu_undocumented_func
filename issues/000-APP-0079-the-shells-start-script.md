@@ -1,6 +1,6 @@
 # 000-APP-0079 — The shell's start script, from the boot volume's root
 
-**Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (planned) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.1
+**Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: done on the tools branch and in `fast-test`; the gate and the MacBook Pro's run left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.1
 
 **Recorded by:** the tools track (APP), 2026-10-14, from the assurance track's request on `internal-dev-messages` (`APP/2026-10-14T1621Z-ASR-wifi-join-without-a-screen-and-a-start-script.md`), for [550-ASR-0007](550-ASR-0007-wifi-join-tests.md): a test on the MacBook Pro that runs at boot, without typing.
 
@@ -18,7 +18,7 @@ Nothing runs at boot on the maintainer's request: the `diag/` scripts run only w
   - in console 1, as `msh autorun.msh` would, with the script's `requires:` line limiting what it may do, as for any script;
   - after the shell's first frame, so the screen shows it;
   - the shell logs `[SHELL] AUTORUN autorun.msh SHA256 <hex>` before it, and `[SHELL] AUTORUN ENDED <status>` after it;
-  - a key the user presses while it runs stops it, as Esc stops a script.
+  - Esc or Ctrl+C stops it, as any script.
 - **Without the file**, nothing changes and nothing is logged.
 - **Not on every machine.** Images made by the build carry no `autorun.msh`, and the shell never writes one.
 - **The help text,** `docs/tools` and `docs/msh.md` (EN, RU).
@@ -31,6 +31,22 @@ Nothing runs at boot on the maintainer's request: the `diag/` scripts run only w
   - a script that needs a word its `requires:` lacks fails as it would when typed;
   - the shell's file client cannot write the root (`write /autorun.msh x` is refused).
 - **The MacBook Pro** (550-ASR-0007): `build-and-write.sh --wifijoin` puts the script at the root, and the boot log shows it ran.
+
+## Progress (2026-10-14)
+
+- **`shell/src/msh.rs`, `autorun`:**
+  - reads `/autorun.msh` (absent: nothing, no line);
+  - logs `[SHELL] AUTORUN /autorun.msh SHA256 <hex>`, shows `AUTORUN /autorun.msh (ESC STOPS IT)` and runs it as `msh /autorun.msh`;
+  - logs `[SHELL] AUTORUN ENDED OK`, or the failure as the script's own line shows it.
+- **Script runs report their end.** `msh`'s file runs and `execute` now return how they ended.
+- **`shell/src/main.rs`** runs it once, after the first frame's line (213-APP-0075), or at once on a shell with no screen, then prompts again.
+- **The `display` suite's `autorun_check`** (x86) boots twice:
+  - a script with `requires: files` writes `ram:autorun.txt`;
+  - one without it fails at `>`;
+  - each checks the hash and the one end line in the log, and that `write /autorun.msh …` is refused;
+  - the suite's own boots, without the file, have no `AUTORUN` line.
+- **Docs:** the help line, `docs/msh.md` and `docs/tools` (EN, RU).
+- **Left:** the gate; the assurance track's answer on the root's place; `build-and-write.sh --wifijoin` writing the script at the root; the MacBook Pro's run.
 
 ## Related
 

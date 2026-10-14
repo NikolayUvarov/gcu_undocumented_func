@@ -23,6 +23,12 @@ A script stops at its first unhandled error with `SCRIPT FAILED: reason (LINE n)
 or Ctrl+Z on the serial line, stops it with `SCRIPT STOPPED: stopped`. A script that runs past its step budget (ten
 million steps) stops the same way.
 
+**The start script** (000-APP-0079): `autorun.msh` at the boot volume's root runs once when the shell starts, after its
+first frame, as `msh /autorun.msh`, under its own `requires:` line. The system log has `[SHELL] AUTORUN /autorun.msh
+SHA256 <hex>` before it and `[SHELL] AUTORUN ENDED OK` (or the failure) after it; Esc stops it. Only whoever writes the
+disk can put it there: the shell writes `ram:`, `log:` and `data/`, never the root, so no program can leave a script
+that runs at every boot.
+
 ## A script
 
 ```

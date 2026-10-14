@@ -166,17 +166,19 @@ impl Host for ShellHost<'_> {
 }
 
 // Runs `script` in `interpreter` with the session's authority (None) or what the script declared.
-fn execute(shell: &mut Shell, interpreter: &mut Interpreter, script: &Script, requires: Option<Vec<String>>) {
+// Runs `script`; its failure as the line shown (`STOPPED: …` or `FAILED: …`).
+fn execute(shell: &mut Shell, interpreter: &mut Interpreter, script: &Script, requires: Option<Vec<String>>) -> Result<(), String> {
     let outer = shell.script.replace(requires.clone().unwrap_or_else(|| WORDS.iter().map(|w| String::from(*w)).collect()));
     let result = {
         let mut host = ShellHost { shell, requires, stop: false };
         interpreter.run(script, &mut host)
     };
     shell.script = outer;
-    if let Err(failure) = result {
-        if shell.term.position().col != 0 { shell.term.print_char(b'\n'); }
-        let _ = writeln!(shell.term, "SCRIPT {}: {} (LINE {})", if failure.stopped { "STOPPED" } else { "FAILED" }, failure.reason, failure.at.line);
-    }
+    let Err(failure) = result else { return Ok(()) };
+    if shell.term.position().col != 0 { shell.term.print_char(b'\n'); }
+    let line = alloc::format!("{}: {} (LINE {})", if failure.stopped { "STOPPED" } else { "FAILED" }, failure.reason, failure.at.line);
+    let _ = writeln!(shell.term, "SCRIPT {}", line);
+    Err(line)
 }
 
 /// A statement typed at the prompt: run in the console's interpreter, whose variables stay.
@@ -185,7 +187,7 @@ pub fn statement(shell: &mut Shell, line: &[u8]) {
     match parse(text) {
         Ok(script) => {
             let mut interpreter = core::mem::take(&mut shell.msh);
-            execute(shell, &mut interpreter, &script, None);
+            let _ = execute(shell, &mut interpreter, &script, None);
             shell.msh = interpreter;
         }
         Err(error) => { let _ = writeln!(shell.term, "MSH: {}", error); }
@@ -223,6 +225,22 @@ pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
     false
 }
 
+/// The start script (000-APP-0079): `autorun.msh` at the boot volume's root, where no program can write, run once after the
+/// shell's first frame as `msh /autorun.msh`; its hash and its end go to the system log. Without the file, nothing.
+pub fn autorun(shell: &mut Shell) -> bool {
+    let source = match read(AUTORUN) { Ok(source) => source, Err("NOT FOUND") => return false, Err(e) => { mind::println!("[SHELL] AUTORUN {} NOT RUN: {}", AUTORUN, e); return false; } };
+    let mut hash = String::new();
+    for byte in mind::sha256::digest(source.as_bytes()) { let _ = write!(hash, "{:02x}", byte); }
+    mind::println!("[SHELL] AUTORUN {} SHA256 {}", AUTORUN, hash);
+    if shell.term.position().col != 0 { shell.term.print_char(b'\n'); }
+    let _ = writeln!(shell.term, "AUTORUN {} (ESC STOPS IT)", AUTORUN);
+    let ended = match run(shell, AUTORUN, false) { Ok(()) => String::from("OK"), Err(line) => line };
+    mind::println!("[SHELL] AUTORUN ENDED {}", ended);
+    true
+}
+
+const AUTORUN: &str = "/autorun.msh";
+
 /// `msh file [args]`, `msh -c "code"`, `msh --check file`; `name.msh [args]` is `msh name.msh [args]`.
 pub fn command(shell: &mut Shell, args: &[u8]) {
     let Ok(args) = core::str::from_utf8(args) else { return shell.report("NOT UTF-8") };
@@ -233,37 +251,43 @@ pub fn command(shell: &mut Shell, args: &[u8]) {
         return statement(shell, code.as_bytes());
     }
     let (check, rest) = match args.strip_prefix("--check") { Some(rest) => (true, rest.trim()), None => (false, args) };
+    let _ = run(shell, rest, check);
+}
+
+// `msh [--check] file [args]`: whether the script ran to its end, else the line that says why.
+fn run(shell: &mut Shell, rest: &str, check: bool) -> Result<(), String> {
     let mut words = rest.split_whitespace();
-    let Some(typed) = words.next() else { return shell.report("USAGE: MSH <FILE> [ARGS], MSH -C \"CODE\", MSH --CHECK <FILE>") };
+    let Some(typed) = words.next() else { shell.report("USAGE: MSH <FILE> [ARGS], MSH -C \"CODE\", MSH --CHECK <FILE>"); return Err(String::from("NO FILE")) };
     // From the current directory (000-APP-0066): `full.msh` in diag/ is diag/full.msh.
     let resolved = shell.path(typed);
     let path = resolved.as_str();
-    let source = match read(path) { Ok(s) => s, Err(e) => return shell.report(&alloc::format!("MSH: {}: {}", path, e)) };
-    let script = match parse(&source) { Ok(s) => s, Err(e) => { let _ = writeln!(shell.term, "MSH: {}: {}", path, e); return; } };
+    let source = match read(path) { Ok(s) => s, Err(e) => { shell.report(&alloc::format!("MSH: {}: {}", path, e)); return Err(String::from(e)) } };
+    let script = match parse(&source) { Ok(s) => s, Err(e) => { let _ = writeln!(shell.term, "MSH: {}: {}", path, e); return Err(alloc::format!("{}", e)) } };
     if let Some(word) = script.requires.iter().find(|w| !WORDS.contains(&w.as_str())) {
         let _ = writeln!(shell.term, "MSH: {}: requires: unknown word {} (the words of mind::request!: {})", path, word, WORDS.join(" "));
-        return;
+        return Err(alloc::format!("REQUIRES: UNKNOWN WORD {}", word));
     }
     if check {
         let unknown = Interpreter::unknown_calls(&script, &HOST_FUNCTIONS);
         for (name, at) in &unknown { let _ = writeln!(shell.term, "MSH: {}: line {}, column {}: no function {}", path, at.line, at.column, name); }
         if unknown.is_empty() { let _ = writeln!(shell.term, "MSH: {}: OK, REQUIRES: {}", path, if script.requires.is_empty() { String::from("NOTHING") } else { script.requires.join(" ") }); }
-        return;
+        return Ok(());
     }
     // A script from outside the boot disk (ram:, a USB disk) asks before it uses what it declares.
     let (volume, _) = mind::fs::split(path);
     let boot_disk = volume.is_empty() || volume.eq_ignore_ascii_case("a");
     if !script.requires.is_empty() && !boot_disk && !ask(shell, &alloc::format!("SCRIPT {} REQUIRES {}. ALLOW?", path, script.requires.join(" "))) {
         let _ = writeln!(shell.term, "MSH: {}: NOT RUN", path);
-        return;
+        return Err(String::from("NOT RUN"));
     }
     let mut interpreter = Interpreter::default();
     interpreter.set("args", Value::List(words.map(Value::str).collect()));
     let requires = script.requires.clone();
     // A script's `cd` lasts while it runs (000-APP-0066): the prompt's directory is as it was.
     let cwd = shell.cwd.clone();
-    execute(shell, &mut interpreter, &script, Some(requires));
+    let ran = execute(shell, &mut interpreter, &script, Some(requires));
     shell.cwd = cwd;
+    ran
 }
 
 /// Whether a command name is a script file to run.
