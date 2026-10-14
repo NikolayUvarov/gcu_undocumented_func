@@ -222,6 +222,12 @@ pub fn stop_others() {
 }
 
 pub fn halt_all() -> ! {
+    super::watchdog::stop();
+    freeze()
+}
+
+/// Every CPU stopped for good, interrupts off; the watchdog, if any, goes on (`halt_all` stops it first).
+pub fn freeze() -> ! {
     unsafe {
         asm!("cli");
         stop_others();

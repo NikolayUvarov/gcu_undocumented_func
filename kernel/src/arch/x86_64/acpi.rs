@@ -186,6 +186,8 @@ pub unsafe fn power_off() -> Result<usize, usize> {
 pub unsafe fn reboot() -> ! {
     core::arch::asm!("cli");
     crate::cpu::stop_others();
+    // Halted: a reset may keep the timer counting, through firmware that does not feed it (000-KRN-0076).
+    super::watchdog::stop();
     let reset = RESET.load(Ordering::Acquire);
     if reset != 0 {
         serial_print("MIND CORE KERNEL: REBOOT VIA ACPI RESET REGISTER\n");

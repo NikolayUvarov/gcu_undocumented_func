@@ -419,7 +419,7 @@ types! {
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update;
     display: Error Mode;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service;
+    init: Error Service Boot;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;

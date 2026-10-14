@@ -17,8 +17,23 @@ impl Log {
         Self { tool, text: String::new(), details: String::new(), started: mind::time::monotonic_ns() }
     }
 
-    /// A line on the screen and in the log.
-    pub fn both(&mut self, line: &str) { mind::println!("{}", line); self.log(line); }
+    /// A line on the screen and in the log. Once the console that showed the output is gone (its window closed), the
+    /// tool stops here: the log is written, saying so, and the exit status is 3 (176-KRN-0103).
+    pub fn both(&mut self, line: &str) {
+        mind::println!("{}", line);
+        self.log(line);
+        if mind::output::gone() { self.stop(); }
+    }
+
+    fn stop(&mut self) -> ! {
+        let note = format!("{}: stopped after {}: the console that showed its output is gone", self.tool, report::duration(self.elapsed()));
+        self.log(&note);
+        match self.save() {
+            Ok(path) => mind::println!("{}; log {}", note, path),
+            Err(_) => mind::println!("{}; the log was not written", note),
+        }
+        mind::process::exit_with(3)
+    }
 
     /// A line in the log only.
     pub fn log(&mut self, line: &str) { self.text.push_str(line); self.text.push('\n'); }

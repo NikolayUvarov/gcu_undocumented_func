@@ -70,6 +70,10 @@ pub fn begin_fatal() {
 /// Text of a fatal report.
 pub fn fatal(text: &str) { draw(text, STOP); }
 
+/// The last lines of a halt a task asked for (000-KRN-0110): from the top of the screen as a fatal report, in the boot
+/// colours; drawn once no other CPU runs a task that draws.
+pub fn last(text: &str) { begin_fatal(); draw(text, BOOT); }
+
 fn draw(text: &str, (fg, bg): (u32, u32)) {
     let base = BASE.load(Relaxed) as *mut u32;
     if base.is_null() { return; }
