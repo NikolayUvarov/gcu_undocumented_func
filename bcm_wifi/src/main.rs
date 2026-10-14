@@ -132,7 +132,11 @@ fn main(_info: &'static BootInfo) {
     let _ = WINDOW;
 
     let mac = sprom(&bar, capabilities);
-    if index == CORE_80211 { microcode(&bar, mac); }
+    if index == CORE_80211 {
+        microcode(&bar, mac);
+        // The maintainer's sign that the disk may go back: logged after a wait longer than the journal's save period.
+        if mind::fs::File::open(STAGE2_FLAG).is_ok() { mind::time::sleep(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
+    }
     idle()
 }
 
