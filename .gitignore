@@ -31,6 +31,7 @@ NvVars
 # Source concatenation for passing into context (code_concat.sh)
 code_context.txt
 code_context*.txt
+constitution_context*.txt
 code_handoff/
 code-handoff/
 
