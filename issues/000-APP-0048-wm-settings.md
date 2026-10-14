@@ -1,6 +1,6 @@
 # 000-APP-0048 — `wm`: Settings, one entry point in the top bar
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress (the window and the background's page done; the system's pages wait for 211-APP-0044) · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: a volume control in `audio.wit`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 (the maintainer's request, 2026-10-10) · **Status:** in progress (the window and the background's page done; the system's pages wait for 211-APP-0044) · **Blocked by:** — (the system's pages: 211-APP-0044 for the shell's channel; the sound: [000-APP-0076](000-APP-0076-output-volume.md) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md)) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 The maintainer's request (2026-10-10): "Add a background switch to the top menu: we will put settings there, where the screen's parameters (network, sound and the rest that needs configuration) can be managed too, through one entry point."
 
@@ -16,7 +16,7 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
   - **Keyboard:** the layout and the layout switch (`keymap`);
   - **Date and time:** `date set`;
   - **Network:** the addresses (`ip`), the flow grants and the policy's lines (`netgrants`, `netpolicy`);
-  - **Sound:** the volume, once `audio.wit` has one (asked of the track that owns `audio_gw`);
+  - **Sound:** the volume and the microphone's sensitivity, once `audio.wit` has them ([000-APP-0076](000-APP-0076-output-volume.md), [000-APP-0077](000-APP-0077-microphone-sensitivity.md));
   - **Screen:** what the firmware's mode allows (shown; changed when a way to change it exists).
 - Until the shell's channel is in `main`, the system pages say where the setting is made today (the shell's command).
 - **Docs:** `docs/tools` (EN, RU), `wm`'s help and top bar.
@@ -32,7 +32,7 @@ What can be configured is spread over shell commands (`keymap`, `date set`, `net
 - **Done:** `wm/src/settings.rs` and `wm`: the top bar's last item `Alt+S settings` and Alt+S open the Settings window (pages on the left: Background, Keyboard, Date and time, Network, Sound, Screen). The Background page changes the picture (none, abstract, image and its typed file), what is shown over it and its place, with keys and clicks; each change is used at once and written to `data/wm.conf` (`[WM] SETTINGS … SAVED`), and the next `wm` starts with it. The system's pages say where each setting is made today.
 - **Checked:** host tests (the bar item and Alt+S, the picture cycling, a toggle, the place, a typed file, the system pages' text, clicks); the `wm` suite (Alt+S, the picture to an image's fallback and to none, the desktop's `░` cells at once, the next `wm` reading `none`).
 - **Added with [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done):** rows for the pattern's kind, speed, contrast and complexity and the information's brightness; ← → step them, Space and Enter go round.
-- **Left:** the system's pages acting through the shell (211-APP-0044's `run`, still to come; `SLOT_SHELL` is in `main`); the sound's volume (requests-DRV.md).
+- **Left:** the system's pages acting through the shell (211-APP-0044's `run`, still to come; `SLOT_SHELL` is in `main`); the sound's volume and the microphone's sensitivity (000-APP-0076, 000-APP-0077).
 
 ## Related
 
