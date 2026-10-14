@@ -247,7 +247,8 @@ impl Updater {
             dir.remove(name).map_err(|_| Error::Write)?;
         }
         let mut fetched = 0;
-        for f in &files {
+        for (index, f) in files.iter().enumerate() {
+            let started = mind::time::uptime_ms();
             let path = format!("MIND/{}/{}", slot, f.path.as_str());
             let mut file = File::open_mode(&path, MODE_WRITE | MODE_CREATE).map_err(|_| Error::Write)?;
             let blob = format!("blobs/{}", f.digest.iter().map(|b| format!("{:02x}", b)).collect::<String>());
@@ -266,6 +267,8 @@ impl Updater {
                 return Err(Error::Digest);
             }
             let _ = file.flush();
+            // Each file in the log, so that a slow or stalled fetch shows how far it got (351-UPD-0018).
+            mind::println!("[UPDATER] FETCH: {} OF {}: {}, {} BYTES IN {} MS", index + 1, files.len(), f.path.as_str(), f.size, mind::time::uptime_ms() - started);
         }
         for (name, data) in [("MANIFEST", &manifest), ("MANIFEST.SIG", &signature), ("CHANNEL", &channel_file)] {
             let mut file = File::create(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::Write)?;
