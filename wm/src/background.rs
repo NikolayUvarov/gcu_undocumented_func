@@ -424,7 +424,7 @@ impl Power {
 /// Minutes as `2:41`, or `-:--` for none.
 pub fn hours(minutes: Option<u16>) -> String { minutes.map_or(String::from("-:--"), |m| format!("{}:{:02}", m / 60, m % 60)) }
 
-/// The battery's line on the background: `BAT 87% 2:41 LEFT`, `BAT 87% AC 0:45 TO FULL`, `BAT 100% AC`, or
+/// The battery's line on the background: `BAT 87% 2:41 LEFT`, `BAT 87% ⚡ 0:45 TO FULL`, `BAT 100% ⚡`, or
 /// `NO BATTERY` (no service, or none fitted); at most `BATTERY` glyphs.
 pub fn battery_line(power: Option<&Power>) -> String {
     match power {
@@ -432,8 +432,8 @@ pub fn battery_line(power: Option<&Power>) -> String {
         Some(p) => match (p.on_ac, p.minutes()) {
             (false, Some(m)) => format!("BAT {}% {} LEFT", p.percent, hours(Some(m))),
             (false, None) => format!("BAT {}%", p.percent),
-            (true, Some(m)) => format!("BAT {}% AC {} TO FULL", p.percent, hours(Some(m))),
-            (true, None) => format!("BAT {}% AC", p.percent),
+            (true, Some(m)) => format!("BAT {}% ⚡ {} TO FULL", p.percent, hours(Some(m))),
+            (true, None) => format!("BAT {}% ⚡", p.percent),
         },
     }
 }
@@ -600,8 +600,8 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
         y += 16 * small + gap;
     }
     let cell = gauge_cell(gauge, small);
-    // The battery's label says AC on the mains.
-    let bat = if info.battery.is_some_and(|p| p.on_ac) { "AC" } else { "BAT" };
+    // The battery's label: ⚡ on the mains.
+    let bat = if info.battery.is_some_and(|p| p.on_ac) { "⚡" } else { "BAT" };
     let gauges: Vec<(&str, Option<u8>)> = [(config.cpu, "CPU", info.cpu.last().copied()), (config.memory, "MEM", used_percent(info.free, info.total)),
         (config.battery, bat, info.battery.map(|p| p.percent))].iter().filter(|g| g.0).map(|g| (g.1, g.2)).collect();
     for (i, (name, value)) in gauges.iter().enumerate() {

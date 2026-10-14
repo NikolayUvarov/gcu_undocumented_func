@@ -51,6 +51,9 @@ pub trait Disk {
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>>;
     /// Starts a program with arguments; says where it shows itself.
     fn run(&mut self, path: &str, args: &str) -> Result<Started, String>;
+    /// Asks the shell to run a script in its window, on its authority, once the user agrees there (000-APP-0067): what
+    /// it printed, or why it did not run.
+    fn script(&mut self, path: &str) -> Result<String, String>;
     /// A file to write: an existing one is emptied if `replace`, else `Failure::Exists`.
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure>;
     /// Makes a directory and missing parents (an existing one is fine).
@@ -528,7 +531,7 @@ impl<'b> Fm<'b> {
         self.load(side, &up, Some(&name), disk);
     }
 
-    /// Enter: a directory is opened, a program started, any other file viewed.
+    /// Enter: a directory is opened, a program started, a script run by the shell, any other file viewed.
     fn open(&mut self, disk: &mut dyn Disk) {
         let Some((path, entry)) = self.current_path() else { return };
         if entry.is_up() { self.up(disk); }
@@ -537,6 +540,14 @@ impl<'b> Fm<'b> {
             self.notice = Some(match disk.run(&path, "") {
                 Ok(started) => started.text(&entry.name),
                 Err(error) => format!("Cannot start {}: {}", entry.name, error),
+            });
+        } else if entry.is_script() {
+            self.notice = Some(match disk.script(&path) {
+                Ok(printed) => match printed.lines().rev().map(str::trim).find(|l| !l.is_empty()) {
+                    Some(last) => format!("{} ran in the shell's window: {}", entry.name, last),
+                    None => format!("{} ran in the shell's window", entry.name),
+                },
+                Err(why) => why,
             });
         } else { self.view(&path, disk); }
     }
@@ -1094,6 +1105,7 @@ impl<'b> Fm<'b> {
                 .iter().filter(|(bit, _)| entry.flags & bit != 0).map(|(_, name)| *name).collect();
             if !attributes.is_empty() { lines.push((format!("  {}", attributes.join(", ")), false)); }
             if entry.is_program() { lines.push((String::from("  a program: Enter starts it"), false)); }
+            if entry.is_script() { lines.push((String::from("  a script: Enter runs it in the shell's window, asked there"), false)); }
         }
         for (i, (text, head)) in lines.iter().enumerate().take(inner.h) {
             grid.text_max(inner.x + 1, inner.y + i, text, inner.w.saturating_sub(2), if *head { theme.header } else { theme.panel });
