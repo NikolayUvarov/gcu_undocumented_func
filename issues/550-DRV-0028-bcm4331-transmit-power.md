@@ -52,6 +52,19 @@ Broadcast probe requests at 1 Mbit/s were answered on channels 1, 2, 8 and 11: 2
   - the per-rate power.
 - **Until OFDM is fixed** the station should send at CCK rates only (1, 2, 5.5, 11 Mbit/s): told to `NET`.
 
+**2026-10-14, the next run.** The OFDM fact sheet (b43, brcmsmac, described) finds our OFDM header equal to b43's field for field. What it does point to:
+- the core field 0x00C0 is a bitmap of cores 0 and 1 in brcmsmac's reading;
+- b43 sends OFDM through both cores in SISO mode, the same signal without cyclic delay, which cancels towards some receivers;
+- Broadcom's driver uses CDD (PHY control 1, mode 1) on several cores.
+
+Stage 4's last step now sends 3 directed probe requests to each network in eight ways:
+- 1 Mbit/s on cores 0+1, and on core 0;
+- 11 Mbit/s on cores 0+1 (a power check: a weak signal hurts it too);
+- 6 Mbit/s on cores 0+1, on core 0, on core 1 and on core 2 alone;
+- 6 Mbit/s on cores 0–2 with CDD.
+
+It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 0x17E).
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.
