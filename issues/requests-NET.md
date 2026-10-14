@@ -75,3 +75,24 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## A download hung once at its resume on x86 with 6 GiB, after 109-NET-0010's fix (8ae66ed)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 (main 4996148 merged) on i9: "x86: RAM above 4 GiB", the network suite's `download_check`.
+
+### What was seen
+
+- `download data/big.bin …/big.bin --sha256 …` (30 MiB): `DOWNLOAD: CONNECTION CUT AT 10485760 OF 31457280, RESUMING`, then nothing on the serial line for 900 s, until the test gave up.
+- No `ITS PARSER HAD ENDED, ANOTHER ONE PARSES`, so it is not the path 109-NET-0010 fixed, or that path did not log.
+- `WATCHDOG: NONE` on that machine type: no reset was involved.
+- In the same gate, the same check passed:
+  - in x86's "boot, display, network, TLS" group on i9, `parser_restart_check` included;
+  - in aarch64's "files, network and TLS" on un-rizen-service;
+  - and the 6 GiB group itself when run again on un-rizen-service (505 s).
+- The serial log is on i9: `/home/un/mind-core/KRN/logs/g63ef/13/mind-core-download-4cpu.log`.
+
+### Asked (the network track decides)
+
+- Whether a resumed response can still wait for ever, and where: the session's call to its parser, the parser's reply, or `netstack`'s flow after the cut.
+- A deadline on that wait, so that a stalled resume ends with an error instead of hanging the program.
+- A line in the log when the resume's request goes out and when its head is parsed, so that the next hang shows which step it stopped at.
