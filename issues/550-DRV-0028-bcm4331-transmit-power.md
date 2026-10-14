@@ -92,6 +92,38 @@ It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 
 - **The cause moves from transmitting to receiving OFDM acknowledgements**: OFDM reception, or the microcode's ACK timeout for OFDM (SIFS and the 2.4 GHz signal extension).
 - **The next run keeps control frames for the host (MAC control bit 22).** It counts the ACKs to us by modulation against the transmit status, and every good frame by modulation in the scan.
 
+**2026-10-14, the fifth run, `fast-test` 180a6a1** (control frames kept; the ACKs the host saw counted by modulation): two requests at each rate, three times each.
+
+| Network (channel, signal) | 1 Mbit/s: acknowledged; ACKs seen as CCK | 6 Mbit/s: acknowledged; ACKs seen as OFDM; probe responses |
+|---|---|---|
+| `TP-LINK_POCKET` (now 8, −31 dBm) | 3, 3; 3, 3 | 3, 3; 3, 3; 3, 3 |
+| `CoolNet2` (8, −40) | 3, 3; 3, 3 | 1, 0; 1, 0; 7, 6 |
+| `ZATV` (8, −40) | 3, 3; 3, 3 | 0, 0; 0, 0; 7, 7 |
+| `David_2.4G` (1, −42) | 3, 3; 3, 3 | 0, 0; 0, 0; 0, 1 |
+| `un2` (1, −43) | 3, 3; 3, 3 | 0, 0; 0, 0; 4, 3 |
+| `Tenda_E25140` (3, −44) | 3, 3; 3, 3 | 0, 0; 0, 0; 0, 0 |
+
+- **Every acknowledgement the microcode counted reached the host, and no other.** So the ACK timeout is not the cause: an OFDM ACK either is received and counts, or is never received at all.
+- **Receiving OFDM is the defect.**
+  - The access points answer our 6 Mbit/s requests with probe responses (CCK), so they received them and sent an OFDM ACK.
+  - We decode that ACK only from the strongest access point (−31 dBm, all of them), rarely at −40 dBm, never at −42 to −44 dBm. CCK is received at all these levels.
+  - In the scan, not one OFDM frame was received on any channel.
+  - OFDM reception is therefore at least 10 dB less sensitive than it should be.
+- **The pocket router acknowledges everything now that it is on channel 8.** In four runs on channel 6 it acknowledged nothing, CCK included. Whether channel 6 or the router's state then was the cause is open: the other network on channel 6 (`Xiaomi_7C34`, −44 to −47 dBm) did answer broadcast requests there.
+- **Next:** the HT-PHY's receive side, compared with b43's sequence register by register (stage 3: init values, tables, AGC and clip settings, channel 6's entries).
+
+**2026-10-14, the receive side compared with b43** (`scratchpad` audit, facts only):
+- **Stage 3 reproduces b43's HT path register for register, value for value and in order.** That covers every PHY table, the 2059 init table and the channel table (channel 6 included).
+- **The one gap is b43's six TX power steps,** which we leave out.
+- **b43's HT path itself writes no AGC settings and runs no RSSI, RX IQ or DC calibration.** The weak OFDM reception may be b43's as much as ours.
+
+The next run, to find where OFDM frames are lost:
+- frames counted by modulation and outcome (good, bad FCS, bad PLCP), with bad frames kept for the host;
+- 6 Mbit/s with each core's front end switched off in turn;
+- the good OFDM frames' per-core powers and clip bits;
+- PHY tables 0, 1, 2 and 0x28 at offsets 8–11 (b43 writes 0, 1 and 0x28, and doubts 0x28 against 2);
+- the SPROM's board flags, chains and front-end words.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.

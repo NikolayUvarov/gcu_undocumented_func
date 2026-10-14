@@ -160,6 +160,8 @@ fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
                 let mac = [words[0x46] >> 8, words[0x46] & 0xFF, words[0x47] >> 8, words[0x47] & 0xFF, words[0x48] >> 8, words[0x48] & 0xFF];
                 mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: REVISION {}, CRC GOOD, MAC {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, WORDS 0-3 {:04X} {:04X} {:04X} {:04X}",
                                at, revision, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], words[0], words[1], words[2], words[3]);
+                // Revision 9's board flags (bytes 0x84, 0x86), chains (0xA2) and front end (0xAE), as read; b43's HT path uses none.
+                mind::println!("[BCM] SPROM BYTES 84 {:04X}, 86 {:04X} (BOARD FLAGS), A2 {:04X} (CHAINS), AE {:04X} (FRONT END)", words[0x42], words[0x43], words[0x51], words[0x57]);
                 found = Some(mac.map(|b| b as u8));
             }
             None => mind::println!("[BCM] SPROM AT CHIPCOMMON+{:03X}: NOT VALID (FIRST WORDS {:04X} {:04X} {:04X} {:04X}, LAST {:04X}, CRC OF THE REST {:02X})",

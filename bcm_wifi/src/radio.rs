@@ -18,7 +18,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 21 | 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -56,10 +56,14 @@ pub struct Filter { pub all_beacons: bool, pub bssid: [u8; 6], pub own: [u8; 6] 
 #[derive(Clone, Copy)]
 pub struct Sent { pub acked: bool, pub attempts: u8 }
 
-// What the receive side did since the radio came up: good frames by modulation (CCK, OFDM) as well, and the
-// acknowledgements to us among them, which reach the host only with control frames kept (`keep_control`).
+// What the receive side did since the radio came up. `frames`: by modulation (CCK, OFDM, HT) and outcome (good, bad
+// FCS, bad PLCP; bad ones reach the host only when kept, `keep`). The acknowledgements to us among the good frames
+// (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames.
 #[derive(Clone, Copy, Default)]
-pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub cck: u32, pub ofdm: u32, pub acks_cck: u32, pub acks_ofdm: u32 }
+pub struct Counts {
+    pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
+    pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
+}
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
@@ -69,8 +73,10 @@ pub struct Radio<'a> {
     filter: Filter,
     queue: Pages, head: usize, count: usize,
     retry: u16,
-    // MAC control bits a test adds: control frames kept for the host.
+    // MAC control bits a test adds: control frames, bad frames kept for the host.
     mac_extra: u32,
+    // The cores' front-end words before a test switched one off.
+    afe_saved: Option<[(u16, u16); 3]>,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -126,7 +132,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -216,11 +222,24 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
-    // Control frames passed to the host as well, for a test: acknowledgements to us are counted by modulation.
-    pub fn keep_control(&mut self, on: bool) {
-        self.mac_extra = if on { MAC_KEEP_CONTROL } else { 0 };
+    // Control frames, and frames with a bad FCS or PLCP, passed to the host as well, for a test.
+    pub fn keep(&mut self, control: bool, bad: bool) {
+        self.mac_extra = if control { MAC_KEEP_CONTROL } else { 0 } | if bad { MAC_KEEP_BAD } else { 0 };
         self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
     }
+
+    // For a test: every core's front end as it was, then `core`'s switched off; None leaves all three on.
+    pub fn core_off(&mut self, core: Option<u16>) -> Result<(), Error> {
+        if !self.c.suspend() { return Err(Error::Failed); }
+        let saved = *self.afe_saved.get_or_insert_with(|| [0, 1, 2].map(|i| self.c.afe(i)));
+        for (i, words) in saved.into_iter().enumerate() { self.c.afe_restore(i as u16, words); }
+        if let Some(i) = core.filter(|&i| i < 3) { self.c.afe_off(i); }
+        self.c.enable();
+        Ok(())
+    }
+
+    // The per-core gain values b43 writes at offsets 8 to 11 of PHY tables 0, 1 and 0x28, with table 2's beside them.
+    pub fn rx_gain_tables(&self) -> [[u16; 4]; 4] { [0, 1, 2, 0x28].map(|t| [8, 9, 10, 11].map(|o| self.c.table16_read(t, o))) }
 
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {
@@ -260,14 +279,20 @@ impl<'a> Radio<'a> {
         for w in 0..(OFFSET + length).div_ceil(4) { self.staging[4 * w..4 * w + 4].copy_from_slice(&self.dma.read32(b + 4 * w).to_le_bytes()); }
         let s = &self.staging;
         let (phy0, status) = (u16::from_le_bytes([s[4], s[5]]), u32::from_le_bytes([s[16], s[17], s[18], s[19]]));
-        // FCS error, decryption error, PLCP violation or header check failure: dropped.
-        if status & (1 | 1 << 4) != 0 || phy0 & 0x0300 != 0 { self.counts.bad += 1; return; }
+        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
+        // Counted by modulation and outcome first; FCS error, decryption error, PLCP violation or header check failure: dropped.
+        let kind = match phy0 & 3 { 0 => 0, 1 => 1, _ => 2 };
+        let outcome = if status & 1 != 0 { 1 } else if phy0 & 0x0300 != 0 { 2 } else { 0 };
+        self.counts.frames[kind][outcome] += 1;
+        if outcome != 0 || status & 1 << 4 != 0 { self.counts.bad += 1; return; }
         let pad = if status & 4 != 0 { 2 } else { 0 };
         if length < pad + 6 + 4 + 10 { self.counts.bad += 1; return; }
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
-        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
-        let ofdm = phy0 & 3 == 1;
-        if ofdm { self.counts.ofdm += 1 } else { self.counts.cck += 1 }
+        let ofdm = kind == 1;
+        if ofdm {
+            for i in 0..3 { self.counts.ofdm_power[i] += s[9 + i] as i8 as i32; }
+            if phy0 & 0x000C != 0 { self.counts.ofdm_clipped += 1; }
+        }
         let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
         if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
         if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
