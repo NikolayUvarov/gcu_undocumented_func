@@ -47,7 +47,6 @@ done
 cp "$ROOT"/LICENSE-MIT "$ROOT"/LICENSE-APACHE "$ROOT"/THIRD_PARTY.md "$ROOT"/LICENSES/*.txt "$OUT/LICENSES/"
 cp "$ROOT"/voice/model.bin "$ROOT"/voice/commands.txt "$OUT/voice/"
 cp "$ROOT"/diag/*.msh "$OUT/diag/"
-if compgen -G "$ROOT/wallpapers/*.jpg" > /dev/null; then mkdir -p "$OUT/wallpapers"; cp "$ROOT"/wallpapers/*.jpg "$OUT/wallpapers/"; fi
 if [[ "${1:-}" == --fixtures ]]; then
     for case in kernel_read text_write stack_exec undefined; do
         rustc --edition=2021 --target "$TARGET" --crate-type bin -C opt-level=2 -C panic=abort -C relocation-model=pic \
