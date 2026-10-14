@@ -32,6 +32,7 @@ Two downloads at once have their heads parsed in two processes, each holding onl
 - **Seen:** on aarch64 (QEMU under TCG), the gate's 8 MiB download hung at its resume, twice: over HTTP on i9 and over HTTPS on PCU (`CONNECTION CUT AT 3145728 OF 8388608, RESUMING`, then nothing for 1200 s).
 - **Why:** the first 3 MiB took longer than 30 s with no head to parse, so the session's parser ended. The resumed response's head then went to the session's endpoint, which the download had created and could still receive on. The kernel therefore saw a receiver, and the call waited for the caller itself.
 - **The fix:** the session keeps a copy that calls and lends pages (`CAP_WRITE | CAP_GRANT`) and drops the one that could receive. A call to an ended parser now fails at once (`ERR_PEER`). `Session` then starts another parser and asks again, and `download` says so (`ITS PARSER HAD ENDED, ANOTHER ONE PARSES`) and ends the new one on its way out.
+- **In `main`** (8ae66ed), gated on i9 (x86) and PCU (aarch64): the 8 MiB downloads over HTTP and HTTPS with a cut passed on aarch64 too.
 - **Tested:** `parser_restart_check` in the network suite. A server sends the head and part of the body, the test kills the download's parser, then the server cuts. The download resumes, its new parser reads the head, and the file arrives whole.
 
 ## Related

@@ -1,6 +1,6 @@
-# 000-KRN-0100 — The TSC measured again: one stretched 50 ms window no longer sets the clock for a whole boot
+# 000-KRN-0100 — The TSC measured again: one stretched 50 ms window no longer sets the clock for a whole boot — done
 
-**Type:** kernel (x86 clock), tests · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Constitution:** MC-5.6, MC-12.1
+**Type:** kernel (x86 clock), tests · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-14) · **Blocked by:** — · **Constitution:** MC-5.6, MC-12.1
 
 ## Problem
 
@@ -37,7 +37,22 @@ Real machines can stretch the window too: an SMI, or a hypervisor that runs the 
 **2026-10-13:**
 - Done as planned, in `kernel/src/arch/x86_64/clock.rs` and `interrupts.rs`.
 - **The `clock` suite** on this session's machine (QEMU 8.2, 4 CPUs, TCG): 2948 → 2700 MHz, and a ratio of 1.000 over 30 s.
-- **Left:** the gate on i9 and PCU.
+
+## Resolution
+
+**Where it was done:**
+- `kernel/src/arch/x86_64/clock.rs`: `on_second` counts the PM timer's ticks across its wraps, measures the TSC again at 1, 8 and 60 s, and moves the base under a sequence number that `now_ns` checks;
+- `interrupts.rs`: `advance` calls it on every 1000th tick of the boot CPU;
+- `tsc-skew-test`, the `clock` suite and the group "x86: TSC measured again" (`ci.yml`, `ci_local.sh`, `x86_fixtures.sh`);
+- `docs/profile/clocks.md`.
+
+**The gate,** on 8ae66ed (`main`), local through Effector:
+- **x86 on i9** (Ubuntu 24.04 under WSL2, QEMU 8.2.2, TCG): every group passed.
+  - "x86: TSC measured again": 3639 MHz measured again after 4043 at boot, the guest's clock within 3% of the host's over 30 s.
+  - "x86: files and block writes", which had failed twice, passed.
+- **aarch64 on PCU** (Ubuntu 22.04, QEMU 8.2.2 from qemu.org, AAVMF 2022.02): every group passed.
+
+**Not claimed:** a TSC whose rate changes after 60 s, and an x86 machine without the PM timer (one measure, as before).
 
 ## Related
 

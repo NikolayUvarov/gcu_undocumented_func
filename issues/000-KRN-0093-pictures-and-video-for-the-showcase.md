@@ -63,3 +63,8 @@ The maintainer (2026-10-12) wants for the project's page on GitHub ([000-KRN-008
 - **The page's animation** (the maintainer, 2026-10-12: "make a nice animation of them and put it on GitHub"): `qemu_scenes.py --scenes tour` plays the boot, `check kernel`, `hw`, `top`, `wm` and three of its windows full screen, and `media.py slideshow` joins them, each going into the next through dark, looping. `docs/media/tour.webp`: lossless, 1280 × 720, 8 pictures, 24.6 s, 1.39 MB (a crossfade of two screens of text came to 2.3–4.7 MB). The README shows it under its intro, saying it is QEMU and which build. The tour took 66 s here.
 
 **Still open:** the scenes on i9 (the second criterion); a picture from a real machine on the page (the third).
+
+## Progress (2026-10-14)
+
+- **The page's animation** (`docs/media/tour.webp`, the QEMU tour made by `qemu_scenes.py --scenes tour`, built from 73b3d33) is in `main` (8ae66ed), under the README's title, with its caption naming QEMU and the build.
+- **Left for the criteria:** a picture from a real machine on the page (`screenshot` or `record` on the MacBook Pro, then `media.py shots`).
