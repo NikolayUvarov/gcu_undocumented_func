@@ -6833,7 +6833,8 @@ def wm_suite(vm):
         vm.send_bytes(b"cat no\t")
         console_has("docs> cat notes.txt")
         vm.send_bytes(b"\r")
-        console_has(None, r".*Line \d+\.")
+        # The file's lines are wider than the window and wrap; console cuts the long output with a line of its own.
+        console_has(None, r"\.\.\. \d+ more bytes")
         vm.send_bytes(b"cd\r")
         vm.send_bytes(b"pwd\r")
         console_has(None, r"/ *$")
