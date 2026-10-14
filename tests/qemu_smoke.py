@@ -5639,6 +5639,20 @@ def wifi_join_check(vm):
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
           "with wlansim's access point, and left", flush=True)
+    # 550-APP-0078: the same without a screen, the passphrase read from a file whose first line names the network.
+    def run(text, timeout):  # as vm.command, with a join's wait (60 s at most in wifi)
+        vm.send(text + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30), "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    require(run("wifi status", 30), "[WIFI] STATUS OFF")
+    require(run("wifi join", 30), "usage: wifi")
+    assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
+    print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
+          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -5667,6 +5681,9 @@ def net_suite(args, disk):
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
+        # 550-APP-0078: passphrase files for `wifi join` without a screen: the right one, a wrong one, another network's.
+        for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
+            (disk / "data" / f"{name}.txt").write_text(text)
         sign_manifest.sign_volume(disk)
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
