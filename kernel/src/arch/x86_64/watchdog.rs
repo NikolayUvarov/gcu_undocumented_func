@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 static TCO: AtomicU16 = AtomicU16::new(0); // the TCO registers' I/O base while the watchdog runs
 static RESTARTED: AtomicBool = AtomicBool::new(false);
+static FRESH: AtomicBool = AtomicBool::new(false);
 const RLD: u16 = 0x00;
 const STS1: u16 = 0x04;
 const STS2: u16 = 0x06;
@@ -28,6 +29,9 @@ pub const TICKS: u16 = 25;
 
 /// Whether this watchdog's reset ended the last run: the second expiry's status outlives the reset.
 pub fn restarted() -> bool { RESTARTED.load(Ordering::Relaxed) }
+
+/// Whether no run of this kernel armed the timer since the machine was powered on (QEMU keeps its count across resets).
+pub fn fresh() -> bool { FRESH.load(Ordering::Relaxed) }
 
 /// Finds and arms the watchdog; the boot line names it, or why there is none.
 pub unsafe fn start() {
@@ -51,6 +55,7 @@ pub unsafe fn start() {
     // No SMI at the first expiry: no handler of the kernel's would take it.
     let smi = inl(pmbase + SMI_EN);
     if smi & TCO_EN != 0 { outl(pmbase + SMI_EN, smi & !TCO_EN); }
+    FRESH.store(read(tco + TMR, 2) != TICKS as usize, Ordering::Relaxed);
     write(tco + TMR, 2, TICKS as usize);
     write(tco + RLD, 2, 1);
     write(tco + CNT1, 2, read(tco + CNT1, 2) & !TMR_HLT);

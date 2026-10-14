@@ -1,6 +1,6 @@
 # 000-KRN-0076 — A frozen machine restarts on its own, and the next start leaves out what froze it
 
-**Type:** kernel, bootloader, `init` · **Owner:** kernel session (`KRN`, with `PRT` for the watchdog and the bootloader's lines) · **Priority:** P1 · **Status:** in progress (step 1 on x86 made; the gate left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.3
+**Type:** kernel, bootloader, `init` · **Owner:** kernel session (`KRN`, with `PRT` for the watchdog and the bootloader's lines) · **Priority:** P1 · **Status:** in progress (steps 1–3 on x86 made; the gate, the MacBook Pro run and aarch64's watchdog left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.3
 
 ## Problem
 
@@ -49,8 +49,21 @@ Today a frozen machine stays frozen until the user holds the power button. The n
   - `halt_all` (a panic, a fatal error, `HALT`) and a reboot stop it first: what a halt shows stays on the screen, and a reboot's firmware is not reset half-way.
   - On q35 OVMF leaves RCBA unmapped: the kernel maps it at Intel's address, for QEMU's ICH9 (8086:2918) only.
 - **The boot line** says what was found: `WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK`, with `; IT RESTARTED THE LAST RUN` when the second expiry's status (kept across the reset, on Intel's chipsets and in QEMU) shows it reset the last run; else `WATCHDOG: NONE (…)` with the reason: no Intel LPC bridge (AMD machines), no RCBA (newer PCHs), `NO_REBOOT` held by the firmware.
-- **The `watchdog` suite** (x86, CI group "x86: the watchdog"): the test kernel `watchdog-test` stops every CPU for good 20 s after boot, unless the watchdog restarted the last run. On q35 the machine was reset and the next boot said so 34 s after the stop, then ran past 20 s.
-- **Left:** a CPU other than the boot CPU that stops alone is not noticed (only the boot CPU has a periodic tick); the SBSA watchdog on aarch64; the MacBook Pro run (its 7-series PCH has RCBA; whether its firmware holds `NO_REBOOT` is what the boot line will say); steps 2 and 3 (the mark of an unfinished run and the safe start).
+- **Left of step 1:** a CPU other than the boot CPU that stops alone is not noticed (only the boot CPU has a periodic tick); the SBSA watchdog on aarch64; the MacBook Pro run (its 7-series PCH has RCBA; whether its firmware holds `NO_REBOOT` is what the boot line will say).
+
+**2026-10-14, steps 2 and 3.**
+
+- **The mark** is the firmware variable `MindCoreRun` of MIND's GUID ({444E494D-4F43-4552-8076-52554E4D4152}, `RUN_MARK_*` in `common/abi.rs`):
+  - `init` reads it at boot and sets it, through a firmware privilege of its own that it mints while it holds the platform privilege and drops once the mark is cleared;
+  - `init` clears it a minute after `READY` (`[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED`);
+  - the kernel clears it at a reboot or power-off a task asked for (`REBOOT`), before the machine goes.
+  - So it is found at boot after a freeze the watchdog reset, a cut power, a panic the user turned off, or a trial boot the kernel restarted at its deadline. Without firmware variables `init` says `NO RUN MARK` and nothing is noticed: on a board without them the record would go to the log volume, which is not done.
+- **The safe start:** with the mark found, `init` logs `[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts` and leaves those four stopped (`svc start` starts each). The next boot without the mark starts everything.
+- **The `watchdog` suite** (x86, CI group "x86: the watchdog"): the test kernel `watchdog-test` stops every CPU for good 20 s after the machine's first boot (QEMU keeps the timer's count across resets, so later boots do not). On q35:
+  - the machine was reset and the next boot said so, 34 s after the stop;
+  - that boot was a safe start without the four services, ran past a minute and cleared its mark;
+  - after `reboot` the boot was a normal one, `audio_gw` started.
+- **Left of steps 2 and 3:** the last line of the stopped run's log in the safe start's line, and the shell showing it (the tools track's part, a note in [requests-APP.md](requests-APP.md)); 173-KRN-0036's safe start on a key, which can use the same start.
 
 ## Related
 
