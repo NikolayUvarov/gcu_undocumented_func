@@ -260,6 +260,7 @@ impl Service {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("ssh — the SSH service: reads files over SFTP for programs through the flows they lend, logged in as the device, each login signed by keystore.");
     let mut service = Service { sessions: Vec::new(), next: 0 };
     let (entropy, outcome) = if mind::random::available() { ("RANDOM FROM ", "") } else { ("NO ", ": EVERY CONNECTION WILL BE REFUSED") };
     mind::println!("[SSH] READY: SFTP READS, LOGINS SIGNED BY THE KEY SERVICE, {}{}{}", entropy, mind::random::SOURCE, outcome);
@@ -268,7 +269,12 @@ fn main(_info: &'static BootInfo) {
     let mut checked = 0u64;
     loop {
         if now() - checked >= 1000 { checked = now(); service.expire(); }
-        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) else { continue };
+        let request = match Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) {
+            Ok(request) => request,
+            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => continue,
+            // Started by hand rather than by init: no endpoint of its own to serve.
+            Err(_) => { mind::println!("[SSH] NO ENDPOINT TO SERVE: NOTHING TO DO"); mind::process::exit_with(1) }
+        };
         if !request.is_call { continue; }
         let pid = request.sender;
         let _ = match api::decode(&request, RECEIVED, &mut scratch) {
