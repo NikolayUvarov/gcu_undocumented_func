@@ -11,7 +11,7 @@ mod cid;
 mod dag;
 
 use cid::{Cid, Codec};
-use dag::{complete, decode, walk, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
+use dag::{complete, decode, each_chunk, walk, encode, height, read_at, size, Blocks, Builder, Error, CHUNK, FANOUT, NODE_MAX};
 use std::collections::HashMap;
 
 /// Blocks in memory; `replace` makes the store answer a CID with other bytes.
@@ -245,11 +245,67 @@ fn a_walk_names_every_block_of_the_object() {
     let data = pattern(CHUNK * FANOUT + 3 * CHUNK + 11);
     let mut blocks = Memory::default();
     let (root, _) = store(&mut blocks, &data, 65536);
-    let mut seen = std::collections::HashSet::new();
+    let (mut seen, mut visits) = (std::collections::HashSet::new(), 0);
     let mut buffer = Box::new([0u8; CHUNK]);
-    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, cid| { seen.insert(*cid); Ok(()) }), Ok(data.len() as u64));
+    assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, cid| { seen.insert(*cid); visits += 1; Ok(()) }), Ok(data.len() as u64));
     // Every block the builder stored, and nothing else.
     assert_eq!(seen, blocks.blocks.keys().copied().collect());
+    // The root, each node of height 1 and each chunk of the tree once (300-STO-0016; equal chunks share a block).
+    let chunks = data.len().div_ceil(CHUNK);
+    assert_eq!(visits, 1 + chunks.div_ceil(FANOUT) + chunks);
     // A visit that refuses stops the walk with its error.
     assert_eq!(walk(&mut blocks, &root, &mut buffer, |_, _| Err(Error::Full)), Err(Error::Full));
+}
+
+// Every chunk in order, as `each_chunk` gives them.
+fn chunks_of(blocks: &mut Memory, root: &Cid) -> Result<(Vec<u8>, Vec<u64>), Error> {
+    let (mut buffer, mut chunk) = (Box::new([0u8; CHUNK]), Box::new([0u8; CHUNK]));
+    let (mut out, mut offsets) = (Vec::new(), Vec::new());
+    let total = each_chunk(blocks, root, &mut buffer, &mut chunk, |at, data| { offsets.push(at); out.extend_from_slice(data); Ok(()) })?;
+    assert_eq!(total as usize, out.len());
+    Ok((out, offsets))
+}
+
+#[test]
+fn each_chunk_reads_the_object_in_order_with_fewer_gets() {
+    // 300-STO-0016: one get for each chunk, and each node once for the chunks under it.
+    for len in [1, CHUNK, CHUNK + 1, CHUNK * FANOUT, CHUNK * FANOUT + 3 * CHUNK + 11] {
+        let data = pattern(len);
+        let mut blocks = Memory::default();
+        let (root, _) = store(&mut blocks, &data, 65536);
+        let (out, offsets) = chunks_of(&mut blocks, &root).unwrap();
+        assert_eq!(out, data, "{len} bytes");
+        assert_eq!(offsets, (0..len.div_ceil(CHUNK)).map(|i| (i * CHUNK) as u64).collect::<Vec<_>>());
+    }
+    // Fewer gets than read_at a chunk at a time: a height-2 object of 259 chunks.
+    struct Counting(Memory, usize);
+    impl Blocks for Counting {
+        fn put(&mut self, codec: Codec, data: &[u8]) -> Result<Cid, Error> { self.0.put(codec, data) }
+        fn get(&mut self, cid: &Cid, out: &mut [u8]) -> Result<usize, Error> { self.1 += 1; self.0.get(cid, out) }
+        fn has(&mut self, cid: &Cid) -> Result<bool, Error> { self.0.has(cid) }
+    }
+    let data = pattern(CHUNK * FANOUT + 3 * CHUNK);
+    let mut blocks = Counting(Memory::default(), 0);
+    let (root, _) = store(&mut blocks.0, &data, 65536);
+    let (mut buffer, mut chunk) = (Box::new([0u8; CHUNK]), Box::new([0u8; CHUNK]));
+    each_chunk(&mut blocks, &root, &mut buffer, &mut chunk, |_, _| Ok(())).unwrap();
+    // The root for its size, then for each of the two nodes of height 1 the root and that node, then 259 chunks.
+    assert_eq!(blocks.1, 1 + 2 * 2 + FANOUT + 3);
+}
+
+#[test]
+fn each_chunk_refuses_what_read_at_refuses() {
+    let data = pattern(CHUNK * 3);
+    let mut blocks = Memory::default();
+    let (root, _) = store(&mut blocks, &data, CHUNK);
+    // A chunk that does not match its CID, after the chunks before it were given.
+    let chunk = Cid::raw(&data[CHUNK..2 * CHUNK]);
+    let mut forged = data[CHUNK..2 * CHUNK].to_vec();
+    forged[7] ^= 1;
+    blocks.replace.insert(chunk, forged);
+    assert_eq!(chunks_of(&mut blocks, &root), Err(Error::Corrupt));
+    // A missing chunk.
+    blocks.replace.clear();
+    blocks.blocks.remove(&chunk);
+    assert_eq!(chunks_of(&mut blocks, &root), Err(Error::NotFound));
 }
