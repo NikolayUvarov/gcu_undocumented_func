@@ -1,6 +1,6 @@
 # 211-APP-0070 — The battery in `wm` (its top bar and its background) and in the shell
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** 211 · **Roadmap:** track G · **Constitution:** MC-3.11, MC-12.4
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (in `main`; the MacBook Pro's check left, 2026-10-14) · **Blocked by:** — · **Main task:** 211 · **Roadmap:** track G · **Constitution:** MC-3.11, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-12, numbering the kernel track's request in requests-APP.md ("The battery in `wm`'s top bar, and in the shell", for [211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md)), taken from there. The maintainer: "The battery's state must also be shown in the indicator: on the mains, % or minutes left, switched", by a click; and on the background with a box, as the other lines: "can the battery's state go there too, on the desktop, with a checkbox like the others?"
 
@@ -32,6 +32,14 @@ A launch session keeps 5 grants (`loader`; requests-KRN.md, "A launch session ho
 - **The `wm` suite:** no battery service in QEMU: `wm` asks the shell and gets none, and the top bar has no item; Settings' `Battery` row ticks and unticks.
 - **On the MacBook Pro** (the maintainer): the item shows the charge and follows the adapter being plugged in and out; a click shows the minutes; the background's line when ticked.
 
+## Progress (2026-10-14)
+
+In `main` (4500fd9) after the gate of 60653c1: the host tests, every x86 suite, every aarch64 suite on the i9 and 16 CPUs on the PCU.
+
+- Done as planned: the shell's `battery` command and its lending (after its commands, where the launch has room), `shell.wit` 1.4 `battery`, `wm`'s top bar item with the click for the minutes, the background's line and Settings' row, the third gauge, `console` passing `battery` on.
+- Checked in QEMU only, where no battery service runs: `battery` says so, `wm` asks the shell and gets none, the top bar has no item, Settings' row ticks and unticks. Nothing here was seen on a battery (MC-12.2).
+- **Left:** the last criterion, on the MacBook Pro (the maintainer): the item follows the adapter, a click shows the minutes, the background's line when ticked.
+
 ## Related
 
-[211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md) (the service), 211-KRN-0090 (`SLOT_BATTERY`, `REQUEST_BATTERY`), [000-APP-0068](000-APP-0068-wms-background-seconds-and-sizes.md), [000-APP-0069](000-APP-0069-wms-background-analog-face-and-gauges.md), [requests-KRN.md](requests-KRN.md) (the launch session's grants).
+[211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md) (the service), 211-KRN-0090 (`SLOT_BATTERY`, `REQUEST_BATTERY`), [000-APP-0068](../issues-done/000-APP-0068-wms-background-seconds-and-sizes.done), [000-APP-0069](../issues-done/000-APP-0069-wms-background-analog-face-and-gauges.done), [requests-KRN.md](requests-KRN.md) (the launch session's grants).
