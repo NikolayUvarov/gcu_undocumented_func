@@ -7817,9 +7817,10 @@ def display_suite(args, disk):
             log = vm.command("dmesg -s compositor", raw=True)
             assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
             assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
-            # 213-APP-0075: the shell names its first frame.
+            # 213-APP-0075: the shell names its first frame; with no start script, no AUTORUN line (000-APP-0079).
             log = vm.command("dmesg -s shell", raw=True)
             assert re.search(r"\[SHELL\] FIRST FRAME \d+X\d+ AT \d+\.\d S", log), (name, log)
+            assert "AUTORUN" not in log, (name, log)
             started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
@@ -7835,6 +7836,39 @@ def display_suite(args, disk):
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front, the shell its first frame", flush=True)
     if args.arch == "x86_64":
         no_serial_check(args, disk)
+    autorun_check(args, disk)
+
+
+def autorun_check(args, disk):
+    """000-APP-0079: `autorun.msh` at the boot volume's root runs once at the shell's start, after its first frame, under
+    its own `requires:` line; the system log has its SHA-256 and its end. The shell's file client cannot write there."""
+    scripts = {
+        "ran": ("#!msh\nrequires: files\nwrite ram:autorun.txt \"autorun wrote this\"\nprint(\"autorun ran\")\n", "autorun ran", "OK"),
+        "limited": ("#!msh\nls data > ram:autorun.txt\nprint(\"not reached\")\n", "SCRIPT FAILED", "FAILED: > needs `requires: files` in the script (LINE 2)"),
+    }
+    try:
+        for name, (script, shown, ended) in scripts.items():
+            (disk / "autorun.msh").write_text(script)
+            sign_manifest.sign_volume(disk)
+            vm = VM(args, disk.relative_to(ROOT).as_posix())
+            try:
+                vm.expect(shown, timeout=30)
+                vm.expect("MIND> ", timeout=30)
+                log = vm.command("dmesg -s shell", raw=True)
+                digest = hashlib.sha256(script.encode()).hexdigest()
+                require(log, f"[SHELL] AUTORUN /autorun.msh SHA256 {digest}")
+                require(log, f"[SHELL] AUTORUN ENDED {ended}")
+                assert log.count("AUTORUN ENDED") == 1, log
+                if name == "ran":
+                    require(vm.command("cat ram:autorun.txt"), "autorun wrote this")
+                    require(vm.command("write /autorun.msh print(1)"), "ERROR")
+            finally:
+                vm.close()
+    finally:
+        (disk / "autorun.msh").unlink(missing_ok=True)
+        sign_manifest.sign_volume(disk)
+    print("PASS: autorun.msh at the boot volume's root runs once after the shell's first frame, its hash and end in the "
+          "log; a word its requires: lacks fails it; the shell cannot write the root", flush=True)
 
 
 def clock_suite(args, disk):
