@@ -1220,7 +1220,7 @@ impl Scheduler {
                 core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).msg[2]), (used == before) as usize);
                 Ok(used)
             }
-            SYSCALL_HALT => cpu::halt_all(),
+            SYSCALL_HALT => { crate::firmware::clear_run_mark(); crate::halt_asked() }
             SYSCALL_REBOOT if request.arg1 == REBOOT_POWER_OFF => { crate::firmware::clear_run_mark(); crate::acpi::power_off() }
             SYSCALL_REBOOT => { crate::firmware::clear_run_mark(); crate::acpi::reboot() }
             _ => Err(ERR_INVALID),

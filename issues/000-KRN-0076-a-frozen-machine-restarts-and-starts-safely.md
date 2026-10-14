@@ -56,7 +56,7 @@ Today a frozen machine stays frozen until the user holds the power button. The n
 - **The mark** is the firmware variable `MindCoreRun` of MIND's GUID ({444E494D-4F43-4552-8076-52554E4D4152}, `RUN_MARK_*` in `common/abi.rs`):
   - `init` reads it at boot and sets it, through a firmware privilege of its own that it mints while it holds the platform privilege and drops once the mark is cleared;
   - `init` clears it a minute after `READY` (`[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED`);
-  - the kernel clears it at a reboot or power-off a task asked for (`REBOOT`), before the machine goes.
+  - the kernel clears it at a reboot or power-off a task asked for (`REBOOT`), before the machine goes, and at a halt a task asked for (`HALT`, 000-KRN-0110).
   - So it is found at boot after a freeze the watchdog reset, a cut power, a panic the user turned off, or a trial boot the kernel restarted at its deadline. Without firmware variables `init` says `NO RUN MARK` and nothing is noticed: on a board without them the record would go to the log volume, which is not done.
 - **The safe start:** with the mark found, `init` logs `[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts` and leaves those four stopped (`svc start` starts each). The next boot without the mark starts everything.
 - **The `watchdog` suite** (x86, CI group "x86: the watchdog"): the test kernel `watchdog-test` stops every CPU for good 20 s after the machine's first boot (QEMU keeps the timer's count across resets, so later boots do not). On q35:
