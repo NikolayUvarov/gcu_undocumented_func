@@ -2943,6 +2943,12 @@ def cid_raw(data):
     return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
 
 
+def guest_seconds(vm):
+    """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
+    hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+
 def store_suite(vm):
     """Main tasks 300-302 (storage track): the block store through the `blocks` tool and the shell's client (badge
     get, put and publish). An object of 4 MiB + 1 byte (the pattern of tests/dag_host.rs) gets the root an independent
@@ -2952,6 +2958,13 @@ def store_suite(vm):
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+
+    def whole(args, expected):
+        # The 4 MiB object goes through SHA-256 in the guest: under TCG on the slowest machine listed for the group
+        # (DESKTOP-i7-930-wsl-u24, aarch64) a check took longer than 240 s (requests-STO.md). Its time is printed.
+        started = time.monotonic()
+        require(blocks(args, timeout=900), expected)
+        print(f"TIME: blocks {args.split()[0]} of the 4 MiB object took {time.monotonic() - started:.0f} s by the host's clock", flush=True)
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
     logs = vm.service_logs("blockstore", ready)
     require(logs, ready)
@@ -2960,8 +2973,8 @@ def store_suite(vm):
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
-    require(blocks("pattern 4194305"), f"PUT {root} SIZE 4194305")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole("pattern 4194305", f"PUT {root} SIZE 4194305")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     # A file: its CID is the raw CID of its bytes, and it comes back the same.
     require(vm.command("write ram:note.txt hello store"), "WROTE 12 BYTES")
     note = cid_raw(b"hello store\n")
@@ -3003,7 +3016,7 @@ def store_suite(vm):
     first = blocks("collect")
     assert re.search(r"COLLECTED 0 BLOCKS [0-2] NAMES [0-2] SECTORS", first), first
     require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; a client that may only "
           "read is refused put and publish; names by compare-and-swap, only complete roots; a full medium refused; a restarted "
           "store finds blocks and names again", flush=True)
@@ -3012,7 +3025,11 @@ def store_suite(vm):
     require(vm.command("write ram:loose.txt never named"), "WROTE 12 BYTES")
     loose = cid_raw(b"never named\n")
     require(blocks("put ram:loose.txt"), f"PUT {loose} SIZE 12")
-    time.sleep(61)
+    # The lease runs by the guest's clock, which falls behind the host's on a busy machine (303-STO-0017): wait until
+    # 62 s have passed there since just after the put (uptime counts whole seconds).
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
     # The medium is full of blocks whose leases have ended: new ones get room from the collection the first put starts.
     require(blocks("fill 120", timeout=600), "FILLED 120 BLOCKS")
     # The new blocks' leases run: an explicit collection right after frees no block (before the long check below).
@@ -3053,7 +3070,7 @@ def store_suite(vm):
     require(blocks("history obj"), "obj VERSION 4 REMOVED")
     require(blocks("resolve copy"), f"copy VERSION 1 ROOT {root}")
     require(blocks("pins"), "0 PINS")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store retention: a name keeps its versions, an owner its quota, a pin its object until unpinned; "
           "a removed name retains nothing and mounts again as removed", flush=True)
     # 304-STO-0007: several names at once, all or none, read at one point between commits.
@@ -5321,7 +5338,9 @@ def download_runs(vm, release, port, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    # The resume's request and its head are logged (351-NET-0029), so a stall shows the step it stopped at.
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
@@ -5361,7 +5380,8 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/tls.bin {url}/big.bin --pin {pins['server']} --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=1200)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert secure.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], secure.requests
     log = vm.command("dmesg -s tls")

@@ -12,6 +12,9 @@
 //! queued), 64-67 the receive tail (frames the client took), both counting up and wrapping; from 4096, `slots` slots
 //! of 4096 bytes, each the 8-byte header and then the frame. Each side checks every index and length it reads from
 //! the shared region. Without a `kick` for a second, received frames go back to `receive`.
+//!
+//! 1.1 (550-NET-0028): `info`'s `bands` bit 2 says the radio receives and sends OFDM on 2.4 GHz. A 1.0 radio leaves it
+//! clear, so the station keeps to 802.11b's rates there, which every 2.4 GHz radio has; the wire is unchanged.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -21,7 +24,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wlanhw";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
@@ -40,7 +43,8 @@ impl Wire for Error {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// The radio: its MAC address (low 48 bits, first byte in bits 40-47), its bands (bit 0: 2.4 GHz, bit 1: 5 GHz),
+/// The radio: its MAC address (low 48 bits, first byte in bits 40-47), its bands (bit 0: 2.4 GHz, bit 1: 5 GHz, which
+/// is OFDM alone; bit 2: OFDM on 2.4 GHz too, 6 to 54 Mb/s, and without it DSSS and CCK alone there, 1 to 11 Mb/s),
 /// the channels it can use (20 MHz each), the longest frame it sends or receives, the channel now set (0: none).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Info { pub mac: u64, pub bands: u8, pub channels: List<u8, 64>, pub frame_max: u16, pub channel: u8 }

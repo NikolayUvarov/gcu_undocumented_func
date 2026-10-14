@@ -70,6 +70,8 @@ pub struct Station {
     heard: u64,
     rejoin: Option<u64>,
     sequence: u16,
+    // Whether the radio receives and sends OFDM on 2.4 GHz (802.11g); without it the station is 802.11b there.
+    ofdm: bool,
     rates: [u8; 12],
     rate_count: usize,
     rate: usize,
@@ -78,13 +80,14 @@ pub struct Station {
 }
 
 impl Station {
-    /// A station with address `own` on a radio that can use `channels`.
-    pub fn new(own: Mac, channels: &[u8]) -> Self {
+    /// A station with address `own` on a radio that can use `channels`, and OFDM on 2.4 GHz when `ofdm` (5 GHz is OFDM
+    /// alone): it offers, and sends at, only the rates the radio has.
+    pub fn new(own: Mac, channels: &[u8], ofdm: bool) -> Self {
         let mut list = [0u8; 64];
         let count = channels.len().min(64);
         list[..count].copy_from_slice(&channels[..count]);
         Station { own, channels: list, channel_count: count, state: State::Off, reason: Reason::None, list: List::default(), scanning: None,
-                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, sequence: 0, rates: [0; 12], rate_count: 0, rate: 0,
+                  join: None, supplicant: None, keys: None, heard: 0, rejoin: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
                   acked: 0, failed: 0 }
     }
 
@@ -118,7 +121,7 @@ impl Station {
         let active = may_probe(channel);
         if active {
             let sequence = self.next_sequence();
-            let len = frame::probe_request(tx, &self.own, &[], channel, sequence)?;
+            let len = frame::probe_request(tx, &self.own, &[], channel, self.ofdm, sequence)?;
             out.send = Some((len, Self::basic_rate(channel)));
         }
         self.scanning = Some((index, now + if active { DWELL_ACTIVE_MS } else { DWELL_PASSIVE_MS }));
@@ -162,9 +165,10 @@ impl Station {
             frame::authentication(tx, &self.own, &bss.bssid, sequence, Self::duration(rate))?
         } else {
             let rsne = scan::own_rsne();
-            let capability = frame::CAPABILITY_ESS
-                | (bss.capability & (frame::CAPABILITY_PRIVACY | frame::CAPABILITY_SHORT_PREAMBLE | frame::CAPABILITY_SHORT_SLOT));
-            frame::association_request(tx, &self.own, &bss.bssid, capability, bss.ssid(), bss.channel,
+            // Short slot time is 802.11g's: an 802.11b station does not claim it.
+            let slot = if self.ofdm || bss.channel > 14 { frame::CAPABILITY_SHORT_SLOT } else { 0 };
+            let capability = frame::CAPABILITY_ESS | (bss.capability & (frame::CAPABILITY_PRIVACY | frame::CAPABILITY_SHORT_PREAMBLE | slot));
+            frame::association_request(tx, &self.own, &bss.bssid, capability, bss.ssid(), bss.channel, self.ofdm,
                                        (bss.security == Security::Wpa2).then_some(&rsne[..]), sequence, Self::duration(rate))?
         };
         if let Some(j) = self.join.as_mut() { j.tries += 1; j.deadline = now + ANSWER_MS; }
@@ -265,7 +269,11 @@ impl Station {
                 self.retry(now, out, tx)
             }
             ASSOCIATION_RESPONSE if self.state == State::Joining && join.step == Step::Associating => {
-                if field(2)? != 0 { self.fail(Reason::Refused); return Ok(()); }
+                match field(2)? {
+                    0 => {}
+                    frame::STATUS_BASIC_RATES => { self.fail(Reason::Unsupported); return Ok(()); }
+                    _ => { self.fail(Reason::Refused); return Ok(()); }
+                }
                 self.take_rates(&body[6..]);
                 match join.secret {
                     None => { self.state = State::Joined; self.reason = Reason::None; }
@@ -301,7 +309,7 @@ impl Station {
                 for &rate in body { if n < theirs.len() { theirs[n] = rate & 0x7F; n += 1; } }
             }
         }
-        let (ours, extended) = frame::rates(channel);
+        let (ours, extended) = frame::rates(channel, self.ofdm);
         self.rate_count = 0;
         for rate in ours.iter().chain(extended.iter()).map(|r| r & 0x7F) {
             if theirs[..n].contains(&rate) && self.rate_count < self.rates.len() { self.rates[self.rate_count] = rate; self.rate_count += 1; }

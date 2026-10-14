@@ -16,6 +16,7 @@ PACKAGES=(
     swtpm swtpm-tools                                                              # the TPM suites
     default-jre-headless                                                           # the TLA+ models (TLC)
     sbsigntool python3-virt-firmware                                               # the Secure Boot groups
+    openssh-server                                                                 # the SSH client's host tests start their own sshd
 )
 
 [[ $(id -u) == 0 ]] || { echo "Run as root: sudo $0 [USER [TREE]]" >&2; exit 1; }
@@ -64,7 +65,7 @@ absent=()
 for tool in python3 mcopy mtype mkfs.fat fsck.fat qemu-img swtpm java openssl sbsign sbvarsign qemu-system-x86_64 qemu-system-aarch64; do
     command -v "$tool" >/dev/null || absent+=("$tool")
 done
-for file in /usr/share/ovmf/OVMF.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/AAVMF/AAVMF_VARS.fd; do [[ -f $file ]] || absent+=("$file"); done
+for file in /usr/share/ovmf/OVMF.fd /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/AAVMF/AAVMF_VARS.fd /usr/sbin/sshd; do [[ -f $file ]] || absent+=("$file"); done
 python3 -c "import virt.firmware.varstore, virt.peutils, pefile" 2>/dev/null || absent+=("python3-virt-firmware (import)")
 [[ -x $HOME_DIR/.cargo/bin/cargo ]] || absent+=("cargo for $BUILDER")
 if ((${#absent[@]})); then echo "!!! Still missing: ${absent[*]}" >&2; exit 2; fi
