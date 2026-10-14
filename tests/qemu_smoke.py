@@ -236,10 +236,10 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text, raw=False):
+    def command(self, text, raw=False, timeout=8):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
+        return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
         # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
@@ -499,7 +499,8 @@ def applications_until_memory_ends(vm, others=0):
     def clocks(most):
         pids = []
         while len(pids) < most:
-            output = vm.command("run clock &")
+            # Each start loads the program while every clock before it draws: a loaded host makes that slow.
+            output = vm.command("run clock &", timeout=60)
             started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
             if not started:
                 require(output, "OUT OF MEMORY")
