@@ -6,10 +6,12 @@
 // (550-DRV-0023), on request, loads the microcode from the disk, starts it, reads its revision and resets the core.
 // Stage 3 sets up the radio; the radio module keeps it running for the station (550-DRV-0027), and stage 4 tests it.
 // Register facts come from Broadcom's published headers and the b43 specifications; no driver code is taken.
-use mind::abi::{BootInfo, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM};
+use core::sync::atomic::{AtomicUsize, Ordering};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_KIND_IRQ, SLOT_DEV0, SLOT_IRQ, SLOT_MEM, SLOT_SERVICE};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 
 mod radio;
+mod serve;
 mod stage3;
 mod stage4;
 mod tables;
@@ -58,10 +60,14 @@ const SHM_UCODE: u32 = 0; const SHM_SHARED: u32 = 1; const SHM_SCRATCH: u32 = 2;
 // The microcode for core revision 29 that scripts/proprietary.sh puts on the disk; a b43 firmware file of type 'u'.
 const MICROCODE: &str = "data/firmware/b43/ucode29_mimo.fw";
 const MICROCODE_MAX: usize = 64 * 1024;
-// Stage 2 runs only when this file exists: it stopped the MacBook Pro once (2026-10-11), so it is a test the maintainer asks for.
+// The stages run as a test when this file exists (the maintainer's request), and the radio comes up for the station when
+// init gives bcm_wifi its service endpoint (550-DRV-0027); without either the core stays in reset.
 const STAGE2_FLAG: &str = "data/wifitest.txt";
 // Each step is logged, then waited for longer than the journal's save period, so a hang leaves its step as the last line.
 const STEP_MS: usize = 3000;
+// The wait after each step: STEP_MS in a test, none when the radio only comes up for the station.
+static STEP_WAIT: AtomicUsize = AtomicUsize::new(0);
+pub fn step_wait() -> usize { STEP_WAIT.load(Ordering::Relaxed) }
 // The BCM4331's 802.11 core is core 1 (ChipCommon 0, 802.11 1, PCIe 2).
 const CORE_80211: u32 = 1;
 
@@ -133,9 +139,13 @@ fn main(_info: &'static BootInfo) {
 
     let mac = sprom(&bar, capabilities);
     if index == CORE_80211 {
-        microcode(&bar, mac);
-        // The maintainer's sign that the disk may go back: logged after a wait longer than the journal's save period.
-        if mind::fs::File::open(STAGE2_FLAG).is_ok() { mind::time::sleep(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
+        let test = mind::fs::File::open(STAGE2_FLAG).is_ok();
+        let serving = cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT;
+        if test { STEP_WAIT.store(STEP_MS, Ordering::Relaxed); }
+        mind::println!("[BCM] TEST {} ({}), A STATION TO SERVE: {}", if test { "ASKED FOR" } else { "NOT ASKED FOR" }, STAGE2_FLAG, if serving { "YES" } else { "NO" });
+        microcode(&bar, mac, test, serving);
+        if test { test_done(); }
+        if serving { serve::absent(); }
     }
     idle()
 }
@@ -218,10 +228,13 @@ fn shm_select(bar: &Mmio, routing: u32, offset: u32) { bar.write32(D11_SHM_CONTR
 
 // Stage 2 (550-DRV-0023): the microcode read from the disk, the core enabled, the microcode loaded and started; its
 // revision read back; then the processor stopped and the core put back into reset. No DMA is set up.
-fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(STEP_MS); }
+fn step(n: u32, what: &str) { mind::println!("[BCM] STAGE 2, STEP {}: {}", n, what); mind::time::sleep(step_wait()); }
 
-fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
-    if mind::fs::File::open(STAGE2_FLAG).is_err() { mind::println!("[BCM] STAGE 2 NOT ASKED FOR ({} IS ABSENT): THE CORE STAYS IN RESET", STAGE2_FLAG); return; }
+// The maintainer's sign that the disk may go back: logged after a wait longer than the journal's save period.
+fn test_done() { mind::time::sleep(STEP_MS); mind::println!("*** WIFI TEST Complete. Data collected ***"); }
+
+fn microcode(bar: &Mmio, mac: Option<[u8; 6]>, test: bool, serving: bool) {
+    if !test && !serving { mind::println!("[BCM] NO TEST AND NO STATION: THE CORE STAYS IN RESET"); return; }
     let Ok(file) = mind::fs::File::open(MICROCODE) else { mind::println!("[BCM] NO MICROCODE AT {} (FILE ACCESS OR scripts/proprietary.sh copy): STAGE 2 SKIPPED", MICROCODE); return };
     let Some(mut pages) = mind::mem::Pages::new(MICROCODE_MAX) else { mind::println!("[BCM] NO MEMORY FOR THE MICROCODE"); return };
     let buffer = pages.as_mut_slice();
@@ -316,8 +329,16 @@ fn microcode(bar: &Mmio, mac: Option<[u8; 6]>) {
             let core = stage3::Core::new(bar);
             match mac {
                 Some(mac) => if stage3::run(&core, mac) {
-                    // The service's endpoint comes with init's start of the station (550-DRV-0027); until then the radio stops.
-                    if let Some(radio) = stage4::run(&core, mac) { mind::println!("[BCM] NO STATION TO SERVE YET: THE RADIO STOPS"); radio.stop(); }
+                    // The test's stages leave the radio running; for the station alone it comes straight up.
+                    let radio = if test { stage4::run(&core, mac) } else { radio::Radio::up(&core, mac) };
+                    if let Some(mut radio) = radio {
+                        if serving {
+                            if test { test_done(); }
+                            serve::run(&mut radio);
+                        }
+                        mind::println!("[BCM] NO STATION TO SERVE: THE RADIO STOPS");
+                        radio.stop();
+                    }
                 },
                 None => mind::println!("[BCM] NO MAC ADDRESS FROM THE SPROM: STAGES 3 AND 4 SKIPPED"),
             }

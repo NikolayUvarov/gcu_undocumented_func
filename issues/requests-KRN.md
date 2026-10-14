@@ -194,6 +194,8 @@ In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's cl
 
 ### Progress (2026-10-12)
 
+**The drivers track, 2026-10-14:** `bcm_wifi` now serves `idl/wlanhw.wit` 1.0 on `SLOT_SERVICE` when it is given one (550-DRV-0027). With the endpoint it brings the radio up at boot; without it the core stays in reset as before. So `init` needs only to give `bcm_wifi` a server endpoint, as it does for the other drivers, and lend its client to `wlan`.
+
 The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the network branch, `netstack` now reads slot 4 as its third card (`CARDS` = 3), and `wlansim`'s network moved to 10.0.4.0/24 (the station's lease 10.0.4.15, its gateway 10.0.4.1), apart from the second card's 10.0.3.0/24 in the same suite. The join check of the `net` suite comes from the network track once 550-KRN-0097 is on `main`.
 
 **On `main` since aedea68 (2026-10-14):** the code of 550-NET-0017 and 550-NET-0018 (`wpa`, `dot11`, `wlan`, `tests/wlansim`, `idl/wifi.wit`), `netstack`'s slot 4, and `keystore.wit` 1.1 for the station's client (550-NET-0024), gated on x86 and aarch64. 550-KRN-0097 can follow.
