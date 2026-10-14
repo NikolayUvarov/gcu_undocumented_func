@@ -6,14 +6,15 @@ use mind::idl::codec::List;
 use mind::idl::{wire, wlanhw};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::ipc::Endpoint;
+use mind::network::{BAND_2GHZ, BAND_2GHZ_OFDM};
 
 // The slot a request's capability lands in; the receive timeout, which is also the polling period; deferred waits.
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 2;
 const WAITERS: usize = 4;
-// 2.4 GHz with OFDM there too (bands bits 0 and 2, idl/wlanhw.wit 1.1, 550-NET-0028; the wire is 1.0's): OFDM is
-// received up to 54 Mbit/s with core 2's front end off (550-DRV-0029), so the station offers 802.11g's rates.
-const BANDS: u8 = 1 | 4;
+// 2.4 GHz with OFDM there too (idl/wlanhw.wit 1.1, 550-NET-0028): OFDM is received up to 54 Mbit/s with core 2's front
+// end off (550-DRV-0029), so the station offers 802.11g's rates.
+const BANDS: u8 = BAND_2GHZ | BAND_2GHZ_OFDM;
 
 fn error(e: Error) -> wlanhw::Error {
     match e { Error::NoDevice => wlanhw::Error::NoDevice, Error::Empty => wlanhw::Error::Empty, Error::Invalid => wlanhw::Error::Invalid, Error::Failed => wlanhw::Error::Failed }
