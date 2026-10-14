@@ -346,40 +346,6 @@ Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST
 
 In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
 
-## A window can be adopted before its title is written, and wm logs it with none (the wm suite fails once in a while)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14, from its gate of 63ef648 on i9 (`x86: keys, shell, tools`, the `wm` suite's `shell_window`).
-
-### Problem
-
-- **What failed.** The shell's window opened as `[WM] WINDOW 5 PID 24 TEXT 80X25 "" AT 80,25 80X24`, with an empty title. `open_shell` in tests/qemu_smoke.py waits for a window line ending `"shell"`, so it timed out. The same group passed on this branch's previous commit, on un-rizen-service and locally.
-- **Why** (from the code; the timing makes it rare):
-  - `libmind::windowed::Window::open` (and `windowed::open`) call `create`, then `surface`, and only then `surface.set_title(title)` in the shared memory.
-  - The broker (`windows/src/main.rs:113`) reads the title from that memory each time it lists the windows.
-  - `wm` adopts a window at the first sync where the broker can lend its surface, which is already true after `surface`, and logs it once (`wm/src/main.rs:244`).
-  - A sync that falls between `surface` and `set_title` therefore logs, and keeps, an empty title. On i9 the guest is slow: wm took 9.5 s to list its programs in that run.
-
-### Plan (a proposal; the tools track decides)
-
-One of:
-- **The title travels with `create`** (a new version of `idl/window.wit`), so the window is never listed without it.
-- **`wm` adopts a window only once its title is set**: an empty title waits for the next sync, as a surface not yet lendable already does. It needs a limit, for a program that sets none.
-- **`wm` logs the title again when it changes**, and the suite waits for that line.
-
-### Acceptance criteria
-
-The `wm` suite's `shell_window` passes under load.
-
-**A second race in the same suite (2026-10-14, the kernel track's gate of 62a2624 on un-rizen-service).**
-- **Where:** `every_entry_reacts` presses Enter on "System>Turn off" and `keys("ret")` waits for one `[WM] MODE=` line.
-- **What happened:**
-  - the shell logged `FOR PID 76 THE SHELL ASKS IN ITS WINDOW: "poweroff"` and opened its window;
-  - wm's `MODE=NORMAL` line never reached the serial line, because the shell passes wm's lines on no more while it asks (the test's own comment says so);
-  - the test then waited 12 s for that line, while the shell waited for the test's `n`.
-- **Why only sometimes:** whether wm's line gets out before the shell starts asking depends on timing. "Restart", just before it, passed.
-- **The fix, one of:**
-  - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
-  - the shell keeps passing the manager's lines while it asks. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
 
 ## Note: the station's client in `SLOT_WIFI`, a read-only card client and a badged TLS client for the shell to lend (550-KRN-0097, 000-KRN-0109)
 
