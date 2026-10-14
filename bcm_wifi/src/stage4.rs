@@ -1,20 +1,15 @@
 // Stages 4 and 5 (550-DRV-0025, 550-DRV-0026), now a test of the radio's service calls (550-DRV-0027): the station's
 // view of a scan of channels 1 to 13 with every beacon let through; a broadcast probe request on channels 1 to 11 at 1
-// and at 6 Mbit/s; probe requests to every network heard, which acknowledge them, sent in eight ways (rates, cores,
-// cyclic delay: 550-DRV-0028), with the filter following that network.
+// and at 6 Mbit/s; probe requests to every network heard, which acknowledge them, at 1 and 6 Mbit/s in five splits of
+// the transmit gain between the radio and the baseband (550-DRV-0028), with the filter following that network.
 use crate::radio::{Filter, Radio, FRAME_MAX, RADIO_HEADER, TX_GAIN};
 use crate::stage3::Core;
 
 const DWELL_MS: usize = 200; const ANSWER_MS: usize = 150; const TX_CHANNELS: u8 = 11;
-// The networks probed, how often, and the ways of sending (550-DRV-0028): the rate, the cores (a bitmap), cyclic delay.
-// b43 sends OFDM on cores 0 and 1 without cyclic delay; Broadcom's own driver uses it on several cores.
+// The networks probed, how often, and the splits of the transmit gain tried (550-DRV-0028): the radio's gain word and
+// the baseband multiplier, which scales OFDM but not CCK. Entry 40 is 1019/33, entry 20 1041/3E, entries 60 and 80 1009.
 const PROBED: usize = 6; const REPEATS: u32 = 3; const ATTEMPTS: u8 = 7;
-const WAYS: [(&str, u8, u16, bool); 8] = [
-    ("1 MBIT/S, CORES 0+1      ", 2, 0b011, false), ("1 MBIT/S, CORE 0         ", 2, 0b001, false),
-    ("11 MBIT/S, CORES 0+1     ", 22, 0b011, false), ("6 MBIT/S, CORES 0+1      ", 12, 0b011, false),
-    ("6 MBIT/S, CORE 0         ", 12, 0b001, false), ("6 MBIT/S, CORE 1         ", 12, 0b010, false),
-    ("6 MBIT/S, CORE 2         ", 12, 0b100, false), ("6 MBIT/S, CORES 0-2, CDD ", 12, 0b111, true),
-];
+const SPLITS: [(u16, u16); 5] = [(0x1019, 0x33), (0x1019, 0x20), (0x1019, 0x48), (0x1009, 0x40), (0x1041, 0x20)];
 
 struct Network { bssid: [u8; 6], ssid: [u8; 32], ssid_len: usize, channel: u8, signal: i8, security: u8, frames: u32 }
 const NONE: Network = Network { bssid: [0; 6], ssid: [0; 32], ssid_len: 0, channel: 0, signal: -128, security: 0, frames: 0 };
@@ -152,9 +147,7 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
     step(5, "THE NETWORKS HEARD, WITH THE ANSWERS");
     mind::println!("[BCM] ACTIVE SCAN DONE: {} PROBE RESPONSES; {} NETWORKS IN ALL", answers, list(&seen));
 
-    step(6, "PROBE REQUESTS TO EVERY NETWORK HEARD, WHICH ACKNOWLEDGE THEM: 3 EACH IN 8 WAYS OF SENDING");
-    let p = radio.phy_state();
-    mind::println!("[BCM] PHY 0B0 {:04X} (CLASSIFIER), C01 {:04X}, C0A {:04X}, 17E {:04X}", p[0], p[1], p[2], p[3]);
+    step(6, "PROBE REQUESTS TO EVERY NETWORK HEARD, WHICH ACKNOWLEDGE THEM: 3 EACH AT 1 AND 6 MBIT/S, IN 5 SPLITS OF THE GAIN");
     let mut order: [usize; SEEN] = core::array::from_fn(|i| i);
     order.sort_unstable_by_key(|&i| (seen[i].frames == 0, -(seen[i].signal as i16)));
     let targets = order.iter().copied().filter(|&i| seen[i].frames != 0 && (1..=13).contains(&seen[i].channel)).take(PROBED);
@@ -163,24 +156,25 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
         if radio.set_channel(ch).is_err() || radio.set_filter(Filter { all_beacons: false, bssid, own: [0; 6] }).is_err() { mind::println!("[BCM] CHANNEL {} OR FILTER NOT SET", ch); continue; }
         let b = bssid;
         mind::println!("[BCM] {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} CHANNEL {} ({} DBM), ACKNOWLEDGED OF {} (TRIES, NOT SENT, PROBE RESPONSES):", b[0], b[1], b[2], b[3], b[4], b[5], ch, signal, REPEATS);
-        for (name, rate, cores, cdd) in WAYS {
-            radio.set_tx_cores(cores, cdd);
-            let (mut acked, mut tries, mut failed) = (0, 0u32, 0);
-            let mut heard = Heard::default();
-            let mut ignore = [NONE; SEEN];
-            for _ in 0..REPEATS {
-                sequence += 1;
-                let len = probe(&mut frame, &mac, &bssid, ch, sequence);
-                match radio.send(&frame[..len], rate, ATTEMPTS) {
-                    Ok(s) => { acked += s.acked as u32; tries += s.attempts as u32; }
-                    Err(_) => failed += 1,
+        for (radio_gain, bbmult) in SPLITS {
+            if radio.set_gain_parts(radio_gain, bbmult).is_err() { mind::println!("[BCM]   GAIN {:04X}/{:02X} NOT SET", radio_gain, bbmult); continue; }
+            for rate in [2u8, 12] {
+                let (mut acked, mut tries, mut failed) = (0, 0u32, 0);
+                let mut heard = Heard::default();
+                let mut ignore = [NONE; SEEN];
+                for _ in 0..REPEATS {
+                    sequence += 1;
+                    let len = probe(&mut frame, &mac, &bssid, ch, sequence);
+                    match radio.send(&frame[..len], rate, ATTEMPTS) {
+                        Ok(s) => { acked += s.acked as u32; tries += s.attempts as u32; }
+                        Err(_) => failed += 1,
+                    }
+                    listen(&mut radio, ANSWER_MS, &mut ignore, &mut heard);
                 }
-                listen(&mut radio, ANSWER_MS, &mut ignore, &mut heard);
+                mind::println!("[BCM]   RADIO GAIN {:04X}, BBMULT {:02X}, {} MBIT/S: {} ({}, {}, {})", radio_gain, bbmult, rate / 2, acked, tries, failed, heard.responses);
             }
-            mind::println!("[BCM]   {}: {} ({}, {}, {})", name, acked, tries, failed, heard.responses);
         }
     }
-    radio.set_tx_cores(0b011, false);
     let _ = radio.set_gain(TX_GAIN);
     let _ = radio.set_filter(Filter::default());
     let k = radio.counts;
