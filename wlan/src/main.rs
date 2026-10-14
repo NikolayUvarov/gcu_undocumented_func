@@ -26,6 +26,9 @@ const QUEUE: usize = 32;
 const WAITERS: usize = 4;
 const ATTEMPTS: u8 = 4;
 const RADIO_HEADER: usize = 8;
+// The radio is asked with a deadline, and again every RADIO_MS until it answers; meanwhile the station serves its
+// clients as a card without a radio (550-NET-0030), so the stack does not wait on it.
+const RADIO_MS: u32 = 2000;
 
 fn mac(value: u64) -> [u8; 6] { let b = value.to_be_bytes(); [b[2], b[3], b[4], b[5], b[6], b[7]] }
 fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -73,6 +76,8 @@ impl Queue {
 
 struct Wlan {
     station: Station,
+    // Whether the radio has answered `info`: until then the station has no channels and answers no-device.
+    radio: bool,
     own: [u8; 6],
     tx: [u8; FRAME_MAX],
     rx: [u8; ETHERNET_MAX],
@@ -84,6 +89,19 @@ struct Wlan {
 }
 
 impl Wlan {
+    // The radio answered: the station gets its address, channels and rates.
+    fn radio_up(&mut self, info: &wlanhw::Info) {
+        let own = mac(info.mac);
+        let channels = info.channels.as_slice();
+        // Without OFDM on 2.4 GHz (a 1.0 radio says nothing of it) the station keeps to 802.11b's rates there (550-NET-0028).
+        let ofdm = info.bands & mind::network::BAND_2GHZ_OFDM != 0;
+        mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS, 2.4 GHZ {}", own[0], own[1], own[2], own[3], own[4], own[5],
+                       channels.len(), if ofdm { "802.11G" } else { "802.11B" });
+        self.station = Station::new(own, channels, ofdm);
+        self.own = own;
+        self.radio = true;
+    }
+
     // What the station asked of the radio: tune, filter, send; a received Ethernet frame for the stack.
     fn apply(&mut self, out: Out) {
         if let Some(channel) = out.channel { let _ = wlanhw::set_channel(RADIO, channel); }
@@ -252,6 +270,7 @@ impl Wlan {
     }
 
     fn join(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
+        if !self.radio { return Err(wifi::Error::NoDevice); }
         let bss = self.station.networks().best(ssid).copied();
         let secret = match bss.map(|b| b.security) {
             Some(Security::Wpa2) => {
@@ -317,18 +336,30 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
     // Without a radio's client (started by hand, not by init with a radio) there is nothing to drive.
-    let info = match wlanhw::info(RADIO) { Ok(Ok(info)) => info, _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) } };
-    let own = mac(info.mac);
-    let channels = info.channels.as_slice();
-    mind::println!("[WLAN] RADIO {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}, {} CHANNELS", own[0], own[1], own[2], own[3], own[4], own[5], channels.len());
-    let mut wlan = Wlan { station: Station::new(own, channels), own, tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX], radio_frame: [0; FRAME_MAX + RADIO_HEADER],
+    if mind::dev::cap_info(RADIO.0).0 != mind::abi::CAP_KIND_ENDPOINT { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
+    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
+                          radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS] };
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;
+    let (mut asked, mut waited) = (0u64, false);
     loop {
+        let now = mind::time::uptime_ms() as u64;
+        if !wlan.radio && (asked == 0 || now - asked >= RADIO_MS as u64) {
+            asked = now.max(1);
+            match wire::with_timeout(RADIO_MS, || wlanhw::info(RADIO)) {
+                Ok(Ok(info)) => wlan.radio_up(&info),
+                Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => if !core::mem::replace(&mut waited, true) {
+                    mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED IN {} S: SERVING WITHOUT IT, ASKING AGAIN", RADIO_MS / 1000);
+                },
+                // A radio that answers it has no device, or a client that fails: nothing to drive.
+                _ => { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
+            }
+        }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
-        wlan.pump();
+        // The radio's calls are bounded too: one that stops answering does not hold the station's clients.
+        if wlan.radio { wire::with_timeout(RADIO_MS, || wlan.pump()); }
         let state = wlan.station.state();
         if state != last {
             mind::println!("[WLAN] {:?}{}", state, if state == State::Failed || wlan.station.reason() == Reason::Lost { match wlan.station.reason() {

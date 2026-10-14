@@ -1,6 +1,6 @@
 # Requests for the update and provenance track (UPD), not numbered yet
 
-**Owner:** update and provenance track · **Status:** open · **Recorded by:** the Effector agent track (EFF), 2026-10-09
+**Owner:** update and provenance track · **Status:** open (the updater's checks in a parser of their own became [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), 2026-10-14) · **Recorded by:** the Effector agent track (EFF), 2026-10-09
 
 The update and provenance track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -47,23 +47,6 @@ The Effector server installs software by sending a package. MIND Core signs its 
 
 - The host tool signs a test package, and the routine accepts it.
 - The routine refuses a package with a changed file, a wrong key or a lower version than one already installed, in host tests.
-
-## The updater's checks in a parser of their own (109-NET-0010)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, for [109-NET-0010](109-NET-0010-a-parser-per-session.md), done by the kernel session at the maintainer's word.
-
-### Problem
-
-Each `download` now parses its heads in a `parse` process of its own, which holds only that session's endpoint and ends with it. The updater's channel, manifests and file heads still go to the shared `parse` service, so one check's input reaches the process that parses the next.
-
-### Plan (a proposal; the update track decides)
-
-- **In `updater/src/source.rs` and `updater/src/main.rs`,** a check or a fetch takes a `mind::parse::Session::start(loader, Endpoint(SLOT_PARSE))` and passes its `endpoint()` where `SLOT_PARSE` goes now. The session ends when it is dropped.
-- **What the updater needs from `init`,** which the kernel track adds when asked: a client of `loader` badged so that it may only start helpers (`loader.wit` 1.8 `helper`, [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)), and an endpoint quota of 1. It gets no right to start programs.
-
-### Acceptance criteria
-
-The `update` suite's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends.
 
 ## A note: `init` says how the boot went (000-KRN-0102)
 

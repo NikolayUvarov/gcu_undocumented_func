@@ -4,11 +4,12 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use mind::abi::{SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use mind::abi::{SLOT_NETWORK, SLOT_TLS};
 use mind::fs::{self, File};
 use mind::http::{self, Sink, Transport, Url};
 use mind::idl::{socket, tls};
 use mind::ipc::Endpoint;
+use mind::parse::Session as Parser;
 use mind::idl::update::Error;
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
@@ -134,13 +135,13 @@ impl Sink for Output<'_> {
 }
 
 // One GET with its retries: a cut connection resumes where the body got to.
-fn get(base: &str, pin: Option<&[u8; 32]>, path: &str, mut offset: u64, sink: &mut impl Sink) -> Result<u64, Error> {
+// Each head parsed by the check's own parser (109-NET-0010), started again if it ended meanwhile.
+fn get(base: &str, pin: Option<&[u8; 32]>, path: &str, mut offset: u64, sink: &mut impl Sink, parser: &mut Parser) -> Result<u64, Error> {
     let address = format!("{}/{}", base.trim_end_matches('/'), path);
     let url = Url::parse(&address).map_err(|_| Error::NoSource)?;
-    let mut parser = mind::parse::Service(Endpoint(SLOT_PARSE));
     for connection in 1..=TRIES {
         let Some(mut session) = connect(&url, pin)? else { mind::time::sleep(1000); continue };
-        match http::get(&mut session, &url, offset, sink, &mut parser) {
+        match http::get(&mut session, &url, offset, sink, parser) {
             Ok(got) if got.complete() => return Ok(got.total),
             Ok(got) => { mind::println!("[UPDATER] {}: CONNECTION CUT AT {} OF {}, RESUMING", path, got.end, got.total); offset = got.end; }
             Err(http::Error::Transport) => mind::println!("[UPDATER] {}: NO ANSWER, TRYING AGAIN ({} OF {})", path, connection, TRIES),
@@ -155,11 +156,11 @@ fn get(base: &str, pin: Option<&[u8; 32]>, path: &str, mut offset: u64, sink: &m
 
 impl Source {
     /// A file of the release layout, `limit` bytes at most, read whole into memory.
-    pub fn small(&self, path: &str, limit: usize) -> Result<Vec<u8>, Error> {
+    pub fn small(&self, path: &str, limit: usize, parser: &mut Parser) -> Result<Vec<u8>, Error> {
         match self {
             Source::Https { base, pin } => {
                 let mut memory = Memory { data: Vec::new(), limit };
-                get(base, pin.as_ref(), path, 0, &mut memory)?;
+                get(base, pin.as_ref(), path, 0, &mut memory, parser)?;
                 Ok(memory.data)
             }
             Source::Directory(dir) => {
@@ -174,15 +175,15 @@ impl Source {
 
     /// File `path` of the layout into `file`, which is to hold `size` bytes: what it holds already is kept and the rest
     /// fetched after it. Returns the bytes fetched.
-    pub fn file(&self, path: &str, file: &mut File, size: u64) -> Result<u64, Error> {
+    pub fn file(&self, path: &str, file: &mut File, size: u64, parser: &mut Parser) -> Result<u64, Error> {
         let have = file.size() as u64;
-        if have > size { file.truncate(0).map_err(|_| Error::Write)?; return self.file(path, file, size); }
+        if have > size { file.truncate(0).map_err(|_| Error::Write)?; return self.file(path, file, size, parser); }
         if have == size { return Ok(0); }
         if have > 0 { mind::println!("[UPDATER] {}: RESUMING AT {} OF {}", path, have, size); }
         match self {
             Source::Https { base, pin } => {
                 let mut output = Output { file, size, stage: alloc::vec![0; STAGE], staged: 0, at: have, failed: false };
-                let result = get(base, pin.as_ref(), path, have, &mut output);
+                let result = get(base, pin.as_ref(), path, have, &mut output, parser);
                 let flushed = output.flush();
                 if output.failed || flushed.is_err() { return Err(Error::Write); }
                 result.map(|_| size - have)

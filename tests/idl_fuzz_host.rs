@@ -93,6 +93,7 @@ mod idl {
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
     #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
+    #[path = "../../libmind/src/idl/ssh.rs"] pub mod ssh;
     #[path = "../../libmind/src/idl/sysinfo.rs"] pub mod sysinfo;
     #[path = "../../libmind/src/idl/tls.rs"] pub mod tls;
     #[path = "../../libmind/src/idl/tpm.rs"] pub mod tpm;
@@ -352,7 +353,7 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
+        owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -430,6 +431,7 @@ types! {
     rtc: Error;
     shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
+    ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
     tpm: Error Info;

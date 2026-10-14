@@ -46,6 +46,10 @@ const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per car
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
 const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
 const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
+// A card's call that takes longer fails, and the card is left alone for STALL_MS, so a driver or station that does
+// not answer cannot hold the stack (550-NET-0030).
+const CARD_MS: u32 = 2000;
+const STALL_MS: u64 = 5000;
 
 // Transmit checksum offload (issue 106, socket.wit `offload`): off until the operator turns it on; the benchmark
 // (docs/profile/network.md) showed no gain worth trusting the device with it by default.
@@ -198,7 +202,7 @@ struct Link {
 }
 
 struct Stack {
-    links: [Option<Link>; CARDS], tried: [u64; CARDS],
+    links: [Option<Link>; CARDS], tried: [u64; CARDS], stalled: [u64; CARDS],
     slots: [Option<Slot>; SOCKETS], generations: [u32; SOCKETS], waiting: Vec<Waiting>, closing: Vec<(usize, SocketHandle, u64)>,
     sequence: u16, next_port: u16,
     // The card the default route goes out through, as last logged.
@@ -276,7 +280,7 @@ impl Link {
 
 impl Stack {
     fn new() -> Self {
-        Self { links: [const { None }; CARDS], tried: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
+        Self { links: [const { None }; CARDS], tried: [0; CARDS], stalled: [0; CARDS], slots: [None; SOCKETS], generations: [0; SOCKETS], waiting: Vec::new(), closing: Vec::new(),
                sequence: 0, next_port: EPHEMERAL, default: None, preferred: None }
     }
 
@@ -325,7 +329,12 @@ impl Stack {
         let Some(link) = self.links[index].as_mut() else { return };
         if now - link.checked < 1000 { return; }
         link.checked = now;
-        let up = matches!(net::info(link.card.endpoint), Ok(Ok(info)) if info.link);
+        let up = match net::info(link.card.endpoint) {
+            Ok(Ok(info)) => info.link,
+            // No answer in time is not a link that went down: the card is asked again later.
+            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => return,
+            _ => false,
+        };
         if up == link.up { return; }
         link.up = up;
         if up {
@@ -353,9 +362,16 @@ impl Stack {
     fn poll(&mut self) {
         let now = now_ms();
         for index in 0..CARDS {
+            if now < self.stalled[index] { continue; }
+            let started = now_ms();
             if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index); }
             if let Some(link) = self.links[index].as_mut() { link.poll(); }
             self.watch_link(index, now);
+            // A call that ran out of CARD_MS: the card is left alone for a while.
+            if now_ms() - started >= CARD_MS as u64 {
+                self.stalled[index] = now_ms() + STALL_MS;
+                mind::println!("[NETSTACK] CARD {} DID NOT ANSWER IN {} S: LEFT ALONE FOR {} S", index, CARD_MS / 1000, STALL_MS / 1000);
+            }
         }
         let default = self.route(0);
         if default != self.default {
@@ -681,7 +697,8 @@ fn main(_info: &'static BootInfo) {
     let mut policy = Policy::default();
     loop {
         let now = now_ms();
-        stack.poll();
+        // Every call to a card is bounded (550-NET-0030); the stack's replies to its clients are not calls.
+        wire::with_timeout(CARD_MS, || stack.poll());
         if now - reaped >= 1000 { reaped = now; stack.reap(); }
         // Grants that ran out of time or volume lose their flows.
         for badge in policy.ended(now) { let closed = stack.close_badge(badge); mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed); }

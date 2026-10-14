@@ -338,3 +338,19 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 - **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
 - **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
 - ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
+
+## The shell lends a client of the SSH service (351-NET-0027)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
+
+### Problem
+
+The service `ssh` (351-NET-0027) reads files over SFTP for programs, logged in as the device with a key that only `keystore` holds. A program reaches it as it reaches `tls`: through a client the shell lends.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST_SSH` exists (requests-KRN.md, "The SSH service in the boot services"), the shell lends a copy of its client in the program's same slot for `REQUEST_SSH`, together with the program's flow grant, as it does for `REQUEST_TLS`. `download` (the network track's) then reads `sftp://` addresses through it.
+
+### Acceptance criteria
+
+In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.

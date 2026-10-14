@@ -1,0 +1,28 @@
+# 303-STO-0017 — The collection check waits for the lease by the guest's clock — done
+
+**Type:** storage (tests) · **Owner:** `STO` track · **Priority:** P3 · **Status:** done (2026-10-14) · **Blocked by:** — · **Main task:** [303](303-retention-and-collection.done) · **Roadmap:** track B · **Constitution:** MC-5.6, MC-12.2
+
+From the request "The block store's collection check waits 61 s by the host's clock for a 60 s lease" in requests-STO.md (recorded by the drivers track, 2026-10-12).
+
+## Problem
+
+The store suite's collection check put a block, slept 61 s by the host's clock, then expected the next put to collect it. The lease is 60 s by the guest's clock. In two of the drivers track's local gates, with many guests running at once, a guest fell behind the host by more than a second over that minute, the lease had not ended, and the check got `GOT 12 BYTES` instead of `NotFound`. It passed when the group ran alone.
+
+## Plan
+
+Read the guest's `uptime` right after the put, sleep 55 s, then poll `uptime` every 2 s until 62 s have passed by the guest's clock. That is 62 rather than 61 because `uptime` counts whole seconds. The wait follows the guest's clock instead of a longer fixed sleep (MC-5.6).
+
+## Acceptance criteria
+
+The check passes under a full local gate as it does alone.
+
+
+## Resolution
+
+Done on the storage track's branch and in `main` (gate 16b, 2037dad).
+- **The store suite** (c92246b) reads the guest's `uptime` after the put and polls it until 62 s have passed there.
+- **It passed** in gate 16b's full runs: "x86: files and block writes" on un-rizen-service, beside other tracks' groups; "aarch64: files, network and TLS" on un-rizen-service and on DESKTOP-i7-930-wsl-u24; and locally.
+
+## Related
+
+[303-STO-0001](303-STO-0001-collection-by-reachability.done), [300-STO-0016](300-STO-0016-a-dag-walked-once.done) (the same suite's timing on a slower machine).
