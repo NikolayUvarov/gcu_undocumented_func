@@ -18,7 +18,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -56,9 +56,10 @@ pub struct Filter { pub all_beacons: bool, pub bssid: [u8; 6], pub own: [u8; 6] 
 #[derive(Clone, Copy)]
 pub struct Sent { pub acked: bool, pub attempts: u8 }
 
-// What the receive side did since the radio came up.
+// What the receive side did since the radio came up: good frames by modulation (CCK, OFDM) as well, and the
+// acknowledgements to us among them, which reach the host only with control frames kept (`keep_control`).
 #[derive(Clone, Copy, Default)]
-pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32 }
+pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub cck: u32, pub ofdm: u32, pub acks_cck: u32, pub acks_ofdm: u32 }
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
@@ -68,6 +69,8 @@ pub struct Radio<'a> {
     filter: Filter,
     queue: Pages, head: usize, count: usize,
     retry: u16,
+    // MAC control bits a test adds: control frames kept for the host.
+    mac_extra: u32,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -123,7 +126,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -150,7 +153,7 @@ impl<'a> Radio<'a> {
         let mut stale = 0;
         while c.r32(TX_STATUS0) & 1 != 0 && stale < 64 { let _ = c.r32(TX_STATUS1); stale += 1; }
         r.addresses(&mac, &[0; 6]);
-        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | r.mac_extra);
         c.enable();
         mind::println!("[BCM] RADIO UP: RX RING AT {:#X} ({} SLOTS), TX RING AT {:#X} ({} SLOTS); GAIN ENTRY {} ({:08X}); {} STALE TRANSMIT STATUSES; RX STATUS {:08X}, ERROR {:08X}",
                        rx_address, SLOTS, tx_address, TX_SLOTS, TX_GAIN, entry, stale, c.r32(RX_STATUS), c.r32(RX_ERROR));
@@ -188,7 +191,7 @@ impl<'a> Radio<'a> {
         if !(1..=13).contains(&ch) { return Err(Error::Invalid); }
         if !self.c.suspend() { return Err(Error::Failed); }
         self.c.channel(ch as usize);
-        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
         self.c.enable();
         self.channel = ch;
         Ok(())
@@ -213,13 +216,10 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
-    // A transmit gain from its parts, for a test: the radio's gain word and the baseband multiplier. Until the next
-    // channel switch, which sets the gain entry again.
-    pub fn set_gain_parts(&mut self, radio: u16, bbmult: u16) -> Result<(), Error> {
-        if !self.c.suspend() { return Err(Error::Failed); }
-        self.c.tx_gain_set(radio, bbmult);
-        self.c.enable();
-        Ok(())
+    // Control frames passed to the host as well, for a test: acknowledgements to us are counted by modulation.
+    pub fn keep_control(&mut self, on: bool) {
+        self.mac_extra = if on { MAC_KEEP_CONTROL } else { 0 };
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
     }
 
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
@@ -266,6 +266,10 @@ impl<'a> Radio<'a> {
         if length < pad + 6 + 4 + 10 { self.counts.bad += 1; return; }
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
         if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
+        let ofdm = phy0 & 3 == 1;
+        if ofdm { self.counts.ofdm += 1 } else { self.counts.cck += 1 }
+        let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
+        if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
         if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
         let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
         let weakness = if signal < 0 && signal > -128 { signal.unsigned_abs() } else { 0 };

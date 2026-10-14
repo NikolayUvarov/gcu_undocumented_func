@@ -86,6 +86,12 @@ It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 
   - b43 runs no TX IQ/LO calibration either.
 - **The next run** sends 1 and 6 Mbit/s in five splits (radio gain word / multiplier): 1019/33 (entry 40), 1019/20, 1019/48, 1009/40, 1041/20.
 
+**2026-10-14, the fourth run, `fast-test` 04460d4** (five splits of the gain between the radio word and the baseband multiplier):
+- **No split changes the picture.** CCK at 1 Mbit/s is acknowledged in every split. 6 Mbit/s is acknowledged by `ZATV` and `CoolNet2` (channel 8) in every split, and almost never by `David_2.4G`, `un2` (channel 1) and `Tenda_E25140` (channel 3).
+- **The networks that do not acknowledge OFDM still answer it.** `un2` sent 3 to 5 probe responses to OFDM requests it never acknowledged, `Tenda` 1 to 2, `David` 1. They receive our OFDM frames. What fails is our side of the acknowledgement: their ACK, sent at an OFDM rate, is not taken by the microcode in time, or not received at all.
+- **The cause moves from transmitting to receiving OFDM acknowledgements**: OFDM reception, or the microcode's ACK timeout for OFDM (SIFS and the 2.4 GHz signal extension).
+- **The next run keeps control frames for the host (MAC control bit 22).** It counts the ACKs to us by modulation against the transmit status, and every good frame by modulation in the scan.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.
