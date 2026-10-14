@@ -66,7 +66,16 @@ pub fn tick_from_lapic() { LAPIC_TICK.store(true, Ordering::Relaxed); }
 /// Counts a tick; true when it ends a time slice.
 pub fn advance() -> bool {
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
-    if ticks % (1000 / TICK_MS) == 0 { super::clock::on_second(ticks * TICK_MS / 1000); }
+    if ticks % (1000 / TICK_MS) == 0 {
+        let seconds = ticks * TICK_MS / 1000;
+        super::clock::on_second(seconds);
+        super::watchdog::feed();
+        // A test kernel stops every CPU for good, once, 20 s after boot: the watchdog must restart it (000-KRN-0076).
+        if cfg!(feature = "watchdog-test") && seconds == 20 && !super::watchdog::restarted() {
+            crate::serial_print("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD\n");
+            crate::cpu::freeze();
+        }
+    }
     ticks % (QUANTUM_MS / TICK_MS) == 0
 }
 extern "x86-interrupt" fn spurious_master(_frame: &mut InterruptFrame) {}
@@ -137,6 +146,7 @@ pub unsafe fn init() {
     outb(0x40, divisor as u8);
     outb(0x40, (divisor >> 8) as u8);
     super::clock::start_tick();
+    super::watchdog::start();
     asm!("sti");
 }
 

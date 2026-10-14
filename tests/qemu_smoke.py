@@ -7708,6 +7708,29 @@ def clock_suite(args, disk):
     print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
 
+def watchdog_suite(args, disk):
+    """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after boot unless the
+    watchdog restarted the last run. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick:
+    the chipset resets the frozen machine at its second expiry, 30 s on, and the next boot says so and runs on."""
+    armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
+    try:
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        frozen = time.monotonic()
+        vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
+        took = time.monotonic() - frozen
+        vm.expect("MIND> ", timeout=120)
+        time.sleep(25)  # past the 20 s at which the first run stopped
+        uptime = int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) / 1e9
+        assert uptime > 25, uptime
+    finally:
+        vm.close()
+    # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
+    assert took > 25, took
+    print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
+          f"({took:.0f} s from the stop to the next kernel's line); it ran on past {uptime:.0f} s", flush=True)
+
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
     the shell. Before, the shell read those ones as input for ever and never drew its first frame: the screen stayed
@@ -8291,6 +8314,9 @@ def main():
                 continue
             if suite == "clock":
                 clock_suite(args, disk)
+                continue
+            if suite == "watchdog":
+                watchdog_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)
