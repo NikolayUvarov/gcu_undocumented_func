@@ -214,6 +214,10 @@ impl<D: Disk, S: Store + 'static> Disk for WithStore<D, S> {
         match on_store(path) { Some(rest) => self.store.as_mut()?.open(rest), None => self.disk.open(path) }
     }
     fn run(&mut self, path: &str, args: &str) -> Result<Started, String> { self.disk.run(path, args) }
+    fn script(&mut self, path: &str) -> Result<String, String> {
+        if on_store(path).is_some() { return Err(String::from("A script on store: is run from a copy on a volume")); }
+        self.disk.script(path)
+    }
     fn create(&mut self, path: &str, replace: bool) -> Result<Box<dyn Sink>, Failure> {
         match on_store(path) { Some(rest) => self.store()?.create(rest, replace), None => self.disk.create(path, replace) }
     }

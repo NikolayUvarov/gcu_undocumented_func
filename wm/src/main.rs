@@ -55,6 +55,13 @@ impl Live {
 
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
 
+// A directory's entries for Settings' picture browser (000-APP-0072): names and whether each is a directory.
+fn list_dir(dir: &str) -> Result<Vec<(String, bool)>, String> {
+    let mut found = Vec::new();
+    mind::fs::list(dir, |e| found.push((String::from(e.name_str()), e.is_dir))).map_err(|e| format!("{:?}", e))?;
+    Ok(found)
+}
+
 // The battery as its service reads it (211-APP-0070): None without one (no service, or no battery fitted); a reading
 // the controller missed keeps the last.
 fn battery(last: Option<Power>) -> Option<Power> {
@@ -278,7 +285,11 @@ impl Manager {
                 }
             }
             let name = title(&live.surface);
-            if !name.is_empty() && name != win.title { win.title = name; dirty = true; }
+            if !name.is_empty() && name != win.title {
+                // A title written after wm adopted the window (the race of requests-APP, 2026-10-14) is logged once.
+                if win.title.is_empty() { mind::println!("[WM] TITLE {} \"{}\"", live.id, name); }
+                win.title = name; dirty = true;
+            }
             // A window draws at the size of its frame's inside (issue u009), or of the screen when full (211-APP-0014).
             let inner = if full == Some(live.id) { screen } else { win.rect.inner() };
             let wanted = match win.content { Content::Text => (inner.w, inner.h), Content::Pixels => (inner.w * 8, inner.h * 16) };
@@ -481,6 +492,7 @@ fn main(info: &'static BootInfo) {
     let mut programs = Some(Programs::new());
     manager.wm.programs = vec![menu::Item::note("Looking for programs…", "wm is still reading the programs on the boot disk: open the menu again in a moment")];
     manager.wm.shell = holds(SLOT_SHELL);
+    manager.wm.lister = list_dir;
     if holds(SLOT_SHELL) { manager.wm.programs = menu::with_shell(core::mem::take(&mut manager.wm.programs)); }
     mind::input::pointer(true);
     // The pointer's pixel on the screen: mind::input follows a mouse's movement or a tablet's position (issue 161).

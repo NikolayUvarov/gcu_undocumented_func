@@ -475,16 +475,19 @@ pub fn bar_label(item: Bar) -> &'static str { if item == Bar::More { MORE } else
 /// The top bar on a screen `cols` wide, `title` cells kept at its right for the window in front's title: the cells
 /// each item covers (x, width) and what it does, "wm" first and then `│ label ` for each item; and the items moved
 /// into `more ▼`'s menu (000-APP-0061). When every item fits, all are on the bar; when not, the items with a key leave
-/// first, from the right, until the rest and `more ▼` fit.
+/// first, from the right, until the rest and `more ▼` fit. `Alt+S settings` leaves last and stays at the bar's end, with
+/// `more ▼` left of it (the maintainer's word, 2026-10-14).
 pub fn bar_layout(cols: usize, title: usize) -> (Vec<(usize, usize, Bar)>, Vec<Bar>) {
     let width = |label: &str| label.chars().count() + 3;
     let room = cols.saturating_sub(title);
     let mut used = 4 + BAR.iter().map(|b| width(b.0)).sum::<usize>();
     let mut moved = Vec::new();
+    let settings = BAR.iter().position(|b| b.1 == Bar::Settings);
     if used > room {
         used += width(MORE);
         let keyed = |i: &usize| BAR[*i].0.starts_with("Alt+");
-        let order: Vec<usize> = (0..BAR.len()).rev().filter(keyed).chain((0..BAR.len()).rev().filter(|i| !keyed(i))).collect();
+        let other = |i: &usize| Some(*i) != settings;
+        let order: Vec<usize> = (0..BAR.len()).rev().filter(|i| keyed(i) && other(i)).chain((0..BAR.len()).rev().filter(|i| !keyed(i) && other(i))).chain(settings).collect();
         for i in order {
             if used <= room { break; }
             used -= width(BAR[i].0);
@@ -494,7 +497,9 @@ pub fn bar_layout(cols: usize, title: usize) -> (Vec<(usize, usize, Bar)>, Vec<B
     }
     let mut items = alloc::vec![(0, 3.min(cols), Bar::Programs)];
     let mut x = 4;
-    let shown = (0..BAR.len()).filter(|i| !moved.contains(i)).map(|i| BAR[i].1).chain((!moved.is_empty()).then_some(Bar::More));
+    let stays = |i: &usize| !moved.contains(i);
+    let shown = (0..BAR.len()).filter(|i| stays(i) && Some(*i) != settings).map(|i| BAR[i].1).chain((!moved.is_empty()).then_some(Bar::More))
+        .chain(settings.filter(stays).map(|i| BAR[i].1));
     for bar in shown {
         let w = width(bar_label(bar)) - 1;
         if x + 1 + w > cols { break; }
@@ -507,12 +512,12 @@ pub fn bar_layout(cols: usize, title: usize) -> (Vec<(usize, usize, Bar)>, Vec<B
 /// The top bar's items on a screen `cols` wide with no title at its right (`bar_layout`).
 pub fn bar_items(cols: usize) -> Vec<(usize, usize, Bar)> { bar_layout(cols, 0).0 }
 
-/// The battery's item at the top bar's right end (211-APP-0070): ` AC 87% ` on the mains, ` ▮ 87% ` on the battery, or
-/// once clicked the minutes (` ▮ 2:41 ` left, ` AC 0:45 ` to full, `-:--` when the battery gives none); none without
+/// The battery's item at the top bar's right end (211-APP-0070): ` ⚡ 87% ` on the mains, ` ▮ 87% ` on the battery, or
+/// once clicked the minutes (` ▮ 2:41 ` left, ` ⚡ 0:45 ` to full, `-:--` when the battery gives none); none without
 /// a battery.
 pub fn battery_chip(power: Option<&Power>, minutes: bool) -> Option<String> {
     let p = power?;
-    let mark = if p.on_ac { "AC" } else { "▮" };
+    let mark = if p.on_ac { "⚡" } else { "▮" };
     Some(if minutes { format!(" {} {} ", mark, hours(p.minutes())) } else { format!(" {} {}% ", mark, p.percent) })
 }
 
@@ -533,6 +538,8 @@ pub struct Wm {
     pub background: Config,
     /// `wm` holds the shell's commands (`SLOT_SHELL`): Settings can set the clock through the shell (000-APP-0055).
     pub shell: bool,
+    /// How Settings read a directory when browsing for the picture (000-APP-0072).
+    pub lister: crate::settings::Lister,
     /// The battery as last read (211-APP-0070), None without one; its item shows the minutes in place of the charge.
     pub battery: Option<Power>,
     pub battery_minutes: bool,
@@ -549,7 +556,7 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -921,7 +928,7 @@ impl Wm {
     /// Settings (000-APP-0048), at the page of the background.
     pub fn open_settings(&mut self) {
         let mut settings = Settings::new(&self.background, (self.desk.cols, self.desk.rows));
-        settings.shell = self.shell;
+        (settings.shell, settings.lister) = (self.shell, self.lister);
         (settings.pixels, settings.scale) = (self.pixels, self.scale);
         self.mode = Mode::Settings(settings);
     }
@@ -1023,6 +1030,7 @@ impl Wm {
             Mode::Menu(open) => format!(" MENU={}", open.path(&self.programs)),
             Mode::List { .. } => format!(" LIST={}", self.list_selected().map_or(String::from("-"), |(_, id)| format!("{}", id))),
             Mode::More { items, row, .. } => format!(" MORE={}", items.get(*row).map_or("-", |&i| bar_label(i))),
+            Mode::Settings(s) if s.browser.is_some() => { let b = s.browser.as_ref().unwrap(); format!(" SETTINGS=Background:Image file BROWSE={}:{}", b.dir, b.entries.get(b.selected).map_or("-", |e| e.0.as_str())) }
             Mode::Settings(s) => format!(" SETTINGS={}{}", crate::settings::PAGES[s.page], if s.on_pages { String::new() } else if s.page == crate::settings::DATE { format!(":{}", crate::settings::CLOCK_ROWS[s.clock_row]) } else if s.page == crate::settings::SCREEN { format!(":{}", crate::settings::SCREEN_ROWS[s.screen_row]) } else if s.page == crate::settings::NETWORK { format!(":{}", crate::settings::NETWORK_ROWS[s.net_row].0) } else { format!(":{}", crate::settings::ROWS[s.row]) }),
             _ => String::new(),
         };
