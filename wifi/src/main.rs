@@ -36,6 +36,9 @@ fn main(info: &'static mind::BootInfo) {
     view.poll(station);
     let mut scanned = mind::time::uptime_ms();
     mind::println!("[WIFI] READY {}x{}{} {}", term.cols(), term.rows(), if demo { " DEMO" } else { "" }, match &view.problem { Some(_) => String::from("NO STATION"), None => view.status() });
+    // The line under the list, in the log too when it changes: the station's answers (never a passphrase).
+    let mut said = String::new();
+    let mut say = |view: &Wifi| if view.notice != said { said = view.notice.clone(); if !said.is_empty() { mind::println!("[WIFI] NOTICE {}", said); } };
     loop {
         let cursor = { let mut grid = term.grid(); view.draw(&mut grid, &DARK) };
         term.set_cursor(cursor);
@@ -46,10 +49,12 @@ fn main(info: &'static mind::BootInfo) {
                 view.poll(station);
                 if mind::time::uptime_ms() - scanned >= SCAN_MS { view.refresh(station); scanned = mind::time::uptime_ms(); }
                 if view.status() != before { mind::println!("[WIFI] {}", view.status()); }
+                say(&view);
             }
             continue;
         };
         if let Flow::Quit = view.key(key, station) { break; }
+        say(&view);
         mind::println!("[WIFI] {}", view.status());
     }
     mind::println!("[WIFI] DONE");
