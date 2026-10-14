@@ -1,9 +1,10 @@
 //! A copy of the tool itself that it starts and talks to: an echo for IPC (`--child`), the memory probes of `check`
-//! (`--probe kernel|code|null`), which must be stopped by a fault, and a reader of its text input (`--reader`).
+//! (`--probe kernel|code|null`), which must be stopped by a fault, a reader of its text input (`--reader`), and one that
+//! says which launch slots it holds (`--slots`).
 use alloc::format;
 use alloc::string::String;
 use core::hint::black_box;
-use mind::abi::{CAP_GRANT, CAP_READ, CAP_WRITE, SLOT_INIT};
+use mind::abi::{CAP_GRANT, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, LAUNCH_SLOTS, SLOT_INIT};
 use mind::idl::loader;
 use mind::io::Writer;
 use mind::ipc::{self, Endpoint, Message};
@@ -20,6 +21,8 @@ pub const PEEK: usize = 5;
 /// then data[0] = HASH, data[1] = their FNV-1a hash.
 pub const READ: usize = 6;
 pub const HASH: usize = 7;
+/// The `--slots` child's answer: data[1] has bit i set when `LAUNCH_SLOTS[i]` holds an endpoint.
+pub const SLOTS: usize = 8;
 /// The input ended, and a read after its end ended it again.
 pub const READ_END: usize = 0;
 /// The input ended, but a read after its end did not answer 0.
@@ -44,6 +47,28 @@ fn session(program: &str, args: &str, endpoint: Endpoint) -> Result<u32, String>
 pub fn start(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
     let session = session(program, args, endpoint)?;
     loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// `start` with a send-only copy of `endpoint` lent in every other launch slot as well, in one session (000-KRN-0101).
+pub fn start_in_every_slot(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
+    let session = session(program, args, endpoint)?;
+    for slot in LAUNCH_SLOTS.into_iter().filter(|&slot| slot != SLOT_INIT) {
+        let granted = ipc::mint(endpoint.0, CAP_WRITE, 0, 0).map(|client| {
+            let granted = loader::grant(Endpoint::LOADER, session, slot as u8, client);
+            let _ = ipc::drop_cap(client);
+            granted
+        });
+        if !matches!(granted, Ok(Ok(Ok(())))) { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("the grant in slot {}: {:?}", slot, granted)); }
+    }
+    loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// Says hello, then which launch slots hold an endpoint (`--slots`).
+pub fn report_slots() {
+    let parent = Endpoint::INIT;
+    if parent.send_timeout(&Message::new(HELLO, 0), 10_000).is_err() { return; }
+    let held = LAUNCH_SLOTS.iter().enumerate().filter(|&(_, &slot)| mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT).fold(0, |mask, (i, _)| mask | 1 << i);
+    let _ = parent.send_timeout(&Message::new(SLOTS, held), 5000);
 }
 
 /// `start` with a text input (loader 1.9, 000-KRN-0094): its PID and the input's writer, which arrives in the fixed

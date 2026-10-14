@@ -314,3 +314,11 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 **Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
 
 **Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.
+
+## A note: a launch session now holds every launch slot (000-KRN-0101)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md), the tools track's request for 211-APP-0044.
+
+**What changed:** `loader`'s launch session keeps a grant for every launch slot and `SLOT_FIRMWARE` (18), not 5. `check`'s `launch: every slot` lends all 17 launch slots in one session.
+
+**Asked:** nothing is required. `wm` and the shell may lend `SLOT_SHELL` and the battery without putting them last, and the `wm` suite can check `console` holding the shell's commands beside `record -w`'s window lease.

@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::child::{self, ECHO, HASH, PEEK, READ, READ_END, SURVIVED};
+use bench::child::{self, ECHO, HASH, PEEK, READ, READ_END, SLOTS, SURVIVED};
 use bench::out::{self, Log};
 use bench::report::{self, Align, Table, Verdict};
 use mind::abi::*;
@@ -108,6 +108,27 @@ fn kernel(run: &mut Run) {
     run.report("a program ends", if child::stop(endpoint, pid) { pass(format!("PID {} ended when told", pid)) } else { fail(format!("PID {} still runs", pid)) });
     let _ = ipc::drop_cap(endpoint.0);
     text_input(run);
+    every_slot(run);
+}
+
+// A launch session that lends every launch slot at once (000-KRN-0101): the program holds them all.
+fn every_slot(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.report("launch: every slot", fail(String::from("no endpoint created"))) };
+    let all = (1usize << LAUNCH_SLOTS.len()) - 1;
+    let verdict = match child::start_in_every_slot("check", "--slots", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)) {
+        Err(why) => fail(why),
+        Ok(pid) => {
+            let said = endpoint.recv_timeout(0, 5000);
+            let _ = child::gone_within(pid, 2000);
+            match said {
+                Ok(m) if m.data == [SLOTS, all] => pass(format!("{} slots lent in one session, all held", LAUNCH_SLOTS.len())),
+                Ok(m) => fail(format!("slots held {:#x} of {:#x}", m.data[1], all)),
+                Err(e) => fail(format!("no answer: {:?}", e)),
+            }
+        }
+    };
+    run.report("launch: every slot", verdict);
+    let _ = ipc::drop_cap(endpoint.0);
 }
 
 // What a `--reader` child said: the bytes it read, their hash and how its input ended.
@@ -399,6 +420,7 @@ fn main(info: &'static mind::BootInfo) {
     let args = mind::process::args_str().trim();
     if args == "--child" { return child::serve(); }
     if args == "--reader" { return child::read_input(); }
+    if args == "--slots" { return child::report_slots(); }
     if let Some(kind) = args.strip_prefix("--probe ") { return child::probe(kind); }
     let chosen: Vec<&str> = args.split_whitespace().collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("check: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }

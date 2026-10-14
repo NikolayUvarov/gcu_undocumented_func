@@ -165,7 +165,11 @@ fn spawn_helper(name: &str) -> Result<u64, Error> {
 }
 
 // A launch in progress (idl/loader.wit): who started it, what to run, the capabilities lent for the program's slots.
-struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); 5], count: usize }
+struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); SESSION_GRANTS], count: usize }
+
+// Every launch slot and SLOT_FIRMWARE at once (000-KRN-0101): with the standard five and the debug log, 24 of SPAWN's 32.
+const SESSION_GRANTS: usize = LAUNCH_SLOTS.len() + 1;
+const _: () = assert!(5 + SESSION_GRANTS + 1 <= SPAWN_GRANTS_MAX);
 
 impl Session {
     fn drop_grants(&mut self) { for &(_, handle) in &self.grants[..self.count] { let _ = ipc::drop_cap(handle); } self.count = 0; }
@@ -186,7 +190,7 @@ impl Launcher {
         }
         let index = self.sessions.iter().position(Option::is_none).ok_or(loader::Error::Sessions)?;
         self.next = self.next.wrapping_add(1).max(1);
-        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); 5], count: 0 };
+        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); SESSION_GRANTS], count: 0 };
         session.name[..name.len()].copy_from_slice(name.as_bytes()); session.args[..args.len()].copy_from_slice(args.as_bytes());
         self.sessions[index] = Some(session);
         Ok(self.next)
