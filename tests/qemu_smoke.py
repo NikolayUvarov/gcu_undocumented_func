@@ -834,6 +834,13 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
+    vm.send("stop\n")
+    vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
+    screen = "\n".join(screen_text(vm))
+    for line in ("MIND CORE: STOPPING THE SYSTEM...", "MIND CORE: THE SYSTEM IS STOPPED. IT IS SAFE TO TURN THE MACHINE OFF."):
+        assert line in screen, screen
+    print("PASS: stop: the kernel stops the other CPUs, then says on COM1 and on the screen that the system stopped", flush=True)
 
 
 def keys_suite(vm):

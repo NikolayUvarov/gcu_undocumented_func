@@ -125,6 +125,17 @@ pub extern "C" fn _start(info: &BootInfo) -> ! {
     }
 }
 
+/// `HALT` (the shell's `stop`, 000-KRN-0110): the other CPUs stop first, so no task draws over the last lines, then the
+/// screen and COM1 say the system stopped.
+pub fn halt_asked() -> ! {
+    serial_only("MIND CORE KERNEL: STOPPING THE SYSTEM\n");
+    cpu::stop_others();
+    clock::spin_us(2_000); // a frame being copied to the screen ends before the lines go over it
+    screen::last("MIND CORE: STOPPING THE SYSTEM...\nMIND CORE: THE SYSTEM IS STOPPED. IT IS SAFE TO TURN THE MACHINE OFF.\n");
+    serial_only("MIND CORE KERNEL: THE SYSTEM IS STOPPED\n");
+    cpu::halt_all()
+}
+
 // Serial output without locks or allocation, also on the screen until a task takes it.
 pub struct PanicSerial;
 impl core::fmt::Write for PanicSerial {
