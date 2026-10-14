@@ -327,4 +327,15 @@ One of:
 
 ### Acceptance criteria
 
-The `wm` suite's `shell_window` passes under load. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
+The `wm` suite's `shell_window` passes under load.
+
+**A second race in the same suite (2026-10-14, the kernel track's gate of 62a2624 on un-rizen-service).**
+- **Where:** `every_entry_reacts` presses Enter on "System>Turn off" and `keys("ret")` waits for one `[WM] MODE=` line.
+- **What happened:**
+  - the shell logged `FOR PID 76 THE SHELL ASKS IN ITS WINDOW: "poweroff"` and opened its window;
+  - wm's `MODE=NORMAL` line never reached the serial line, because the shell passes wm's lines on no more while it asks (the test's own comment says so);
+  - the test then waited 12 s for that line, while the shell waited for the test's `n`.
+- **Why only sometimes:** whether wm's line gets out before the shell starts asking depends on timing. "Restart", just before it, passed.
+- **The fix, one of:**
+  - `keys("ret")` for the two power entries waits for no state line, and the test reads the question from the screen first, as it does next;
+  - the shell keeps passing the manager's lines while it asks. For example, run it with the shell slowed between `surface` and `set_title` by a test feature, or many times on a busy machine.
