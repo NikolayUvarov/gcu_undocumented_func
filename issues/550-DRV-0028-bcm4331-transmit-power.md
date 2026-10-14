@@ -112,6 +112,18 @@ It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 
 - **The pocket router acknowledges everything now that it is on channel 8.** In four runs on channel 6 it acknowledged nothing, CCK included. Whether channel 6 or the router's state then was the cause is open: the other network on channel 6 (`Xiaomi_7C34`, −44 to −47 dBm) did answer broadcast requests there.
 - **Next:** the HT-PHY's receive side, compared with b43's sequence register by register (stage 3: init values, tables, AGC and clip settings, channel 6's entries).
 
+**2026-10-14, the receive side compared with b43** (`scratchpad` audit, facts only):
+- **Stage 3 reproduces b43's HT path register for register, value for value and in order.** That covers every PHY table, the 2059 init table and the channel table (channel 6 included).
+- **The one gap is b43's six TX power steps,** which we leave out.
+- **b43's HT path itself writes no AGC settings and runs no RSSI, RX IQ or DC calibration.** The weak OFDM reception may be b43's as much as ours.
+
+The next run, to find where OFDM frames are lost:
+- frames counted by modulation and outcome (good, bad FCS, bad PLCP), with bad frames kept for the host;
+- 6 Mbit/s with each core's front end switched off in turn;
+- the good OFDM frames' per-core powers and clip bits;
+- PHY tables 0, 1, 2 and 0x28 at offsets 8–11 (b43 writes 0, 1 and 0x28, and doubts 0x28 against 2);
+- the SPROM's board flags, chains and front-end words.
+
 ## Related
 
 [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), `bcm_wifi/`.

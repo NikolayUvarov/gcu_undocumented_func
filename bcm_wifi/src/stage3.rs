@@ -83,7 +83,7 @@ impl<'a> Core<'a> {
     }
     fn table16_fill(&self, table: u16, offset: u16, n: usize) { self.phy_w(0x072, table << 10 | offset); for _ in 0..n { self.phy_w(0x073, 0); } }
     fn table32_fill(&self, table: u16, offset: u16, n: usize) { self.phy_w(0x072, table << 10 | offset); for _ in 0..n { self.phy_w(0x074, 0); self.phy_w(0x073, 0); } }
-    fn table16_read(&self, table: u16, offset: u16) -> u16 { self.phy_w(0x072, table << 10 | offset); self.phy(0x073) }
+    pub(crate) fn table16_read(&self, table: u16, offset: u16) -> u16 { self.phy_w(0x072, table << 10 | offset); self.phy(0x073) }
     fn table32_read(&self, table: u16, offset: u16) -> u32 { self.phy_w(0x072, table << 10 | offset); let high = self.phy(0x074) as u32; high << 16 | self.phy(0x073) as u32 }
 
     // Shared memory takes byte offsets; scratch takes word indexes.
@@ -122,6 +122,12 @@ impl<'a> Core<'a> {
         self.phy_clear(0xC01, 0xC000);
         self.w16(PSM_PHY_HEADER, header);
     }
+    // A core's analog front end: its control and override words (PHY 0x911 and 0x910, then + 4 per core).
+    pub(crate) fn afe(&self, core: u16) -> (u16, u16) { (self.phy(0x911 + 4 * core), self.phy(0x910 + 4 * core)) }
+    // A core's front end switched off as b43 switches the analog part off: the override first, then the control.
+    pub(crate) fn afe_off(&self, core: u16) { self.phy_w(0x910 + 4 * core, 0x07FF); self.phy_w(0x911 + 4 * core, 0x00FD); }
+    // A core's front end given back its words: the control first, then the override.
+    pub(crate) fn afe_restore(&self, core: u16, (control, over): (u16, u16)) { self.phy_w(0x911 + 4 * core, control); self.phy_w(0x910 + 4 * core, over); }
     fn analog_on(&self) { for (control, over) in [(0x911, 0x910), (0x915, 0x914), (0x919, 0x918)] { self.phy_w(control, 0x00CD); self.phy_w(over, 0x0000); } }
 
     // The fixed transmit gain the channel switch sets from entry `gain` of the gain table; the entry is returned.
