@@ -18,6 +18,8 @@ On the MacBook Pro, one boot on request logs the SPROM's power data, the idle TS
 
 ## Progress
 
+The code these runs tested is on `claude/ASR-DRV` and `fast-test`, and reaches `main` after its gate: gain entry 40, the directed-probe tests, core 2's front end off, and the radio's calls of 550-DRV-0027. Until then `main`'s `bcm_wifi` has 550-DRV-0026's stage 5.
+
 **2026-10-13, the maintainer's run of `fast-test` 28d9c3d** (`log:boot0004.log`, stage 4 through the radio's calls of 550-DRV-0027):
 
 | Test | Gain entry | Result |
@@ -112,7 +114,7 @@ It also logs the PHY registers that decide OFDM reception (0x0B0, 0xC01, 0xC0A, 
 - **The pocket router acknowledges everything now that it is on channel 8.** In four runs on channel 6 it acknowledged nothing, CCK included. Whether channel 6 or the router's state then was the cause is open: the other network on channel 6 (`Xiaomi_7C34`, −44 to −47 dBm) did answer broadcast requests there.
 - **Next:** the HT-PHY's receive side, compared with b43's sequence register by register (stage 3: init values, tables, AGC and clip settings, channel 6's entries).
 
-**2026-10-14, the receive side compared with b43** (`scratchpad` audit, facts only):
+**2026-10-14, the receive side compared with b43** (an audit of facts, kept outside the repository):
 - **Stage 3 reproduces b43's HT path register for register, value for value and in order.** That covers every PHY table, the 2059 init table and the channel table (channel 6 included).
 - **The one gap is b43's six TX power steps,** which we leave out.
 - **b43's HT path itself writes no AGC settings and runs no RSSI, RX IQ or DC calibration.** The weak OFDM reception may be b43's as much as ours.
