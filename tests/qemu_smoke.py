@@ -2031,6 +2031,7 @@ def fm_check(vm):
     vm.send_bytes(b"\x1b[21~")
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("rm ram:fmrun.msh"), "OK")  # the RAM disk empty again for vfs_check
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel in front and fm back after it, "
           "Ctrl+Z from it to the shell, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
           "the mouse (click, double click, wheel, the cell under it inverted); Enter on a script says to run it in the shell", flush=True)
