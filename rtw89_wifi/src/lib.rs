@@ -57,3 +57,6 @@ pub(crate) mod tssi;
 #[allow(dead_code)]
 pub(crate) mod dpk;
 mod dpk_tables;
+
+#[allow(dead_code)]
+pub(crate) mod channel_rfk;
