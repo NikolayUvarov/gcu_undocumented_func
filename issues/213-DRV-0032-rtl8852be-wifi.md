@@ -160,16 +160,17 @@ under one deadline. Partial failures poison the attempt and independently
 attempt BB/RF disable; guard refusal never changes an unknown active device.
 The library requires actual firmware-init-ready, full single-band MAC,
 BB access, stopped data paths and a complete BAR2 mapping. The native service
-still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
-RFK calibration, board trims and regulatory authorization remain integration
+still does not call it. The chip TX-power unit, gain decoding and BB reset
+now follow the BB table under the same deadline; failed interleaves cannot
+publish gains or admit RF programming. BTC/DM interleaves, RFK calibration,
+board trims and regulatory authorization remain integration
 work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
 
-After publication of `59a77177`, 18/19 Rust fixtures and all four extractor
-fixtures passed, as did pinned-source regeneration. The failing RF-order
-fixture expected register 0 before the source table's initial register 5.
-Its exact prefix is corrected. A twentieth fixture covers valid slow XTAL
-cleanup under the source-derived 400 ms total ceiling. The revised native
-build and fixture compilation pass; their execution awaits publication.
-No hardware or radio success is claimed.
+After publication of `f4766604`, all 20 Rust fixtures and four extractor
+fixtures passed, as did pinned-source regeneration. The earlier RF-order
+expectation is corrected to register 5 before register 0. Slow XTAL cleanup
+uses the source-derived common 400 ms ceiling. The separate TX-power/BB-reset
+slice builds natively and 24 fixtures compile; those revised fixtures await
+publication before execution. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.

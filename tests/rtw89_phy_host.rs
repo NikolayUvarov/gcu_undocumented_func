@@ -17,7 +17,7 @@ struct Device {
     memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, xtal_delay_us: u64, xtal_pending: Option<(u64, u32)>, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
-    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>,
+    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>, deadline_write_number: Option<usize>, delay_jump: Option<u32>,
 }
 
 fn identity() -> board::Identity {
@@ -28,7 +28,7 @@ impl Device {
     fn new() -> Self {
         let mut d = Self { memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
-            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None };
+            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_write_number: None, delay_jump: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
             (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03)] {
@@ -73,6 +73,7 @@ impl Device {
         self.events.push(Event::Write(at, width, value));
         self.put(at, width, value);
         if self.deadline_write == Some(at) { self.now += 100_000; self.deadline_write = None; }
+        if self.deadline_write_number == Some(self.writes) { self.now+=100_000; self.deadline_write_number=None; }
         if self.fail_write == Some(self.writes) || self.fail_cleanup == Some(at) {
             return Err(Fault::new(FaultKind::Access, at, value));
         }
@@ -108,7 +109,11 @@ impl RegisterIo for Device {
         if self.jump_call == Some(self.now_calls) { self.now += 100_000; }
         self.now
     }
-    fn delay_us(&mut self, us: u32) -> Result<()> { self.tick(us as u64); Ok(()) }
+    fn delay_us(&mut self, us: u32) -> Result<()> {
+        self.tick(us as u64);
+        if self.delay_jump == Some(us) { self.tick(100_000); self.delay_jump=None; }
+        Ok(())
+    }
 }
 
 impl PhyIo for Device {
@@ -164,12 +169,12 @@ fn bb_applies_full_mcu_offset_and_preserves_repeated_writes() {
     let mut d = Device::new();
     let mut p = Phy::new(&mut d, identity()); p.baseband().unwrap();
     assert_eq!(p.state(), State::BasebandLoaded);
-    assert_eq!(d.writes, 1013);
+    assert_eq!(d.writes, 1034);
     assert_eq!(d.events[0], Event::Write(0x10704,4,0x601e0100));
-    assert_eq!(d.events.last().unwrap(), &Event::Write(0x100f8,4,0x20220408));
+    assert_eq!(d.events[1012], Event::Write(0x100f8,4,0x20220408));
     let repeated: Vec<_> = d.events.iter().filter(|e| matches!(e, Event::Write(0x10000,4,_))).cloned().collect();
     assert_eq!(repeated, [Event::Write(0x10000,4,0xc580801e), Event::Write(0x10000,4,0x0580801f)]);
-    assert!(d.events.iter().all(|e| matches!(e, Event::Write(at,4,_) if *at>=0x10000 && *at<0x20000)));
+    assert!(d.events[..1013].iter().all(|e| matches!(e, Event::Write(at,4,_) if *at>=0x10000 && *at<0x20000)));
 }
 
 #[test]
@@ -298,7 +303,7 @@ fn active_grant_may_also_decode_io_while_phy_uses_only_mmio() {
     let mut d=Device::new(); d.command=7;
     let mut p=Phy::new(&mut d,identity()); p.baseband().unwrap(); p.radio().unwrap(); p.nctl().unwrap();
     assert_eq!(p.state(),State::TablesLoaded); assert_eq!(d.command,7);
-    assert!(d.events.iter().all(|event| match event { Event::Write(at,_,_) => *at>=0x10000, Event::H2c(_,_,_) => true }));
+    assert!(d.events.iter().all(|event| match event { Event::Write(at,_,_) => *at>=0x10000 || matches!(*at,0xd248|0xd220|0xd240|0xd288|0xd28c|0xd290), Event::H2c(_,_,_) => true }));
 }
 
 #[test]
@@ -342,4 +347,55 @@ fn chip_cleanup_accepts_slow_xtal_commands_within_source_derived_total_budget() 
     let start=d.now; let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
     assert_eq!(error.cause.kind,FaultKind::Access); assert!(error.disable_bb_rf.is_none());
     assert!(d.now-start>=60_000 && d.now-start<400_000); assert!(d.xtal_pending.is_none()); d.reset();
+}
+
+#[test]
+fn txpower_and_chip_reset_follow_bb_in_exact_order_preserving_other_fields() {
+    let mut d=Device::new();
+    d.put(0xd288,4,0x12345678); d.put(0xd28c,4,0x87654335); d.put(0xd290,4,0x76543216);
+    d.put(0x158dc,4,0x80001234); d.put(0x178dc,4,0x80005678);
+    let gain=Phy::new(&mut d,identity()).baseband().unwrap(); assert_eq!(gain,phy::gain_defaults());
+    assert_eq!(&d.events[1013..], &[
+        Event::Write(0xd248,4,0x07763333), Event::Write(0xd220,4,0x01ebf000), Event::Write(0xd240,4,0x0002f8ff),
+        Event::Write(0xd288,4,0x92345678), Event::Write(0xd28c,4,0x87654320), Event::Write(0xd290,4,0x7654321d),
+        Event::Write(0x158dc,4,0xc0001234), Event::Write(0x15818,4,0x482c1800),
+        Event::Write(0x178dc,4,0xc0005678), Event::Write(0x17818,4,0x482c1800),
+        Event::Write(0x11200,4,0x70010142), Event::Write(0x13200,4,0x70010142),
+        Event::Write(0x10704,4,0x601c05ff), Event::Write(0x10704,4,0x601c05fd),
+        Event::Write(0x11200,4,0x00010142), Event::Write(0x13200,4,0x00010142),
+        Event::Write(0x10704,4,0x601c05ff), Event::Write(0x158dc,4,0x80001234),
+        Event::Write(0x15818,4,0x082c1800), Event::Write(0x178dc,4,0x80005678), Event::Write(0x17818,4,0x082c1800),
+    ]);
+    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.get(0x1010,4),0xb0f03); assert_eq!(d.command,6);
+}
+
+#[test]
+fn every_post_table_write_failure_poisoned_without_publishing_gains_or_radio() {
+    for fail in 1014..=1034 {
+        let mut d=Device::new(); d.fail_write=Some(fail);
+        let mut p=Phy::new(&mut d,identity()); let error=p.baseband().unwrap_err();
+        assert_eq!(error.cause.kind,FaultKind::Access);
+        assert_eq!(error.stage,if fail<=1019 { Stage::TxPowerUnit } else { Stage::BasebandReset });
+        assert!(error.disable_bb_rf.is_none()); assert_eq!(p.state(),State::Failed);
+        assert_eq!(p.bus_between_stages().events[fail],Event::Write(0x2f0,4,0));
+        let before=p.bus_between_stages().writes; assert!(p.radio().is_err()); assert!(p.baseband().is_err());
+        assert_eq!(p.bus_between_stages().writes,before); p.bus_between_stages().reset();
+    }
+}
+
+#[test]
+fn last_chip_reset_write_cannot_report_success_after_whole_bb_deadline() {
+    let mut d=Device::new(); d.deadline_write_number=Some(1034);
+    let mut p=Phy::new(&mut d,identity()); let error=p.baseband().unwrap_err();
+    assert_eq!(error.stage,Stage::BasebandReset); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert_eq!(p.state(),State::Failed); assert!(error.disable_bb_rf.is_none()); d.reset();
+}
+
+#[test]
+fn bb_reset_delay_overrun_blocks_later_reset_writes_and_radio() {
+    let mut d=Device::new(); d.delay_jump=Some(1);
+    let mut p=Phy::new(&mut d,identity()); let error=p.baseband().unwrap_err();
+    assert_eq!(error.stage,Stage::BasebandReset); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert!(error.disable_bb_rf.is_none()); assert!(p.radio().is_err());
+    assert_eq!(d.events[1025],Event::Write(0x2f0,4,0)); d.reset();
 }
