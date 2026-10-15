@@ -10,6 +10,20 @@
 #[path = "../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
 #[path = "../rtw89_wifi/src/rxdck.rs"] mod rxdck;
 
+extern crate self as mind;
+#[path="../libmind/src/sha256.rs"] pub mod sha256;
+#[path="../rtw89_wifi/src/firmware.rs"] mod firmware;
+#[path="../rtw89_wifi/src/fwcmd.rs"] mod fwcmd;
+#[path="../rtw89_wifi/src/mac.rs"] mod mac;
+#[path="../rtw89_wifi/src/download.rs"] mod download;
+#[path="../rtw89_wifi/src/runtime_mac_regs.rs"] mod runtime_mac_regs;
+#[path="../rtw89_wifi/src/runtime_mac.rs"] mod runtime_mac;
+#[path="../rtw89_wifi/src/rx.rs"] mod rx;
+#[path="../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
+#[path="../rtw89_wifi/src/c2h.rs"] mod c2h;
+#[path="../rtw89_wifi/src/post_mac_regs.rs"] mod post_mac_regs;
+#[path="../rtw89_wifi/src/post_mac.rs"] mod post_mac;
+
 use io::{Fault, FaultKind, RegisterIo, Result};
 use phy::{Phy, PhyIo, State, Stage};
 

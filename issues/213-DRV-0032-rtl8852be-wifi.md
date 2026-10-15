@@ -380,3 +380,13 @@ records exact skipped chip hooks and the remaining source order through board
 trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
+
+### PHY consumer of the owned RX permit
+
+The shared PHY guard now accepts active RX only through the actual borrowed
+`ReceivePermit`, with default refusal, a 10 ms callback ceiling and repeated
+DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
+DACK phases remain distinct. Six integration fixtures exercise real session
+objects and stale/current hardware state without fabricating a token; the
+PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
+execution awaits publication. This does not grant BTC or transmit readiness.
