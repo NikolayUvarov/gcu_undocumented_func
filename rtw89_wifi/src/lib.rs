@@ -36,3 +36,5 @@ mod post_mac_regs;
 pub(crate) mod report_tail;
 
 pub mod rxdck;
+
+pub mod btc_session;

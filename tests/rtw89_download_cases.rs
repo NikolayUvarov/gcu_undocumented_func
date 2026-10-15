@@ -139,10 +139,15 @@ fn synthetic_file() -> Vec<u8> {
 fn fixture(file: &[u8]) -> Verified<'_> { Verified::parse_pinned(file).unwrap() }
 
 pub(crate) fn with_downloaded_queue(check: impl FnOnce(Ready, &mut Queue<'_>)) {
-    let file=synthetic_file(); let mut region=Region::new(); let mut bus=Device::new(); let mut queue=region.queue(&mut bus);
+    with_downloaded_storage(|ready,queue,_,_,_|check(ready,queue));
+}
+
+pub(crate) fn with_downloaded_storage(check: impl FnOnce(Ready, &mut Queue<'_>, *mut u8, usize, u32)) {
+    let file=synthetic_file(); let mut region=Region::new(); let base=region.base; let length=region.layout.size();
+    let mut bus=Device::new(); let mut queue=region.queue(&mut bus);
     let ready=run(&mut bus,&mut queue,fixture(&file)).unwrap();
     assert_eq!(ready.session(),queue.session());
-    check(ready,&mut queue);
+    check(ready,&mut queue,base,length,bus.get(fwcmd::INDEX));
     assert_eq!(stop(&mut bus,&mut queue),Stop{dma:None,cpu:None});
     bus.command=0;
 }

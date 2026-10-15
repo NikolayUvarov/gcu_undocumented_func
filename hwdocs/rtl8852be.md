@@ -904,6 +904,15 @@ retained. The full own-branch image builds and twelve startup fixtures compile;
 execution awaits publication. Cumulative runtime-MAC/RX modeling and actual
 hardware verification remain separate, incomplete evidence requirements.
 
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.
+
 ## Exact coexistence command codecs and bounded register transitions
 
 `btc_codec` selects only the observed cut-1/RFE-1, physical security bytes
@@ -956,17 +965,47 @@ Precise source anchors, all at the existing BSD-licensed pin: `coex.c`
 `rtw8852b.c` monitor register and RF parameter tables. The eighteen new
 fixtures cover packed wire formats and production H2C integration, actual
 scoreboard ownership, grant order/restoration, pending-command protection,
-applied-write failures and bounded time/clock faults. They are compiled;
-execution evidence will be recorded after raw publication. This adds no
-hardware, native-policy or calibrated-radio claim.
+applied-write failures and bounded time/clock faults. Own-branch `94762996`
+native build passed (0.80 seconds, no warnings). After raw publication
+`1006c136`, all seven codec and eleven control fixtures passed on 2026-10-16
+MSK (0.00 seconds each, none failed or ignored, x86-64 WSL2). The codec
+command selected its seven new cases; inherited downloader tests were not
+rerun in this slice. This adds no hardware, native-policy or calibrated-radio claim.
 
-## Native startup execution evidence
+## Exclusive startup command and receive session
 
-Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
-executing its compiled startup harness. All twelve cases passed on 2026-10-16
-(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
-c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
-all thirteen startup-stage failure positions and independent cleanup.
-The later own-branch integration `f314d00c` also builds the complete x86
-image with the queue-session and typed PHY/RX guards. These checks do not
-establish cumulative runtime device behavior or physical connectivity.
+`btc_session::Session` consumes the actual downloader `Ready` and borrows the
+matching command queue, both RX rings, their `Receiving` token, caller scratch
+and the same device adapter. It creates the normal H2C sequence exactly once
+for this startup; the existing 256-command bound is explicit and is not a
+continuous-runtime reset strategy. `PhyIo::command_session` exposes the actual
+queue identity while healthy. A failed session rejects new PHY PCI guards and
+receive permits; raw register access remains available for independent shutdown.
+
+Each command has one absolute budget, at most 100 ms, covering ownership checks,
+publication, RXQ/RPQ progress, requested receipt/DONE ACKs and command-DMA/TX-busy
+drain. An outer clock window checks nested accesses before doorbells and RX
+release, including CPU-copy delays that an inner relative timer cannot cover.
+Finite loop counts also terminate a frozen clock. Only definite pre-publication
+queue-full is retried; uncertain publication, malformed input, a lost permit,
+clock error, rejection or deadline failure poisons the session without resend.
+Neither a DONE ACK nor DMA drain establishes an applied coexistence policy.
+
+Only RXQ can deliver a C2H ACK. Complete BTC C2H messages are copied into four
+fixed 2048-byte slots before their DMA buffers can be reused. The policy owner
+must consume these ordered events; overflow fails instead of discarding BT
+state. Other traffic is counted without WLAN dispatch. The session does not
+interpret BTINFO, grant RFK, initialize BTC policy or enable ordinary TX. Future
+policy orchestration must bind this session to the actual PHY attempt and
+ConfigPrepared, process those events and complete all source common actions.
+Dropping the session frees no DMA; the external owner still performs independent
+receive/radio/command shutdown and PCI quiescence with retained allocations.
+
+Thirteen focused host fixtures compile with real synthetic downloader tokens,
+production runtime-MAC preparation and owned receive activation. The model
+explicitly seeds the post-download register handoff; it is separate from the
+cumulative cold-device model and is not device evidence. It exercises shared RF
+mirror sequencing, ACK ownership/rejection, retained events and overflow,
+poisoned-PHY refusal with raw cleanup, live-ring corruption, clock jumps before
+publication, frozen clocks and incomplete hardware consumption. Execution is
+pending raw publication. No native radio endpoint or hardware guarantee changes.

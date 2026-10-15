@@ -334,6 +334,17 @@ private-file GEN1/GEN2 and missing-H2C model scenarios also passed, on
 2026-10-16 MSK. Full-gate and hardware evidence remain pending. This does
 not bind the separate future BTC/PHY attempt.
 
+The following `btc_codec`/`btc_control` prerequisite slice adds only exact
+profile-105 wire encoding and bounded low-level no-link coexistence register
+steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
+refuses pending-LTE overwrite, and retains separate source ACK choices.
+Own-branch `94762996` built without warnings (0.80 seconds); after raw
+publication `1006c136`, its seven codec and eleven control fixtures passed
+on 2026-10-16 MSK (0.00 seconds each, zero failed or ignored, x86-64 WSL2).
+The complete session-bound owner and applied policy/C2H
+orchestration remain unimplemented, and no Initialized or RFK-grant token
+is available from this slice. No native or hardware guarantee changes;
+[scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
 Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
 executing its compiled startup harness. All twelve cases passed on 2026-10-16
 (0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
@@ -383,3 +394,11 @@ unsupported events. It carries no session correlation or RFK permission;
 the future owner must process state changes and verify policy application.
 Seven host parser fixtures compile; build, execution and native/hardware
 evidence are pending for this slice.
+
+The owned startup `btc_session` adapter consumes the downloader token and uses
+actual command/RX/Receiving objects for normal H2C and PHY RF-page sends. It
+retains ordered bounded BTC events and rejects new stages after an uncertain
+failure; raw cleanup remains possible. Thirteen model fixtures compile, with
+execution pending raw publication. These seeded-handoff fixtures do not establish
+cumulative cold-device behavior, complete BTC initialization or RFK permission.
+The native service still does not invoke this adapter or expose a radio endpoint.
