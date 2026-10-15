@@ -34,6 +34,7 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 | [2026-10-16-network-validation.md](2026-10-16-network-validation.md) | Later ABI/Realtek validation subsets, retained TLS-fixture failure, MacBook/Ryzen hardware acceptance still open |
 | [2026-10-15-astra-validation.md](2026-10-15-astra-validation.md) | Exact ASTRA candidate, 24 passing host/x86 groups, deferred ARM and hardware limits |
 | [2026-10-15-hardware-audit.md](2026-10-15-hardware-audit.md) | Ryzen cache and NIC findings, bounded network work, UI reports, Effector prerequisites, task routing and separate hardware acceptance |
+| [2026-10-16-bcm-tx-wait-audit.md](2026-10-16-bcm-tx-wait-audit.md) | BCM4331 TX status loop bypasses its deadline on intermediate/unrelated statuses; owner request and hardware evidence boundary |
 | [2026-10-09-baseline.md](2026-10-09-baseline.md) | The state of the repository before the first audit |
 | [2026-10-09-repository-audit.md](2026-10-09-repository-audit.md) | Code audit at `2cbda21`: eight confirmed findings covering FAT, blockstore, packaging, CI and file-manager/editor data loss; routing and acceptance criteria |
 | [2026-10-09-validation.txt](2026-10-09-validation.txt) | Host-test results, skipped checks, existing ELF fixture hashes and audit reproduction output |
