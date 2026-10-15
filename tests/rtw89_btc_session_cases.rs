@@ -390,3 +390,79 @@ fn btc_rfk_stop_policy_timeout_reserves_real_owned_cleanup_within_caller_budget(
     assert!(s.bus.writes.iter().any(|(at,_,v)|*at==0xac&&v&(1<<11)==0));assert_eq!(s.bus.lte[0],saved);
     let failure=crate::btc_context::last_rfk_failure(s).unwrap();assert!(failure.cleanup_attempted);assert_eq!(failure.clear_scoreboard,None);assert_eq!(failure.restore_antenna,None);
 }));}
+
+
+fn iqk_notice(state:crate::dack::RfkState,band:u8)->crate::dack::BtcNotice{
+    let path=if matches!(state,crate::dack::RfkState::OneshotStart|crate::dack::RfkState::OneshotStop){3}else{0};
+    crate::dack::BtcNotice{calibration:crate::dack::Calibration::Iqk,state,phy_map:0x10|band<<6|path}
+}
+#[test]
+fn btc_nested_iqk_oneshots_retain_outer_grant_without_replaying_policy(){for band in [0,1]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=2|1<<30;crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,band),100_000).unwrap();
+    let packets=s.bus.packets.len();let writes=s.bus.writes.len();
+    for _ in 0..2{crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,band),100_000).unwrap();
+        crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,band),100_000).unwrap();}
+    assert_eq!(s.bus.packets.len(),packets);assert_eq!(s.bus.writes.len(),writes);assert_eq!(s.bus.get(0xac)&(1<<11),1<<11);
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,band),100_000).unwrap();assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}}
+#[test]
+fn btc_nested_orphan_start_or_stop_never_grants(){for state in [crate::dack::RfkState::OneshotStart,crate::dack::RfkState::OneshotStop]{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();let writes=s.bus.writes.len();let packets=s.bus.packets.len();
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(state,0),100_000).is_err());assert_eq!(s.bus.writes.len(),writes);assert_eq!(s.bus.packets.len(),packets);
+}));}}
+#[test]
+fn btc_nested_wrong_band_or_calibration_does_not_release_held_grant(){for wrong in 0..2{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,0),100_000).unwrap();
+    let mut nested=iqk_notice(crate::dack::RfkState::OneshotStart,wrong);if wrong==0{nested.calibration=crate::dack::Calibration::Dpk;}
+    let writes=s.bus.writes.len();assert!(crate::dack::DackIo::btc_rfk(s,nested,100_000).is_err());assert_eq!(s.bus.writes.len(),writes);
+    let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000);assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}}
+#[test]
+fn btc_nested_duplicate_and_mismatched_stop_keep_matching_cleanup_possible(){for duplicate in [false,true]{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,0),100_000).unwrap();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,0),100_000).unwrap();
+    let bad=if duplicate{iqk_notice(crate::dack::RfkState::OneshotStart,0)}else{iqk_notice(crate::dack::RfkState::OneshotStop,1)};
+    assert!(crate::dack::DackIo::btc_rfk(s,bad,100_000).is_err());assert_eq!(s.bus.get(0xac)&(1<<11),1<<11);
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,0),100_000).is_err());
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000).is_err());assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}}
+#[test]
+fn btc_nested_outer_stop_cannot_silently_drop_an_active_oneshot(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,0),100_000).unwrap();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,0),100_000).unwrap();
+    let writes=s.bus.writes.len();assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000).is_err());
+    assert_eq!(s.bus.writes.len(),writes);assert_eq!(s.bus.get(0xac)&(1<<11),1<<11);
+    let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,0),100_000);
+    let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000);assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}
+#[test]
+fn btc_nested_failed_admission_and_radio_off_close_without_reenabling_rf(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,0),100_000).unwrap();
+    s.bus.bt=0x62;assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,0),100_000).is_err());
+    s.bus.regs[2]&=!3;s.bus.set(0x2f0,0);s.bus.writes.clear();
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,0),100_000).is_err());
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000).is_err());
+    assert!(!s.bus.writes.iter().any(|(at,_,_)|*at==2||*at==0x2f0||*at>=0x10000));assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}
+#[test]
+fn btc_nested_dpk_uses_real_outer_grant_and_cannot_borrow_iqk_oneshot(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();let mut start=rfk_notice(crate::dack::RfkState::Start);start.calibration=crate::dack::Calibration::Dpk;
+    crate::dack::DackIo::btc_rfk(s,start,100_000).unwrap();assert_eq!(s.bus.get(0xac)&(1<<11),1<<11);
+    assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,0),100_000).is_err());
+    start.state=crate::dack::RfkState::Stop;assert!(crate::dack::DackIo::btc_rfk(s,start,100_000).is_err());assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}
+
+#[test]
+fn btc_nested_fresh_whql_state_refuses_but_keeps_matching_cleanup(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Start,0),100_000).unwrap();s.bus.bt=2|4;
+    let writes=s.bus.writes.len();assert!(crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStart,0),100_000).is_err());
+    assert_eq!(s.bus.writes.len(),writes);assert_eq!(crate::btc_context::last_rfk_failure(s).unwrap().cause,crate::btc_context::Error::Whql);
+    let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,0),100_000);
+    let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000);assert_eq!(s.bus.get(0xac)&(1<<11),0);
+}));}

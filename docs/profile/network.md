@@ -446,3 +446,10 @@ or radio-off STOP reports incomplete policy while attempting raw ownership
 cleanup. Eleven focused fixtures compile, pending raw publication and execution.
 This does not activate the native callback, establish physical calibration or
 complete association. [Limits and cleanup](../../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
+
+
+The owned BTC callback also has source-valued IQK/DPK and nested IQK notices.
+Nested success requires an actual matching outer grant; TSSI must obtain an
+extra enclosing IQK grant rather than relying on upstream's discarded rejection.
+Eight regression cases compile pending execution. This stricter admission is
+not a claim of complete upstream equivalence or completed calibration/TX policy.

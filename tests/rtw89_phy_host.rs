@@ -575,6 +575,7 @@ impl dack::DackIo for Device {
         let (delay,fail)=match notice.state {
             dack::RfkState::Start=>(self.btc_start_delay,self.btc_start_fail),
             dack::RfkState::Stop=>(self.btc_stop_delay,self.btc_stop_fail),
+            dack::RfkState::OneshotStart|dack::RfkState::OneshotStop=>return Err(Fault::new(FaultKind::PowerState,0,notice.state as u32)),
         };
         self.tick(delay);
         if fail {Err(Fault::new(FaultKind::Access,0xaa,notice.state as u32))} else {Ok(())}

@@ -55,7 +55,7 @@ of firmware consumption, because either observation alone is insufficient.
 This validates the transport ownership handoff. The modeled firmware emits
 ideal synchronous ACKs; it does not execute BTC policy or RF calibration,
 and successful command exchange does not establish WLAN operation. These
-new cases are awaiting raw publication and focused execution.
+new cases passed the focused model run recorded below.
 
 ## Evidence
 
@@ -77,3 +77,17 @@ branch on 2026-10-16 MSK:
 The focused filters select the named suites; unrelated imported module cases
 were not rerun. Independent read-only review found no blocker. No build or
 test ran on `fast-test`; full gate and physical-device acceptance remain open.
+
+### Normal Session evidence
+
+Implementation `62df9f0b` built on the own branch without warnings in 1.03
+seconds. The three affected binaries were compiled at that exact commit.
+After parent-confirmed raw publication `71b3a770`, those unchanged binaries
+ran on the own branch on 2026-10-16 MSK (x86-64 WSL2): all ten cumulative
+MAC/RX/Session cases passed in 0.11 seconds, and both earlier cold-board cases
+passed in 0.01 seconds, with zero failed or ignored. The explicit private-file
+GEN1/GEN2 and missing-H2C scenarios also passed, with the same 164 / 164 / 0
+packet counts and modeled 12,344 / 12,344 / 407,344 microseconds. Unrelated
+imported module tests were filtered; these are not physical-device timings.
+Independent review found no blocker in this model extension. Full gate and
+physical firmware/RX/BTC behavior remain unvalidated.
