@@ -149,3 +149,21 @@ Twelve Rust model cases and seven Python parser cases are registered in
 `scripts/host_tests.sh`. They are compile-only until own build, raw publication
 and an explicit publication ACK. Actual board/policy input, MMIO programming,
 calibration and physical validation remain separate acceptance work.
+
+### Actual pinned firmware element observation
+
+On 2026-10-16 MSK a read-only metadata inspection of the fetched private
+firmware file confirmed SHA-256
+`5b68415e3bfe72715d63a70703d4471b04b5475b8ff69cfdc8cdf48233cd5d3a`
+and length 1,245,944 bytes. Its five-entry MFW directory ends with the
+log-format image at offset 1,192,968, length 52,976: its end and the maximum
+image end both equal EOF. The pinned `fw.c::rtw89_mfw_get_size` and
+`rtw89_fw_recognize_elements` would start elements at the next 16-byte
+boundary, 1,245,952, beyond EOF. This exact file therefore contains no
+appended power, country or other firmware elements. No proprietary payload
+bytes were printed or committed.
+
+This closes the file-content question for the existing hash pin. The runtime
+consumer must still bind that observation to its actual Verified/Ready
+firmware identity; it is not a rule for an arbitrary future firmware file.
+Actual board country, frequency policy and platform constraints remain open.
