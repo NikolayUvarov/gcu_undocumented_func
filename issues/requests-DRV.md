@@ -2,7 +2,7 @@
 
 **Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** open · **Recorded by:** the kernel track (KRN), 2026-10-09
 
-The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09).
+The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09). The network track's request that `bcm_wifi` names OFDM in `idl/wlanhw.wit` 1.1 became plan item 2 of [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) (2026-10-14).
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. The drivers track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -248,19 +248,3 @@ This is the Ryzen machine's request above, with one addition:
 - The `vfs`, `disk` and `block` suites pass on IDE and AHCI disks.
 - A request on a drive that never leaves BSY ends with `ERR_IO` within the stated time. A host test with a stand-in for the ports, or a QEMU disk made to stall, shows it.
 - No path in either driver indexes the DMA region or the buffer without a check of its own.
-
-## `bcm_wifi` names OFDM in `wlanhw.wit` 1.1 once it hears it (550-NET-0028)
-
-**Recorded by:** the network track (`NET`), 2026-10-14, answering the request "The station offers only the rates the radio can receive" (550-DRV-0028's findings).
-
-### Problem
-
-`idl/wlanhw.wit` 1.1 (550-NET-0028) gives `info`'s `bands` a bit 2, `mind::network::BAND_2GHZ_OFDM`: the radio receives and sends OFDM on 2.4 GHz. Without it, the station `wlan` offers and sends at 1, 2, 5.5 and 11 Mb/s alone there (802.11b). The wire is unchanged, and `bcm_wifi`'s `bands: 1` already reads as "no OFDM", so nothing in `bcm_wifi` has to change now.
-
-### Plan (a proposal; the drivers track decides)
-
-Once `bcm_wifi` receives OFDM, it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, and the station offers 802.11g's rates again. The drivers track's ffcf2b5 (in `fast-test`) reports OFDM received with core 2's front end off, so the bit may follow that commit. A radio that sends at a rate it cannot use answers `send` with `invalid`, as the interface says.
-
-### Acceptance criteria
-
-On the MacBook Pro, with the bit set, `wlan` logs `2.4 GHZ 802.11G`, joins a WPA2 network and sends at OFDM rates.
