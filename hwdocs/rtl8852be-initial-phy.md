@@ -55,3 +55,13 @@ missing RF command ACK, busy BT admission, NCTL/RCK/DACK failure cutoffs and
 final report-write cleanup. The existing twelve startup fixtures cover the
 new fifteenth stage and independent cleanup errors. Execution follows the
 own-branch build and raw publication; results will be recorded here.
+
+The first execution at source `1a99bece`, after publication `180f9559`, passed
+four cumulative cases and all twelve startup cases. The success fixture failed
+its guessed `submitted > 10` assertion after completing the actual pipeline.
+For the modeled BT-disabled state, source initialization sends exactly two RF
+mirror commands and eight BTC commands; RFK keeps the same no-link policy and
+does not send redundant policy commands. The fixture now requires the exact
+ten category/class/function headers and sequential sequence bytes instead of
+that guessed lower bound. Production behavior is unchanged. Corrected-case
+execution is pending its own raw publication.

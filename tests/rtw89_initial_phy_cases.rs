@@ -110,7 +110,12 @@ fn cold_gen1_and_gen2_complete_owned_initial_phy_and_then_shut_down() {
     for speed in [1, 2] { run(speed, |_| {}, |d, result| {
         let observed = result.unwrap(); assert_eq!(observed.rck.values, [7, 11]); assert_eq!(observed.dack.drck, 17);
         assert_eq!(observed.dack.completion, [[3, 3]; 2]); assert_eq!((observed.rx_path, observed.rx_nss), (3, 2));
-        assert_eq!(observed.encoded_rts, 0x2ff); assert!(observed.submitted > 10);
+        assert_eq!(observed.encoded_rts, 0x2ff);
+        let expected = [(2, 8, 0), (2, 9, 0), (2, 16, 2), (2, 16, 0), (2, 16, 1),
+            (2, 16, 5), (2, 16, 5), (2, 16, 3), (2, 16, 10), (2, 16, 5)];
+        assert_eq!(observed.submitted as usize, expected.len());
+        let headers: Vec<_> = d.inner.normal_packets.iter().map(|p| (p[0] & 3, p[0] >> 2, p[1])).collect();
+        assert_eq!(headers, expected);
         assert_eq!(d.inner.normal_packets.len(), observed.submitted as usize);
         for (index, packet) in d.inner.normal_packets.iter().enumerate() { assert_eq!(packet[3], index as u8); }
         assert_eq!(d.inner.get(0xce40, 4), 0x2b); assert_eq!(d.inner.get(0x9c18, 4) & 3, 1);
