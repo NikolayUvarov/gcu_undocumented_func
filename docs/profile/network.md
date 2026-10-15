@@ -364,15 +364,6 @@ tail cases passed (0.27 seconds) and 16 affected post/session cases passed
 (0.88 seconds), none ignored, on 2026-10-16 MSK. Full-gate/native/hardware
 validation remains pending.
 
-The following `btc_codec`/`btc_control` prerequisite slice adds only exact
-profile-105 wire encoding and bounded low-level no-link coexistence register
-steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
-refuses pending-LTE overwrite, and retains separate source ACK choices.
-The eighteen new host fixtures are compiled; execution is pending raw
-publication. The complete session-bound owner and applied policy/C2H
-orchestration remain unimplemented, and no Initialized or RFK-grant token
-is available from this slice. No native or hardware guarantee changes;
-[scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
 
 The PHY-capability query shares the scheduler's register mailbox and counters,
 requires an actual downloader token for the same live DLFW queue, and only
@@ -402,3 +393,10 @@ failure; raw cleanup remains possible. Thirteen model fixtures compile, with
 execution pending raw publication. These seeded-handoff fixtures do not establish
 cumulative cold-device behavior, complete BTC initialization or RFK permission.
 The native service still does not invoke this adapter or expose a radio endpoint.
+
+The later native PHY-capability continuation invokes the actual GET_FEATURE
+query after successful WCPU download and before runtime MAC. It retains the
+queue-bound reply and logs raw words and explicit successful-zero-NSS defaults.
+Mailbox failure ends the diagnostic with independent cleanup; this adds no
+association or radio guarantee. Own-branch build and the fourteen-stage startup
+fixture must precede any hardware claim; physical execution remains unobserved.
