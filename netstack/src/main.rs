@@ -10,12 +10,14 @@ extern crate alloc;
 
 mod dns;
 mod policy;
+mod poll;
 
 use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use mind::abi::{BootInfo, SLOT_DEV0, SLOT_DEV1};
+use mind::deadline::Deadline;
 use mind::idl::codec::List;
 use mind::idl::{net, socket, wire};
 use mind::ipc::{self, Endpoint};
@@ -46,8 +48,7 @@ const CARDS: usize = 3; // SLOT_DEV0, SLOT_DEV1 (one virtio_net instance per car
 const DRIVERS: [usize; CARDS] = [SLOT_DEV0, SLOT_DEV1, SLOT_STATION];
 const KINDS: [socket::CardKind; CARDS] = [socket::CardKind::Wired, socket::CardKind::Wired, socket::CardKind::Wireless];
 const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
-// A card's call that takes longer fails, and the card is left alone for STALL_MS, so a driver or station that does
-// not answer cannot hold the stack (550-NET-0030).
+// Every call in a card's turn shares CARD_MS; IPC timeouts rest for STALL_MS (550-NET-0031).
 const CARD_MS: u32 = 2000;
 const STALL_MS: u64 = 5000;
 
@@ -58,15 +59,25 @@ static OFFLOAD: AtomicBool = AtomicBool::new(false);
 // Frames each card sent and received.
 static SENT: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
 static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS];
+static TIMED_OUT: [AtomicBool; CARDS] = [const { AtomicBool::new(false) }; CARDS];
+
+// Only an attempted IPC timeout warrants cooldown; an exhausted work budget merely yields.
+fn card_call<T>(index: usize, deadline: Deadline, call: impl FnOnce() -> mind::sys::Result<T>) -> mind::sys::Result<T> {
+    deadline.call(|| {
+        let result = call();
+        if matches!(result, Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT))) { TIMED_OUT[index].store(true, Ordering::Relaxed); }
+        result
+    })
+}
 
 // A driver's frames as a smoltcp device: one IDL call per frame.
 // `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on). `ring`: the frame ring shared
 // with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
 // without one, every frame is a call.
-struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64 }
+struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64, deadline: Deadline }
 struct Shared { _pages: Pages, cap: usize, ring: Ring }
 struct Rx<'a>(&'a [u8]);
-struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool> }
+struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool>, deadline: Deadline }
 
 impl Card {
     // Lends the driver a fresh frame ring (at start, and after a driver restart lost the old one).
@@ -76,7 +87,7 @@ impl Card {
         let ring = unsafe { Ring::new(pages.address() as *mut u8) };
         ring.reset();
         let Ok(cap) = pages.share() else { return };
-        match net::attach(self.endpoint, cap) {
+        match card_call(self.index, self.deadline, || net::attach(self.endpoint, cap)) {
             Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = now_ms(); }
             _ => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
         }
@@ -88,7 +99,7 @@ impl Card {
         let now = now_ms();
         if !self.queued && !shared.ring.sending() && now - self.kicked < 300 { return; }
         self.queued = false; self.kicked = now;
-        match net::kick(self.endpoint) {
+        match card_call(self.index, self.deadline, || net::kick(self.endpoint)) {
             Ok(Ok(())) => {}
             Ok(Err(_)) => { mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
             Err(_) => {} // the driver is restarting
@@ -145,11 +156,11 @@ impl smoltcp::phy::TxToken for Tx<'_> {
         }
         // TCP and UDP checksums are finished here: by the card with offload, else in software (smoltcp leaves them).
         let offloaded = match partial(&mut frame[..len]) {
-            Some((start, field, _)) if self.offload && matches!(net::send_partial(self.endpoint, &frame[..len], start as u16, field as u16), Ok(Ok(()))) => Some(true),
+            Some((start, field, _)) if self.offload && matches!(card_call(self.index, self.deadline, || net::send_partial(self.endpoint, &frame[..len], start as u16, field as u16)), Ok(Ok(()))) => Some(true),
             Some((start, field, end)) => { complete(&mut frame[..len], start, field, end); None }
             None => None,
         };
-        let sent = offloaded.unwrap_or_else(|| matches!(net::send(self.endpoint, &frame[..len]), Ok(Ok(()))));
+        let sent = offloaded.unwrap_or_else(|| matches!(card_call(self.index, self.deadline, || net::send(self.endpoint, &frame[..len])), Ok(Ok(()))));
         if sent { SENT[self.index].fetch_add(1, Ordering::Relaxed); }
         result
     }
@@ -158,18 +169,20 @@ impl Device for Card {
     type RxToken<'a> = Rx<'a>;
     type TxToken<'a> = Tx<'a>;
     fn receive(&mut self, _: Instant) -> Option<(Rx<'_>, Tx<'_>)> {
+        self.deadline.remaining(now_ms())?;
         let ring = self.ring.as_ref().map(|shared| shared.ring);
         let len = match ring {
-            // From the shared ring: no call (a slot the driver filled wrongly comes back empty and is skipped).
-            Some(ring) => loop { match ring.receive(&mut self.frame) { Some(frame) if frame.len == 0 => continue, Some(frame) => break frame.len, None => return None } },
-            None => match net::receive(self.endpoint, &mut self.frame) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
+            // A malformed slot consumes one turn too; a peer cannot keep us skipping forever.
+            Some(ring) => match ring.receive(&mut self.frame) { Some(frame) if frame.len != 0 => frame.len, _ => return None },
+            None => match card_call(self.index, self.deadline, || net::receive(self.endpoint, &mut self.frame)) { Ok(Ok(len)) => len.min(FRAME_MAX), _ => return None },
         };
         RECEIVED_FRAMES[self.index].fetch_add(1, Ordering::Relaxed);
-        Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) }))
+        Some((Rx(&self.frame[..len]), Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued), deadline: self.deadline }))
     }
     fn transmit(&mut self, _: Instant) -> Option<Tx<'_>> {
+        self.deadline.remaining(now_ms())?;
         let ring = self.ring.as_ref().map(|shared| shared.ring);
-        Some(Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued) })
+        Some(Tx { endpoint: self.endpoint, index: self.index, offload: self.offload, ring, queued: Some(&mut self.queued), deadline: self.deadline })
     }
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
@@ -218,12 +231,12 @@ fn text(address: Ipv4Address) -> [u8; 4] { address.octets() }
 
 impl Link {
     // The interface of card `index`, or None while its driver does not answer.
-    fn new(index: usize) -> Option<Self> {
+    fn new(index: usize, deadline: Deadline) -> Option<Self> {
         let endpoint = Endpoint(DRIVERS[index]);
-        let info = match net::info(endpoint) { Ok(Ok(info)) => info, _ => return None };
+        let info = match card_call(index, deadline, || net::info(endpoint)) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
-        let offers = net::offloads(endpoint).is_ok_and(|o| o & 1 != 0);
-        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0 };
+        let offers = card_call(index, deadline, || net::offloads(endpoint)).is_ok_and(|o| o & 1 != 0);
+        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0, deadline };
         card.attach();
         let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])));
         config.random_seed = mind::time::rdtsc();
@@ -255,7 +268,8 @@ impl Link {
 
     // Runs the interface and applies DHCP results.
     fn poll(&mut self) {
-        let _ = self.iface.poll(instant(), &mut self.card, &mut self.sockets);
+        let deadline = self.card.deadline;
+        poll::interface(&mut self.iface, &mut self.card, &mut self.sockets, instant(), || deadline.remaining(now_ms()).is_some());
         self.card.kick();
         let event = self.sockets.get_mut::<dhcpv4::Socket>(self.dhcp).poll().map(|event| match event {
             dhcpv4::Event::Configured(config) => Some((config.address, config.router, config.dns_servers.first().copied())),
@@ -329,7 +343,7 @@ impl Stack {
         let Some(link) = self.links[index].as_mut() else { return };
         if now - link.checked < 1000 { return; }
         link.checked = now;
-        let up = match net::info(link.card.endpoint) {
+        let up = match card_call(index, link.card.deadline, || net::info(link.card.endpoint)) {
             Ok(Ok(info)) => info.link,
             // No answer in time is not a link that went down: the card is asked again later.
             Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => return,
@@ -364,13 +378,15 @@ impl Stack {
         for index in 0..CARDS {
             if now < self.stalled[index] { continue; }
             let started = now_ms();
-            if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index); }
-            if let Some(link) = self.links[index].as_mut() { link.poll(); }
-            self.watch_link(index, now);
-            // A call that ran out of CARD_MS: the card is left alone for a while.
-            if now_ms() - started >= CARD_MS as u64 {
+            let deadline = Deadline::after(started, CARD_MS);
+            TIMED_OUT[index].store(false, Ordering::Relaxed);
+            if self.links[index].is_none() && now - self.tried[index] >= 1000 { self.tried[index] = now; self.links[index] = Link::new(index, deadline); }
+            if let Some(link) = self.links[index].as_mut() { link.card.deadline = deadline; link.poll(); }
+            self.watch_link(index, now_ms());
+            // A transport timeout, not ordinary work-budget exhaustion, starts the cooldown.
+            if TIMED_OUT[index].load(Ordering::Relaxed) {
                 self.stalled[index] = now_ms() + STALL_MS;
-                mind::println!("[NETSTACK] CARD {} DID NOT ANSWER IN {} S: LEFT ALONE FOR {} S", index, CARD_MS / 1000, STALL_MS / 1000);
+                mind::println!("[NETSTACK] CARD {} CALL TIMED OUT: LEFT ALONE FOR {} S", index, STALL_MS / 1000);
             }
         }
         let default = self.route(0);
@@ -378,6 +394,7 @@ impl Stack {
             self.default = default;
             match default { Some(card) => mind::println!("[NETSTACK] DEFAULT ROUTE: CARD {}", card), None => mind::println!("[NETSTACK] DEFAULT ROUTE: NONE") }
         }
+        let now = now_ms();
         self.finish_pings();
         let mut index = 0;
         while index < self.waiting.len() {
@@ -697,8 +714,8 @@ fn main(_info: &'static BootInfo) {
     let mut policy = Policy::default();
     loop {
         let now = now_ms();
-        // Every call to a card is bounded (550-NET-0030); the stack's replies to its clients are not calls.
-        wire::with_timeout(CARD_MS, || stack.poll());
+        // Both polling paths bound calls at the driver boundary (550-NET-0031).
+        stack.poll();
         if now - reaped >= 1000 { reaped = now; stack.reap(); }
         // Grants that ran out of time or volume lose their flows.
         for badge in policy.ended(now) { let closed = stack.close_badge(badge); mind::println!("[NETSTACK] GRANT {} ENDED, {} SOCKETS CLOSED", badge, closed); }
