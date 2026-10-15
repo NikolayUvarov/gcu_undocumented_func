@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware/MAC/RX diagnostic using retained, disjoint command and receive DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -883,3 +883,129 @@ one inherited ignored, 0.19 seconds (x86-64 WSL2, rustc 1.101.0-nightly
 c36f14571). No new BTC test is ignored. The fixtures run real BB/radio
 stages into a stateful register model before BTC; hardware initialization,
 calibration and network acceptance remain open.
+
+## Native MAC/RX diagnostic continuation
+
+The current 213-KRN-0114 entry extends the earlier 128 KiB firmware-only
+stage to retained 8 MiB DMA: command reservation `[0, 128 KiB)`, receive
+reservation `[128 KiB, 8 MiB)`. The actual command and receive footprints
+fit those disjoint regions. No CPU alias accesses them after construction.
+RX installation follows PCIe finish before mastering; runtime MAC and the
+post-MAC receive-only activation follow successful firmware download.
+The service then shuts down; it does not run normal H2C/C2H transport or
+register a radio. This supersedes the native integration limits recorded
+with the earlier library slices above, without changing their test evidence.
+
+Independent RX, radio and command shutdown precedes the checked MEM-only
+transition. Before MAC power-off, pending XTAL readiness is bounded by 50 ms
+inside a fresh one-second cleanup budget; failure skips all power-off writes
+and still requests final quiescence. All primary/cleanup errors and DMA stay
+retained. The full own-branch image builds and twelve startup fixtures compile;
+execution awaits publication. Cumulative runtime-MAC/RX modeling and actual
+hardware verification remain separate, incomplete evidence requirements.
+
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.
+
+## Exact coexistence command codecs and bounded register transitions
+
+`btc_codec` selects only the observed cut-1/RFE-1, physical security bytes
+`ff/ff`, firmware `0.29.29.15` profile. At the pinned Linux source this is
+`coex.c`'s `0.29.29.0` BTC profile: report format 105 uses wire version 5,
+TDMA version 3, slot version 1, monitor version 2, role version 2 and control
+version 1. It encodes bounded, initialized monitor/default-slot/report,
+CXDRVINFO INIT/CTRL/ROLE, no-link AFH and OFF_BT/OFF_WL2 policy messages.
+No-link AFH preserves the source's disabled-but-width-32 representation.
+Policy changes use source delta TLVs; RFK forces all 18 slots and the
+instant-execute bit. This is startup/no-link/no-LPS scope, not connected
+coexistence, a Bluetooth service or arbitrary firmware-version support.
+
+The generic BTC messages request DONE ACK; direct CXDRVINFO messages do
+not. All use the real normal-H2C engine, including its periodic receipt
+ACK and refusal to reuse the initial 256 sequence numbers. Serialization
+or a matching ACK does not establish applied policy or RFK permission.
+The codec's `Profile` selects layout only and is not a firmware-session token.
+
+`btc_control` supplies the bounded register steps needed by the upcoming
+owner context: an exclusive lower-24-bit WLAN scoreboard write shadow,
+actual BT state reads, initial/RFK/no-link grant and antenna transitions,
+a pre-transition snapshot for failed-attempt restoration, default WLAN
+power and the cold-init `_action_common` BTG/pre-AGC operations. Scoreboard
+reads are BT state and are never copied into the WLAN-owned low bits.
+A scoreboard write with uncertain completion poisons the shadow. LTE
+operations wait up to 50 ms for ready before commands and after writes,
+retain the source immediate RDATA ordering and never replace pending
+commands. Antenna transitions check actual BT RFK RUN/REQ first and verify
+grant/pollution readback. Ordinary TX is not enabled by these helpers.
+Each entry has a total 100 ms bound (snapshot/restoration 200 ms); loops
+also have finite iteration limits when the clock stalls.
+
+Source behavior retained for normal cold init includes no station TX-limit
+iteration, no BT RF-parameter command before a BT-info update, and initially
+unchanged WLAN RX gain. AFH, report/role commands and final scoreboard flush
+remain mandatory orchestration steps. These lower-level functions assume
+exclusive, freshly validated MAC/PHY/DMA ownership; they do not themselves
+validate the complete session or issue an `Initialized`/RFK token. A combined
+context bound to the actual Ready, command/RX objects and PHY attempt,
+ordered C2H/report handling, complete common-action state and independent
+failure cleanup is still required before native use or calibration.
+
+Precise source anchors, all at the existing BSD-licensed pin: `coex.c`
+`_reset_btc_var`, `_append_tdma`, `_append_slot_v1`, `btc_fw_set_monreg`,
+`rtw89_btc_fw_en_rpt`, `_action_wl_init`, `_action_wl_nc`, `_action_wl_rfk`,
+`_action_common`; `fw.c` `rtw89_fw_h2c_cxdrv_init`, `_ctrl`, `_role_v2`;
+`mac.c` `rtw89_mac_cfg_gnt`, `_cfg_plt`, `_cfg_sb`, `_cfg_ctrl_path`;
+`rtw8852b_common.c` `rtw8852b_ctrl_btg_bt_rx`, `rtw8852b_btc_set_wl_preagc`;
+`rtw8852b.c` monitor register and RF parameter tables. The eighteen new
+fixtures cover packed wire formats and production H2C integration, actual
+scoreboard ownership, grant order/restoration, pending-command protection,
+applied-write failures and bounded time/clock faults. Own-branch `94762996`
+native build passed (0.80 seconds, no warnings). After raw publication
+`1006c136`, all seven codec and eleven control fixtures passed on 2026-10-16
+MSK (0.00 seconds each, none failed or ignored, x86-64 WSL2). The codec
+command selected its seven new cases; inherited downloader tests were not
+rerun in this slice. This adds no hardware, native-policy or calibrated-radio claim.
+
+## Exclusive startup command and receive session
+
+`btc_session::Session` consumes the actual downloader `Ready` and borrows the
+matching command queue, both RX rings, their `Receiving` token, caller scratch
+and the same device adapter. It creates the normal H2C sequence exactly once
+for this startup; the existing 256-command bound is explicit and is not a
+continuous-runtime reset strategy. `PhyIo::command_session` exposes the actual
+queue identity while healthy. A failed session rejects new PHY PCI guards and
+receive permits; raw register access remains available for independent shutdown.
+
+Each command has one absolute budget, at most 100 ms, covering ownership checks,
+publication, RXQ/RPQ progress, requested receipt/DONE ACKs and command-DMA/TX-busy
+drain. An outer clock window checks nested accesses before doorbells and RX
+release, including CPU-copy delays that an inner relative timer cannot cover.
+Finite loop counts also terminate a frozen clock. Only definite pre-publication
+queue-full is retried; uncertain publication, malformed input, a lost permit,
+clock error, rejection or deadline failure poisons the session without resend.
+Neither a DONE ACK nor DMA drain establishes an applied coexistence policy.
+
+Only RXQ can deliver a C2H ACK. Complete BTC C2H messages are copied into four
+fixed 2048-byte slots before their DMA buffers can be reused. The policy owner
+must consume these ordered events; overflow fails instead of discarding BT
+state. Other traffic is counted without WLAN dispatch. The session does not
+interpret BTINFO, grant RFK, initialize BTC policy or enable ordinary TX. Future
+policy orchestration must bind this session to the actual PHY attempt and
+ConfigPrepared, process those events and complete all source common actions.
+Dropping the session frees no DMA; the external owner still performs independent
+receive/radio/command shutdown and PCI quiescence with retained allocations.
+
+Thirteen focused host fixtures compile with real synthetic downloader tokens,
+production runtime-MAC preparation and owned receive activation. The model
+explicitly seeds the post-download register handoff; it is separate from the
+cumulative cold-device model and is not device evidence. It exercises shared RF
+mirror sequencing, ACK ownership/rejection, retained events and overflow,
+poisoned-PHY refusal with raw cleanup, live-ring corruption, clock jumps before
+publication, frozen clocks and incomplete hardware consumption. Execution is
+pending raw publication. No native radio endpoint or hardware guarantee changes.

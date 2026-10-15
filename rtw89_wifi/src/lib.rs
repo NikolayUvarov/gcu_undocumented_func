@@ -3,8 +3,10 @@
 //! RTL8852BE firmware, bounded device initialization and retained DMA helpers.
 
 pub mod board;
+pub mod calibration;
 pub mod btc;
-
+pub mod btc_codec;
+pub mod btc_control;
 pub mod btc_init;
 pub mod dack;
 mod dack_tables;
@@ -34,3 +36,5 @@ mod post_mac_regs;
 pub(crate) mod report_tail;
 
 pub mod rxdck;
+
+pub mod btc_session;

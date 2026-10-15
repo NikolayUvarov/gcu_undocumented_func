@@ -1,6 +1,8 @@
 use super::*;
 use std::alloc::{alloc_zeroed,dealloc,Layout};
 
+#[path="rtw89_phy_receive_cases.rs"] mod phy_receive;
+
 #[path="rtw89_report_tail_cases.rs"]mod report_tail;
 
 struct Region{base:*mut u8,layout:Layout}

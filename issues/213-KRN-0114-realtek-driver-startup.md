@@ -23,8 +23,8 @@ MacBook and Ryzen, with Wi-Fi first and Ethernet in parallel.
 - Restrict init selection to the exact Realtek IDs and classes. Pass the
   selected device index as a decimal argument so a BAR-owning driver can use
   the existing checked DEVICE_STATE API. Give Ethernet its retained DMA,
-  interrupt and net endpoint; give Wi-Fi its BAR, retained 128 KiB DMA and
-  firmware-reader client for one bounded firmware diagnostic, without
+  interrupt and net endpoint; give Wi-Fi its BAR, retained 8 MiB DMA and
+  firmware-reader client for one bounded firmware/MAC/RX diagnostic, without
   advertising a working radio to WLAN.
 - On restart restore only memory decoding through DEVICE_REGISTERS and an owned BAR, after Platform is dropped. MSI preserves Command and MSI-X requires existing MEM; neither starts DMA. Verify the old process is dead and device
   stop succeeds before clearing DMA; a failed stop quarantines the driver and retains
@@ -121,3 +121,37 @@ passing case in the normal host gate. No production guard or API was changed.
 [550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.md),
 [213-KRN-0113](213-KRN-0113-realtek-boot-identification.md),
 [hardware audit](../issues-audit/2026-10-15-hardware-audit.md).
+
+### Native MAC/RX diagnostic continuation (2026-10-16)
+
+The allocation is now a retained 8 MiB coherent region below 4 GiB. The
+first 128 KiB is reserved for the command queue; the page-aligned remainder
+is exclusive to RXQ/RPQ. Each constructor receives only its disjoint region,
+while init and the driver retain the whole allocation after every outcome.
+RX descriptors are installed after PCIe BDRAM preparation and before
+mastering. The successful firmware token then admits runtime MAC preparation
+and installed RX-only activation; ordinary packet TX and host IRQs remain
+disabled. No WLAN endpoint, PHY calibration or association is advertised.
+
+Cleanup independently attempts receive stop, chip radio disable and command
+DMA/WCPU stop, preserving their errors. After verified MEM-only PCI state,
+MAC power-off first waits for any outstanding XTAL command under the source
+50 ms bound and its fresh overall one-second budget. An uncertain command
+is never replaced: a timeout skips power-off writes but still requests final
+kernel quiescence. DMA is never freed or reused. Independent review found
+and corrected the indirect-command cleanup gap before publication.
+
+The full own-branch x86 image builds (one second incremental), and twelve
+updated startup/cleanup fixtures compile. Execution awaits raw publication;
+these checks and the existing library models do not establish actual Ryzen
+DMA, RF calibration or connectivity. The frozen `ac1854f2` gate does not
+contain this continuation.
+
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.

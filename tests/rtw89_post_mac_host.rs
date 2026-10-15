@@ -16,4 +16,12 @@ extern crate self as mind;
 #[path="../rtw89_wifi/src/rxdesc.rs"]mod rxdesc;
 #[path="../rtw89_wifi/src/post_mac_regs.rs"]mod post_mac_regs;
 #[path="../rtw89_wifi/src/post_mac.rs"]mod post_mac;
+#[path="../rtw89_wifi/src/phy_tables.rs"] mod phy_tables;
+#[path="../rtw89_wifi/src/phy.rs"] mod phy;
+#[path="../rtw89_wifi/src/dack.rs"] mod dack;
+#[path="../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
+#[path="../rtw89_wifi/src/rxdck.rs"] mod rxdck;
 #[path="../rtw89_wifi/src/report_tail.rs"]mod report_tail;
+
+#[path="../rtw89_wifi/src/calibration.rs"] mod calibration;
+#[path="../rtw89_wifi/src/phycap.rs"] mod phycap;

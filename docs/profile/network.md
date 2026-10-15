@@ -312,6 +312,17 @@ cases (reported 0.00 seconds), none ignored, on 2026-10-16 MSK. Full-gate
 and hardware evidence remain pending. PHY/native integration does not
 yet consume this permit.
 
+The subsequent native MAC/RX continuation supersedes the earlier firmware-only
+entry: init grants retained 8 MiB DMA, with disjoint command/RX reservations,
+RX installation before mastering, then runtime MAC and receive-only startup
+after verified firmware. Independent receive/radio/command stop follows every
+modified attempt. Before power-off, a bounded idle-XTAL check prevents cleanup
+from replacing an uncertain command. No WLAN endpoint, calibrated channel,
+association or network link is claimed. The full x86 image builds; twelve
+startup fixtures compile and await publication before execution. Earlier gate
+`ac1854f2` does not cover this continuation; physical Ryzen operation and a
+cumulative runtime-MAC/RX model remain unvalidated.
+
 The subsequent firmware-ready token correction binds `Ready` to the
 successful command queue session and checks that identity before runtime
 MAC preparation accesses the device. Existing live guards still reject a
@@ -323,6 +334,26 @@ private-file GEN1/GEN2 and missing-H2C model scenarios also passed, on
 2026-10-16 MSK. Full-gate and hardware evidence remain pending. This does
 not bind the separate future BTC/PHY attempt.
 
+The following `btc_codec`/`btc_control` prerequisite slice adds only exact
+profile-105 wire encoding and bounded low-level no-link coexistence register
+steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
+refuses pending-LTE overwrite, and retains separate source ACK choices.
+Own-branch `94762996` built without warnings (0.80 seconds); after raw
+publication `1006c136`, its seven codec and eleven control fixtures passed
+on 2026-10-16 MSK (0.00 seconds each, zero failed or ignored, x86-64 WSL2).
+The complete session-bound owner and applied policy/C2H
+orchestration remain unimplemented, and no Initialized or RFK-grant token
+is available from this slice. No native or hardware guarantee changes;
+[scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.
+
 The private MAC report-tail engine requires a real receive permit and live
 post-DACK register state before programming PPDU forwarding and RTS fields.
 It remains inaccessible to native startup until the complete PHY/RFK/trim
@@ -332,6 +363,7 @@ without warnings in 0.71 seconds. After raw publication `1006c136`, seven
 tail cases passed (0.27 seconds) and 16 affected post/session cases passed
 (0.88 seconds), none ignored, on 2026-10-16 MSK. Full-gate/native/hardware
 validation remains pending.
+
 
 The PHY-capability query shares the scheduler's register mailbox and counters,
 requires an actual downloader token for the same live DLFW queue, and only
@@ -353,3 +385,11 @@ unsupported events. It carries no session correlation or RFK permission;
 the future owner must process state changes and verify policy application.
 Seven host parser fixtures compile; build, execution and native/hardware
 evidence are pending for this slice.
+
+The owned startup `btc_session` adapter consumes the downloader token and uses
+actual command/RX/Receiving objects for normal H2C and PHY RF-page sends. It
+retains ordered bounded BTC events and rejects new stages after an uncertain
+failure; raw cleanup remains possible. Thirteen model fixtures compile, with
+execution pending raw publication. These seeded-handoff fixtures do not establish
+cumulative cold-device behavior, complete BTC initialization or RFK permission.
+The native service still does not invoke this adapter or expose a radio endpoint.

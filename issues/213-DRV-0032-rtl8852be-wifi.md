@@ -179,11 +179,24 @@ tables and preserved per-stage/cleanup failures. After publication of
 `7c6d5ecc` and `a8418545`, all 44 Rust and three DACK extractor fixtures
 passed, as did pinned table regeneration. The next initial RXDCK slice uses
 the shared zero-only scheduler mailbox, post-DACK phase guard and actual BTC
-contract. Native build passes and 56 fixtures compile; execution awaits its
-publication. It never enables packet transmission.
+contract. Published `abe309ea` passed all 56 Rust fixtures, three DACK
+extractor fixtures and pinned regeneration. It never enables packet transmission.
 Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
+
+### Contiguous DM prefix (2026-10-16)
+
+The private `phy::dm` engine now follows the entire initial pre-NCTL register
+prefix, with a 300 ms total deadline and independent 400 ms chip-disable
+cleanup. It returns initial observations/settings and keeps the public pipeline
+closed until actual BTC `ntfy_init` completion supplies its concrete token.
+Native build passes; after publication `badae1bc`, all 68 fixtures of `727aab95` passed (0.11 seconds, none ignored).
+The [PHY contract](../hwdocs/rtl8852be-phy.md#contiguous-initial-dm-prefix-and-remaining-order)
+records exact skipped chip hooks and the remaining source order through board
+trim, actual firmware PHY capabilities, channel calibration and association.
+Owned active-RX permits and actual BTC policy remain integration dependencies;
+no fake readiness callback, radio activation or hardware success is supplied.
 
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
@@ -377,6 +390,19 @@ fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
 file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
 found no blocker. Full-gate and hardware validation remain pending.
 
+### PHY consumer of the owned RX permit
+
+The shared PHY guard now accepts active RX only through the actual borrowed
+`ReceivePermit`, with default refusal, a 10 ms callback ceiling and repeated
+DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
+DACK phases remain distinct. Six integration fixtures exercise real session
+objects and stale/current hardware state without fabricating a token; the
+PHY, BTC-init and post-MAC host harnesses pass 125, 66 and 57 cases respectively
+after `2a41a980` was published in `08a4c784`; all six new cases pass in each.
+These harnesses repeat shared cases and each retains the existing ignored
+private firmware-file fixture. Native build passes. This does not grant BTC
+or transmit readiness.
+
 ### MAC report tail after the full PHY prefix
 
 Implement the pinned single-band AX PPDU status/report forwarding and RTS
@@ -389,6 +415,41 @@ applied write error, independently disable PPDU reports, stop RX, disable
 BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
 Add exact mask/order, threshold boundary, stale-session, applied-failure
 and final-deadline fixtures without enabling native operation.
+
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
+
+### PHY attempt binding for BTC integration
+
+Give each PHY attempt a bounded nonwrapping identity independent of its bus
+address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
+bind ConfigPrepared to this identity and actual firmware/ring sessions without
+a raw bool or pointer identity. Two model fixtures cover same-address reuse and
+exhaustion; test execution awaits raw publication. No native activation changes.
+
+### BTC command/profile and transition prerequisites (2026-10-16)
+
+The next slice adds exact firmware-profile-105 encoders for monitor, slots,
+report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
+scoreboard, antenna/grant snapshot/restoration and cold-init common BB
+operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
+separate through production H2C. Own-branch `94762996` no-std build passed
+(0.80 seconds); after raw publication `1006c136`, all seven codec and eleven
+control source/format/fault fixtures passed (0.00 seconds each, zero failed
+or ignored). Source reviews by the PHY and MAC/RX owners found no blocker.
+These helpers cannot construct an Initialized or RFK-grant result. The
+session-bound owner context, full ordered C2H/report and common-action
+orchestration, calibrated PHY interleave and native activation remain open;
+see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+
+### Report-tail execution evidence
 
 Own-branch `150f5b80` built without warnings in 0.71 seconds. After raw
 publication `1006c136` (including PHY-capability tip `a877030f`), all seven
@@ -433,3 +494,24 @@ branch. After raw publication `539b588e`, all seven decoder fixtures passed,
 none ignored, on 2026-10-16 MSK. [Stage evidence](../hwdocs/rtl8852be-btc-reports.md)
 records the configuration and limits; actual firmware reports and policy
 application remain pending.
+
+### Post-RXDCK initial DM tail
+
+Implement the source-contiguous power-reference, board thermal/PA trim and
+receive-path/NSS sequence, using actual session-bound firmware capabilities
+and DM gain baselines from this same PHY attempt. Keep it crate-private until
+actual BTC and the full source startup ordering are integrated. Detailed
+scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
+
+### Owned normal H2C/RX startup session
+
+Add an adapter that consumes the actual successful downloader token, retains
+exclusive command/RX/Receiving/scratch ownership and preserves one normal H2C
+sequence across PHY mirror and subsequent BTC commands. Enforce one absolute
+100 ms maximum command budget, actual ACK correlation and final DMA drain;
+uncertain failures reject subsequent PHY stages while leaving raw cleanup
+accessible. Retain ordered BTC C2H messages in bounded copied storage and fail
+on overflow. This prerequisite deliberately cannot issue Initialized or RFK
+permission. Thirteen focused fixtures compile; execution follows publication.
+The complete BTC policy/common-action owner and native activation remain open.
+See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).
