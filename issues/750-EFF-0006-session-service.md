@@ -63,3 +63,17 @@ Something on the machine must keep the connection to the server, report the mach
 [Contract 1.0](../docs/effector/protocol.md) and the [host fixture](../docs/effector/README.md) now exist. The runtime service has not been implemented. HTTP POST/headers/keep-alive, two certificate pins and parser-service JSON are already present in the linked NET tasks; use them rather than recreating transports.
 
 The first token-authenticated slice can heartbeat and poll independently while all local actions are denied. It needs a native AgentToken; the owner's operator API key is not a substitute. The device-certificate part above remains separate: `connect-pins` currently cannot request a client certificate, and the reviewed server does not yet persist the proposed device-key/manifest heartbeat fields. Keep those acceptance/evidence requirements open until an explicit protocol/interface extension is implemented.
+## Network latency limit found by the hardware audit (2026-10-15)
+
+`550-NET-0031` bounds each card turn, not the whole network service turn.
+Three cards with `CARD_MS=2000` can consume six seconds of driver waits in one
+`Stack::poll`, before CPU and scheduling overhead. The main loop polls both
+before receiving clients and after handling one. The reviewed Effector server
+marks an endpoint offline after five seconds, so independent heartbeat work
+alone does not establish stable online status while unrelated cards stall.
+
+Before closing session-service acceptance, inject two failing peers beside a
+healthy link and measure heartbeat gaps and socket-service latency. Use that
+evidence to implement a shared turn budget, fair rotation or asynchronous
+driver calls. Do not hide the gap by broadening server timeouts or transfer
+per-card boundedness into a heartbeat guarantee.
