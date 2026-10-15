@@ -122,3 +122,12 @@ The full tables are in the resolutions of [176-KRN-0062](../../issues-done/176-K
 - A minted port sub-range (applications hold no ports).
 - That a holder of only the observe privilege cannot kill, focus or read logs (no such task exists before `sysmon`).
 - Playback reaching the audio output in the `listen` suite (QEMU's capture backend has no output file); the kernel's validation of `PLATFORM_CAP` arguments.
+
+
+The RTL8852BE initial-channel coexistence callbacks in
+[connection RFK notes](../../hwdocs/rtl8852be-connection-rfk.md) have ten additional
+compiled Session model cases, pending raw publication and execution. They cover
+source host-state notifications, conditional measured A2DP time and exact normal
+MCC packets through the owned command/RX session. They do not establish hardware
+calibration, RFK transmission authority, a continuous coexistence service or WLAN
+connectivity; no profile guarantee is expanded by this slice.
