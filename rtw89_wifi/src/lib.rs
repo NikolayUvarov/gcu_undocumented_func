@@ -28,4 +28,7 @@ pub mod c2h;
 pub mod post_mac;
 mod post_mac_regs;
 
+#[allow(dead_code)]
+pub(crate) mod report_tail;
+
 pub mod rxdck;

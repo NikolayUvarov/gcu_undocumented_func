@@ -333,3 +333,10 @@ private-file hash/mutation case passed (0.06 seconds). The cumulative
 private-file GEN1/GEN2 and missing-H2C model scenarios also passed, on
 2026-10-16 MSK. Full-gate and hardware evidence remain pending. This does
 not bind the separate future BTC/PHY attempt.
+
+The private MAC report-tail engine requires a real receive permit and live
+post-DACK register state before programming PPDU forwarding and RTS fields.
+It remains inaccessible to native startup until the complete PHY/RFK/trim
+and path prerequisites are implemented. A 10 ms stage and independent
+report/RX/radio/command cleanup retain DMA on failure. Seven host cases
+compile; new-slice build/execution and hardware validation are pending.
