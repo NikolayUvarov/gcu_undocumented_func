@@ -640,3 +640,14 @@ adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
 actual same-session firmware default-table provenance and explicit platform
 policy; it has no native caller and creates no TX authorization. Channel RFK,
 actual policy/board observations and physical traffic validation remain open.
+
+### Shared IQK/DPK and nested coexistence prerequisite
+
+Extend source-valued callback types for IQK/DPK and require actual held outer
+IQK permission for matching RF_AB one-shots. Preserve partial nested admission
+for matching cleanup; refuse orphan, duplicate, foreign and premature outer
+release. TSSI receives an explicit stronger enclosing IQK START/STOP requirement
+approved by the maintainer, instead of copying upstream's ignored rejection.
+Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
+algorithms, their policy-bound TX prerequisites and native integration remain
+open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
