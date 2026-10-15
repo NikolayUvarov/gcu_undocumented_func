@@ -21,6 +21,7 @@ struct Device {
     now: u64, freeze: bool, oversleep: u64, stuck_xtal: Option<usize>, xtal_count: usize,
     stuck_efuse: bool, minimum_delay: u32,
     late_ready: bool, backwards: bool,
+    off_state: u32,
 }
 
 impl Device {
@@ -30,6 +31,7 @@ impl Device {
             writes: Vec::new(), attempted: 0, fail_writes: Vec::new(), now: 0, freeze: false,
             oversleep: 0, stuck_xtal: None, xtal_count: 0, stuck_efuse: false, minimum_delay: 0,
             late_ready: false, backwards: false,
+            off_state: 0,
         };
         value.put(SYS_CFG1, 4, 1 << 12);
         value.put(R_AX_SYS_PW_CTRL, 4, B_AX_RDY_SYSPWR);
@@ -63,7 +65,7 @@ impl Device {
         self.put(at, width, value);
         if at == R_AX_SYS_PW_CTRL && width == 4 {
             if value & B_AX_APFN_ONMAC != 0 { self.put(R_AX_IC_PWR_STATE, 4, 1 << 8); }
-            if value & B_AX_APFM_OFFMAC != 0 { self.put(R_AX_IC_PWR_STATE, 4, 0); }
+            if value & B_AX_APFM_OFFMAC != 0 { self.put(R_AX_IC_PWR_STATE, 4, self.off_state); }
             self.put(at, 4, value & !(B_AX_APFN_ONMAC | B_AX_APFM_OFFMAC));
         }
         if at == R_AX_EFUSE_CTRL && width == 4 && !self.stuck_efuse {
@@ -129,9 +131,11 @@ fn unknown_cut_unavailable_or_already_active_mac_get_no_writes() {
         let mut d = Device::new(); d.put(SYS_CFG1, 4, value);
         assert!(board::read(&mut d).is_err()); assert!(d.writes.is_empty());
     }
-    let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, 1 << 8);
-    assert_eq!(board::read(&mut d).err().unwrap().cause.kind, FaultKind::PowerState);
-    assert!(d.writes.is_empty());
+    for state in 1..=3 {
+        let mut d = Device::new(); d.put(R_AX_IC_PWR_STATE, 4, state << 8);
+        assert_eq!(board::read(&mut d).err().unwrap().cause.kind, FaultKind::PowerState);
+        assert!(d.writes.is_empty());
+    }
 }
 
 #[test]
@@ -249,6 +253,12 @@ fn complete_board_data_is_not_success_when_shutdown_fails() {
     let error = board::read(&mut d).err().unwrap();
     assert_eq!(error.stage, board::Stage::PowerOff);
     assert_eq!(error.shutdown.unwrap().kind, FaultKind::Access);
+    for state in 1..=3 {
+        let mut d = Device::new(); d.off_state = state << 8;
+        let error = board::read(&mut d).err().unwrap();
+        assert_eq!(error.stage, board::Stage::PowerOff);
+        assert_eq!(error.shutdown.unwrap().kind, FaultKind::PowerState);
+    }
 }
 
 #[test]

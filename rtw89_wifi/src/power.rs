@@ -106,8 +106,12 @@ pub fn off(io: &mut impl RegisterIo, rfe: Option<u8>) -> Result<()> {
     modify32(io, R_AX_SYS_PW_CTRL, 0, B_AX_APFM_SWLPS)?;
     io.write8(R_AX_SCOREBOARD + 3, MAC_AX_NOTIFY_PWR_MAJOR as u8)?;
     let state = read32(io, R_AX_IC_PWR_STATE)?;
-    if state & B_AX_WLMAC_PWR_STE_MASK == 1 << B_AX_WLMAC_PWR_STE_MASK.trailing_zeros() {
+    if state & B_AX_WLMAC_PWR_STE_MASK != 0 {
         return Err(Fault::new(FaultKind::PowerState, R_AX_IC_PWR_STATE, state));
+    }
+    let bb = io.read8(R_AX_SYS_FUNC_EN)?;
+    if bb & (B_AX_FEN_BB_GLB_RSTN | B_AX_FEN_BBRSTB) as u8 != 0 {
+        return Err(Fault::new(FaultKind::PowerState, R_AX_SYS_FUNC_EN, bb as u32));
     }
     Ok(())
 }

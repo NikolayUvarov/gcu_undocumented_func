@@ -118,7 +118,8 @@ It rejects a different PCI function, I/O decoding, enabled bus mastering,
 unsupported BAR type/extent and a short mapping before device writes.
 `CAP_INFO` hides the physical MMIO base, so matching the capability to BAR2 is
 part of the kernel grant contract, not independently verified by this service.
-Digital cut must be 1. An already-active MAC is rejected without writes: the
+Digital cut must be 1. Only WLMAC power state 0 is accepted before writes and
+after shutdown; active or transitional states 1–3 are rejected. The
 service does not assume that firmware left in an unknown power-save state can
 be reset by the initial cold-start sequence.
 

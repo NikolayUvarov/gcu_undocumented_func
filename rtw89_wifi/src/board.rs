@@ -37,7 +37,7 @@ pub fn read(io: &mut impl RegisterIo) -> core::result::Result<Board, Failure> {
     let fail = |cause| Failure { stage: Stage::Identify, cause, efuse_restore: None, shutdown: None };
     let cut = power::identify(io).map_err(fail)?;
     let state = read32(io, R_AX_IC_PWR_STATE).map_err(fail)?;
-    if state & B_AX_WLMAC_PWR_STE_MASK == 1 << B_AX_WLMAC_PWR_STE_MASK.trailing_zeros() {
+    if state & B_AX_WLMAC_PWR_STE_MASK != 0 {
         return Err(fail(Fault::new(FaultKind::PowerState, R_AX_IC_PWR_STATE, state)));
     }
     let mut stage = Stage::PowerOn;
