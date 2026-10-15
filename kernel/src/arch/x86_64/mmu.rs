@@ -12,6 +12,7 @@ const USER: u64 = 4;
 const NX: u64 = 1 << 63;
 const UNCACHED: u64 = 0x18; // PCD | PWT: uncached device registers
 const PWT: u64 = 0x08; // PWT alone: PAT entry 1, write-combining (000-KRN-0081)
+const PAT: u64 = 0x0007_0406_0007_0106;
 static KERNEL_ROOT: AtomicUsize = AtomicUsize::new(0);
 static KERNEL_PDPT: AtomicUsize = AtomicUsize::new(0);
 
@@ -125,9 +126,67 @@ pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
     core::mem::forget(pdpt);
     core::mem::forget(root);
     enable_protection(true);
-    activate(kernel_root());
+    activate_boot_map(kernel_root());
     protect_from_programs();
     Ok(())
+}
+
+// BSP only, before AP startup: Intel SDM 11.12.4/11.11.8 and AMD APM 7.8.7 cache-type serialization.
+unsafe fn activate_boot_map(root: usize) {
+    let features = core::arch::x86_64::__cpuid(1).edx;
+    let mut cr0: usize;
+    asm!("mov {}, cr0", out(reg) cr0);
+    let (mut mtrr_low, mut mtrr_high) = (0u32, 0u32);
+    if features & (1 << 12) != 0 {
+        asm!("rdmsr", in("ecx") 0x2FFu32, out("eax") mtrr_low, out("edx") mtrr_high);
+    }
+    // All tables and inputs exist before caches stop filling; this block has no calls, allocation or stack access.
+    asm!(
+        "cli",
+        "mov cr0, {disabled}",
+        "wbinvd",
+        "mov rax, cr4",
+        "btr rax, 7",
+        "mov cr4, rax",
+        "mov rax, cr3",
+        "mov cr3, rax",
+        "test {features:e}, 0x1000",
+        "jz 2f",
+        "mov ecx, 0x2FF",
+        "mov eax, {mtrr_low:e}",
+        "and eax, 0xFFFFF7FF",
+        "mov edx, {mtrr_high:e}",
+        "wrmsr",
+        "2:",
+        "test {features:e}, 0x10000",
+        "jz 3f",
+        "mov ecx, 0x277",
+        "mov eax, {pat_low}",
+        "mov edx, {pat_high}",
+        "wrmsr",
+        "3:",
+        "mov cr3, {root}",
+        "test {features:e}, 0x1000",
+        "jz 4f",
+        "mov ecx, 0x2FF",
+        "mov eax, {mtrr_low:e}",
+        "mov edx, {mtrr_high:e}",
+        "wrmsr",
+        "4:",
+        "wbinvd",
+        "mov cr3, {root}",
+        "mov cr0, {enabled}",
+        disabled = in(reg) (cr0 | (1 << 30)) & !(1 << 29),
+        enabled = in(reg) cr0 & !((1 << 30) | (1 << 29)),
+        root = in(reg) root,
+        features = in(reg) features,
+        mtrr_low = in(reg) mtrr_low,
+        mtrr_high = in(reg) mtrr_high,
+        pat_low = const PAT as u32,
+        pat_high = const (PAT >> 32) as u32,
+        out("rax") _, out("rcx") _, out("rdx") _,
+        options(nostack),
+    );
 }
 
 // The boot CPU's SMEP, SMAP and UMIP, on the kernel's page tables (000-KRN-0039).
@@ -147,8 +206,8 @@ pub unsafe fn enable_protection(bsp: bool) {
     lo = (lo | (1 << 11)) & !1;
     asm!("wrmsr", in("ecx") 0xc0000080u32, in("eax") lo, in("edx") hi);
     asm!("wrmsr", in("ecx") 0x174u32, in("eax") 0u32, in("edx") 0u32); // SYSENTER_CS=0 => #GP
-    // PAT: the power-on default but entry 1 write-combining, the same on every CPU; only framebuffer pages use it.
-    if core::arch::x86_64::__cpuid(1).edx & (1 << 16) != 0 { asm!("wrmsr", in("ecx") 0x277u32, in("eax") 0x0007_0106u32, in("edx") 0x0007_0406u32); }
+    // APs retain their per-CPU PAT setup; the BSP changes PAT with its serialized firmware-map transition.
+    if !bsp && core::arch::x86_64::__cpuid(1).edx & (1 << 16) != 0 { asm!("wrmsr", in("ecx") 0x277u32, in("eax") PAT as u32, in("edx") (PAT >> 32) as u32); }
     let mut cr0: usize;
     asm!("mov {}, cr0", out(reg) cr0);
     cr0 = (cr0 | (1 << 16) | 2) & !12; // WP, MP; clear EM/TS for FXSAVE.
