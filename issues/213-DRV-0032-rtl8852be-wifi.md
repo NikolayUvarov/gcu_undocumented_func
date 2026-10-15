@@ -539,6 +539,18 @@ pins. Test malformed/unordered/trailing directories and old/new sessions.
 This does not establish platform country/SAR/EIRP constraints or authorize TX.
 See [metadata, API boundary and evidence](../hwdocs/rtl8852be-firmware-tables.md).
 
+### Cumulative normal command and receive ownership
+
+Extend the same cold-device model beyond firmware/MAC/RX into the production
+exclusive Session. Consume normal channel-12 headers only while actual RX
+and command DMA are enabled and ordinary TX remains stopped. Produce ACKs
+through the programmed RX descriptors; preserve one sequence across RF
+mirror and BTC commands, without reseeding guards or replacing production
+correlation. Exercise missing/foreign/rejected/malformed ACKs and DMA that
+does not report consumption after an ACK. Failures must prevent new commands
+and retain the allocation until independent shutdown. This is host model
+coverage, not observed firmware semantics or working WLAN.
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and
