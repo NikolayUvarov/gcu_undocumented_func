@@ -121,3 +121,22 @@ of this source commit to raw `fast-test`, then occurs on the owner branch.
 The fixtures cover signed power packing and bounds, source ordering,
 identity/policy refusal, finite synth/LPF failure, original LDO restoration,
 uncertain mailbox failures, readback errors and absolute deadlines.
+
+After raw publication `71b3a770`, the exact saved `5bb78d89` binaries ran on
+the owner branch: PHY 170 passed, BTC init 87 passed, Session 91 passed,
+post-MAC 78 passed and cumulative MAC 84 passed. Each inherited harness had
+one ignored private-firmware case; none failed. The power-image harness had
+seven passes and one failure, preserved in
+`/tmp/mind-channel-channel_power-results.log`. The failed expectation wrongly
+treated CCK20/CCK40 as adjacent non-BF values: `phy.h:477` actually interleaves
+non-BF/BF, and the pinned CCK and OFDM BF entries are zero. Only 2TX MCS has
+the nonzero BF entry used here. Production packing matches `phy.c:2488`; the
+fixture now independently checks `[cap,0,cap,0]` and the distinct 1TX/2TX MCS
+BF values. Its corrected execution remains pending publication.
+
+RFK can transmit while the ordinary scheduler remains stopped. The private
+opaque `CalibrationTransmit` binds the PHY attempt, firmware session, channel,
+policy version and named IQK/TSSI/DPK engine, and refuses passive channels.
+It has no production constructor: actual calibration gain/PMAC level units,
+regulatory and platform SAR/EIRP admission are still unresolved. A test-only
+model constructor exercises identity refusal without granting native rights.

@@ -31,7 +31,9 @@ fn packed_rates_keep_little_endian_signed_units_and_source_section_order(){
 fn one_and_two_stream_pages_apply_independent_caps_and_zero_unused_twenty_mhz_slots(){
     let image=build(Group::FCC,1,Constraints{per_ntx:[20,10],per_path:[20,20]}).unwrap();
     for(base,cap)in[(0xd2ec,20),(0xd314,10)]{
-        assert_eq!(word(&image,base).to_le_bytes(),[cap,cap,0,0]);assert_eq!(word(&image,base+4).to_le_bytes(),[cap;4]);
+        // Source layout is CCK20[nonBF,BF], CCK40[nonBF,BF], OFDM[nonBF,BF], MCS20[nonBF,BF].
+        assert_eq!(word(&image,base).to_le_bytes(),[cap,0,cap,0]);
+        assert_eq!(word(&image,base+4).to_le_bytes(),[cap,0,cap,if base==0xd314{cap}else{0}]);
         for off in (8..40).step_by(4){assert_eq!(word(&image,base+off),0);}
     }
     for(base,cap)in[(0xd33c,20),(0xd354,10)]{
