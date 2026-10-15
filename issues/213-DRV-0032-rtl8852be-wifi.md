@@ -198,6 +198,7 @@ trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
 
+
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -403,6 +404,25 @@ These harnesses repeat shared cases and each retains the existing ignored
 private firmware-file fixture. Native build passes. This does not grant BTC
 or transmit readiness.
 
+
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
+
+### PHY attempt binding for BTC integration
+
+Give each PHY attempt a bounded nonwrapping identity independent of its bus
+address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
+bind ConfigPrepared to this identity and actual firmware/ring sessions without
+a raw bool or pointer identity. Two model fixtures cover same-address reuse and
+exhaustion; test execution awaits raw publication. No native activation changes.
+
 ### MAC report tail after the full PHY prefix
 
 Implement the pinned single-band AX PPDU status/report forwarding and RTS
@@ -527,3 +547,11 @@ on overflow. This prerequisite deliberately cannot issue Initialized or RFK
 permission. Thirteen focused fixtures compile; execution follows publication.
 The complete BTC policy/common-action owner and native activation remain open.
 See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).
+
+### Channel policy and pinned power-data preparation
+
+Add the source-ordered [channel/RFK plan](../hwdocs/rtl8852be-channel-plan.md)
+and pure pinned default power/country decoder. Preserve unknown policy,
+firmware overrides and platform constraints as explicit dependencies; no
+channel permission, native MMIO or transmit activation is added. See the
+linked document for exact table provenance and pending/executed evidence.
