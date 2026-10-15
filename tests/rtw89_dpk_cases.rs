@@ -6,13 +6,13 @@ struct Device{
     writes:Vec<(usize,u32)>,commands:Vec<(u8,u8)>,btc:Vec<(BtcNotice,usize)>,schedulers:Vec<usize>,
     fail_write:Option<usize>,fail_cleanup:Option<usize>,missing_first:Option<usize>,missing_second:Option<usize>,
     loss:u8,dgain:u16,correlation:u8,dc:[u16;2],pas:[(u16,u16);2],
-    start_fail:bool,stop_fail:bool,scheduler_fail:Option<usize>,scheduler_delay:u64,late_delay:Option<u32>,late_write:Option<usize>,
+    start_fail:bool,stop_fail:bool,stop_delay:u64,scheduler_fail:Option<usize>,scheduler_delay:u64,late_delay:Option<u32>,late_write:Option<usize>,
 }
 impl Device{
     fn new()->Self{
         let mut d=Self{memory:vec![0;0x20000],rf:[[0;256];2],xtal:[0;256],selected:(0,0),now:0,frozen:false,writes:Vec::new(),commands:Vec::new(),btc:Vec::new(),schedulers:Vec::new(),
             fail_write:None,fail_cleanup:None,missing_first:None,missing_second:None,loss:3,dgain:0x600,correlation:200,dc:[1,0xffe],pas:[(100,0),(100,0)],
-            start_fail:false,stop_fail:false,scheduler_fail:None,scheduler_delay:0,late_delay:None,late_write:None};
+            start_fail:false,stop_fail:false,stop_delay:0,scheduler_fail:None,scheduler_delay:0,late_delay:None,late_write:None};
         d.set(2,3);d.set(0x2f0,1<<17);d.xtal[0x80]=0xc7;d.xtal[0x81]=0xc7;
         for(path,values)in d.rf.iter_mut().enumerate(){for(at,v)in values.iter_mut().enumerate(){*v=((path+1)*0x1000+at)as u32;}values[0]=0x31234;values[0x42]=42<<1;}
         for(path,base)in [0x1e000,0x1f000].into_iter().enumerate(){d.set(base+20,0x54321+path as u32);}
@@ -57,7 +57,7 @@ impl PhyIo for Device{
     fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn pci_command(&mut self)->io::Result<u16>{Ok(6)}fn bar_len(&self)->usize{self.memory.len()}
     fn send_rf_page(&mut self,_:u8,_:u8,_:&[u8],_:u32)->io::Result<()>{panic!("DPK has no RF H2C upload")}
 }
-impl DackIo for Device{fn btc_rfk(&mut self,notice:BtcNotice,timeout:u32)->io::Result<()>{assert!((1..=100_000).contains(&timeout));self.btc.push((notice,self.writes.len()));
+impl DackIo for Device{fn btc_rfk(&mut self,notice:BtcNotice,timeout:u32)->io::Result<()>{assert!((1..=100_000).contains(&timeout));self.btc.push((notice,self.writes.len()));if notice.state==RfkState::Stop{self.now+=self.stop_delay;}
     if (notice.state==RfkState::Start&&self.start_fail)||(notice.state==RfkState::Stop&&self.stop_fail){return Err(Fault::new(FaultKind::PowerState,0xac,0));}Ok(())}}
 impl RxdckIo for Device{fn scheduler_zero(&mut self,timeout:u32)->io::Result<()>{assert!((1..=1_000_000).contains(&timeout));self.schedulers.push(self.writes.len());self.now+=self.scheduler_delay;
     if self.scheduler_fail==Some(self.schedulers.len()){return Err(Fault::new(FaultKind::Access,0xc348,0));}Ok(())}}
@@ -132,8 +132,17 @@ fn late_delay_or_restore_cannot_publish_completed_calibration(){for restore_late
     let e=run(&mut d,admission()).unwrap_err();assert_eq!(e.cause.kind,FaultKind::Timeout);off(&d);paired(&d);
 }}
 #[test]
-fn failed_final_scheduler_or_btc_stop_disables_both_dpd_paths(){for stop in [false,true]{
-    let mut d=Device::new();if stop{d.stop_fail=true}else{d.scheduler_fail=Some(2)};let e=run(&mut d,admission()).unwrap_err();assert_eq!(e.stage,if stop{Stage::BtcStop}else{Stage::SchedulerRestore});assert_eq!(d.schedulers.len(),2);paired(&d);off(&d);
+fn failed_final_scheduler_or_btc_stop_never_restores_after_released_grant(){for mode in 0..3{
+    let mut d=Device::new();match mode{0=>d.scheduler_fail=Some(2),1=>d.stop_fail=true,_=>d.stop_delay=TOTAL_US};
+    let e=run(&mut d,admission()).unwrap_err();assert_eq!(e.stage,if mode!=0{Stage::BtcStop}else{Stage::SchedulerRestore});assert_eq!(d.schedulers.len(),2);
+    if mode==0{paired(&d);off(&d);assert!(!e.disable_skipped&&!e.restore_skipped);}
+    else{
+        assert_eq!(d.btc.len(),2);assert_eq!(d.btc[0].0,notice(RfkState::Start));assert_eq!(d.btc[1].0,notice(RfkState::Stop));
+        assert!(d.writes[d.btc[1].1..].iter().all(|(at,_)|matches!(*at,2|0x2f0|0x270)));radio_off(&d);
+        assert!(e.disable_skipped&&e.restore_skipped&&!e.nctl_uncertain);assert_eq!(e.disable,[None;2]);assert!(e.radio_stop.is_none());
+        assert_eq!(e.cause.kind,if mode==1{FaultKind::PowerState}else{FaultKind::Timeout});assert!(e.btc_stop.is_some());
+        for at in [0x181bc,0x182bc]{assert_ne!(d.get(at)&(1<<24),0);}
+    }
 }}
 #[test]
 fn invalid_initial_input_is_rejected_before_register_access(){for input in [Admission{channel:14,tssi:[true;2]},Admission{channel:6,tssi:[true,false]}]{let mut d=Device::new();assert_eq!(run(&mut d,input).unwrap_err().stage,Stage::Guard);assert!(d.writes.is_empty()&&d.btc.is_empty());assert_eq!(d.now,0);}}

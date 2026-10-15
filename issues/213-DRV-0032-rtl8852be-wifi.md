@@ -727,3 +727,53 @@ Fourteen engine fixtures and two provenance cases compile/are registered;
 execution follows raw publication. Full typed cold-start integration, RFK power
 policy, hardware quality and association remain open. See the
 [DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
+
+### DPK first-run cleanup finding (2026-10-16)
+
+Published `2fc291a5` passed 13/14 focused DPK models; the final-STOP model
+failed. Both Python provenance cases and exact source-table regeneration
+passed. Review of that failure found redundant AFE/KIP/RF restore after a STOP
+that may already have released the grant. The correction allows only emergency
+radio shutdown after an attempted STOP, records skipped/unknown DPD disable
+explicitly, and never repeats STOP or restores calibration state. The failed
+run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
+await publication. Hardware acceptance is unchanged and remains open.
+
+### Initial channel coexistence callbacks (2026-10-16)
+
+The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
+30 ms preservation and first-slot RTL8852B MCC notification callbacks, described
+in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
+initialized context, normal H2C sequence and retained RX, refuse pending RFK,
+preserve errors and allow a matching host END even after poisoning. Ten new
+Session model cases compile; execution awaits raw publication. The channel
+coordinator must still validate real IQK/TSSI/DPK results and transmission
+admission. No native RFK-power provider or working WLAN is claimed.
+
+### Initial channel calibration coordination (2026-10-16)
+
+The private [channel RFK continuation](../hwdocs/rtl8852be-channel-rfk.md)
+connects actual same-session RXDCK/IQK, conditional A2DP windows, TSSI, DPK,
+connection end and final MCC notification. Three consumed engine-specific
+power authorities and live owner/PHY checks are mandatory. There is no native
+power-authority provider or packet-transmit activation. Seven cumulative cold
+model cases compile, preserving the existing five initial-PHY cases; execution
+follows raw publication. Physical RF calibration and WLAN acceptance stay open.
+
+### Raw MPDU transmit ownership and status prerequisite
+
+Implement exact RTL8852B TXWD/WP/address descriptors and bounded retained DMA
+queues for band-zero management and four ordinary access categories. Use a
+fixed legacy rate, no aggregation or hardware sequence replacement, a selected
+hardware limit of one and no RTS. Count actual DONE/RETRY_LIMIT RPQ-completed
+descriptors separately from DMA consumption; bound resubmission to 1..15
+descriptors with the original sequence and Retry bit. The exact-chip
+transmission-versus-retry limit semantics remain unresolved, so preserve raw
+status and explicit `AttemptCount::Unknown`; the exact-attempt `wlanhw` 1.1
+adapter stays closed until that boundary is resolved.
+Lifetime/MACID drops cannot manufacture a transmission count. Preserve
+ownership on uncertain publication, malformed reports, deadlines or stop
+failures. No native caller or IDL/ABI change is part of this library stage;
+activation still requires actual channel/calibration/policy and CMAC setup.
+Register meaningful descriptor, ring, status and cleanup fixtures in the host
+gate; run them only after own commit/build and raw publication.

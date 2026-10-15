@@ -44,16 +44,20 @@ impl ObservedBt{
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct RfkFailure{pub cause:Error,pub cleanup_attempted:bool,pub clear_scoreboard:Option<Fault>,pub restore_antenna:Option<Fault>}
+#[allow(dead_code)]
+#[derive(Clone,Copy,Eq,PartialEq)]
+enum Connection{Fresh,Active,Ended,Reported}
 struct RfkAttempt{notice:BtcNotice,saved:Option<SavedAntenna>,granted:bool,nested:Option<u8>}
 pub(crate) struct Context{
     attempt:u64,session:u64,profile:Profile,shadow:WlanShadow,policy:Policy,reports:u32,bt:ObservedBt,
     published:Option<u32>,btg:bool,rx_gain:bool,bt_lna:u8,afh_profiles:Option<u8>,ignore_pending:bool,dirty:bool,
     observed_tdma:Option<[u8;8]>,observed_slots:Option<[btc_reports::Slot;18]>,other_events:u32,rfk:Option<RfkAttempt>,last_rfk:Option<RfkFailure>,
+    #[allow(dead_code)] connection:Connection,
 }
 impl Context{
     fn new(profile:Profile,attempt:u64,session:u64)->Self{let mut shadow=WlanShadow::new();shadow.initialize();Self{
         attempt,session,profile,shadow,policy:Policy::ResetDefaults,reports:0,bt:ObservedBt::new(),published:None,btg:false,rx_gain:false,bt_lna:0,
-        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None}}
+        afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh}}
     fn events<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>)->Result<(),Error>{
         while let Some(event)=s.event(){
             match btc_reports::parse_105(event.bytes).map_err(Error::Reports)?{
@@ -286,5 +290,66 @@ impl<B:DeviceIo> DackIo for Session<'_,'_,'_,B>{
         })();
         context.last_rfk=result.as_ref().err().copied();self.btc=Some(context);
         match result{Ok(())=>Ok(()),Err(failure)=>{self.abort_coexistence();Err(rfk_fault(failure.cause))}}
+    }
+}
+
+
+// The private channel coordinator is integrated separately from this owner slice.
+#[allow(dead_code)]
+impl<B:DeviceIo> Session<'_,'_,'_,B>{
+    fn connection_call(&mut self,timeout_us:u32,prepare:impl FnOnce(&mut Context)->Result<(),Error>,
+        run:impl FnOnce(&mut Context,&mut Self,u64)->Result<(),Error>)->Result<(),Error>{
+        if timeout_us==0||timeout_us>100_000{return Err(Error::Order)}
+        let mut context=self.btc.take().ok_or(Error::Order)?;
+        let result=(||{
+            if context.attempt==0||context.session==0||context.session!=self.command_session(){return Err(Error::Order)}
+            prepare(&mut context)?;
+            if let Some(error)=self.failed(){return Err(Error::Session(error))}
+            if context.rfk.is_some(){return Err(Error::Order)}
+            let deadline=self.clock()?.checked_add(u64::from(timeout_us)).ok_or(Error::Clock)?;
+            run(&mut context,self,deadline)?;left(self,deadline)?;Ok(())
+        })();
+        self.btc=Some(context);if result.is_err(){self.abort_coexistence();}result
+    }
+    /// Source con_rfk is host state; the initial no-link policy has no additional command for this notification.
+    pub(crate) fn connection_rfk(&mut self,active:bool,timeout_us:u32)->Result<(),Error>{
+        self.connection_call(timeout_us,|c|{
+            if active{if c.connection!=Connection::Fresh{return Err(Error::Order)}c.connection=Connection::Active;}
+            else{if c.connection!=Connection::Active{return Err(Error::Order)}c.connection=Connection::Ended;}
+            Ok(())
+        },|c,s,deadline|{
+            let raw=s.registers(deadline,|b|io::read32(b,SCOREBOARD))?;c.dirty|=c.bt.update_score(raw);
+            c.drain(s,deadline)?;if c.bt.raw&4!=0{return Err(Error::Whql)}
+            let remaining=left(s,deadline)?.min(10_000);s.receive_permit(remaining)?;Ok(())
+        })
+    }
+    /// Preserve thirty elapsed milliseconds only for the actual A2DP snapshot, after the previous RFK STOP.
+    pub(crate) fn preserve_bt_time(&mut self,timeout_us:u32)->Result<(),Error>{
+        self.connection_call(timeout_us,|c|if c.connection==Connection::Active{Ok(())}else{Err(Error::Order)},|c,s,deadline|{
+            let raw=s.registers(deadline,|b|io::read32(b,SCOREBOARD))?;c.dirty|=c.bt.update_score(raw);c.drain(s,deadline)?;
+            if c.bt.info[2]&(1<<6)!=0{
+                let target=s.clock()?.checked_add(30_000).ok_or(Error::Clock)?;
+                if target>=deadline{return Err(Error::Timeout)}
+                for _ in 0..=30{
+                    left(s,deadline)?;if s.clock()?>=target{break}
+                    c.events(s)?;s.poll_before(deadline)?;c.events(s)?;
+                    let now=s.clock()?;if now<target{s.registers(deadline,|b|b.delay_us((target-now).min(1000)as u32))?;}
+                }
+                if s.clock()?<target{return Err(Error::Clock)}
+            }
+            c.drain(s,deadline)?;let remaining=left(s,deadline)?.min(10_000);s.receive_permit(remaining)?;Ok(())
+        })
+    }
+    /// Initial slot zero only; completion is command DMA/required receipt, not firmware-applied RF or TX permission.
+    pub(crate) fn notify_mcc(&mut self,channel:u8,timeout_us:u32)->Result<(),Error>{
+        if !(1..=13).contains(&channel){return Err(Error::Profile)}
+        self.connection_call(timeout_us,|c|{
+            if c.connection!=Connection::Ended{return Err(Error::Order)}c.connection=Connection::Reported;Ok(())
+        },|c,s,deadline|{
+            c.drain(s,deadline)?;c.policy_consistent()?;
+            let mut body=[0u8;20];for (at,value)in [channel,channel,0,0,channel].into_iter().enumerate(){body[at*4..at*4+4].copy_from_slice(&u32::from(value).to_le_bytes());}
+            s.command_before(crate::h2c::Command{category:2,class:0xa,function:2},&body,crate::h2c::Acks{received:false,done:false},deadline)?;
+            c.drain(s,deadline)?;c.policy_consistent()?;let remaining=left(s,deadline)?.min(10_000);s.receive_permit(remaining)?;Ok(())
+        })
     }
 }

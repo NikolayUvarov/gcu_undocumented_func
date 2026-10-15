@@ -297,6 +297,7 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         Self{bus,identity,state:if attempt==0{State::Failed}else{State::Fresh},attempt}
     }
     pub(crate) fn attempt(&self)->u64{self.attempt}
+    pub(crate) fn identity(&self)->Identity{self.identity}
     #[cfg(test)]
     pub(crate) fn new_with_counter(bus:&'a mut B,identity:Identity,counter:&core::sync::atomic::AtomicU64)->Self{
         Self::from_attempt(bus,identity,io::next_dma_session(counter))

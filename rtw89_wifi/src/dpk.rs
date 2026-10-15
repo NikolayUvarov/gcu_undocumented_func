@@ -18,8 +18,8 @@ pub(crate) enum Stage{Guard,BtcStart,SchedulerPause,WaitA,WaitB,Backup,Afe,PathA
 pub(crate) struct Failure{pub stage:Stage,pub cause:Fault,pub disable:[Option<Fault>;2],pub bb_restore:Option<Fault>,
     pub kip_restore:[Option<Fault>;2],pub rf_restore:[Option<Fault>;2],pub tssi_restore:[Option<Fault>;2],
     pub scheduler_restore:Option<Fault>,pub scheduler_status:Option<Fault>,pub radio_stop:Option<Fault>,pub btc_stop:Option<Fault>,
-    pub nctl_uncertain:bool,pub restore_skipped:bool}
-impl Failure{fn guard(cause:Fault)->Self{Self{stage:Stage::Guard,cause,disable:[None;2],bb_restore:None,kip_restore:[None;2],rf_restore:[None;2],tssi_restore:[None;2],scheduler_restore:None,scheduler_status:None,radio_stop:None,btc_stop:None,nctl_uncertain:false,restore_skipped:false}}}
+    pub nctl_uncertain:bool,pub restore_skipped:bool,pub disable_skipped:bool}
+impl Failure{fn guard(cause:Fault)->Self{Self{stage:Stage::Guard,cause,disable:[None;2],bb_restore:None,kip_restore:[None;2],rf_restore:[None;2],tssi_restore:[None;2],scheduler_restore:None,scheduler_status:None,radio_stop:None,btc_stop:None,nctl_uncertain:false,restore_skipped:false,disable_skipped:false}}}
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub(crate) struct PathResult{pub txagc:u8,pub thermal:u8,pub correlation_index:u8,pub correlation:u8,pub dc:[u16;2]}
 #[derive(Debug,Eq,PartialEq)]
@@ -213,7 +213,9 @@ fn engine(bus:&mut impl RxdckIo,admission:Admission,start:u64)->Result<ResultDat
     })();
     match result{
         Ok(data)=>Ok(data),
-        Err(cause)=>{failure.cause=cause;failure.nctl_uncertain=pending;failure.restore_skipped=pending;
+        Err(cause)=>{failure.cause=cause;failure.nctl_uncertain=pending;failure.restore_skipped=pending||stopped;failure.disable_skipped=pending||stopped;
+            // STOP may have released ownership; only independent radio shutdown remains authorized.
+            if stopped{failure.radio_stop=phy::disable_bb_rf(bus).err();return Err(failure)}
             if !pending{cleanup(bus,&saved,changed,&mut failure);}
             if btc&&pending{failure.radio_stop=phy::disable_bb_rf(bus).err();}
             if paused&&!resumed{failure.scheduler_restore=scheduler(bus,1_000_000).err();}

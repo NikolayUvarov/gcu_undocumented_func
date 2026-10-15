@@ -13,13 +13,13 @@ struct Device{
     hold:bool,busy:bool,late_index:usize,index_reads:usize,reverse_index:usize,
     bt:u32,rf:[[u32;256];2],rf_read:Option<(usize,usize)>,lte:[u32;2],lte_pending:Option<u32>,
     btc_event:Option<(usize,Vec<u8>)>,missing_at:usize,fail_at:Option<usize>,packet_us:u64,bt_release_at:Option<u64>,after_ack:Option<(usize,Vec<u8>)>,
-    scheduler_reply:u8,scheduler_us:u64,
+    scheduler_reply:u8,scheduler_us:u64,delay_event:Option<(u64,Vec<u8>)>,delay_extra:u64,
 }
 impl Device{
     fn new(tx:*mut u8,tx_bytes:usize,index:u32)->Self{
         let mut d=Self{regs:vec![0;runtime_mac::BAR_BYTES],xtal:[0;256],command:6,time:0,frozen:false,writes:Vec::new(),
             tx,tx_bytes,rx:core::ptr::null_mut(),packets:Vec::new(),reply:Reply::Normal,events:0,hold:false,busy:false,late_index:0,index_reads:0,reverse_index:0,
-            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None,scheduler_reply:0,scheduler_us:0};
+            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None,scheduler_reply:0,scheduler_us:0,delay_event:None,delay_extra:0};
         for (at,value)in[(0xf0,1<<12),(0x3f0,1<<8),(R_AX_PLATFORM_ENABLE,3),(download::FW_CONTROL,0xe0),
             (R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),(crate::mac::DMAC_CLOCK,0x04840000),
             (crate::mac::PLE_CONFIG,0x00400801),(crate::mac::WDE_READY,3),(crate::mac::PLE_READY,3),(crate::mac::HFC_CONTROL,8),
@@ -99,7 +99,8 @@ impl RegisterIo for Device{
     fn write16(&mut self,a:usize,v:u16)->io::Result<()>{self.apply(a,2,v as u32)}
     fn write32(&mut self,a:usize,v:u32)->io::Result<()>{self.apply(a,4,v)}
     fn now_us(&mut self)->u64{self.time}
-    fn delay_us(&mut self,us:u32)->io::Result<()>{if !self.frozen{self.time+=u64::from(us)}Ok(())}
+    fn delay_us(&mut self,us:u32)->io::Result<()>{if !self.frozen{self.time+=u64::from(us)+if us!=0{self.delay_extra}else{0};}
+        if self.delay_event.as_ref().is_some_and(|(at,_)|self.time>=*at){let(_,event)=self.delay_event.take().unwrap();self.inject(0,&event);}Ok(())}
 }
 impl Bus for Device{fn pci_command(&mut self)->io::Result<u16>{Ok(self.command)}}
 impl DeviceIo for Device{fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.regs.len()}}
@@ -521,3 +522,80 @@ fn owned_scheduler_applied_doorbell_failure_is_never_retried(){with_session(|s|{
     assert_eq!(s.scheduler_zero(1000).unwrap_err().kind,FaultKind::Access);let n=s.bus.writes.len();
     assert!(s.scheduler_zero(1000).is_err());assert_eq!(s.bus.writes.len(),n);assert_eq!(s.bus.regs[R_AX_C2HREG_CTRL],1);
 });}
+
+#[test]
+fn connection_notifications_keep_host_state_and_never_replay_start_or_end(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();let first=s.bus.packets.len();let writes=s.bus.writes.len();
+    s.connection_rfk(true,1000).unwrap();s.connection_rfk(false,1000).unwrap();assert_eq!(s.bus.packets.len(),first);assert_eq!(s.bus.writes.len(),writes);
+    assert!(s.connection_rfk(false,1000).is_err());assert!(s.connection_rfk(true,1000).is_err());assert_eq!(s.bus.packets.len(),first);
+}));}
+#[test]
+fn connection_callbacks_require_actual_initialized_owner_and_order(){
+    with_session(|s|{let writes=s.bus.writes.len();assert!(s.connection_rfk(true,1000).is_err());assert!(s.preserve_bt_time(1000).is_err());assert!(s.notify_mcc(6,1000).is_err());assert_eq!(s.bus.writes.len(),writes);});
+    for action in 0..3{with_session(|s|owner_phase(s,|p|{crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();let first=s.bus.packets.len();
+        let result=match action{0=>s.connection_rfk(false,1000),1=>s.preserve_bt_time(1000),_=>s.notify_mcc(6,1000)};assert!(result.is_err());assert_eq!(s.bus.packets.len(),first);
+    }));}
+}
+#[test]
+fn connection_end_clears_matching_attempt_even_after_begin_loses_live_rx(){with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.bus.command=2;
+    assert!(s.connection_rfk(true,1000).is_err());let first=s.bus.writes.len();let original=s.failed().unwrap();
+    assert_eq!(s.connection_rfk(false,1000),Err(crate::btc_context::Error::Session(original)));
+    assert_eq!(s.connection_rfk(false,1000),Err(crate::btc_context::Error::Order));assert_eq!(s.bus.writes.len(),first);assert_eq!(s.failed(),Some(original));
+    s.bus.command=6;
+}));}
+#[test]
+fn connection_preserve_waits_thirty_elapsed_ms_only_for_actual_a2dp(){for profiles in [0,0x10,0x20,0x40,0x80,0xf0]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=2|1<<30;crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.connection_rfk(true,1000).unwrap();
+    s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,6,profiles,0,0,0,0,0]));let before=s.bus.time;let first=s.bus.packets.len();
+    s.preserve_bt_time(100_000).unwrap();assert_eq!(s.bus.time-before,if profiles&0x40!=0{30_000}else{0});assert_eq!(s.pending_events(),0);assert_eq!(s.bus.packets.len(),first);
+    s.connection_rfk(false,1000).unwrap();
+}));}}
+#[test]
+fn connection_preserve_frozen_clock_insufficient_budget_and_regression_are_errors(){for mode in 0..3{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=2|1<<30;crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.connection_rfk(true,1000).unwrap();
+    s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,6,0x40,0,0,0,0,0]));let first=s.bus.packets.len();
+    if mode==0{s.bus.frozen=true;}if mode==2{s.bus.time=0;}
+    assert!(s.preserve_bt_time(if mode==1{30_000}else{100_000}).is_err());assert!(s.failed().is_some());assert_eq!(s.bus.packets.len(),first);
+    assert!(s.connection_rfk(false,1000).is_err());assert_eq!(s.connection_rfk(false,1000),Err(crate::btc_context::Error::Order));s.bus.frozen=false;
+}));}}
+#[test]
+fn connection_window_refuses_pending_rfk_and_malformed_bt_events(){for pending in [false,true]{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.connection_rfk(true,1000).unwrap();
+    if pending{crate::dack::DackIo::btc_rfk(s,rfk_notice(crate::dack::RfkState::Start),100_000).unwrap();}
+    else{s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,5,0x40,0,0,0,0,0]));}
+    assert!(s.preserve_bt_time(100_000).is_err());assert!(s.failed().is_some());assert!(s.connection_rfk(false,1000).is_err());assert!(s.notify_mcc(6,1000).is_err());
+}));}}
+#[test]
+fn connection_mcc_uses_initial_52b_payload_actual_sequence_and_only_periodic_receipt(){for align in 0..4{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();for _ in 0..align{s.command(command(),&[0],both(),1000).unwrap();}
+    s.connection_rfk(true,1000).unwrap();s.connection_rfk(false,1000).unwrap();let sequence=s.submitted();let first=s.bus.packets.len();
+    s.notify_mcc(6,100_000).unwrap();let packet=s.bus.packets.last().unwrap();assert_eq!(s.bus.packets.len(),first+1);
+    assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()),2|0xa<<2|2<<8|u32::from(sequence)<<24);
+    assert_eq!(packet[5]&0xc0,if sequence%4==0{0x40}else{0});
+    assert_eq!(&packet[8..],&[6,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0]);assert_eq!(s.queue.pending(),0);
+    assert!(s.notify_mcc(6,1000).is_err());assert_eq!(s.bus.packets.len(),first+1);
+}));}}
+#[test]
+fn connection_mcc_uncertain_publication_missing_receipt_and_busy_dma_never_retry(){for mode in 0..4{with_session(|s|owner_phase(s,|p|{
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();while s.submitted()%4!=0{s.command(command(),&[0],both(),1000).unwrap();}
+    s.connection_rfk(true,1000).unwrap();s.connection_rfk(false,1000).unwrap();let first=s.bus.packets.len();
+    match mode{0=>s.bus.reply=Reply::Missing,1=>s.bus.fail_at=Some(fwcmd::INDEX),2=>s.bus.busy=true,_=>s.bus.packet_us=100_000}
+    assert!(s.notify_mcc(6,1000).is_err());assert!(s.failed().is_some());assert_eq!(s.bus.packets.len(),first+1);
+    assert!(s.notify_mcc(6,1000).is_err());assert_eq!(s.bus.packets.len(),first+1);s.bus.set(fwcmd::DMA_BUSY,0);
+}));}}
+
+#[test]
+fn connection_preserve_consumes_later_events_but_keeps_the_requested_snapshot_window(){with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=2|1<<30;crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.connection_rfk(true,1000).unwrap();
+    s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,6,0x40,0,0,0,0,0]));let before=s.bus.time;
+    s.bus.delay_event=Some((before+10_000,c2h_bytes(2,0x12,1,&[0,6,0,0,0,0,0,0])));
+    s.preserve_bt_time(100_000).unwrap();assert_eq!(s.bus.time-before,30_000);assert!(s.bus.delay_event.is_none());assert_eq!(s.pending_events(),0);
+    let before=s.bus.time;s.preserve_bt_time(1000).unwrap();assert_eq!(s.bus.time,before);s.connection_rfk(false,1000).unwrap();
+}));}
+#[test]
+fn connection_preserve_does_not_accept_an_oversleep_after_requested_thirty_ms(){with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=2|1<<30;crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();s.connection_rfk(true,1000).unwrap();
+    s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,6,0x40,0,0,0,0,0]));s.bus.delay_extra=100_000;
+    assert!(s.preserve_bt_time(100_000).is_err());assert!(s.failed().is_some());s.bus.delay_extra=0;
+}));}

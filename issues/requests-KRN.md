@@ -255,3 +255,50 @@ recovery path. Preserve safe start and the end of bootstrap authority
 (MC-3.12, MC-6.3). Acceptance: a safe boot performs no radio startup; the operator
 can explicitly start its omitted radio afterward without restoring Platform or
 rebooting, or the UI clearly describes the deliberately unsupported operation.
+
+## Device-bound platform power policy for the Ryzen WLAN driver
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The RTL8852BE channel path requires explicit platform SAR and antenna-gain
+constraints, separately from firmware default tables and operator country.
+The current native driver has neither a device-bound platform-policy result
+nor a complete checked ACPI snapshot from which such a result could be derived.
+`PLATFORM_ACPI_TABLE` already copies individual tables read-only during init;
+`init/src/hardware.rs` writes their diagnostic copies to `log:acpi/`. That
+diagnostic loop does not establish complete namespace evaluation, absence of
+device-specific policy or a durable scoped authority after Platform is dropped.
+
+Please number the smallest suitable KRN dependency and choose its interface:
+
+- Supply a complete, bounded, validated snapshot of applicable AML tables and
+  PCI identity/topology to a scoped consumer, or a typed device-bound result
+  `KnownLimits / KnownAbsent / UnsupportedOrUnknown`. Do not restore general
+  Platform privilege to the radio service.
+- Distinguish an actually absent supported policy from inaccessible, truncated,
+  malformed or unsupported input. Known absence may use a justified bounded
+  analysis; this request does not demand a general AML interpreter. Unknown
+  input must not silently become unlimited transmit power.
+- Retain actual limits/antenna offsets, their source and policy version for
+  the DRV consumer. Version changed ABI/IDL explicitly; document capability
+  ownership, bounds and restart behavior. Intel/x86 is the priority; ARM
+  execution remains deferred by the maintainer.
+
+Pinned RTL8852B source looks up `WRDS`, `RWRD`, `RWSI`, `RWGS` and `RTAG` relative
+to its WLAN ACPI device. A matching string in an unrelated scope is not a
+policy. Read-only Ubuntu Ryzen operation `20261015233912.417877721_000172`
+read DSDT and nine SSDTs: none contained those five names; PCI `03:00.0` had
+no `firmware_node` entry. It did not evaluate AML or change the NIC. These
+observations narrow the expected profile but are not a MIND runtime result.
+Raw hashes and source details are recorded on ASTRA in
+`hwdocs/rtl8852be-channel-stage.md`.
+
+Acceptance: supported valid/absent fixtures have explicit device identity and
+provenance; invalid, partial or unsupported snapshots remain distinguishable;
+the driver cannot substitute an unrelated snapshot or infer permission from
+an error; no ambient Platform capability is retained. Record actual Ryzen
+evidence separately. DRV-0032 remains blocked on this request for native
+transmit-policy admission; calibration/datapath development can continue
+without enabling transmission.
+

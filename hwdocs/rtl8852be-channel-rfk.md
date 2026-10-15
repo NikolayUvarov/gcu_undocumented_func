@@ -1,0 +1,60 @@
+# RTL8852BE initial channel calibration coordinator
+
+This private continuation joins the actual initial 2 GHz/20 MHz channel
+calibrations on one PHY attempt and one firmware/command/RX session. It has no
+native caller. The three consumed `CalibrationTransmit` authorities still have
+no production constructor: firmware startup, a selected channel, a stopped
+scheduler and Linux's country observation do not establish calibration power
+or platform SAR/EIRP permission.
+
+The pinned source dispatch is
+[`rtw8852b.c:643–660`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b.c#L643).
+For a first channel only, MCC's software slot is zero. The coordinator requires
+all three engine authorities to match the actual attempt, command session,
+channel and policy version before issuing a connection notification. It then
+runs:
+
+1. Actual owned connection RFK begin.
+2. Production channel RXDCK and IQK through the existing IQK wrapper.
+3. The BTC owner's 30 ms preservation window when its actual accepted BTINFO
+   snapshot reports A2DP; other profiles do not acquire an invented delay.
+4. Production TSSI using the actual successful IQK result.
+5. Another source BTC preservation window.
+6. Production DPK using the actual successful TSSI result.
+7. Matching connection RFK end, then normal RF-notify-MCC H2C through the same
+   command sequence and owned RX/ACK engine.
+8. A final live PHY and owned-session check before returning the opaque result.
+
+The source preservation helper is
+[`coex.c:11887`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/coex.c#L11887).
+The 8852B does not select `RFK_NTFY_MCC_V0`: the source feature table enables
+that feature for 8852C. Its first-slot notification therefore contains five
+little-endian words `[channel, channel, 0, 0, channel]`, with category 2,
+class 10, function 2, explicit ACK flags false and the normal periodic receipt
+policy. See
+[`fw.c:6173`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/fw.c#L6173).
+DMA consumption and required receipt are not firmware-applied RF evidence.
+
+A 15 s whole-work limit covers the continuation. Before a child engine begins,
+the coordinator reserves its existing maximum work budget: 6 s for the IQK
+wrapper including channel RXDCK, 4.5 s for TSSI, and 3 s for DPK. Owner callbacks
+receive at most 100 ms, with absolute checks between stages. The existing
+finite register-poll bounds remain unchanged. Independent error cleanup is
+outside that work budget and retains each child's primary error and shutdown
+failures. No bound promises progress under indefinite preemption.
+
+A failed stage cannot run the following calibration or notify MCC. Independent
+radio shutdown precedes the sole matching connection-end cleanup. An uncertain
+END or MCC send is never retried. Backing DMA remains owned, ordinary DMA TX
+and the packet scheduler remain stopped, and the result is not association or
+packet-transmit authorization. A subsequent consumer must revalidate the live
+attempt/session and current policy; identity equality alone is not readiness.
+
+The host continuation fixture uses the existing cold PCIe/OTP/firmware/MAC/RX
+model and extracted initial-PHY RF/LTE/DACK device. It adds write-triggered PLL,
+NCTL and PMAC/CW responses, without reseeding production guard registers between
+stages. Calibration policy is test-only. The existing five initial-PHY cases
+and their exact H2C trace remain registered; the new coordinator harness is
+registered separately. Native build passed in 1.45 s without warnings and the
+seven new cases compile. Execution follows raw publication on the owner branch;
+these device reactions are models, not hardware calibration evidence.
