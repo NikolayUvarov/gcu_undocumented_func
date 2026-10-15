@@ -225,5 +225,11 @@ containment evidence, and native Ryzen firmware/DMA operation remains pending.
 The integration branch `5f1d940d` builds `rtw89_wifi` and `init` for x86-64.
 After raw publication `649fea37`, all ten startup/activation host cases
 passed on the own branch (2026-10-16, zero failed/ignored, 0.00 s). These are
-orchestration/register tests; a single cumulative model across all stages
-and actual hardware evidence remain separate.
+orchestration/register tests. The separate cumulative model in `09d1ceaa`
+then passed two standard host cases and three explicit local private-file
+scenarios after publication `8461fd20` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). It carries one modeled device through
+board/power/MAC/PCIe/command-queue/download/stop stages, compares every section
+byte with the pinned file, and checks missing-readiness cleanup. Readiness,
+OTP, PCI transitions and synchronous DMA consumption are simulated; actual
+Ryzen firmware/DMA operation and hardware timing remain unvalidated.
