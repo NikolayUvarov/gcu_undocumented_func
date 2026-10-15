@@ -85,6 +85,27 @@ then `/tmp/mind-rtw-startup-tests-20261016`. Nothing was built or tested on
 untested on Ryzen. The driver owner's independent review found no blocking
 integration/ownership defect; it does not establish hardware operation.
 
+### Cumulative MMIO integration fixture
+
+`tests/rtw89_pipeline_device.rs` supplies one register/OTP/XTAL/MDIO/DBI
+model throughout the real board-read, second power-on, MAC preparation,
+PCIe preparation, command-ring installation and activation helpers. It does
+not reseed guards with a hand-written ready state between stages. Two
+standard host cases cover GEN1/GEN2 compatibility and refusal of an
+unsupported link after the actual preceding helpers.
+
+The separate `tests/rtw89_pipeline_private.rs` binary requires an explicit
+local pinned firmware path. It uses the production `Verified::verify`,
+download and stop helpers through the same cumulative model, compares all
+transferred sections with the verified file, checks status 7 and retained
+payloads, and includes a readiness-timeout cleanup case. The board's OTP and
+PCI transitions are modeled, not observations from Ryzen. Payload bytes stay
+in memory and are never written to a report or committed.
+
+Both executables compile; execution is pending publication of their commit.
+The private binary is an explicit local check, not a skipped or conditional
+passing case in the normal host gate. No production guard or API was changed.
+
 ## Related
 
 [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md),

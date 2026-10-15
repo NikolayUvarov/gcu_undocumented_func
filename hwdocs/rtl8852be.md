@@ -456,6 +456,21 @@ failed/ignored). They cover orchestration and register models, not the actual
 PCIe fabric or RTL8852BE power/firmware path. A single cumulative MMIO model
 across all library stages remains a separate integration check.
 
+The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
+from cold board access through power/MAC/PCIe and command activation, without
+reseeding guard registers between stages. Its explicit local companion adds
+production pinned-file verification, full transfer/status and stop/power-off,
+including missing-H2C-readiness cleanup. Both are compiled but not yet run.
+The model synthesizes readiness and consumes doorbells synchronously; it
+does not model PCIe timing, ordering faults, real OTP or firmware execution.
+There is no new ignored/conditional pass in the host gate. The private check
+requires a separately fetched file and writes no payload to a report:
+
+```sh
+rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
+/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
+```
+
 ## Single-band runtime MAC preparation library
 
 `runtime_mac.rs` and `runtime_mac_regs.rs` implement the pinned RTL8852B
