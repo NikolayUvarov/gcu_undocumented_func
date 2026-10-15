@@ -683,6 +683,7 @@ and hardware traffic remain open. Five cumulative cold-device fixtures and
 the fifteen-stage cleanup matrix compile; execution follows raw publication.
 See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
 
+
 ### Initial channel RXDCK and host IQK preparation
 
 Implement the pinned initial non-DBCC 2 GHz/20 MHz wideband IQK engine, including
@@ -710,3 +711,16 @@ Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
 combined Session cases passed in 0.24 s on the own branch with no failures or
 ignores. The seven new register-mailbox regressions are included; hardware
 calibration, association and normal traffic acceptance remain open.
+
+### Private initial host DPK
+
+Implement the source initial 2 GHz/20 MHz, non-DBCC, both-path DPK engine and
+same-session/channel/policy entry after actual BTC initialization and TSSI.
+Consume separate DPK calibration-transmit authority; no native provider exists.
+Actual BTC/scheduler callbacks, bounded NCTL/AGC, source backups and independent
+cleanup retain primary and secondary errors. Unknown NCTL completion switches
+radio off before mailbox cleanup and skips unsafe register restoration.
+Fourteen engine fixtures and two provenance cases compile/are registered;
+execution follows raw publication. Full typed cold-start integration, RFK power
+policy, hardware quality and association remain open. See the
+[DPK source and bounds](../hwdocs/rtl8852be-dpk.md).

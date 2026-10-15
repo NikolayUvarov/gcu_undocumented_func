@@ -470,3 +470,11 @@ always shuts down afterward. This does not complete channel calibration,
 policy admission, association or usable networking. The new cold-device
 composition fixtures are compiled; execution and hardware evidence remain
 pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).
+
+The private RTL8852B initial host DPK entry now requires same-attempt BTC,
+channel and completed TSSI tokens plus consumed engine-specific calibration
+transmit authority. The source 2 GHz/20 MHz/both-path algorithm has bounded
+NCTL/AGC and explicit uncertain-command shutdown; fourteen model regressions
+compile, with execution pending raw publication. No native authority provider
+exists, and full typed cold-start composition, physical RFK quality and WLAN
+traffic are unvalidated. [Scope and failure evidence](../../hwdocs/rtl8852be-dpk.md).
