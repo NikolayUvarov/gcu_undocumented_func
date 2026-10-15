@@ -115,3 +115,11 @@ invocation correction and precise scope. It is
 not called by the native board service and supplies no host DMA or radio
 startup; actual hardware operation and the subsequent PCIe/firmware stages
 remain unvalidated.
+
+The later PCIe preparation implements the pinned RTL8852B MDIO/DBI path,
+temporary L1 restoration, channel stops/index/mode setup and BDRAM reset
+after command-ring installation. It checks the MAC download profile and
+preserves PCI MEM-only/HCI-off state. Primary and independent restoration/
+stop failures remain explicit, and no DMA map is freed. Build/host evidence
+for this additional slice is pending; it is not invoked by the native service
+and provides no tested hardware DMA, firmware download or radio operation.

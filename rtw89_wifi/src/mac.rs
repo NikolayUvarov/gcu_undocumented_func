@@ -47,7 +47,7 @@ fn disable(bus: &mut impl RegisterIo, at: usize, mask: u32) -> io::Result<()> {
     timed.delay_us(0)
 }
 
-fn guard(bus: &mut impl Bus) -> io::Result<()> {
+pub(crate) fn guard(bus: &mut impl Bus) -> io::Result<()> {
     let command = bus.pci_command()?;
     if command & 7 != 2 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }
     let raw = io::read32(bus, SYS_CFG1)?;

@@ -276,6 +276,57 @@ MAC/DLE/HFC operation remains untested. PCIe MDIO/DBI configuration, modes,
 BDRAM reset, ring installation and external DMA ownership must be integrated
 before the command transport can run; this preparation alone is insufficient.
 
+## PCIe preparation with host DMA disabled (213-DRV-0032)
+
+`pcie.rs` ports the RTL8852B-specific path from the pinned `pci.c`, `pci.h`,
+`reg.h` and `rtw8852be.c`. `prepare` verifies the previous DLFW MAC profile,
+idle indirect interfaces, reset BB/stopped WCPU and PCI MEM-only/HCI-off state
+before any write. RTL8852A/C-only workarounds and unrelated PHY generations
+are not applied. The fixed observed function has no subsystem BER quirk in
+the pinned `rtw8852be.c` entry.
+
+The path applies PCIe power/LDO controls, GEN1 MDIO DPHY delay (register
+`0x1b`, 25 microseconds) and AUTOK N (`0x1d`, 4), then disables refclock
+calibration in MDIO register `0x30` for the observed link speed GEN1 or GEN2.
+Its DBI fallback accesses only PCI vendor/link byte `0x82` and L1 byte `0x719`
+through BAR2 `0x1090/0x1094/0x1098`; no generic configuration-write ABI is
+introduced. If L1 bit 3 was set, its original byte is saved before the first
+attempted change and restored with readback. Failure during that interval
+gets a fresh 1 ms restoration budget, distinct from the original error and
+the DMA-stop cleanup. A pending DBI operation must complete before its write
+data is replaced, including during cleanup. Already-disabled calibration
+and L1 are not rewritten.
+
+After the pinned wake/watchdog/debug settings, the implementation stops all
+supported TX/RX channels, PCIe I/O and WPDMA with both HCI engines off. Unlike
+the complete upstream driver, it has no ordinary RX/TX rings and therefore
+leaves these channels stopped throughout this slice. It clears the supported
+indices and applies packet RXBD mode, 2048-byte TX/128-byte RX bursts,
+multi-tag count 8, 256 ns descriptor intervals and truncated address-info
+format. Each index/idle wait is bounded by 100 microseconds; MDIO transactions
+by 2 ms and DBI transactions by 200 microseconds, each with finite polls even
+if the clock stops. `prepare` has a 50 ms total budget, including its final
+readback. There is no PCI mastering, HCI, WCPU or RF enabling operation.
+
+The returned `Prepared` value is consumed by `finish` after the same function's
+`Queue` reaches `Installed`. It rechecks the profile and command-ring
+base/count/zero indices before writing the exact single-band BDRAM table
+(starts 0/5/10/15/20/24/28, with the source's per-channel limits), then polls
+BDRAM reset for at most 100 microseconds within a 5 ms stage budget. A guard
+failure performs no write. A modified failure independently attempts to
+retain channel stops/HCI-off and verifies idle under a fresh 1 ms budget.
+Primary, L1-restoration and stop errors are separate; no queue or DMA memory
+is freed. The caller must still power the MAC off on failure and retain any
+DMA allocation until external quiescence. Success leaves all host DMA off.
+
+Build/host evidence is pending. Sixteen focused fixtures in
+`tests/rtw89_pcie_host.rs` model both PHY pages, DBI byte lanes, pending command
+completion, every preparation/BDRAM write fault, deadline/restore failures,
+ring guards and BDRAM-reset ordering. They are not actual PCIe hardware
+observations. The native board service does not call this library stage.
+Actual MAC/PCIe preparation, DMA enable/quiescence and firmware/WCPU download
+remain unvalidated and must be integrated before a hardware-network claim.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
