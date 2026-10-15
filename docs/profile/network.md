@@ -293,8 +293,11 @@ RTL8852B/RFE-1 PTA/LTE/RF-LUT setup. It has a 200 ms attempt deadline and
 independent LUT-close/chip-disable cleanup; modified failures poison the
 PHY attempt. Its opaque result is not an RFK grant or complete coexistence
 initialization. Actual policy, scoreboard ownership, antenna/grant state and
-native integration remain absent from this slice. Native build passes;
-nine fixtures compile, with execution pending publication. No hardware
+native integration remain absent from this slice. Own-branch `e6ed1e2c` native build passed (3.53 seconds). After raw
+publication `c2facb84`, all nine new fixtures passed on 2026-10-16; the
+executable also passed 18 inherited downloader cases and retained that
+module's existing optional private-file ignored case (27 passed, zero failed,
+one inherited ignored, 0.19 seconds, x86-64 WSL2). No hardware
 or calibrated-radio guarantee is added; [scope and source](../../hwdocs/rtl8852be.md#hardware-coexistence-initialization-before-nctl).
 
 The later receive-session validation binds that result to both exact DMA

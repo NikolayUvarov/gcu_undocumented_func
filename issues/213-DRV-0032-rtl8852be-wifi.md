@@ -253,24 +253,6 @@ state. A future owned warm-state shutdown/reset must establish quiescence
 and retain any previously reachable memory before cold reinitialization;
 this slice does not pretend to provide that transition.
 
-### Initial calibration scheduler contract
-
-Expose the existing firmware-owned scheduler-zero exchange for the initial
-RXDCK wrapper. Both pause and restore are restricted to an already-zero
-saved scheduler mask, with live firmware/CMAC guards, exclusive register
-mailbox ownership, caller timeout and actual CTN/PTCL idle readback. No
-nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
-further mailbox calls in that session; callers must retain DMA and perform
-their independent shutdown. Add focused zero/occupied/deadline fixtures;
-native calibration and BTC arbitration are still separate prerequisites.
-
-Own-branch `b947aa40` built without warnings in 0.46 seconds. After raw
-publication `d9266c7b24ba3f3946c32e3ba56592a8b5ad1769`, all 17 runtime-MAC
-host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
-cases filtered). The exact commit ran on the owned scheduler-test branch
-before the later post-init code was published. Independent review found
-no blocker; native RXDCK/BTC integration and hardware evidence are pending.
-
 ### Initial normal-H2C and BT-arbitration prerequisites
 
 `h2c.rs` adds normal sequence/header construction, a real command-queue
@@ -294,6 +276,24 @@ passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
 and deadline boundaries before publication. The native service and existing
 firmware-download path are unchanged. Hardware acceptance stays open.
+
+### Initial calibration scheduler contract
+
+Expose the existing firmware-owned scheduler-zero exchange for the initial
+RXDCK wrapper. Both pause and restore are restricted to an already-zero
+saved scheduler mask, with live firmware/CMAC guards, exclusive register
+mailbox ownership, caller timeout and actual CTN/PTCL idle readback. No
+nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
+further mailbox calls in that session; callers must retain DMA and perform
+their independent shutdown. Add focused zero/occupied/deadline fixtures;
+native calibration and BTC arbitration are still separate prerequisites.
+
+Own-branch `b947aa40` built without warnings in 0.46 seconds. After raw
+publication `d9266c7b24ba3f3946c32e3ba56592a8b5ad1769`, all 17 runtime-MAC
+host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
+cases filtered). The exact commit ran on the owned scheduler-test branch
+before the later post-init code was published. Independent review found
+no blocker; native RXDCK/BTC integration and hardware evidence are pending.
 
 ### Runtime MAC tail and installed receive-channel activation
 
@@ -328,9 +328,13 @@ selection and RFK START/STOP restoration remain open. The existing live
 PHY guard continues to reject active ordinary RX/TX. A failed modified
 attempt independently closes both LUT write gates, disables BB/RF and
 poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
-The native service is unchanged. Native build passes and nine meaningful
-phase/source-order/failure/deadline fixtures compile; execution follows raw
-publication. No hardware or working-radio claim follows from this library.
+The native service is unchanged. Own-branch `e6ed1e2c` native build passed
+(3.53 seconds, no warnings). After raw publication `c2facb84`, all nine
+new phase/source-order/failure/deadline fixtures passed on 2026-10-16. The
+executable also ran 18 inherited synthetic downloader cases successfully
+and retained its one existing optional private-file ignored case: 27 passed,
+zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
+claim follows from this library.
 
 ### Typed receive-session revalidation
 

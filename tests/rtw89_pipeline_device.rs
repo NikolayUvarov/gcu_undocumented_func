@@ -188,4 +188,3 @@ pub fn power_off(device: &mut Device) {
     assert_eq!(device.get(R_AX_SYS_FUNC_EN, 1) & 3, 0);
     device.command = 0;
 }
-

@@ -413,70 +413,8 @@ a delayed-index fixture. Integration review corrected the optional I/O BAR
 decode contract and an invented CMAC-off prerequisite: the real power-on
 sequence already enables CMAC functions while BB remains reset.
 
-Actual Ryzen security bytes and DMA/WCPU firmware operation remain
-unvalidated; native diagnostic integration is described next. The frozen
-`a99cc44a` gate does not contain this later library slice.
-
-## Native firmware diagnostic integration (213-KRN-0114)
-
-The native entry reads `data/firmware/rtw89/rtw8852b_fw-1.bin` through its
-read-only VFS client into private process pages. Missing, wrong-sized or
-wrong-hash files stop before board MMIO access; no firmware bytes enter the
-image. VFS open/close calls have two-second IPC timeouts; chunked reads share
-a five-second deadline. The exact hash check is repeated with the actual
-board's cut/RFE/OTP/image policy after the board-read power-off cycle.
-
-`init` retains a 128 KiB DMA region and passes it in `SLOT_MEM`, along with
-the existing decimal PCI device index. The adapter verifies its DMA kind,
-4 KiB virtual/physical alignment and full bounds below 4 GiB before queue
-construction. The x86 kernel maps DMA as WB and BAR MMIO as UC. The native
-adapter uses `ManuallyDrop` for the DMA mapping and never frees or remaps it
-after a queue exists, including on setup failure or failed cleanup.
-
-`startup.rs` enforces verification before queue initialization, then MAC
-power-on, download-memory preparation, PCIe preparation, ring installation,
-BDRAM finish, kernel mastering, command-only activation and one download.
-Ordinary packet DMA/WPDMA and RXHCI remain stopped; only channel 12 and PCIe
-I/O are unstopped with TXHCI. A successful firmware status 7 is logged with
-its version, then independently bounded DMA/WCPU stop always follows.
-
-Kernel `registers_only` disables bus mastering while preserving MEM decode;
-an explicit PCI Command read must confirm low bits 2. If either check fails,
-no more MMIO is performed. Otherwise MAC power-off gets a fresh one-second
-budget, followed by a final kernel quiesce and Command readback. Primary,
-DMA/WCPU stop, kernel transition and power-off errors remain separate.
-Even complete cleanup does not release the retained DMA mapping or claim
-IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
-radio endpoint, packet traffic or native hardware evidence yet.
-
-Own-branch `5f1d940d` builds both the native driver and init. After raw
-`fast-test` publication `649fea37`, all ten production startup/activation
-host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
-failed/ignored). They cover orchestration and register models, not the actual
-PCIe fabric or RTL8852BE power/firmware path. The cumulative MMIO model below
-adds a separate compatibility check across the library stages.
-
-The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
-from cold board access through power/MAC/PCIe and command activation, without
-reseeding guard registers between stages. Its explicit local companion adds
-production pinned-file verification, full transfer/status and stop/power-off,
-including missing-H2C-readiness cleanup. After raw publication `8461fd20`,
-own-branch `09d1ceaa` passed both standard cases (zero failed/ignored, 0.00 s)
-and three explicit private-file scenarios on 2026-10-16. GEN1/GEN2 each
-transferred 164 packets, with all 326,472 section bytes matching the pinned
-file, reached status 7/version 0.29.29.15 and completed stop/power-off.
-Withheld H2C readiness timed out before the first packet and still completed
-independent cleanup. These runs used x86-64 Linux 6.6.87.2 WSL2 and
-rustc 1.101.0-nightly c36f14571. Their modeled durations are not device timings.
-The model synthesizes readiness and consumes doorbells synchronously; it
-does not model PCIe timing, ordering faults, real OTP or firmware execution.
-There is no new ignored/conditional pass in the host gate. The private check
-requires a separately fetched file and writes no payload to a report:
-
-```sh
-rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
-/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
-```
+The native diagnostic integration is described below. Actual Ryzen security
+bytes and DMA/WCPU firmware operation remain unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
 
 ## Single-band runtime MAC preparation library
 
@@ -571,6 +509,67 @@ A warm device is not silently reset: MEM-only PCI decoding does not imply
 MAC-off or establish ownership of old DMA. The board's cold-state guard
 remains; an owned quiescence/reset transition is still required for warm
 boot/restart support.
+
+## Native firmware diagnostic integration (213-KRN-0114)
+
+The native entry reads `data/firmware/rtw89/rtw8852b_fw-1.bin` through its
+read-only VFS client into private process pages. Missing, wrong-sized or
+wrong-hash files stop before board MMIO access; no firmware bytes enter the
+image. VFS open/close calls have two-second IPC timeouts; chunked reads share
+a five-second deadline. The exact hash check is repeated with the actual
+board's cut/RFE/OTP/image policy after the board-read power-off cycle.
+
+`init` retains a 128 KiB DMA region and passes it in `SLOT_MEM`, along with
+the existing decimal PCI device index. The adapter verifies its DMA kind,
+4 KiB virtual/physical alignment and full bounds below 4 GiB before queue
+construction. The x86 kernel maps DMA as WB and BAR MMIO as UC. The native
+adapter uses `ManuallyDrop` for the DMA mapping and never frees or remaps it
+after a queue exists, including on setup failure or failed cleanup.
+
+`startup.rs` enforces verification before queue initialization, then MAC
+power-on, download-memory preparation, PCIe preparation, ring installation,
+BDRAM finish, kernel mastering, command-only activation and one download.
+Ordinary packet DMA/WPDMA and RXHCI remain stopped; only channel 12 and PCIe
+I/O are unstopped with TXHCI. A successful firmware status 7 is logged with
+its version, then independently bounded DMA/WCPU stop always follows.
+
+Kernel `registers_only` disables bus mastering while preserving MEM decode;
+an explicit PCI Command read must confirm low bits 2. If either check fails,
+no more MMIO is performed. Otherwise MAC power-off gets a fresh one-second
+budget, followed by a final kernel quiesce and Command readback. Primary,
+DMA/WCPU stop, kernel transition and power-off errors remain separate.
+Even complete cleanup does not release the retained DMA mapping or claim
+IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
+radio endpoint, packet traffic or native hardware evidence yet.
+
+Own-branch `5f1d940d` builds both the native driver and init. After raw
+`fast-test` publication `649fea37`, all ten production startup/activation
+host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
+failed/ignored). They cover orchestration and register models, not the actual
+PCIe fabric or RTL8852BE power/firmware path. The cumulative MMIO model below
+adds a separate compatibility check across the library stages.
+
+The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
+from cold board access through power/MAC/PCIe and command activation, without
+reseeding guard registers between stages. Its explicit local companion adds
+production pinned-file verification, full transfer/status and stop/power-off,
+including missing-H2C-readiness cleanup. After raw publication `8461fd20`,
+own-branch `09d1ceaa` passed both standard cases (zero failed/ignored, 0.00 s)
+and three explicit private-file scenarios on 2026-10-16. GEN1/GEN2 each
+transferred 164 packets, with all 326,472 section bytes matching the pinned
+file, reached status 7/version 0.29.29.15 and completed stop/power-off.
+Withheld H2C readiness timed out before the first packet and still completed
+independent cleanup. These runs used x86-64 Linux 6.6.87.2 WSL2 and
+rustc 1.101.0-nightly c36f14571. Their modeled durations are not device timings.
+The model synthesizes readiness and consumes doorbells synchronously; it
+does not model PCIe timing, ordering faults, real OTP or firmware execution.
+There is no new ignored/conditional pass in the host gate. The private check
+requires a separately fetched file and writes no payload to a report:
+
+```sh
+rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
+/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
+```
 
 ## MAC tail and receive-only post-init library
 
@@ -766,7 +765,12 @@ Source hashes at the same BSD-licensed pin: `rtw8852b_common.c`
 `34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb`,
 `rtw8852b.c` `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a`,
 `core.c` `41ea6a22a4ff78035364def00c70edb49d821f2d4cb12869f1a0a87e6ee54886`;
-`mac.c` and `coex.c` hashes are recorded above. The no-std native build
-passes, and nine focused fixtures compile. Execution awaits raw publication.
-The fixtures run real BB/radio stages into a stateful register model before
-BTC; hardware initialization/calibration and network acceptance remain open.
+`mac.c` and `coex.c` hashes are recorded above. Own-branch `e6ed1e2c`
+no-std native build passed (3.53 seconds, no warnings). After raw publication
+`c2facb84`, all nine new BTC-init fixtures passed on 2026-10-16. Their
+executable also includes 18 inherited downloader synthetic tests, all passing,
+and its existing optional private-file ignored case: 27 passed, zero failed,
+one inherited ignored, 0.19 seconds (x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571). No new BTC test is ignored. The fixtures run real BB/radio
+stages into a stateful register model before BTC; hardware initialization,
+calibration and network acceptance remain open.
