@@ -2,8 +2,19 @@
 name = "rtl8168"
 version = "0.1.0"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "(MIT OR Apache-2.0) AND BSD-4-Clause"
 repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [lib]
 path = "src/lib.rs"
+
+[[bin]]
+name = "rtl8168"
+path = "src/main.rs"
+
+[dependencies]
+libmind = { path = "../libmind" }
+
+[profile.release]
+panic = "abort"
+opt-level = 3
