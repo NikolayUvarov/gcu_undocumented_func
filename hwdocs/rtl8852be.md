@@ -453,14 +453,21 @@ Own-branch `5f1d940d` builds both the native driver and init. After raw
 `fast-test` publication `649fea37`, all ten production startup/activation
 host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
 failed/ignored). They cover orchestration and register models, not the actual
-PCIe fabric or RTL8852BE power/firmware path. A single cumulative MMIO model
-across all library stages remains a separate integration check.
+PCIe fabric or RTL8852BE power/firmware path. The cumulative MMIO model below
+adds a separate compatibility check across the library stages.
 
 The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
 from cold board access through power/MAC/PCIe and command activation, without
 reseeding guard registers between stages. Its explicit local companion adds
 production pinned-file verification, full transfer/status and stop/power-off,
-including missing-H2C-readiness cleanup. Both are compiled but not yet run.
+including missing-H2C-readiness cleanup. After raw publication `8461fd20`,
+own-branch `09d1ceaa` passed both standard cases (zero failed/ignored, 0.00 s)
+and three explicit private-file scenarios on 2026-10-16. GEN1/GEN2 each
+transferred 164 packets, with all 326,472 section bytes matching the pinned
+file, reached status 7/version 0.29.29.15 and completed stop/power-off.
+Withheld H2C readiness timed out before the first packet and still completed
+independent cleanup. These runs used x86-64 Linux 6.6.87.2 WSL2 and
+rustc 1.101.0-nightly c36f14571. Their modeled durations are not device timings.
 The model synthesizes readiness and consumes doorbells synchronously; it
 does not model PCIe timing, ordering faults, real OTP or firmware execution.
 There is no new ignored/conditional pass in the host gate. The private check
