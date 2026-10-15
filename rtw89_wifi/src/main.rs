@@ -5,7 +5,7 @@ use core::mem::ManuallyDrop;
 use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{board, download, fwcmd, mac, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{board, btc_session, download, fwcmd, initial_phy, mac, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
@@ -29,10 +29,18 @@ impl fwcmd::Bus for Native {
     }
 }
 
+impl btc_session::DeviceIo for Native {
+    fn pci_id(&mut self) -> io::Result<u32> {
+        device_config(SLOT_DEV0, 0).map_err(|_| Fault::new(FaultKind::Access, 0, 0))
+    }
+    fn bar_len(&self) -> usize { self.bar.len() }
+}
+
 enum Error {
     Grant, Length, State, System(mind::sys::Error), File(mind::fs::Error), Verify(download::VerifyError),
     Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure),
     PhyCap(phycap::Failure), Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
+    InitialPhy(initial_phy::Failure),
 }
 
 #[derive(Debug)]
@@ -46,6 +54,7 @@ impl core::fmt::Debug for Error {
             Self::Io(e) => ("Io", Some(e)), Self::Mac(e) => ("Mac", Some(e)), Self::Pcie(e) => ("Pcie", Some(e)),
             Self::Queue(e) => ("Queue", Some(e)), Self::Download(e) => ("Download", Some(e)), Self::Stop(e) => ("Stop", Some(e)),
             Self::PhyCap(e) => ("PhyCap", Some(e)),
+            Self::InitialPhy(e) => ("InitialPhy", Some(e)),
             Self::Runtime(e) => ("Runtime", Some(e)), Self::Receive(e) => ("Receive", Some(e)), Self::PostMac(e) => ("PostMac", Some(e)),
         };
         match detail { Some(value) => f.debug_tuple(name).field(value).finish(), None => f.write_str(name) }
@@ -146,6 +155,15 @@ impl startup::Diagnostic for Attempt<'_> {
                     self.rings.as_mut().ok_or(Error::State)?, self.board, bar_bytes, self.runtime.as_ref().ok_or(Error::State)?).map_err(Error::PostMac)?);
                 mind::println!("[RTW89] MAC/RX DMA PREPARED; DATA TX STOPPED, RADIO CALIBRATION AND WLAN PENDING");
             }
+            Stage::InitialPhy => {
+                let mut scratch = [0; rx::BUFFER_BYTES];
+                let observed = initial_phy::diagnose(&mut self.native, self.queue.as_mut().ok_or(Error::State)?,
+                    self.rings.as_mut().ok_or(Error::State)?, self.receiving.as_ref().ok_or(Error::State)?,
+                    self.ready.take().ok_or(Error::State)?, self.board, self.capabilities.as_ref().ok_or(Error::State)?,
+                    &mut scratch).map_err(Error::InitialPhy)?;
+                mind::println!("[RTW89] INITIAL PHY/BTC DIAGNOSTIC: {:?}", observed);
+                mind::println!("[RTW89] CHANNEL CALIBRATION AND WLAN PENDING; SHUTTING DOWN DIAGNOSTIC");
+            }
         }
         Ok(())
     }
@@ -179,7 +197,7 @@ impl startup::Diagnostic for Attempt<'_> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX DIAGNOSTIC: NO WLAN RADIO OR NETWORK LINK");
+    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX/INITIAL-PHY DIAGNOSTIC: NO WLAN NETWORK LINK");
     if !cfg!(target_arch = "x86_64") { mind::println!("[RTW89] UNSUPPORTED DMA ARCHITECTURE"); idle(); }
     let (_, resolution, frequency) = mind::time::clock_info();
     if let Err(error) = io::validate_clock(resolution, frequency) {

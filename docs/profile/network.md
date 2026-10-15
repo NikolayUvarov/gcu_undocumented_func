@@ -420,7 +420,9 @@ The shared XTAL command helpers now guard the early board-read cleanup as well
 as later native cleanup: wait for an existing command before writing another,
 with finite 50 ms polling inside the caller's total budget. A stuck command
 retains primary and cleanup failures; successful power-off is not claimed.
-Regression execution and physical validation remain pending for this slice.
+After publication `1a62e46f`, own-branch code `3226b5fe` passed 18 power
+fixtures and the cumulative harness (84 passed, zero failed, one existing
+private-file case ignored); physical validation remains pending for this slice.
 
 The RTL8852BE BTC owner additionally implements bounded normal/no-link source
 initialization and common actions over the owned Session. Its completion token
@@ -459,3 +461,12 @@ Session/owner/RFK/nested cases and all 11 control cases with no failures or
 ignores. This replaces the pending execution status for code `a134b5a0` and
 its RFK prerequisite `a6df7c83`; the seeded-model and hardware limitations above
 remain unchanged.
+
+
+The native RTL8852BE diagnostic now attempts the initial PHY/BTC chain over
+its actual retained command/RX allocations and consumed Ready. It uses actual
+coexistence and scheduler callbacks for DACK/RXDCK, returns observations and
+always shuts down afterward. This does not complete channel calibration,
+policy admission, association or usable networking. The new cold-device
+composition fixtures are compiled; execution and hardware evidence remain
+pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).

@@ -648,7 +648,7 @@ Extend source-valued callback types for IQK/DPK and require actual held outer
 IQK permission for matching RF_AB one-shots. Preserve partial nested admission
 for matching cleanup; refuse orphan, duplicate, foreign and premature outer
 release. TSSI receives an explicit stronger enclosing IQK START/STOP requirement
-approved by the maintainer, instead of copying upstream's ignored rejection.
+as a deliberate stronger admission rule, instead of copying upstream's ignored rejection.
 Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
 algorithms, their policy-bound TX prerequisites and native integration remain
 open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
@@ -669,3 +669,16 @@ one absolute budget, live firmware/queue/RX checks, final elapsed check and
 terminal poison on uncertainty. Seven production-entry fixtures compile;
 native build passes. Execution follows raw publication, and this does not
 close calibration or hardware acceptance.
+
+
+### Native initial PHY and owned coexistence continuation
+
+Join the verified firmware/MAC/RX startup to actual Session-based H2C, BTC
+normal/no-link initialization, initial DM and NCTL/RCK/DACK/RXDCK, board trims
+and the final report registers. Consume Ready exactly once; never replace
+BTC permission or scheduler mailbox responses with successful placeholders.
+Return observations only and always run the existing independent native
+shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
+and hardware traffic remain open. Five cumulative cold-device fixtures and
+the fifteen-stage cleanup matrix compile; execution follows raw publication.
+See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
