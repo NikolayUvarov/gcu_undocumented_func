@@ -114,6 +114,14 @@ fn frame_metadata_checks_lengths_qos_and_actual_tid_mapping(){
     assert!(txdesc::frame(&frame(1,None,false),2,1).is_err());
 }
 #[test]
+fn management_order_bit_requires_complete_ht_control_and_encodes_its_length(){
+    let mut f=frame(0,None,false);f[1]=0x80;f.truncate(28);
+    let meta=txdesc::frame(&f,12,1).unwrap();assert_eq!(meta.header,28);
+    let wd=txdesc::descriptor(meta,0,1,0x300000).unwrap();assert_eq!((Device::word(&wd,0)>>11)&31,14);
+    for len in 24..28{assert_eq!(txdesc::frame(&f[..len],12,1),Err(txdesc::Error::Length));}
+    f[1]=0;f.truncate(24);assert_eq!(txdesc::frame(&f,12,1).unwrap().header,24);
+}
+#[test]
 fn actual_rpq_and_dma_are_both_required_and_group_done_is_not_acknowledged(){
     for early_report in [false,true]{run(|d,q,r,s,_|{
         d.auto_dma=early_report==false;d.auto_rpq=early_report;q.begin(d,&frame(0,None,false),2,3,4,100_000).unwrap();
