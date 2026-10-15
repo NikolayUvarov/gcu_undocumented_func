@@ -457,6 +457,53 @@ packet-report routing, normal interrupt handling, RX rings/C2H processing,
 final offload commands, BTC/PHY/calibration, channel/regulatory setup and
 association still require their own implementation and hardware evidence.
 
+## RXQ/RPQ ownership and C2H parsing libraries
+
+`rx.rs`, `rxdesc.rs` and `c2h.rs` adapt the same pinned `pci.c`, `pci.h`,
+`rtw8852be.c`, `core.c`, `core.h`, `txrx.h`, `fw.h`, `fw.c` and `mac.h`
+layouts. RTL8852BE explicitly uses `rx_ring_eq_is_full=false`,
+`check_rx_tag=false` and `no_rxbd_fs=false`; the library therefore uses
+normal empty-equal indices and FS/LS, without importing another chip's
+RX-tag validation. Each RXQ/RPQ has 256 eight-byte descriptors and 11498-byte
+buffers. The 512 buffer strides are aligned to 64 bytes (11520 bytes).
+
+The 5,902,336-byte RX region and 86,016-byte FWCMD region must be disjoint
+subregions of a future retained 8 MiB coherent-WB grant below 4 GiB. This
+library does not change the existing 128 KiB native diagnostic allocation.
+DMA initialization requires MEM-only PCI Command and no prior device
+access to the region. Installation requires stopped RX DMA, RXHCI off and
+bounded receive-engine idle; it writes only owned RX ring registers.
+`start` validates externally activated, unchanged installed rings; it never
+enables mastering, HCI or another DMA channel. Both objects and all mappings
+must remain alive until external PCI quiescence, including after errors.
+The ordering contract is x86-64 coherent WB plus UC MMIO, without WC aliases.
+
+`receive` processes at most one descriptor under a nonzero caller budget.
+It validates host/hardware indices, reads DMA bytes with volatile accesses,
+checks time during bounded chunks, and copies into caller-owned storage
+before the 16-bit host-index release. No packet heap allocation or DMA
+reference escapes. Malformed lengths/descriptors and fragmented packets
+are explicitly dropped; fragment reassembly is not implemented. A possibly
+applied doorbell error poisons the receiver and retains the memory. Local
+stop independently attempts RX stop bits, RXHCI disable and bounded idle,
+preserving separate errors and the TX command channel.
+
+The AX descriptor parser bounds short/long headers, shift and driver-info
+bytes against the actual write length. RPQ reports use the chip's four-byte
+format. The C2H parser requires a complete declared packet length, then
+keeps receipt ACK (sequence bits 23:16) separate from done ACK (sequence
+bits 31:24 and return status 23:16). Matching includes category, class,
+function and sequence; receipt or DMA consumption does not imply success
+of the requested firmware operation.
+
+Eighteen focused host fixtures compile; native-build, execution and hardware
+evidence for this new slice are pending. Interrupts, RX activation, command
+ACK routing, BTC coordination and WLAN service registration remain separate.
+A warm device is not silently reset: MEM-only PCI decoding does not imply
+MAC-off or establish ownership of old DMA. The board's cold-state guard
+remains; an owned quiescence/reset transition is still required for warm
+boot/restart support.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
