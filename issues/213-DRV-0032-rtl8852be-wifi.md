@@ -218,3 +218,14 @@ DMA buffers. The current board guard continues to refuse nonzero MAC power
 state. A future owned warm-state shutdown/reset must establish quiescence
 and retain any previously reachable memory before cold reinitialization;
 this slice does not pretend to provide that transition.
+
+### Initial calibration scheduler contract
+
+Expose the existing firmware-owned scheduler-zero exchange for the initial
+RXDCK wrapper. Both pause and restore are restricted to an already-zero
+saved scheduler mask, with live firmware/CMAC guards, exclusive register
+mailbox ownership, caller timeout and actual CTN/PTCL idle readback. No
+nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
+further mailbox calls in that session; callers must retain DMA and perform
+their independent shutdown. Add focused zero/occupied/deadline fixtures;
+native calibration and BTC arbitration are still separate prerequisites.

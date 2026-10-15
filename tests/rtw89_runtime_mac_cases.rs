@@ -160,6 +160,33 @@ fn diagnostic_counter_nibbles_wrap_independently(){
     prepare_inner(&mut d,&mut q,&board(),BAR_BYTES).unwrap();assert_eq!(d.regs[R_AX_UDM1+1],0);d.stopped_for_drop(&mut q);
 }
 #[test]
+fn calibration_pause_and_restore_use_one_zero_mailbox_contract(){
+    let mut d=Device::new();d.set(R_AX_CTN_TXEN,0);d.regs[R_AX_UDM1+1]=0xee;
+    scheduler_zero(&mut d,1000).unwrap();scheduler_zero(&mut d,1000).unwrap();
+    assert_eq!(d.regs[R_AX_UDM1+1],0);
+    assert_eq!(d.writes.iter().filter(|(at,_,value)|*at==R_AX_H2CREG_CTRL&&*value==1).count(),2);
+    assert!(d.writes.iter().all(|(at,_,_)|*at==R_AX_UDM1+1||(R_AX_H2CREG_DATA0..=R_AX_C2HREG_CTRL).contains(at)));
+    assert_eq!(d.get(R_AX_CTN_TXEN),0);
+}
+#[test]
+fn calibration_scheduler_refuses_live_tx_and_occupied_or_unready_mailbox(){
+    for variant in 0..7{
+        let mut d=Device::new();d.set(R_AX_CTN_TXEN,0);let mut timeout=1000;
+        match variant{0=>d.set(R_AX_CTN_TXEN,1),1=>d.set(download::FW_CONTROL,0),2=>d.set(R_AX_CMAC_FUNC_EN,0),
+            3=>d.regs[R_AX_H2CREG_CTRL]=1,4=>d.regs[R_AX_C2HREG_CTRL]=1,5=>timeout=0,_=>timeout=1_000_001}
+        assert!(scheduler_zero(&mut d,timeout).is_err());assert!(d.writes.is_empty());
+    }
+}
+#[test]
+fn calibration_scheduler_observes_missing_reply_and_late_idle_read(){
+    for late in [false,true]{
+        let mut d=Device::new();d.set(R_AX_CTN_TXEN,0);
+        if late{d.late_final=true;d.idle_reads=1;}else{d.no_reply=true;}
+        assert_eq!(scheduler_zero(&mut d,100).unwrap_err().kind,FaultKind::Timeout);
+        assert_eq!(d.writes.iter().filter(|(at,_,value)|*at==R_AX_H2CREG_CTRL&&*value==1).count(),1);
+    }
+}
+#[test]
 fn ignored_geometry_write_is_not_success(){
     let index={let mut d=Device::new();let mut r=Region::new();let mut q=r.queue(&mut d);prepare_inner(&mut d,&mut q,&board(),BAR_BYTES).unwrap();let n=d.writes.iter().position(|(at,_,_)|*at==mac::WDE_CONFIG).unwrap()+1;d.stopped_for_drop(&mut q);n};
     let mut d=Device::new();let mut r=Region::new();let mut q=r.queue(&mut d);d.ignore_write=Some(index);
