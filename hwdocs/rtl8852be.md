@@ -713,6 +713,32 @@ post-init/session fixtures passed (0.88 seconds), none ignored, on
 2026-10-16 MSK. Independent source review found no blocker; native,
 full-gate and hardware evidence remain pending.
 
+## BTC profile 105 receive envelopes
+
+`btc_reports::parse_105` reuses the complete C2H-header parser and implements
+the pinned `coex.c` `_parse_btc_report`, `_chk_btc_report`, report/event ID
+mapping and `core.h` packed layouts for RTL8852B firmware 0.29.29.15. BTC
+events are category two/class `0x12`; report payloads are bounded at the
+profile's 1800 bytes. The whole TLV stream is validated before a borrowed
+iterator exposes any item, including malformed trailing records.
+
+Legacy report IDs zero through five are unchanged and six through twelve
+map to the following canonical ID, so BT-version-v1 arrives as wire ID
+eight. TDMA-v3 is 12 bytes with all eight policy bytes preserved; slots-v1
+is 152 bytes with raw count/update bitmap and all 18 typed slot records;
+BT-version-v1 is 16 bytes with complete coexistence/firmware/features words.
+Unknown report contents remain explicit borrowed records. Reserved bytes
+and the slot update bitmap are not treated as invented command correlation.
+
+Profile `fwc2hfunc=1` maps function seven to overflow and eight to loopback.
+BTINFO requires its eight-byte shape and source length marker six, and
+remains a visible event for the session owner, alongside scoreboard changes
+and unhandled events. This decoder has no MMIO, heap allocation, MAC ACK
+correlation, applied-policy or RFK token. The owner must process state changes
+and compare actual policy contents in the same session; source policy checks
+compare all eight TDMA bytes, including instant execution, and all 18 slots.
+Seven parser fixtures compile; execution and hardware evidence are pending.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.

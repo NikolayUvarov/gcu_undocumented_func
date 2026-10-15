@@ -375,3 +375,11 @@ part of the contract. Final own tip `a877030f` built without warnings in
 none ignored, on 2026-10-16 MSK. Native integration and physical-device
 evidence remain pending; synthetic responses do not establish hardware
 capabilities on the maintainer's device.
+
+The pure BTC profile-105 decoder validates a complete bounded C2H report
+stream before yielding typed TDMA/slot/BT-version records, preserves all
+policy fields and explicitly surfaces BTINFO, scoreboard, overflow and
+unsupported events. It carries no session correlation or RFK permission;
+the future owner must process state changes and verify policy application.
+Seven host parser fixtures compile; build, execution and native/hardware
+evidence are pending for this slice.
