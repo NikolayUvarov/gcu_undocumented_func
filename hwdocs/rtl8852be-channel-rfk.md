@@ -75,3 +75,19 @@ assertions remain intact. NCTL command replies likewise require the start
 bit, excluding the source table's `0x8000=8` initialization writes. No
 production code or successful-calibration assertion changed. Corrected
 execution remains pending its own raw publication.
+
+## Corrected execution
+
+After raw publication of `fbe42d48` in `5cbf1825`, the saved corrected host
+binary passed all seven new coordinator cases in 0.08 s, with no ignored
+cases. The exact source build passed in 0.01 s. The successful GEN1/GEN2 model
+retains one downloaded firmware, one queue/RX session and one PHY attempt
+through all three engines; its accepted A2DP event supplies both 30 ms windows.
+IQK uncertainty, missing TSSI report, bad DPK quality and unconsumed MCC DMA
+prevent readiness and later-stage work. The original seven failures and
+source-derived trigger correction above remain part of the evidence.
+
+The earlier same-change affected checks passed: five preserved initial-PHY
+cases (0.14 s), two cold PCIe cases (0.01 s), and 186 MAC/RX/session cases
+(1.05 s), with one existing private-firmware case ignored. These are host
+models, not physical RF or WLAN traffic evidence.
