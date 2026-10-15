@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -723,9 +723,9 @@ Consume separate DPK calibration-transmit authority; no native provider exists.
 Actual BTC/scheduler callbacks, bounded NCTL/AGC, source backups and independent
 cleanup retain primary and secondary errors. Unknown NCTL completion switches
 radio off before mailbox cleanup and skips unsafe register restoration.
-Fourteen engine fixtures and two provenance cases compile/are registered;
-execution follows raw publication. Full typed cold-start integration, RFK power
-policy, hardware quality and association remain open. See the
+Fourteen engine fixtures and two provenance cases are registered; the
+execution and first-run correction are recorded below. Full typed cold-start
+integration, RFK power policy, hardware quality and association remain open. See the
 [DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
 
 ### DPK first-run cleanup finding (2026-10-16)
@@ -737,7 +737,9 @@ that may already have released the grant. The correction allows only emergency
 radio shutdown after an attempted STOP, records skipped/unknown DPD disable
 explicitly, and never repeats STOP or restores calibration state. The failed
 run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
-await publication. Hardware acceptance is unchanged and remains open.
+passed 14/14 on the own source branch at `40addff0`, after build and raw
+publication `c38df1dd` (0.01 s; no failures or ignored cases). Hardware
+acceptance is unchanged and remains open.
 
 ### Initial channel coexistence callbacks (2026-10-16)
 
@@ -746,7 +748,9 @@ The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
 in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
 initialized context, normal H2C sequence and retained RX, refuse pending RFK,
 preserve errors and allow a matching host END even after poisoning. Ten new
-Session model cases compile; execution awaits raw publication. The channel
+Session model cases and the existing 52 passed together on the own branch
+at `bf6747f5` after native build and raw publication `c38df1dd`: 62/62,
+0.29 s, no failures or ignored cases. The channel
 coordinator must still validate real IQK/TSSI/DPK results and transmission
 admission. No native RFK-power provider or working WLAN is claimed.
 
