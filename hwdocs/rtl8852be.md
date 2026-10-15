@@ -627,8 +627,12 @@ traffic is allowed; ordinary TX/WPDMA must remain stopped and idle. Command
 reclaim changes only CPU completion counters. The permit is an observation
 at that instant, not a promise that future hardware state cannot change.
 The PHY guard remains unchanged until its separate typed integration.
-Sixteen post-init/session fixtures compile; new slice execution/build and
-hardware evidence are pending.
+Own-branch `b8f41cb5` native build passed (0.51 seconds, no warnings).
+After raw publication `767c2cb8`, all 16 post-init/session fixtures passed
+(0.82 seconds), all 18 affected RX fixtures passed (0.12 seconds), and all
+14 FWCMD fixtures passed (reported 0.00 seconds), none ignored, on
+2026-10-16 MSK. Two independent read-only reviews found no blocker.
+Full-gate and physical-device evidence remain pending.
 
 ## What blocks radio operation
 

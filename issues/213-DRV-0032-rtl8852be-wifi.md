@@ -348,3 +348,11 @@ The future PHY adapter may request this permit for an owned receive path;
 the existing stopped-RX guard is unchanged until that integration. Test
 same-address pool reconstruction, stale/foreign tokens, partial live traffic,
 actual register corruption and timeout without publishing MMIO writes.
+
+Own-branch `b8f41cb5` built without warnings in 0.51 seconds. After raw
+publication `767c2cb8`, all 16 post-init/session fixtures passed (0.82
+seconds; 36 unchanged module cases filtered), all 18 affected RX fixtures
+passed (0.12 seconds), and all 14 FWCMD fixtures passed (reported 0.00
+seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
+reviews found no blocker. These are host model results; full-gate,
+physical-device operation and the PHY/native permit consumer are pending.
