@@ -208,9 +208,12 @@ Its TCB includes the existing SHA-256 implementation, trusted board-map origin
 and the command queue's coherent DMA/kernel-quiescence contract. It bounds
 reset/start, header/section transfer and status polling and retains failed
 DMA ownership with separate cleanup errors. This is pinned-file integrity,
-not vendor-signature verification. Build/host evidence for this library slice
-is recorded separately by its owner; actual Ryzen firmware/radio operation remains pending;
-the original board executable at that stage performed no download or host DMA.
+not vendor-signature verification. Own-branch `cf768d22` native build passed;
+after `fast-test` publication `45387d45`, all 18 synthetic downloader cases,
+the separately invoked private-file hash/mutation fixture and 14 FWCMD
+regressions passed on 2026-10-15 UTC. These establish model behavior and
+identity of the private file, not hardware operation. Native integration is described next;
+actual Ryzen firmware/radio operation remains pending.
 
 The 213-KRN-0114 continuation wires a single native firmware diagnostic into
 that executable. It verifies the private file before board MMIO, admits the

@@ -401,8 +401,19 @@ eight command buffers. Only separately verified kernel quiescence permits
 region release. `Ready` means status 7 was observed, not full MAC, calibrated
 RF, WLAN service registration or usable networking.
 
-Build and focused host evidence for this library slice are recorded by its
-owner. Actual Ryzen security bytes and DMA/WCPU firmware operation remain
+Own-branch `cf768d22` (following `27033a43`) built for native x86-64 in
+0.39 seconds without warnings. After `fast-test` publication `45387d45`,
+18 synthetic downloader tests passed (0.19 seconds), the explicitly invoked
+private-file digest/mutation fixture passed (0.05 seconds), and all 14 FWCMD
+regressions passed (reported 0.00 seconds), on 2026-10-15 UTC. The private
+fixture is intentionally excluded from ordinary CI because it requires the
+separately fetched proprietary file; it was run explicitly in this session.
+Independent review caught the final drain-read deadline gap, corrected with
+a delayed-index fixture. Integration review corrected the optional I/O BAR
+decode contract and an invented CMAC-off prerequisite: the real power-on
+sequence already enables CMAC functions while BB remains reset.
+
+Actual Ryzen security bytes and DMA/WCPU firmware operation remain
 unvalidated; native diagnostic integration is described next. The frozen
 `a99cc44a` gate does not contain this later library slice.
 
