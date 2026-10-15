@@ -86,9 +86,9 @@ DMA with UC MMIO. Host fixtures do not establish hardware ordering or actual
 DMA operation. The frozen earlier `a99cc44a` full gate does not contain this slice;
 its full gate, integration and hardware acceptance remain pending.
 
-### Next slice: MAC download-memory preparation
+### Implemented slice: MAC download-memory preparation
 
-Port the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
+Commit `371d41db` ports the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
 including the SCC WCPU minimum quota override, followed by HFC channel-12
 pre-cost/enabling. Require supported cut, active MAC, reset baseband, stopped
 WCPU and disabled PCI mastering/HCI before any write. Bound readiness polls
@@ -96,3 +96,12 @@ and attempt independently budgeted HFC/DLE disable with explicit cleanup
 errors on every modified failure. This slice prepares internal device memory
 only; it neither enables host DMA nor replaces the still-required PCIe
 MDIO/DBI/mode/BDRAM startup, firmware download or calibration.
+
+The native x86-64 build passed (0.31 seconds, no warnings), and all 11 focused
+host fixtures passed on 2026-10-15 UTC after `fast-test` publication `60a100be`.
+Independent source review confirmed the quota/ordering/cleanup mapping and
+identified a final-read deadline gap, corrected before publication with a
+dedicated regression. The service-directory build passed after correcting an
+initial root-directory invocation that selected the Linux target. This library
+stage remains uncalled by the native board service. Actual hardware operation
+and a full gate containing this later commit remain pending.
