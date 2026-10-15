@@ -319,11 +319,14 @@ Primary, L1-restoration and stop errors are separate; no queue or DMA memory
 is freed. The caller must still power the MAC off on failure and retain any
 DMA allocation until external quiescence. Success leaves all host DMA off.
 
-Build/host evidence is pending. Sixteen focused fixtures in
-`tests/rtw89_pcie_host.rs` model both PHY pages, DBI byte lanes, pending command
+Own-branch `4feee434` native x86-64 release build passed (0.64 seconds, no
+warnings). After `fast-test` publication `1dee0b3f`, all 16 focused fixtures
+in `tests/rtw89_pcie_host.rs` passed on 2026-10-15 UTC (reported 0.00 seconds,
+no ignored tests). They model both PHY pages, DBI byte lanes, pending command
 completion, every preparation/BDRAM write fault, deadline/restore failures,
-ring guards and BDRAM-reset ordering. They are not actual PCIe hardware
-observations. The native board service does not call this library stage.
+ring guards and BDRAM-reset ordering. Independent source review found no
+remaining blocking discrepancy. These are not actual PCIe hardware
+observations. The frozen `a99cc44a` gate does not contain this slice. The native board service does not call this library stage.
 Actual MAC/PCIe preparation, DMA enable/quiescence and firmware/WCPU download
 remain unvalidated and must be integrated before a hardware-network claim.
 
