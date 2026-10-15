@@ -26,7 +26,7 @@ pub const INIT_CONFIG: usize = 0x1000;
 const STOP_CHANNEL: u32 = 1 << 18;
 const TX_HCI: u32 = 1 << 11;
 const RX_HCI: u32 = 1 << 13;
-const BUSY_MASK: u32 = 0x007f_0f03;
+pub(crate) const BUSY_MASK: u32 = 0x007f_0f03;
 const BDRAM_VALUE: u32 = 28 | 4 << 8 | 1 << 16;
 const INDEX_MASK: u32 = 0x0fff_0fff;
 

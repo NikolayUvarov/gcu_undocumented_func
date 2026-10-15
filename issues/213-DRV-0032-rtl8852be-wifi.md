@@ -64,9 +64,9 @@ not establish hardware operation or a network link. KRN-0114 integration must
 rebuild the executable with its final boot ABI; actual Ryzen board reads,
 power-off and all radio acceptance criteria remain pending.
 
-### Next slice: bounded PCIe FWCMD transport
+### Implemented slice: bounded PCIe FWCMD transport
 
-The next separate commit implements channel-12 TXBD/24-byte TXWD packets,
+Commit `f6caafca` implements channel-12 TXBD/24-byte TXWD packets,
 installation while PCI mastering/HCI engines are off, register readback,
 ordered descriptor publication, guarded hardware-index reclamation and a
 bounded drain. A separate payload pool preserves the pinned Linux driver's
@@ -75,3 +75,24 @@ The initial native board service remains without DMA and does not call it.
 MAC DLE/HFC/PCIe pre-initialization, authenticated firmware/WCPU sequencing,
 RX/C2H and the KRN DMA integration are explicitly separate prerequisites;
 the transport must not enable bus mastering or release DMA on its own.
+
+The own-branch x86-64 native release build passed (0.34 seconds). Following
+`fast-test` publication `dd735d0a`, all 14 focused command-queue tests passed
+on 2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). Independent
+review checked the pinned descriptor/retention contract and found a missing
+`0xffff` PCI Command guard, which was corrected before publication. The
+implementation rejects non-x86-64 architectures and requires coherent WB
+DMA with UC MMIO. Host fixtures do not establish hardware ordering or actual
+DMA operation. The frozen earlier `a99cc44a` full gate does not contain this slice;
+its full gate, integration and hardware acceptance remain pending.
+
+### Next slice: MAC download-memory preparation
+
+Port the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
+including the SCC WCPU minimum quota override, followed by HFC channel-12
+pre-cost/enabling. Require supported cut, active MAC, reset baseband, stopped
+WCPU and disabled PCI mastering/HCI before any write. Bound readiness polls
+and attempt independently budgeted HFC/DLE disable with explicit cleanup
+errors on every modified failure. This slice prepares internal device memory
+only; it neither enables host DMA nor replaces the still-required PCIe
+MDIO/DBI/mode/BDRAM startup, firmware download or calibration.
