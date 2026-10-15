@@ -8010,9 +8010,10 @@ def clock_suite(args, disk):
         time.sleep(10)  # past the measures at 1 s and 8 s
 
         def clocks():
-            before = time.time()
+            # Compare elapsed clocks; host realtime can jump independently of both monotonic clocks.
+            before = time.monotonic_ns()
             line = vm.command("time", raw=True)
-            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+            return (before + time.monotonic_ns()) / 2e9, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
         host0, guest0, measured = clocks()
         # Measured again below the first: 9% less where the first window was right, more or less where the host
         # stretched it too (i9: 4043 -> 3639 MHz).
