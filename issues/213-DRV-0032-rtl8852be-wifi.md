@@ -356,3 +356,14 @@ passed (0.12 seconds), and all 14 FWCMD fixtures passed (reported 0.00
 seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
 reviews found no blocker. These are host model results; full-gate,
 physical-device operation and the PHY/native permit consumer are pending.
+
+### Firmware-ready command-session binding
+
+Bind the downloader's opaque `Ready` result to the successful command
+queue's existing non-wrapping session identity. Require that exact identity
+in `runtime_mac::prepare` before hardware access, while retaining all live
+register checks. A stopped or reconstructed queue cannot reuse an old
+firmware token. Add host regressions using an actual synthetic downloader
+completion, including old-token/new-queue rejection at the same physical
+base. Future BTC context must also bind its PHY/init attempt and revalidate
+live receiving state; a matching firmware token alone is not an RFK grant.
