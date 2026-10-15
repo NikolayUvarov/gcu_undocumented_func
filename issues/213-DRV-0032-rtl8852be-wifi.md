@@ -376,3 +376,16 @@ also passed when explicitly invoked (0.06 seconds). The cumulative private
 fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
 file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
 found no blocker. Full-gate and hardware validation remain pending.
+
+### MAC report tail after the full PHY prefix
+
+Implement the pinned single-band AX PPDU status/report forwarding and RTS
+threshold writes as a crate-private bounded stage. The AX PHY-report hook
+is null and requires no substitute command. Require a fresh actual owned
+receive-session permit and post-DACK register state; the eventual caller
+must also establish complete BTC/PHY/RFK/power-trim/path prerequisites.
+Never treat this stage as WLAN or regulatory readiness. On a possibly
+applied write error, independently disable PPDU reports, stop RX, disable
+BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
+Add exact mask/order, threshold boundary, stale-session, applied-failure
+and final-deadline fixtures without enabling native operation.
