@@ -2,7 +2,7 @@
 
 The network stack benchmark of issue 106 and what it decided. Appendix B.2: performance features are taken on the evidence of a measurement on a profile, not by default.
 
-## Bounded service work (550-NET-0031/0032, 2026-10-15)
+## Bounded service work (550-NET-0031/0032/0033, 2026-10-15)
 
 The per-card two-second deadline from 550-NET-0031 allowed three slow cards
 to accumulate six seconds in one poll; polling both before and after a client
@@ -40,7 +40,7 @@ or CPU-time guarantee.
 
 A short-budget timeout does not erase link state or label a card dead.
 Quota exhaustion yields until old work charges expire; no new five-second
-cooldown starts from a timeout. The unchanged WLAN
+cooldown starts from a timeout. The WLAN
 pump can spend up to two seconds in radio/key-store calls: a live WLAN that
 becomes ready after exhausting its allowance can wait until older charges
 expire (the tests exercise readiness after two seconds and retry at 5.5 s). Other cards and clients continue meanwhile. Quick raw-frame
@@ -61,6 +61,24 @@ latency/loss measurements remain pending for this configuration. The supplied
 MacBook log does not establish the cause of the reported ping loss under
 load. No Effector heartbeat or physical NIC result follows from these host
 checks.
+
+The separate 550-NET-0033 change dispatches an accepted WLAN client before
+background receives. Each receive batch starts at most eight frames and
+checks a 100 ms cooperative slice before starting another frame. A frame
+already received completes its station processing and actions using the
+original two-second deadline shared with the client handler. The slice does
+not shorten radio/control/key IPC deadlines. If the aggregate deadline has
+expired, the loop does not start background processing or a new station tick.
+Protocol handshake and link-loss timers are unchanged.
+
+With a continuous stream of 10 ms receives and no other work, a new client
+gets a dispatch opportunity after eight receives (80 ms), instead of waiting
+behind a 64-frame batch. This is the model for the added production-helper
+tests, not a measured hardware limit; the new tests have not yet run.
+A single synchronous call or the final frame's actions can still exceed
+100 ms and the caller's 250 ms budget. Existing action losses when the
+aggregate two-second deadline expires during frame actions are not repaired
+by this change. Integrated WLAN QEMU and MacBook measurements remain pending.
 
 ## How it is measured
 
