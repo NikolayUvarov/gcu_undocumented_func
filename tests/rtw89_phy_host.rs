@@ -8,6 +8,7 @@
 #[path = "../rtw89_wifi/src/phy.rs"] mod phy;
 #[path = "../rtw89_wifi/src/dack.rs"] mod dack;
 #[path = "../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
+#[path = "../rtw89_wifi/src/rxdck.rs"] mod rxdck;
 
 use io::{Fault, FaultKind, RegisterIo, Result};
 use phy::{Phy, PhyIo, State, Stage};
@@ -16,6 +17,7 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
+    scheduler_calls:Vec<(u32,usize)>, scheduler_fail:Option<usize>, scheduler_late:Option<usize>, scheduler_dirty:bool, rx_delay_fail:bool, rx_delay_late:bool,
     btc: Vec<(dack::BtcNotice,u32)>, btc_event_positions: Vec<usize>, btc_start_fail: bool, btc_stop_fail: bool, btc_start_delay: u64, btc_stop_delay: u64, dack_model: bool,
     rf: [[u32; 256]; 2], swsi_pending: Option<(u64,u8,u8)>, swsi_latched: u32, read_stuck: bool,
     rck_pending: [Option<u64>;2], rck_values: [u8;2], rck_delay: u64, rck_stuck: Option<u8>,
@@ -32,7 +34,7 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+        let mut d = Self { scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
             rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
@@ -152,6 +154,8 @@ impl RegisterIo for Device {
     }
     fn delay_us(&mut self, us: u32) -> Result<()> {
         self.tick(us as u64);
+        if us==1_000 && self.rx_delay_fail {self.rx_delay_fail=false;return Err(Fault::new(FaultKind::Access,0x92,us));}
+        if us==1_000 && self.rx_delay_late {self.rx_delay_late=false;self.tick(2_500_000);}
         if self.delay_jump == Some(us) { self.tick(100_000); self.delay_jump=None; }
         Ok(())
     }
@@ -556,3 +560,18 @@ impl dack::DackIo for Device {
     }
 }
 #[path="rtw89_dack_cases.rs"] mod dack_cases;
+
+impl rxdck::RxdckIo for Device {
+    fn scheduler_zero(&mut self,timeout_us:u32)->Result<()> {
+        assert!(timeout_us>0&&timeout_us<=1_000_000);
+        assert_eq!(self.get(0xc348,4)&0xffff,0);assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
+        self.scheduler_calls.push((timeout_us,self.events.len()));let index=self.scheduler_calls.len();
+        if self.scheduler_late==Some(index) {self.tick(u64::from(timeout_us));}
+        if self.scheduler_fail==Some(index) {
+            if self.scheduler_dirty {self.put(0xc348,4,1);}
+            return Err(Fault::new(FaultKind::Access,0xc160,index as u32));
+        }
+        Ok(())
+    }
+}
+#[path="rtw89_rxdck_cases.rs"] mod rxdck_cases;

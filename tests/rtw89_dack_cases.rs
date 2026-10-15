@@ -1,6 +1,6 @@
 use super::*;
 
-fn prepared(p:&mut Phy<Device>) {
+pub(super) fn prepared(p:&mut Phy<Device>) {
     to_nctl(p); p.rck().unwrap();
     let d=p.bus_between_stages(); d.events.clear(); d.dack_model=true;
     for (at,value) in [(0x1c0d0,(17<<15)|8),(0x1c0fc,(0x123<<10)|0x155),(0x1c1fc,(0x234<<10)|0x2ab),

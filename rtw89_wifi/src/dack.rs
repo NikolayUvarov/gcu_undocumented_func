@@ -13,7 +13,7 @@ const RF_MASK:u32=0xfffff;
 pub enum Band { Ghz2=0, Ghz5=1 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u8)]
-pub enum Calibration { Dack=4 }
+pub enum Calibration { Dack=4, Rxdck=5 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u8)]
 pub enum RfkState { Stop=0, Start=1 }
@@ -141,7 +141,7 @@ fn remaining(bus:&mut impl RegisterIo,start:u64)->io::Result<u32> {
     let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0,0))?;
     TOTAL_US.checked_sub(elapsed).filter(|v|*v!=0).map(|v|v as u32).ok_or(Fault::new(FaultKind::Timeout,0,0))
 }
-fn notify(bus:&mut impl DackIo,notice:BtcNotice,timeout_us:u32)->io::Result<()> {
+pub(crate) fn notify(bus:&mut impl DackIo,notice:BtcNotice,timeout_us:u32)->io::Result<()> {
     let start=bus.now_us(); let result=bus.btc_rfk(notice,timeout_us);
     let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0,0))?;
     result?;

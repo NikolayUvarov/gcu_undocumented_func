@@ -26,3 +26,4 @@ pub mod rxdesc;
 pub mod c2h;
 pub mod post_mac;
 mod post_mac_regs;
+pub mod rxdck;

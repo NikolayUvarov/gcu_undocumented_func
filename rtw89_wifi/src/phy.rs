@@ -32,10 +32,13 @@ pub trait PhyIo: RegisterIo {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, DpkBackoff, RckA, RckB }
+pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, Rxdck, DpkBackoff, RckA, RckB }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, Failed }
+pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, Failed }
+
+#[derive(Clone, Copy)]
+pub(crate) enum RegisterPhase { BeforeDack, AfterDack }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Failure { pub stage: Stage, pub cause: Fault, pub disable_bb_rf: Option<Fault>, pub restore_rf: Option<Fault> }
@@ -95,7 +98,7 @@ fn remaining(io: &mut impl RegisterIo, start: u64) -> io::Result<u32> {
         .ok_or(Fault::new(FaultKind::Timeout, 0, 0))
 }
 
-fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
+pub(crate) fn guard(bus: &mut impl PhyIo, identity: &Identity, phase: RegisterPhase) -> io::Result<()> {
     if bus.bar_len() < BAR_BYTES { return Err(Fault::new(FaultKind::Access, BAR_BYTES, bus.bar_len().min(u32::MAX as usize) as u32)); }
     let id = bus.pci_id()?;
     let command = bus.pci_command()?;
@@ -116,7 +119,8 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     require(bus, R_AX_SPS_DIG_ON_CTRL0, B_AX_REG_ZCDC_H_MASK, 1 << 17)?;
     require(bus, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG, B_AX_AFC_AFEDIG)?;
     let cycle = bus.read8(0x8040)?;
-    if cycle == u8::MAX || cycle & 15 != 14 { return Err(state(0x8040, cycle as u32)); }
+    let expected = match phase { RegisterPhase::BeforeDack=>14, RegisterPhase::AfterDack=>15 };
+    if cycle == u8::MAX || cycle & 15 != expected { return Err(state(0x8040, cycle as u32)); }
     require(bus, 0x1000, 1 << 11 | 1 << 13, 1 << 11)?;
     require(bus, 0x1010, DATA_STOP | 1 << 18 | 1 << 20, DATA_STOP)?;
     require(bus, 0x101c, DATA_BUSY, 0)?;
@@ -256,20 +260,22 @@ pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State }
 impl<'a, B: PhyIo> Phy<'a, B> {
     pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self { bus, identity, state: State::Fresh } }
     pub fn state(&self) -> State { self.state }
+    pub(crate) fn mark_failed(&mut self) { self.state=State::Failed; }
     /// Execute the documented interleaved chip steps on this same device, retaining all startup restrictions.
     pub fn bus_between_stages(&mut self) -> &mut B { self.bus }
 
     fn begin(&mut self, stage: Stage, expected: State) -> core::result::Result<u64, Failure> {
         if self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
         let start = self.bus.now_us();
-        if let Err(cause) = guard(self.bus, &self.identity).and_then(|()| remaining(self.bus, start).map(|_| ())) {
-            self.state = State::Failed;
+        let phase = if expected == State::DackDone { RegisterPhase::AfterDack } else { RegisterPhase::BeforeDack };
+        if let Err(cause) = guard(self.bus, &self.identity, phase).and_then(|()| remaining(self.bus, start).map(|_| ())) {
+            self.mark_failed();
             return Err(Failure { stage, cause, disable_bb_rf: None, restore_rf: None });
         }
         Ok(start)
     }
     fn failed(&mut self, stage: Stage, cause: Fault) -> Failure {
-        self.state = State::Failed;
+        self.mark_failed();
         Failure { stage, cause, disable_bb_rf: disable_bb_rf(self.bus).err(), restore_rf: None }
     }
 
@@ -408,6 +414,15 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         let start=self.begin(Stage::Dack,State::RckDone).map_err(|failure|crate::dack::Failure::guard(failure.cause))?;
         let result=crate::dack::run(self.bus,band,start);
         self.state=if result.is_ok() {State::DackDone} else {State::Failed};
+        result
+    }
+
+    /// Complete initial RXDCK with TSSI modes still disabled and the same exclusively owned scheduler mailbox.
+    pub fn rxdck(&mut self,band:crate::dack::Band)->core::result::Result<crate::rxdck::Completed,crate::rxdck::Failure>
+    where B:crate::rxdck::RxdckIo {
+        let start=self.begin(Stage::Rxdck,State::DackDone).map_err(|failure|crate::rxdck::Failure::guard(failure.cause))?;
+        let result=crate::rxdck::run(self.bus,band,start);
+        self.state=if result.is_ok() {State::RxdckDone} else {State::Failed};
         result
     }
 
