@@ -13,6 +13,7 @@ All adaptations select the BSD-3-Clause option from Linux commit `05f7e89ab97315
 | [reg.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/reg.h) | MAC/BB/RF guard and access definitions | `a302f390b451ce1dcdf8dd1d5149910a71cb8621b309b274eb5b1ce060335333` |
 | [mac.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/mac.c) | Full DMAC/CMAC definitions and single-band TX-power register mapping | `ce5c09696ba6dcdc2003ce28803052fd3238c9da55188046e3e6e1ed82658055` |
 | [fw.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/fw.c) | RF H2C layout | `64c86436e8e0f7f9ecd4364d2d2c48be4549a0448b3ce738eee7e8c25e5875ce` |
+| [rtw8852b_common.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.h) | Packed logical board calibration layout | `f58fead1913d8bf4c9453e47bbe12241f96bb68109d1806eccf9b11c8ce54666` |
 | [rtw8852b_common.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.c) | Actual RTL8852B BB/RF dispatch, TX-power unit and common BB reset | `34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb` |
 | [rtw8852b.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b.c) | Chip BB-reset wrapper and ops dispatch | `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a` |
 | [rtw8852b_rfk.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_rfk.c) | DPK backoff, RCK, DACK and initial RXDCK sequences | `c4613e3d2755f14649154a1c8393bf72ae215e8b683219a0763a033b224c715f` |
@@ -150,8 +151,12 @@ Six integration fixtures use the real queue/ring/session implementation and
 post-MAC activation model, not a constructed-success permit. They check live
 RX/command traffic, default refusal, corrupted live rings/indices, ordinary
 TX/WPDMA/phase refusal, late/backwards clocks and post-permit STOP changes.
-All three affected host harnesses compile against the real token and include
-these cases; no conditional skip is introduced. Execution awaits publication.
+After publication `08a4c784`, the PHY harness passed 125 cases, post-MAC 57
+and BTC-init 66 on the own branch `2a41a980` (1.13 seconds each). All six
+new cases pass in every harness; shared module cases are repeated, not unique
+additional evidence. Each harness retains one previously ignored private
+firmware-file fixture, requiring separately fetched proprietary bytes. No new
+conditional skip is introduced. These are host models, not hardware results.
 
 ## Contiguous initial DM prefix and remaining order
 
@@ -200,6 +205,32 @@ The remaining integration order is explicit:
 None of these steps is replaced by an ACK-only BTC callback or by these model
 fixtures. Actual Ryzen calibration, association, ping and Effector remain open.
 
+## Board calibration decoder
+
+`calibration::decode` interprets the actual `Board` logical map and 128-byte
+physical map starting at OTP `0x580`. It supports only the identified cut-1,
+RFE-1 device. The logical TSSI blocks start at `0x210` and `0x23a`; thermal
+references are `0x2d0/0x2d1`, and signed gain offsets retain the chip band order.
+The physical map provides the exact power-calibration marker, descending TSSI
+trim bytes, thermal/PA fields and signed gain compensation. It performs no
+MMIO and does not change the supplied maps.
+
+Sentinels follow the source globally: all sixteen erased TSSI trim bytes become
+zero, but one programmed byte preserves every other `0xff` as signed -1.
+Thermal/PA writes are omitted only when both respective bytes are erased;
+when one is programmed the other path retains the source's `0xff`-derived
+setting. Gain validity is likewise global, with signed -1 preserved for erased
+entries and the unused 5 GHz subband index 2 left zero. Unprogrammed logical
+TSSI and thermal references are not silently replaced. These data do not
+substitute for the firmware PHY-capability reply or authorize transmit power.
+
+Nine pure fixtures cover independent packed offsets, signed fields, global
+sentinels, every thermal-byte encoding, unused subband, exact marker and foreign
+cut/RFE refusal. Native build and fixture compilation pass; execution awaits
+publication. The next DM tail must consume these decoded values in source
+order after RXDCK: TX-power reference, thermal/PA trim, then RX-path/NSS setup
+with actual firmware capabilities and the preserved DM gain baselines.
+
 ## Validation scope
 
 Initial `59a77177` execution passed 18/19 Rust fixtures and failed the RF-prefix assertion because it incorrectly placed RF register 0 before the source table's register 5. After publication of `f4766604`, all 20 Rust and four extractor fixtures passed, as did pinned-source regeneration. After publication of `78cf274a`, all 24 Rust fixtures passed, including exact TX-power/reset order, field preservation, every added write failure and deadline failures. After publication of `0d6c66bf`, all 34 RCK/RF/PHY fixtures passed. After publication of `7c6d5ecc` and registration `a8418545`, all 44 Rust and three DACK extractor fixtures passed, as did pinned DACK-table regeneration. Ten added cases cover RF field validation/readback, frozen/pending SWSI, state/guard refusal, DPK threshold branches, both RCK paths, timeout restoration, distinct cleanup errors and late completion. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.
@@ -210,4 +241,4 @@ The ten DACK cases cover BTC ordering/refusal/late completion, captured calibrat
 
 After publication of `abe309ea` in fast-test `b50f52c0`, all 56 Rust fixtures, three DACK extractor fixtures and pinned DACK regeneration passed. Twelve added cases cover exact two-path writes and timing, phase/queue guards, BTC and uncertain scheduler failures, source RF-mode timeout, late completion, every applied write failure, cleanup ordering and distinct cleanup errors. Native activation and actual Ryzen radio validation remain pending.
 
-The DM prefix builds for `x86_64-unknown-none`; all 68 Rust fixtures compile. Execution awaits publication. Twelve new cases cover the full order, all MACID words, PHYSTS compression, CCX units, signed/zero observations, DIG/cap branches, stuck or mismatched XTAL, every applied write error, independent cleanup and late total deadlines.
+After publication of `727aab95` in fast-test `badae1bc`, the exact compiled DM binary passed all 68 Rust fixtures (0.11 seconds, none ignored). Its native build passed (0.48 seconds). Twelve new cases cover the full order, all MACID words, PHYSTS compression, CCX units, signed/zero observations, DIG/cap branches, stuck or mismatched XTAL, every applied write error, independent cleanup and late total deadlines.

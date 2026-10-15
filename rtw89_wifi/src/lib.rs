@@ -3,6 +3,7 @@
 //! RTL8852BE firmware, bounded device initialization and retained DMA helpers.
 
 pub mod board;
+pub mod calibration;
 pub mod btc;
 
 pub mod btc_init;

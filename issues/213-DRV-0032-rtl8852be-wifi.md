@@ -191,7 +191,7 @@ The private `phy::dm` engine now follows the entire initial pre-NCTL register
 prefix, with a 300 ms total deadline and independent 400 ms chip-disable
 cleanup. It returns initial observations/settings and keeps the public pipeline
 closed until actual BTC `ntfy_init` completion supplies its concrete token.
-Native build and compilation of 68 fixtures pass; execution awaits publication.
+Native build passes; after publication `badae1bc`, all 68 fixtures of `727aab95` passed (0.11 seconds, none ignored).
 The [PHY contract](../hwdocs/rtl8852be-phy.md#contiguous-initial-dm-prefix-and-remaining-order)
 records exact skipped chip hooks and the remaining source order through board
 trim, actual firmware PHY capabilities, channel calibration and association.
@@ -376,5 +376,18 @@ The shared PHY guard now accepts active RX only through the actual borrowed
 DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
 DACK phases remain distinct. Six integration fixtures exercise real session
 objects and stale/current hardware state without fabricating a token; the
-PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
-execution awaits publication. This does not grant BTC or transmit readiness.
+PHY, BTC-init and post-MAC host harnesses pass 125, 66 and 57 cases respectively
+after `2a41a980` was published in `08a4c784`; all six new cases pass in each.
+These harnesses repeat shared cases and each retains the existing ignored
+private firmware-file fixture. Native build passes. This does not grant BTC
+or transmit readiness.
+
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
