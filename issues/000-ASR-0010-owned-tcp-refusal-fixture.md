@@ -68,3 +68,11 @@ Apply the existing fixture fix to `tls_suite` as well, retaining the exact
 policy, certificate assertion or timing limit changes. The corrected focused
 TLS run and subsequent integrated candidate results must be recorded
 separately; earlier Ryzen/i9 results do not cover this failed local run.
+
+After publication in fast-test `ffb7f540`, the complete four-CPU TLS suite
+passed on own-branch candidate `5370bd25` on UN-LEGION9 (QEMU TCG 8.2.2,
+WSL2 Linux 6.6.87.2, repository nightly). The default refusal assertion,
+certificate/cipher/client-authority checks, device-key persistence,
+no-entropy rejection and TPM checks all passed; exit 0. The command and
+log location are in [the later validation record](../issues-audit/2026-10-16-network-validation.md).
+The newer integrated full gate and hardware criteria remain open.
