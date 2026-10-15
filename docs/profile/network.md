@@ -50,10 +50,13 @@ on the MacBook. This policy does not establish a heartbeat latency bound.
 The existing four production deadline/ingress host tests remain, with fourteen
 new production scheduling regressions for silent peers, slow successful
 peers, remaining time, recovery, idle slots, continuous ingress, rolling
-work quotas, fixed-window boundary bursts, cheap healthy peers, clock reversal and a live WLAN completing its long operation
-(`tests/network_budget/Cargo.toml`). At the implementation commit the build
-and host test binary compile; focused tests await `fast-test` publication.
-Integrated network QEMU checks and hardware
+work quotas, fixed-window boundary bursts, cheap healthy peers, clock reversal
+and a live WLAN completing its long operation (`tests/network_budget/Cargo.toml`).
+Implementation `b5b9b3ddb946b6c2aa223f6dcb7ca6ddf979ab34` built for
+`x86_64-unknown-none`. After its publication in `fast-test` `0b5bd1bf`, all
+18 host tests passed on the own branch on 2026-10-15 (zero failures/ignored;
+x86_64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571). Nothing was
+built or tested on `fast-test`. Integrated network QEMU checks and hardware
 latency/loss measurements remain pending for this configuration. The supplied
 MacBook log does not establish the cause of the reported ping loss under
 load. No Effector heartbeat or physical NIC result follows from these host
