@@ -627,3 +627,9 @@ fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
 #[path="../rtw89_wifi/src/phycap.rs"] mod phycap;
 
 #[path="rtw89_tail_cases.rs"] mod tail_cases;
+
+#[path="../rtw89_wifi/src/channel_policy.rs"] mod channel_policy;
+#[path="../rtw89_wifi/src/power_tables.rs"] mod power_tables;
+#[path="../rtw89_wifi/src/channel_power.rs"] mod channel_power;
+
+#[path="rtw89_channel_cases.rs"] mod channel_cases;

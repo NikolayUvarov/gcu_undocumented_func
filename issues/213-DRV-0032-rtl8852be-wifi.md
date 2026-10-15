@@ -612,3 +612,11 @@ is not an RFK grant: actual START/STOP arbitration, remaining calibration,
 native integration and hardware evidence remain open. Thirteen new owner and
 two identity fixtures compile; execution follows raw publication. See the
 [contract and report limits](../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
+
+### Initial channel register stage (2026-10-16)
+
+The private [2 GHz/20 MHz channel stage](../hwdocs/rtl8852be-channel-stage.md)
+adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
+actual same-session firmware default-table provenance and explicit platform
+policy; it has no native caller and creates no TX authorization. Channel RFK,
+actual policy/board observations and physical traffic validation remain open.

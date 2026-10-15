@@ -25,3 +25,7 @@ extern crate self as mind;
 
 #[path="../rtw89_wifi/src/calibration.rs"] mod calibration;
 #[path="../rtw89_wifi/src/phycap.rs"] mod phycap;
+
+#[path="../rtw89_wifi/src/channel_policy.rs"] mod channel_policy;
+#[path="../rtw89_wifi/src/power_tables.rs"] mod power_tables;
+#[path="../rtw89_wifi/src/channel_power.rs"] mod channel_power;

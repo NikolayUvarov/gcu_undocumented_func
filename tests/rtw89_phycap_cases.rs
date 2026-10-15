@@ -54,9 +54,12 @@ fn query_default(d:&mut Device,q:&mut Queue<'_>,ready:&download::Ready)->Result<
 }
 
 pub(crate) fn with_capabilities(raw:[u32;4],check:impl FnOnce(Capabilities)){
+    with_capabilities_and_tables(raw,|cap,_|check(cap));
+}
+pub(crate) fn with_capabilities_and_tables(raw:[u32;4],check:impl FnOnce(Capabilities,download::DefaultTables)){
     download::tests::with_downloaded_queue(|ready,q|{
         let mut d=Device::new(q);d.response=raw;let capabilities=query_default(&mut d,q,&ready).unwrap();
-        check(capabilities);
+        check(capabilities,ready.default_tables());
     });
 }
 

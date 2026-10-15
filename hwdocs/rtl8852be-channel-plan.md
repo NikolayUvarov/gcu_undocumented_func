@@ -186,3 +186,12 @@ or that MIND has established the same policy. The initial implementation can
 model this observed input without hard-coding it as MIND authorization. The
 actual Board-to-policy relationship and explicit platform constraint inputs
 still have to be checked before any transmit-capable native stage.
+
+### Executed decoder evidence
+
+Own source `45b4aa9e` built without warnings in 0.97 seconds. After raw
+publication `f566311f`, all 12 Rust decoder cases and seven Python parser
+cases passed on 2026-10-16 MSK, with zero failures or ignored cases. The
+exact pinned-source regeneration check also matched the committed table
+byte-for-byte. Independent source review found no blocker. These are pure
+model/data results; they do not validate native channel selection or RF power.
