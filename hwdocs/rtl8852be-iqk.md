@@ -57,7 +57,8 @@ ceiling; the wrapper checks a total six-second success deadline.
 A trigger is considered pending before its possibly applied write. Until
 completion is observed, no subsequent calibration/restore trigger is issued.
 Unknown completion skips register restoration and records `nctl_uncertain`;
-independent chip radio shutdown is attempted. The caller must destroy the
+independent chip radio shutdown is attempted immediately, before potentially
+waiting on scheduler restoration. The caller must destroy the
 failed attempt and perform full device shutdown; there is no claimed NCTL
 abort or safe continuation. Known-idle failures attempt table/register
 restoration within a fresh 20 ms budget. A failed scheduler exchange is never
