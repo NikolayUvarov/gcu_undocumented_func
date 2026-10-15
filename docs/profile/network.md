@@ -208,9 +208,12 @@ Its TCB includes the existing SHA-256 implementation, trusted board-map origin
 and the command queue's coherent DMA/kernel-quiescence contract. It bounds
 reset/start, header/section transfer and status polling and retains failed
 DMA ownership with separate cleanup errors. This is pinned-file integrity,
-not vendor-signature verification. Build/host evidence for this library slice
-is recorded separately by its owner; actual Ryzen firmware/radio operation remains pending;
-the original board executable at that stage performed no download or host DMA.
+not vendor-signature verification. Own-branch `cf768d22` native build passed;
+after `fast-test` publication `45387d45`, all 18 synthetic downloader cases,
+the separately invoked private-file hash/mutation fixture and 14 FWCMD
+regressions passed on 2026-10-15 UTC. These establish model behavior and
+identity of the private file, not hardware operation. Actual Ryzen
+firmware/radio operation remains pending.
 
 The 213-KRN-0114 continuation wires a single native firmware diagnostic into
 that executable. It verifies the private file before board MMIO, admits the
@@ -233,3 +236,23 @@ board/power/MAC/PCIe/command-queue/download/stop stages, compares every section
 byte with the pinned file, and checks missing-readiness cleanup. Readiness,
 OTP, PCI transitions and synchronous DMA consumption are simulated; actual
 Ryzen firmware/DMA operation and hardware timing remain unvalidated.
+
+The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
+station/MPDU/security and CMAC0 preparation after verified firmware readiness.
+Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
+DMA remains stopped. An independently bounded cleanup retains errors and
+DMA. Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings);
+after `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds), on 2026-10-15 UTC. Hardware validation and
+a full gate containing this slice remain pending. It is not called by the
+native service and does not establish full runtime MAC, calibrated RF or
+WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).
+
+The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
+copies each bounded packet before releasing its descriptor, and parses AX
+RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
+future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
+is unchanged. Eighteen host fixtures compile; execution/native build and
+hardware validation remain pending. It provides neither RX activation nor
+interrupt/WLAN integration. Warm-state ownership/quiescence is still a
+precondition, not established by PCI MEM-only decoding.

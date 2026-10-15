@@ -401,10 +401,111 @@ eight command buffers. Only separately verified kernel quiescence permits
 region release. `Ready` means status 7 was observed, not full MAC, calibrated
 RF, WLAN service registration or usable networking.
 
-Build and focused host evidence for this library slice are recorded by its
-owner. Actual Ryzen security bytes and DMA/WCPU firmware operation remain
-unvalidated; native diagnostic integration is described next. The frozen
-`a99cc44a` gate does not contain this later library slice.
+Own-branch `cf768d22` (following `27033a43`) built for native x86-64 in
+0.39 seconds without warnings. After `fast-test` publication `45387d45`,
+18 synthetic downloader tests passed (0.19 seconds), the explicitly invoked
+private-file digest/mutation fixture passed (0.05 seconds), and all 14 FWCMD
+regressions passed (reported 0.00 seconds), on 2026-10-15 UTC. The private
+fixture is intentionally excluded from ordinary CI because it requires the
+separately fetched proprietary file; it was run explicitly in this session.
+Independent review caught the final drain-read deadline gap, corrected with
+a delayed-index fixture. Integration review corrected the optional I/O BAR
+decode contract and an invented CMAC-off prerequisite: the real power-on
+sequence already enables CMAC functions while BB remains reset.
+
+The native diagnostic integration is described below. Actual Ryzen security
+bytes and DMA/WCPU firmware operation remain unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
+
+## Single-band runtime MAC preparation library
+
+`runtime_mac.rs` and `runtime_mac_regs.rs` implement the pinned RTL8852B
+`mac_enable_bb_rf` chip dispatch, `sys_init_ax` and SCC DMAC/CMAC0 setup.
+They require the verified downloader's `Ready` token, actual firmware status
+7, the measured cut/RFE/security profile, an idle retained command queue,
+BAR2 of at least 128 KiB and stopped ordinary host DMA. This is a library
+stage; native startup does not invoke it.
+
+Once firmware is ready, the source's scheduler pause uses register H2C/C2H
+(`mac.c` `rtw89_hw_sch_tx_en_h2c`; `fw.c` `rtw89_fw_msg_reg`). The stage
+refuses occupied mailboxes, sends CMAC0 SCH_TX_EN/all queues disabled, checks
+the TX_PAUSE reply and hardware CTN/protocol idle, and preserves the two
+host diagnostic counter nibbles. The caller owns the sole mailbox writer.
+A response alone does not substitute for scheduler/idle register checks.
+No direct writes to CTN_TXEN or the read-only protocol-idle bit occur.
+
+The chip sequence in `rtw8852b_common.c` enables BB, sets SPS ZCDC_H, toggles
+AFC, writes XTAL80/81 and sets XYN. SCC uses 510+2 64-byte WDE pages and
+496+16 128-byte PLE pages, with the source's SCC quotas and PCIe HFC values;
+normal DMA stays stopped. It configures station scheduling, MPDU/security,
+CMAC0 scheduler parameters, address/BA CAM, RX filtering, CCA/NAV, TMAC/RMAC
+and protocol controls. The RX MPDU limit is 22 units of 512 bytes from the
+minimum RX quota of 89 pages. CAM, DLE and station readiness are bounded.
+
+The preparation has a two-second absolute budget, including the mailbox's
+one-second reply deadline and final readback. A modified failure poisons
+the command queue, independently checks packet stop (80 ms), disables
+chip BB/RF (400 ms), and stops command DMA/WCPU under the downloader's
+separate budgets. Cleanup never retries the mailbox or overwrites a pending
+XTAL command. It keeps all primary/cleanup errors and does not free DMA.
+Own-branch `02b6b4e3` built for native x86-64 (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review checked the mailbox/source ordering and added the
+live CMAC-enable prerequisite before the first firmware command. Hardware
+validation and a full gate containing this slice remain pending. None of
+this establishes physical firmware/MAC operation.
+
+`Prepared` deliberately does not mean full runtime MAC or WLAN readiness:
+packet-report routing, normal interrupt handling, RX rings/C2H processing,
+final offload commands, BTC/PHY/calibration, channel/regulatory setup and
+association still require their own implementation and hardware evidence.
+
+## RXQ/RPQ ownership and C2H parsing libraries
+
+`rx.rs`, `rxdesc.rs` and `c2h.rs` adapt the same pinned `pci.c`, `pci.h`,
+`rtw8852be.c`, `core.c`, `core.h`, `txrx.h`, `fw.h`, `fw.c` and `mac.h`
+layouts. RTL8852BE explicitly uses `rx_ring_eq_is_full=false`,
+`check_rx_tag=false` and `no_rxbd_fs=false`; the library therefore uses
+normal empty-equal indices and FS/LS, without importing another chip's
+RX-tag validation. Each RXQ/RPQ has 256 eight-byte descriptors and 11498-byte
+buffers. The 512 buffer strides are aligned to 64 bytes (11520 bytes).
+
+The 5,902,336-byte RX region and 86,016-byte FWCMD region must be disjoint
+subregions of a future retained 8 MiB coherent-WB grant below 4 GiB. This
+library does not change the existing 128 KiB native diagnostic allocation.
+DMA initialization requires MEM-only PCI Command and no prior device
+access to the region. Installation requires stopped RX DMA, RXHCI off and
+bounded receive-engine idle; it writes only owned RX ring registers.
+`start` validates externally activated, unchanged installed rings; it never
+enables mastering, HCI or another DMA channel. Both objects and all mappings
+must remain alive until external PCI quiescence, including after errors.
+The ordering contract is x86-64 coherent WB plus UC MMIO, without WC aliases.
+
+`receive` processes at most one descriptor under a nonzero caller budget.
+It validates host/hardware indices, reads DMA bytes with volatile accesses,
+checks time during bounded chunks, and copies into caller-owned storage
+before the 16-bit host-index release. No packet heap allocation or DMA
+reference escapes. Malformed lengths/descriptors and fragmented packets
+are explicitly dropped; fragment reassembly is not implemented. A possibly
+applied doorbell error poisons the receiver and retains the memory. Local
+stop independently attempts RX stop bits, RXHCI disable and bounded idle,
+preserving separate errors and the TX command channel.
+
+The AX descriptor parser bounds short/long headers, shift and driver-info
+bytes against the actual write length. RPQ reports use the chip's four-byte
+format. The C2H parser requires a complete declared packet length, then
+keeps receipt ACK (sequence bits 23:16) separate from done ACK (sequence
+bits 31:24 and return status 23:16). Matching includes category, class,
+function and sequence; receipt or DMA consumption does not imply success
+of the requested firmware operation.
+
+Eighteen focused host fixtures compile; native-build, execution and hardware
+evidence for this new slice are pending. Interrupts, RX activation, command
+ACK routing, BTC coordination and WLAN service registration remain separate.
+A warm device is not silently reset: MEM-only PCI decoding does not imply
+MAC-off or establish ownership of old DMA. The board's cold-state guard
+remains; an owned quiescence/reset transition is still required for warm
+boot/restart support.
 
 ## Native firmware diagnostic integration (213-KRN-0114)
 

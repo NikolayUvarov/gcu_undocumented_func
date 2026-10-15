@@ -124,7 +124,7 @@ on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
 source review found no remaining blocking defect; actual hardware behavior
 and a full gate containing this slice remain unvalidated.
 
-### Next slice: hash-pinned firmware and WCPU download
+### Implemented slice: hash-pinned firmware and WCPU download
 
 Verify the entire private file against the documented immutable SHA-256 and
 size before device writes; select only the measured cut-1 normal-CE image
@@ -140,3 +140,78 @@ backpressure, retain the last eight command buffers, and poison failed
 attempts while independently stopping HCI and WCPU. Do not retry or free DMA
 without the separate quiescence contract. Native activation, complete MAC,
 C2H/RX, calibration and the WLAN frame service remain separate integration.
+
+Own-branch `cf768d22` (following `27033a43`) native build passed (0.39 seconds,
+no warnings). After `fast-test` publication `45387d45`, all 18 synthetic
+host cases passed (0.19 seconds), the explicitly requested private-file
+hash/mutation fixture passed (0.05 seconds), and all 14 affected FWCMD tests
+passed (reported 0.00 seconds) on 2026-10-15 UTC. Independent review fixed
+final-drain deadline handling; actual source/kernel integration checks
+corrected optional PCI I/O decoding and the existing powered-CMAC state.
+No native activation, hardware firmware readiness, RF or network claim
+follows from these tests. Required later integration/full gate remain open.
+
+### Implemented library slice: single-band MAC preparation after firmware readiness
+
+Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
+then source-derived `sys_init_ax`, SCC DLE/HFC and DMAC/CMAC0 preparation.
+Stop all packet scheduler queues through the firmware register mailbox, keep ordinary host DMA stopped, retain the
+command queue and verify real firmware status before writes. Bound CAM,
+scheduler and DLE readiness; a partial failure poisons the attempt and
+independently disables chip RF/BB and command DMA/WCPU without freeing DMA.
+This prepares the configuration needed by the reviewed PHY stages; it must
+not claim calibrated RF, usable RX/TX or a complete WLAN link. Packet report
+routing/interrupts, normal H2C sequence/C2H processing and final offload setup
+remain explicit subsequent runtime integration, not silently omitted from a
+full-MAC guarantee. Native main/init are owned by the separate integration
+agent and are not modified here.
+
+The firmware-ready scheduler path follows `rtw89_hw_sch_tx_en_h2c`: refuse
+occupied/foreign register mailboxes, send SCH_TX_EN for CMAC0/all queues,
+check the TX_PAUSE response and actual scheduler/protocol idle, and never
+replace or retry a pending command during cleanup. Hardware diagnostic
+counter nibbles retain the sole-writer contract. The whole preparation is
+bounded by two seconds; failure separately checks packet stop, disables
+chip BB/RF, and stops command DMA/WCPU while retaining the primary error.
+The packet-report/interrupt and final runtime H2C/C2H work remains open.
+Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review added the live CMAC-enable prerequisite; no blocking
+source-review finding remains. Hardware validation and a full gate
+containing this library slice remain pending.
+
+### Implemented library slice: bounded RXQ/RPQ and C2H parsing
+
+Implement the exact RTL8852BE RXBD layout and chip flags from the pinned
+PCIe source: 256 descriptors per RXQ/RPQ, 11498-byte buffers, normal
+empty-equal indices, FS/LS present and no RX-tag check. Use a retained,
+disjoint coherent DMA region within a future 8 MiB allocation, without
+changing the current 128 KiB native firmware diagnostic grant. Install
+only while bus mastering/RXHCI are off; activation validates already
+installed rings and never releases an uninstalled DMA channel.
+
+Each receive call processes at most one descriptor under the caller's
+absolute budget, copies volatile DMA bytes into caller storage before the
+16-bit host-index release, and never allocates per packet. Reject invalid
+indices/lengths and partial/fragmented frames explicitly; preserve buffers
+on a possibly applied doorbell error. Decode short/long AX RX descriptors,
+RPQ reports and complete bounded C2H headers, distinguishing receipt ACK
+from done ACK and matching category/class/function/sequence. This is not
+interrupt handling, full H2C/C2H integration, BTC arbitration, association
+or WLAN registration. Add meaningful malformed-data/ownership/wrap/budget
+host fixtures before native integration; no live Linux NIC access.
+
+The RX region occupies 5,902,336 bytes (4096 descriptor bytes plus 512
+64-byte-aligned buffer strides of 11520), disjoint from the 86,016-byte
+command region. The combined layout fits within a future 8 MiB retained
+grant. Eighteen focused host fixtures compile; execution/native-build and
+hardware evidence for this new slice remain pending. The current firmware
+diagnostic's grant and native entry are unchanged.
+
+A warm inherited device remains an explicit integration precondition:
+PCI MEM-only does not imply MAC power state zero or ownership of previous
+DMA buffers. The current board guard continues to refuse nonzero MAC power
+state. A future owned warm-state shutdown/reset must establish quiescence
+and retain any previously reachable memory before cold reinitialization;
+this slice does not pretend to provide that transition.
