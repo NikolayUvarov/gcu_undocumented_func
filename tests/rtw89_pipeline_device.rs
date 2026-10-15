@@ -1,6 +1,6 @@
-//! One cumulative MMIO model: cold OTP access, MAC/PCIe setup and a synchronous command-DMA consumer.
+//! One cold device with write-triggered OTP, PCIe, firmware mailbox and DMA reactions; not physical timing evidence.
 
-use crate::{board, efuse, fwcmd, io, mac, pcie, power, registers::*, startup};
+use crate::{board, efuse, fwcmd, io, mac, pcie, power, registers::*, rx, startup};
 use io::RegisterIo;
 use std::alloc::{alloc_zeroed, dealloc, Layout};
 
@@ -13,7 +13,16 @@ impl Region {
     }
     pub fn queue<'a>(&'a mut self, device: &mut Device) -> fwcmd::Queue<'a> {
         device.dma = self.base;
-        unsafe { fwcmd::Queue::new(device, self.base, self.layout.size(), 0x200000) }.unwrap()
+        unsafe { fwcmd::Queue::new(device, self.base, startup::COMMAND_REGION_BYTES, 0x200000) }.unwrap()
+    }
+    pub fn pair<'a>(&'a mut self, device: &mut Device) -> (fwcmd::Queue<'a>, rx::Rings<'a>) {
+        assert!(startup::valid_dma(self.base as usize, self.layout.size(), 0x200000));
+        assert!(fwcmd::DMA_BYTES <= startup::COMMAND_REGION_BYTES && rx::DMA_BYTES <= startup::RECEIVE_REGION_BYTES);
+        device.dma = self.base;
+        let queue = unsafe { fwcmd::Queue::new(device, self.base, startup::COMMAND_REGION_BYTES, 0x200000) }.unwrap();
+        let rings = unsafe { rx::Rings::new(device, self.base.add(startup::COMMAND_REGION_BYTES),
+            startup::RECEIVE_REGION_BYTES, 0x200000 + startup::COMMAND_REGION_BYTES as u64) }.unwrap();
+        (queue, rings)
     }
 }
 impl Drop for Region { fn drop(&mut self) { unsafe { dealloc(self.base, self.layout); } } }
@@ -23,13 +32,17 @@ pub struct Device {
     config: [u8; 4096], mdio: [u16; 128], dma: *mut u8,
     pub command: u16, pub now: u64, pub writes: Vec<(usize, usize, u32)>,
     pub packets: Vec<(bool, Vec<u8>)>, pub transferred: usize, pub no_h2c: bool,
+    pub feature_reply: Option<[u32; 4]>, pub mailbox_requests: Vec<[u32; 4]>,
+    pub station_stuck: bool, pub ignore_receive_base: bool, pub fail_receive_enable: bool,
 }
 
 impl Device {
     pub fn new(link_speed: u8) -> Self {
-        let mut d = Self { registers: vec![0; 0x10000], xtal: [0; 256], otp: [0xff; 0x800], dav: [0xff; 96],
+        let mut d = Self { registers: vec![0; 0x20000], xtal: [0; 256], otp: [0xff; 0x800], dav: [0xff; 96],
             config: [0; 4096], mdio: [0; 128], dma: std::ptr::null_mut(), command: 2, now: 0,
-            writes: Vec::new(), packets: Vec::new(), transferred: 0, no_h2c: false };
+            writes: Vec::new(), packets: Vec::new(), transferred: 0, no_h2c: false,
+            feature_reply: Some([0x02020403, 2, 0, 0x20200]), mailbox_requests: Vec::new(),
+            station_stuck: false, ignore_receive_base: false, fail_receive_enable: false };
         d.put(SYS_CFG1, 4, 1 << 12);
         d.put(R_AX_SYS_PW_CTRL, 4, B_AX_RDY_SYSPWR);
         d.put(R_AX_SYS_WL_EFUSE_CTRL, 2, B_AX_AUTOLOAD_SUS);
@@ -59,10 +72,13 @@ impl Device {
     fn put(&mut self, at: usize, width: usize, value: u32) { self.registers[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]); }
 
     fn consume(&mut self, index: u32) {
+        assert!(index < fwcmd::DESCRIPTORS as u32);
         assert!(matches!(self.command & 7, 6 | 7));
         assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, 0x000b_0f03);
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x800);
         assert!(!self.dma.is_null());
+        assert_eq!(self.get(fwcmd::BASE_LOW, 4), 0x200000);
+        assert_eq!(self.get(fwcmd::BASE_HIGH, 4), 0);
         let descriptor = ((index as usize + fwcmd::DESCRIPTORS - 1) % fwcmd::DESCRIPTORS) * 8;
         let (size, physical) = unsafe {
             (u32::from_le(self.dma.add(descriptor).cast::<u32>().read()),
@@ -81,13 +97,53 @@ impl Device {
         if part { self.transferred += packet.len(); } else { self.registers[0x1e0] |= 4; }
         self.packets.push((part, packet));
         self.put(fwcmd::INDEX, 4, index | index << 16);
-        if self.transferred == 326_472 { self.registers[0x1e0] = (self.registers[0x1e0] & !0xe0) | 0xe0; }
+        if self.transferred == 326_472 {
+            self.registers[0x1e0] = (self.registers[0x1e0] & !0xe0) | 0xe0;
+            self.put(0xc348, 4, 0xffff);
+        }
+    }
+
+    fn receive_buffer(&self, channel: usize, index: usize) -> usize {
+        assert!(channel < 2 && index < rx::DESCRIPTORS && !self.dma.is_null());
+        let base = [0x1100, 0x1108][channel];
+        assert_eq!(self.get(base + 4, 4), 0);
+        let ring = (self.get(base, 4) as usize).checked_sub(0x200000).unwrap();
+        let descriptor = ring.checked_add(index * rx::DESCRIPTOR_BYTES).unwrap();
+        assert!(descriptor >= startup::COMMAND_REGION_BYTES && descriptor + 8 <= startup::COMMAND_REGION_BYTES + rx::BUFFERS_AT);
+        let (size, address) = unsafe { (u32::from_le(self.dma.add(descriptor).cast::<u32>().read_unaligned()),
+            u32::from_le(self.dma.add(descriptor + 4).cast::<u32>().read_unaligned())) };
+        assert_eq!(size & 0x3fff, rx::BUFFER_BYTES as u32);
+        let buffer = (address as usize).checked_sub(0x200000).unwrap();
+        assert!(buffer >= startup::COMMAND_REGION_BYTES + rx::BUFFERS_AT);
+        assert!(buffer.checked_add(rx::BUFFER_BYTES).is_some_and(|end| end <= startup::COMMAND_REGION_BYTES + rx::DMA_BYTES));
+        buffer
+    }
+
+    pub fn inject_c2h(&mut self, event: &[u8]) {
+        assert!(matches!(self.command & 7, 6 | 7));
+        assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, 0x000b0f00);
+        assert!(event.len() + 20 <= rx::BUFFER_BYTES);
+        let index = self.get(0x1050, 4);
+        let hardware = ((index >> 16) & 0xfff) as usize;
+        let next = (hardware + 1) % rx::DESCRIPTORS;
+        assert_ne!(next, (index & 0xfff) as usize);
+        let buffer = self.receive_buffer(0, hardware);
+        let length = 20 + event.len();
+        let mut packet = vec![0; length];
+        packet[..4].copy_from_slice(&(length as u32 | 0xc000).to_le_bytes());
+        packet[4..8].copy_from_slice(&(event.len() as u32 | 10 << 24).to_le_bytes());
+        packet[20..].copy_from_slice(event);
+        unsafe { std::ptr::copy_nonoverlapping(packet.as_ptr(), self.dma.add(buffer), packet.len()); }
+        self.put(0x1050, 4, (index & 0xffff) | (next as u32) << 16);
     }
 
     fn write(&mut self, at: usize, width: usize, value: u32) -> io::Result<()> {
         io::check_offset(at, width, self.registers.len())?;
         let previous = self.get(at, width);
-        self.writes.push((at, width, value)); self.put(at, width, value);
+        self.writes.push((at, width, value));
+        if self.ignore_receive_base && [0x1100, 0x1108].contains(&at) { return Ok(()); }
+        self.put(at, width, value);
         if at == R_AX_SYS_PW_CTRL && width == 4 {
             if value & B_AX_APFN_ONMAC != 0 { self.put(R_AX_IC_PWR_STATE, 4, 1 << 8); }
             if value & B_AX_APFM_OFFMAC != 0 { self.put(R_AX_IC_PWR_STATE, 4, 0); }
@@ -110,9 +166,33 @@ impl Device {
                 self.put(at, 4, value & !B_AX_WL_XTAL_SI_CMD_POLL);
             }
         }
-        if at == R_AX_DMAC_FUNC_EN && value & 0x0480_0000 == 0x0480_0000 {
-            self.put(mac::WDE_READY, 4, 3); self.put(mac::PLE_READY, 4, 3);
+        if at == R_AX_DMAC_FUNC_EN {
+            let ready = if value & 0x0480_0000 == 0x0480_0000 { 3 } else { 0 };
+            self.put(mac::WDE_READY, 4, ready); self.put(mac::PLE_READY, 4, ready);
         }
+        if at == mac::HFC_CONTROL && value & 1 != 0 {
+            self.put(0x8a98, 4, 0); self.put(0x8a9c, 4, self.get(0x8a90, 4) & 0x1fff);
+        }
+        if at == 0x8160 && width == 1 && value == 1 {
+            assert_eq!(self.get(R_AX_PLATFORM_ENABLE, 4) & 3, 3);
+            assert_eq!(self.get(0x1e0, 4) & 0xe0, 0xe0);
+            assert_eq!(self.get(0x8164, 1), 0);
+            let request = std::array::from_fn(|i| self.get(0x8140 + i * 4, 4));
+            self.mailbox_requests.push(request);
+            let reply = match request {
+                [0x103, 0, 0, 0] => self.feature_reply,
+                [0x205, 0xffff, 0, 0] => { self.put(0xc348, 4, 0); Some([0x204, 0, 0, 0]) }
+                _ => panic!("unsupported modeled mailbox request: {request:x?}"),
+            };
+            if let Some(reply) = reply {
+                self.put(at, 1, 0);
+                for (i, word) in reply.into_iter().enumerate() { self.put(0x8150 + i * 4, 4, word); }
+                self.put(0x8164, 1, 1);
+            }
+        }
+        if at == 0x9e10 && value & 1 != 0 && !self.station_stuck { self.registers[at + 3] |= 0x80; }
+        if at == 0xce34 { self.registers[at + 1] &= !1; }
+        if at == 0xce3c { self.registers[at] &= !3; }
         if at == 0x10a0 && width == 2 && value & 0x300 != 0 {
             let index = ((value >> 12) & 3) as usize * 32 + (value & 31) as usize;
             if value & 0x100 != 0 { self.mdio[index] = self.get(0x10a4, 2) as u16; }
@@ -141,6 +221,14 @@ impl Device {
         if at == 0x11d8 { self.put(at, 4, value & !2); }
         if at == R_AX_PLATFORM_ENABLE && value & 2 != 0 && previous & 2 == 0 && !self.no_h2c { self.registers[0x1e0] |= 2; }
         if at == fwcmd::INDEX { assert_eq!(width, 2); self.consume(value); }
+        if at == 0x1050 && width == 2 {
+            let buffer = self.receive_buffer(0, previous as usize & 0xfff);
+            unsafe { std::ptr::write_bytes(self.dma.add(buffer), 0xdd, rx::BUFFER_BYTES); }
+        }
+        if at == fwcmd::INIT_CONFIG && value & (1 << 13) != 0 && self.fail_receive_enable {
+            self.fail_receive_enable = false;
+            return Err(io::Fault::new(io::FaultKind::Access, at, value));
+        }
         Ok(())
     }
 }
@@ -179,6 +267,19 @@ pub fn prepare<'a>(device: &mut Device, region: &'a mut Region) -> fwcmd::Queue<
     startup::command_dma(device).unwrap();
     unsafe { queue.start(device) }.unwrap();
     queue
+}
+
+pub fn prepare_receive(device: &mut Device, queue: &mut fwcmd::Queue<'_>, rings: &mut rx::Rings<'_>) -> Result<(), rx::Error> {
+    power::on_for_board_read(&mut io::TimedIo::new(device, 1_000_000)).unwrap();
+    mac::prepare_download(device).unwrap();
+    let prepared = pcie::prepare(device).unwrap();
+    queue.install(device).unwrap(); prepared.finish(device, queue).unwrap();
+    rings.install(device)?;
+    assert_eq!(device.command, 2);
+    device.command = 7;
+    startup::command_dma(device).unwrap();
+    unsafe { queue.start(device) }.unwrap();
+    Ok(())
 }
 
 pub fn power_off(device: &mut Device) {

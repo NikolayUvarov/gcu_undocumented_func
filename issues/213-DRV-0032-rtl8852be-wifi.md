@@ -488,6 +488,25 @@ records; preserve unsupported records/events explicitly. BTINFO and scoreboard
 notifications must reach the session owner, not disappear as ignored traffic.
 The pure decoder neither correlates a report with a command nor grants RFK;
 the session owner must validate provenance and actual applied-policy contents.
+
+Source `96941305` and host-gate registration `3b0ca3d4` built on the own
+branch. After raw publication `539b588e`, all seven decoder fixtures passed,
+none ignored, on 2026-10-16 MSK. [Stage evidence](../hwdocs/rtl8852be-btc-reports.md)
+records the configuration and limits; actual firmware reports and policy
+application remain pending.
+
+### One-device cold firmware/MAC/RX model
+
+Extend the existing cumulative cold OTP/power/PCIe/firmware model through
+the real PHY-capability mailbox query, runtime MAC setup, installed RX
+activation and fresh Receiving validation. Use the native disjoint 128 KiB
+command reservation and remaining receive region inside one retained 8 MiB
+allocation, one Board and one Queue/Ready session. Register the harness in
+the normal host gate. Model device reactions to real writes, without
+reseeding stage guards; exercise missing replies, runtime readiness failure,
+failed RX installation/activation and independent shutdown. This model is
+not evidence of physical firmware timing, RF calibration or WLAN traffic.
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and
