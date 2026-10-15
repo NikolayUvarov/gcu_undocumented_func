@@ -201,5 +201,9 @@ counter nibbles retain the sole-writer contract. The whole preparation is
 bounded by two seconds; failure separately checks packet stop, disables
 chip BB/RF, and stops command DMA/WCPU while retaining the primary error.
 The packet-report/interrupt and final runtime H2C/C2H work remains open.
-Fourteen new host fixtures compile; execution, native build and hardware
-validation have not yet been recorded for this new slice.
+Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review added the live CMAC-enable prerequisite; no blocking
+source-review finding remains. Hardware validation and a full gate
+containing this library slice remain pending.

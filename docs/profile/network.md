@@ -235,7 +235,9 @@ The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
 station/MPDU/security and CMAC0 preparation after verified firmware readiness.
 Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
 DMA remains stopped. An independently bounded cleanup retains errors and
-DMA. Fourteen new host cases compile, but execution/native build and
-hardware validation for this slice are pending. It is not called by the
+DMA. Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings);
+after `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds), on 2026-10-15 UTC. Hardware validation and
+a full gate containing this slice remain pending. It is not called by the
 native service and does not establish full runtime MAC, calibrated RF or
 WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).

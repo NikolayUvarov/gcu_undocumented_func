@@ -502,8 +502,13 @@ the command queue, independently checks packet stop (80 ms), disables
 chip BB/RF (400 ms), and stops command DMA/WCPU under the downloader's
 separate budgets. Cleanup never retries the mailbox or overwrites a pending
 XTAL command. It keeps all primary/cleanup errors and does not free DMA.
-Fourteen new host cases compile; execution/native-build evidence for this
-slice is pending. None of this establishes physical firmware/MAC operation.
+Own-branch `02b6b4e3` built for native x86-64 (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review checked the mailbox/source ordering and added the
+live CMAC-enable prerequisite before the first firmware command. Hardware
+validation and a full gate containing this slice remain pending. None of
+this establishes physical firmware/MAC operation.
 
 `Prepared` deliberately does not mean full runtime MAC or WLAN readiness:
 packet-report routing, normal interrupt handling, RX rings/C2H processing,
