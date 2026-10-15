@@ -21,6 +21,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 |---|---|---|---|---|---|
 | [213-KRN-0112](213-KRN-0112-firmware-ram-cache-types.md) | Firmware RAM above 3 GiB stays cached; regressions cover the Ryzen arena and mixed RAM/MMIO pages | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen rerun | H / 213 |
 | [213-KRN-0113](213-KRN-0113-realtek-boot-identification.md) | Record RTL8168 XID and RTL8852BE cut through guarded boot-report reads | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen observation | H / 213 |
+| [000-ASR-0008](000-ASR-0008-test-only-openssh-path.md) | Run the full SSH host tests with an explicitly selected OpenSSH executable | `ASR` / ASTRA auditor-fixer | P2 | Full gate | Assurance |
 | [213-DRV-0030](213-DRV-0030-rtl8168-hardware-identification.md) | Read the Ryzen RTL8168 MAC XID before selecting revision-specific initialization | `DRV` / ASTRA auditor-fixer | P1 | Ryzen Linux diagnostic | H / 213 |
 | [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md) | RTL8168 Ethernet: checked DMA-ring foundation; revision initialization and hardware tests remain | `DRV` / ASTRA auditor-fixer | P1 | 213-DRV-0030; integration and hardware | H / 213 |
 | [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md) | RTL8852BE Wi-Fi first: power, calibration, firmware transport and radio integration | `DRV` / ASTRA auditor-fixer | P1 | 213-DRV-0033; integration and hardware | H / 213 |

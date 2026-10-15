@@ -1,15 +1,14 @@
 //! Host tests of the SSH client (351-NET-0026) against OpenSSH's server: sshd is started on 127.0.0.1 for the test,
 //! with its own host key, configuration and authorized key in a temporary directory, on a port it is seen to serve
 //! (another try on another port if it cannot), and stopped after it; its log goes into failures' messages. Needs
-//! OpenSSH's server (`openssh-server`, /usr/sbin/sshd) and ssh-keygen.
+//! OpenSSH's server (`MIND_SSHD`, default /usr/sbin/sshd) and ssh-keygen.
 use ssh::{Error, Io, Keys};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::Duration;
 
-const SSHD: &str = "/usr/sbin/sshd";
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn base64(data: &[u8]) -> String {
@@ -111,7 +110,8 @@ fn ready(child: &mut Child, port: u16) -> bool {
 }
 
 fn server(name: &str, client: &[u8; 32]) -> Server {
-    assert!(Path::new(SSHD).exists(), "OpenSSH's server is needed for these tests: install openssh-server ({} is missing)", SSHD);
+    let sshd = PathBuf::from(std::env::var_os("MIND_SSHD").filter(|path| !path.is_empty()).unwrap_or_else(|| "/usr/sbin/sshd".into()));
+    assert!(sshd.is_absolute() && sshd.is_file(), "OpenSSH's server is needed: install openssh-server or set MIND_SSHD to its absolute executable path (invalid: {})", sshd.display());
     let dir = std::env::temp_dir().join(format!("mind-ssh-{}-{}", name, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -133,7 +133,7 @@ fn server(name: &str, client: &[u8; 32]) -> Server {
             "Port {port}\nListenAddress 127.0.0.1\nHostKey {}\nPidFile {}\nAuthorizedKeysFile {}\nPasswordAuthentication no\n\
              KbdInteractiveAuthentication no\nPubkeyAuthentication yes\nUsePAM no\nStrictModes no\nSubsystem sftp internal-sftp\nLogLevel ERROR\n",
             host.display(), dir.join("sshd.pid").display(), dir.join("authorized_keys").display())).unwrap();
-        let mut child = Command::new(SSHD).args(["-D", "-E"]).arg(dir.join("sshd.log")).arg("-f").arg(&config).spawn().expect("sshd");
+        let mut child = Command::new(&sshd).args(["-D", "-E"]).arg(dir.join("sshd.log")).arg("-f").arg(&config).spawn().expect("sshd");
         if ready(&mut child, port) { return Server { child, dir, port, pin }; }
         let _ = child.kill();
         let _ = child.wait();
