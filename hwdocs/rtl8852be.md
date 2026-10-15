@@ -836,3 +836,59 @@ and still requests final quiescence. All primary/cleanup errors and DMA stay
 retained. The full own-branch image builds and twelve startup fixtures compile;
 execution awaits publication. Cumulative runtime-MAC/RX modeling and actual
 hardware verification remain separate, incomplete evidence requirements.
+
+## Exact coexistence command codecs and bounded register transitions
+
+`btc_codec` selects only the observed cut-1/RFE-1, physical security bytes
+`ff/ff`, firmware `0.29.29.15` profile. At the pinned Linux source this is
+`coex.c`'s `0.29.29.0` BTC profile: report format 105 uses wire version 5,
+TDMA version 3, slot version 1, monitor version 2, role version 2 and control
+version 1. It encodes bounded, initialized monitor/default-slot/report,
+CXDRVINFO INIT/CTRL/ROLE, no-link AFH and OFF_BT/OFF_WL2 policy messages.
+No-link AFH preserves the source's disabled-but-width-32 representation.
+Policy changes use source delta TLVs; RFK forces all 18 slots and the
+instant-execute bit. This is startup/no-link/no-LPS scope, not connected
+coexistence, a Bluetooth service or arbitrary firmware-version support.
+
+The generic BTC messages request DONE ACK; direct CXDRVINFO messages do
+not. All use the real normal-H2C engine, including its periodic receipt
+ACK and refusal to reuse the initial 256 sequence numbers. Serialization
+or a matching ACK does not establish applied policy or RFK permission.
+The codec's `Profile` selects layout only and is not a firmware-session token.
+
+`btc_control` supplies the bounded register steps needed by the upcoming
+owner context: an exclusive lower-24-bit WLAN scoreboard write shadow,
+actual BT state reads, initial/RFK/no-link grant and antenna transitions,
+a pre-transition snapshot for failed-attempt restoration, default WLAN
+power and the cold-init `_action_common` BTG/pre-AGC operations. Scoreboard
+reads are BT state and are never copied into the WLAN-owned low bits.
+A scoreboard write with uncertain completion poisons the shadow. LTE
+operations wait up to 50 ms for ready before commands and after writes,
+retain the source immediate RDATA ordering and never replace pending
+commands. Antenna transitions check actual BT RFK RUN/REQ first and verify
+grant/pollution readback. Ordinary TX is not enabled by these helpers.
+Each entry has a total 100 ms bound (snapshot/restoration 200 ms); loops
+also have finite iteration limits when the clock stalls.
+
+Source behavior retained for normal cold init includes no station TX-limit
+iteration, no BT RF-parameter command before a BT-info update, and initially
+unchanged WLAN RX gain. AFH, report/role commands and final scoreboard flush
+remain mandatory orchestration steps. These lower-level functions assume
+exclusive, freshly validated MAC/PHY/DMA ownership; they do not themselves
+validate the complete session or issue an `Initialized`/RFK token. A combined
+context bound to the actual Ready, command/RX objects and PHY attempt,
+ordered C2H/report handling, complete common-action state and independent
+failure cleanup is still required before native use or calibration.
+
+Precise source anchors, all at the existing BSD-licensed pin: `coex.c`
+`_reset_btc_var`, `_append_tdma`, `_append_slot_v1`, `btc_fw_set_monreg`,
+`rtw89_btc_fw_en_rpt`, `_action_wl_init`, `_action_wl_nc`, `_action_wl_rfk`,
+`_action_common`; `fw.c` `rtw89_fw_h2c_cxdrv_init`, `_ctrl`, `_role_v2`;
+`mac.c` `rtw89_mac_cfg_gnt`, `_cfg_plt`, `_cfg_sb`, `_cfg_ctrl_path`;
+`rtw8852b_common.c` `rtw8852b_ctrl_btg_bt_rx`, `rtw8852b_btc_set_wl_preagc`;
+`rtw8852b.c` monitor register and RF parameter tables. The eighteen new
+fixtures cover packed wire formats and production H2C integration, actual
+scoreboard ownership, grant order/restoration, pending-command protection,
+applied-write failures and bounded time/clock faults. They are compiled;
+execution evidence will be recorded after raw publication. This adds no
+hardware, native-policy or calibrated-radio claim.
