@@ -69,10 +69,12 @@ impl Device {
              u32::from_le(self.dma.add(descriptor + 4).cast::<u32>().read()))
         };
         assert_ne!(size & (1 << 30), 0);
-        let at = physical as usize - 0x200000;
+        let at = (physical as usize).checked_sub(0x200000).expect("descriptor before DMA region");
         let length = (size & 0xffff) as usize;
-        assert!(at >= fwcmd::BUFFERS_AT && at + length <= fwcmd::DMA_BYTES);
-        let txwd = unsafe { u32::from_le(self.dma.add(at).cast::<u32>().read()) };
+        assert!((fwcmd::TXWD_BYTES..=fwcmd::TXWD_BYTES + fwcmd::MAX_PAYLOAD).contains(&length));
+        let end = at.checked_add(length).expect("descriptor end overflow");
+        assert!(at >= fwcmd::BUFFERS_AT && end <= fwcmd::DMA_BYTES);
+        let txwd = unsafe { u32::from_le(self.dma.add(at).cast::<u32>().read_unaligned()) };
         assert_eq!((txwd >> 16) & 15, 12);
         let part = txwd & (1 << 20) != 0;
         let packet = unsafe { std::slice::from_raw_parts(self.dma.add(at + fwcmd::TXWD_BYTES), length - fwcmd::TXWD_BYTES) }.to_vec();
