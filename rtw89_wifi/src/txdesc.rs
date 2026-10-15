@@ -24,7 +24,7 @@ pub(crate) fn frame(bytes:&[u8],rate:u8,max_submissions:u8)->Result<Frame,Error>
     let kind=(fc>>2)&3;
     let (mut header,mut tid)=(24,0);
     let queue=match kind{
-        0=>{if fc&0x0300!=0{return Err(Error::Frame);}4},
+        0=>{if fc&0x0300!=0{return Err(Error::Frame);}if fc&0x8000!=0{header+=4;}4},
         2=>{
             if fc&0x0300==0x0300{header+=6;}
             if fc&0x0080!=0{

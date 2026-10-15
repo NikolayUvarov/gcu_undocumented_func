@@ -99,9 +99,9 @@ shutdown. The future owner must coordinate scheduler/radio/PCI teardown.
 
 ## Evidence and outstanding integration
 
-Fifteen host fixtures are registered and compile, but have not run before
+Sixteen host fixtures are registered and compile, but have not run before
 the required own-branch commit/build and raw publication. They exercise exact
-WD/WP/address fields, frame boundaries, all rates, separate RPQ/DMA completion,
+WD/WP/address fields, management HT-Control/header boundaries, all rates, separate RPQ/DMA completion,
 bounded resubmission and explicitly unknown attempt counts, actual RX-copy release, ring/tag
 rollover beyond sixteen frames, faulted publication, stale/malformed reports,
 frozen/regressing/late clocks, bounded shutdown and the diagnostic C2H codec.
