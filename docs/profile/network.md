@@ -369,3 +369,11 @@ remain available; OTP data or a missing reply cannot replace the response.
 Session identity, independent command/WCPU cleanup and retained DMA remain
 part of the contract. Ten new host cases compile; execution, native integration
 and physical-device evidence are pending.
+
+The owned startup `btc_session` adapter consumes the downloader token and uses
+actual command/RX/Receiving objects for normal H2C and PHY RF-page sends. It
+retains ordered bounded BTC events and rejects new stages after an uncertain
+failure; raw cleanup remains possible. Thirteen model fixtures compile, with
+execution pending raw publication. These seeded-handoff fixtures do not establish
+cumulative cold-device behavior, complete BTC initialization or RFK permission.
+The native service still does not invoke this adapter or expose a radio endpoint.

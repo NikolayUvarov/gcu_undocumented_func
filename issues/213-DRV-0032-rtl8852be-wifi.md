@@ -468,3 +468,16 @@ receive-path/NSS sequence, using actual session-bound firmware capabilities
 and DM gain baselines from this same PHY attempt. Keep it crate-private until
 actual BTC and the full source startup ordering are integrated. Detailed
 scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
+
+### Owned normal H2C/RX startup session
+
+Add an adapter that consumes the actual successful downloader token, retains
+exclusive command/RX/Receiving/scratch ownership and preserves one normal H2C
+sequence across PHY mirror and subsequent BTC commands. Enforce one absolute
+100 ms maximum command budget, actual ACK correlation and final DMA drain;
+uncertain failures reject subsequent PHY stages while leaving raw cleanup
+accessible. Retain ordered BTC C2H messages in bounded copied storage and fail
+on overflow. This prerequisite deliberately cannot issue Initialized or RFK
+permission. Thirteen focused fixtures compile; execution follows publication.
+The complete BTC policy/common-action owner and native activation remain open.
+See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).
