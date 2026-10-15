@@ -2,11 +2,65 @@
 
 The network stack benchmark of issue 106 and what it decided. Appendix B.2: performance features are taken on the evidence of a measurement on a profile, not by default.
 
-## Bounded service work (550-NET-0031, 2026-10-15)
+## Bounded service work (550-NET-0031/0032, 2026-10-15)
 
-On ASTRA, each card turn has a two-second deadline shared by all of its driver calls. Calls after expiry are skipped; the five-second cooldown applies only to an attempted IPC that times out, not to a healthy card whose work budget expires. The stack processes at most 64 incoming packets before one egress pass and the next card. WLAN shares a turn deadline across its radio and key-store calls, including client request handlers. These bounds limit service work; they are not a real-time scheduling guarantee.
+The per-card two-second deadline from 550-NET-0031 allowed three slow cards
+to accumulate six seconds in one poll; polling both before and after a client
+could postpone the next receive by twelve seconds. The 550-NET-0032 change
+uses one 250 ms deadline for all driver calls in a stack poll and one poll
+before each client receive. Calls after expiry are skipped. A persistent
+round-robin cursor resumes at the next card after a budget-consuming card.
+Link checks run before ingress so a busy queue cannot starve them. Pending
+socket replies, timers and cleanup still run after the card loop yields.
 
-Four host tests exercise the production deadline and smoltcp polling helper with slow or silent peers and continuously arriving packets (`tests/network_budget/Cargo.toml`); the two affected services build for x86-64. QEMU integration and hardware latency/loss measurements remain pending. The supplied MacBook log does not establish the cause of the reported ping loss under load, and these changes do not add a driver for the Ryzen's Realtek NICs.
+With three present cards, two budget-consuming peers impose at most 500 ms
+of driver waits before the first visit to an eligible healthy last card. Each pass
+offers client handling after at most 250 ms of requested driver waiting.
+There may also be the 10 ms client receive wait between passes, bounded CPU
+work and kernel scheduling/timeout overhead; this is not a real-time bound.
+The stack still processes at most 64 incoming packets per visited card,
+followed by an egress pass if time remains. A pending frame waits until the
+next loop's poll; there is no second full poll between client receives.
+
+A separate per-card rolling work quota preserves 550-NET-0030's
+second limit independently of liveness: no fresh call is admitted beyond
+2000 ms of measured visit work retained from the past five seconds. Eleven
+500 ms completion buckets per card conservatively retain the entire duration
+of a visit until its bucket is fully five seconds old (retention is 5–5.5 s
+from completion). Work spanning a bucket boundary is charged entirely to its
+completion bucket. There is no fixed-window reset or idle credit. The next
+IPC gets at most the remainder of both this quota and the global turn.
+Backwards/wrapped monotonic time fails closed instead of renewing allowance.
+
+The accounting uses elapsed whole milliseconds for complete visits. CPU work
+is also charged at that resolution; submillisecond quantization and a final
+operation's kernel scheduling/timeout or CPU overrun are outside the bound.
+This is a bound on admitted waits and measured work, not a hard real-time
+or CPU-time guarantee.
+
+A short-budget timeout does not erase link state or label a card dead.
+Quota exhaustion yields until old work charges expire; no new five-second
+cooldown starts from a timeout. The unchanged WLAN
+pump can spend up to two seconds in radio/key-store calls: a live WLAN that
+becomes ready after exhausting its allowance can wait until older charges
+expire (the tests exercise readiness after two seconds and retry at 5.5 s). Other cards and clients continue meanwhile. Quick raw-frame
+replies are expected normally, but this expectation has not been measured
+on the MacBook. This policy does not establish a heartbeat latency bound.
+
+The existing four production deadline/ingress host tests remain, with fourteen
+new production scheduling regressions for silent peers, slow successful
+peers, remaining time, recovery, idle slots, continuous ingress, rolling
+work quotas, fixed-window boundary bursts, cheap healthy peers, clock reversal
+and a live WLAN completing its long operation (`tests/network_budget/Cargo.toml`).
+Implementation `b5b9b3ddb946b6c2aa223f6dcb7ca6ddf979ab34` built for
+`x86_64-unknown-none`. After its publication in `fast-test` `0b5bd1bf`, all
+18 host tests passed on the own branch on 2026-10-15 (zero failures/ignored;
+x86_64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571). Nothing was
+built or tested on `fast-test`. Integrated network QEMU checks and hardware
+latency/loss measurements remain pending for this configuration. The supplied
+MacBook log does not establish the cause of the reported ping loss under
+load. No Effector heartbeat or physical NIC result follows from these host
+checks.
 
 ## How it is measured
 
