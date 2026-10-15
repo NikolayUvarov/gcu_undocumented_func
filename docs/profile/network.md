@@ -311,3 +311,11 @@ After raw publication `767c2cb8`, all 16 post-init/session cases passed
 cases (reported 0.00 seconds), none ignored, on 2026-10-16 MSK. Full-gate
 and hardware evidence remain pending. PHY/native integration does not
 yet consume this permit.
+
+The subsequent firmware-ready token correction binds `Ready` to the
+successful command queue session and checks that identity before runtime
+MAC preparation accesses the device. Existing live guards still reject a
+stopped queue. Two additional host fixtures compile using a synthetic
+download completion, including a stale token and a replacement queue at
+the same physical base; correction build/execution and hardware evidence
+are pending. This does not bind the separate future BTC/PHY attempt.
