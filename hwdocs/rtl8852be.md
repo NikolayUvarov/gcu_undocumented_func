@@ -224,8 +224,12 @@ eight payloads; no error, destructor or drain releases DMA memory or claims
 that hardware stopped. There is no timeout recovery or restart contract yet.
 
 The focused x86-64 fixture `tests/rtw89_fwcmd_host.rs` models DMA reads at the
-doorbell, wrap/full/retention and register/fault bounds. Build/test evidence
-for this new slice is pending. The actual RTL8852BE has not used this queue.
+doorbell, wrap/full/retention and register/fault bounds. On own-branch commit
+`f6caafca`, the x86-64 native release build passed (0.34 seconds, no warnings).
+After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
+2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
+`fast-test`. The earlier frozen `a99` full gate excludes this later slice.
+The actual RTL8852BE has not used this queue.
 The native board service still has no DMA capability and does not call it;
 KRN integration must remain disabled until a complete MAC/PCIe startup and
 quiescence path is reviewed. Firmware authentication/address policy, H2C

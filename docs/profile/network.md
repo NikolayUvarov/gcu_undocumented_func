@@ -97,6 +97,10 @@ ownership implementation but is not called by the native service. Its TCB
 requires x86-64 coherent WB DMA, UC MMIO, exact PCI/MMIO identity and externally
 verified quiescence before region release. It does not grant DMA, enable
 mastering or supply MAC/PCIe startup, firmware policy or radio operation.
-Build/host evidence for this additional slice is pending; no hardware DMA
-evidence or portable architecture guarantee is claimed. See the hardware
-notes for the eight-completed-command retention and fault contract.
+Evidence for this additional slice: own-branch `f6caafca` native x86-64 release
+build passed; all 14 focused host tests passed on 2026-10-15 at 21:01 UTC
+(0.03 seconds), after `fast-test` publication `dd735d0a`. The tests use a
+simulated coherent DMA device; no hardware DMA evidence or portable
+architecture guarantee is claimed. See the hardware notes for the
+eight-completed-command retention and fault contract. The frozen `a99` gate
+does not include this later change and cannot be used as its full-gate evidence.
