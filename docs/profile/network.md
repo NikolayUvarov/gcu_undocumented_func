@@ -271,3 +271,14 @@ fixtures passed after raw publication `d9266c7b` (2026-10-16, x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571; zero failures/ignored). These include a
 modeled DMA/C2H path, not actual firmware execution. Native integration and
 hardware validation remain pending for this slice.
+
+
+The hardware-only `btc_init` library requires the actual RadioLoaded PHY
+phase and the unchanged stopped-data-path guard before the source-derived
+RTL8852B/RFE-1 PTA/LTE/RF-LUT setup. It has a 200 ms attempt deadline and
+independent LUT-close/chip-disable cleanup; modified failures poison the
+PHY attempt. Its opaque result is not an RFK grant or complete coexistence
+initialization. Actual policy, scoreboard ownership, antenna/grant state and
+native integration remain absent from this slice. Native build passes;
+nine fixtures compile, with execution pending publication. No hardware
+or calibrated-radio guarantee is added; [scope and source](../../hwdocs/rtl8852be.md#hardware-coexistence-initialization-before-nctl).

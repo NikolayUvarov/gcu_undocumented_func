@@ -272,3 +272,18 @@ publication. It never enables packet transmission.
 Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
+
+
+### Hardware BTC initcfg prerequisite
+
+Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
+LUT and counter initialization between actual `Phy::RadioLoaded` and NCTL.
+`ConfigPrepared` deliberately represents only this hardware stage; actual
+BTC software context, scoreboard ownership, report/control policy, antenna
+selection and RFK START/STOP restoration remain open. The existing live
+PHY guard continues to reject active ordinary RX/TX. A failed modified
+attempt independently closes both LUT write gates, disables BB/RF and
+poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
+The native service is unchanged. Native build passes and nine meaningful
+phase/source-order/failure/deadline fixtures compile; execution follows raw
+publication. No hardware or working-radio claim follows from this library.

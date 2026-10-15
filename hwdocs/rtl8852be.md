@@ -658,3 +658,51 @@ stateful model; they do not establish hardware transport or BTC grants.
 The separately guarded BB/RF/NCTL table library and its integration limits are
 described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
 native firmware diagnostic and does not establish calibrated radio operation.
+
+
+## Hardware coexistence initialization before NCTL
+
+`btc_init::prepare(&mut Phy, &Board, &download::Ready)` accepts only the
+actual supported cut-1/RFE-1 board, nonsecure OTP `ff/ff` and pinned firmware
+0.29.29.15. The existing private PHY state must be `RadioLoaded`, and its
+live `BeforeDack` register guard still requires ordinary RX/TX stopped.
+The order is the pinned `core.c:5654–5658`: radio tables, BTC initialization,
+then PHY dynamic management/NCTL. No receive-only guard exception is added.
+
+This slice ports `rtw8852b_common.c:1799` `__rtw8852bx_btc_init_cfg` and
+`mac.c:6122` `rtw89_mac_coex_init`: internal Realtek PTA, LTE SW_CFG2,
+WLAN response/beacon priorities, RF grant-debug disable, the four shared
+antenna RF LUT entries, the break table and BT counters. The selected RFE
+uses A/B sleep masks `0x5ff`, A TX `0x5ff` and B TX `0x55f`. Register
+operations preserve the source's access widths and unrelated bits.
+
+The whole stage has a 200 ms deadline, including its initial live guard.
+LTE readiness waits are capped at 50 ms with finite polls even if the clock
+stops. Unlike the source's log-and-continue path, failed readiness returns
+before any new indirect command. The source's immediate RDATA read after
+its read command is retained. A final readiness check after the write uses
+the same condition required by the next source transaction. Failure never
+replaces/retries a pending LTE command. Both RF LUT write gates are closed
+and read back independently under fresh 1 ms budgets after a modified
+failure, followed by the shared independently bounded chip BB/RF disable.
+Primary and cleanup errors stay separate; the PHY attempt becomes Failed.
+DMA remains owned by the caller; neither success nor cleanup frees memory.
+This cleanup does not claim to restore every previously changed PTA field.
+
+The opaque `ConfigPrepared` result means hardware initcfg only. It does not
+set a complete software BTC initialized flag, publish a WLAN scoreboard,
+send TDMA policy, select RFK antenna/grants or authorize calibration. Actual
+coexistence context, firmware-profile-matched control/init/report messages,
+policy application and STOP restoration remain subsequent prerequisites.
+`Phy::nctl` still documents the interleave obligation; a complete typed BTC
+prerequisite will enforce it in the later integration. Native main/init and
+its firmware-only diagnostic are unchanged.
+
+Source hashes at the same BSD-licensed pin: `rtw8852b_common.c`
+`34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb`,
+`rtw8852b.c` `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a`,
+`core.c` `41ea6a22a4ff78035364def00c70edb49d821f2d4cb12869f1a0a87e6ee54886`;
+`mac.c` and `coex.c` hashes are recorded above. The no-std native build
+passes, and nine focused fixtures compile. Execution awaits raw publication.
+The fixtures run real BB/radio stages into a stateful register model before
+BTC; hardware initialization/calibration and network acceptance remain open.
