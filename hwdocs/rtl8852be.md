@@ -610,6 +610,26 @@ in 0.46 seconds without warnings; after publication `d9266c7b`, all 17
 runtime-MAC cases passed (0.12 seconds, none ignored). This does not supply
 BTC arbitration or activate native calibration.
 
+The later `Receiving::validate` API returns an opaque `ReceivePermit` whose
+borrow covers the original token and both DMA objects. Each object receives
+a fresh process-local session number before initialization; allocation is
+bounded and permanently refuses counter exhaustion instead of wrapping.
+The token records both sessions and physical bases, so reconstructing a
+pool at the same address does not revive an old token. The bus adapter must
+still refer to the same exclusively owned PCI function; software session
+identity does not replace the kernel capability or warm-state quiescence.
+
+Validation performs no MMIO writes. It rechecks both running objects,
+command/RX bases and counts, current host/hardware index bounds, firmware,
+MAC memory/functions, RX-only HCI/STOP configuration, quiet scheduler and
+masked host interrupts within the caller's deadline. Live RX and CH12
+traffic is allowed; ordinary TX/WPDMA must remain stopped and idle. Command
+reclaim changes only CPU completion counters. The permit is an observation
+at that instant, not a promise that future hardware state cannot change.
+The PHY guard remains unchanged until its separate typed integration.
+Sixteen post-init/session fixtures compile; new slice execution/build and
+hardware evidence are pending.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.

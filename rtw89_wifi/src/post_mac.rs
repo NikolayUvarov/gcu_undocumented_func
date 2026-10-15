@@ -2,7 +2,7 @@
 // Copyright(c) 2019-2022 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
 //! RTL8852B MAC tail and installed RX-channel activation; ordinary TX and host interrupts remain disabled.
 
-use core::sync::atomic::{fence,Ordering};
+use core::{marker::PhantomData,sync::atomic::{fence,Ordering}};
 use crate::{board::Board,download,fwcmd::{self,Bus,Queue},io::{self,Fault,FaultKind,RegisterIo,TimedIo},mac,runtime_mac,rx};
 use crate::post_mac_regs::*;
 
@@ -23,7 +23,47 @@ impl From<rx::Error> for Error{fn from(e:rx::Error)->Self{Self::Receive(e)}}
 #[derive(Debug)]
 pub struct Failure{pub stage:Stage,pub cause:Error,pub receive_stop:Option<rx::Stop>,pub radio_stop:Option<Fault>,pub command_stop:Option<download::Stop>}
 #[derive(Debug)]
-pub struct Receiving{_private:()}
+pub struct Receiving{command_session:u64,receive_session:u64,command_physical:u64,receive_physical:u64}
+
+/// A read-only observation borrowed from the same token and both DMA objects; no software bool can construct it.
+/// Valid only for the observed instant; later device operations still need fresh validation and bounded work.
+#[derive(Debug)]
+pub struct ReceivePermit<'a>{_borrow:PhantomData<&'a ()>}
+
+impl Receiving{
+    /// Revalidate this exclusive live session without MMIO writes; reclaim updates only command completion counters.
+    /// The same-device, retained coherent-DMA contracts of both original objects remain mandatory.
+    pub fn validate<'a>(&'a self,bus:&mut impl Bus,queue:&'a mut Queue<'_>,rings:&'a rx::Rings<'_>,timeout_us:u32)->Result<ReceivePermit<'a>,Error>{
+        if timeout_us==0||timeout_us>1_000_000{return Err(Fault::new(FaultKind::Access,0,timeout_us).into());}
+        if self.command_session!=queue.session()||self.receive_session!=rings.session()||self.command_physical!=queue.physical()||self.receive_physical!=rings.physical()
+            ||queue.state()!=fwcmd::State::Running||rings.state()!=rx::State::Running{return Err(Fault::new(FaultKind::PowerState,0,0).into());}
+        let started=bus.now_us();let command=bus.pci_command()?;
+        if command==u16::MAX||command&6!=6{return Err(Fault::new(FaultKind::Access,4,command as u32).into());}
+        let elapsed=bus.now_us().checked_sub(started).ok_or(Fault::new(FaultKind::Clock,0,0))?;
+        let budget=u64::from(timeout_us).checked_sub(elapsed).filter(|left|*left>0).ok_or(Fault::new(FaultKind::Timeout,0,timeout_us))?;
+        {
+            let mut timed=TimedIo::new(bus,budget);
+            require(&mut timed,download::FW_CONTROL,0xe0,0xe0)?;
+            require(&mut timed,0xf0,0xf000,1<<12)?;require(&mut timed,0x3f0,0x300,1<<8)?;require(&mut timed,0x88,3,3)?;
+            require(&mut timed,0x8400,0xfffd0000,0xfffd0000)?;require(&mut timed,0x8404,0x0f9f0000,0x0f9f0000)?;
+            require(&mut timed,0xc000,0xf000003f,0xf000003f)?;require(&mut timed,0xc004,0x4000003f,0x4000003f)?;require(&mut timed,0xe000,1<<30,0)?;
+            require(&mut timed,mac::WDE_CONFIG,0x1fff3f03,510<<16)?;require(&mut timed,mac::PLE_CONFIG,0x1fff3f03,496<<16|4<<8|1)?;
+            require(&mut timed,mac::HFC_CONTROL,0xfff,0x19)?;
+            require(&mut timed,fwcmd::INIT_CONFIG,HCI|1<<18,HCI)?;require(&mut timed,fwcmd::DMA_STOP,STOP_MASK,RECEIVING)?;
+            require(&mut timed,fwcmd::DMA_BUSY,0x000b0f00,0)?;
+            require(&mut timed,0xc348,0xffff,0)?;require(&mut timed,0xc6ec,1<<7,0)?;
+            for at in HOST_MASKS{require(&mut timed,at,u32::MAX,0)?;}
+            require(&mut timed,fwcmd::BASE_LOW,u32::MAX,self.command_physical as u32)?;require(&mut timed,fwcmd::BASE_HIGH,u32::MAX,0)?;
+            require(&mut timed,fwcmd::BDRAM,u32::MAX,28|4<<8|1<<16)?;
+            let count=timed.read16(fwcmd::NUMBER)?;
+            if count!=fwcmd::DESCRIPTORS as u16{return Err(Fault::new(FaultKind::PowerState,fwcmd::NUMBER,count as u32).into());}
+            queue.reclaim(&mut timed)?;rings.running(&mut timed)?;timed.delay_us(0)?;
+        }
+        let elapsed=bus.now_us().checked_sub(started).ok_or(Fault::new(FaultKind::Clock,0,0))?;
+        if elapsed>=u64::from(timeout_us){return Err(Fault::new(FaultKind::Timeout,0,timeout_us).into());}
+        Ok(ReceivePermit{_borrow:PhantomData})
+    }
+}
 
 fn require(bus:&mut impl RegisterIo,at:usize,mask:u32,expected:u32)->io::Result<()>{
     let value=bus.read32(at)?;
@@ -146,7 +186,7 @@ fn activate_inner(bus:&mut impl Bus,queue:&mut Queue<'_>,rings:&mut rx::Rings<'_
         let command_stop=Some(download::stop(bus,queue));
         return Err(Failure{stage,cause,receive_stop,radio_stop,command_stop});
     }
-    Ok(Receiving{_private:()})
+    Ok(Receiving{command_session:queue.session(),receive_session:rings.session(),command_physical:queue.physical(),receive_physical:rings.physical()})
 }
 
 fn remaining(bus:&mut impl RegisterIo,started:u64)->io::Result<u64>{

@@ -335,3 +335,16 @@ executable also ran 18 inherited synthetic downloader cases successfully
 and retained its one existing optional private-file ignored case: 27 passed,
 zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
 claim follows from this library.
+
+### Typed receive-session revalidation
+
+Bind `Receiving` to the original command and receive objects with unique,
+nonzero process-local session numbers; never wrap or reuse an exhausted
+number. Add a bounded public read-only validation that checks those objects,
+running state, real DMA addresses/counts/indices, firmware and MAC state,
+RX-only DMA configuration, stopped packet TX, and masked host interrupts.
+Return an opaque permit borrowed from the token and both rings, not a bool.
+The future PHY adapter may request this permit for an owned receive path;
+the existing stopped-RX guard is unchanged until that integration. Test
+same-address pool reconstruction, stale/foreign tokens, partial live traffic,
+actual register corruption and timeout without publishing MMIO writes.

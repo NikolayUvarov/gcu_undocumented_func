@@ -299,3 +299,12 @@ executable also passed 18 inherited downloader cases and retained that
 module's existing optional private-file ignored case (27 passed, zero failed,
 one inherited ignored, 0.19 seconds, x86-64 WSL2). No hardware
 or calibrated-radio guarantee is added; [scope and source](../../hwdocs/rtl8852be.md#hardware-coexistence-initialization-before-nctl).
+
+The later receive-session validation binds that result to both exact DMA
+objects and fresh non-wrapping process-local session numbers. It returns a
+borrowed opaque permit only after bounded live register/index checks, with
+no MMIO writes. This prevents old tokens accepting reconstructed pools at
+the same addresses; it still trusts the adapter's same-function capability
+contract. Sixteen combined post-init/session fixtures compile; new-slice
+execution/build and hardware evidence are pending. PHY/native integration
+does not yet consume this permit.
