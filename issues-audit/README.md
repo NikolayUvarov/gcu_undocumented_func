@@ -6,7 +6,7 @@ This folder keeps the code audits of MIND Core and their assessments. The mainta
 
 - `YYYY-MM-DD-baseline.md`: the state of the repository before an audit (what is done, against the Constitution's stages), with the commits it describes.
 - `YYYY-MM-DD-<scope>-audit.md`: an audit, with the commit it was made on.
-- `YYYY-MM-DD-validation.txt`: commands, per-suite outcomes and evidence limits for that audit.
+- `YYYY-MM-DD-<scope>-validation.md` (older records use `.txt`): commands, per-suite outcomes and evidence limits for that audit.
 - `repro/`: executable audit reproductions; their assertions establish the observed defect, not a successful fix.
 - `YYYY-MM-DD-<scope>-assessment.md`: the assessment of that audit. For each finding:
   - its verdict against the code at the audited commit: confirmed, partly confirmed, or not confirmed;
@@ -31,6 +31,7 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-15-astra-validation.md](2026-10-15-astra-validation.md) | Exact ASTRA candidate, 24 passing host/x86 groups, deferred ARM and hardware limits |
 | [2026-10-15-hardware-audit.md](2026-10-15-hardware-audit.md) | Ryzen cache and NIC findings, bounded network work, UI reports, Effector prerequisites, task routing and separate hardware acceptance |
 | [2026-10-09-baseline.md](2026-10-09-baseline.md) | The state of the repository before the first audit |
 | [2026-10-09-repository-audit.md](2026-10-09-repository-audit.md) | Code audit at `2cbda21`: eight confirmed findings covering FAT, blockstore, packaging, CI and file-manager/editor data loss; routing and acceptance criteria |

@@ -39,3 +39,15 @@ twice, each in about 0.242 seconds. Captured SYN-to-RST/ACK delays were 469
 and 357 microseconds. HTTP succeeded before and after, without a netstack
 driver cooldown. The correction is to the test endpoint, not the TCP stack
 or its expected behavior. The full gate remains pending.
+
+The isolated complete four-CPU x86 network suite passes with this fixture,
+including 30 MiB HTTP/TLS interruption/resume, policy, multiple cards and
+driver/stack restart. The earlier full gate also reaches the same fixed-port
+failure in its 6 GiB network group; both paths use the single corrected
+fixture. Final-candidate full-gate evidence is recorded separately in
+[the audit validation](../issues-audit/2026-10-15-astra-validation.md).
+
+The final `1aea9100` host/x86 stage passed all 24 groups, including the
+normal network suite on Ryzen and the 6 GiB suite on Intel i9. ARM was
+explicitly deferred by the maintainer, so the full-gate acceptance criterion
+remains open. These tests do not establish either physical NIC driver.
