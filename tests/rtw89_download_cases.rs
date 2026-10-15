@@ -138,6 +138,10 @@ fn synthetic_file() -> Vec<u8> {
 }
 fn fixture(file: &[u8]) -> Verified<'_> { Verified::parse_pinned(file).unwrap() }
 
+pub(crate) fn with_synthetic_firmware(check: impl FnOnce(Verified<'_>)) {
+    let file=synthetic_file(); check(fixture(&file));
+}
+
 pub(crate) fn with_downloaded_queue(check: impl FnOnce(Ready, &mut Queue<'_>)) {
     with_downloaded_storage(|ready,queue,_,_,_|check(ready,queue));
 }
