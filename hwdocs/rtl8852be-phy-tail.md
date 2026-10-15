@@ -71,3 +71,17 @@ with the merged report/capability modules; no new skip is introduced.
 Native build passed in 0.88 seconds. Execution awaits raw publication. These
 are host model checks, not evidence of analog calibration quality or physical
 Ryzen association, ping or Effector connectivity.
+
+The next [channel/RFK dependency plan](rtl8852be-channel-plan.md) records the
+missing actual board/regulatory inputs and exact channel/power/calibration order.
+
+## Executed host evidence
+
+After raw publication `539b588e`, the exact saved own-branch `5477b455`
+binaries passed all ten new tail fixtures on 2026-10-16 MSK. The full
+PHY harness passed 156 cases (0.96 s), BTC-init passed 85 (0.90 s), and
+post-MAC passed 76 (0.87 s), with no failure. Each harness retains one
+pre-existing ignored test requiring the external proprietary firmware file.
+The harnesses share cases; these totals are not distinct additional tests.
+Independent source review found no blocker. This evidence is synthetic and
+does not establish country, calibrated power or radio operation on Ryzen.

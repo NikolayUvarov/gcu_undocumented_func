@@ -198,6 +198,7 @@ trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
 
+
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -403,6 +404,25 @@ These harnesses repeat shared cases and each retains the existing ignored
 private firmware-file fixture. Native build passes. This does not grant BTC
 or transmit readiness.
 
+
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
+
+### PHY attempt binding for BTC integration
+
+Give each PHY attempt a bounded nonwrapping identity independent of its bus
+address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
+bind ConfigPrepared to this identity and actual firmware/ring sessions without
+a raw bool or pointer identity. Two model fixtures cover same-address reuse and
+exhaustion; test execution awaits raw publication. No native activation changes.
+
 ### MAC report tail after the full PHY prefix
 
 Implement the pinned single-band AX PPDU status/report forwarding and RTS
@@ -488,6 +508,25 @@ records; preserve unsupported records/events explicitly. BTINFO and scoreboard
 notifications must reach the session owner, not disappear as ignored traffic.
 The pure decoder neither correlates a report with a command nor grants RFK;
 the session owner must validate provenance and actual applied-policy contents.
+
+Source `96941305` and host-gate registration `3b0ca3d4` built on the own
+branch. After raw publication `539b588e`, all seven decoder fixtures passed,
+none ignored, on 2026-10-16 MSK. [Stage evidence](../hwdocs/rtl8852be-btc-reports.md)
+records the configuration and limits; actual firmware reports and policy
+application remain pending.
+
+### One-device cold firmware/MAC/RX model
+
+Extend the existing cumulative cold OTP/power/PCIe/firmware model through
+the real PHY-capability mailbox query, runtime MAC setup, installed RX
+activation and fresh Receiving validation. Use the native disjoint 128 KiB
+command reservation and remaining receive region inside one retained 8 MiB
+allocation, one Board and one Queue/Ready session. Register the harness in
+the normal host gate. Model device reactions to real writes, without
+reseeding stage guards; exercise missing replies, runtime readiness failure,
+failed RX installation/activation and independent shutdown. This model is
+not evidence of physical firmware timing, RF calibration or WLAN traffic.
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and
@@ -508,3 +547,20 @@ on overflow. This prerequisite deliberately cannot issue Initialized or RFK
 permission. Thirteen focused fixtures compile; execution follows publication.
 The complete BTC policy/common-action owner and native activation remain open.
 See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).
+
+Own-branch session commit `3ee6dd54` built for x86-64 without warnings in
+1.09 seconds. After raw publication `539b588e`, all 13 session fixtures passed
+in 0.08 seconds on 2026-10-16 MSK (zero failed/ignored, x86-64 WSL2).
+The two existing runtime-MAC identity tests using the changed downloader helper
+also passed separately (0.00 seconds each). Other inherited fixtures were
+filtered from this focused run. Independent review found no remaining blocker
+in this slice. These seeded-handoff models do not establish cumulative device
+behavior, complete BTC initialization, RFK permission or hardware connectivity.
+
+### Channel policy and pinned power-data preparation
+
+Add the source-ordered [channel/RFK plan](../hwdocs/rtl8852be-channel-plan.md)
+and pure pinned default power/country decoder. Preserve unknown policy,
+firmware overrides and platform constraints as explicit dependencies; no
+channel permission, native MMIO or transmit activation is added. See the
+linked document for exact table provenance and pending/executed evidence.

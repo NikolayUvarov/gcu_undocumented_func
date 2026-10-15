@@ -9,6 +9,8 @@ extern crate self as rtw89_wifi;
 #[path = "../rtw89_wifi/src/mac.rs"] mod mac;
 #[path = "../rtw89_wifi/src/pcie.rs"] mod pcie;
 #[path = "../rtw89_wifi/src/startup.rs"] mod startup;
+#[path = "../rtw89_wifi/src/rx.rs"] mod rx;
+#[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 #[path = "rtw89_pipeline_device.rs"] mod model;
 
 #[test]

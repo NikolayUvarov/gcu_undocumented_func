@@ -14,6 +14,8 @@ extern crate self as mind;
 #[path = "../rtw89_wifi/src/pcie.rs"] mod pcie;
 #[path = "../rtw89_wifi/src/download.rs"] mod download;
 #[path = "../rtw89_wifi/src/startup.rs"] mod startup;
+#[path = "../rtw89_wifi/src/rx.rs"] mod rx;
+#[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 #[path = "rtw89_pipeline_device.rs"] mod model;
 
 fn roundtrip(file: &[u8], speed: u8, no_h2c: bool) {

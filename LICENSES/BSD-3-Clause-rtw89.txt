@@ -15,6 +15,8 @@ The same BSD option covers rtw89_wifi/src/{phy,phy_tables}.rs, adapted from
 phy.c, phy.h, rtw8852b_table.c, rtw8852b_common.c, mac.c, reg.h and fw.c/fw.h
 at the same commit.
 Copyright(c) 2019-2022 Realtek Corporation.
+The same BSD option covers rtw89_wifi/src/{channel_policy,power_tables}.rs,
+adapted from regd.c, rtw8852b_table.c, phy.c and phy.h at the same commit.
 The firmware binary has separate terms and is not part of this repository.
 
 Redistribution and use in source and binary forms, with or without
