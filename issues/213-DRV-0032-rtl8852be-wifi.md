@@ -433,3 +433,16 @@ address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
 bind ConfigPrepared to this identity and actual firmware/ring sessions without
 a raw bool or pointer identity. Two model fixtures cover same-address reuse and
 exhaustion; test execution awaits raw publication. No native activation changes.
+
+### BTC command/profile and transition prerequisites (2026-10-16)
+
+The next slice adds exact firmware-profile-105 encoders for monitor, slots,
+report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
+scoreboard, antenna/grant snapshot/restoration and cold-init common BB
+operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
+separate through production H2C. Eighteen new source/format/fault fixtures
+compile; execution follows raw publication. The native no-std build passes.
+These helpers cannot construct an Initialized or RFK-grant result. The
+session-bound owner context, full ordered C2H/report and common-action
+orchestration, calibrated PHY interleave and native activation remain open;
+see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).

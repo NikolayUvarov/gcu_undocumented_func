@@ -349,3 +349,13 @@ It remains inaccessible to native startup until the complete PHY/RFK/trim
 and path prerequisites are implemented. A 10 ms stage and independent
 report/RX/radio/command cleanup retain DMA on failure. Seven host cases
 compile; new-slice build/execution and hardware validation are pending.
+
+The following `btc_codec`/`btc_control` prerequisite slice adds only exact
+profile-105 wire encoding and bounded low-level no-link coexistence register
+steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
+refuses pending-LTE overwrite, and retains separate source ACK choices.
+The eighteen new host fixtures are compiled; execution is pending raw
+publication. The complete session-bound owner and applied policy/C2H
+orchestration remain unimplemented, and no Initialized or RFK-grant token
+is available from this slice. No native or hardware guarantee changes;
+[scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
