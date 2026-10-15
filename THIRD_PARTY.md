@@ -19,9 +19,11 @@ Code adapted from another project:
 | File | Source | Licence |
 |---|---|---|
 | `tls/src/provider.rs` | The rustls crypto provider of [rustls-rustcrypto](https://github.com/RustCrypto/rustls-rustcrypto) 0.0.2-alpha (RustCrypto Developers): cipher, hash, HMAC, key exchange and signature verification glue, rewritten for TLS 1.3 only, RDRAND randomness and no private keys | MIT OR Apache-2.0 |
+| `rtw89_wifi/src/firmware.rs`, `rtw89_wifi/src/registers.rs` | Public RTL8852BE firmware format and register definitions adapted from Linux v6.19 commit `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`, `drivers/net/wireless/realtek/rtw89/{fw.h,fw.c,core.h,core.c,reg.h}`, Copyright(c) 2019-2020 Realtek Corporation; [precise references](hwdocs/rtl8852be.md) | **BSD-3-Clause** ([notice](LICENSES/BSD-3-Clause-rtw89.txt)), chosen from upstream's `GPL-2.0 OR BSD-3-Clause` offer; firmware binary has separate terms |
 | `libmind/src/voice/russian.rs` (`rules`), `scripts/voice_tts/dictionary.py` (`convert`) | The Russian letter-to-sound rules of [vosk-tts](https://github.com/alphacep/vosk-tts) 0.3.61 (`vosk_tts/g2p.py`, alphacep), ported; the dictionary they serve stays with the model on the model disk (`models/manifest.toml`: `tts-ru-vosk-0.7`) | Apache-2.0 |
 
 Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.
+
 
 ## Rust dependencies (fetched by Cargo, not stored here)
 
@@ -69,6 +71,10 @@ Their terms forbid redistribution. A script fetches each from the source named h
 | Files | Needed by | Source | Script |
 |---|---|---|---|
 | Broadcom's 802.11 microcode for the BCM4331: `ucode29_mimo`, `ht0initvals29`, `ht0bsinitvals29` | `bcm_wifi` from its stage 2 ([550-DRV-0006](issues/550-DRV-0006-broadcom-wifi.md)) | Broadcom's `wl` 6.30.163.46 archive. Its first home (lwfinger.com) is gone, so it is fetched from the copy distributions use (github.com/minios-linux/b43-firmware) and checked against the SHA-256 nixpkgs publishes and the MD5 SlackBuilds publishes. `b43-fwcutter` extracts the files, and each is checked by its own SHA-256 | [`scripts/proprietary.sh`](scripts/proprietary.sh) `fetch`, then `copy` after the disk is written |
+
+### Realtek firmware kept in the same personal store
+
+RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` commit `599764611a8ac213c6aa6dad17c941c2f46b53cb` by [`scripts/firmware/rtl8852be.py`](scripts/firmware/rtl8852be.py). [The source/size/hash record](hwdocs/rtl8852be.md#firmware-pin-and-personal-store) pins both firmware and `LICENCE.rtlwifi_firmware.txt`. Unlike the Broadcom files above, Realtek's terms permit unmodified binary redistribution with its notice and conditions; they prohibit reverse engineering, decompilation and disassembly. The project's personal-store workflow is nevertheless used: both downloads stay under ignored `proprietary/firmware/rtw89/`, outside built images and this repository, and `scripts/proprietary.sh copy` copies them together after a disk image is written. The binary is not a test fixture or part of the BSD-licensed helper code.
 
 ## Tools used at build or test time (not distributed)
 

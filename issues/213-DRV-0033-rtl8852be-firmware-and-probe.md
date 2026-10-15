@@ -1,0 +1,34 @@
+# 213-DRV-0033 — Pin RTL8852BE firmware and identify the chip before radio initialization
+
+**Type:** firmware format / hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV`, with a `KRN` read-only probe · **Priority:** P1 · **Status:** in progress (host foundation checked; hardware evidence pending) · **Blocked by:** the Ryzen digital chip-cut observation · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
+
+## Problem
+
+The PCI ID `10ec:b852` establishes the adapter family, but not its silicon cut, RFE type or calibration. The official `rtw8852b_fw-1.bin` contains several images; selecting the wrong variant or trusting unchecked sizes would make later firmware download unsafe. No firmware binary may enter the repository or a built image.
+
+## Plan
+
+1. Pin Linux v6.19's dual-licensed rtw89 public format/register definitions under BSD-3-Clause and the matching official `linux-firmware` revision. Keep source/binary licences distinct.
+2. Fetch/check the firmware and its licence by SHA-256 into `proprietary/firmware/rtw89/`. Preserve the existing explicit post-image copying workflow; never add firmware to image construction.
+3. Add `rtw89_wifi/src/firmware.rs`: bounded MFW selection by measured cut and image type, AX header-v0 parsing, section/overlap/length checks and explicit rejection of unsupported security layouts. Use synthetic test fixtures in the repository.
+4. Add pure register identification helpers. KRN's hardware-report path may read `BAR2 + 0xF0` (`SYS_CFG1`) after validating the PCI function and memory BAR; no bus mastering, RF writes or indirect XTAL/EFUSE transactions in this probe. Preserve any PCI configuration state changed to permit the read.
+5. Record actual raw `SYS_CFG1` and cut on the Ryzen, then select and validate that cut's normal-CE image from the verified file. Record which power/EFUSE/calibration dependencies still block the driver.
+6. When Linux is available, collect existing driver/kernel/firmware/RFE observations using `scripts/hardware/rtl8852be_probe.py`. The reviewed Linux APIs do not safely expose digital cut: `btc_info` changes firmware reporting even on read, and mac80211 exposes no register bytes. This collector must report missing cut explicitly and never substitute PCI revision or access live BAR MMIO. It does not replace step 5.
+
+## Acceptance criteria
+
+- Official firmware revision, size and SHA-256, source commit and separate licence terms are documented; fetching verifies before atomic replacement and leaves no binary outside the ignored store.
+- Synthetic tests reject every truncated prefix, oversized counts/sections, overlapping or header-aliasing image ranges, duplicate selection keys, malformed dynamic lengths, unsupported security pools and future header versions. Selection does not silently use manufacturing/WoWLAN or a newer cut.
+- Both available CE variants of the pinned personal firmware pass a separate explicit local validation; those bytes are not committed test fixtures.
+- The actual Ryzen report records `SYS_CFG1`, a usable digital cut or a precise read failure, and the compatible CE image selection. No successful-radio claim follows from the probe.
+- Radio bring-up dependencies are captured in [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md); licence notices and project host-test integration accompany the change.
+
+## Related
+
+[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [RTL8852BE source and format notes](../hwdocs/rtl8852be.md), [THIRD_PARTY.md](../THIRD_PARTY.md), `rtw89_wifi/src/`, `scripts/firmware/rtl8852be.py`, `tests/rtw89_firmware_host.rs`, `tests/rtl8852be_fetch_test.py`.
+
+## Progress (2026-10-15)
+
+Twelve Rust host tests pass, covering hostile/truncated synthetic inputs and pure register decoding; five offline fetcher tests pass, including bounded reads and preservation of an existing file on an invalid download. The helper library builds as `no_std`. A separately invoked proprietary-fixture test passes for both CE images (cuts 1 and 2) in the pinned firmware, version 0.29.29.15, header version 0, three sections. Cut 0 has no compatible CE image in that file and is rejected. This is host format evidence only. The actual Ryzen chip cut, KRN probe run and radio operation remain untested, so the issue stays open.
+
+The Linux identity collector and ten tests in `tests/rtl8852be_probe_test.py` are prepared and pass. It verifies the exact PCI/driver/bus identity, queries only `ethtool -i` and a tightly filtered current-boot journal, and persists only known numeric RFE/firmware records. It neither reads debugfs nor maps MMIO. Conflicting or absent evidence remains unresolved; SSIDs and unrelated log text are excluded. The expected exit code is 1 (`partial`) because no safe digital-cut API was established. Collection on the actual Ryzen remains pending. See [usage and primary-source review](../hwdocs/rtl8852be.md#linux-identity-collector).
