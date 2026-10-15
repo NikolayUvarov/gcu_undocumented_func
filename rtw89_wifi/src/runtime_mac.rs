@@ -56,7 +56,7 @@ fn field(bus: &mut impl RegisterIo, at: usize, mask: u32, value: u32) -> io::Res
     modify(bus,at,mask,(value<<mask.trailing_zeros())&mask)
 }
 
-fn guard(bus: &mut impl Bus, queue: &Queue<'_>, board: &Board, bar_bytes: usize) -> io::Result<()> {
+pub(crate) fn guard(bus: &mut impl Bus, queue: &Queue<'_>, board: &Board, bar_bytes: usize) -> io::Result<()> {
     if bar_bytes<BAR_BYTES || board.identity.cut!=1 || board.identity.rfe!=1 { return Err(fault(BAR_BYTES,bar_bytes.min(u32::MAX as usize) as u32)); }
     if board.maps.phycap[0x6c..0x6e]!=[0xff,0xff] { return Err(fault(0x5ec,0)); }
     let command=bus.pci_command()?;
@@ -105,12 +105,12 @@ fn counter(bus: &mut impl RegisterIo, mask: u8) -> io::Result<()> {
     let next=(((original&mask)>>shift).wrapping_add(1)<<shift)&mask;
     bus.write8(at,(original&!mask)|next)
 }
-fn packet_stop(bus: &mut impl RegisterIo) -> io::Result<()> {
+pub(crate) fn exchange_register(bus: &mut impl RegisterIo, request: [u32;4], expected: u8) -> io::Result<[u32;4]> {
     // Firmware owns scheduler updates after FW_RDY; do not overwrite an outstanding register exchange.
     poll8(bus,R_AX_H2CREG_CTRL,false,1000,5000)?;
     let pending=bus.read8(R_AX_C2HREG_CTRL)?;
     if pending!=0 { return Err(fault(R_AX_C2HREG_CTRL,pending as u32)); }
-    for (i,value) in [0x205,0xffff,0,0].into_iter().enumerate() { bus.write32(R_AX_H2CREG_DATA0+i*4,value)?; }
+    for (i,value) in request.into_iter().enumerate() { bus.write32(R_AX_H2CREG_DATA0+i*4,value)?; }
     counter(bus,(B_AX_UDM1_HALMAC_H2C_DEQ_CNT_MASK>>8) as u8)?;
     bus.write8(R_AX_H2CREG_CTRL,1)?;
     poll8(bus,R_AX_C2HREG_CTRL,true,1,1_000_000)?;
@@ -119,7 +119,12 @@ fn packet_stop(bus: &mut impl RegisterIo) -> io::Result<()> {
     bus.write8(R_AX_C2HREG_CTRL,0)?;
     counter(bus,(B_AX_UDM1_HALMAC_C2H_ENQ_CNT_MASK>>8) as u8)?;
     let words=(response[0]>>8)&15;
-    if response[0]&127!=4 || !(1..=4).contains(&words) { return Err(fault(R_AX_C2HREG_DATA0,response[0])); }
+    if response[0]&127!=u32::from(expected) || !(1..=4).contains(&words) { return Err(fault(R_AX_C2HREG_DATA0,response[0])); }
+    bus.delay_us(0)?;
+    Ok(response)
+}
+fn packet_stop(bus: &mut impl RegisterIo) -> io::Result<()> {
+    exchange_register(bus,[0x205,0xffff,0,0],4)?;
     packet_status(bus)
 }
 

@@ -23,6 +23,7 @@ pub mod phy;
 mod phy_tables;
 pub mod registers;
 pub mod runtime_mac;
+pub mod phycap;
 mod runtime_mac_regs;
 pub mod rx;
 pub mod rxdesc;

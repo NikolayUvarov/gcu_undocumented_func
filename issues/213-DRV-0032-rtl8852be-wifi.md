@@ -429,3 +429,17 @@ These helpers cannot construct an Initialized or RFK-grant result. The
 session-bound owner context, full ordered C2H/report and common-action
 orchestration, calibrated PHY interleave and native activation remain open;
 see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+
+
+### Actual firmware PHY capability query
+
+Add the pinned AX GET_FEATURE register exchange before runtime MAC setup,
+using the scheduler's existing exclusive mailbox and counter implementation.
+Require the downloader's actual Ready token for the same running command
+queue and the live DLFW state; preserve all four response words and distinguish
+firmware fields from the source's successful-zero-field NSS fallback. Only a
+complete matching response may create a session-bound capability result.
+Missing, malformed, late or foreign-session responses cannot imply two NSS.
+Retain an uncertain mailbox and DMA until independent command/WCPU cleanup;
+never retry a failed exchange. Test the real exchange, counter rollover,
+source resolution, busy/malformed/frozen-clock cases and independent cleanup.
