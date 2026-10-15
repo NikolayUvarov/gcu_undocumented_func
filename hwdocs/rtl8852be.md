@@ -1176,3 +1176,29 @@ Eight nested-notice regressions compile against the real owner/Session,
 including both bands, orphan and duplicate notifications, mismatched stop,
 cleanup after partial admission, and refusal of premature outer release.
 Execution awaits raw publication. DACK/RXDCK semantics are unchanged.
+
+Execution evidence for `a134b5a0` (including `a6df7c83`), after raw publication
+`8ebd2da170902c5679ff5450e674007dd1dfb9ee`: all 45 Session/owner/RFK/nested cases
+passed in 0.18 s, and all 11 control cases passed in 0.00 s, on their own source
+branches. Both runs had zero failures and zero ignores; the Session run filtered
+113 unrelated cases. The native build passed in 3.24 s without warnings. This
+supersedes the pending statements above for these cases; the tests remain a
+seeded register/DMA model and do not establish physical RFK behavior.
+
+### Owned scheduler mailbox adapter
+
+`Session` implements the actual `RxdckIo::scheduler_zero` boundary used by PHY
+calibration. It validates its consumed firmware Ready, current command queue
+and owned receive rings, then delegates to `runtime_mac::scheduler_zero` through
+one absolute deadline (at most one second). The existing register mailbox sends
+the already-zero scheduler mask; real firmware response and CTN/PTCL idle remain
+mandatory. No packet-command sequence is consumed and no second mailbox writer
+is introduced. Any operational error poisons the Session, forbidding a retry or
+mailbox restoration after an uncertain exchange; raw shutdown access remains.
+
+Native build passes in 3.32 s. Seven new regressions compile against production
+Session/runtime helpers and modeled register responses: valid exchanges,
+invalid budgets, stale live ownership, missing/wrong response, actual busy
+CTN/PTCL, outstanding C2H, expired aggregate budget and possibly applied
+doorbell failure. Execution follows raw publication. This closes a missing
+native trait implementation, not physical calibration or network acceptance.

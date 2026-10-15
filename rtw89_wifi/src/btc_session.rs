@@ -202,6 +202,21 @@ impl<B:DeviceIo> PhyIo for Session<'_,'_,'_,B> {
     }
 }
 
+impl<B:DeviceIo> crate::rxdck::RxdckIo for Session<'_,'_,'_,B> {
+    fn scheduler_zero(&mut self,timeout_us:u32)->io::Result<()> {
+        if let Some(error)=self.failed{return Err(fault(error))}
+        if timeout_us==0||timeout_us>1_000_000{return Err(Fault::new(FaultKind::Access,0xc348,timeout_us))}
+        let result=(||{
+            let deadline=self.now()?.checked_add(u64::from(timeout_us)).ok_or(Error::Clock)?;
+            let left=self.left(deadline)?;self.live(left.min(10_000))?;
+            let left=self.left(deadline)?;
+            self.registers(deadline,|window|crate::runtime_mac::scheduler_zero(window,left))?;
+            self.left(deadline)?;Ok(())
+        })();
+        match result{Ok(())=>Ok(()),Err(error)=>self.fail::<()>(error).map_err(fault)}
+    }
+}
+
 #[cfg(test)]
 #[path="../../tests/rtw89_btc_session_cases.rs"]
 mod tests;
