@@ -167,3 +167,22 @@ This closes the file-content question for the existing hash pin. The runtime
 consumer must still bind that observation to its actual Verified/Ready
 firmware identity; it is not a rule for an arbitrary future firmware file.
 Actual board country, frequency policy and platform constraints remain open.
+
+### Actual Ryzen Linux regulatory observation
+
+Effector operation `20261015225123.187155428_000169` completed at
+2026-10-15 22:51:26 UTC. Read-only `iw` 6.7, extracted from the official
+Ubuntu package under `/tmp` without installation or changing network state,
+reported global country `DE`, `DFS-ETSI`. The 2.4 GHz rule was
+2400–2483 MHz, maximum bandwidth 40 MHz and EIRP 20 dBm. `phy0` reported
+channels 1–13 (2412–2472 MHz) at 20 dBm without `NO_IR`; channel 14
+(2484 MHz) was disabled. Available TX/RX antenna masks were both `0x3`;
+configured masks were both zero.
+
+This is the actual effective Linux policy on that machine at that time. It
+is not evidence that the board OTP contains `DE`, that the machine is
+physically in Germany, that platform SAR/antenna-gain constraints are absent,
+or that MIND has established the same policy. The initial implementation can
+model this observed input without hard-coding it as MIND authorization. The
+actual Board-to-policy relationship and explicit platform constraint inputs
+still have to be checked before any transmit-capable native stage.
