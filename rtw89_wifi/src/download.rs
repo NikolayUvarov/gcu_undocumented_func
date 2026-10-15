@@ -104,7 +104,6 @@ fn guard(bus: &mut impl Bus, queue: &Queue<'_>) -> core::result::Result<(), Caus
     require(bus, R_AX_PLATFORM_ENABLE, 3, 1)?;
     let bb = bus.read8(R_AX_SYS_FUNC_EN)?;
     if bb & 3 != 0 { return Err(Fault::new(FaultKind::PowerState, R_AX_SYS_FUNC_EN, bb as u32).into()); }
-    require(bus, R_AX_CMAC_FUNC_EN, 1 << 30, 0)?;
     require(bus, R_AX_DMAC_FUNC_EN, 0x64c4_0000, 0x64c4_0000)?;
     require(bus, mac::DMAC_CLOCK, 0x0484_0000, 0x0484_0000)?;
     require(bus, mac::WDE_CONFIG, 0x1fff_3f03, 0)?;
