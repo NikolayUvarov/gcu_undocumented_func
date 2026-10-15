@@ -24,6 +24,7 @@ Code adapted from another project:
 
 Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.
 
+`rtl8168/src/` and `scripts/hardware/rtl8168_probe.py` use hardware facts (descriptor fields, register offsets and the XID mask) cross-checked against FreeBSD releng/14.2 `sys/dev/rl/if_rlreg.h` and `sys/dev/re/if_re.c`, and Linux v6.12 `r8169_main.c`. [The RTL8168 notes](hwdocs/rtl8168.md) record the primary links. No implementation or firmware payload from those projects is copied.
 
 ## Rust dependencies (fetched by Cargo, not stored here)
 
