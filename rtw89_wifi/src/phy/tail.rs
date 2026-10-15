@@ -64,7 +64,7 @@ fn receive_path(bus:&mut impl RegisterIo,path:u8)->io::Result<()>{
     bb(bus,0x49c0,0x003c0000,u32::from(path))?;
     stream_limits(bus,if path==3{2}else{1},true)
 }
-fn gain_offset(bus:&mut impl RegisterIo,cal:&Calibration,prefix:&dm::Prefix,subband:Subband,path:u8)->io::Result<()>{
+pub(super) fn gain_offset(bus:&mut impl RegisterIo,cal:&Calibration,prefix:&dm::Prefix,subband:Subband,path:u8)->io::Result<()>{
     if cal.gain_comp_valid{for(p,at)in [0x4acc,0x4ad8].into_iter().enumerate(){bb(bus,at,255,signed(i32::from(cal.gain_comp[p][subband.comp()])*4))?;}}
     if !cal.gain_offset_valid{return Ok(());}
     let base=i32::from(prefix.gain_offset);let rssi=i32::from(prefix.gain_rssi);

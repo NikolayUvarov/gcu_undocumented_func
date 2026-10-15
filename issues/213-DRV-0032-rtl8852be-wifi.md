@@ -539,6 +539,18 @@ pins. Test malformed/unordered/trailing directories and old/new sessions.
 This does not establish platform country/SAR/EIRP constraints or authorize TX.
 See [metadata, API boundary and evidence](../hwdocs/rtl8852be-firmware-tables.md).
 
+### Cumulative normal command and receive ownership
+
+Extend the same cold-device model beyond firmware/MAC/RX into the production
+exclusive Session. Consume normal channel-12 headers only while actual RX
+and command DMA are enabled and ordinary TX remains stopped. Produce ACKs
+through the programmed RX descriptors; preserve one sequence across RF
+mirror and BTC commands, without reseeding guards or replacing production
+correlation. Exercise missing/foreign/rejected/malformed ACKs and DMA that
+does not report consumption after an ACK. Failures must prevent new commands
+and retain the allocation until independent shutdown. This is host model
+coverage, not observed firmware semantics or working WLAN.
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and
@@ -600,3 +612,31 @@ is not an RFK grant: actual START/STOP arbitration, remaining calibration,
 native integration and hardware evidence remain open. Thirteen new owner and
 two identity fixtures compile; execution follows raw publication. See the
 [contract and report limits](../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
+
+
+Owner evidence after raw publication `1a62e46f` / code `8b2caed7`: all 26
+Session/owner, 11 initcfg and 11 control cases passed on the own branch with no
+failures or ignores. Native build passed without warnings. The normal-mode
+startup library boundary is tested in the seeded model; real RFK arbitration,
+native integration, remaining calibration and hardware connectivity stay open.
+
+
+### Actual owned RFK coexistence callback
+
+Implement typed DACK/RXDCK START/STOP over the completed BTC owner: bounded
+actual BT arbitration, source policy/antenna/common actions, scoreboard and
+report reconciliation, and final owned RX validation precede permission.
+Retain partial START until matching STOP. Poisoned H2C or disabled BB/RF permits
+only bounded raw ownership cleanup with explicit incomplete-policy failure;
+ordinary TX remains stopped and all DMA stays owned. Eleven new fixtures compile;
+execution follows raw publication. Native binding, remaining calibration and
+physical-device evidence are still open. See the
+[RFK contract](../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
+
+### Initial channel register stage (2026-10-16)
+
+The private [2 GHz/20 MHz channel stage](../hwdocs/rtl8852be-channel-stage.md)
+adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
+actual same-session firmware default-table provenance and explicit platform
+policy; it has no native caller and creates no TX authorization. Channel RFK,
+actual policy/board observations and physical traffic validation remain open.

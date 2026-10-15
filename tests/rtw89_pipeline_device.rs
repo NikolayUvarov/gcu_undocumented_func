@@ -27,6 +27,9 @@ impl Region {
 }
 impl Drop for Region { fn drop(&mut self) { unsafe { dealloc(self.base, self.layout); } } }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NormalAck { Complete, Missing, Foreign, Rejected(u8), Truncated, WrongChannel }
+
 pub struct Device {
     registers: Vec<u8>, xtal: [u8; 256], otp: [u8; 0x800], dav: [u8; 96],
     config: [u8; 4096], mdio: [u16; 128], dma: *mut u8,
@@ -34,6 +37,7 @@ pub struct Device {
     pub packets: Vec<(bool, Vec<u8>)>, pub transferred: usize, pub no_h2c: bool,
     pub feature_reply: Option<[u32; 4]>, pub mailbox_requests: Vec<[u32; 4]>,
     pub station_stuck: bool, pub ignore_receive_base: bool, pub fail_receive_enable: bool,
+    pub normal_packets: Vec<Vec<u8>>, pub normal_ack: NormalAck, pub hold_normal_dma: bool,
 }
 
 impl Device {
@@ -42,7 +46,8 @@ impl Device {
             config: [0; 4096], mdio: [0; 128], dma: std::ptr::null_mut(), command: 2, now: 0,
             writes: Vec::new(), packets: Vec::new(), transferred: 0, no_h2c: false,
             feature_reply: Some([0x02020403, 2, 0, 0x20200]), mailbox_requests: Vec::new(),
-            station_stuck: false, ignore_receive_base: false, fail_receive_enable: false };
+            station_stuck: false, ignore_receive_base: false, fail_receive_enable: false,
+            normal_packets: Vec::new(), normal_ack: NormalAck::Complete, hold_normal_dma: false };
         d.put(SYS_CFG1, 4, 1 << 12);
         d.put(R_AX_SYS_PW_CTRL, 4, B_AX_RDY_SYSPWR);
         d.put(R_AX_SYS_WL_EFUSE_CTRL, 2, B_AX_AUTOLOAD_SUS);
@@ -74,8 +79,9 @@ impl Device {
     fn consume(&mut self, index: u32) {
         assert!(index < fwcmd::DESCRIPTORS as u32);
         assert!(matches!(self.command & 7, 6 | 7));
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, 0x000b_0f03);
-        assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x800);
+        let receiving = self.get(fwcmd::INIT_CONFIG, 4) & 0x2000 != 0;
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, if receiving { 0x000b_0f00 } else { 0x000b_0f03 });
+        assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, if receiving { 0x2800 } else { 0x800 });
         assert!(!self.dma.is_null());
         assert_eq!(self.get(fwcmd::BASE_LOW, 4), 0x200000);
         assert_eq!(self.get(fwcmd::BASE_HIGH, 4), 0);
@@ -94,12 +100,41 @@ impl Device {
         assert_eq!((txwd >> 16) & 15, 12);
         let part = txwd & (1 << 20) != 0;
         let packet = unsafe { std::slice::from_raw_parts(self.dma.add(at + fwcmd::TXWD_BYTES), length - fwcmd::TXWD_BYTES) }.to_vec();
+        if receiving {
+            assert!(!part);assert_eq!(self.get(0x1e0,4)&0xe0,0xe0);
+            assert_eq!(self.get(0xc348,4)&0xffff,0);assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
+            self.normal_command(&packet);
+            self.normal_packets.push(packet);
+            if !self.hold_normal_dma {self.put(fwcmd::INDEX,4,index|index<<16);}
+            return;
+        }
         if part { self.transferred += packet.len(); } else { self.registers[0x1e0] |= 4; }
         self.packets.push((part, packet));
         self.put(fwcmd::INDEX, 4, index | index << 16);
         if self.transferred == 326_472 {
             self.registers[0x1e0] = (self.registers[0x1e0] & !0xe0) | 0xe0;
             self.put(0xc348, 4, 0xffff);
+        }
+    }
+
+    fn normal_command(&mut self, packet: &[u8]) {
+        assert!(packet.len()>=8);
+        let identity=u32::from_le_bytes(packet[..4].try_into().unwrap());
+        let flags=u32::from_le_bytes(packet[4..8].try_into().unwrap());
+        assert_eq!(flags&0x3fff,packet.len()as u32);
+        if self.normal_ack==NormalAck::Missing {return;}
+        let sequence=(identity>>24)as u8;
+        let sequence=if self.normal_ack==NormalAck::Foreign {sequence.wrapping_add(1)}else{sequence};
+        for done in [false,true] {
+            if flags&(1<<if done{15}else{14})==0 {continue;}
+            let mut ack=[0u8;12];
+            ack[..4].copy_from_slice(&(1u32|u32::from(done)<<8).to_le_bytes());
+            let length=if self.normal_ack==NormalAck::Truncated{8}else{12};
+            ack[4..8].copy_from_slice(&(length as u32).to_le_bytes());
+            let status=match self.normal_ack{NormalAck::Rejected(status)if done=>status,_=>0};
+            let payload=(identity&0xffff)|u32::from(sequence)<<if done{24}else{16}|u32::from(status)<<16;
+            ack[8..].copy_from_slice(&payload.to_le_bytes());
+            self.inject_c2h_channel(usize::from(self.normal_ack==NormalAck::WrongChannel),&ack[..length]);
         }
     }
 
@@ -120,22 +155,27 @@ impl Device {
     }
 
     pub fn inject_c2h(&mut self, event: &[u8]) {
+        self.inject_c2h_channel(0,event);
+    }
+
+    fn inject_c2h_channel(&mut self, channel: usize, event: &[u8]) {
+        assert!(channel<2);
         assert!(matches!(self.command & 7, 6 | 7));
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
         assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, 0x000b0f00);
         assert!(event.len() + 20 <= rx::BUFFER_BYTES);
-        let index = self.get(0x1050, 4);
+        let index_at=[0x1050,0x1054][channel];let index = self.get(index_at, 4);
         let hardware = ((index >> 16) & 0xfff) as usize;
         let next = (hardware + 1) % rx::DESCRIPTORS;
         assert_ne!(next, (index & 0xfff) as usize);
-        let buffer = self.receive_buffer(0, hardware);
+        let buffer = self.receive_buffer(channel, hardware);
         let length = 20 + event.len();
         let mut packet = vec![0; length];
         packet[..4].copy_from_slice(&(length as u32 | 0xc000).to_le_bytes());
         packet[4..8].copy_from_slice(&(event.len() as u32 | 10 << 24).to_le_bytes());
         packet[20..].copy_from_slice(event);
         unsafe { std::ptr::copy_nonoverlapping(packet.as_ptr(), self.dma.add(buffer), packet.len()); }
-        self.put(0x1050, 4, (index & 0xffff) | (next as u32) << 16);
+        self.put(index_at, 4, (index & 0xffff) | (next as u32) << 16);
     }
 
     fn write(&mut self, at: usize, width: usize, value: u32) -> io::Result<()> {
@@ -221,8 +261,8 @@ impl Device {
         if at == 0x11d8 { self.put(at, 4, value & !2); }
         if at == R_AX_PLATFORM_ENABLE && value & 2 != 0 && previous & 2 == 0 && !self.no_h2c { self.registers[0x1e0] |= 2; }
         if at == fwcmd::INDEX { assert_eq!(width, 2); self.consume(value); }
-        if at == 0x1050 && width == 2 {
-            let buffer = self.receive_buffer(0, previous as usize & 0xfff);
+        if [0x1050,0x1054].contains(&at) && width == 2 {
+            let buffer = self.receive_buffer(usize::from(at==0x1054), previous as usize & 0xfff);
             unsafe { std::ptr::write_bytes(self.dma.add(buffer), 0xdd, rx::BUFFER_BYTES); }
         }
         if at == fwcmd::INIT_CONFIG && value & (1 << 13) != 0 && self.fail_receive_enable {

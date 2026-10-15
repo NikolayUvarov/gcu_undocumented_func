@@ -1090,3 +1090,58 @@ phase/session identity, aggregate deadlines, optional reports, pre-completion
 snapshots, malformed envelopes, post-boundary contradictions, unmarked slots and
 later reconciliation. Execution awaits raw publication. The seeded handoff model
 is not physical-device evidence or the separate cumulative cold-device model.
+
+
+After raw publication `1a62e46f` containing code `8b2caed7`, the owner's own
+branch passed all 26 Session/owner fixtures (0.18 s), all 11 initcfg fixtures
+(0.01 s), and all 11 control fixtures (0.00 s) on 2026-10-16. Each selected set
+had zero failures and zero ignored cases. The native release build passed in
+3.33 s without warnings. The tests exercise the production init/common path
+against the documented stateful seeded model; they do not validate physical
+coexistence, RFK START/STOP, native integration or continuous WLAN operation.
+
+
+## Owned calibration coexistence START and STOP
+
+`Session` implements the actual `DackIo::btc_rfk` callback only after the
+successful owned BTC initialization above. It accepts the typed DACK/RXDCK
+notice for PHY0/path-map zero and actual 2G/5G band (`0x10`/`0x50`), retains one
+pending calibration identity and refuses overlapping START or mismatched STOP.
+The source is pinned `coex.c` `_chk_wl_rfk_request`, `_ntfy_wl_rfk`,
+`rtw89_btc_ntfy_wl_rfk`, `_action_wl_rfk`, `_run_coex` and `_action_common`.
+No firmware message is invented for a notice that upstream keeps in host state.
+
+START checks the owned receive session and actual BT scoreboard RUN/REQ state,
+with 40 us retry steps and finite iterations inside the caller's absolute
+maximum 100 ms budget. It does not override a busy BT calibration after timeout.
+Once arbitration permits, it saves the actual antenna/grants, sets its owned
+WLRFK request, performs source antenna/grant/pollution and OFF_WL2 forced policy
+(including instant TDMA and all slots), completes the relevant common actions,
+processes BT events and policy reports, publishes the scoreboard and validates
+actual RX ownership again. The source BT-off branch instead retains OFF_BT
+with WLAN-only controls. Only this complete path returns permission; receipt,
+DONE, drained command DMA or a policy encoder alone do not grant RFK.
+
+A possibly applied START remains recorded until its matching STOP; calibration
+callers hold this state through RF restoration and radio disable on failure.
+Normal STOP clears WLRFK and completes no-link/BT-off policy, controls and common
+actions with live BB/RF. If H2C/RX is poisoned or the caller has already disabled
+BB/RF, STOP cannot claim those firmware/common actions succeeded: it attempts
+only bounded raw clearing of the owned WLRFK request and restoration of the
+saved antenna/grants. It never reenables RF to run cleanup, never resets an H2C
+sequence and never resends an uncertain command. STOP reserves the smaller of 20 ms or half its remaining callback budget for
+raw cleanup; the normal policy/common transition uses the earlier deadline.
+Cleanup keeps the original absolute STOP deadline, with independent clear and
+restore outcomes. A stalled indirect register or scheduling delay can still
+exhaust this reserve and is reported without an unbounded retry. A failed scoreboard shadow remains poisoned after
+its shutdown-only clear. `last_rfk_failure` exposes the original cause, whether
+cleanup was attempted, and separate clear/restore errors. Outer retained-DMA,
+WCPU and PCI shutdown is mandatory after any failed callback.
+
+Eleven new fixtures compile against the real Session/owner path. They cover both
+source policy branches, actual BT arbitration and bounded/frozen clocks,
+missing ACK and contradictory post-policy report, possibly applied control and
+scoreboard writes, independent cleanup failures, radio-off cleanup, identity
+mismatch, duplicate START and actual cleanup after a STOP-policy ACK timeout. Existing 26 Session/owner and 11 control fixtures
+also compile. Execution awaits raw publication; no native wiring or physical
+RFK/association evidence is added by this slice.

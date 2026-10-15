@@ -33,6 +33,30 @@ It exercises its exact structural parser without weakening the public pinned
 SHA-256 policy. The separately fetched private-file fixture remains explicit
 and is never bundled with this test, the repository or a disk image.
 
+## Normal command/RX extension
+
+The model now continues into the production exclusive `btc_session::Session`
+without changing guard registers between stages. Normal channel-12 packets
+are consumed only when the actual HCI and stop registers enable command/RX
+DMA and the ordinary TX scheduler remains idle. ACK bytes are derived from
+the real submitted header, with distinct receipt and completion sequence
+positions, and written through the currently programmed RXQ descriptors.
+The model releases descriptor ownership only through the production RX
+doorbell. The same Region remains alive through independent shutdown.
+
+Four additional cumulative cases cover GEN1/GEN2 RF-page and BTC commands
+sharing a single normal sequence, including periodic receipt ACKs; missing
+or foreign ACKs despite completed DMA; firmware rejection, truncated ACKs
+and delivery through RPQ; and an ACK whose command-DMA index never advances.
+Failed sessions reject subsequent commands and borrowed receive permits.
+The last case deliberately models a stuck completion report independently
+of firmware consumption, because either observation alone is insufficient.
+
+This validates the transport ownership handoff. The modeled firmware emits
+ideal synchronous ACKs; it does not execute BTC policy or RF calibration,
+and successful command exchange does not establish WLAN operation. These
+new cases are awaiting raw publication and focused execution.
+
 ## Evidence
 
 Own-branch commit `fdb77f1d`, based on consolidated ASTRA `bf5f3df0` plus

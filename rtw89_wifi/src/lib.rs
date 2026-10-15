@@ -5,6 +5,8 @@
 pub mod board;
 pub mod calibration;
 pub mod channel_policy;
+#[allow(dead_code)]
+pub(crate) mod channel_power;
 mod power_tables;
 pub mod btc;
 pub mod btc_codec;

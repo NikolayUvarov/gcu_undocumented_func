@@ -6,7 +6,7 @@ fn board()->board::Board{board::Board{identity:identity(),maps:efuse::Maps{logic
 fn with_caps(rx:u8,ant:u8,run:impl FnOnce(Capabilities)){
     phycap::tests::with_capabilities([0x403|(rx as u32)<<16,2,0,(ant as u32)<<16],run);
 }
-fn prepared(p:&mut Phy<Device>,cap:&Capabilities,band:dack::Band)->dm::Prefix{
+pub(super) fn prepared(p:&mut Phy<Device>,cap:&Capabilities,band:dack::Band)->dm::Prefix{
     p.baseband().unwrap();p.radio().unwrap();
     let d=p.bus_between_stages();d.session=cap.session();d.put(0x149b0,4,0xe1);d.put(0x14a00,4,0x7f);
     let prefix=dm::run(p,band).unwrap();p.nctl().unwrap();p.rck().unwrap();dack_cases::prepare_results(p);
