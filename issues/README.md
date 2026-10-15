@@ -20,6 +20,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
 | [213-KRN-0112](213-KRN-0112-firmware-ram-cache-types.md) | Firmware RAM above 3 GiB stays cached; regressions cover the Ryzen arena and mixed RAM/MMIO pages | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen rerun | H / 213 |
+| [213-DRV-0030](213-DRV-0030-rtl8168-hardware-identification.md) | Read the Ryzen RTL8168 MAC XID before selecting revision-specific initialization | `DRV` / ASTRA auditor-fixer | P1 | Ryzen Linux diagnostic | H / 213 |
 | [000-APP-0080](000-APP-0080-dzen-current-hour-sector.md) | Dzen-clock marks the current hour sector separately from the 100-second zero reference | `APP` / ASTRA auditor-fixer | P2 | Full gate | track G |
 | [000-APP-0081](000-APP-0081-visible-window-placement-mode.md) | Alt+M immediately marks the moving/resizing window, including fullscreen | `APP` / ASTRA auditor-fixer | P2 | Full gate | track G |
 | [175](175-audit-2026-10-09.md) | The 2026-10-09 audit's eight findings, fixed in their tracks (main task; routing: `vfs_server` joins `KRN`) | `KRN` | P1 | — | S0 |
