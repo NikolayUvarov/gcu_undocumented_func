@@ -32,17 +32,24 @@ pub trait PhyIo: RegisterIo {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl }
+pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, Rxdck, DpkBackoff, RckA, RckB }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, Failed }
+pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, Failed }
+
+#[derive(Clone, Copy)]
+pub(crate) enum RegisterPhase { BeforeDack, AfterDack }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Failure { pub stage: Stage, pub cause: Fault, pub disable_bb_rf: Option<Fault> }
+pub struct Failure { pub stage: Stage, pub cause: Fault, pub disable_bb_rf: Option<Fault>, pub restore_rf: Option<Fault> }
 
 /// Successful table writes only; RFK, board trims, channel setup and regulatory/SAR limits remain mandatory.
 #[derive(Debug)]
 pub struct TablesLoaded { _private: () }
+
+/// RCK results only; DACK/RXDCK, channel calibration and regulatory limits are still mandatory.
+#[derive(Debug, Eq, PartialEq)]
+pub struct RckResult { pub values: [u8; 2], pub dpk_gain: u8 }
 
 /// Gain defaults decoded into software state, distinct from board-specific EFUSE trims.
 #[derive(Debug, Eq, PartialEq)]
@@ -91,7 +98,7 @@ fn remaining(io: &mut impl RegisterIo, start: u64) -> io::Result<u32> {
         .ok_or(Fault::new(FaultKind::Timeout, 0, 0))
 }
 
-fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
+pub(crate) fn guard(bus: &mut impl PhyIo, identity: &Identity, phase: RegisterPhase) -> io::Result<()> {
     if bus.bar_len() < BAR_BYTES { return Err(Fault::new(FaultKind::Access, BAR_BYTES, bus.bar_len().min(u32::MAX as usize) as u32)); }
     let id = bus.pci_id()?;
     let command = bus.pci_command()?;
@@ -112,7 +119,8 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     require(bus, R_AX_SPS_DIG_ON_CTRL0, B_AX_REG_ZCDC_H_MASK, 1 << 17)?;
     require(bus, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG, B_AX_AFC_AFEDIG)?;
     let cycle = bus.read8(0x8040)?;
-    if cycle == u8::MAX || cycle & 15 != 14 { return Err(state(0x8040, cycle as u32)); }
+    let expected = match phase { RegisterPhase::BeforeDack=>14, RegisterPhase::AfterDack=>15 };
+    if cycle == u8::MAX || cycle & 15 != expected { return Err(state(0x8040, cycle as u32)); }
     require(bus, 0x1000, 1 << 11 | 1 << 13, 1 << 11)?;
     require(bus, 0x1010, DATA_STOP | 1 << 18 | 1 << 20, DATA_STOP)?;
     require(bus, 0x101c, DATA_BUSY, 0)?;
@@ -121,7 +129,7 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     Ok(())
 }
 
-fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
+pub(crate) fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
     // Two XTAL paths share the eight 50 ms idle/read/write/readback ceilings.
     let mut io = TimedIo::new(bus, 400_000);
     let mut first = None;
@@ -180,19 +188,67 @@ fn reset_baseband(io: &mut impl RegisterIo) -> io::Result<()> {
     io.delay_us(0)
 }
 
-fn rf_write(io: &mut impl RegisterIo, path: u8, at: u32, value: u32) -> io::Result<()> {
-    if path > 1 || at & !0x100ff != 0 || value > RF_MASK {
+fn rf_field(path: u8, at: u32, mask: u32) -> io::Result<u32> {
+    if path > 1 || at & !0x100ff != 0 || mask == 0 || mask & !RF_MASK != 0 {
+        return Err(Fault::new(FaultKind::Access, at as usize, mask));
+    }
+    Ok(mask.trailing_zeros())
+}
+
+pub(crate) fn rf_read(io: &mut impl RegisterIo, path: u8, at: u32, mask: u32) -> io::Result<u32> {
+    let shift = rf_field(path, at, mask)?;
+    let value = if at & 0x10000 != 0 {
+        io::read32(io, PHY_BASE + 0xe000 + (path as usize * 0x1000) + ((at & 255) as usize * 4))?
+    } else {
+        io::poll32(io, SWSI_STATUS, SWSI_BUSY, 0, 1, 30)?;
+        io::modify32(io, PHY_BASE + 0x378, 0x7ff, (path as u32) << 8 | at)?;
+        io.delay_us(2)?;
+        io::poll32(io, SWSI_STATUS, 1 << 26, 1 << 26, 1, 30)?;
+        io::read32(io, SWSI_STATUS)?
+    };
+    io.delay_us(0)?;
+    Ok((value & mask) >> shift)
+}
+
+pub(crate) fn rf_write_masked(io: &mut impl RegisterIo, path: u8, at: u32, mask: u32, value: u32) -> io::Result<()> {
+    let shift = rf_field(path, at, mask)?;
+    if value > (mask >> shift) || (value << shift) & !mask != 0 {
         return Err(Fault::new(FaultKind::Access, at as usize, value));
     }
+    let bits = value << shift;
     if at & 0x10000 != 0 {
         let address = PHY_BASE + 0xe000 + (path as usize * 0x1000) + ((at & 255) as usize * 4);
-        io::modify32(io, address, RF_MASK, value)?;
+        io::modify32(io, address, mask, bits)?;
         io.delay_us(1)
     } else {
         io::poll32(io, SWSI_STATUS, SWSI_BUSY, 0, 1, 30)?;
-        io.write32(SWSI_DATA, (path as u32) << 28 | at << 20 | value)?;
-        Ok(())
+        let masked = mask != RF_MASK;
+        if masked { io::modify32(io, PHY_BASE + 0x374, RF_MASK, mask)?; }
+        io.write32(SWSI_DATA, (masked as u32) << 31 | (path as u32) << 28 | at << 20 | bits)?;
+        io.delay_us(0)
     }
+}
+
+fn rf_write(io: &mut impl RegisterIo, path: u8, at: u32, value: u32) -> io::Result<()> {
+    rf_write_masked(io, path, at, RF_MASK, value)
+}
+
+fn restore_rsv1(io: &mut impl RegisterIo, path: u8, original: u32) -> io::Result<()> {
+    rf_write(io, path, 5, original)?;
+    let actual = rf_read(io, path, 5, RF_MASK)?;
+    if actual != original { return Err(state(5, actual)); }
+    io.delay_us(0)
+}
+
+fn poll_rck(io: &mut impl RegisterIo, path: u8) -> io::Result<()> {
+    let mut poll = TimedIo::new(io, 30);
+    for _ in 0..=15 {
+        let value = rf_read(&mut poll, path, 0x1c, 8)?;
+        poll.delay_us(0)?;
+        if value != 0 { return Ok(()); }
+        poll.delay_us(2)?;
+    }
+    Err(Fault::new(FaultKind::Timeout, 0x1c, path as u32))
 }
 
 /// One startup attempt, with failed attempts poisoned until the caller destroys and powers down the device.
@@ -204,21 +260,23 @@ pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State }
 impl<'a, B: PhyIo> Phy<'a, B> {
     pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self { bus, identity, state: State::Fresh } }
     pub fn state(&self) -> State { self.state }
+    pub(crate) fn mark_failed(&mut self) { self.state=State::Failed; }
     /// Execute the documented interleaved chip steps on this same device, retaining all startup restrictions.
     pub fn bus_between_stages(&mut self) -> &mut B { self.bus }
 
     fn begin(&mut self, stage: Stage, expected: State) -> core::result::Result<u64, Failure> {
-        if self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None }); }
+        if self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
         let start = self.bus.now_us();
-        if let Err(cause) = guard(self.bus, &self.identity).and_then(|()| remaining(self.bus, start).map(|_| ())) {
-            self.state = State::Failed;
-            return Err(Failure { stage, cause, disable_bb_rf: None });
+        let phase = if expected == State::DackDone { RegisterPhase::AfterDack } else { RegisterPhase::BeforeDack };
+        if let Err(cause) = guard(self.bus, &self.identity, phase).and_then(|()| remaining(self.bus, start).map(|_| ())) {
+            self.mark_failed();
+            return Err(Failure { stage, cause, disable_bb_rf: None, restore_rf: None });
         }
         Ok(start)
     }
     fn failed(&mut self, stage: Stage, cause: Fault) -> Failure {
-        self.state = State::Failed;
-        Failure { stage, cause, disable_bb_rf: disable_bb_rf(self.bus).err() }
+        self.mark_failed();
+        Failure { stage, cause, disable_bb_rf: disable_bb_rf(self.bus).err(), restore_rf: None }
     }
 
     /// Apply BB, initialize the chip TX-power unit and software gain defaults, then reset BB under one deadline.
@@ -274,7 +332,7 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         Ok(())
     }
 
-    /// Call after BTC initialization and PHY dynamic-management initialization, before any RF calibration.
+    /// Call after BTC initialization and the pre-NCTL prefix of PHY dynamic management, before RF calibration.
     pub fn nctl(&mut self) -> core::result::Result<TablesLoaded, Failure> {
         let start = self.begin(Stage::Nctl, State::RadioLoaded)?;
         let result = (|| {
@@ -302,4 +360,70 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         self.state = State::TablesLoaded;
         Ok(TablesLoaded { _private: () })
     }
+
+    /// Follow NCTL with DPK backoff and both RCK paths; no BTC RFK notification surrounds RCK in the pinned chip source.
+    /// The caller retains fresh TSSI/MCC software state and completed BTC/DM prerequisites; DACK remains a separate stage.
+    pub fn rck(&mut self) -> core::result::Result<RckResult, Failure> {
+        let start = self.begin(Stage::DpkBackoff, State::TablesLoaded)?;
+        let mut stage = Stage::DpkBackoff;
+        let mut restore = None;
+        let result = (|| {
+            let left = remaining(self.bus, start)?;
+            let mut io = TimedIo::new(self.bus, left as u64);
+            let backoff = io::read32(&mut io, PHY_BASE + 0x44a0)?;
+            let dpk_gain = if ((backoff >> 12) & 31) + (backoff & 127) >= 44 {
+                for at in [0x81bc, 0x82bc] { io::modify32(&mut io, PHY_BASE + at, 0x7fffff, 0x7f7f7f)?; }
+                0x7f
+            } else { 0x5b };
+            let mut values = [0; 2];
+            for path in 0..2 {
+                stage = if path == 0 { Stage::RckA } else { Stage::RckB };
+                let original = rf_read(&mut io, path, 5, RF_MASK)?;
+                restore = Some((path, original));
+                rf_write_masked(&mut io, path, 5, 1, 0)?;
+                rf_write_masked(&mut io, path, 0, 0xf0000, 3)?;
+                rf_write(&mut io, path, 0x1b, 0x240)?;
+                poll_rck(&mut io, path)?;
+                let value = rf_read(&mut io, path, 0x1b, 0x7c00)?;
+                rf_write(&mut io, path, 0x1b, value)?;
+                restore_rsv1(&mut io, path, original)?;
+                restore = None;
+                values[path as usize] = value as u8;
+            }
+            remaining(self.bus, start)?;
+            Ok(RckResult { values, dpk_gain })
+        })();
+        match result {
+            Ok(result) => { self.state = State::RckDone; Ok(result) }
+            Err(cause) => {
+                let restore_rf = restore.and_then(|(path, original)| {
+                    let mut cleanup = TimedIo::new(self.bus, 200);
+                    restore_rsv1(&mut cleanup, path, original).err()
+                });
+                let mut failure = self.failed(stage, cause);
+                failure.restore_rf = restore_rf;
+                Err(failure)
+            }
+        }
+    }
+
+
+    /// Run DACK only after RCK, with actual BTC arbitration and the same initialized channel-band context.
+    pub fn dack(&mut self,band:crate::dack::Band)->core::result::Result<crate::dack::ResultData,crate::dack::Failure>
+    where B:crate::dack::DackIo {
+        let start=self.begin(Stage::Dack,State::RckDone).map_err(|failure|crate::dack::Failure::guard(failure.cause))?;
+        let result=crate::dack::run(self.bus,band,start);
+        self.state=if result.is_ok() {State::DackDone} else {State::Failed};
+        result
+    }
+
+    /// Complete initial RXDCK with TSSI modes still disabled and the same exclusively owned scheduler mailbox.
+    pub fn rxdck(&mut self,band:crate::dack::Band)->core::result::Result<crate::rxdck::Completed,crate::rxdck::Failure>
+    where B:crate::rxdck::RxdckIo {
+        let start=self.begin(Stage::Rxdck,State::DackDone).map_err(|failure|crate::rxdck::Failure::guard(failure.cause))?;
+        let result=crate::rxdck::run(self.bus,band,start);
+        self.state=if result.is_ok() {State::RxdckDone} else {State::Failed};
+        result
+    }
+
 }

@@ -4,6 +4,8 @@
 
 pub mod board;
 pub mod btc;
+pub mod dack;
+mod dack_tables;
 pub mod efuse;
 pub mod download;
 pub mod firmware;
@@ -23,3 +25,4 @@ pub mod rxdesc;
 pub mod c2h;
 pub mod post_mac;
 mod post_mac_regs;
+pub mod rxdck;

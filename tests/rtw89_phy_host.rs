@@ -6,6 +6,9 @@
 #[path = "../rtw89_wifi/src/board.rs"] mod board;
 #[path = "../rtw89_wifi/src/phy_tables.rs"] mod phy_tables;
 #[path = "../rtw89_wifi/src/phy.rs"] mod phy;
+#[path = "../rtw89_wifi/src/dack.rs"] mod dack;
+#[path = "../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
+#[path = "../rtw89_wifi/src/rxdck.rs"] mod rxdck;
 
 use io::{Fault, FaultKind, RegisterIo, Result};
 use phy::{Phy, PhyIo, State, Stage};
@@ -14,10 +17,15 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
+    scheduler_calls:Vec<(u32,usize)>, scheduler_fail:Option<usize>, scheduler_late:Option<usize>, scheduler_dirty:bool, rx_delay_fail:bool, rx_delay_late:bool,
+    btc: Vec<(dack::BtcNotice,u32)>, btc_event_positions: Vec<usize>, btc_start_fail: bool, btc_stop_fail: bool, btc_start_delay: u64, btc_stop_delay: u64, dack_model: bool,
+    rf: [[u32; 256]; 2], swsi_pending: Option<(u64,u8,u8)>, swsi_latched: u32, read_stuck: bool,
+    rck_pending: [Option<u64>;2], rck_values: [u8;2], rck_delay: u64, rck_stuck: Option<u8>,
+    rck_bus_stuck: bool, restore_fail: bool, late_restore: bool,
     memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, xtal_delay_us: u64, xtal_pending: Option<(u64, u32)>, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
-    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>, deadline_write_number: Option<usize>, delay_jump: Option<u32>,
+    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>, deadline_us: u64, deadline_write_number: Option<usize>, delay_jump: Option<u32>,
 }
 
 fn identity() -> board::Identity {
@@ -26,9 +34,10 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
+        let mut d = Self { scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+            rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
-            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_write_number: None, delay_jump: None };
+            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
             (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03)] {
@@ -62,7 +71,25 @@ impl Device {
         if at == 0x1174c && width == 4 {
             if self.swsi_stuck { return Ok(1 << 24); }
             if self.swsi_busy != 0 { self.swsi_busy -= 1; return Ok(1 << 24); }
-            return Ok(0);
+            for path in 0..2 {
+                if let Some(ready)=self.rck_pending[path] {
+                    if self.now>=ready && self.rck_stuck!=Some(path as u8) {
+                        self.rf[path][0x1c]|=8;
+                        self.rf[path][0x1b]=(self.rf[path][0x1b]&!0x7c00)|((self.rck_values[path] as u32)<<10);
+                        self.rck_pending[path]=None;
+                    }
+                }
+            }
+            if let Some((ready,path,reg))=self.swsi_pending {
+                if self.now<ready || self.read_stuck { return Ok(1<<25); }
+                self.swsi_latched=(1<<26)|self.rf[path as usize][reg as usize]; self.swsi_pending=None;
+            }
+            return Ok(self.swsi_latched);
+        }
+        if self.dack_model && width==4 {
+            for (reg,index,base) in [(0x1c05c,0x1c000,0x10),(0x1c080,0x1c020,0x30),(0x1c15c,0x1c100,0x50),(0x1c180,0x1c120,0x70)] {
+                if at==reg {return Ok((self.get(at,4)&0xffffff)|((base+((self.get(index,4)>>1)&15))<<24));}
+            }
         }
         if at == 0x18080 && self.nctl_stuck { return Ok(0); }
         Ok(self.get(at, width))
@@ -72,8 +99,24 @@ impl Device {
         self.tick(1); self.writes += 1;
         self.events.push(Event::Write(at, width, value));
         self.put(at, width, value);
-        if self.deadline_write == Some(at) { self.now += 100_000; self.deadline_write = None; }
+        if self.deadline_write == Some(at) { self.now += self.deadline_us; self.deadline_write = None; }
         if self.deadline_write_number == Some(self.writes) { self.now+=100_000; self.deadline_write_number=None; }
+        if at == 0x10378 && width == 4 {
+            assert!(self.swsi_pending.is_none(), "pending RF read cannot be replaced");
+            self.swsi_pending=Some((self.now+2,((value>>8)&7) as u8,(value&255) as u8)); self.swsi_latched=0;
+        }
+        if at == 0x10370 && width == 4 {
+            assert!(!self.swsi_stuck && self.swsi_pending.is_none(), "pending RF command cannot be replaced");
+            let path=((value>>28)&7) as usize; let reg=((value>>20)&255) as usize;
+            let mask=if value&(1<<31)!=0 { self.get(0x10374,4)&0xfffff } else { 0xfffff };
+            self.rf[path][reg]=(self.rf[path][reg]&!mask)|(value&mask);
+            if reg==0x1b && value&0xfffff==0x240 {
+                self.rf[path][0x1c]&=!8; self.rck_pending[path]=Some(self.now+self.rck_delay);
+                if self.rck_bus_stuck { self.swsi_stuck=true; }
+            }
+            if reg==5 && mask==0xfffff && self.restore_fail { return Err(Fault::new(FaultKind::Access,at,value)); }
+            if path==1 && reg==5 && mask==0xfffff && self.late_restore { self.now+=100_000; self.late_restore=false; }
+        }
         if self.fail_write == Some(self.writes) || self.fail_cleanup == Some(at) {
             return Err(Fault::new(FaultKind::Access, at, value));
         }
@@ -111,6 +154,8 @@ impl RegisterIo for Device {
     }
     fn delay_us(&mut self, us: u32) -> Result<()> {
         self.tick(us as u64);
+        if us==1_000 && self.rx_delay_fail {self.rx_delay_fail=false;return Err(Fault::new(FaultKind::Access,0x92,us));}
+        if us==1_000 && self.rx_delay_late {self.rx_delay_late=false;self.tick(2_500_000);}
         if self.delay_jump == Some(us) { self.tick(100_000); self.delay_jump=None; }
         Ok(())
     }
@@ -399,3 +444,134 @@ fn bb_reset_delay_overrun_blocks_later_reset_writes_and_radio() {
     assert!(error.disable_bb_rf.is_none()); assert!(p.radio().is_err());
     assert_eq!(d.events[1025],Event::Write(0x2f0,4,0)); d.reset();
 }
+
+
+fn to_nctl(p: &mut Phy<Device>) { p.baseband().unwrap(); p.radio().unwrap(); p.nctl().unwrap(); }
+
+#[test]
+fn bounded_rf_access_validates_arguments_before_any_register_write() {
+    for (path,at,mask,value) in [(2,5,1,0),(0,0x20000,1,0),(0,5,0,0),(0,5,0x100000,0),(0,5,1,2),(0,5,5,2)] {
+        let mut d=Device::new(); assert!(phy::rf_write_masked(&mut d,path,at,mask,value).is_err());
+        assert!(d.events.is_empty());
+        if mask==0 || mask>0xfffff || path>1 || at>0x100ff { assert!(phy::rf_read(&mut d,path,at,mask).is_err()); }
+        assert!(d.events.is_empty());
+    }
+}
+
+#[test]
+fn rf_read_and_masked_write_preserve_analog_and_direct_register_fields() {
+    let mut d=Device::new(); d.rf[1][0x55]=0xabcde; d.put(0x10374,4,0xabc00000); d.put(0x10378,4,0xfeed0000);
+    phy::rf_write_masked(&mut d,1,0x55,0x00f00,3).unwrap();
+    assert_eq!(d.rf[1][0x55],0xab3de); assert_eq!(d.get(0x10374,4),0xabc00f00);
+    assert_eq!(d.events[1],Event::Write(0x10370,4,0x95500300));
+    assert_eq!(phy::rf_read(&mut d,1,0x55,0x00f00).unwrap(),3); assert_eq!(d.get(0x10378,4),0xfeed0155);
+    d.put(0x1e154,4,0xabcabcde); phy::rf_write_masked(&mut d,0,0x10055,0x00f00,7).unwrap();
+    assert_eq!(d.get(0x1e154,4),0xabcab7de); assert_eq!(phy::rf_read(&mut d,0,0x10055,0x00f00).unwrap(),7);
+}
+
+#[test]
+fn frozen_swsi_read_has_finite_limit_and_never_replaces_pending_request() {
+    let mut d=Device::new(); d.frozen=true; d.read_stuck=true;
+    let error=phy::rf_read(&mut d,0,5,0xfffff).unwrap_err(); assert_eq!(error.kind,FaultKind::Timeout);
+    assert!(d.reads<40); let commands=d.events.len();
+    assert!(phy::rf_read(&mut d,1,5,0xfffff).is_err()); assert_eq!(d.events.len(),commands);
+}
+
+#[test]
+fn rck_requires_nctl_and_rechecks_live_mac_without_writes_on_refusal() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity());
+    assert!(p.rck().is_err()); assert!(p.bus_between_stages().events.is_empty());
+    to_nctl(&mut p); let d=p.bus_between_stages(); d.events.clear(); d.put(0xc348,4,1);
+    assert!(p.rck().is_err()); assert_eq!(p.state(),State::Failed); assert!(p.bus_between_stages().events.is_empty());
+}
+
+#[test]
+fn rck_both_paths_follow_backoff_read_result_and_restore_reserved_registers() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    let d=p.bus_between_stages(); d.events.clear(); d.rf[0][5]=0xabcdf; d.rf[1][5]=0x54321;
+    d.put(0x144a0,4,(20<<12)|24); d.put(0x181bc,4,0x99000000); d.put(0x182bc,4,0xaa000000);
+    let result=p.rck().unwrap(); assert_eq!(result,phy::RckResult { values:[7,11], dpk_gain:0x7f });
+    assert_eq!(p.state(),State::RckDone); let d=p.bus_between_stages();
+    assert_eq!(d.events[0],Event::Write(0x181bc,4,0x997f7f7f));
+    assert_eq!(d.events[1],Event::Write(0x182bc,4,0xaa7f7f7f));
+    assert_eq!(d.rf[0][5],0xabcdf); assert_eq!(d.rf[1][5],0x54321);
+    assert_eq!(d.rf[0][0x1b],7); assert_eq!(d.rf[1][0x1b],11);
+    let writes:Vec<u32>=d.events.iter().filter_map(|e| if let Event::Write(0x10370,4,v)=e {Some(*v)} else {None}).collect();
+    assert_eq!(writes,[0x80500000,0x80030000,0x01b00240,0x01b00007,0x005abcdf,
+        0x90500000,0x90030000,0x11b00240,0x11b0000b,0x10554321]);
+    assert_eq!(d.get(0xc348,4),0); assert_eq!(d.command,6);
+}
+
+#[test]
+fn low_backoff_selects_software_gain_without_writing_dpd_coefficients() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    let d=p.bus_between_stages(); d.put(0x144a0,4,(20<<12)|23); d.events.clear();
+    assert_eq!(p.rck().unwrap().dpk_gain,0x5b);
+    assert!(!p.bus_between_stages().events.iter().any(|e| matches!(e,Event::Write(0x181bc|0x182bc,_,_))));
+}
+
+#[test]
+fn rck_timeout_restores_rf5_disables_chip_and_does_not_start_later_path() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    let d=p.bus_between_stages(); d.rck_stuck=Some(0); d.rf[0][5]=0x12345; d.events.clear();
+    let error=p.rck().unwrap_err(); assert_eq!(error.stage,Stage::RckA); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert!(error.restore_rf.is_none()); assert!(error.disable_bb_rf.is_none()); assert_eq!(p.state(),State::Failed);
+    let d=p.bus_between_stages(); assert_eq!(d.rf[0][5],0x12345);
+    assert!(!d.events.iter().any(|e| matches!(e,Event::Write(0x10370,4,v) if (v>>28)&7==1))); d.reset();
+}
+
+#[test]
+fn rck_primary_timeout_and_independent_restore_failure_are_both_reported() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    let d=p.bus_between_stages(); d.rck_stuck=Some(0); d.restore_fail=true;
+    let error=p.rck().unwrap_err(); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert_eq!(error.restore_rf.unwrap().kind,FaultKind::Access); assert!(error.disable_bb_rf.is_none());
+    p.bus_between_stages().reset();
+}
+
+#[test]
+fn rck_cleanup_refuses_to_replace_a_stuck_swsi_command() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    let d=p.bus_between_stages(); d.rck_bus_stuck=true; d.events.clear();
+    let error=p.rck().unwrap_err(); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert_eq!(error.restore_rf.unwrap().kind,FaultKind::Timeout); assert!(error.disable_bb_rf.is_none());
+    let commands:Vec<_>=p.bus_between_stages().events.iter().filter(|e| matches!(e,Event::Write(0x10370,4,_))).collect();
+    assert_eq!(commands.len(),3); p.bus_between_stages().reset();
+}
+
+#[test]
+fn late_last_rck_restore_cannot_report_completed_calibration() {
+    let mut d=Device::new(); let mut p=Phy::new(&mut d,identity()); to_nctl(&mut p);
+    p.bus_between_stages().late_restore=true;
+    let error=p.rck().unwrap_err(); assert_eq!(error.stage,Stage::RckB); assert_eq!(error.cause.kind,FaultKind::Timeout);
+    assert!(error.restore_rf.is_none()); assert!(error.disable_bb_rf.is_none()); assert_eq!(p.state(),State::Failed);
+    p.bus_between_stages().reset();
+}
+
+impl dack::DackIo for Device {
+    fn btc_rfk(&mut self,notice:dack::BtcNotice,timeout_us:u32)->Result<()> {
+        assert!(timeout_us>0 && timeout_us<=100_000); self.btc.push((notice,timeout_us)); self.btc_event_positions.push(self.events.len());
+        let (delay,fail)=match notice.state {
+            dack::RfkState::Start=>(self.btc_start_delay,self.btc_start_fail),
+            dack::RfkState::Stop=>(self.btc_stop_delay,self.btc_stop_fail),
+        };
+        self.tick(delay);
+        if fail {Err(Fault::new(FaultKind::Access,0xaa,notice.state as u32))} else {Ok(())}
+    }
+}
+#[path="rtw89_dack_cases.rs"] mod dack_cases;
+
+impl rxdck::RxdckIo for Device {
+    fn scheduler_zero(&mut self,timeout_us:u32)->Result<()> {
+        assert!(timeout_us>0&&timeout_us<=1_000_000);
+        assert_eq!(self.get(0xc348,4)&0xffff,0);assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
+        self.scheduler_calls.push((timeout_us,self.events.len()));let index=self.scheduler_calls.len();
+        if self.scheduler_late==Some(index) {self.tick(u64::from(timeout_us));}
+        if self.scheduler_fail==Some(index) {
+            if self.scheduler_dirty {self.put(0xc348,4,1);}
+            return Err(Fault::new(FaultKind::Access,0xc160,index as u32));
+        }
+        Ok(())
+    }
+}
+#[path="rtw89_rxdck_cases.rs"] mod rxdck_cases;
