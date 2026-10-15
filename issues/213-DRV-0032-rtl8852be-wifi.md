@@ -537,3 +537,16 @@ Session/owner, 11 initcfg and 11 control cases passed on the own branch with no
 failures or ignores. Native build passed without warnings. The normal-mode
 startup library boundary is tested in the seeded model; real RFK arbitration,
 native integration, remaining calibration and hardware connectivity stay open.
+
+
+### Actual owned RFK coexistence callback
+
+Implement typed DACK/RXDCK START/STOP over the completed BTC owner: bounded
+actual BT arbitration, source policy/antenna/common actions, scoreboard and
+report reconciliation, and final owned RX validation precede permission.
+Retain partial START until matching STOP. Poisoned H2C or disabled BB/RF permits
+only bounded raw ownership cleanup with explicit incomplete-policy failure;
+ordinary TX remains stopped and all DMA stays owned. Eleven new fixtures compile;
+execution follows raw publication. Native binding, remaining calibration and
+physical-device evidence are still open. See the
+[RFK contract](../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).

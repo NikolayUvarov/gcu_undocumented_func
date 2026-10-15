@@ -33,6 +33,14 @@ impl WlanShadow {
     pub(crate) fn clear(&mut self,mask:u32){self.value&=!mask;}
     pub fn initialize(&mut self) { self.value = WL_ACTIVE | WL_ON | WL_BTLOG; }
     pub fn set_rfk(&mut self, active: bool) { if active { self.value |= WL_RFK; } else { self.value &= !WL_RFK; } }
+    // Shutdown may clear our RFK request after an ambiguous write, but can never rehabilitate the failed shadow.
+    pub(crate) fn release_rfk(&mut self,bus:&mut impl RegisterIo,timeout_us:u32)->io::Result<()> {
+        self.set_rfk(false);self.failed=true;
+        if timeout_us<=1000||timeout_us>100_000{return Err(Fault::new(FaultKind::Timeout,SCOREBOARD,timeout_us))}
+        let mut timed=TimedIo::new(bus,timeout_us as u64);let bt=io::read32(&mut timed,SCOREBOARD)?;
+        let firmware=((bt>>24)&0x7f&!1)|1;
+        timed.write32(SCOREBOARD,1<<31|firmware<<24|self.value)?;timed.delay_us(1000)?;timed.delay_us(0)
+    }
     /// An ambiguous write poisons this shadow; it must not be reused as a successfully applied state.
     pub fn publish(&mut self, bus: &mut impl RegisterIo, timeout_us: u32) -> io::Result<()> {
         if self.failed || timeout_us <= 1_000 || timeout_us > 100_000 { return Err(Fault::new(FaultKind::Access, SCOREBOARD, timeout_us)); }
