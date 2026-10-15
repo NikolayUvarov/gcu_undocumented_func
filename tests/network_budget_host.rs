@@ -5,6 +5,8 @@
 mod deadline;
 #[path = "../netstack/src/poll.rs"]
 mod poll;
+#[path = "../netstack/src/turn.rs"]
+mod turn;
 
 mod abi { pub const ERR_TIMEOUT: usize = 99; }
 mod sys {
@@ -160,5 +162,252 @@ mod tests {
             result
         }), Err(sys::Error::Other(abi::ERR_TIMEOUT)));
         assert!(!attempted_timeout.get(), "work-budget exhaustion is not a failed peer call");
+    }
+
+    fn run_turn(turn: &mut turn::Turn<3>, delays: [u64; 3], visits: &mut Vec<(usize, u64, sys::Result<u64>)>) {
+        turn.begin(time::MS.get());
+        while let Some(visit) = turn.next(time::MS.get()) {
+            let deadline = Deadline::after(visit.started_ms, visit.remaining_ms);
+            let result = deadline.call(|| delayed_reply(delays[visit.index]));
+            visits.push((visit.index, visit.started_ms, result));
+            turn.finish(time::MS.get());
+        }
+    }
+
+    #[test]
+    fn two_silent_peers_cannot_starve_healthy_last_card_or_client_opportunities() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        let mut clients = Vec::new();
+        for _ in 0..4 {
+            let start = time::MS.get();
+            run_turn(&mut turn, [10_000, 10_000, 1], &mut visits);
+            assert!(time::MS.get() - start <= turn::TURN_MS as u64);
+            clients.push(time::MS.get());
+        }
+        assert_eq!(visits[0], (0, 0, Err(sys::Error::Other(abi::ERR_TIMEOUT))));
+        assert_eq!(visits[1], (1, 250, Err(sys::Error::Other(abi::ERR_TIMEOUT))));
+        assert_eq!(visits[2], (2, 500, Ok(1)), "the healthy last card runs by the third turn");
+        assert_eq!(clients, [250, 500, 750, 1000], "each turn returns to client handling");
+        assert_eq!(visits[3].0, 0);
+        assert_eq!(visits[3].1, 501, "short timeout never adds a five-second cooldown");
+    }
+
+    #[test]
+    fn three_slow_successful_peers_share_the_total_budget_without_restarting_at_zero() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        for expected in [0, 1, 2, 0, 1, 2] {
+            let before = visits.len();
+            run_turn(&mut turn, [250; 3], &mut visits);
+            assert_eq!(visits.len(), before + 1);
+            assert_eq!(visits[before].0, expected);
+            assert_eq!(visits[before].2, Ok(250), "successful slow replies must also yield");
+        }
+        assert_eq!(time::MS.get(), 1500);
+    }
+
+    #[test]
+    fn later_cards_inherit_only_remaining_time_and_no_call_is_given_zero() {
+        time::MS.set(1000);
+        let mut turn = turn::Turn::<3>::new();
+        let mut seen = Vec::new();
+        turn.begin(time::MS.get());
+        while let Some(visit) = turn.next(time::MS.get()) {
+            let deadline = Deadline::after(visit.started_ms, visit.remaining_ms);
+            let result = deadline.call(|| {
+                seen.push((visit.index, idl::wire::TIMEOUT.get()));
+                delayed_reply(if visit.index == 0 { 200 } else { 500 })
+            });
+            if visit.index == 1 { assert_eq!(result, Err(sys::Error::Other(abi::ERR_TIMEOUT))); }
+            turn.finish(time::MS.get());
+        }
+        assert_eq!(seen, [(0, 250), (1, 50)]);
+        assert_eq!(time::MS.get(), 1250);
+        assert_eq!(turn.next(1250), None);
+        turn.begin(1250);
+        assert_eq!(turn.next(1250).unwrap().index, 2);
+    }
+
+    #[test]
+    fn a_peer_recovers_on_its_next_fair_visit_after_short_timeouts() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        run_turn(&mut turn, [10_000; 3], &mut visits);
+        run_turn(&mut turn, [10_000; 3], &mut visits);
+        run_turn(&mut turn, [10_000; 3], &mut visits);
+        run_turn(&mut turn, [2; 3], &mut visits);
+        assert_eq!(&visits[3..], &[(0, 750, Ok(2)), (1, 752, Ok(2)), (2, 754, Ok(2))]);
+    }
+
+    #[test]
+    fn fast_cards_idle_slots_and_saturated_clock_still_have_finite_turns() {
+        let mut turn = turn::Turn::<3>::new();
+        turn.begin(0);
+        let mut slots = Vec::new();
+        while let Some(visit) = turn.next(0) { slots.push(visit.index); turn.finish(0); }
+        assert_eq!(slots, [0, 1, 2], "idle slots cannot cycle forever without consuming time");
+        turn.begin(u64::MAX - 1);
+        assert_eq!(turn.next(u64::MAX - 1).unwrap().remaining_ms, 1);
+        turn.finish(u64::MAX);
+        assert_eq!(turn.next(u64::MAX), None);
+        turn.begin(u64::MAX);
+        assert_eq!(turn.next(u64::MAX), None);
+        let mut empty = turn::Turn::<0>::new();
+        empty.begin(0);
+        assert_eq!(empty.next(0), None);
+    }
+
+    #[test]
+    fn slow_continuous_ingress_yields_the_next_turn_to_another_card() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut nic = Nic::new(true, 50);
+        let (mut iface, mut sockets) = configured(&mut nic);
+        turn.begin(0);
+        let visit = turn.next(0).unwrap();
+        let deadline = Deadline::after(visit.started_ms, visit.remaining_ms);
+        poll::interface(&mut iface, &mut nic, &mut sockets, Instant::ZERO, || deadline.remaining(time::MS.get()).is_some());
+        turn.finish(time::MS.get());
+        assert_eq!(nic.received, 5);
+        assert_eq!(turn.next(time::MS.get()), None);
+        turn.begin(time::MS.get());
+        assert_eq!(turn.next(time::MS.get()).unwrap().index, 1);
+    }
+
+    #[test]
+    fn a_silent_card_spends_only_two_seconds_until_rolling_charges_expire() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        for _ in 0..8 { run_turn(&mut turn, [10_000, 0, 0], &mut visits); }
+        assert_eq!(time::MS.get(), 2000);
+        assert_eq!(visits.iter().filter(|v| v.0 == 0).count(), 8);
+        for now in [2000, 3000, 4999, 5000, 5499] {
+            time::MS.set(now);
+            let start = visits.len();
+            run_turn(&mut turn, [10_000, 0, 0], &mut visits);
+            assert!(visits[start..].iter().all(|v| v.0 != 0));
+            assert!(visits[start..].iter().any(|v| v.0 == 2), "healthy last card stays eligible");
+        }
+        time::MS.set(5500);
+        let start = visits.len();
+        run_turn(&mut turn, [10_000, 0, 0], &mut visits);
+        assert!(visits[start..].iter().any(|v| v.0 == 0));
+        assert_eq!(time::MS.get(), 5750);
+    }
+
+    #[test]
+    fn per_card_remainder_shortens_the_turn_and_success_does_not_reset_the_quota() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        for _ in 0..8 { run_turn(&mut turn, [240, 0, 0], &mut visits); }
+        assert_eq!(time::MS.get(), 1920);
+        let start = visits.len();
+        run_turn(&mut turn, [240, 0, 0], &mut visits);
+        assert_eq!(time::MS.get(), 2000, "only the 80 ms card allowance remains");
+        assert_eq!(visits[start].2, Err(sys::Error::Other(abi::ERR_TIMEOUT)));
+        let start = visits.len();
+        run_turn(&mut turn, [1, 1, 1], &mut visits);
+        assert!(visits[start..].iter().all(|v| v.0 != 0));
+    }
+
+    #[test]
+    fn live_wlan_finishing_after_two_seconds_is_not_marked_dead_and_recovers_when_charges_age() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        for _ in 0..8 { run_turn(&mut turn, [10_000, 0, 0], &mut visits); }
+        time::MS.set(2001);
+        let before = visits.len();
+        run_turn(&mut turn, [1, 1, 1], &mut visits);
+        assert!(visits[before..].iter().all(|v| v.0 != 0), "ready WLAN still respects its work quota");
+        time::MS.set(5500);
+        let before = visits.len();
+        run_turn(&mut turn, [1, 1, 1], &mut visits);
+        assert!(visits[before..].iter().any(|v| v.0 == 0 && v.2 == Ok(1)), "eligibility is restored when old work charges expire, not failure time plus five seconds");
+    }
+
+    #[test]
+    fn unfinished_visit_is_charged_before_another_turn_and_idle_time_does_not_accumulate_credit() {
+        let mut turn = turn::Turn::<1>::new();
+        turn.begin(0);
+        assert_eq!(turn.next(0).unwrap().remaining_ms, 250);
+        assert_eq!(turn.next(1), None, "a second visit cannot bypass accounting");
+        turn.begin(2000);
+        assert_eq!(turn.next(2000), None, "the unfinished visit consumed the card quota");
+        turn.begin(50_000);
+        assert_eq!(turn.next(50_000).unwrap().remaining_ms, 250);
+        turn.finish(52_000);
+        turn.begin(52_000);
+        assert_eq!(turn.next(52_000), None, "idle time cannot bank future allowance");
+    }
+
+    #[test]
+    fn a_fixed_window_boundary_cannot_double_the_five_second_allowance() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        run_turn(&mut turn, [0; 3], &mut visits);
+        time::MS.set(3000);
+        for _ in 0..8 { run_turn(&mut turn, [10_000, 0, 0], &mut visits); }
+        assert_eq!(time::MS.get(), 5000);
+        for now in [5000, 6000, 7000, 8499] {
+            time::MS.set(now);
+            let before = visits.len();
+            run_turn(&mut turn, [10_000, 0, 0], &mut visits);
+            assert!(visits[before..].iter().all(|v| v.0 != 0), "there is no fresh two-second budget at a fixed boundary");
+        }
+        time::MS.set(8500);
+        let before = visits.len();
+        run_turn(&mut turn, [10_000, 0, 0], &mut visits);
+        assert!(visits[before..].iter().any(|v| v.0 == 0));
+    }
+
+    #[test]
+    fn cheap_frequent_healthy_visits_keep_running_beside_an_exhausted_card() {
+        time::MS.set(0);
+        let mut turn = turn::Turn::<3>::new();
+        let mut visits = Vec::new();
+        for _ in 0..8 { run_turn(&mut turn, [10_000, 0, 0], &mut visits); }
+        let before = visits.len();
+        for _ in 0..1000 { run_turn(&mut turn, [10_000, 1, 1], &mut visits); }
+        assert_eq!(time::MS.get(), 4000);
+        assert!(visits[before..].iter().all(|v| v.0 != 0));
+        assert_eq!(visits[before..].iter().filter(|v| v.0 == 2 && v.2 == Ok(1)).count(), 1000);
+    }
+
+    #[test]
+    fn completion_buckets_retain_work_for_at_least_five_and_at_most_five_and_a_half_seconds() {
+        let mut turn = turn::Turn::<1>::new();
+        turn.begin(0);
+        turn.next(0).unwrap();
+        turn.finish(2000);
+        turn.begin(7000);
+        assert_eq!(turn.next(7000), None, "even an exact boundary completion is retained conservatively");
+        turn.begin(7499);
+        assert_eq!(turn.next(7499), None);
+        turn.begin(7500);
+        assert!(turn.next(7500).is_some());
+    }
+
+    #[test]
+    fn a_backwards_or_wrapped_clock_fails_closed_instead_of_renewing_allowance() {
+        let mut turn = turn::Turn::<1>::new();
+        turn.begin(100);
+        turn.next(100).unwrap();
+        turn.finish(99);
+        turn.begin(10_000);
+        assert_eq!(turn.next(10_000), None);
+        let mut wrapped = turn::Turn::<1>::new();
+        wrapped.begin(u64::MAX - 1);
+        wrapped.next(u64::MAX - 1).unwrap();
+        wrapped.finish(0);
+        wrapped.begin(5000);
+        assert_eq!(wrapped.next(5000), None);
     }
 }

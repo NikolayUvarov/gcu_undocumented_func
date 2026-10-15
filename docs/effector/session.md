@@ -71,7 +71,7 @@ separately scheduled authorized helper remains necessary. The hardware audit
 also records the stack's aggregate per-card latency in 0006; a healthy link
 beside stalled cards must be measured before online acceptance.
 
-## Build and pending verification
+## Build and verification
 
 Build the core without a host operating system:
 
@@ -86,10 +86,15 @@ rustc --edition=2021 --test tests/effector_session_host.rs -o /tmp/effector-sess
 /tmp/effector-session-tests
 ```
 
-At the first implementation commit, the x86 `no_std` library and host test
-binary were compiled; tests had not yet run. Under AGENTS.md section 4, the
-coordinator first publishes the built implementation to `fast-test`, then
-runs these tests on the agent's own branch. Never run tests on `fast-test`.
+On 2026-10-15, implementation commit
+`e947245086957218e3c3db92ddedb5dba767c0e4` built for
+`x86_64-unknown-none`. After the coordinator published it in `fast-test`
+`b8e02e3ab0e191d848c51c8a24742981cef52e46`, all 20 host regressions passed
+on the implementation's own `codex/EFF-session` branch: zero failures or
+ignored tests. Host: x86_64 Linux 6.6.87.2 WSL2; compiler:
+`rustc 1.101.0-nightly (c36f14571 2026-10-01)`. No build or test ran on
+`fast-test`. This is host state-machine evidence, not a QEMU, transport,
+hardware or full-gate result.
 
 Still open: the 0004 writer/schema adapter, actual HTTPS transport using
 `connect-pins` and parser-service JSON, native configuration/private-token
