@@ -7,6 +7,8 @@ mod deadline;
 mod poll;
 #[path = "../netstack/src/turn.rs"]
 mod turn;
+#[path = "../wlan/src/service_turn.rs"]
+mod wlan_turn;
 
 mod abi { pub const ERR_TIMEOUT: usize = 99; }
 mod sys {
@@ -73,6 +75,118 @@ mod tests {
         assert_eq!(time::MS.get(), 2123);
         assert_eq!(deadline.remaining(2123), None);
         assert_eq!(Deadline::after(u64::MAX - 1, 2000).remaining(u64::MAX - 1), Some(1));
+    }
+
+    #[test]
+    fn wlan_accepted_cached_info_and_queued_receive_precede_background_work() {
+        for request in ["cached-info", "queued-receive"] {
+            time::MS.set(0);
+            let mut events = Vec::new();
+            wlan_turn::run(&mut events, request,
+                |events, request| events.push((request, time::MS.get())),
+                |_| true,
+                |events| wlan_turn::receive_batch(events, || time::MS.get(), |events| {
+                    time::MS.set(time::MS.get() + 10);
+                    events.push(("radio-receive", time::MS.get()));
+                    true
+                }));
+            assert_eq!(events[0], (request, 0), "an accepted reply must not sit behind the radio queue");
+            assert_eq!(events.len(), 1 + wlan_turn::RECEIVE_FRAMES);
+            assert_eq!(time::MS.get(), 80);
+        }
+    }
+
+    #[test]
+    fn wlan_client_arriving_during_continuous_ten_ms_frames_gets_the_next_dispatch() {
+        time::MS.set(0);
+        let mut arrivals = Vec::new();
+        wlan_turn::run(&mut arrivals, None::<u64>, |_, request| assert!(request.is_none()), |_| true,
+            |arrivals| wlan_turn::receive_batch(arrivals, || time::MS.get(), |arrivals| {
+                time::MS.set(time::MS.get() + 10);
+                if arrivals.is_empty() { arrivals.push(time::MS.get()); }
+                true
+            }));
+        assert_eq!(arrivals, [10]);
+        assert_eq!(time::MS.get(), 80, "the old 64-frame batch would still be busy");
+        let request = arrivals.pop();
+        wlan_turn::run(&mut arrivals, request, |replies, arrival| {
+            assert_eq!(arrival, Some(10));
+            replies.push(time::MS.get());
+        }, |_| true, |replies| {
+            assert_eq!(replies, &[80], "dispatch must precede a second never-empty batch");
+        });
+        assert_eq!(arrivals, [80]);
+    }
+
+    #[test]
+    fn wlan_slice_is_checked_before_each_frame_but_a_started_frame_can_finish() {
+        time::MS.set(0);
+        let mut starts = Vec::new();
+        wlan_turn::receive_batch(&mut starts, || time::MS.get(), |starts| {
+            starts.push(time::MS.get());
+            time::MS.set(time::MS.get() + 30);
+            true
+        });
+        assert_eq!(starts, [0, 30, 60, 90]);
+        assert_eq!(time::MS.get(), 120, "a cooperative slice permits the final frame's overrun");
+    }
+
+    #[test]
+    fn wlan_zero_cost_stream_still_yields_after_eight_frames() {
+        let mut frames = 0;
+        wlan_turn::receive_batch(&mut frames, || 0, |frames| { *frames += 1; true });
+        assert_eq!(frames, 8, "the count limit also bounds submillisecond frames");
+    }
+
+    #[test]
+    fn wlan_empty_radio_ends_the_batch_without_retries() {
+        let mut calls = 0;
+        wlan_turn::receive_batch(&mut calls, || 0, |calls| { *calls += 1; false });
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn wlan_long_frame_actions_keep_the_original_shared_deadline() {
+        time::MS.set(0);
+        let deadline = Deadline::after(0, 2000);
+        let mut actions = Vec::new();
+        wlan_turn::run(&mut actions, (), |actions, ()| {
+            assert_eq!(deadline.call(|| delayed_reply(600)), Ok(600));
+            actions.push("client");
+        }, |_| deadline.remaining(time::MS.get()).is_some(), |actions| {
+            wlan_turn::receive_batch(actions, || time::MS.get(), |actions| {
+                assert_eq!(deadline.call(|| delayed_reply(700)), Ok(700));
+                actions.push("received");
+                assert_eq!(deadline.call(|| delayed_reply(500)), Ok(500));
+                actions.push("applied");
+                true
+            });
+        });
+        assert_eq!(actions, ["client", "received", "applied"], "a new short IPC deadline would lose the frame action");
+        assert_eq!(time::MS.get(), 1800);
+        assert_eq!(deadline.remaining(time::MS.get()), Some(200), "dispatch and pump cannot each get a fresh two seconds");
+    }
+
+    #[test]
+    fn wlan_handler_exhaustion_skips_background_without_advancing_station_state() {
+        time::MS.set(0);
+        let deadline = Deadline::after(0, 2000);
+        wlan_turn::run(&mut (), (), |_, ()| {
+            assert_eq!(deadline.call(|| delayed_reply(2000)), Ok(2000));
+        }, |_| deadline.remaining(time::MS.get()).is_some(), |_| panic!("expired handler must not start receive or station tick"));
+        assert_eq!(time::MS.get(), 2000);
+    }
+
+    #[test]
+    fn wlan_clock_reversal_does_not_extend_the_receive_slice() {
+        let readings = std::cell::Cell::new(200);
+        let mut calls = 0;
+        wlan_turn::receive_batch(&mut calls, || readings.get(), |calls| {
+            *calls += 1;
+            readings.set(199);
+            true
+        });
+        assert_eq!(calls, 1);
     }
 
     struct Nic { flood: bool, received: usize, sent: Vec<Vec<u8>>, frame: [u8; 60], cost_ms: u64 }
