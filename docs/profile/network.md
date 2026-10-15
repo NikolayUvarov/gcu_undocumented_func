@@ -270,3 +270,11 @@ not authorize calibration. Actual BTC state, WLAN scoreboard ownership,
 antenna/grant and TDMA policy remain required for a DACK START/STOP callback.
 Thirteen H2C and six BT-observation fixtures compile; execution/native
 integration and hardware validation remain pending for this slice.
+
+The subsequent MAC-tail/PCIe post-init library validates installed receive
+rings before enabling RXHCI and RXQ/RPQ. All uninstalled data-TX channels,
+WPDMA and host interrupt masks remain stopped/masked. The 10 ms stage and
+its independent cleanup retain DMA after failures. Nine focused host
+fixtures compile; execution, native-build, full-gate and hardware evidence
+remain pending. Its `Receiving` result is not H2C/BTC/PHY or WLAN readiness,
+and the native firmware-only service still does not call this library.

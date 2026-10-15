@@ -67,6 +67,10 @@ impl<'a> Rings<'a>{
         }
         Ok(())
     }
+    pub(crate) fn installed(&self,bus:&mut impl RegisterIo)->Result<(),Error>{
+        if self.state!=State::Installed{return Err(Error::State);}
+        self.check_rings(bus,true)
+    }
     /// Install both owned rings before mastering or RXHCI activation; no other channel's registers are changed.
     pub fn install(&mut self,bus:&mut impl Bus)->Result<(),Error>{
         if self.state!=State::Allocated{return Err(Error::State);}
