@@ -72,7 +72,7 @@ ordered descriptor publication, guarded hardware-index reclamation and a
 bounded drain. A separate payload pool preserves the pinned Linux driver's
 eight-completed-command retention requirement (`RTW89_PCI_MULTITAG`).
 The initial native board service remains without DMA and does not call it.
-MAC DLE/HFC/PCIe pre-initialization, authenticated firmware/WCPU sequencing,
+MAC DLE/HFC/PCIe pre-initialization, hash-pinned firmware/WCPU sequencing,
 RX/C2H and the KRN DMA integration are explicitly separate prerequisites;
 the transport must not enable bus mastering or release DMA on its own.
 
@@ -105,3 +105,21 @@ dedicated regression. The service-directory build passed after correcting an
 initial root-directory invocation that selected the Linux target. This library
 stage remains uncalled by the native board service. Actual hardware operation
 and a full gate containing this later commit remain pending.
+
+### Implemented slice: bounded PCIe preparation
+
+Port the pinned RTL8852B-specific PCIe preparation through MDIO/DBI, link
+workarounds, stopped DMA/index clearing and descriptor modes. Use only the
+supported BAR2 DBI fallback for the named vendor bytes; do not widen the
+kernel configuration-write interface. Restore the temporary L1 bit with a
+fresh budget on every attempted change, preserving primary and restoration
+errors. Keep PCI mastering and both HCI engines off. After command-ring
+installation, configure the source's single-band BDRAM table and bound its
+reset; leave all DMA channels stopped. No native call or DMA grant is added
+until firmware sequencing, ring ownership and kernel quiescence are reviewed.
+
+Own-branch `4feee434` built for native x86-64 (0.64 seconds, no warnings).
+After `fast-test` publication `1dee0b3f`, all 16 focused PCIe host tests passed
+on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
+source review found no remaining blocking defect; actual hardware behavior
+and a full gate containing this slice remain unvalidated.

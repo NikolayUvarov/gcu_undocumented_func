@@ -8,5 +8,6 @@ pub mod firmware;
 pub mod fwcmd;
 pub mod io;
 pub mod mac;
+pub mod pcie;
 pub mod power;
 pub mod registers;
