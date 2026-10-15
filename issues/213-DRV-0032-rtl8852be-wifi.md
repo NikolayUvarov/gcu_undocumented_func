@@ -198,6 +198,7 @@ trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
 
+
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -403,6 +404,25 @@ These harnesses repeat shared cases and each retains the existing ignored
 private firmware-file fixture. Native build passes. This does not grant BTC
 or transmit readiness.
 
+
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
+
+### PHY attempt binding for BTC integration
+
+Give each PHY attempt a bounded nonwrapping identity independent of its bus
+address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
+bind ConfigPrepared to this identity and actual firmware/ring sessions without
+a raw bool or pointer identity. Two model fixtures cover same-address reuse and
+exhaustion; test execution awaits raw publication. No native activation changes.
+
 ### MAC report tail after the full PHY prefix
 
 Implement the pinned single-band AX PPDU status/report forwarding and RTS
@@ -433,3 +453,64 @@ address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
 bind ConfigPrepared to this identity and actual firmware/ring sessions without
 a raw bool or pointer identity. Two model fixtures cover same-address reuse and
 exhaustion; test execution awaits raw publication. No native activation changes.
+
+### BTC command/profile and transition prerequisites (2026-10-16)
+
+The next slice adds exact firmware-profile-105 encoders for monitor, slots,
+report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
+scoreboard, antenna/grant snapshot/restoration and cold-init common BB
+operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
+separate through production H2C. Eighteen new source/format/fault fixtures
+compile; execution follows raw publication. The native no-std build passes.
+These helpers cannot construct an Initialized or RFK-grant result. The
+session-bound owner context, full ordered C2H/report and common-action
+orchestration, calibrated PHY interleave and native activation remain open;
+see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+
+### Report-tail execution evidence
+
+Own-branch `150f5b80` built without warnings in 0.71 seconds. After raw
+publication `1006c136` (including PHY-capability tip `a877030f`), all seven
+report-tail fixtures passed in 0.27 seconds and all 16 affected post-init/
+session fixtures passed in 0.88 seconds, none ignored, on 2026-10-16 MSK.
+Independent source review found no blocker. Native/full-gate/hardware
+operation remains pending.
+
+### Actual firmware PHY capability query
+
+Add the pinned AX GET_FEATURE register exchange before runtime MAC setup,
+using the scheduler's existing exclusive mailbox and counter implementation.
+Require the downloader's actual Ready token for the same running command
+queue and the live DLFW state; preserve all four response words and distinguish
+firmware fields from the source's successful-zero-field NSS fallback. Only a
+complete matching response may create a session-bound capability result.
+Missing, malformed, late or foreign-session responses cannot imply two NSS.
+Retain an uncertain mailbox and DMA until independent command/WCPU cleanup;
+never retry a failed exchange. Test the real exchange, counter rollover,
+source resolution, busy/malformed/frozen-clock cases and independent cleanup.
+
+Own-branch source `1c854cda`, identity-consumer API `2629a614` and test-only
+production-query reuse helper `a877030f` built without warnings at the final
+tip in 0.73 seconds. After raw publication `1006c136`, all 10 PHY-capability
+fixtures passed in 0.14 seconds and all 19 affected runtime-MAC fixtures
+passed in 0.13 seconds, none ignored, on 2026-10-16 MSK. Independent source
+review found no blocker. These are synthetic device results, not a firmware
+response observed on physical hardware; native integration remains pending.
+
+### BTC 105 receive-envelope prerequisites
+
+Decode complete bounded C2H envelopes for the exact pinned BTC 105 profile,
+including the source's legacy report/event ID mapping. Validate the whole
+report stream before exposing borrowed typed TDMA-v3, slots-v1 and BT-version-v1
+records; preserve unsupported records/events explicitly. BTINFO and scoreboard
+notifications must reach the session owner, not disappear as ignored traffic.
+The pure decoder neither correlates a report with a command nor grants RFK;
+the session owner must validate provenance and actual applied-policy contents.
+
+### Post-RXDCK initial DM tail
+
+Implement the source-contiguous power-reference, board thermal/PA trim and
+receive-path/NSS sequence, using actual session-bound firmware capabilities
+and DM gain baselines from this same PHY attempt. Keep it crate-private until
+actual BTC and the full source startup ordering are integrated. Detailed
+scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
