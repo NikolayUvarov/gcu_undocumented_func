@@ -4,7 +4,8 @@
 
 pub mod board;
 pub mod btc;
-
+pub mod btc_codec;
+pub mod btc_control;
 pub mod btc_init;
 pub mod dack;
 mod dack_tables;

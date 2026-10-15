@@ -376,3 +376,16 @@ also passed when explicitly invoked (0.06 seconds). The cumulative private
 fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
 file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
 found no blocker. Full-gate and hardware validation remain pending.
+
+### BTC command/profile and transition prerequisites (2026-10-16)
+
+The next slice adds exact firmware-profile-105 encoders for monitor, slots,
+report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
+scoreboard, antenna/grant snapshot/restoration and cold-init common BB
+operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
+separate through production H2C. Eighteen new source/format/fault fixtures
+compile; execution follows raw publication. The native no-std build passes.
+These helpers cannot construct an Initialized or RFK-grant result. The
+session-bound owner context, full ordered C2H/report and common-action
+orchestration, calibrated PHY interleave and native activation remain open;
+see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).

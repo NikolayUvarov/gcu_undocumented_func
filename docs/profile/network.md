@@ -322,3 +322,13 @@ private-file hash/mutation case passed (0.06 seconds). The cumulative
 private-file GEN1/GEN2 and missing-H2C model scenarios also passed, on
 2026-10-16 MSK. Full-gate and hardware evidence remain pending. This does
 not bind the separate future BTC/PHY attempt.
+
+The following `btc_codec`/`btc_control` prerequisite slice adds only exact
+profile-105 wire encoding and bounded low-level no-link coexistence register
+steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
+refuses pending-LTE overwrite, and retains separate source ACK choices.
+The eighteen new host fixtures are compiled; execution is pending raw
+publication. The complete session-bound owner and applied policy/C2H
+orchestration remain unimplemented, and no Initialized or RFK-grant token
+is available from this slice. No native or hardware guarantee changes;
+[scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
