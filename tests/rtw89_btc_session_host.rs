@@ -30,3 +30,9 @@ extern crate self as mind;
 
 #[path="../rtw89_wifi/src/h2c.rs"] mod h2c;
 #[path="../rtw89_wifi/src/btc_session.rs"] mod btc_session;
+
+#[path="../rtw89_wifi/src/btc_codec.rs"] mod btc_codec;
+#[path="../rtw89_wifi/src/btc_control.rs"] mod btc_control;
+#[path="../rtw89_wifi/src/btc_init.rs"] mod btc_init;
+#[path="../rtw89_wifi/src/btc_reports.rs"] mod btc_reports;
+#[path="../rtw89_wifi/src/btc_context.rs"] mod btc_context;

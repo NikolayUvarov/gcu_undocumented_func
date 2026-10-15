@@ -576,3 +576,27 @@ and pure pinned default power/country decoder. Preserve unknown policy,
 firmware overrides and platform constraints as explicit dependencies; no
 channel permission, native MMIO or transmit activation is added. See the
 linked document for exact table provenance and pending/executed evidence.
+
+### Pending XTAL command ownership during board cleanup
+
+[Audit H14](../issues-audit/2026-10-16-xtal-cleanup-audit.md) identifies an
+early cleanup gap outside the later native power-off guard. Both shared XTAL
+read/write helpers now require the previous command to become idle within
+50 ms and the caller's tighter budget before issuing another. Stuck/unavailable
+commands remain untouched; board cleanup keeps its own timeout alongside the
+primary fault. Focused regression and cumulative scenarios remain required
+after raw publication. This does not add warm-device reset or hardware evidence.
+
+### Owned BTC normal initialization and common actions
+
+Add actual session/PHY-attempt-bound normal/no-link initialization through
+initcfg, source H2C commands, antenna/grant/pollution controls, dynamic BTINFO
+and scoreboard state, full relevant common actions and final live receive
+validation. Optional policy reports are reconciled against all TDMA/slot fields
+at an explicit command-completion boundary; missing optional reports do not
+invent an extra firmware requirement. One aggregate budget and independent
+failure cleanup prevent partial completion from issuing Initialized. This token
+is not an RFK grant: actual START/STOP arbitration, remaining calibration,
+native integration and hardware evidence remain open. Thirteen new owner and
+two identity fixtures compile; execution follows raw publication. See the
+[contract and report limits](../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).

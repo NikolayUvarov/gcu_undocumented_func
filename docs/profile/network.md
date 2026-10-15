@@ -409,3 +409,24 @@ queue-bound reply and logs raw words and explicit successful-zero-NSS defaults.
 Mailbox failure ends the diagnostic with independent cleanup; this adds no
 association or radio guarantee. Own-branch build and the fourteen-stage startup
 fixture must precede any hardware claim; physical execution remains unobserved.
+
+Own native continuation `e4cb5ea8` and consolidated `dd91a0a1` build the
+complete x86 image. After raw publication `f566311f`, all twelve startup
+fixtures passed (0.00 s, zero failed/ignored, x86-64 WSL2) including failure
+at every one of the fourteen stages. This verifies orchestration behavior,
+not actual firmware capabilities or a physical network link.
+
+The shared XTAL command helpers now guard the early board-read cleanup as well
+as later native cleanup: wait for an existing command before writing another,
+with finite 50 ms polling inside the caller's total budget. A stuck command
+retains primary and cleanup failures; successful power-off is not claimed.
+Regression execution and physical validation remain pending for this slice.
+
+The RTL8852BE BTC owner additionally implements bounded normal/no-link source
+initialization and common actions over the owned Session. Its completion token
+binds the actual PHY attempt and command session, and observed policy reports
+must be consistent at the documented boundary. This is an unactivated startup
+library slice; focused fixtures are compiled but execution is pending raw
+publication. It grants neither RFK arbitration nor WLAN connectivity. Native
+integration, complete calibration and physical hardware evidence remain open.
+See [the BTC owner contract](../../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
