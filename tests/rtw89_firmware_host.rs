@@ -64,6 +64,28 @@ fn validates_all_entries_even_when_selected_image_is_earlier() {
 }
 
 #[test]
+fn element_boundary_uses_aligned_last_directory_entry_instead_of_maximum() {
+    let mut bytes=container(&[(1,NORMAL_CE,0),(2,3,0)]);
+    let end=bytes.len();let layout=firmware::container_layout(&bytes).unwrap();
+    assert_eq!(layout.image_count(),2);assert_eq!(layout.last_image_end(),end);
+    assert_eq!(layout.maximum_image_end(),end);assert_eq!(layout.elements_offset(),(end+15)&!15);
+    for byte in 0..16 {bytes.swap(16+byte,32+byte);}
+    let layout=firmware::container_layout(&bytes).unwrap();
+    assert_eq!(layout.last_image_end(),end-image().len());assert_eq!(layout.maximum_image_end(),end);
+    assert_eq!(layout.elements_offset(),(end-image().len()+15)&!15);
+    assert!(layout.elements_offset()<layout.maximum_image_end());
+}
+
+#[test]
+fn structural_layout_preserves_possible_appended_elements_without_claiming_provenance() {
+    let mut bytes=container(&[(1,NORMAL_CE,0)]);let end=bytes.len();
+    let aligned=(end+15)&!15;bytes.resize(aligned+32,0xa5);
+    let layout=firmware::container_layout(&bytes).unwrap();
+    assert_eq!(layout.last_image_end(),end);assert_eq!(layout.elements_offset(),aligned);
+    assert!(layout.elements_offset()<bytes.len());assert!(select(&bytes,1,NORMAL_CE).is_ok());
+}
+
+#[test]
 fn rejects_overlap_table_aliases_and_duplicate_selection_keys() {
     let mut bytes = container(&[(1, NORMAL_CE, 0), (2, NORMAL_CE, 0)]);
     put(&mut bytes, 36, 48);
