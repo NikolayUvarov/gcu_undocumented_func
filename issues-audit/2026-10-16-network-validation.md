@@ -75,6 +75,65 @@ tests/qemu_smoke.py --qemu qemu-system-x86_64 --firmware
 /usr/share/ovmf/OVMF.fd --cpus 4 --suites tls`. This correction does not
 retrospectively turn the failed 0c4205e7 group into a pass.
 
+## Candidate ac1854f2: completed x86 matrix, one retained failure
+
+Candidate `ac1854f202ac8ceebb2167c8b3e0da4a539fdd33` with baseline main
+`bd7b5493d22f5d818c5c07b07ba4873dbaba4b60` was published in fast-test
+`2f0e20d8faa1c188bdb8428daf76b8caf6023a45` before these own-branch runs.
+It includes the TLS refusal correction and the original BCM dispatcher.
+All 25 scoped host/x86 groups reached a terminal result: **24 PASS, one FAIL**.
+ARM remains deferred; this is not a green gate and authorizes no code push
+to main. Later PHY/MAC/RX/BTC slices are not covered by this frozen matrix.
+
+| Group | Host | Result | Time | Operation |
+|---|---|---|---|---|
+| build (x86) | Ryzen Ubuntu | PASS | 200 s | `20261015214652.934670562_000138` |
+| network driver without legacy | Ryzen Ubuntu | PASS | 5 s | `20261015214652.934670562_000138` |
+| host tests | Ryzen Ubuntu | PASS | 173 s | `20261015214652.934670562_000138` |
+| models (TLC) | Ryzen Ubuntu | PASS | 142 s | `20261015214652.934670562_000138` |
+| build (x86 test programs) | Ryzen Ubuntu | PASS | 44 s | `20261015214652.934670562_000138` |
+| x86: TSC measured again | Ryzen Ubuntu | PASS | 47 s | `20261015215634.814129423_000143` |
+| x86: boot, display, network, TLS, shell, memory, clock | Ryzen Ubuntu | PASS | 839 s | `20261015215733.582403682_000144` |
+| x86: services, storage, audio | Ryzen Ubuntu | PASS | 182 s | `20261015221136.838502617_000149` |
+| x86: scheduling, isolation, heap | Ryzen Ubuntu | PASS | 97 s | `20261015221448.229680138_000150` |
+| x86: files and block writes | Ryzen Ubuntu | PASS | 548 s | `20261015221627.872067071_000151` |
+| x86: one CPU | Ryzen Ubuntu | PASS | 114 s | `20261015222543.169891176_000155` |
+| x86: AVX state | Ryzen Ubuntu | PASS | 41 s | `20261015222756.085713267_000156` |
+| x86: AVX state, one CPU | Ryzen Ubuntu | PASS | 33 s | `20261015222756.085713267_000156` |
+| x86: no PIT | Ryzen Ubuntu | PASS | 121 s | `20261015222921.772814608_000157` |
+| x86: x2APIC | Ryzen Ubuntu | PASS | 169 s | `20261015223142.294857768_000158` |
+| x86: padded vector area | Ryzen Ubuntu | PASS | 73 s | `20261015223441.419534525_000160` |
+| x86: protection probes | Ryzen Ubuntu | PASS | 32 s | `20261015223600.363663523_000162` |
+| x86: the watchdog | Ryzen Ubuntu | PASS | 123 s | `20261015223635.383529657_000163` |
+| x86: USB image | Ryzen Ubuntu | PASS | 81 s | `20261015223844.128174470_000165` |
+| x86: Secure Boot with our keys | Ryzen Ubuntu | PASS | 20 s | `20261015224018.231645011_000166` |
+| x86: keys, shell, tools | Intel i9 WSL2 | PASS | 1430 s | `20261015215323.563088752_000141` |
+| x86: RAM above 4 GiB | Intel i9 WSL2 | FAIL | 715 s | `20261015221739.924407850_000152` |
+| x86: NVMe boot disk | Intel i9 WSL2 | PASS | 65 s | `20261015223554.903169564_000161` |
+| x86: 16 CPUs | Intel i9 WSL2 | PASS | 154 s | `20261015223731.347774261_000164` |
+| x86: reproducible build | UN-LEGION9 WSL2 | PASS | 175 s | `local, 109 identical files` |
+
+Ryzen ran native Ubuntu 24.04, Linux 7.0.0-38-generic, QEMU 8.2.2
+(Ubuntu) under TCG. Intel ran Ubuntu 24.04 under WSL2 with the same QEMU
+package and TCG. Its independent build prerequisites also passed (223 s
+x86 build, 48 s fixtures, operation `20261015214832.111053736_000139`).
+The Intel image manifest remained 125 files, SHA-256
+`08ee8e3953865138f1db3d7463be3abaa5cffde6c4f29211152fcbb997e45677`.
+Local reproducibility compared 109 identical files across two x86 builds.
+No tests or builds ran on fast-test, and no machine was rebooted.
+
+The 6 GiB group passed its memory prechecks and first resumed 30 MiB transfer
+and hash, then stalled in the already-complete second download after HTTP 416.
+The existing 300-second wait expired without a digest or prompt.
+[Audit H13](2026-10-16-download-recheck-stall.md) preserves the exact failure
+and the NET request to distinguish flush, VFS read/hash and scheduling.
+Independent NVMe and 16-CPU groups continued; their passes do not erase the
+RAM-group failure. Neither QEMU nor host models establish physical NIC traffic.
+
+Final structured records: `ryzen-ac18-groups.json`,
+`ryzen-ac18-final-gate-results.json`, `astra-i9x3-result.json` and
+`local-repro-ac18-result.json` in the private evidence directory below.
+
 ## Hardware readiness boundary
 
 | Target/path | Implemented work | Acceptance still required |

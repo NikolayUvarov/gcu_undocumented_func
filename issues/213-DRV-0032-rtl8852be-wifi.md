@@ -539,6 +539,18 @@ pins. Test malformed/unordered/trailing directories and old/new sessions.
 This does not establish platform country/SAR/EIRP constraints or authorize TX.
 See [metadata, API boundary and evidence](../hwdocs/rtl8852be-firmware-tables.md).
 
+### Cumulative normal command and receive ownership
+
+Extend the same cold-device model beyond firmware/MAC/RX into the production
+exclusive Session. Consume normal channel-12 headers only while actual RX
+and command DMA are enabled and ordinary TX remains stopped. Produce ACKs
+through the programmed RX descriptors; preserve one sequence across RF
+mirror and BTC commands, without reseeding guards or replacing production
+correlation. Exercise missing/foreign/rejected/malformed ACKs and DMA that
+does not report consumption after an ACK. Failures must prevent new commands
+and retain the allocation until independent shutdown. This is host model
+coverage, not observed firmware semantics or working WLAN.
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and
@@ -577,13 +589,15 @@ firmware overrides and platform constraints as explicit dependencies; no
 channel permission, native MMIO or transmit activation is added. See the
 linked document for exact table provenance and pending/executed evidence.
 
-### Initial channel register stage (2026-10-16)
+### Pending XTAL command ownership during board cleanup
 
-The private [2 GHz/20 MHz channel stage](../hwdocs/rtl8852be-channel-stage.md)
-adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
-actual same-session firmware default-table provenance and explicit platform
-policy; it has no native caller and creates no TX authorization. Channel RFK,
-actual policy/board observations and physical traffic validation remain open.
+[Audit H14](../issues-audit/2026-10-16-xtal-cleanup-audit.md) identifies an
+early cleanup gap outside the later native power-off guard. Both shared XTAL
+read/write helpers now require the previous command to become idle within
+50 ms and the caller's tighter budget before issuing another. Stuck/unavailable
+commands remain untouched; board cleanup keeps its own timeout alongside the
+primary fault. Focused regression and cumulative scenarios remain required
+after raw publication. This does not add warm-device reset or hardware evidence.
 
 ### Owned BTC normal initialization and common actions
 
@@ -619,6 +633,13 @@ execution follows raw publication. Native binding, remaining calibration and
 physical-device evidence are still open. See the
 [RFK contract](../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
 
+### Initial channel register stage (2026-10-16)
+
+The private [2 GHz/20 MHz channel stage](../hwdocs/rtl8852be-channel-stage.md)
+adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
+actual same-session firmware default-table provenance and explicit platform
+policy; it has no native caller and creates no TX authorization. Channel RFK,
+actual policy/board observations and physical traffic validation remain open.
 
 ### Shared IQK/DPK and nested coexistence prerequisite
 
@@ -630,3 +651,16 @@ approved by the maintainer, instead of copying upstream's ignored rejection.
 Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
 algorithms, their policy-bound TX prerequisites and native integration remain
 open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
+
+### Initial channel RXDCK and host IQK preparation
+
+Implement the pinned initial non-DBCC 2 GHz/20 MHz wideband IQK engine, including
+source register backups, bounded NCTL completion, LOK retries and both TX/RX
+group paths. A private wrapper requires the actual same-attempt BTC owner,
+channel token and separate calibration-transmit authority, runs production
+channel RXDCK first and returns an opaque identity-bound result for TSSI.
+No native authority provider exists yet. Unknown NCTL completion forbids another
+trigger and forces independent radio shutdown before coexistence release.
+Meaningful register/timeout/cleanup fixtures and source-table regeneration will
+be registered in the host gate; execution follows commit/build/raw publication.
+Physical quality, full channel RFK coordination and hardware traffic stay open.

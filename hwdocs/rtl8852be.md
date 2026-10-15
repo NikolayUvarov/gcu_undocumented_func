@@ -1031,6 +1031,12 @@ force, with no resend or ordinary data TX. The startup fixture covers failure
 at all fourteen stages; execution is recorded only after raw publication.
 This remains a diagnostic, not calibrated RF or a WLAN endpoint.
 
+Own native continuation `e4cb5ea8` and consolidated `dd91a0a1` build the
+complete x86 image. After raw publication `f566311f`, all twelve startup
+fixtures passed (0.00 s, zero failed/ignored, x86-64 WSL2) including failure
+at every one of the fourteen stages. This verifies orchestration behavior,
+not actual firmware capabilities or a physical network link.
+
 ## Owned normal/no-link BTC initialization
 
 `btc_context::initialize` requires the actual `Phy<Session>` at RadioLoaded,

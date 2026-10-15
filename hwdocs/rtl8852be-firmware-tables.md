@@ -48,6 +48,23 @@ its payload stays synthetic and cannot pass the public SHA-256 policy.
 The explicit private fixture checks the real hash and obtains provenance
 through the actual downloader model before checking a one-byte mutation.
 
-Own-branch build, raw publication and focused execution are pending. These
-fixtures and the private-file check are host evidence only. Physical board
-validation and the complete gate remain open.
+Own-branch source commit `3ffb323c` built in release mode without warnings
+in 0.97 seconds. After raw publication `1a62e46f`, the unchanged own branch
+ran these focused checks on 2026-10-16 MSK (x86-64 WSL2):
+
+- Firmware: all 14 synthetic cases passed in 0.01 seconds.
+- Downloader: all 20 synthetic cases passed in 0.19 seconds.
+- One-device cumulative MAC/RX: all six cases passed in 0.10 seconds.
+- Both opt-in private-file tests, excluded from the ordinary synthetic
+  runs, were explicitly invoked with the separately fetched file and
+  passed: parser in 0.00 seconds, real-hash downloader/provenance/mutation
+  case in 0.05 seconds. Neither private test remained unexecuted.
+- The explicit private-file pipeline binary passed GEN1 and GEN2 download
+  (164 packets each) and missing-H2C GEN2 (zero packets). Model times were
+  12,344 / 12,344 / 407,344 microseconds; these are not hardware timings.
+
+No selected case failed. The cumulative filter excludes unrelated imported
+module tests. Independent read-only review found no blocking defect. These
+fixtures and the private-file checks are host evidence only; no build or
+test ran on `fast-test`. Physical board validation and the full gate remain
+open.

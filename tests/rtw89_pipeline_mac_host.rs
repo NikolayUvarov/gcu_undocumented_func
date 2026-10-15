@@ -30,6 +30,13 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/pcie.rs"]mod pcie;
 #[path="../rtw89_wifi/src/startup.rs"]mod startup;
 #[path="../rtw89_wifi/src/c2h.rs"]mod c2h;
+#[path="../rtw89_wifi/src/h2c.rs"]mod h2c;
+#[path="../rtw89_wifi/src/btc_session.rs"]mod btc_session;
+#[path="../rtw89_wifi/src/btc_context.rs"]mod btc_context;
+#[path="../rtw89_wifi/src/btc_codec.rs"]mod btc_codec;
+#[path="../rtw89_wifi/src/btc_control.rs"]mod btc_control;
+#[path="../rtw89_wifi/src/btc_init.rs"]mod btc_init;
+#[path="../rtw89_wifi/src/btc_reports.rs"]mod btc_reports;
 #[path="rtw89_pipeline_device.rs"]mod model;
 #[path="rtw89_pipeline_mac_cases.rs"]mod cumulative;
 
