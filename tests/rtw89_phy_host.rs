@@ -594,3 +594,26 @@ impl rxdck::RxdckIo for Device {
 }
 #[path="rtw89_rxdck_cases.rs"] mod rxdck_cases;
 #[path="rtw89_dm_cases.rs"] mod dm_cases;
+
+#[test]
+fn reconstructed_phy_at_same_bus_has_fresh_nonzero_attempt_identity(){
+    let mut d=Device::new();
+    let first={let mut p=Phy::new(&mut d,identity());let id=p.attempt();p.mark_failed();assert_eq!(p.attempt(),id);id};
+    let second={let p=Phy::new(&mut d,identity());assert_eq!(p.state(),State::Fresh);p.attempt()};
+    assert_ne!(first,0);assert_ne!(second,0);assert_ne!(first,second);assert!(d.events.is_empty());assert_eq!(d.reads,0);
+}
+
+#[test]
+fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
+    use core::sync::atomic::{AtomicU64,Ordering};
+    for initial in [0,u64::MAX]{
+        let counter=AtomicU64::new(initial);let mut d=Device::new();
+        let mut p=Phy::new_with_counter(&mut d,identity(),&counter);
+        assert_eq!(p.attempt(),0);assert_eq!(p.state(),State::Failed);assert!(p.baseband().is_err());
+        assert_eq!(counter.load(Ordering::Relaxed),initial);assert!(d.events.is_empty());assert_eq!(d.reads,0);
+    }
+    let counter=AtomicU64::new(u64::MAX-1);let mut d=Device::new();
+    {let p=Phy::new_with_counter(&mut d,identity(),&counter);assert_eq!(p.attempt(),u64::MAX-1);assert_eq!(p.state(),State::Fresh);}
+    let mut p=Phy::new_with_counter(&mut d,identity(),&counter);assert_eq!(p.state(),State::Failed);assert!(p.baseband().is_err());
+    assert_eq!(counter.load(Ordering::Relaxed),u64::MAX);assert!(d.events.is_empty());assert_eq!(d.reads,0);
+}
