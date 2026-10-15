@@ -427,3 +427,9 @@ records; preserve unsupported records/events explicitly. BTINFO and scoreboard
 notifications must reach the session owner, not disappear as ignored traffic.
 The pure decoder neither correlates a report with a command nor grants RFK;
 the session owner must validate provenance and actual applied-policy contents.
+
+Source `96941305` and host-gate registration `3b0ca3d4` built on the own
+branch. After raw publication `539b588e`, all seven decoder fixtures passed,
+none ignored, on 2026-10-16 MSK. [Stage evidence](../hwdocs/rtl8852be-btc-reports.md)
+records the configuration and limits; actual firmware reports and policy
+application remain pending.
