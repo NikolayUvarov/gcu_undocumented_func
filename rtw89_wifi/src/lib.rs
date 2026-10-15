@@ -4,6 +4,7 @@
 
 pub mod board;
 pub mod efuse;
+pub mod download;
 pub mod firmware;
 pub mod fwcmd;
 pub mod io;

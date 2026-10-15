@@ -23,8 +23,9 @@ MacBook and Ryzen, with Wi-Fi first and Ethernet in parallel.
 - Restrict init selection to the exact Realtek IDs and classes. Pass the
   selected device index as a decimal argument so a BAR-owning driver can use
   the existing checked DEVICE_STATE API. Give Ethernet its retained DMA,
-  interrupt and net endpoint; give the initial Wi-Fi stage only its BAR and
-  firmware-reader client, without advertising a working radio to WLAN.
+  interrupt and net endpoint; give Wi-Fi its BAR, retained 128 KiB DMA and
+  firmware-reader client for one bounded firmware diagnostic, without
+  advertising a working radio to WLAN.
 - On restart restore only memory decoding through DEVICE_REGISTERS and an owned BAR, after Platform is dropped. MSI preserves Command and MSI-X requires existing MEM; neither starts DMA. Verify the old process is dead and device
   stop succeeds before clearing DMA; a failed stop quarantines the driver and retains
   its DMA contents. Preserve the existing VirtIO and MacBook routes.
@@ -41,6 +42,44 @@ MacBook and Ryzen, with Wi-Fi first and Ethernet in parallel.
 - The original MacBook still starts its radio/station, and Ryzen's next boot
   records driver identity, grant/start state and traffic outcomes separately.
   A Wi-Fi board probe is not association or a usable network interface.
+
+## Firmware diagnostic continuation (2026-10-16)
+
+The separate integration branch starts from `0c4205e7` and merges the driver
+owner's `27033a43` and `cf768d22`. The existing ABI, service identity and
+MEM-only BAR grant remain unchanged. `init` adds a retained 128 KiB DMA grant
+in `SLOT_MEM` and keeps the decimal device index and read-only VFS client.
+No RTL8852BE WLAN endpoint is minted.
+
+The native service first loads exactly the pinned private firmware file and
+checks its digest before mapping/accessing the board. After the board-read
+cycle has powered MAC off, `Verified::verify` admits the actual cut/RFE/OTP
+and image metadata. Only then can it map/initialize the exclusive DMA queue.
+The native adapter checks DMA capability kind, virtual/physical 4 KiB
+alignment, full allocation bounds below 4 GiB and the 128 KiB minimum.
+Kernel DMA maps are WB and BAR maps UC on x86; no CPU alias accesses the
+queue after construction. The DMA mapping is retained with `ManuallyDrop`
+on every success/error path and the kernel's original region stays in init.
+
+Production orchestration then powers MAC, prepares download memory and
+PCIe, installs the command ring, finishes BDRAM setup and requests kernel
+mastering. Only PCIe I/O and channel 12 are unstopped, TXHCI is enabled and
+RXHCI/ordinary packet channels stay stopped. After the single bounded
+download attempt, independent DMA/WCPU stop runs even on failure. Kernel
+`registers_only` and explicit Command readback must confirm MEM-only before
+the fresh-budget MAC power-off attempt. A failed confirmation permits no
+further MMIO. A final kernel stop follows power-off; every cleanup outcome
+is retained separately. No path retries or releases DMA.
+
+The focused startup fixture checks the production stage ordering and a
+failure at every stage, independent cleanup, unavailable mastering, missing
+ordinary-channel stops, activation readback failure and DMA bounds. Own-branch
+`rtw89_wifi` and `init` x86-64 release builds passed (final incremental native
+build 0.22 s, init build 3.64 s); ten startup/activation cases compiled with
+`rustc --test` but have not run. Execution follows raw `fast-test` publication
+on the own branch. Actual board reads, DMA/WCPU startup and cleanup remain
+untested on Ryzen. The driver owner's independent review found no blocking
+integration/ownership defect; it does not establish hardware operation.
 
 ## Related
 

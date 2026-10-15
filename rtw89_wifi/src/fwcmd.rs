@@ -74,6 +74,8 @@ impl<'a> Queue<'a> {
     pub fn pending(&self) -> usize { (self.issued - self.completed) as usize }
     pub fn retained(&self) -> usize { self.completed.min(RETAIN_COMPLETED as u64) as usize }
     pub fn physical(&self) -> u64 { self.physical }
+    pub(crate) fn fresh_running(&self) -> bool { self.state == State::Running && self.issued == 0 && self.completed == 0 }
+    pub(crate) fn poison(&mut self) { self.state = State::Faulted; }
 
     fn fail<T>(&mut self, error: Error) -> Result<T> { self.state = State::Faulted; Err(error) }
     fn observe<T>(&mut self, result: Result<T>) -> Result<T> {
@@ -111,7 +113,7 @@ impl<'a> Queue<'a> {
     /// The caller completed supported-cut DLE/HFC/PCIe initialization and enabled mastering only after `install`.
     /// Other DMA channels must be stopped or own valid rings; channel 12 uses the addresses installed by this queue.
     /// Its BDRAM/mode/count/indices must not have been reset or changed, and the device retains coherent DMA access.
-    /// Firmware authentication, target-address/security policy and WCPU download sequencing are the caller's duties.
+    /// Pinned-file integrity, target-address/security policy and WCPU download sequencing are the caller's duties.
     pub unsafe fn start(&mut self, bus: &mut impl Bus) -> Result<()> {
         if self.state != State::Installed { return Err(Error::State); }
         let result = (|| {
@@ -181,7 +183,10 @@ impl<'a> Queue<'a> {
         let mut timed = TimedIo::new(bus, timeout_us as u64);
         for _ in 0..=timeout_us / 50 + 1 {
             self.reclaim(&mut timed)?;
-            if self.pending() == 0 { return Ok(()); }
+            if self.pending() == 0 {
+                if let Err(error) = timed.delay_us(0) { return self.fail(Error::Io(error)); }
+                return Ok(());
+            }
             if let Err(error) = timed.delay_us(50) { return self.fail(Error::Io(error)); }
         }
         self.fail(Error::Io(Fault::new(io::FaultKind::Timeout, INDEX, self.pending() as u32)))
