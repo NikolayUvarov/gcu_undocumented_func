@@ -3,14 +3,18 @@
 This native service verifies the separately supplied private firmware file,
 reads board data under the MEM-only BAR2 grant supplied by KRN-0114, and
 attempts one bounded command-DMA/WCPU download for the supported cut-1/RFE-1
-board/security profile. Independent stop, kernel mastering-disable checks
+board/security profile. It queries actual firmware PHY capabilities before
+runtime MAC preparation and receive-only DMA activation. A missing/malformed
+response stops the attempt; zero NSS in a successful reply is logged separately
+from the documented chip-default fallback. Independent stop, kernel mastering-disable checks
 and power-off follow the attempt; the coherent DMA grant stays retained.
 It does not calibrate RF, register a radio or provide a network link.
 
 The library also contains the independently testable firmware parser,
 register/OTP access state machine, MAC download-memory/PCIe preparation and
-channel-12 PCIe command queue. Additional runtime-MAC, RX/C2H and normal-H2C
-libraries are not activated by the native diagnostic. H2C tracks at most
+channel-12 PCIe command queue. Runtime MAC and RX DMA are integrated;
+normal-H2C/BTC and calibrated PHY libraries are not yet activated by the native
+diagnostic. H2C tracks at most
 eight results and 256 non-reused sequences in a fresh firmware session;
 timeout or uncertain publication poisons it without automatic retransmission.
 The BT RFK helper returns only a bounded read-only observation, never a

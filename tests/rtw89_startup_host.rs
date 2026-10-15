@@ -8,8 +8,8 @@ extern crate self as rtw89_wifi;
 
 use startup::{Diagnostic, Stage};
 
-const STEPS: [Stage; 13] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
-    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::RuntimeMac, Stage::Receive];
+const STEPS: [Stage; 14] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
+    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event { Step(Stage), Stop, Registers, PowerOff, Quiesce }

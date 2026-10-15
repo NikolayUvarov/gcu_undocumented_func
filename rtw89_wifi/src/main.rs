@@ -5,7 +5,7 @@ use core::mem::ManuallyDrop;
 use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{board, download, fwcmd, mac, pcie, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{board, download, fwcmd, mac, pcie, phycap, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
@@ -32,7 +32,7 @@ impl fwcmd::Bus for Native {
 enum Error {
     Grant, Length, State, System(mind::sys::Error), File(mind::fs::Error), Verify(download::VerifyError),
     Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure),
-    Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
+    PhyCap(phycap::Failure), Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
 }
 
 #[derive(Debug)]
@@ -45,6 +45,7 @@ impl core::fmt::Debug for Error {
             Self::System(e) => ("System", Some(e)), Self::File(e) => ("File", Some(e)), Self::Verify(e) => ("Verify", Some(e)),
             Self::Io(e) => ("Io", Some(e)), Self::Mac(e) => ("Mac", Some(e)), Self::Pcie(e) => ("Pcie", Some(e)),
             Self::Queue(e) => ("Queue", Some(e)), Self::Download(e) => ("Download", Some(e)), Self::Stop(e) => ("Stop", Some(e)),
+            Self::PhyCap(e) => ("PhyCap", Some(e)),
             Self::Runtime(e) => ("Runtime", Some(e)), Self::Receive(e) => ("Receive", Some(e)), Self::PostMac(e) => ("PostMac", Some(e)),
         };
         match detail { Some(value) => f.debug_tuple(name).field(value).finish(), None => f.write_str(name) }
@@ -72,7 +73,7 @@ struct Attempt<'a> {
     native: Native, index: usize, board: &'a board::Board, file: &'a [u8], verified: Option<download::Verified<'a>>,
     dma: Option<ManuallyDrop<Dma>>, queue: Option<fwcmd::Queue<'a>>, rings: Option<rx::Rings<'a>>,
     prepared: Option<pcie::Prepared>, ready: Option<download::Ready>, runtime: Option<runtime_mac::Prepared>,
-    receiving: Option<post_mac::Receiving>, radio_attempted: bool,
+    capabilities: Option<phycap::Capabilities>, receiving: Option<post_mac::Receiving>, radio_attempted: bool,
 }
 
 impl Attempt<'_> {
@@ -124,6 +125,14 @@ impl startup::Diagnostic for Attempt<'_> {
                 let ready = download::run(&mut self.native, self.queue.as_mut().ok_or(Error::State)?, self.verified.take().ok_or(Error::State)?).map_err(Error::Download)?;
                 mind::println!("[RTW89] FW STATUS 7 OBSERVED: {:?}", ready.version());
                 self.ready = Some(ready);
+            }
+            Stage::PhyCap => {
+                let bar_bytes = self.native.bar.len();
+                let capabilities = phycap::query(&mut self.native, self.queue.as_mut().ok_or(Error::State)?, self.board,
+                    bar_bytes, self.ready.as_ref().ok_or(Error::State)?, phycap::MAX_TIMEOUT_US).map_err(Error::PhyCap)?;
+                mind::println!("[RTW89] FW PHY CAP RAW {:08X?}; TX/RX NSS {}/{}; ZERO-NSS DEFAULTS {}/{}",
+                    capabilities.raw(), capabilities.tx_nss(), capabilities.rx_nss(), capabilities.tx_nss_defaulted(), capabilities.rx_nss_defaulted());
+                self.capabilities = Some(capabilities);
             }
             Stage::RuntimeMac => {
                 self.radio_attempted = true;
@@ -203,7 +212,7 @@ fn main(_info: &'static BootInfo) {
         Err(error) => { mind::println!("[RTW89] BOARD ACCESS FAILED {:?}; NO NETWORK LINK", error); idle(); }
     };
     let mut attempt = Attempt { native, index, board: &board, file: bytes.as_slice(), verified: None,
-        dma: None, queue: None, rings: None, prepared: None, ready: None, runtime: None, receiving: None, radio_attempted: false };
+        dma: None, queue: None, rings: None, prepared: None, ready: None, runtime: None, capabilities: None, receiving: None, radio_attempted: false };
     let report = startup::run(&mut attempt);
     mind::println!("[RTW89] DIAGNOSTIC {:?}", report);
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());

@@ -393,3 +393,10 @@ failure; raw cleanup remains possible. Thirteen model fixtures compile, with
 execution pending raw publication. These seeded-handoff fixtures do not establish
 cumulative cold-device behavior, complete BTC initialization or RFK permission.
 The native service still does not invoke this adapter or expose a radio endpoint.
+
+The later native PHY-capability continuation invokes the actual GET_FEATURE
+query after successful WCPU download and before runtime MAC. It retains the
+queue-bound reply and logs raw words and explicit successful-zero-NSS defaults.
+Mailbox failure ends the diagnostic with independent cleanup; this adds no
+association or radio guarantee. Own-branch build and the fourteen-stage startup
+fixture must precede any hardware claim; physical execution remains unobserved.

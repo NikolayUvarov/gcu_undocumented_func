@@ -43,7 +43,7 @@ pub fn power_off_ready(bus: &mut impl RegisterIo) -> io::Result<()> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Verify, Dma, Power, Mac, Pcie, Install, Finish, InstallReceive, Resume, Start, Download, RuntimeMac, Receive }
+pub enum Stage { Verify, Dma, Power, Mac, Pcie, Install, Finish, InstallReceive, Resume, Start, Download, PhyCap, RuntimeMac, Receive }
 
 pub trait Diagnostic {
     type Error;
@@ -70,7 +70,7 @@ pub fn run<D: Diagnostic>(device: &mut D) -> Report<D::Error> {
         if let Err(error) = device.step(stage) { report.failure = Some((stage, error)); return report; }
     }
     for stage in [Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install, Stage::Finish, Stage::InstallReceive,
-        Stage::Resume, Stage::Start, Stage::Download, Stage::RuntimeMac, Stage::Receive] {
+        Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive] {
         if let Err(error) = device.step(stage) { report.failure = Some((stage, error)); break; }
     }
     report.stop = Some(device.stop());
