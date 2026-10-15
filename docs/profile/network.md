@@ -228,5 +228,46 @@ containment evidence, and native Ryzen firmware/DMA operation remains pending.
 The integration branch `5f1d940d` builds `rtw89_wifi` and `init` for x86-64.
 After raw publication `649fea37`, all ten startup/activation host cases
 passed on the own branch (2026-10-16, zero failed/ignored, 0.00 s). These are
-orchestration/register tests; a single cumulative model across all stages
-and actual hardware evidence remain separate.
+orchestration/register tests. The separate cumulative model in `09d1ceaa`
+then passed two standard host cases and three explicit local private-file
+scenarios after publication `8461fd20` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). It carries one modeled device through
+board/power/MAC/PCIe/command-queue/download/stop stages, compares every section
+byte with the pinned file, and checks missing-readiness cleanup. Readiness,
+OTP, PCI transitions and synchronous DMA consumption are simulated; actual
+Ryzen firmware/DMA operation and hardware timing remain unvalidated.
+
+The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
+station/MPDU/security and CMAC0 preparation after verified firmware readiness.
+Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
+DMA remains stopped. An independently bounded cleanup retains errors and
+DMA. Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings);
+after `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds), on 2026-10-15 UTC. Hardware validation and
+a full gate containing this slice remain pending. It is not called by the
+native service and does not establish full runtime MAC, calibrated RF or
+WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).
+
+The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
+copies each bounded packet before releasing its descriptor, and parses AX
+RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
+future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
+is unchanged. Eighteen host fixtures compile; execution/native build and
+hardware validation remain pending. It provides neither RX activation nor
+interrupt/WLAN integration. Warm-state ownership/quiescence is still a
+precondition, not established by PCI MEM-only decoding.
+
+The initial normal-H2C library adds bounded eight-slot correlation of typed
+receipt/DONE events, absolute command deadlines, failure poisoning and a
+256-command no-wrap limit for startup work. It does not establish a
+continuous runtime firmware transport. Its production adapter reuses the
+existing DMA command queue and therefore inherits that queue's TCB and
+retained-memory preconditions. The BT RFK prerequisite only observes actual
+RUN/REQ scoreboard bits under a bounded read-only wait; that snapshot does
+not authorize calibration. Actual BTC state, WLAN scoreboard ownership,
+antenna/grant and TDMA policy remain required for a DACK START/STOP callback.
+Own-branch `d951d101` native build and thirteen H2C plus six BT-observation
+fixtures passed after raw publication `d9266c7b` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571; zero failures/ignored). These include a
+modeled DMA/C2H path, not actual firmware execution. Native integration and
+hardware validation remain pending for this slice.
