@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware/MAC/RX diagnostic using retained, disjoint command and receive DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -778,3 +778,23 @@ one inherited ignored, 0.19 seconds (x86-64 WSL2, rustc 1.101.0-nightly
 c36f14571). No new BTC test is ignored. The fixtures run real BB/radio
 stages into a stateful register model before BTC; hardware initialization,
 calibration and network acceptance remain open.
+
+## Native MAC/RX diagnostic continuation
+
+The current 213-KRN-0114 entry extends the earlier 128 KiB firmware-only
+stage to retained 8 MiB DMA: command reservation `[0, 128 KiB)`, receive
+reservation `[128 KiB, 8 MiB)`. The actual command and receive footprints
+fit those disjoint regions. No CPU alias accesses them after construction.
+RX installation follows PCIe finish before mastering; runtime MAC and the
+post-MAC receive-only activation follow successful firmware download.
+The service then shuts down; it does not run normal H2C/C2H transport or
+register a radio. This supersedes the native integration limits recorded
+with the earlier library slices above, without changing their test evidence.
+
+Independent RX, radio and command shutdown precedes the checked MEM-only
+transition. Before MAC power-off, pending XTAL readiness is bounded by 50 ms
+inside a fresh one-second cleanup budget; failure skips all power-off writes
+and still requests final quiescence. All primary/cleanup errors and DMA stay
+retained. The full own-branch image builds and twelve startup fixtures compile;
+execution awaits publication. Cumulative runtime-MAC/RX modeling and actual
+hardware verification remain separate, incomplete evidence requirements.

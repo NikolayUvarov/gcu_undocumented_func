@@ -2,11 +2,14 @@
 extern crate self as rtw89_wifi;
 #[path = "../rtw89_wifi/src/io.rs"] pub mod io;
 #[path = "../rtw89_wifi/src/fwcmd.rs"] pub mod fwcmd;
+#[path = "../rtw89_wifi/src/rx.rs"] mod rx;
+#[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 #[path = "../rtw89_wifi/src/startup.rs"] mod startup;
 
 use startup::{Diagnostic, Stage};
 
-const STEPS: [Stage; 10] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install, Stage::Finish, Stage::Resume, Stage::Start, Stage::Download];
+const STEPS: [Stage; 13] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
+    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::RuntimeMac, Stage::Receive];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event { Step(Stage), Stop, Registers, PowerOff, Quiesce }
@@ -43,7 +46,7 @@ fn private_file_and_dma_failures_cannot_reach_power_or_mastering() {
 }
 
 #[test]
-fn successful_diagnostic_always_stops_after_observing_firmware_readiness() {
+fn successful_diagnostic_always_stops_after_runtime_mac_and_receive_activation() {
     let mut attempt = Attempt::new();
     let report = startup::run(&mut attempt);
     let mut expected = STEPS.map(Event::Step).to_vec();
@@ -91,22 +94,26 @@ fn failed_poweroff_still_requests_final_kernel_stop_and_reports_both_errors() {
 fn dma_requires_full_retained_aligned_region_below_four_gib() {
     let size = startup::DMA_GRANT_BYTES;
     assert!(size >= fwcmd::DMA_BYTES);
+    assert!(startup::COMMAND_REGION_BYTES >= fwcmd::DMA_BYTES);
+    assert!(startup::RECEIVE_REGION_BYTES >= rx::DMA_BYTES);
+    assert_eq!(startup::COMMAND_REGION_BYTES & 4095, 0);
+    assert_eq!(startup::COMMAND_REGION_BYTES + startup::RECEIVE_REGION_BYTES, size);
     assert!(startup::valid_dma(0x10000, size, 0x20000));
     assert!(startup::valid_dma(0x10000, size, (1u64 << 32) - size as u64));
     for (address, length, physical) in [(0, size, 0x20000), (0x10001, size, 0x20000), (0x10000, fwcmd::DMA_BYTES - 1, 0x20000),
-        (0x10000, size, 0), (0x10000, size, 0x20001), (0x10000, size, (1u64 << 32) - 4096),
+        (0x10000, 128 * 1024, 0x20000), (0x10000, size, 0), (0x10000, size, 0x20001), (0x10000, size, (1u64 << 32) - 4096),
         (usize::MAX - 4095, size, 0x20000), (0x10000, usize::MAX, 0x20000)] {
         assert!(!startup::valid_dma(address, length, physical));
     }
 }
 
-struct Bus { command: u16, stop: u32, config: u32, writes: Vec<(usize, u32)>, ignore: bool }
-impl Bus { fn new(command: u16) -> Self { Self { command, stop: 0x801f_0f03, config: 0x80, writes: Vec::new(), ignore: false } } }
+struct Bus { command: u16, stop: u32, config: u32, writes: Vec<(usize, u32)>, ignore: bool, xtal: u32, now: u64 }
+impl Bus { fn new(command: u16) -> Self { Self { command, stop: 0x801f_0f03, config: 0x80, writes: Vec::new(), ignore: false, xtal: 0, now: 0 } } }
 impl io::RegisterIo for Bus {
     fn read8(&mut self, _: usize) -> io::Result<u8> { panic!("unexpected width") }
     fn read16(&mut self, _: usize) -> io::Result<u16> { panic!("unexpected width") }
     fn read32(&mut self, at: usize) -> io::Result<u32> {
-        Ok(match at { fwcmd::DMA_STOP => self.stop, fwcmd::INIT_CONFIG => self.config, _ => panic!("unexpected register") })
+        Ok(match at { fwcmd::DMA_STOP => self.stop, fwcmd::INIT_CONFIG => self.config, 0x270 => self.xtal, _ => panic!("unexpected register") })
     }
     fn write8(&mut self, _: usize, _: u8) -> io::Result<()> { panic!("unexpected width") }
     fn write16(&mut self, _: usize, _: u16) -> io::Result<()> { panic!("unexpected width") }
@@ -115,8 +122,8 @@ impl io::RegisterIo for Bus {
         if !self.ignore { match at { fwcmd::DMA_STOP => self.stop = value, fwcmd::INIT_CONFIG => self.config = value, _ => panic!("unexpected register") } }
         Ok(())
     }
-    fn now_us(&mut self) -> u64 { 0 }
-    fn delay_us(&mut self, us: u32) -> io::Result<()> { assert_eq!(us, 0); Ok(()) }
+    fn now_us(&mut self) -> u64 { self.now }
+    fn delay_us(&mut self, us: u32) -> io::Result<()> { self.now += u64::from(us); Ok(()) }
 }
 impl fwcmd::Bus for Bus { fn pci_command(&mut self) -> io::Result<u16> { Ok(self.command) } }
 
@@ -156,4 +163,23 @@ fn ignored_command_channel_write_does_not_enable_hci() {
     assert!(startup::command_dma(&mut bus).is_err());
     assert_eq!(bus.writes.len(), 1);
     assert_eq!(bus.config, 0x80);
+}
+
+#[test]
+fn pending_xtal_poweroff_boundary_is_bounded_without_replacing_the_command() {
+    let mut bus = Bus::new(2); bus.xtal = 1 << 31 | 0x1234;
+    let error = startup::power_off_ready(&mut bus).unwrap_err();
+    assert_eq!(error.kind, io::FaultKind::Timeout);
+    assert!(bus.now <= 50_000);
+    assert!(bus.writes.is_empty());
+    assert_eq!(bus.xtal, 1 << 31 | 0x1234);
+}
+
+#[test]
+fn only_an_available_idle_xtal_admits_the_poweroff_sequence() {
+    let mut bus = Bus::new(2);
+    startup::power_off_ready(&mut bus).unwrap();
+    bus.xtal = u32::MAX;
+    assert!(startup::power_off_ready(&mut bus).is_err());
+    assert!(bus.writes.is_empty());
 }
