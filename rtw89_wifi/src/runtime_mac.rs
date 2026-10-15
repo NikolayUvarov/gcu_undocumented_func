@@ -274,7 +274,10 @@ fn cmac(bus: &mut impl RegisterIo) -> io::Result<()> {
 /// The same device must have completed the verified downloader; no other MMIO or firmware command writer may run.
 /// Ordinary host DMA stays stopped; the sole register-mailbox writer must own its mirrored diagnostic counters.
 /// This does not enable interrupts, create RX rings or configure a usable channel.
-pub fn prepare(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize, _firmware: &download::Ready) -> core::result::Result<Prepared,Failure> {
+pub fn prepare(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize, firmware: &download::Ready) -> core::result::Result<Prepared,Failure> {
+    if firmware.session()!=queue.session() {
+        return Err(Failure{stage:Stage::Guard,cause:fault(fwcmd::INDEX,0),packet_stop:None,radio_stop:None,command_stop:None});
+    }
     prepare_inner(bus,queue,board,bar_bytes)
 }
 fn prepare_inner(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize) -> core::result::Result<Prepared,Failure> {

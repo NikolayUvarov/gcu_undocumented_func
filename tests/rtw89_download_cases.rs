@@ -138,6 +138,15 @@ fn synthetic_file() -> Vec<u8> {
 }
 fn fixture(file: &[u8]) -> Verified<'_> { Verified::parse_pinned(file).unwrap() }
 
+pub(crate) fn with_downloaded_queue(check: impl FnOnce(Ready, &mut Queue<'_>)) {
+    let file=synthetic_file(); let mut region=Region::new(); let mut bus=Device::new(); let mut queue=region.queue(&mut bus);
+    let ready=run(&mut bus,&mut queue,fixture(&file)).unwrap();
+    assert_eq!(ready.session(),queue.session());
+    check(ready,&mut queue);
+    assert_eq!(stop(&mut bus,&mut queue),Stop{dma:None,cpu:None});
+    bus.command=0;
+}
+
 #[test]
 fn public_policy_rejects_unpinned_bytes_and_unknown_board_security() {
     let mut b = board(); let file = synthetic_file();
@@ -167,7 +176,8 @@ fn exact_header_and_all_section_chunks_cross_ring_wraps_then_require_ready_statu
     assert_eq!(&header[36..38],&2020u16.to_le_bytes());
     assert_eq!(&header[38..],&file[126..176]);
     let mut region=Region::new(); let mut bus=Device::new(); let mut queue=region.queue(&mut bus);
-    assert_eq!(run(&mut bus,&mut queue,fw).unwrap().version(),VERSION);
+    let ready=run(&mut bus,&mut queue,fw).unwrap();
+    assert_eq!(ready.version(),VERSION); assert_eq!(ready.session(),queue.session());
     assert_eq!(bus.packets[0],(false,header.to_vec()));
     let mut packet=1;
     for section in fixture(&file).image.sections() {

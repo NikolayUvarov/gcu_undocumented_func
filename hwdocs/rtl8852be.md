@@ -401,6 +401,20 @@ eight command buffers. Only separately verified kernel quiescence permits
 region release. `Ready` means status 7 was observed, not full MAC, calibrated
 RF, WLAN service registration or usable networking.
 
+The later session-binding correction records the successful command
+queue's unique session in `Ready`. `runtime_mac::prepare` rejects a token
+from another or reconstructed queue before any bus access, then retains
+all actual device-state checks. Stopping the queue poisons it, and a fresh
+attempt requires a new queue/session; a future reusable reset must also
+invalidate this identity. Future BTC initialization must separately bind
+its PHY attempt and require a fresh receive permit. Own-branch `383b27e5`
+built without warnings in 3.31 seconds. After publication `badae1bc`, all
+19 runtime MAC cases passed (0.12 seconds), 18 synthetic downloader cases
+passed (0.19 seconds), and the explicitly invoked private hash/mutation
+case passed (0.06 seconds). The cumulative private-file fixture passed
+GEN1/GEN2 and missing-H2C model scenarios, on 2026-10-16 MSK. Full-gate
+and physical-device evidence remain pending.
+
 Own-branch `cf768d22` (following `27033a43`) built for native x86-64 in
 0.39 seconds without warnings. After `fast-test` publication `45387d45`,
 18 synthetic downloader tests passed (0.19 seconds), the explicitly invoked

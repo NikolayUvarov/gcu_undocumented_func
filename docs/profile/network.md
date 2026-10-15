@@ -322,3 +322,14 @@ association or network link is claimed. The full x86 image builds; twelve
 startup fixtures compile and await publication before execution. Earlier gate
 `ac1854f2` does not cover this continuation; physical Ryzen operation and a
 cumulative runtime-MAC/RX model remain unvalidated.
+
+The subsequent firmware-ready token correction binds `Ready` to the
+successful command queue session and checks that identity before runtime
+MAC preparation accesses the device. Existing live guards still reject a
+stopped queue. Own-branch `383b27e5` built without warnings in 3.31 seconds.
+After publication `badae1bc`, 19 runtime MAC cases passed (0.12 seconds),
+18 synthetic downloader cases passed (0.19 seconds), and the explicit
+private-file hash/mutation case passed (0.06 seconds). The cumulative
+private-file GEN1/GEN2 and missing-H2C model scenarios also passed, on
+2026-10-16 MSK. Full-gate and hardware evidence remain pending. This does
+not bind the separate future BTC/PHY attempt.
