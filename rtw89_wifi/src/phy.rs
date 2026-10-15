@@ -34,6 +34,11 @@ pub trait PhyIo: RegisterIo {
     fn pci_command(&mut self) -> io::Result<u16>;
     fn bar_len(&self) -> usize;
     fn send_rf_page(&mut self, path: u8, page: u8, payload: &[u8], timeout_us: u32) -> io::Result<()>;
+    /// Revalidate the actual same-device Receiving token and both retained DMA objects, without MMIO writes.
+    /// No adapter inherits active-RX permission; a callback must return the real borrowed session permit.
+    fn receive_permit(&mut self, _timeout_us:u32) -> io::Result<crate::post_mac::ReceivePermit<'_>> {
+        Err(Fault::new(FaultKind::Access,0x1000,0))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -126,9 +131,21 @@ pub(crate) fn guard(bus: &mut impl PhyIo, identity: &Identity, phase: RegisterPh
     let cycle = bus.read8(0x8040)?;
     let expected = match phase { RegisterPhase::BeforeDack=>14, RegisterPhase::AfterDack=>15 };
     if cycle == u8::MAX || cycle & 15 != expected { return Err(state(0x8040, cycle as u32)); }
-    require(bus, 0x1000, 1 << 11 | 1 << 13, 1 << 11)?;
-    require(bus, 0x1010, DATA_STOP | 1 << 18 | 1 << 20, DATA_STOP)?;
-    require(bus, 0x101c, DATA_BUSY, 0)?;
+    let hci=io::read32(bus,0x1000)?;
+    let stopped=io::read32(bus,0x1010)?;
+    let stop_mask=DATA_STOP|1<<18|1<<20;
+    if hci&(1<<11|1<<13|1<<18)==1<<11 && stopped&stop_mask==DATA_STOP {
+        require(bus,0x101c,DATA_BUSY,0)?;
+    } else if hci&(1<<11|1<<13|1<<18)==(1<<11|1<<13) && stopped&stop_mask==(DATA_STOP&!3) {
+        let start=bus.now_us();
+        {let _permit=bus.receive_permit(10_000)?;}
+        let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0x1000,0))?;
+        if elapsed>=10_000{return Err(Fault::new(FaultKind::Timeout,0x1000,elapsed.min(u32::MAX as u64)as u32));}
+        require(bus,0x1000,1<<11|1<<13|1<<18,1<<11|1<<13)?;
+        require(bus,0x1010,stop_mask,DATA_STOP&!3)?;
+        // Only the owned RX and command channels may be busy; ordinary TX and WPDMA remain stopped.
+        require(bus,0x101c,0x000b0f00,0)?;
+    } else {return Err(state(0x1010,stopped));}
     require(bus, 0xc348, 0xffff, 0)?;
     require(bus, 0xc6ec, 1 << 7, 0)?;
     Ok(())

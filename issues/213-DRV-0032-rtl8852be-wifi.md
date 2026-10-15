@@ -368,3 +368,13 @@ passed (0.12 seconds), and all 14 FWCMD fixtures passed (reported 0.00
 seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
 reviews found no blocker. These are host model results; full-gate,
 physical-device operation and the PHY/native permit consumer are pending.
+
+### PHY consumer of the owned RX permit
+
+The shared PHY guard now accepts active RX only through the actual borrowed
+`ReceivePermit`, with default refusal, a 10 ms callback ceiling and repeated
+DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
+DACK phases remain distinct. Six integration fixtures exercise real session
+objects and stale/current hardware state without fabricating a token; the
+PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
+execution awaits publication. This does not grant BTC or transmit readiness.

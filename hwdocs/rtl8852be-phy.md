@@ -40,7 +40,7 @@ This tool never downloads or changes a network device. PHY offsets add the AX MC
 
 ## Integration contract
 
-`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. RTL8852B chip dispatch requires SPS ZCDC_H=1, WLRF AFC_AFEDIG bit17 and PHYREG_XYN cycle 0xe before DACK and 0xf after it; it does not use the generic MAC WLRF0x8282 sequence. Successful chip enable must also have set XTAL80/81 to0xc7 before these read-only guards. The DLFW-only MAC state is rejected. Active PCI Command must have MEM and MASTER set; the kernel may additionally decode BAR0 I/O, which this MMIO-only library never accesses. Only the command channel may run: ordinary RX/TX/WP channels and all MAC scheduler queues must be stopped, and ordinary DMA/protocol TX must be idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
+`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. RTL8852B chip dispatch requires SPS ZCDC_H=1, WLRF AFC_AFEDIG bit17 and PHYREG_XYN cycle 0xe before DACK and 0xf after it; it does not use the generic MAC WLRF0x8282 sequence. Successful chip enable must also have set XTAL80/81 to0xc7 before these read-only guards. The DLFW-only MAC state is rejected. Active PCI Command must have MEM and MASTER set; the kernel may additionally decode BAR0 I/O, which this MMIO-only library never accesses. The command-only path retains its stopped-RX contract. Active RXQ/RPQ additionally requires the actual owned receive-session permit described below; ordinary TX/WP channels and all MAC scheduler queues remain stopped, and ordinary DMA/protocol TX remains idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
 
 Source order in `core.c::rtw89_core_start` and `phy.c` requires these separate stages and interleaves:
 
@@ -126,6 +126,32 @@ RF cleanup and chip disable precede releasing BTC arbitration. DMA memory is
 retained until verified outer quiescence. The shared crate-private phase guard
 and `Phy::mark_failed` also let the BTC-init interleave reuse the same live
 checks and poison a modified failure without copying the register contract.
+
+## Typed owned receive-session guard
+
+`PhyIo::receive_permit(timeout_us)` defaults to refusal. An adapter admitting
+active RX must return the concrete `post_mac::ReceivePermit` borrowed from
+`Receiving::validate`, which rechecks the actual command and receive objects,
+non-reused session IDs, live addresses/counts/indices, firmware/MAC state and
+masked host interrupts. A bool or raw matching register masks cannot construct
+this permit. The adapter must retain the original same-device/exclusive-owner
+contract; the permit is an observation, not lasting hardware authorization.
+
+The PHY guard recognizes only the command-only stopped-RX configuration or
+command plus owned RXQ/RPQ. The latter callback has a 10 ms ceiling with an
+independent elapsed-clock check, after which HCI/STOP, ordinary TX/WPDMA busy
+and CTN/PTCL are checked again. No DMA, interrupt or transmit register is
+written. Both pre-DACK and post-DACK BB/RF phases retain their exact checks.
+An expired or failed callback prevents the PHY stage from starting. The native
+adapter must delegate to the same sole ring owners; this change supplies no
+native activation or BTC initialization.
+
+Six integration fixtures use the real queue/ring/session implementation and
+post-MAC activation model, not a constructed-success permit. They check live
+RX/command traffic, default refusal, corrupted live rings/indices, ordinary
+TX/WPDMA/phase refusal, late/backwards clocks and post-permit STOP changes.
+All three affected host harnesses compile against the real token and include
+these cases; no conditional skip is introduced. Execution awaits publication.
 
 ## Contiguous initial DM prefix and remaining order
 
