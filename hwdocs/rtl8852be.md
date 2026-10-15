@@ -1018,3 +1018,58 @@ also passed separately (0.00 seconds each). Other inherited fixtures were
 filtered from this focused run. Independent review found no remaining blocker
 in this slice. These seeded-handoff models do not establish cumulative device
 behavior, complete BTC initialization, RFK permission or hardware connectivity.
+
+
+## Owned normal/no-link BTC initialization
+
+`btc_context::initialize` requires the actual `Phy<Session>` at RadioLoaded,
+consumes the existing initcfg result internally, and returns `Initialized`
+only after the normal, no-link, no-LPS source initialization and common actions.
+Both config and completion records bind the nonzero PHY attempt and command
+queue session; reuse with a new PHY, failed Session, unrelated Ready or changed
+live RX allocation is refused. This is the pre-NCTL interleave, not an RFK grant,
+calibrated-radio readiness, association or authorization to start ordinary TX.
+No native wiring changes in this slice.
+
+The source remains Linux v6.19 `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`,
+`coex.c` `rtw89_btc_ntfy_init`, `_action_common`, `_update_bt_scbd`, `_update_bt_info`,
+`_set_rf_trx_para`, `_set_bt_afh_info`, `_fw_set_policy`, `_chk_btc_report`, and
+`rtw8852b_common.c` RX-gain operations, under the BSD-3-Clause option. The owner
+performs default WLAN power, monitor/MREG reporting, slot defaults, INIT and
+CTRL information, initial antenna/grant/pollution selection, OFF_BT policy,
+BTG/pre-AGC, no-link AFH, shared-antenna gain, BT ignore-WLAN and LNA responses,
+conditional BT-version reporting, ROLE2 and owned WLAN scoreboard publication.
+BTINFO, scoreboard notifications and version reports update bounded owned state;
+reenabling BT resets prior BT state. WHQL/factory mode and busy BT calibration
+are explicitly refused by this limited normal-mode startup.
+
+After the existing 200 ms initcfg stage, one absolute 1 s budget covers all
+commands, MMIO, event processing and final live receive validation. Each command
+also retains its 100 ms bound; eight state-reconciliation passes and finite RX
+loops bound a frozen clock or endless input. Any partial failure prevents the
+completion token, independently restores the saved antenna/grants, closes the
+RF LUT and disables BB/RF; it poisons further command/PHY work. Cleanup has its
+own finite budgets and reports independent errors. It neither frees DMA nor
+claims to restore firmware policy; the outer owner must still stop receive,
+command/WCPU and PCI bus mastering before retained-memory reclamation.
+
+TDMA and slot reports are optional under the source MREG/BT-version default
+report map; no new mandatory TDMA request is invented. Before an actual policy
+command, queued events are drained. Reports consumed through that command's
+completion are transition snapshots and their observations are cleared only
+when the command completes; a no-op policy does not clear observations. The
+final drain compares the latest later TDMA snapshot's eight bytes and every
+one of the 18 slot structures, regardless of update bitmap, with the requested
+policy. A later matching snapshot may reconcile an earlier mismatch; malformed
+reports or a final contradiction fail. Reports carry no causal policy identity:
+an old snapshot arriving after this local boundary is indistinguishable from
+a new contradiction and conservatively fails. Absence, matching snapshots and
+MAC DONE are not by themselves evidence of an RFK arbitration grant.
+
+Thirteen new owner fixtures and two initcfg-identity fixtures compile, together
+with the unchanged session/control cases. They cover actual production initcfg
+and normal H2C/RX orchestration, BTINFO-driven actions, command/register failures,
+phase/session identity, aggregate deadlines, optional reports, pre-completion
+snapshots, malformed envelopes, post-boundary contradictions, unmarked slots and
+later reconciliation. Execution awaits raw publication. The seeded handoff model
+is not physical-device evidence or the separate cumulative cold-device model.

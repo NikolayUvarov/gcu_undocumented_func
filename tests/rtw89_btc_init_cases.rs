@@ -94,13 +94,14 @@ impl PhyIo for Device {
     fn pci_id(&mut self) -> io::Result<u32> { Ok(0xb85210ec) }
     fn pci_command(&mut self) -> io::Result<u16> { Ok(6) }
     fn bar_len(&self) -> usize { self.bytes.len() }
+    fn command_session(&self)->u64{1}
     fn send_rf_page(&mut self, path: u8, _: u8, _: &[u8], _: u32) -> io::Result<()> { self.events.push(Event::Mirror(path)); Ok(()) }
 }
 fn loaded(d: &mut Device) -> Phy<'_, Device> {
     let mut phy = Phy::new(d, board().identity); phy.baseband().unwrap(); phy.radio().unwrap();
     let bus = phy.bus_between_stages(); bus.events.clear(); bus.writes = 0; phy
 }
-fn run(phy: &mut Phy<'_, Device>) -> core::result::Result<ConfigPrepared, Failure> { prepare_inner(phy, &board(), [0, 29, 29, 15]) }
+fn run(phy: &mut Phy<'_, Device>) -> core::result::Result<ConfigPrepared, Failure> { prepare_inner(phy, &board(), [0, 29, 29, 15],1) }
 
 #[test]
 fn radio_loaded_hardware_init_matches_rfe1_without_scoreboard_policy_or_nctl() {
@@ -129,7 +130,7 @@ fn unsupported_board_security_or_firmware_refuses_before_writes() {
     for case in 0..4 {
         let mut d = Device::new(); let mut p = loaded(&mut d); let mut board = board(); let mut version = [0,29,29,15];
         match case { 0 => board.identity.cut = 2, 1 => board.identity.rfe = 2, 2 => board.maps.phycap[0x6c] = 0, _ => version[3] = 5 }
-        assert_eq!(prepare_inner(&mut p, &board, version).unwrap_err().stage, Stage::Guard);
+        assert_eq!(prepare_inner(&mut p, &board, version,1).unwrap_err().stage, Stage::Guard);
         assert_eq!(p.state(), State::Failed); assert!(p.bus_between_stages().events.is_empty());
     }
 }
@@ -191,3 +192,15 @@ fn late_final_write_and_clock_regression_never_publish_prepared() {
         assert_eq!(p.state(),State::Failed); p.bus_between_stages().disabled();
     }
 }
+
+#[test]
+fn initcfg_binds_actual_phy_attempt_and_command_session(){
+    let mut d=Device::new();let mut p=loaded(&mut d);let attempt=p.attempt();let token=run(&mut p).unwrap();
+    assert!(token.matches(attempt,1));assert!(!token.matches(attempt,2));assert!(!token.matches(attempt+1,1));
+    assert!(!token.matches(0,1));assert!(!token.matches(attempt,0));
+}
+#[test]
+fn initcfg_refuses_foreign_or_missing_session_before_writes(){for session in [0,2]{
+    let mut d=Device::new();let mut p=loaded(&mut d);
+    assert!(prepare_inner(&mut p,&board(),[0,29,29,15],session).is_err());assert!(p.bus_between_stages().events.is_empty());
+}}

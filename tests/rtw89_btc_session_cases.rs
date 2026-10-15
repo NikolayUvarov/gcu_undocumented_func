@@ -11,11 +11,14 @@ struct Device{
     regs:Vec<u8>,xtal:[u8;256],command:u16,time:u64,frozen:bool,writes:Vec<(usize,usize,u32)>,
     tx:*mut u8,tx_bytes:usize,rx:*mut u8,packets:Vec<Vec<u8>>,reply:Reply,events:usize,
     hold:bool,busy:bool,late_index:usize,index_reads:usize,reverse_index:usize,
+    bt:u32,rf:[[u32;256];2],rf_read:Option<(usize,usize)>,lte:[u32;2],lte_pending:Option<u32>,
+    btc_event:Option<(usize,Vec<u8>)>,missing_at:usize,fail_at:Option<usize>,packet_us:u64,
 }
 impl Device{
     fn new(tx:*mut u8,tx_bytes:usize,index:u32)->Self{
         let mut d=Self{regs:vec![0;runtime_mac::BAR_BYTES],xtal:[0;256],command:6,time:0,frozen:false,writes:Vec::new(),
-            tx,tx_bytes,rx:core::ptr::null_mut(),packets:Vec::new(),reply:Reply::Normal,events:0,hold:false,busy:false,late_index:0,index_reads:0,reverse_index:0};
+            tx,tx_bytes,rx:core::ptr::null_mut(),packets:Vec::new(),reply:Reply::Normal,events:0,hold:false,busy:false,late_index:0,index_reads:0,reverse_index:0,
+            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0};
         for (at,value)in[(0xf0,1<<12),(0x3f0,1<<8),(R_AX_PLATFORM_ENABLE,3),(download::FW_CONTROL,0xe0),
             (R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),(crate::mac::DMAC_CLOCK,0x04840000),
             (crate::mac::PLE_CONFIG,0x00400801),(crate::mac::WDE_READY,3),(crate::mac::PLE_READY,3),(crate::mac::HFC_CONTROL,8),
@@ -43,11 +46,12 @@ impl Device{
         let txwd=unsafe{u32::from_le(self.tx.add(offset).cast::<u32>().read_unaligned())};assert_eq!(txwd,12<<16);
         let payload=unsafe{core::slice::from_raw_parts(self.tx.add(offset+fwcmd::TXWD_BYTES),length-fwcmd::TXWD_BYTES)}.to_vec();
         assert!(payload.len()>=8);let w0=u32::from_le_bytes(payload[..4].try_into().unwrap());let w1=u32::from_le_bytes(payload[4..8].try_into().unwrap());
-        assert_eq!((w1&0x3fff)as usize,payload.len());self.packets.push(payload);
+        assert_eq!((w1&0x3fff)as usize,payload.len());self.packets.push(payload);self.time+=self.packet_us;
         if !self.hold{self.set(fwcmd::INDEX,next|next<<16);}
         if self.busy{self.set(fwcmd::DMA_BUSY,TX_BUSY);}
         for n in 0..self.events{self.inject(0,&c2h_bytes(2,0x12,0,&[n as u8,0xaa]));}
-        if self.reply==Reply::Missing{return}
+        if self.btc_event.as_ref().is_some_and(|e|e.0==self.packets.len()){let (_,event)=self.btc_event.take().unwrap();self.inject(0,&event);}
+        if self.reply==Reply::Missing||self.packets.len()==self.missing_at{return}
         let mut seq=(w0>>24)as u8;if self.reply==Reply::WrongSequence{seq=seq.wrapping_add(1);}
         let identity=w0&0xffff;let channel=usize::from(self.reply==Reply::WrongChannel);
         if self.reply==Reply::Malformed{self.inject(0,&[0,0]);return}
@@ -62,19 +66,30 @@ impl Device{
         if at==R_AX_SS_CTRL&&value&1!=0{self.regs[at+3]|=0x80;}
         if at==R_AX_ADDR_CAM_CTRL{self.regs[at+1]&=!1;}
         if at==R_AX_RESPBA_CAM_CTRL{self.regs[at]&=!3;}
+        if at==0xdaf0{assert!(self.lte_pending.is_none());assert!(matches!(value,0x800f0038|0xc00f0038|0x800f003c|0xc00f003c));self.lte_pending=Some(value);}
+        if at==0x10370{let path=(value>>28&3)as usize;assert!(path<2);let register=(value>>20&255)as usize;
+            let mask=if value>>31!=0{self.get(0x10374)&0xfffff}else{0xfffff};self.rf[path][register]=(self.rf[path][register]&!mask)|(value&mask);self.rf_read=None;}
+        if at==0x10378{let path=(value>>8&7)as usize;assert!(path<2);self.rf_read=Some((path,(value&255)as usize));}
         if at==fwcmd::INDEX{assert_eq!(width,2);self.consume(value);}
         if [0x1050,0x1054].contains(&at)&&width==2&&!self.rx.is_null(){
             let channel=usize::from(at==0x1054);let host=(previous&0xffff)as usize;assert!(host<rx::DESCRIPTORS);
             let offset=rx::BUFFERS_AT+(channel*rx::DESCRIPTORS+host)*rx::BUFFER_STRIDE;
             unsafe{core::ptr::write_bytes(self.rx.add(offset),0xdd,rx::BUFFER_BYTES);}
         }
+        if self.fail_at==Some(at){self.fail_at=None;return Err(Fault::new(FaultKind::Access,at,value))}
         Ok(())
     }
 }
 impl RegisterIo for Device{
-    fn read8(&mut self,a:usize)->io::Result<u8>{Ok(self.regs[a])}
+    fn read8(&mut self,a:usize)->io::Result<u8>{
+        if a==0xdaf3{if let Some(command)=self.lte_pending.take(){if command>>30==3{self.lte[usize::from(command&255==0x3c)]=self.get(0xdaf4);}}return Ok(0x20)}
+        Ok(self.regs[a])}
     fn read16(&mut self,a:usize)->io::Result<u16>{Ok(u16::from_le_bytes(self.regs[a..a+2].try_into().unwrap()))}
-    fn read32(&mut self,a:usize)->io::Result<u32>{if a==fwcmd::INDEX{self.index_reads+=1;if self.late_index==self.index_reads{self.time+=100_000;}if self.reverse_index==self.index_reads{self.time=0;}}Ok(self.get(a))}
+    fn read32(&mut self,a:usize)->io::Result<u32>{
+        if a==0xac{return Ok(self.bt)}
+        if a==0xdaf8{let command=self.lte_pending.unwrap();assert_eq!(command>>30,2);return Ok(self.lte[usize::from(command&255==0x3c)])}
+        if a==0x1174c{return Ok(self.rf_read.map_or(0,|(p,r)|1<<26|self.rf[p][r]))}
+        if a==fwcmd::INDEX{self.index_reads+=1;if self.late_index==self.index_reads{self.time+=100_000;}if self.reverse_index==self.index_reads{self.time=0;}}Ok(self.get(a))}
     fn write8(&mut self,a:usize,v:u8)->io::Result<()>{self.apply(a,1,v as u32)}
     fn write16(&mut self,a:usize,v:u16)->io::Result<()>{self.apply(a,2,v as u32)}
     fn write32(&mut self,a:usize,v:u32)->io::Result<()>{self.apply(a,4,v)}
@@ -171,3 +186,102 @@ fn failed_receive_validation_prevents_later_stopped_rx_phy_bypass(){with_session
     s.write32(fwcmd::DMA_STOP,0xb0f03).unwrap();s.write32(fwcmd::INIT_CONFIG,1<<11).unwrap();
     assert!(PhyIo::pci_id(s).is_err());assert_eq!(PhyIo::command_session(s),0);assert!(s.bus.packets.is_empty());
 });}
+
+
+fn owner_phase(s:&mut Session<'_,'_,'_,Device>,check:impl FnOnce(&mut crate::phy::Phy<'_,Session<'_,'_,'_,Device>>)){
+    let mut phy=crate::phy::Phy::new(s,board().identity);phy.baseband().unwrap();phy.radio().unwrap();check(&mut phy);
+}
+#[test]
+fn btc_owner_exact_cold_init_commands_without_invented_tdma_report_request(){with_session(|s|owner_phase(s,|p|{
+    let token=crate::btc_context::initialize(p,&board()).unwrap();token.validate(p,1000).unwrap();
+    let s=p.bus_between_stages();let functions:Vec<_>=s.bus.packets[2..].iter().map(|v|v[1]).collect();
+    assert_eq!(functions,[2,0,1,5,5,3,10,5]);
+    let reports:Vec<_>=s.bus.packets.iter().filter(|v|v[1]==0&&v[0]==(2|16<<2)).collect();assert_eq!(reports.len(),1);
+    assert_eq!(&reports[0][8..],&[5,4,0,0,0,1,0,0,0]);assert_eq!(s.bus.get(0xac)&0x00ffffff,0x4003);
+    assert_eq!(s.bus.lte[0],0x77007700);assert_eq!(s.bus.get(0xc67c)&0xffff,0x166);
+    assert_eq!(s.bus.get(fwcmd::DMA_STOP),0xb0f00);assert_eq!(s.bus.get(R_AX_CTN_TXEN),0);
+    let writes=s.bus.writes.len();assert!(crate::btc_context::initialize(p,&board()).is_err());assert_eq!(p.bus_between_stages().bus.writes.len(),writes);
+}));}
+#[test]
+fn btc_owner_actual_btinfo_drives_btg_gain_ignore_and_lna_commands(){with_session(|s|owner_phase(s,|p|{
+    let s=p.bus_between_stages();s.bus.bt=2|1<<30;s.bus.btc_event=Some((3,c2h_bytes(2,0x12,1,&[0,6,0x20,0,0,8,0,0])));
+    crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();
+    assert_eq!(s.bus.get(0x14738)&(1<<19),1<<19);assert_eq!(s.bus.rf[1][0xef],0);assert_eq!(s.bus.rf[1][0x3f],5);
+    assert!(s.bus.packets.iter().any(|v|v[1]==12&&v[8..]==[0]));assert!(s.bus.packets.iter().any(|v|v[1]==14&&v[8..]==[7]));
+    assert!(s.bus.packets.iter().any(|v|v[1]==0&&v[8..]==[5,12,0,0,0,1,0,0,0]));
+}));}
+#[test]
+fn btc_owner_missing_each_requested_ack_never_publishes_initialized(){for command_index in [3,4,5,8,9]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.missing_at=command_index;assert!(crate::btc_context::initialize(p,&board()).is_err());
+    assert_eq!(p.state(),crate::phy::State::Failed);let s=p.bus_between_stages();assert!(s.btc.is_none());assert!(s.failed().is_some());
+    assert_eq!(s.bus.packets.len(),command_index);assert_eq!(s.bus.regs[2]&3,0);assert_eq!(s.bus.rf[1][0xef],0);
+}));}}
+#[test]
+fn btc_owner_whql_and_busy_bt_refuse_calibration_readiness(){for state in [2|4,2|32,2|64]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.bt=state;assert!(crate::btc_context::initialize(p,&board()).is_err());
+    assert!(p.bus_between_stages().btc.is_none());assert_eq!(p.state(),crate::phy::State::Failed);
+}));}}
+#[test]
+fn btc_owner_applied_register_failures_restore_known_ant_and_close_lut(){for at in [0xda30,0xd200,0xc67c,0xac]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.fail_at=Some(at);assert!(crate::btc_context::initialize(p,&board()).is_err());
+    let s=p.bus_between_stages();assert!(s.btc.is_none());assert!(s.failed().is_some());assert_eq!(s.bus.regs[2]&3,0);
+    assert_eq!(s.bus.rf[0][0xef],0);assert_eq!(s.bus.rf[1][0xef],0);
+}));}}
+#[test]
+fn btc_owner_token_rejects_a_new_phy_attempt_on_the_same_session(){with_session(|s|{
+    let token={let mut p=crate::phy::Phy::new(s,board().identity);p.baseband().unwrap();p.radio().unwrap();crate::btc_context::initialize(&mut p,&board()).unwrap()};
+    let mut other=crate::phy::Phy::new(s,board().identity);assert!(token.validate(&mut other,1000).is_err());
+});}
+
+fn policy_report(policy:crate::btc_codec::Policy,tdma:bool)->Vec<u8>{
+    let mut body=Vec::new();
+    if tdma{body.extend_from_slice(&[1,12,0,3,0,0,0]);body.extend_from_slice(&policy.tdma());}
+    else{body.extend_from_slice(&[2,152,0,1,18,0,0,0,0,0,0]);
+        for index in 0..18{let(d,t,k)=policy.slot(index);body.extend_from_slice(&d.to_le_bytes());body.extend_from_slice(&t.to_le_bytes());body.extend_from_slice(&k.to_le_bytes());}}
+    c2h_bytes(2,0x12,0,&body)
+}
+#[test]
+fn btc_owner_pre_policy_reports_are_transition_snapshots(){for position in [0,8]{with_session(|s|owner_phase(s,|p|{
+    let s=p.bus_between_stages();let report=policy_report(crate::btc_codec::Policy::Rfk,true);
+    if position==0{s.bus.inject(0,&report)}else{s.bus.btc_event=Some((position,report));}
+    crate::btc_context::initialize(p,&board()).unwrap();
+}));}}
+#[test]
+fn btc_owner_post_policy_contradictions_fail_including_unmarked_slots(){for tdma in [true,false]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.btc_event=Some((9,policy_report(crate::btc_codec::Policy::Rfk,tdma)));
+    let failure=crate::btc_context::initialize(p,&board()).unwrap_err();assert_eq!(failure.cause,crate::btc_context::Error::PolicyMismatch);
+    assert_eq!(p.state(),crate::phy::State::Failed);assert!(p.bus_between_stages().btc.is_none());
+}));}}
+#[test]
+fn btc_owner_matching_tdma_and_slots_are_optional_consistent_observations(){for tdma in [true,false]{with_session(|s|owner_phase(s,|p|{
+    p.bus_between_stages().bus.btc_event=Some((9,policy_report(crate::btc_codec::Policy::NoLink,tdma)));
+    crate::btc_context::initialize(p,&board()).unwrap();
+}));}}
+#[test]
+fn btc_owner_malformed_transition_report_is_not_discarded(){with_session(|s|owner_phase(s,|p|{
+    let mut report=policy_report(crate::btc_codec::Policy::Rfk,true);report.pop();let length=report.len()as u32;report[4..8].copy_from_slice(&length.to_le_bytes());
+    p.bus_between_stages().bus.btc_event=Some((8,report));
+    let failure=crate::btc_context::initialize(p,&board()).unwrap_err();assert!(matches!(failure.cause,crate::btc_context::Error::Reports(_)));
+    assert!(p.bus_between_stages().btc.is_none());
+}));}
+
+#[test]
+fn btc_owner_all_report_slots_are_checked_even_with_zero_update_bitmap(){with_session(|s|owner_phase(s,|p|{
+    let mut report=policy_report(crate::btc_codec::Policy::NoLink,false);let last=report.len()-1;report[last]^=1;
+    p.bus_between_stages().bus.btc_event=Some((9,report));
+    assert_eq!(crate::btc_context::initialize(p,&board()).unwrap_err().cause,crate::btc_context::Error::PolicyMismatch);
+}));}
+#[test]
+fn btc_owner_later_consistent_snapshot_reconciles_before_final_drain(){with_session(|s|owner_phase(s,|p|{
+    let mut reports=policy_report(crate::btc_codec::Policy::Rfk,true);
+    reports.extend_from_slice(&policy_report(crate::btc_codec::Policy::NoLink,true)[8..]);
+    let length=reports.len()as u32;reports[4..8].copy_from_slice(&length.to_le_bytes());
+    p.bus_between_stages().bus.btc_event=Some((9,reports));crate::btc_context::initialize(p,&board()).unwrap();
+}));}
+#[test]
+fn btc_owner_aggregate_deadline_is_not_renewed_for_each_command(){with_session(|s|owner_phase(s,|p|{
+    let s=p.bus_between_stages();s.bus.packet_us=90_000;s.bus.bt=2|1<<30;
+    s.bus.btc_event=Some((9,c2h_bytes(2,0x12,1,&[0,6,0x20,0,0,8,0,0])));let before=s.bus.time;
+    assert!(crate::btc_context::initialize(p,&board()).is_err());let s=p.bus_between_stages();
+    assert!(s.bus.time-before<1_100_000);assert!(s.bus.packets.len()>10);assert!(s.btc.is_none());assert!(s.failed().is_some());
+}));}

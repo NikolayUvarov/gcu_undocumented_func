@@ -401,3 +401,13 @@ also passed separately (0.00 seconds each). Other inherited fixtures were
 filtered from this focused run. Independent review found no remaining blocker
 in this slice. These seeded-handoff models do not establish cumulative device
 behavior, complete BTC initialization, RFK permission or hardware connectivity.
+
+
+The RTL8852BE BTC owner additionally implements bounded normal/no-link source
+initialization and common actions over the owned Session. Its completion token
+binds the actual PHY attempt and command session, and observed policy reports
+must be consistent at the documented boundary. This is an unactivated startup
+library slice; focused fixtures are compiled but execution is pending raw
+publication. It grants neither RFK arbitration nor WLAN connectivity. Native
+integration, complete calibration and physical hardware evidence remain open.
+See [the BTC owner contract](../../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
