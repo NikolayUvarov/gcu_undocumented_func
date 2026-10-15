@@ -4,6 +4,7 @@
 
 pub(crate) const MAX_FRAME: usize = 2346;
 pub(crate) const WD_BYTES: usize = 64;
+pub(crate) const SELECTED_LIMIT:u8=1;
 pub(crate) const LEGACY_RATES: [u8;12] = [2,4,11,22,12,18,24,36,48,72,96,108];
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -55,7 +56,8 @@ pub(crate) fn descriptor(meta:Frame,mac_id:u8,wp_sequence:u16,payload:u64)->Resu
     put(&mut out,8,u32::from(mac_id)<<24|u32::from(meta.tid_indicate)<<23|u32::from(meta.qsel)<<17|meta.length as u32);
     put(&mut out,12,u32::from(meta.sequence));
     put(&mut out,24,1<<30|u32::from(meta.rate)<<16|1<<10);
-    put(&mut out,28,1<<31|1<<25|u32::from(meta.rate)<<16);
+    put(&mut out,28,1<<31|u32::from(SELECTED_LIMIT)<<25|u32::from(meta.rate)<<16);
+    put(&mut out,36,1<<10);put(&mut out,40,u32::from(wp_sequence&15));
     out[48..50].copy_from_slice(&(wp_sequence|0x8000).to_le_bytes());
     out[56..58].copy_from_slice(&(meta.length as u16).to_le_bytes());
     out[58..60].copy_from_slice(&0x8001u16.to_le_bytes());
