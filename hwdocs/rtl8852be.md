@@ -445,6 +445,21 @@ failed/ignored). They cover orchestration and register models, not the actual
 PCIe fabric or RTL8852BE power/firmware path. A single cumulative MMIO model
 across all library stages remains a separate integration check.
 
+The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
+from cold board access through power/MAC/PCIe and command activation, without
+reseeding guard registers between stages. Its explicit local companion adds
+production pinned-file verification, full transfer/status and stop/power-off,
+including missing-H2C-readiness cleanup. Both are compiled but not yet run.
+The model synthesizes readiness and consumes doorbells synchronously; it
+does not model PCIe timing, ordering faults, real OTP or firmware execution.
+There is no new ignored/conditional pass in the host gate. The private check
+requires a separately fetched file and writes no payload to a report:
+
+```sh
+rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
+/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
+```
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
