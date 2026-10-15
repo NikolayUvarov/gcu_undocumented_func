@@ -672,5 +672,8 @@ PMAC calibration samples on both paths, board thermal/DE tables, actual
 owned BTC notices and bounded cleanup. It requires the actual IQK result
 and a consumed engine-specific calibration authority; there is no native
 provider until raw PMAC/RFK power and platform policy are resolved. Native
-build and fixture compilation pass; execution waits for raw publication.
+build passes. After raw publication `b169a275` of code `983e4c72`, the exact
+owner PHY harness passed 183 cases (twelve new TSSI cases), zero failures and
+one existing private-firmware ignore; five extractor cases and exact pinned
+table regeneration also passed. These are model and source-integrity results.
 This does not complete channel RFK, association or physical WLAN evidence.
