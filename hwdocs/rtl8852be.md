@@ -68,6 +68,8 @@ Read one aligned 32-bit value at **BAR2 + `0x00F0`**, `R_AX_SYS_CFG1`; digital c
 
 Validate the exact PCI ID and a usable MMIO BAR/window. The supplied run has memory decode off, so a KRN collector may need a scoped enable/restore of PCI command memory decode. Bus mastering and RF power are unnecessary for this read. Do not scan arbitrary offsets or enable DMA. No helper in `rtw89_wifi/` performs MMIO itself.
 
+[213-KRN-0113](../issues/213-KRN-0113-realtek-boot-identification.md) adds this guarded read to the x86 hardware report: ungranted/non-mastering endpoint, D0 when PM exists, current BAR2 and actual uncached identity mapping. It temporarily enables MEM decode only when needed and verifies restoration without clearing PCI Status flags. Raw values and skip/failure reasons are retained. Eight host guard tests, an actual page-table-walk regression and the kernel build pass; the digital cut still needs observation on the Ryzen. Neither radio power nor an indirect analog-cut/EFUSE transaction is performed.
+
 The subsequent analog-cut `XTAL_SI_CV` read in Linux uses an indirect transaction which **writes** request registers and polls; it is not part of this read-only slice. EFUSE access also requires reviewed power/indirect-access sequencing. No board calibration may be inferred from `SYS_CFG1`.
 
 ## Linux identity collector

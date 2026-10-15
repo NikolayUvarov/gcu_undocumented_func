@@ -188,6 +188,9 @@ pub unsafe fn enable(device: &Device) {
 /// A dword of the device's configuration space (offset < 256, aligned down to 4); reading has no side effects.
 pub unsafe fn config(device: &Device, offset: u8) -> u32 { read(device.bus, device.device, device.function, offset) }
 
+// Write only Command; zeroes in the adjacent Status halfword preserve its write-one-to-clear flags.
+pub unsafe fn command(device: &Device, value: u16) { write(device.bus, device.device, device.function, 4, value as u32); }
+
 // Offset of the function's capability `id` in configuration space.
 unsafe fn capability_at(bus: u8, device: u8, function: u8, id: u8) -> Option<u8> {
     if read(bus, device, function, 0x04) >> 16 & 0x10 == 0 { return None; }

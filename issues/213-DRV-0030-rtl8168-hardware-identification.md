@@ -1,6 +1,6 @@
 # 213-DRV-0030 — Identify the Ryzen's RTL8168 MAC and PHY before implementing its driver
 
-**Type:** hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV` · **Priority:** P1 · **Status:** in progress (collector prepared; hardware evidence pending) · **Blocked by:** a Linux run on the Ryzen · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
+**Type:** hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV` · **Priority:** P1 · **Status:** in progress (collector prepared; hardware evidence pending) · **Blocked by:** a new Ryzen hardware observation (MIND report or Linux collector) · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -21,6 +21,8 @@ PCI revision alone does not establish the MAC/PHY initialization sequence. Linux
    If register access is denied, run the same collector with the machine's authorized administrative privileges and a new output directory. The tool reports missing dependencies and permission failures; it does not escalate itself. BDF may differ under Linux: omit `--pci` to select the sole matching device.
 4. Review the resulting identity, XID, PHY/link evidence, driver/firmware versions and any missing observations. Preserve machine/build provenance. A link that is down is an observation, not permission to change it.
 5. Choose and document the supported silicon variant in [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md), with sources and any firmware requirements. Register dumps remain private run artifacts, not committed fixtures.
+
+Alternatively, a new MIND boot containing [213-KRN-0113](213-KRN-0113-realtek-boot-identification.md) records a guarded direct TxConfig/XID observation in `hwNNNN.txt`. This supplies MAC identity without Linux; it does not supply the Linux collector's PHY, firmware and link evidence. Keep the missing observations explicit and select the variant from the actual value, not PCI revision alone.
 
 ## Acceptance criteria
 
