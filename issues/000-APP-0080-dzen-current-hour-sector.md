@@ -42,3 +42,14 @@ Validation on ASTRA: `tests/clock_host.rs` passes 16 tests; the three
 `dzen_view` tests compiled through `tests/runtime.rs` pass, including a new
 rendered-pixel transition/hiding regression. No hardware rendering result is
 claimed; the full branch gate remains with the coordinating auditor.
+
+The full QEMU gate exposed an obsolete grayscale-only orbit assertion. A
+focused run on the unchanged candidate image captured exactly eight yellow
+pixels, at relative coordinates `(90,-90)` through `(97,-97)`, for the fixed
+19:35 test time. The QEMU test now requires a short, continuous yellow marker
+in the outer top-right diagonal, requires its removal when hiding the orbit,
+and retains the strict grayscale palette outside that marker and all existing
+dot, reference, tick and erasure assertions. The corrected complete Dzen
+suite passed on Ryzen/QEMU 8.2.2 with four CPUs (Effector operation
+`20261015191446.779635445_000053`, 36.7 s). This focused result does not replace
+the full gate on the resulting commit.

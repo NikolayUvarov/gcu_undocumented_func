@@ -2739,8 +2739,17 @@ def dzen_suite(vm):
                  for py in range(y - half, y + half + 1)
                  for px in range(x - half, x + half + 1)
                  if (radius + 6) ** 2 <= (px - x) ** 2 + (py - y) ** 2 <= (half - radius // 3) ** 2}
+        # At 19:35 the separate hour-sector marker is a short yellow diagonal outside the orbit, toward top right.
+        sector = {point for point, color in orbit.items() if color == b"\xff\xff\x00"}
+        if mode != "off":
+            assert max(half // 24, 2) <= len(sector) <= max(half // 16, 2), "a short hour-sector marker must be visible"
+            assert all(px > 0 and py == -px and (half * .78) ** 2 <= px * px + py * py <= (half * .90) ** 2
+                       for px, py in sector), "the yellow marker must point top right, outside the cycle orbit"
+            assert {px for px, _ in sector} == set(range(min(px for px, _ in sector), max(px for px, _ in sector) + 1)), "hour-sector marker must be continuous"
+        else:
+            assert not sector, "hiding the orbit must erase its hour-sector marker"
         assert all(p in (b"\x08\x0c\x12", b"\x80\x80\x80", b"\x18\x18\x18", b"\x28\x28\x28",
-                         b"\x60\x60\x60", b"\x40\x40\x40") for p in orbit.values())
+                         b"\x60\x60\x60", b"\x40\x40\x40") for point, p in orbit.items() if point not in sector)
         mark = {point for point, color in orbit.items() if color == b"\x80\x80\x80"}
         if mode != "off":
             diameter = max(half // 24, 2)
@@ -2891,7 +2900,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; separate yellow top-right hour sector, bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
