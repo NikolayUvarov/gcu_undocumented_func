@@ -705,3 +705,8 @@ and a consumed engine-specific calibration authority; there is no native
 provider until raw PMAC/RFK power and platform policy are resolved. Native
 build and fixture compilation pass; execution waits for raw publication.
 This does not complete channel RFK, association or physical WLAN evidence.
+
+Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
+combined Session cases passed in 0.24 s on the own branch with no failures or
+ignores. The seven new register-mailbox regressions are included; hardware
+calibration, association and normal traffic acceptance remain open.
