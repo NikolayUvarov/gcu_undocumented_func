@@ -7,4 +7,6 @@ pub mod efuse;
 pub mod firmware;
 pub mod io;
 pub mod power;
+pub mod phy;
+mod phy_tables;
 pub mod registers;

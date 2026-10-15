@@ -63,3 +63,20 @@ calibrated clock; initial/final MAC power state must be zero. These results do
 not establish hardware operation or a network link. KRN-0114 integration must
 rebuild the executable with its final boot ABI; actual Ryzen board reads,
 power-off and all radio acceptance criteria remain pending.
+
+### Implemented slice: exact RFE-1/cut-1 PHY tables
+
+The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
+BSD BB/gain/RF/NCTL data and bounded production stages in `phy.rs`.
+The RF stage includes both physical paths and mandatory firmware mirrors
+under one deadline. Partial failures poison the attempt and independently
+attempt BB/RF disable; guard refusal never changes an unknown active device.
+The library requires actual firmware-init-ready, full single-band MAC,
+BB access, stopped data paths and a complete BAR2 mapping. The native service
+still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
+RFK calibration, board trims and regulatory authorization remain integration
+work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
+
+The x86 native release build and compilation of 14 host fixtures pass.
+Focused test execution waits for publication of this commit to `fast-test`,
+then runs on this branch; no hardware or radio success is claimed.
