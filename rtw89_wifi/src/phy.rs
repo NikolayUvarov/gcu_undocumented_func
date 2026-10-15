@@ -15,6 +15,9 @@ pub(crate) mod dm;
 #[allow(dead_code)]
 #[path="phy/tail.rs"]
 pub(crate) mod tail;
+#[allow(dead_code)]
+#[path="phy/channel.rs"]
+pub(crate) mod channel;
 
 pub const BAR_BYTES: usize = 0x20000;
 pub const PHY_BASE: usize = 0x10000;
@@ -50,7 +53,7 @@ pub trait PhyIo: RegisterIo {
 pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, Rxdck, DpkBackoff, RckA, RckB }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, PathsConfigured, Failed }
+pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, PathsConfigured, ChannelTuned, Failed }
 
 #[derive(Clone, Copy)]
 pub(crate) enum RegisterPhase { BeforeDack, AfterDack }

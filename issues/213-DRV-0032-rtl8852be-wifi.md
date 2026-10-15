@@ -576,3 +576,11 @@ and pure pinned default power/country decoder. Preserve unknown policy,
 firmware overrides and platform constraints as explicit dependencies; no
 channel permission, native MMIO or transmit activation is added. See the
 linked document for exact table provenance and pending/executed evidence.
+
+### Initial channel register stage (2026-10-16)
+
+The private [2 GHz/20 MHz channel stage](../hwdocs/rtl8852be-channel-stage.md)
+adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
+actual same-session firmware default-table provenance and explicit platform
+policy; it has no native caller and creates no TX authorization. Channel RFK,
+actual policy/board observations and physical traffic validation remain open.

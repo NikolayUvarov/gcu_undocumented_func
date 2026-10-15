@@ -25,6 +25,7 @@ Code adapted from another project:
 
 
 | `rtw89_wifi/src/{channel_policy,power_tables}.rs` | RTL8852B default 2 GHz power tables, country-to-power-group map and signed unit/fallback semantics from pinned Linux `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`, `rtw8852b_table.c`, `regd.c`, `phy.c`, `phy.h`, Realtek Corporation; [scope and hashes](hwdocs/rtl8852be-channel-plan.md) | **BSD-3-Clause** ([notice](LICENSES/BSD-3-Clause-rtw89.txt)); these are source defaults, not regulatory authorization or firmware overrides |
+| `rtw89_wifi/src/channel_power.rs`, `rtw89_wifi/src/phy/channel.rs` | Initial RTL8852B 2 GHz/20 MHz MAC/BB/RF sequence and power-register packing from pinned Linux `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`, `rtw8852b.c`, `rtw8852b_common.c`, `rtw8852b_rfk.c`, `phy.c` and `reg.h`, Realtek Corporation; [scope](hwdocs/rtl8852be-channel-stage.md) | **BSD-3-Clause** ([notice](LICENSES/BSD-3-Clause-rtw89.txt)); private bounded stage, no native TX authorization |
 | `libmind/src/voice/russian.rs` (`rules`), `scripts/voice_tts/dictionary.py` (`convert`) | The Russian letter-to-sound rules of [vosk-tts](https://github.com/alphacep/vosk-tts) 0.3.61 (`vosk_tts/g2p.py`, alphacep), ported; the dictionary they serve stays with the model on the model disk (`models/manifest.toml`: `tts-ru-vosk-0.7`) | Apache-2.0 |
 
 Everything else was written for this project, including the 8×8 bitmap font in `common/font.rs`, which was drawn for MIND Core.

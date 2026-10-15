@@ -32,3 +32,7 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/c2h.rs"]mod c2h;
 #[path="rtw89_pipeline_device.rs"]mod model;
 #[path="rtw89_pipeline_mac_cases.rs"]mod cumulative;
+
+#[path="../rtw89_wifi/src/channel_policy.rs"] mod channel_policy;
+#[path="../rtw89_wifi/src/power_tables.rs"] mod power_tables;
+#[path="../rtw89_wifi/src/channel_power.rs"] mod channel_power;
