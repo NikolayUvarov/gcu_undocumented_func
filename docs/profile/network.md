@@ -409,3 +409,35 @@ queue-bound reply and logs raw words and explicit successful-zero-NSS defaults.
 Mailbox failure ends the diagnostic with independent cleanup; this adds no
 association or radio guarantee. Own-branch build and the fourteen-stage startup
 fixture must precede any hardware claim; physical execution remains unobserved.
+
+The RTL8852BE BTC owner additionally implements bounded normal/no-link source
+initialization and common actions over the owned Session. Its completion token
+binds the actual PHY attempt and command session, and observed policy reports
+must be consistent at the documented boundary. This is an unactivated startup
+library slice; focused fixtures are compiled but execution is pending raw
+publication. It grants neither RFK arbitration nor WLAN connectivity. Native
+integration, complete calibration and physical hardware evidence remain open.
+See [the BTC owner contract](../../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
+
+
+The BTC owner execution evidence is now available for code `8b2caed7` after
+raw publication `1a62e46f`: 26 Session/owner, 11 initcfg and 11 control cases pass
+with zero failures/ignores on the own branch. This supersedes the pending
+execution statement above for those focused cases only. Seeded-model, native
+activation, RFK and hardware limitations remain unchanged.
+
+
+The RTL8852BE library now also implements actual bounded DACK/RXDCK BTC
+START/STOP through the owned initialization context. Permission requires BT
+arbitration, policy, common actions, scoreboard publication and live RX; failed
+or radio-off STOP reports incomplete policy while attempting raw ownership
+cleanup. Eleven focused fixtures compile, pending raw publication and execution.
+This does not activate the native callback, establish physical calibration or
+complete association. [Limits and cleanup](../../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
+
+
+The owned BTC callback also has source-valued IQK/DPK and nested IQK notices.
+Nested success requires an actual matching outer grant; TSSI must obtain an
+extra enclosing IQK grant rather than relying on upstream's discarded rejection.
+Eight regression cases compile pending execution. This stricter admission is
+not a claim of complete upstream equivalence or completed calibration/TX policy.

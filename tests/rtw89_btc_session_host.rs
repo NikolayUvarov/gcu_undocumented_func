@@ -34,3 +34,8 @@ extern crate self as mind;
 #[path="../rtw89_wifi/src/channel_policy.rs"] mod channel_policy;
 #[path="../rtw89_wifi/src/power_tables.rs"] mod power_tables;
 #[path="../rtw89_wifi/src/channel_power.rs"] mod channel_power;
+#[path="../rtw89_wifi/src/btc_codec.rs"] mod btc_codec;
+#[path="../rtw89_wifi/src/btc_control.rs"] mod btc_control;
+#[path="../rtw89_wifi/src/btc_init.rs"] mod btc_init;
+#[path="../rtw89_wifi/src/btc_reports.rs"] mod btc_reports;
+#[path="../rtw89_wifi/src/btc_context.rs"] mod btc_context;

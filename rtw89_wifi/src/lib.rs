@@ -42,3 +42,5 @@ pub(crate) mod report_tail;
 pub mod rxdck;
 
 pub mod btc_session;
+
+pub mod btc_context;

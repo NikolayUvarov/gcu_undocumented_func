@@ -30,8 +30,17 @@ impl WlanShadow {
     /// Only for a fresh verified firmware session with exclusive scoreboard ownership; never reconstruct on live firmware.
     pub fn new() -> Self { Self { value: 0, failed: false } }
     pub fn value(&self) -> u32 { self.value }
+    pub(crate) fn clear(&mut self,mask:u32){self.value&=!mask;}
     pub fn initialize(&mut self) { self.value = WL_ACTIVE | WL_ON | WL_BTLOG; }
     pub fn set_rfk(&mut self, active: bool) { if active { self.value |= WL_RFK; } else { self.value &= !WL_RFK; } }
+    // Shutdown may clear our RFK request after an ambiguous write, but can never rehabilitate the failed shadow.
+    pub(crate) fn release_rfk(&mut self,bus:&mut impl RegisterIo,timeout_us:u32)->io::Result<()> {
+        self.set_rfk(false);self.failed=true;
+        if timeout_us<=1000||timeout_us>100_000{return Err(Fault::new(FaultKind::Timeout,SCOREBOARD,timeout_us))}
+        let mut timed=TimedIo::new(bus,timeout_us as u64);let bt=io::read32(&mut timed,SCOREBOARD)?;
+        let firmware=((bt>>24)&0x7f&!1)|1;
+        timed.write32(SCOREBOARD,1<<31|firmware<<24|self.value)?;timed.delay_us(1000)?;timed.delay_us(0)
+    }
     /// An ambiguous write poisons this shadow; it must not be reused as a successfully applied state.
     pub fn publish(&mut self, bus: &mut impl RegisterIo, timeout_us: u32) -> io::Result<()> {
         if self.failed || timeout_us <= 1_000 || timeout_us > 100_000 { return Err(Fault::new(FaultKind::Access, SCOREBOARD, timeout_us)); }
@@ -50,7 +59,7 @@ impl WlanShadow {
 impl Default for WlanShadow { fn default() -> Self { Self::new() } }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Antenna { Initial, NoLink, Rfk }
+pub enum Antenna { Initial, NoLink, Rfk, WlanOnly }
 
 /// Actual pre-transition registers, retained for a failed transition's independent restoration attempt.
 #[derive(Debug)]
@@ -121,9 +130,9 @@ pub fn antenna(bus: &mut impl RegisterIo, desired: Antenna, timeout_us: u32) -> 
     if bt.running_rfk || bt.requests_rfk { return Err(Fault::new(FaultKind::PowerState, SCOREBOARD, 0x60)); }
     let grants = match desired { Antenna::NoLink => 0,
         Antenna::Initial if bt.enabled => 0xdd00dd00, _ => 0x77007700 };
-    let pollution = if desired == Antenna::Rfk { 0x100 } else { 0x166 };
+    let pollution = if matches!(desired,Antenna::Rfk|Antenna::WlanOnly) { 0x100 } else { 0x166 };
     // The initial source path writes grants first; no-link and RFK select WLAN control first.
-    if desired == Antenna::Initial { lte_write(&mut timed, grants)?; control(&mut timed, true)?; }
+    if matches!(desired,Antenna::Initial|Antenna::WlanOnly) { lte_write(&mut timed, grants)?; control(&mut timed, true)?; }
     else { control(&mut timed, true)?; lte_write(&mut timed, grants)?; }
     timed.write16(0xc67c, pollution)?;
     let actual = lte_read(&mut timed)?;
@@ -175,3 +184,12 @@ pub fn common_initial(bus: &mut impl RegisterIo, bt: BtState, timeout_us: u32) -
 #[cfg(test)]
 #[path = "../../tests/rtw89_btc_control_cases.rs"]
 mod tests;
+
+
+pub(crate) fn btg(bus:&mut impl RegisterIo,enabled:bool)->io::Result<()> {
+    if enabled{return table(bus,BTG_ENABLED)}
+    table(bus,&[(0x4738,1<<19,0),(0x4738,1<<22,0),(0x476c,0xff000000,0x1a),
+        (0x4778,0xff,0x2a),(0x4aa4,1<<19,0),(0x4aa4,1<<22,0),(0x980,0x001e0000,0xc),
+        (0x49c4,1<<14,0),(0x49c0,0x03c00000,0),(0x4420,1<<31,1),(0xc6c,1<<21,0)])
+}
+pub(crate) fn preagc_off(bus:&mut impl RegisterIo)->io::Result<()>{table(bus,PRE_AGC_DISABLED)}

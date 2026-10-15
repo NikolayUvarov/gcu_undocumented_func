@@ -1030,3 +1030,143 @@ assumed two-stream capabilities. The existing independent cleanup remains in
 force, with no resend or ordinary data TX. The startup fixture covers failure
 at all fourteen stages; execution is recorded only after raw publication.
 This remains a diagnostic, not calibrated RF or a WLAN endpoint.
+
+## Owned normal/no-link BTC initialization
+
+`btc_context::initialize` requires the actual `Phy<Session>` at RadioLoaded,
+consumes the existing initcfg result internally, and returns `Initialized`
+only after the normal, no-link, no-LPS source initialization and common actions.
+Both config and completion records bind the nonzero PHY attempt and command
+queue session; reuse with a new PHY, failed Session, unrelated Ready or changed
+live RX allocation is refused. This is the pre-NCTL interleave, not an RFK grant,
+calibrated-radio readiness, association or authorization to start ordinary TX.
+No native wiring changes in this slice.
+
+The source remains Linux v6.19 `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`,
+`coex.c` `rtw89_btc_ntfy_init`, `_action_common`, `_update_bt_scbd`, `_update_bt_info`,
+`_set_rf_trx_para`, `_set_bt_afh_info`, `_fw_set_policy`, `_chk_btc_report`, and
+`rtw8852b_common.c` RX-gain operations, under the BSD-3-Clause option. The owner
+performs default WLAN power, monitor/MREG reporting, slot defaults, INIT and
+CTRL information, initial antenna/grant/pollution selection, OFF_BT policy,
+BTG/pre-AGC, no-link AFH, shared-antenna gain, BT ignore-WLAN and LNA responses,
+conditional BT-version reporting, ROLE2 and owned WLAN scoreboard publication.
+BTINFO, scoreboard notifications and version reports update bounded owned state;
+reenabling BT resets prior BT state. WHQL/factory mode and busy BT calibration
+are explicitly refused by this limited normal-mode startup.
+
+After the existing 200 ms initcfg stage, one absolute 1 s budget covers all
+commands, MMIO, event processing and final live receive validation. Each command
+also retains its 100 ms bound; eight state-reconciliation passes and finite RX
+loops bound a frozen clock or endless input. Any partial failure prevents the
+completion token, independently restores the saved antenna/grants, closes the
+RF LUT and disables BB/RF; it poisons further command/PHY work. Cleanup has its
+own finite budgets and reports independent errors. It neither frees DMA nor
+claims to restore firmware policy; the outer owner must still stop receive,
+command/WCPU and PCI bus mastering before retained-memory reclamation.
+
+TDMA and slot reports are optional under the source MREG/BT-version default
+report map; no new mandatory TDMA request is invented. Before an actual policy
+command, queued events are drained. Reports consumed through that command's
+completion are transition snapshots and their observations are cleared only
+when the command completes; a no-op policy does not clear observations. The
+final drain compares the latest later TDMA snapshot's eight bytes and every
+one of the 18 slot structures, regardless of update bitmap, with the requested
+policy. A later matching snapshot may reconcile an earlier mismatch; malformed
+reports or a final contradiction fail. Reports carry no causal policy identity:
+an old snapshot arriving after this local boundary is indistinguishable from
+a new contradiction and conservatively fails. Absence, matching snapshots and
+MAC DONE are not by themselves evidence of an RFK arbitration grant.
+
+Thirteen new owner fixtures and two initcfg-identity fixtures compile, together
+with the unchanged session/control cases. They cover actual production initcfg
+and normal H2C/RX orchestration, BTINFO-driven actions, command/register failures,
+phase/session identity, aggregate deadlines, optional reports, pre-completion
+snapshots, malformed envelopes, post-boundary contradictions, unmarked slots and
+later reconciliation. Execution awaits raw publication. The seeded handoff model
+is not physical-device evidence or the separate cumulative cold-device model.
+
+
+After raw publication `1a62e46f` containing code `8b2caed7`, the owner's own
+branch passed all 26 Session/owner fixtures (0.18 s), all 11 initcfg fixtures
+(0.01 s), and all 11 control fixtures (0.00 s) on 2026-10-16. Each selected set
+had zero failures and zero ignored cases. The native release build passed in
+3.33 s without warnings. The tests exercise the production init/common path
+against the documented stateful seeded model; they do not validate physical
+coexistence, RFK START/STOP, native integration or continuous WLAN operation.
+
+
+## Owned calibration coexistence START and STOP
+
+`Session` implements the actual `DackIo::btc_rfk` callback only after the
+successful owned BTC initialization above. It accepts the typed DACK/RXDCK
+notice for PHY0/path-map zero and actual 2G/5G band (`0x10`/`0x50`), retains one
+pending calibration identity and refuses overlapping START or mismatched STOP.
+The source is pinned `coex.c` `_chk_wl_rfk_request`, `_ntfy_wl_rfk`,
+`rtw89_btc_ntfy_wl_rfk`, `_action_wl_rfk`, `_run_coex` and `_action_common`.
+No firmware message is invented for a notice that upstream keeps in host state.
+
+START checks the owned receive session and actual BT scoreboard RUN/REQ state,
+with 40 us retry steps and finite iterations inside the caller's absolute
+maximum 100 ms budget. It does not override a busy BT calibration after timeout.
+Once arbitration permits, it saves the actual antenna/grants, sets its owned
+WLRFK request, performs source antenna/grant/pollution and OFF_WL2 forced policy
+(including instant TDMA and all slots), completes the relevant common actions,
+processes BT events and policy reports, publishes the scoreboard and validates
+actual RX ownership again. The source BT-off branch instead retains OFF_BT
+with WLAN-only controls. Only this complete path returns permission; receipt,
+DONE, drained command DMA or a policy encoder alone do not grant RFK.
+
+A possibly applied START remains recorded until its matching STOP; calibration
+callers hold this state through RF restoration and radio disable on failure.
+Normal STOP clears WLRFK and completes no-link/BT-off policy, controls and common
+actions with live BB/RF. If H2C/RX is poisoned or the caller has already disabled
+BB/RF, STOP cannot claim those firmware/common actions succeeded: it attempts
+only bounded raw clearing of the owned WLRFK request and restoration of the
+saved antenna/grants. It never reenables RF to run cleanup, never resets an H2C
+sequence and never resends an uncertain command. STOP reserves the smaller of 20 ms or half its remaining callback budget for
+raw cleanup; the normal policy/common transition uses the earlier deadline.
+Cleanup keeps the original absolute STOP deadline, with independent clear and
+restore outcomes. A stalled indirect register or scheduling delay can still
+exhaust this reserve and is reported without an unbounded retry. A failed scoreboard shadow remains poisoned after
+its shutdown-only clear. `last_rfk_failure` exposes the original cause, whether
+cleanup was attempted, and separate clear/restore errors. Outer retained-DMA,
+WCPU and PCI shutdown is mandatory after any failed callback.
+
+Eleven new fixtures compile against the real Session/owner path. They cover both
+source policy branches, actual BT arbitration and bounded/frozen clocks,
+missing ACK and contradictory post-policy report, possibly applied control and
+scoreboard writes, independent cleanup failures, radio-off cleanup, identity
+mismatch, duplicate START and actual cleanup after a STOP-policy ACK timeout. Existing 26 Session/owner and 11 control fixtures
+also compile. Execution awaits raw publication; no native wiring or physical
+RFK/association evidence is added by this slice.
+
+
+### IQK/DPK and nested IQK notices
+
+The shared typed callback additionally names source calibration values IQK=0
+and DPK=2, and one-shot states START=2/STOP=3. IQK and DPK use actual outer
+START/STOP with PHY0/path-map zero (`0x10`/`0x50`). An IQK one-shot uses RF_AB
+(`0x13`/`0x53`) and must match the band and calibration of a still-held, completed
+outer IQK grant. A partial nested admission remains recorded; its matching
+nested STOP clears the host nesting even after poison, while preserving an
+error and requiring the outer STOP. Outer STOP refuses to silently release an
+active nested operation. Orphans, duplicate starts, mismatched identity and
+DPK attempts to borrow IQK one-shots are refused.
+
+This follows pinned `coex.h` enum values and `coex.c` `_ntfy_wl_rfk`: a nested
+notice does not replay policy or release the outer WLRFK request. START still
+checks actual BT busy state, live receive ownership and the already published
+owned grant; no synthetic success is supplied. The host IQK source's per-path
+one-shots can therefore use the existing outer permission. In contrast, the
+pinned TSSI wrapper calls IQK one-shot notices after the preceding IQK STOP, and
+the upstream void notification wrapper ignores rejection. MIND deliberately
+requires an extra complete enclosing IQK START/STOP around TSSI before allowing
+its nested one-shots. The maintainer approved this stronger admission on
+2026-10-16; refusal while BT is busy is visible, and full upstream behavioral
+equivalence is not claimed. The TSSI algorithm and native integration remain
+separate work; this callback alone does not authorize arbitrary hardware TX.
+
+Eight nested-notice regressions compile against the real owner/Session,
+including both bands, orphan and duplicate notifications, mismatched stop,
+cleanup after partial admission, and refusal of premature outer release.
+Execution awaits raw publication. DACK/RXDCK semantics are unchanged.

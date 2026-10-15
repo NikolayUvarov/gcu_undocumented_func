@@ -584,3 +584,49 @@ adds source MAC/BB/RF/power sequencing and bounded failure cleanup. It requires
 actual same-session firmware default-table provenance and explicit platform
 policy; it has no native caller and creates no TX authorization. Channel RFK,
 actual policy/board observations and physical traffic validation remain open.
+
+### Owned BTC normal initialization and common actions
+
+Add actual session/PHY-attempt-bound normal/no-link initialization through
+initcfg, source H2C commands, antenna/grant/pollution controls, dynamic BTINFO
+and scoreboard state, full relevant common actions and final live receive
+validation. Optional policy reports are reconciled against all TDMA/slot fields
+at an explicit command-completion boundary; missing optional reports do not
+invent an extra firmware requirement. One aggregate budget and independent
+failure cleanup prevent partial completion from issuing Initialized. This token
+is not an RFK grant: actual START/STOP arbitration, remaining calibration,
+native integration and hardware evidence remain open. Thirteen new owner and
+two identity fixtures compile; execution follows raw publication. See the
+[contract and report limits](../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
+
+
+Owner evidence after raw publication `1a62e46f` / code `8b2caed7`: all 26
+Session/owner, 11 initcfg and 11 control cases passed on the own branch with no
+failures or ignores. Native build passed without warnings. The normal-mode
+startup library boundary is tested in the seeded model; real RFK arbitration,
+native integration, remaining calibration and hardware connectivity stay open.
+
+
+### Actual owned RFK coexistence callback
+
+Implement typed DACK/RXDCK START/STOP over the completed BTC owner: bounded
+actual BT arbitration, source policy/antenna/common actions, scoreboard and
+report reconciliation, and final owned RX validation precede permission.
+Retain partial START until matching STOP. Poisoned H2C or disabled BB/RF permits
+only bounded raw ownership cleanup with explicit incomplete-policy failure;
+ordinary TX remains stopped and all DMA stays owned. Eleven new fixtures compile;
+execution follows raw publication. Native binding, remaining calibration and
+physical-device evidence are still open. See the
+[RFK contract](../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
+
+
+### Shared IQK/DPK and nested coexistence prerequisite
+
+Extend source-valued callback types for IQK/DPK and require actual held outer
+IQK permission for matching RF_AB one-shots. Preserve partial nested admission
+for matching cleanup; refuse orphan, duplicate, foreign and premature outer
+release. TSSI receives an explicit stronger enclosing IQK START/STOP requirement
+approved by the maintainer, instead of copying upstream's ignored rejection.
+Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
+algorithms, their policy-bound TX prerequisites and native integration remain
+open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
