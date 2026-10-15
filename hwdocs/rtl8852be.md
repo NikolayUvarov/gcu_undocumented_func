@@ -496,8 +496,11 @@ bits 31:24 and return status 23:16). Matching includes category, class,
 function and sequence; receipt or DMA consumption does not imply success
 of the requested firmware operation.
 
-Eighteen focused host fixtures compile; native-build, execution and hardware
-evidence for this new slice are pending. Interrupts, RX activation, command
+Own-branch `b112406d` native build passed in 0.47 seconds without warnings;
+after raw publication in `fast-test` `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Independent source and
+ownership review found no remaining blocker. Hardware validation and a full
+gate containing this slice remain pending. Interrupts, RX activation, command
 ACK routing, BTC coordination and WLAN service registration remain separate.
 A warm device is not silently reset: MEM-only PCI decoding does not imply
 MAC-off or establish ownership of old DMA. The board's cold-state guard

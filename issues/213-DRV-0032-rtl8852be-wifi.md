@@ -205,8 +205,11 @@ host fixtures before native integration; no live Linux NIC access.
 The RX region occupies 5,902,336 bytes (4096 descriptor bytes plus 512
 64-byte-aligned buffer strides of 11520), disjoint from the 86,016-byte
 command region. The combined layout fits within a future 8 MiB retained
-grant. Eighteen focused host fixtures compile; execution/native-build and
-hardware evidence for this new slice remain pending. The current firmware
+grant. Own-branch `b112406d` native build passed (0.47 seconds, no warnings).
+After raw publication in `fast-test` `cfc4515bf1d1164c75a11ecd959aaca05326d88c`,
+all 18 RX host fixtures passed on 2026-10-16 (0.13 seconds, none ignored).
+Independent source/ownership review found no remaining blocker. Hardware
+validation and a full gate containing this slice remain pending. The current firmware
 diagnostic's grant and native entry are unchanged.
 
 A warm inherited device remains an explicit integration precondition:

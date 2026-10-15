@@ -156,7 +156,9 @@ The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
 copies each bounded packet before releasing its descriptor, and parses AX
 RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
 future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
-is unchanged. Eighteen host fixtures compile; execution/native build and
-hardware validation remain pending. It provides neither RX activation nor
+is unchanged. Own-branch `b112406d` native build passed (0.47 seconds, no
+warnings); after raw publication `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Hardware validation and a
+full gate containing this slice remain pending. It provides neither RX activation nor
 interrupt/WLAN integration. Warm-state ownership/quiescence is still a
 precondition, not established by PCI MEM-only decoding.
