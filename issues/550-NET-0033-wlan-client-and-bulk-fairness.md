@@ -63,11 +63,19 @@ an action sequence remains; no new short IPC deadline is introduced.
 
 On the own branch based on `a99cc44a650b2d4cf287116dfa7adb520277ca27`,
 `cargo build --release --target x86_64-unknown-none` in `wlan/` passed in
-5.65 s. The 26 network-budget host cases (18 existing, eight added) and the
-unchanged `dot11` tests compiled with `cargo test --no-run`; they have not
-run yet. Execution follows publication of this commit to `fast-test` and
-occurs only on the own branch. Integrated QEMU and hardware evidence remain
-open.
+5.65 s. Implementation `31af1f011ab3fda6d35f794c64fa8d46c39e3346` was then
+published in `fast-test` `a98052b5b78ebcc31fcc7bc7fde4b647fbb3b073`.
+After publication, on the own branch, all 26 network-budget host cases
+(18 existing, eight added) passed, and all 12 unchanged `dot11` station
+protocol tests passed (zero failures/ignored, 0.00 s and 0.19 s respectively).
+The host was x86_64 Linux 6.6.87.2 WSL2 with rustc 1.101.0-nightly c36f14571.
+Nothing was built or tested on `fast-test`. Integrated QEMU and hardware
+evidence remain open.
+
+Commands: `cargo test --manifest-path tests/network_budget/Cargo.toml
+--target-dir /tmp/mind-wlan-fairness-host-20261015` and
+`cargo test --manifest-path dot11/Cargo.toml
+--target-dir /tmp/mind-wlan-fairness-dot11-20261015`.
 
 ## Related
 
