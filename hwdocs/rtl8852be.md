@@ -1176,3 +1176,11 @@ Eight nested-notice regressions compile against the real owner/Session,
 including both bands, orphan and duplicate notifications, mismatched stop,
 cleanup after partial admission, and refusal of premature outer release.
 Execution awaits raw publication. DACK/RXDCK semantics are unchanged.
+
+Execution evidence for `a134b5a0` (including `a6df7c83`), after raw publication
+`8ebd2da170902c5679ff5450e674007dd1dfb9ee`: all 45 Session/owner/RFK/nested cases
+passed in 0.18 s, and all 11 control cases passed in 0.00 s, on their own source
+branches. Both runs had zero failures and zero ignores; the Session run filtered
+113 unrelated cases. The native build passed in 3.24 s without warnings. This
+supersedes the pending statements above for these cases; the tests remain a
+seeded register/DMA model and do not establish physical RFK behavior.
