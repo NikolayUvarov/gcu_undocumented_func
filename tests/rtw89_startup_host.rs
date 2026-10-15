@@ -8,8 +8,8 @@ extern crate self as rtw89_wifi;
 
 use startup::{Diagnostic, Stage};
 
-const STEPS: [Stage; 14] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
-    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive];
+const STEPS: [Stage; 15] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
+    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive, Stage::InitialPhy];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event { Step(Stage), Stop, Registers, PowerOff, Quiesce }
@@ -46,7 +46,7 @@ fn private_file_and_dma_failures_cannot_reach_power_or_mastering() {
 }
 
 #[test]
-fn successful_diagnostic_always_stops_after_runtime_mac_and_receive_activation() {
+fn successful_diagnostic_always_stops_after_initial_phy() {
     let mut attempt = Attempt::new();
     let report = startup::run(&mut attempt);
     let mut expected = STEPS.map(Event::Step).to_vec();

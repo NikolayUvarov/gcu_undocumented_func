@@ -641,16 +641,47 @@ actual same-session firmware default-table provenance and explicit platform
 policy; it has no native caller and creates no TX authorization. Channel RFK,
 actual policy/board observations and physical traffic validation remain open.
 
+
 ### Shared IQK/DPK and nested coexistence prerequisite
 
 Extend source-valued callback types for IQK/DPK and require actual held outer
 IQK permission for matching RF_AB one-shots. Preserve partial nested admission
 for matching cleanup; refuse orphan, duplicate, foreign and premature outer
 release. TSSI receives an explicit stronger enclosing IQK START/STOP requirement
-approved by the maintainer, instead of copying upstream's ignored rejection.
+as a deliberate stronger admission rule, instead of copying upstream's ignored rejection.
 Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
 algorithms, their policy-bound TX prerequisites and native integration remain
 open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
+
+RFK/nested execution evidence: after raw publication `8ebd2da170902c5679ff5450e674007dd1dfb9ee`
+containing code `a134b5a0` and `a6df7c83`, the own source branch passed all 45
+Session/owner/RFK/nested cases (0.18 s) and all 11 control cases (0.00 s), with
+zero failures or ignores. Native build passed in 3.24 s without warnings.
+These seeded-device fixtures cover actual production owner/session logic;
+hardware calibration, policy-authorized RFK transmission and native networking
+remain open.
+
+### Actual calibration scheduler adapter
+
+Native composition exposed a missing `Session: RxdckIo` implementation. Add
+the owned adapter to the existing `runtime_mac::scheduler_zero` exchange with
+one absolute budget, live firmware/queue/RX checks, final elapsed check and
+terminal poison on uncertainty. Seven production-entry fixtures compile;
+native build passes. Execution follows raw publication, and this does not
+close calibration or hardware acceptance.
+
+
+### Native initial PHY and owned coexistence continuation
+
+Join the verified firmware/MAC/RX startup to actual Session-based H2C, BTC
+normal/no-link initialization, initial DM and NCTL/RCK/DACK/RXDCK, board trims
+and the final report registers. Consume Ready exactly once; never replace
+BTC permission or scheduler mailbox responses with successful placeholders.
+Return observations only and always run the existing independent native
+shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
+and hardware traffic remain open. Five cumulative cold-device fixtures and
+the fifteen-stage cleanup matrix compile; execution follows raw publication.
+See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
 
 ### Initial channel RXDCK and host IQK preparation
 
@@ -664,3 +695,18 @@ trigger and forces independent radio shutdown before coexistence release.
 Meaningful register/timeout/cleanup fixtures and source-table regeneration will
 be registered in the host gate; execution follows commit/build/raw publication.
 Physical quality, full channel RFK coordination and hardware traffic stay open.
+
+## Initial TSSI continuation (2026-10-16)
+
+The [private TSSI engine](../hwdocs/rtl8852be-tssi.md) implements both source
+PMAC calibration samples on both paths, board thermal/DE tables, actual
+owned BTC notices and bounded cleanup. It requires the actual IQK result
+and a consumed engine-specific calibration authority; there is no native
+provider until raw PMAC/RFK power and platform policy are resolved. Native
+build and fixture compilation pass; execution waits for raw publication.
+This does not complete channel RFK, association or physical WLAN evidence.
+
+Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
+combined Session cases passed in 0.24 s on the own branch with no failures or
+ignores. The seven new register-mailbox regressions are included; hardware
+calibration, association and normal traffic acceptance remain open.

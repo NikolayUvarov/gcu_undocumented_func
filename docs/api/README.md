@@ -215,8 +215,11 @@ not establish PCIe transaction drainage or safe reuse.
 The ABI-11 RTL8852BE boot service receives its MEM-only BAR2, retained 8 MiB
 DMA, read-only firmware client and PCI index from init. A verified firmware
 download is followed by a real PHY-capability mailbox query, runtime MAC and
-receive-only setup; independent stop/mastering-disable/power-off follows every
-modified attempt. Logs distinguish raw firmware capabilities and successful
+receive-only setup. One consumed firmware token then binds normal H2C, actual
+BTC policy, BB/RF tables, initial DM and RCK/DACK/RXDCK to the same command/RX
+allocations. The report tail ends this diagnostic session; independent
+stop/mastering-disable/power-off follows every modified attempt. Channel
+calibration and transmit-policy admission remain pending. Logs distinguish raw firmware capabilities and successful
 zero-field defaults. No RTL8852BE radio endpoint or WLAN service is exposed yet.
 See [the service scope](../../rtw89_wifi/README.md) and
 [213-KRN-0114](../../issues/213-KRN-0114-realtek-driver-startup.md).

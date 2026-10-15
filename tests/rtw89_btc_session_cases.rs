@@ -13,12 +13,13 @@ struct Device{
     hold:bool,busy:bool,late_index:usize,index_reads:usize,reverse_index:usize,
     bt:u32,rf:[[u32;256];2],rf_read:Option<(usize,usize)>,lte:[u32;2],lte_pending:Option<u32>,
     btc_event:Option<(usize,Vec<u8>)>,missing_at:usize,fail_at:Option<usize>,packet_us:u64,bt_release_at:Option<u64>,after_ack:Option<(usize,Vec<u8>)>,
+    scheduler_reply:u8,scheduler_us:u64,
 }
 impl Device{
     fn new(tx:*mut u8,tx_bytes:usize,index:u32)->Self{
         let mut d=Self{regs:vec![0;runtime_mac::BAR_BYTES],xtal:[0;256],command:6,time:0,frozen:false,writes:Vec::new(),
             tx,tx_bytes,rx:core::ptr::null_mut(),packets:Vec::new(),reply:Reply::Normal,events:0,hold:false,busy:false,late_index:0,index_reads:0,reverse_index:0,
-            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None};
+            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None,scheduler_reply:0,scheduler_us:0};
         for (at,value)in[(0xf0,1<<12),(0x3f0,1<<8),(R_AX_PLATFORM_ENABLE,3),(download::FW_CONTROL,0xe0),
             (R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),(crate::mac::DMAC_CLOCK,0x04840000),
             (crate::mac::PLE_CONFIG,0x00400801),(crate::mac::WDE_READY,3),(crate::mac::PLE_READY,3),(crate::mac::HFC_CONTROL,8),
@@ -63,7 +64,10 @@ impl Device{
         self.writes.push((at,width,value));let previous=self.get(at&!3);self.regs[at..at+width].copy_from_slice(&value.to_le_bytes()[..width]);
         if at==0x1018{self.set(0x1050,0);self.set(0x1054,0);self.set(at,0);}
         if at==R_AX_WLAN_XTAL_SI_CTRL{let offset=(value&255)as usize;if value>>24&7==XTAL_SI_NORMAL_READ{self.regs[at+1]=self.xtal[offset];}else{let mask=(value>>16)as u8;self.xtal[offset]=(self.xtal[offset]&!mask)|((value>>8)as u8&mask);}self.regs[at+3]&=!0x80;}
-        if at==R_AX_H2CREG_CTRL&&value==1{assert_eq!(self.get(R_AX_H2CREG_DATA0),0x205);assert_eq!(self.get(R_AX_H2CREG_DATA0+4),0xffff);self.regs[at]=0;self.regs[R_AX_C2HREG_CTRL]=1;self.set(R_AX_C2HREG_DATA0,0x204);self.set(R_AX_CTN_TXEN,0);}
+        if at==R_AX_H2CREG_CTRL&&value==1{assert_eq!(self.get(R_AX_H2CREG_DATA0),0x205);assert_eq!(self.get(R_AX_H2CREG_DATA0+4),0xffff);
+            self.time+=self.scheduler_us;self.regs[at]=0;self.regs[R_AX_C2HREG_CTRL]=u8::from(self.scheduler_reply!=1);
+            self.set(R_AX_C2HREG_DATA0,if self.scheduler_reply==2{0x205}else{0x204});self.set(R_AX_CTN_TXEN,u32::from(self.scheduler_reply==3));
+            if self.scheduler_reply==4{self.set(R_AX_PTCL_TX_CTN_SEL,B_AX_PTCL_TX_ON_STAT);}}
         if at==R_AX_SS_CTRL&&value&1!=0{self.regs[at+3]|=0x80;}
         if at==R_AX_ADDR_CAM_CTRL{self.regs[at+1]&=!1;}
         if at==R_AX_RESPBA_CAM_CTRL{self.regs[at]&=!3;}
@@ -466,3 +470,54 @@ fn btc_nested_fresh_whql_state_refuses_but_keeps_matching_cleanup(){with_session
     let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::OneshotStop,0),100_000);
     let _=crate::dack::DackIo::btc_rfk(s,iqk_notice(crate::dack::RfkState::Stop,0),100_000);assert_eq!(s.bus.get(0xac)&(1<<11),0);
 }));}
+
+#[test]
+fn owned_scheduler_uses_real_register_exchange_without_consuming_packet_sequence(){with_session(|s|{
+    use crate::rxdck::RxdckIo;
+    let before=s.bus.regs[R_AX_UDM1+1];let command=s.command_session();
+    s.scheduler_zero(1000).unwrap();s.scheduler_zero(1000).unwrap();
+    let sent:Vec<_>=s.bus.writes.iter().filter(|(at,_,v)|*at==R_AX_H2CREG_CTRL&&*v==1).collect();assert_eq!(sent.len(),2);
+    assert_eq!(s.bus.get(R_AX_H2CREG_DATA0),0x205);assert_eq!(s.bus.get(R_AX_H2CREG_DATA0+4),0xffff);
+    assert_eq!(s.bus.get(R_AX_H2CREG_DATA0+8),0);assert_eq!(s.bus.get(R_AX_H2CREG_DATA0+12),0);
+    let hmask=(B_AX_UDM1_HALMAC_H2C_DEQ_CNT_MASK>>8)as u8;let cmask=(B_AX_UDM1_HALMAC_C2H_ENQ_CNT_MASK>>8)as u8;
+    for mask in [hmask,cmask]{let shift=mask.trailing_zeros();assert_eq!((s.bus.regs[R_AX_UDM1+1]&mask)>>shift,(((before&mask)>>shift)+2)&(mask>>shift));}
+    assert_eq!(s.bus.regs[R_AX_C2HREG_CTRL],0);assert_eq!(s.bus.get(R_AX_CTN_TXEN),0);assert_eq!(s.bus.get(fwcmd::DMA_STOP),0xb0f00);
+    assert_eq!(s.command_session(),command);assert_eq!(s.submitted(),0);assert!(s.bus.packets.is_empty());assert_eq!(s.failed(),None);
+});}
+#[test]
+fn owned_scheduler_invalid_budget_does_not_touch_hardware_or_poison(){with_session(|s|{
+    use crate::rxdck::RxdckIo;let writes=s.bus.writes.len();
+    for budget in [0,1_000_001]{assert_eq!(s.scheduler_zero(budget).unwrap_err().kind,FaultKind::Access);}
+    assert_eq!(s.bus.writes.len(),writes);assert_eq!(s.failed(),None);s.scheduler_zero(1000).unwrap();
+});}
+#[test]
+fn owned_scheduler_actual_queue_and_receive_guard_precedes_register_mailbox(){for broken in [0x1108,download::FW_CONTROL,fwcmd::BASE_LOW]{with_session(|s|{
+    use crate::rxdck::RxdckIo;s.bus.set(broken,0);s.bus.writes.clear();assert!(s.scheduler_zero(1000).is_err());
+    assert!(s.bus.writes.is_empty());assert!(s.failed().is_some());
+});}}
+#[test]
+fn owned_scheduler_failure_poisons_without_retry_and_retains_raw_shutdown(){for reply in [1,2,3,4]{with_session(|s|{
+    use crate::rxdck::RxdckIo;s.bus.scheduler_reply=reply;assert!(s.scheduler_zero(1000).is_err());assert!(s.failed().is_some());
+    assert_eq!(s.bus.writes.iter().filter(|(at,_,v)|*at==R_AX_H2CREG_CTRL&&*v==1).count(),1);
+    let n=s.bus.writes.len();assert!(s.scheduler_zero(1000).is_err());assert_eq!(s.bus.writes.len(),n);assert_eq!(PhyIo::command_session(s),0);
+    s.write32(fwcmd::DMA_STOP,0x1f0f03).unwrap();assert_eq!(s.bus.get(fwcmd::DMA_STOP),0x1f0f03);assert_eq!(s.submitted(),0);
+});}}
+#[test]
+fn owned_scheduler_pending_response_is_not_discarded_or_replaced(){with_session(|s|{
+    use crate::rxdck::RxdckIo;s.bus.regs[R_AX_C2HREG_CTRL]=1;let n=s.bus.writes.len();
+    assert!(s.scheduler_zero(1000).is_err());assert_eq!(s.bus.writes.len(),n);assert_eq!(s.bus.regs[R_AX_C2HREG_CTRL],1);
+});}
+#[test]
+fn owned_scheduler_absolute_budget_includes_live_validation_and_published_command(){for late_guard in [true,false]{with_session(|s|{
+    use crate::rxdck::RxdckIo;
+    if late_guard{s.bus.index_reads=0;s.bus.late_index=1;}else{s.bus.scheduler_us=1000;}
+    assert!(s.scheduler_zero(1000).is_err());assert!(s.failed().is_some());
+    assert_eq!(s.bus.writes.iter().filter(|(at,_,v)|*at==R_AX_H2CREG_CTRL&&*v==1).count(),usize::from(!late_guard));
+    if !late_guard{assert_eq!(s.bus.regs[R_AX_C2HREG_CTRL],1);}
+});}}
+#[test]
+fn owned_scheduler_applied_doorbell_failure_is_never_retried(){with_session(|s|{
+    use crate::rxdck::RxdckIo;s.bus.fail_at=Some(R_AX_H2CREG_CTRL);
+    assert_eq!(s.scheduler_zero(1000).unwrap_err().kind,FaultKind::Access);let n=s.bus.writes.len();
+    assert!(s.scheduler_zero(1000).is_err());assert_eq!(s.bus.writes.len(),n);assert_eq!(s.bus.regs[R_AX_C2HREG_CTRL],1);
+});}
