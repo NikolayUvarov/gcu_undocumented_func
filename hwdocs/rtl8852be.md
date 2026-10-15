@@ -655,3 +655,6 @@ c36f14571). Independent reviews corrected a pre-publication deadline gap
 and a consecutive-clock regression gap, each with regression cases. The
 fixtures include the actual DMA queue adapter and C2H parser through a
 stateful model; they do not establish hardware transport or BTC grants.
+The separately guarded BB/RF/NCTL table library and its integration limits are
+described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
+native firmware diagnostic and does not establish calibrated radio operation.

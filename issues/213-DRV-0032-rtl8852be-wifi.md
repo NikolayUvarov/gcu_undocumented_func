@@ -239,3 +239,36 @@ passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
 and deadline boundaries before publication. The native service and existing
 firmware-download path are unchanged. Hardware acceptance stays open.
+### Implemented slice: exact RFE-1/cut-1 PHY tables
+
+The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
+BSD BB/gain/RF/NCTL data and bounded production stages in `phy.rs`.
+The RF stage includes both physical paths and mandatory firmware mirrors
+under one deadline. Partial failures poison the attempt and independently
+attempt BB/RF disable; guard refusal never changes an unknown active device.
+The library requires actual firmware-init-ready, full single-band MAC,
+BB access, stopped data paths and a complete BAR2 mapping. The native service
+still does not call it. The chip TX-power unit, gain decoding and BB reset
+now follow the BB table under the same deadline; failed interleaves cannot
+publish gains or admit RF programming. The additional RCK stage follows NCTL and source DPK backoff, with bounded
+analog/direct RF access and separate RF5-restore/chip-disable errors.
+BTC/pre-NCTL DM interleaves, remaining RFK calibration,
+board trims and regulatory authorization remain integration
+work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
+
+The initial `59a77177` run passed 18/19 Rust cases; the RF-prefix case
+incorrectly expected register 0 before the pinned table's first register 5.
+After correction and publication of `f4766604`, all 20 Rust fixtures and four
+extractor fixtures passed, as did pinned-source regeneration. Published
+`78cf274a` passed all 24 Rust cases including the TX-power/BB-reset interleave.
+Published `0d6c66bf` passed all 34 RCK/RF/PHY fixtures. The separate DACK
+engine follows with mandatory typed BTC START/STOP, pinned BSD calibration
+tables and preserved per-stage/cleanup failures. After publication of
+`7c6d5ecc` and `a8418545`, all 44 Rust and three DACK extractor fixtures
+passed, as did pinned table regeneration. The next initial RXDCK slice uses
+the shared zero-only scheduler mailbox, post-DACK phase guard and actual BTC
+contract. Native build passes and 56 fixtures compile; execution awaits its
+publication. It never enables packet transmission.
+Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
+
+Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
