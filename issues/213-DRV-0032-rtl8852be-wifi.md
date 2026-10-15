@@ -164,8 +164,12 @@ still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
 RFK calibration, board trims and regulatory authorization remain integration
 work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
 
-The x86 native release build and compilation of 19 host fixtures pass.
-Focused test execution waits for publication of this commit to `fast-test`,
-then runs on this branch; no hardware or radio success is claimed.
+After publication of `59a77177`, 18/19 Rust fixtures and all four extractor
+fixtures passed, as did pinned-source regeneration. The failing RF-order
+fixture expected register 0 before the source table's initial register 5.
+Its exact prefix is corrected. A twentieth fixture covers valid slow XTAL
+cleanup under the source-derived 400 ms total ceiling. The revised native
+build and fixture compilation pass; their execution awaits publication.
+No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.

@@ -14,7 +14,7 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
-    memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, id: u32, command: u16, now: u64, frozen: bool,
+    memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, xtal_delay_us: u64, xtal_pending: Option<(u64, u32)>, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
     now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>,
@@ -26,7 +26,7 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
+        let mut d = Self { memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
@@ -42,9 +42,23 @@ impl Device {
     fn get(&self, at: usize, width: usize) -> u32 {
         let mut raw = [0; 4]; raw[..width].copy_from_slice(&self.memory[at..at + width]); u32::from_le_bytes(raw)
     }
+    fn complete_xtal(&mut self, value: u32) {
+        let offset=(value&255) as usize;
+        if value & (1<<24) != 0 { self.put(0x270,4,offset as u32 | (self.xtal[offset] as u32)<<8); }
+        else {
+            let mask=(value>>16) as u8;
+            self.xtal[offset]=(self.xtal[offset]&!mask)|((value>>8) as u8 & mask);
+            self.put(0x270,4,value&!(1<<31));
+        }
+    }
     fn read(&mut self, at: usize, width: usize) -> Result<u32> {
         io::check_offset(at, width, self.memory.len())?;
         self.reads += 1; self.tick(1);
+        if at == 0x270 && width == 4 {
+            if let Some((ready, command)) = self.xtal_pending {
+                if self.now >= ready { self.xtal_pending=None; self.complete_xtal(command); }
+            }
+        }
         if at == 0x1174c && width == 4 {
             if self.swsi_stuck { return Ok(1 << 24); }
             if self.swsi_busy != 0 { self.swsi_busy -= 1; return Ok(1 << 24); }
@@ -63,13 +77,9 @@ impl Device {
             return Err(Fault::new(FaultKind::Access, at, value));
         }
         if at == 0x270 && width == 4 && !self.xtal_stuck {
-            let offset=(value&255) as usize;
-            if value & (1<<24) != 0 { self.put(at,4,offset as u32 | (self.xtal[offset] as u32)<<8); }
-            else {
-                let mask=(value>>16) as u8;
-                self.xtal[offset]=(self.xtal[offset]&!mask)|((value>>8) as u8 & mask);
-                self.put(at,4,value&!(1<<31));
-            }
+            assert!(self.xtal_pending.is_none(), "a pending XTAL command must not be overwritten");
+            if self.xtal_delay_us == 0 { self.complete_xtal(value); }
+            else { self.xtal_pending=Some((self.now+self.xtal_delay_us,value)); }
         }
         if at == 0x10370 { self.swsi_busy = 1; }
         Ok(())
@@ -186,7 +196,8 @@ fn both_rf_paths_use_swsi_and_direct_windows_then_mirror_the_digital_words() {
     let mut d=Device::new(); let mut p=Phy::new(&mut d,identity());
     p.baseband().unwrap(); p.bus_between_stages().events.clear(); p.radio().unwrap();
     assert_eq!(p.state(),State::RadioLoaded);
-    assert_eq!(d.events[0], Event::Write(0x10370,4,0x30000));
+    assert_eq!(&d.events[..3], &[Event::Write(0x10370,4,0x500000),
+        Event::Write(0x10370,4,0x30000), Event::Write(0x1e000,4,0x30000)]);
     let pages=d.pages(); assert_eq!(pages.len(),2);
     for (index,(path,bytes,_)) in pages.iter().enumerate() {
         assert_eq!(*path,index as u8); assert_eq!(bytes.len(),1176);
@@ -323,4 +334,12 @@ fn cleanup_xtal_read_timeout_reports_failure_without_overwriting_for_the_other_p
     assert_eq!(error.disable_bb_rf.unwrap().kind,FaultKind::Timeout);
     let commands:Vec<_>=d.events.iter().filter(|e| matches!(e,Event::Write(0x270,4,_))).collect();
     assert_eq!(commands.len(),1); assert_eq!(d.xtal[0x80],0xc7); assert_eq!(d.xtal[0x81],0xc7);
+}
+
+#[test]
+fn chip_cleanup_accepts_slow_xtal_commands_within_source_derived_total_budget() {
+    let mut d=Device::new(); d.fail_write=Some(20); d.xtal_delay_us=10_000;
+    let start=d.now; let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
+    assert_eq!(error.cause.kind,FaultKind::Access); assert!(error.disable_bb_rf.is_none());
+    assert!(d.now-start>=60_000 && d.now-start<400_000); assert!(d.xtal_pending.is_none()); d.reset();
 }

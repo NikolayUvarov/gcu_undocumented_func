@@ -21,7 +21,8 @@ const DATA_BUSY: u32 = 0x006b_0f03;
 /// All reads and the H2C transport refer to the same exclusively owned RTL8852BE function.
 /// The transport copies the payload and drains hardware command consumption/PCIe TX busy before returning.
 /// All transport work shares `timeout_us`; command consumption does not establish firmware application.
-/// Send H2C type=0/category=2/class=8+path/function=page, with neither receive nor done ACK requested.
+/// Send H2C type=0/category=2/class=8+path/function=page, with explicit receive/done ACK flags false.
+/// Preserve the normal H2C sequence and its periodic receive-ACK policy; DMA drain is not a firmware ACK.
 /// It may operate only the preinstalled command ring; it must retain DMA memory after every failure.
 pub trait PhyIo: RegisterIo {
     fn pci_id(&mut self) -> io::Result<u32>;
@@ -121,7 +122,8 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
 }
 
 fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
-    let mut io = TimedIo::new(bus, 1_000);
+    // Two XTAL paths share the eight 50 ms idle/read/write/readback ceilings.
+    let mut io = TimedIo::new(bus, 400_000);
     let mut first = None;
     let mut remember = |result: io::Result<()>| { if let Err(error) = result { if first.is_none() { first = Some(error); } } };
     remember((|| {
