@@ -359,3 +359,12 @@ publication. The complete session-bound owner and applied policy/C2H
 orchestration remain unimplemented, and no Initialized or RFK-grant token
 is available from this slice. No native or hardware guarantee changes;
 [scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+
+The PHY-capability query shares the scheduler's register mailbox and counters,
+requires an actual downloader token for the same live DLFW queue, and only
+returns a capability token after a matching complete firmware response within
+the total deadline. Raw fields and explicit successful-zero-NSS fallback flags
+remain available; OTP data or a missing reply cannot replace the response.
+Session identity, independent command/WCPU cleanup and retained DMA remain
+part of the contract. Ten new host cases compile; execution, native integration
+and physical-device evidence are pending.
