@@ -150,3 +150,27 @@ final-drain deadline handling; actual source/kernel integration checks
 corrected optional PCI I/O decoding and the existing powered-CMAC state.
 No native activation, hardware firmware readiness, RF or network claim
 follows from these tests. Required later integration/full gate remain open.
+
+### Implemented slice: exact RFE-1/cut-1 PHY tables
+
+The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
+BSD BB/gain/RF/NCTL data and bounded production stages in `phy.rs`.
+The RF stage includes both physical paths and mandatory firmware mirrors
+under one deadline. Partial failures poison the attempt and independently
+attempt BB/RF disable; guard refusal never changes an unknown active device.
+The library requires actual firmware-init-ready, full single-band MAC,
+BB access, stopped data paths and a complete BAR2 mapping. The native service
+still does not call it. The chip TX-power unit, gain decoding and BB reset
+now follow the BB table under the same deadline; failed interleaves cannot
+publish gains or admit RF programming. BTC/DM interleaves, RFK calibration,
+board trims and regulatory authorization remain integration
+work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
+
+After publication of `f4766604`, all 20 Rust fixtures and four extractor
+fixtures passed, as did pinned-source regeneration. The earlier RF-order
+expectation is corrected to register 5 before register 0. Slow XTAL cleanup
+uses the source-derived common 400 ms ceiling. The separate TX-power/BB-reset
+slice builds natively and 24 fixtures compile; those revised fixtures await
+publication before execution. No hardware or radio success is claimed.
+
+Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.

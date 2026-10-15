@@ -11,4 +11,6 @@ pub mod io;
 pub mod mac;
 pub mod pcie;
 pub mod power;
+pub mod phy;
+mod phy_tables;
 pub mod registers;
