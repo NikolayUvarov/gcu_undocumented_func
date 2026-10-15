@@ -32,10 +32,10 @@ pub trait PhyIo: RegisterIo {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, DpkBackoff, RckA, RckB }
+pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, DpkBackoff, RckA, RckB }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, Failed }
+pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, Failed }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Failure { pub stage: Stage, pub cause: Fault, pub disable_bb_rf: Option<Fault>, pub restore_rf: Option<Fault> }
@@ -125,7 +125,7 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     Ok(())
 }
 
-fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
+pub(crate) fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
     // Two XTAL paths share the eight 50 ms idle/read/write/readback ceilings.
     let mut io = TimedIo::new(bus, 400_000);
     let mut first = None;
@@ -399,6 +399,16 @@ impl<'a, B: PhyIo> Phy<'a, B> {
                 Err(failure)
             }
         }
+    }
+
+
+    /// Run DACK only after RCK, with actual BTC arbitration and the same initialized channel-band context.
+    pub fn dack(&mut self,band:crate::dack::Band)->core::result::Result<crate::dack::ResultData,crate::dack::Failure>
+    where B:crate::dack::DackIo {
+        let start=self.begin(Stage::Dack,State::RckDone).map_err(|failure|crate::dack::Failure::guard(failure.cause))?;
+        let result=crate::dack::run(self.bus,band,start);
+        self.state=if result.is_ok() {State::DackDone} else {State::Failed};
+        result
     }
 
 }

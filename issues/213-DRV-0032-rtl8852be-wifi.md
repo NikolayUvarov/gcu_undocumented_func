@@ -173,8 +173,11 @@ incorrectly expected register 0 before the pinned table's first register 5.
 After correction and publication of `f4766604`, all 20 Rust fixtures and four
 extractor fixtures passed, as did pinned-source regeneration. Published
 `78cf274a` passed all 24 Rust cases including the TX-power/BB-reset interleave.
-The RCK slice builds natively and 34 fixtures compile; execution awaits
-publication. No hardware or radio success is claimed.
+Published `0d6c66bf` passed all 34 RCK/RF/PHY fixtures. The separate DACK
+engine follows with mandatory typed BTC START/STOP, pinned BSD calibration
+tables and preserved per-stage/cleanup failures. Its native build passes and
+44 fixtures compile; those cases plus three extractor tests await publication.
+Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
 
