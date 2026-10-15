@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-15: `rtw89_wifi/` has an initial native board-access service: MAC power, XTAL and EFUSE reads, then power-off. This slice is not a working network driver. It starts no host DMA, downloads no firmware, applies no RF calibration and registers no WLAN radio. Its build/host checks and actual hardware status are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -34,11 +34,15 @@ The listed source files carry `GPL-2.0 OR BSD-3-Clause`. The adapted public defi
 Realtek permits unmodified binary redistribution with its notice and conditions; the licence prohibits reverse engineering, decompilation and disassembly. This work uses the published open-source header definitions, not disassembled firmware. The project's personal-store policy is still followed: neither binary nor licence download is packaged in an image or committed. The fetcher saves both together.
 
 ```bash
+scripts/proprietary.sh fetch  # both MacBook Broadcom and Ryzen Realtek firmware
+# Realtek alone, without the Broadcom extractor dependency:
 python3 scripts/firmware/rtl8852be.py fetch
 python3 scripts/firmware/rtl8852be.py check
 # After an image is written, explicitly copy the personal store to the intended volume:
 scripts/proprietary.sh copy /path/to/mounted/MINDCORE
 ```
+
+`build-and-write.sh` invokes `scripts/proprietary.sh fetch`, which now includes the pinned Realtek firmware and licence. They remain in the personal store until the existing post-write copy; neither enters the image.
 
 `fetch` uses an immutable source revision, a bounded read, exact size/hash checks and atomic replacement. `check` never uses the network. Neither command writes a disk. The existing `proprietary.sh copy` copies all files under `proprietary/firmware/`, retaining the Realtek licence alongside its binary; run it only against the intended written volume.
 
@@ -230,9 +234,9 @@ After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
 2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
 `fast-test`. The earlier frozen `a99cc44a` full gate excludes this later slice.
 The actual RTL8852BE has not used this queue.
-The native board service still has no DMA capability and does not call it;
-KRN integration must remain disabled until a complete MAC/PCIe startup and
-quiescence path is reviewed. Firmware authentication/address policy, H2C
+At that library commit the native board service had no DMA capability and
+did not call it; the later diagnostic integration is described below.
+Firmware authentication/address policy, H2C
 encoding, WCPU sequencing and RX/C2H completion are not supplied by this queue.
 
 ## MAC download-memory preparation (213-DRV-0032)
@@ -409,9 +413,8 @@ a delayed-index fixture. Integration review corrected the optional I/O BAR
 decode contract and an invented CMAC-off prerequisite: the real power-on
 sequence already enables CMAC functions while BB remains reset.
 
-The native board service does not invoke this stage. Actual Ryzen security
-bytes, DMA/WCPU firmware operation and complete integration remain
-unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
+The native diagnostic integration is described below. Actual Ryzen security
+bytes and DMA/WCPU firmware operation remain unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
 
 ## Single-band runtime MAC preparation library
 
@@ -507,6 +510,67 @@ MAC-off or establish ownership of old DMA. The board's cold-state guard
 remains; an owned quiescence/reset transition is still required for warm
 boot/restart support.
 
+## Native firmware diagnostic integration (213-KRN-0114)
+
+The native entry reads `data/firmware/rtw89/rtw8852b_fw-1.bin` through its
+read-only VFS client into private process pages. Missing, wrong-sized or
+wrong-hash files stop before board MMIO access; no firmware bytes enter the
+image. VFS open/close calls have two-second IPC timeouts; chunked reads share
+a five-second deadline. The exact hash check is repeated with the actual
+board's cut/RFE/OTP/image policy after the board-read power-off cycle.
+
+`init` retains a 128 KiB DMA region and passes it in `SLOT_MEM`, along with
+the existing decimal PCI device index. The adapter verifies its DMA kind,
+4 KiB virtual/physical alignment and full bounds below 4 GiB before queue
+construction. The x86 kernel maps DMA as WB and BAR MMIO as UC. The native
+adapter uses `ManuallyDrop` for the DMA mapping and never frees or remaps it
+after a queue exists, including on setup failure or failed cleanup.
+
+`startup.rs` enforces verification before queue initialization, then MAC
+power-on, download-memory preparation, PCIe preparation, ring installation,
+BDRAM finish, kernel mastering, command-only activation and one download.
+Ordinary packet DMA/WPDMA and RXHCI remain stopped; only channel 12 and PCIe
+I/O are unstopped with TXHCI. A successful firmware status 7 is logged with
+its version, then independently bounded DMA/WCPU stop always follows.
+
+Kernel `registers_only` disables bus mastering while preserving MEM decode;
+an explicit PCI Command read must confirm low bits 2. If either check fails,
+no more MMIO is performed. Otherwise MAC power-off gets a fresh one-second
+budget, followed by a final kernel quiesce and Command readback. Primary,
+DMA/WCPU stop, kernel transition and power-off errors remain separate.
+Even complete cleanup does not release the retained DMA mapping or claim
+IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
+radio endpoint, packet traffic or native hardware evidence yet.
+
+Own-branch `5f1d940d` builds both the native driver and init. After raw
+`fast-test` publication `649fea37`, all ten production startup/activation
+host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
+failed/ignored). They cover orchestration and register models, not the actual
+PCIe fabric or RTL8852BE power/firmware path. The cumulative MMIO model below
+adds a separate compatibility check across the library stages.
+
+The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
+from cold board access through power/MAC/PCIe and command activation, without
+reseeding guard registers between stages. Its explicit local companion adds
+production pinned-file verification, full transfer/status and stop/power-off,
+including missing-H2C-readiness cleanup. After raw publication `8461fd20`,
+own-branch `09d1ceaa` passed both standard cases (zero failed/ignored, 0.00 s)
+and three explicit private-file scenarios on 2026-10-16. GEN1/GEN2 each
+transferred 164 packets, with all 326,472 section bytes matching the pinned
+file, reached status 7/version 0.29.29.15 and completed stop/power-off.
+Withheld H2C readiness timed out before the first packet and still completed
+independent cleanup. These runs used x86-64 Linux 6.6.87.2 WSL2 and
+rustc 1.101.0-nightly c36f14571. Their modeled durations are not device timings.
+The model synthesizes readiness and consumes doorbells synchronously; it
+does not model PCIe timing, ordering faults, real OTP or firmware execution.
+There is no new ignored/conditional pass in the host gate. The private check
+requires a separately fetched file and writes no payload to a report:
+
+```sh
+rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
+/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
+```
+
 ## MAC tail and receive-only post-init library
 
 `post_mac::activate` follows pinned `mac.c:3569–3909` and
@@ -574,7 +638,7 @@ Full-gate and physical-device evidence remain pending.
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
-After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue above is not wired into a device startup. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
+After the board/firmware diagnostic passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue is wired only into the bounded diagnostic above. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from these host tests.
 
 ## Reproducible host evidence
 
@@ -589,3 +653,128 @@ RTW89_FIRMWARE="$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin" /tmp/rtw89_fi
 ```
 
 On 2026-10-15, 12 synthetic Rust tests, five offline fetcher tests, the `no_std` build and the separate two-cut proprietary-file validation passed. The normal suite intentionally does not require or embed the proprietary file. These checks do not exercise the Ryzen hardware or establish radio functionality.
+
+## Normal H2C sequencing and BT RFK observation prerequisites
+
+The initial `h2c.rs` library uses the pinned `fw.c:1480`
+`rtw89_h2c_pkt_set_hdr` contract: an eight-byte header, delivery type zero,
+category/class/function, byte sequence and total packet length. Every fourth
+sequence requests a receipt ACK even when the caller did not ask for one.
+Firmware-download headers keep their existing separate, unadvanced sequence.
+The implementation uses the typed `c2h.rs` receipt/done decoder, whose
+sequence positions differ. All four identity fields must match. An
+unsolicited DONE, an unrelated event, descriptor consumption or receipt
+alone cannot complete a command that requires DONE. Firmware rejection
+preserves its status byte. Results distinguish transport submission,
+receipt, successful requested completion and rejection.
+
+`Engine` admits eight outstanding or uncollected results and bodies up to
+2012 bytes; the production `CommandQueue` adapter uses the existing bounded
+channel-12 queue. Packet construction, publication and ACK waiting share an
+absolute deadline of at most one second. A pre-publication clock check
+passes only the remaining budget to the adapter; a final check rejects late
+completion. `poll` must run between bounded RX polls even without events.
+Full without publication does not advance the sequence. Uncertain sends,
+backward clocks and expired commands poison the entire session; no command
+is automatically resent, and this object does not stop DMA or free memory.
+
+This is a startup prerequisite, not continuous runtime transport: only
+sequences 0 through 255 are admitted. Exhaustion refuses new work instead
+of wrapping and misidentifying a delayed old ACK. Reconstructing an engine
+against the same live firmware session is outside its contract. Continuous
+operation needs a separate ordered C2H-drain/session-recovery contract; a
+firmware reset every 256 commands is not an implemented networking service.
+The native firmware diagnostic does not invoke this library or activate RX.
+
+`btc.rs` reads the actual BT-side scoreboard at BAR2 `0xac`, polling RFK RUN
+and REQUEST bits 5/6 every 40 microseconds for at most 100 milliseconds.
+Unavailable reads, time regression and timeout fail closed; no unobserved
+BT timeout report overrides a busy adapter. A returned `ClearSnapshot` is
+only a transient observation. It performs no write and is **not** an RFK
+START grant or a successful DACK coexistence callback.
+
+The remaining START/STOP integration is concrete. Pinned `coex.c`
+`_ntfy_wl_rfk` and `_run_coex` require initialized BTC state, antenna/grant
+selection, TDMA/coexistence policy and an owned WLAN scoreboard shadow.
+WLRFK is bit 11 in that WLAN shadow. The read view of `0xac` is BT's
+scoreboard, so copying its lower 24 bits into WLAN's write view is incorrect.
+`mac.c:6359` `rtw89_mac_cfg_sb` preserves the firmware notification field,
+sets the toggle and waits one millisecond after a write. START must return
+success only after actual arbitration and the applicable policy have been
+applied; STOP must clear the owned WLRFK state and restore/apply the proper
+post-calibration policy, including failure cleanup. Normal H2C DONE alone
+establishes none of those conditions. There is no native success stub.
+
+Source SHA-256 at the pinned revision: `fw.c`
+`64c86436e8e0f7f9ecd4364d2d2c48be4549a0448b3ce738eee7e8c25e5875ce`,
+`fw.h` `bae6675fc95c3f6edd348aaa78c2bbb5cc7768f1961a91fb95ff49624aa9e345`,
+`coex.c` `c38d8a42a57300c0c376217d3472e2a3176760346ab44b8c21cca6b98c63a11c`,
+`mac.c` `ce5c09696ba6dcdc2003ce28803052fd3238c9da55188046e3e6e1ed82658055`.
+These source files offer the BSD-3-Clause option used here; notices are in
+`THIRD_PARTY.md` and the retained Realtek licence.
+
+The own-branch native x86-64 release build passed (0.53 seconds, no warnings).
+After raw publication `d9266c7b`, own-branch `d951d101` passed all thirteen
+H2C and six BT-observation host fixtures on 2026-10-16 (both 0.00 seconds,
+zero failed/ignored; x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly
+c36f14571). Independent reviews corrected a pre-publication deadline gap
+and a consecutive-clock regression gap, each with regression cases. The
+fixtures include the actual DMA queue adapter and C2H parser through a
+stateful model; they do not establish hardware transport or BTC grants.
+
+The separately guarded BB/RF/NCTL table library and its integration limits are
+described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
+native firmware diagnostic and does not establish calibrated radio operation.
+
+
+## Hardware coexistence initialization before NCTL
+
+`btc_init::prepare(&mut Phy, &Board, &download::Ready)` accepts only the
+actual supported cut-1/RFE-1 board, nonsecure OTP `ff/ff` and pinned firmware
+0.29.29.15. The existing private PHY state must be `RadioLoaded`, and its
+live `BeforeDack` register guard still requires ordinary RX/TX stopped.
+The order is the pinned `core.c:5654–5658`: radio tables, BTC initialization,
+then PHY dynamic management/NCTL. No receive-only guard exception is added.
+
+This slice ports `rtw8852b_common.c:1799` `__rtw8852bx_btc_init_cfg` and
+`mac.c:6122` `rtw89_mac_coex_init`: internal Realtek PTA, LTE SW_CFG2,
+WLAN response/beacon priorities, RF grant-debug disable, the four shared
+antenna RF LUT entries, the break table and BT counters. The selected RFE
+uses A/B sleep masks `0x5ff`, A TX `0x5ff` and B TX `0x55f`. Register
+operations preserve the source's access widths and unrelated bits.
+
+The whole stage has a 200 ms deadline, including its initial live guard.
+LTE readiness waits are capped at 50 ms with finite polls even if the clock
+stops. Unlike the source's log-and-continue path, failed readiness returns
+before any new indirect command. The source's immediate RDATA read after
+its read command is retained. A final readiness check after the write uses
+the same condition required by the next source transaction. Failure never
+replaces/retries a pending LTE command. Both RF LUT write gates are closed
+and read back independently under fresh 1 ms budgets after a modified
+failure, followed by the shared independently bounded chip BB/RF disable.
+Primary and cleanup errors stay separate; the PHY attempt becomes Failed.
+DMA remains owned by the caller; neither success nor cleanup frees memory.
+This cleanup does not claim to restore every previously changed PTA field.
+
+The opaque `ConfigPrepared` result means hardware initcfg only. It does not
+set a complete software BTC initialized flag, publish a WLAN scoreboard,
+send TDMA policy, select RFK antenna/grants or authorize calibration. Actual
+coexistence context, firmware-profile-matched control/init/report messages,
+policy application and STOP restoration remain subsequent prerequisites.
+`Phy::nctl` still documents the interleave obligation; a complete typed BTC
+prerequisite will enforce it in the later integration. Native main/init and
+its firmware-only diagnostic are unchanged.
+
+Source hashes at the same BSD-licensed pin: `rtw8852b_common.c`
+`34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb`,
+`rtw8852b.c` `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a`,
+`core.c` `41ea6a22a4ff78035364def00c70edb49d821f2d4cb12869f1a0a87e6ee54886`;
+`mac.c` and `coex.c` hashes are recorded above. Own-branch `e6ed1e2c`
+no-std native build passed (3.53 seconds, no warnings). After raw publication
+`c2facb84`, all nine new BTC-init fixtures passed on 2026-10-16. Their
+executable also includes 18 inherited downloader synthetic tests, all passing,
+and its existing optional private-file ignored case: 27 passed, zero failed,
+one inherited ignored, 0.19 seconds (x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571). No new BTC test is ignored. The fixtures run real BB/radio
+stages into a stateful register model before BTC; hardware initialization,
+calibration and network acceptance remain open.

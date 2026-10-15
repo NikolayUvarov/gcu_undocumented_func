@@ -1,6 +1,6 @@
 # 750-EFF-0006 — `effector`: the session with the Effector server
 
-**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** 0001–0004; [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) (an HTTP/1.1 client for a service), [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done) (a pinned leaf certificate), [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON in `parse`); [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) (a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
+**Type:** service · **Owner:** ASTRA auditor-fixer, for `EFF` · **Priority:** P1 · **Status:** in progress · **Blocked by:** 0001–0004; [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) (an HTTP/1.1 client for a service), [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done) (a pinned leaf certificate), [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done) (JSON in `parse`); [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done) (a flow for a long-running service); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants); [requests-APP.md](requests-APP.md) (the shell's `effector` command, for the configuration) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.3, MC-11.4, MC-11.6, MC-11.11, MC-7.1, MC-7.5, MC-7.6, MC-6.6, MC-6.9
 
 ## Problem
 
@@ -77,3 +77,26 @@ healthy link and measure heartbeat gaps and socket-service latency. Use that
 evidence to implement a shared turn budget, fair rotation or asynchronous
 driver calls. Do not hide the gap by broadening server timeouts or transfer
 per-card boundedness into a heartbeat guarantee.
+
+## Bounded session core — 2026-10-15
+
+`effector/src/session.rs` now implements separate heartbeat/poll/ACK lanes,
+validated bounded command identity, initial explicit denial, durable-write
+confirmation before ACK, replay of saved results, retry/backoff, retained
+records on expiry/permanent refusal, and orderly-shutdown scheduling. It is
+production `no_std` library code with no local-action authority. The journal
+write is an internal effect for the trusted store adapter, not a remote API
+that can assert an action completed.
+
+Implementation `e947245086957218e3c3db92ddedb5dba767c0e4` builds for
+`x86_64-unknown-none`. After publication in `fast-test` `b8e02e3a`, all 20
+`tests/effector_session_host.rs` regressions passed on the implementation's
+own branch (zero failures or ignored tests). No test ran on `fast-test`.
+[Session core and limits](../docs/effector/session.md) records the exact
+configuration and scope; no QEMU, transport, hardware or full gate ran.
+
+This does not supply a running boot service. The current HTTP client is
+synchronous: separate connections alone do not make heartbeat independent.
+The transport executor, JSON adapter, 0007 durable store, existing KRN grants
+and APP configuration requests, SSE/pins and all QEMU/live/hardware acceptance
+remain open. No agent registration or remote operation was performed.

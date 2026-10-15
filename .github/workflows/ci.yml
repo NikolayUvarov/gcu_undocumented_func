@@ -89,6 +89,9 @@ jobs:
           # The TSC's first measure 9% high: measured again on the ACPI PM timer, the clock keeps the host's time (000-KRN-0100).
           - name: TSC measured again
             args: --kernel /tmp/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock
+          # Every CPU stopped for good: the ICH9's TCO timer resets the machine on q35, and the next boot says so (000-KRN-0076).
+          - name: the watchdog
+            args: --kernel /tmp/mind-watchdog-target/x86_64-unknown-none/release/kernel --suites watchdog
           - name: USB image
             usb: true
     name: QEMU (${{ matrix.name }})

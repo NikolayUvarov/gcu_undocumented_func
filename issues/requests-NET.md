@@ -75,3 +75,13 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## Note: the kernel's side of 550-NET-0018, 550-NET-0024, 000-NET-0015 and 351-NET-0022 (550-KRN-0097, 000-KRN-0109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14. On the kernel branch, and in `main` after its gate (ABI 10):
+- `init` starts `wlan` over `bcm_wifi`, else `wlansim`, with the radio's client in slot 2 and `keystore`'s (`BADGE_KEY_STATION`) in slot 3;
+- `netstack` gets `wlan` in slot 4;
+- the `net` suite puts `wlansim` on its disk;
+- the shell's `SLOT_NET` and `SLOT_TLS` copies carry `CAP_BADGE`.
+
+The network track's QEMU checks of the station, the remembered networks, the read-only card client and TLS without the device certificate can follow.

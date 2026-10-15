@@ -151,6 +151,40 @@ corrected optional PCI I/O decoding and the existing powered-CMAC state.
 No native activation, hardware firmware readiness, RF or network claim
 follows from these tests. Required later integration/full gate remain open.
 
+### Implemented slice: exact RFE-1/cut-1 PHY tables
+
+The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
+BSD BB/gain/RF/NCTL data and bounded production stages in `phy.rs`.
+The RF stage includes both physical paths and mandatory firmware mirrors
+under one deadline. Partial failures poison the attempt and independently
+attempt BB/RF disable; guard refusal never changes an unknown active device.
+The library requires actual firmware-init-ready, full single-band MAC,
+BB access, stopped data paths and a complete BAR2 mapping. The native service
+still does not call it. The chip TX-power unit, gain decoding and BB reset
+now follow the BB table under the same deadline; failed interleaves cannot
+publish gains or admit RF programming. The additional RCK stage follows NCTL and source DPK backoff, with bounded
+analog/direct RF access and separate RF5-restore/chip-disable errors.
+BTC/pre-NCTL DM interleaves, remaining RFK calibration,
+board trims and regulatory authorization remain integration
+work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
+
+The initial `59a77177` run passed 18/19 Rust cases; the RF-prefix case
+incorrectly expected register 0 before the pinned table's first register 5.
+After correction and publication of `f4766604`, all 20 Rust fixtures and four
+extractor fixtures passed, as did pinned-source regeneration. Published
+`78cf274a` passed all 24 Rust cases including the TX-power/BB-reset interleave.
+Published `0d6c66bf` passed all 34 RCK/RF/PHY fixtures. The separate DACK
+engine follows with mandatory typed BTC START/STOP, pinned BSD calibration
+tables and preserved per-stage/cleanup failures. After publication of
+`7c6d5ecc` and `a8418545`, all 44 Rust and three DACK extractor fixtures
+passed, as did pinned table regeneration. The next initial RXDCK slice uses
+the shared zero-only scheduler mailbox, post-DACK phase guard and actual BTC
+contract. Native build passes and 56 fixtures compile; execution awaits its
+publication. It never enables packet transmission.
+Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
+
+Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
+
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -219,6 +253,30 @@ state. A future owned warm-state shutdown/reset must establish quiescence
 and retain any previously reachable memory before cold reinitialization;
 this slice does not pretend to provide that transition.
 
+### Initial normal-H2C and BT-arbitration prerequisites
+
+`h2c.rs` adds normal sequence/header construction, a real command-queue
+adapter and bounded receipt/DONE correlation through `c2h.rs`. Eight slots,
+one-second maximum absolute deadlines and a first-stage 256-command limit
+bound state. Full before publication consumes no sequence; ambiguous sends,
+time regression and timeout poison the session without retransmission.
+Unrequested/mismatched ACKs cannot turn a command into success. Continuous
+sequence reuse, RX activation and native command routing remain separate.
+
+`btc.rs` implements an actual bounded read-only BT RFK RUN/REQ wait. Its
+snapshot is not an RFK grant: DACK START/STOP still needs initialized BTC
+context, an owned WLAN scoreboard shadow, antenna/grant configuration,
+version-matched TDMA policy and restoration/cleanup. The BT read view cannot
+be used as the WLAN write shadow. No fake successful callback is supplied.
+The exact source flow and next integration boundaries are in the
+[hardware notes](../hwdocs/rtl8852be.md#normal-h2c-sequencing-and-bt-rfk-observation-prerequisites).
+Own-branch `d951d101` builds natively (0.53 seconds, no warnings). After
+raw publication `d9266c7b`, all thirteen H2C and six BT-observation fixtures
+passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
+and deadline boundaries before publication. The native service and existing
+firmware-download path are unchanged. Hardware acceptance stays open.
+
 ### Initial calibration scheduler contract
 
 Expose the existing firmware-owned scheduler-zero exchange for the initial
@@ -259,6 +317,24 @@ seconds, none ignored; 36 other module cases filtered), as did all 18
 affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
 review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
 containing this slice and actual hardware operation remain pending.
+
+### Hardware BTC initcfg prerequisite
+
+Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
+LUT and counter initialization between actual `Phy::RadioLoaded` and NCTL.
+`ConfigPrepared` deliberately represents only this hardware stage; actual
+BTC software context, scoreboard ownership, report/control policy, antenna
+selection and RFK START/STOP restoration remain open. The existing live
+PHY guard continues to reject active ordinary RX/TX. A failed modified
+attempt independently closes both LUT write gates, disables BB/RF and
+poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
+The native service is unchanged. Own-branch `e6ed1e2c` native build passed
+(3.53 seconds, no warnings). After raw publication `c2facb84`, all nine
+new phase/source-order/failure/deadline fixtures passed on 2026-10-16. The
+executable also ran 18 inherited synthetic downloader cases successfully
+and retained its one existing optional private-file ignored case: 27 passed,
+zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
+claim follows from this library.
 
 ### Typed receive-session revalidation
 

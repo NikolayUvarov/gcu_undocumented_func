@@ -1,7 +1,7 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits.
-package mind:loader@1.8.0;
+package mind:loader@1.9.0;
 
 interface loader {
     /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
@@ -48,4 +48,8 @@ interface loader {
     /// endpoints of its own, 2 MiB of memory. It serves that endpoint alone and ends when told or left idle; a caller
     /// may have 4 at once (`limit`). Returns its PID.
     helper: func(which: helper-kind, served: borrow<endpoint>) -> result<u64, error>;
+    /// `commit`, or with `front` `commit-in-front`, the program started with a text input (1.9, 000-KRN-0094): returns
+    /// the writer of that input (`mind::io::Writer`), whose `CAP_INFO` names the program's PID. The program reads it with
+    /// `mind::io` to its end, which comes when the writer closes it or no copy of the writer is left.
+    commit-with-input: func(session: u32, front: bool) -> result<own<text>, error>;
 }

@@ -35,11 +35,14 @@ fn request(page: &mut [u8], name: &str, guid: &[u8; 16], attributes: u32, data: 
 
 /// Reads variable `name` of `guid` into `out`: its attributes and length. NotFound when it is not set, or the firmware
 /// has no runtime variable services.
-pub fn get(name: &str, guid: &[u8; 16], out: &mut [u8]) -> Result<(u32, usize)> {
+pub fn get(name: &str, guid: &[u8; 16], out: &mut [u8]) -> Result<(u32, usize)> { get_in(SLOT_FIRMWARE, name, guid, out) }
+
+/// `get` through the privilege in `cap` (init's own, 000-KRN-0076).
+pub fn get_in(cap: usize, name: &str, guid: &[u8; 16], out: &mut [u8]) -> Result<(u32, usize)> {
     let mut pages = Pages::new(FIRMWARE_BUFFER).ok_or(Error::NoMemory)?;
     let page = pages.as_mut_slice();
     let end = request(page, name, guid, 0, &[])?;
-    let length = check(syscall(SYSCALL_FIRMWARE_VARIABLE, SLOT_FIRMWARE, FIRMWARE_GET, [page.as_ptr() as usize, FIRMWARE_BUFFER, 0, 0]).result)?;
+    let length = check(syscall(SYSCALL_FIRMWARE_VARIABLE, cap, FIRMWARE_GET, [page.as_ptr() as usize, FIRMWARE_BUFFER, 0, 0]).result)?;
     let attributes = u32::from_le_bytes(page[16..20].try_into().unwrap());
     let n = length.min(out.len());
     out[..n].copy_from_slice(&page[end..end + n]);
@@ -47,9 +50,12 @@ pub fn get(name: &str, guid: &[u8; 16], out: &mut [u8]) -> Result<(u32, usize)> 
 }
 
 /// Writes variable `name` of `guid` with `attributes`; empty `data` deletes it.
-pub fn set(name: &str, guid: &[u8; 16], attributes: u32, data: &[u8]) -> Result<()> {
+pub fn set(name: &str, guid: &[u8; 16], attributes: u32, data: &[u8]) -> Result<()> { set_in(SLOT_FIRMWARE, name, guid, attributes, data) }
+
+/// `set` through the privilege in `cap`.
+pub fn set_in(cap: usize, name: &str, guid: &[u8; 16], attributes: u32, data: &[u8]) -> Result<()> {
     let mut pages = Pages::new(FIRMWARE_BUFFER).ok_or(Error::NoMemory)?;
     let page = pages.as_mut_slice();
     let end = request(page, name, guid, attributes, data)?;
-    check(syscall(SYSCALL_FIRMWARE_VARIABLE, SLOT_FIRMWARE, FIRMWARE_SET, [page.as_ptr() as usize, end + data.len(), 0, 0]).result).map(|_| ())
+    check(syscall(SYSCALL_FIRMWARE_VARIABLE, cap, FIRMWARE_SET, [page.as_ptr() as usize, end + data.len(), 0, 0]).result).map(|_| ())
 }
