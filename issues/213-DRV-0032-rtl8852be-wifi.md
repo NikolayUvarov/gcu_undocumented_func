@@ -303,3 +303,17 @@ retained allocations still require external PCI quiescence. Add applied
 write-failure, stale-ring, status-bit preservation and deadline fixtures.
 No native grant expansion, normal H2C/BTC/PHY claim or WLAN registration
 is included in this slice.
+
+### Hardware BTC initcfg prerequisite
+
+Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
+LUT and counter initialization between actual `Phy::RadioLoaded` and NCTL.
+`ConfigPrepared` deliberately represents only this hardware stage; actual
+BTC software context, scoreboard ownership, report/control policy, antenna
+selection and RFK START/STOP restoration remain open. The existing live
+PHY guard continues to reject active ordinary RX/TX. A failed modified
+attempt independently closes both LUT write gates, disables BB/RF and
+poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
+The native service is unchanged. Native build passes and nine meaningful
+phase/source-order/failure/deadline fixtures compile; execution follows raw
+publication. No hardware or working-radio claim follows from this library.
