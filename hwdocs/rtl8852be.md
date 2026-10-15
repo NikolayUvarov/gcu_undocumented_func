@@ -595,3 +595,66 @@ On 2026-10-15, 12 synthetic Rust tests, five offline fetcher tests, the `no_std`
 The separately guarded BB/RF/NCTL table library and its integration limits are
 described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
 native board-read service and does not establish calibrated radio operation.
+
+## Normal H2C sequencing and BT RFK observation prerequisites
+
+The initial `h2c.rs` library uses the pinned `fw.c:1480`
+`rtw89_h2c_pkt_set_hdr` contract: an eight-byte header, delivery type zero,
+category/class/function, byte sequence and total packet length. Every fourth
+sequence requests a receipt ACK even when the caller did not ask for one.
+Firmware-download headers keep their existing separate, unadvanced sequence.
+The implementation uses the typed `c2h.rs` receipt/done decoder, whose
+sequence positions differ. All four identity fields must match. An
+unsolicited DONE, an unrelated event, descriptor consumption or receipt
+alone cannot complete a command that requires DONE. Firmware rejection
+preserves its status byte. Results distinguish transport submission,
+receipt, successful requested completion and rejection.
+
+`Engine` admits eight outstanding or uncollected results and bodies up to
+2012 bytes; the production `CommandQueue` adapter uses the existing bounded
+channel-12 queue. Packet construction, publication and ACK waiting share an
+absolute deadline of at most one second. A pre-publication clock check
+passes only the remaining budget to the adapter; a final check rejects late
+completion. `poll` must run between bounded RX polls even without events.
+Full without publication does not advance the sequence. Uncertain sends,
+backward clocks and expired commands poison the entire session; no command
+is automatically resent, and this object does not stop DMA or free memory.
+
+This is a startup prerequisite, not continuous runtime transport: only
+sequences 0 through 255 are admitted. Exhaustion refuses new work instead
+of wrapping and misidentifying a delayed old ACK. Reconstructing an engine
+against the same live firmware session is outside its contract. Continuous
+operation needs a separate ordered C2H-drain/session-recovery contract; a
+firmware reset every 256 commands is not an implemented networking service.
+The native firmware diagnostic does not invoke this library or activate RX.
+
+`btc.rs` reads the actual BT-side scoreboard at BAR2 `0xac`, polling RFK RUN
+and REQUEST bits 5/6 every 40 microseconds for at most 100 milliseconds.
+Unavailable reads, time regression and timeout fail closed; no unobserved
+BT timeout report overrides a busy adapter. A returned `ClearSnapshot` is
+only a transient observation. It performs no write and is **not** an RFK
+START grant or a successful DACK coexistence callback.
+
+The remaining START/STOP integration is concrete. Pinned `coex.c`
+`_ntfy_wl_rfk` and `_run_coex` require initialized BTC state, antenna/grant
+selection, TDMA/coexistence policy and an owned WLAN scoreboard shadow.
+WLRFK is bit 11 in that WLAN shadow. The read view of `0xac` is BT's
+scoreboard, so copying its lower 24 bits into WLAN's write view is incorrect.
+`mac.c:6359` `rtw89_mac_cfg_sb` preserves the firmware notification field,
+sets the toggle and waits one millisecond after a write. START must return
+success only after actual arbitration and the applicable policy have been
+applied; STOP must clear the owned WLRFK state and restore/apply the proper
+post-calibration policy, including failure cleanup. Normal H2C DONE alone
+establishes none of those conditions. There is no native success stub.
+
+Source SHA-256 at the pinned revision: `fw.c`
+`64c86436e8e0f7f9ecd4364d2d2c48be4549a0448b3ce738eee7e8c25e5875ce`,
+`fw.h` `bae6675fc95c3f6edd348aaa78c2bbb5cc7768f1961a91fb95ff49624aa9e345`,
+`coex.c` `c38d8a42a57300c0c376217d3472e2a3176760346ab44b8c21cca6b98c63a11c`,
+`mac.c` `ce5c09696ba6dcdc2003ce28803052fd3238c9da55188046e3e6e1ed82658055`.
+These source files offer the BSD-3-Clause option used here; notices are in
+`THIRD_PARTY.md` and the retained Realtek licence.
+
+The own-branch native x86-64 release build passed (0.53 seconds, no warnings).
+Thirteen H2C and six BT-observation host fixtures compile. Execution awaits
+raw publication; no host-test or hardware success is claimed for this slice yet.

@@ -259,3 +259,24 @@ nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
 further mailbox calls in that session; callers must retain DMA and perform
 their independent shutdown. Add focused zero/occupied/deadline fixtures;
 native calibration and BTC arbitration are still separate prerequisites.
+
+### Initial normal-H2C and BT-arbitration prerequisites
+
+`h2c.rs` adds normal sequence/header construction, a real command-queue
+adapter and bounded receipt/DONE correlation through `c2h.rs`. Eight slots,
+one-second maximum absolute deadlines and a first-stage 256-command limit
+bound state. Full before publication consumes no sequence; ambiguous sends,
+time regression and timeout poison the session without retransmission.
+Unrequested/mismatched ACKs cannot turn a command into success. Continuous
+sequence reuse, RX activation and native command routing remain separate.
+
+`btc.rs` implements an actual bounded read-only BT RFK RUN/REQ wait. Its
+snapshot is not an RFK grant: DACK START/STOP still needs initialized BTC
+context, an owned WLAN scoreboard shadow, antenna/grant configuration,
+version-matched TDMA policy and restoration/cleanup. The BT read view cannot
+be used as the WLAN write shadow. No fake successful callback is supplied.
+The exact source flow and next integration boundaries are in the
+[hardware notes](../hwdocs/rtl8852be.md#normal-h2c-sequencing-and-bt-rfk-observation-prerequisites).
+Thirteen H2C and six BT-observation fixtures compile; execution awaits raw
+publication. The native service and existing firmware-download path are
+unchanged by these prerequisite libraries. Hardware acceptance stays open.

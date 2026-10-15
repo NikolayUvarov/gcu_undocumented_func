@@ -5,10 +5,13 @@
 pub mod board;
 pub mod dack;
 mod dack_tables;
+
+pub mod btc;
 pub mod efuse;
 pub mod download;
 pub mod firmware;
 pub mod fwcmd;
+pub mod h2c;
 pub mod io;
 pub mod mac;
 pub mod pcie;

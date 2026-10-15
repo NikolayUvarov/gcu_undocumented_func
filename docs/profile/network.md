@@ -258,3 +258,15 @@ passed on 2026-10-16 (0.13 seconds, none ignored). Hardware validation and a
 full gate containing this slice remain pending. It provides neither RX activation nor
 interrupt/WLAN integration. Warm-state ownership/quiescence is still a
 precondition, not established by PCI MEM-only decoding.
+
+The initial normal-H2C library adds bounded eight-slot correlation of typed
+receipt/DONE events, absolute command deadlines, failure poisoning and a
+256-command no-wrap limit for startup work. It does not establish a
+continuous runtime firmware transport. Its production adapter reuses the
+existing DMA command queue and therefore inherits that queue's TCB and
+retained-memory preconditions. The BT RFK prerequisite only observes actual
+RUN/REQ scoreboard bits under a bounded read-only wait; that snapshot does
+not authorize calibration. Actual BTC state, WLAN scoreboard ownership,
+antenna/grant and TDMA policy remain required for a DACK START/STOP callback.
+Thirteen H2C and six BT-observation fixtures compile; execution/native
+integration and hardware validation remain pending for this slice.
