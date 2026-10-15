@@ -180,6 +180,9 @@ objects and fresh non-wrapping process-local session numbers. It returns a
 borrowed opaque permit only after bounded live register/index checks, with
 no MMIO writes. This prevents old tokens accepting reconstructed pools at
 the same addresses; it still trusts the adapter's same-function capability
-contract. Sixteen combined post-init/session fixtures compile; new-slice
-execution/build and hardware evidence are pending. PHY/native integration
-does not yet consume this permit.
+contract. Own-branch `b8f41cb5` built without warnings in 0.51 seconds.
+After raw publication `767c2cb8`, all 16 post-init/session cases passed
+(0.82 seconds), together with 18 RX cases (0.12 seconds) and 14 FWCMD
+cases (reported 0.00 seconds), none ignored, on 2026-10-16 MSK. Full-gate
+and hardware evidence remain pending. PHY/native integration does not
+yet consume this permit.
