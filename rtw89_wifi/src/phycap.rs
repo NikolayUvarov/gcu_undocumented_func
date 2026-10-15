@@ -29,6 +29,8 @@ impl Capabilities{
     pub fn antenna_tx(&self)->u8{if self.raw_tx_antennas()==1||self.tx_path_diversity(){2}else{0}}
     pub fn antenna_rx(&self)->u8{if self.raw_rx_antennas()==1{2}else{0}}
     pub fn effective_rx_path(&self)->u8{if self.antenna_rx()==0{3}else{self.antenna_rx()}}
+    /// Identity comparison only; the caller must also revalidate the live queue and PHY attempt.
+    pub fn belongs_to(&self,ready:&download::Ready)->bool{self.session()==ready.session()}
     pub(crate) fn session(&self)->u64{self.session}
 }
 

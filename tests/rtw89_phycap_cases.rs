@@ -58,6 +58,7 @@ fn actual_exchange_returns_raw_session_bound_capabilities_without_enabling_radio
     download::tests::with_downloaded_queue(|ready,q|{
         let mut d=Device::new(q);let cap=query_default(&mut d,q,&ready).unwrap();
         assert_eq!(cap.raw(),d.response);assert_eq!(cap.session(),ready.session());
+        assert!(cap.belongs_to(&ready));
         assert_eq!((cap.tx_nss(),cap.rx_nss(),cap.antenna_tx(),cap.antenna_rx(),cap.effective_rx_path()),(2,2,0,0,3));
         assert!(!cap.tx_nss_defaulted()&&!cap.rx_nss_defaulted()&&!cap.tx_path_diversity());
         assert_eq!(d.writes,[(R_AX_H2CREG_DATA0,4,0x103),(R_AX_H2CREG_DATA0+4,4,0),(R_AX_H2CREG_DATA0+8,4,0),
