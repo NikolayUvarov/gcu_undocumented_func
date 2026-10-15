@@ -3,10 +3,10 @@ use phy::{channel::{self,Access,ChannelIo,Platform,Policy,PolicyError,Rule},dm,t
 use channel_power::Constraints;
 
 impl ChannelIo for Device{fn scheduler_zero(&mut self,timeout:u32)->Result<()>{rxdck::RxdckIo::scheduler_zero(self,timeout)}}
-fn board()->board::Board{board::Board{identity:identity(),maps:efuse::Maps{logical:[255;2048],dav_logical:[255;16],phycap:[255;128]}}}
-fn rule()->Rule{Rule{country:*b"US",version:1,center_mhz:2437,access:Access::InitiateRadiation,eirp_half_dbm:40,conducted_half_dbm:34}}
-fn platform()->Platform{Platform::Resolved(Constraints{per_ntx:[30,24],per_path:[30,30]})}
-fn with_prepared(check:impl FnOnce(&mut Phy<Device>,dm::Prefix,tail::Configured,download::DefaultTables)){
+pub(super) fn board()->board::Board{board::Board{identity:identity(),maps:efuse::Maps{logical:[255;2048],dav_logical:[255;16],phycap:[255;128]}}}
+pub(super) fn rule()->Rule{Rule{country:*b"US",version:1,center_mhz:2437,access:Access::InitiateRadiation,eirp_half_dbm:40,conducted_half_dbm:34}}
+pub(super) fn platform()->Platform{Platform::Resolved(Constraints{per_ntx:[30,24],per_path:[30,30]})}
+pub(super) fn with_prepared(check:impl FnOnce(&mut Phy<Device>,dm::Prefix,tail::Configured,download::DefaultTables)){
     phycap::tests::with_capabilities_and_tables([0x20403,2,0,0x20000],|cap,tables|{
         let mut d=Device::new();let mut p=Phy::new(&mut d,identity());let prefix=tail_cases::prepared(&mut p,&cap,dack::Band::Ghz2);
         let configured=tail::run(&mut p,&board(),&prefix,&cap,tail::Subband::Ghz2).unwrap();

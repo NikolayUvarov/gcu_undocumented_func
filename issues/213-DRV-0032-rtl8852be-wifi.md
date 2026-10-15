@@ -695,3 +695,13 @@ trigger and forces independent radio shutdown before coexistence release.
 Meaningful register/timeout/cleanup fixtures and source-table regeneration will
 be registered in the host gate; execution follows commit/build/raw publication.
 Physical quality, full channel RFK coordination and hardware traffic stay open.
+
+## Initial TSSI continuation (2026-10-16)
+
+The [private TSSI engine](../hwdocs/rtl8852be-tssi.md) implements both source
+PMAC calibration samples on both paths, board thermal/DE tables, actual
+owned BTC notices and bounded cleanup. It requires the actual IQK result
+and a consumed engine-specific calibration authority; there is no native
+provider until raw PMAC/RFK power and platform policy are resolved. Native
+build and fixture compilation pass; execution waits for raw publication.
+This does not complete channel RFK, association or physical WLAN evidence.

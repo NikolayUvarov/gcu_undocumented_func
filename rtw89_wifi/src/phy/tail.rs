@@ -59,7 +59,7 @@ fn stream_limits(bus:&mut impl RegisterIo,nss:u8,with_user:bool)->io::Result<()>
     if with_user{bb(bus,0xd80,0x3fc0,4)?;}
     bb(bus,0xd80,0x1c000,encoded)?;bb(bus,0xd80,0x03800000,encoded)
 }
-fn receive_path(bus:&mut impl RegisterIo,path:u8)->io::Result<()>{
+pub(super) fn receive_path(bus:&mut impl RegisterIo,path:u8)->io::Result<()>{
     bb(bus,0x49c4,15,u32::from(path))?;bb(bus,0x49c0,0x0003c000,u32::from(path))?;
     bb(bus,0x49c0,0x003c0000,u32::from(path))?;
     stream_limits(bus,if path==3{2}else{1},true)
@@ -78,7 +78,7 @@ pub(super) fn gain_offset(bus:&mut impl RegisterIo,cal:&Calibration,prefix:&dm::
         bb(bus,0x23ac,127,value as i8 as u8 as u32)?;
     }Ok(())
 }
-fn btg(bus:&mut impl RegisterIo,enabled:bool)->io::Result<()>{
+pub(super) fn btg(bus:&mut impl RegisterIo,enabled:bool)->io::Result<()>{
     let on=u32::from(enabled);
     for(at,mask,value)in [(0x4738,1<<19,on),(0x4738,1<<22,0),
         (0x476c,0xff000000,if enabled{0x20}else{0x1a}),(0x4778,255,if enabled{0x30}else{0x2a}),
