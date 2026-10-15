@@ -425,3 +425,7 @@ RTW89_FIRMWARE="$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin" /tmp/rtw89_fi
 ```
 
 On 2026-10-15, 12 synthetic Rust tests, five offline fetcher tests, the `no_std` build and the separate two-cut proprietary-file validation passed. The normal suite intentionally does not require or embed the proprietary file. These checks do not exercise the Ryzen hardware or establish radio functionality.
+
+The separately guarded BB/RF/NCTL table library and its integration limits are
+described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
+native board-read service and does not establish calibrated radio operation.

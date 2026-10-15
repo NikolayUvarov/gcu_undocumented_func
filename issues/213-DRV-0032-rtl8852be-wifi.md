@@ -140,3 +140,22 @@ backpressure, retain the last eight command buffers, and poison failed
 attempts while independently stopping HCI and WCPU. Do not retry or free DMA
 without the separate quiescence contract. Native activation, complete MAC,
 C2H/RX, calibration and the WLAN frame service remain separate integration.
+
+### Implemented slice: exact RFE-1/cut-1 PHY tables
+
+The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
+BSD BB/gain/RF/NCTL data and bounded production stages in `phy.rs`.
+The RF stage includes both physical paths and mandatory firmware mirrors
+under one deadline. Partial failures poison the attempt and independently
+attempt BB/RF disable; guard refusal never changes an unknown active device.
+The library requires actual firmware-init-ready, full single-band MAC,
+BB access, stopped data paths and a complete BAR2 mapping. The native service
+still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
+RFK calibration, board trims and regulatory authorization remain integration
+work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
+
+The x86 native release build and compilation of 19 host fixtures pass.
+Focused test execution waits for publication of this commit to `fast-test`,
+then runs on this branch; no hardware or radio success is claimed.
+
+Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
