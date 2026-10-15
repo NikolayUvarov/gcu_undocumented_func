@@ -63,3 +63,15 @@ calibrated clock; initial/final MAC power state must be zero. These results do
 not establish hardware operation or a network link. KRN-0114 integration must
 rebuild the executable with its final boot ABI; actual Ryzen board reads,
 power-off and all radio acceptance criteria remain pending.
+
+### Next slice: bounded PCIe FWCMD transport
+
+The next separate commit implements channel-12 TXBD/24-byte TXWD packets,
+installation while PCI mastering/HCI engines are off, register readback,
+ordered descriptor publication, guarded hardware-index reclamation and a
+bounded drain. A separate payload pool preserves the pinned Linux driver's
+eight-completed-command retention requirement (`RTW89_PCI_MULTITAG`).
+The initial native board service remains without DMA and does not call it.
+MAC DLE/HFC/PCIe pre-initialization, authenticated firmware/WCPU sequencing,
+RX/C2H and the KRN DMA integration are explicitly separate prerequisites;
+the transport must not enable bus mastering or release DMA on its own.
