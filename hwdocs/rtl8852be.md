@@ -1009,3 +1009,24 @@ mirror sequencing, ACK ownership/rejection, retained events and overflow,
 poisoned-PHY refusal with raw cleanup, live-ring corruption, clock jumps before
 publication, frozen clocks and incomplete hardware consumption. Execution is
 pending raw publication. No native radio endpoint or hardware guarantee changes.
+
+Own-branch session commit `3ee6dd54` built for x86-64 without warnings in
+1.09 seconds. After raw publication `539b588e`, all 13 session fixtures passed
+in 0.08 seconds on 2026-10-16 MSK (zero failed/ignored, x86-64 WSL2).
+The two existing runtime-MAC identity tests using the changed downloader helper
+also passed separately (0.00 seconds each). Other inherited fixtures were
+filtered from this focused run. Independent review found no remaining blocker
+in this slice. These seeded-handoff models do not establish cumulative device
+behavior, complete BTC initialization, RFK permission or hardware connectivity.
+
+## Native firmware PHY capability continuation
+
+The native sequence now calls the real bounded GET_FEATURE mailbox query after
+download and before runtime MAC setup. It retains the response token from that
+exact queue/Ready session and logs all four reply words, effective TX/RX NSS and
+whether successful zero NSS fields invoked the source chip-default rule. A
+missing, malformed or late reply fails this stage; it cannot substitute OTP or
+assumed two-stream capabilities. The existing independent cleanup remains in
+force, with no resend or ordinary data TX. The startup fixture covers failure
+at all fourteen stages; execution is recorded only after raw publication.
+This remains a diagnostic, not calibrated RF or a WLAN endpoint.

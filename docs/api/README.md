@@ -209,3 +209,14 @@ The RTL8852BE native diagnostic (213-KRN-0114) uses the existing ABI 11
 IDL version or WLAN endpoint is introduced. Drivers install every ring before
 mastering and retain memory through shutdown failures; these conventions do
 not establish PCIe transaction drainage or safe reuse.
+
+### RTL8852BE startup diagnostic
+
+The ABI-11 RTL8852BE boot service receives its MEM-only BAR2, retained 8 MiB
+DMA, read-only firmware client and PCI index from init. A verified firmware
+download is followed by a real PHY-capability mailbox query, runtime MAC and
+receive-only setup; independent stop/mastering-disable/power-off follows every
+modified attempt. Logs distinguish raw firmware capabilities and successful
+zero-field defaults. No RTL8852BE radio endpoint or WLAN service is exposed yet.
+See [the service scope](../../rtw89_wifi/README.md) and
+[213-KRN-0114](../../issues/213-KRN-0114-realtek-driver-startup.md).

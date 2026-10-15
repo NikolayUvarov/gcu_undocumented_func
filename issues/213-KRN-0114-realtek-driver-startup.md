@@ -155,3 +155,15 @@ all thirteen startup-stage failure positions and independent cleanup.
 The later own-branch integration `f314d00c` also builds the complete x86
 image with the queue-session and typed PHY/RX guards. These checks do not
 establish cumulative runtime device behavior or physical connectivity.
+
+### Native firmware PHY capability continuation
+
+The native sequence now calls the real bounded GET_FEATURE mailbox query after
+download and before runtime MAC setup. It retains the response token from that
+exact queue/Ready session and logs all four reply words, effective TX/RX NSS and
+whether successful zero NSS fields invoked the source chip-default rule. A
+missing, malformed or late reply fails this stage; it cannot substitute OTP or
+assumed two-stream capabilities. The existing independent cleanup remains in
+force, with no resend or ordinary data TX. The startup fixture covers failure
+at all fourteen stages; execution is recorded only after raw publication.
+This remains a diagnostic, not calibrated RF or a WLAN endpoint.
