@@ -1128,3 +1128,34 @@ scoreboard writes, independent cleanup failures, radio-off cleanup, identity
 mismatch, duplicate START and actual cleanup after a STOP-policy ACK timeout. Existing 26 Session/owner and 11 control fixtures
 also compile. Execution awaits raw publication; no native wiring or physical
 RFK/association evidence is added by this slice.
+
+
+### IQK/DPK and nested IQK notices
+
+The shared typed callback additionally names source calibration values IQK=0
+and DPK=2, and one-shot states START=2/STOP=3. IQK and DPK use actual outer
+START/STOP with PHY0/path-map zero (`0x10`/`0x50`). An IQK one-shot uses RF_AB
+(`0x13`/`0x53`) and must match the band and calibration of a still-held, completed
+outer IQK grant. A partial nested admission remains recorded; its matching
+nested STOP clears the host nesting even after poison, while preserving an
+error and requiring the outer STOP. Outer STOP refuses to silently release an
+active nested operation. Orphans, duplicate starts, mismatched identity and
+DPK attempts to borrow IQK one-shots are refused.
+
+This follows pinned `coex.h` enum values and `coex.c` `_ntfy_wl_rfk`: a nested
+notice does not replay policy or release the outer WLRFK request. START still
+checks actual BT busy state, live receive ownership and the already published
+owned grant; no synthetic success is supplied. The host IQK source's per-path
+one-shots can therefore use the existing outer permission. In contrast, the
+pinned TSSI wrapper calls IQK one-shot notices after the preceding IQK STOP, and
+the upstream void notification wrapper ignores rejection. MIND deliberately
+requires an extra complete enclosing IQK START/STOP around TSSI before allowing
+its nested one-shots. The maintainer approved this stronger admission on
+2026-10-16; refusal while BT is busy is visible, and full upstream behavioral
+equivalence is not claimed. The TSSI algorithm and native integration remain
+separate work; this callback alone does not authorize arbitrary hardware TX.
+
+Eight nested-notice regressions compile against the real owner/Session,
+including both bands, orphan and duplicate notifications, mismatched stop,
+cleanup after partial admission, and refusal of premature outer release.
+Execution awaits raw publication. DACK/RXDCK semantics are unchanged.

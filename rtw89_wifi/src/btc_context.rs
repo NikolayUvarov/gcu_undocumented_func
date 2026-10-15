@@ -2,7 +2,7 @@
 // Copyright(c) 2019-2022 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
 //! Session-bound normal/no-link coexistence; completion is distinct from calibrated-radio readiness.
 
-use crate::dack::{BtcNotice,RfkState,DackIo};
+use crate::dack::{BtcNotice,RfkState,Calibration,DackIo};
 use crate::{board::Board,btc_codec::{Profile,Policy,Encoded},btc_control::{self,WlanShadow,BtState,SavedAntenna,Antenna},
     btc_init,btc_reports::{self,Event,Report},btc_session::{self,Session,DeviceIo},io::{self,RegisterIo,Fault,FaultKind,TimedIo},phy::{self,Phy,PhyIo}};
 const INIT_US:u64=1_000_000;
@@ -44,7 +44,7 @@ impl ObservedBt{
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct RfkFailure{pub cause:Error,pub cleanup_attempted:bool,pub clear_scoreboard:Option<Fault>,pub restore_antenna:Option<Fault>}
-struct RfkAttempt{notice:BtcNotice,saved:Option<SavedAntenna>,granted:bool}
+struct RfkAttempt{notice:BtcNotice,saved:Option<SavedAntenna>,granted:bool,nested:Option<u8>}
 pub(crate) struct Context{
     attempt:u64,session:u64,profile:Profile,shadow:WlanShadow,policy:Policy,reports:u32,bt:ObservedBt,
     published:Option<u32>,btg:bool,rx_gain:bool,bt_lna:u8,afh_profiles:Option<u8>,ignore_pending:bool,dirty:bool,
@@ -146,7 +146,7 @@ impl Context{
     }
     fn start_rfk<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,notice:BtcNotice,deadline:u64)->Result<(),Error>{
         if self.rfk.is_some(){return Err(Error::Order)}
-        self.rfk=Some(RfkAttempt{notice,saved:None,granted:false});
+        self.rfk=Some(RfkAttempt{notice,saved:None,granted:false,nested:None});
         if let Some(error)=s.failed(){return Err(Error::Session(error))}
         Self::radio_active(s,deadline)?;
         for pass in 0..=2500{
@@ -160,10 +160,29 @@ impl Context{
         self.rfk.as_mut().unwrap().saved=Some(saved);self.shadow.set_rfk(true);
         self.transition(s,true,deadline)?;self.rfk.as_mut().unwrap().granted=true;Ok(())
     }
+    fn nested_rfk<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,notice:BtcNotice,deadline:u64)->Result<(),Error>{
+        let pending=self.rfk.as_mut().ok_or(Error::Order)?;
+        if !pending.granted||pending.notice.calibration!=Calibration::Iqk||notice.calibration!=Calibration::Iqk
+            ||notice.phy_map!=(pending.notice.phy_map|3){return Err(Error::Order)}
+        match notice.state{
+            RfkState::OneshotStart=>{if pending.nested.is_some(){return Err(Error::Order)}pending.nested=Some(notice.phy_map);},
+            RfkState::OneshotStop=>{if pending.nested!=Some(notice.phy_map){return Err(Error::Order)}pending.nested=None;},
+            _=>return Err(Error::Order),
+        }
+        if let Some(error)=s.failed(){return Err(Error::Session(error))}
+        if notice.state==RfkState::OneshotStart{
+            Self::radio_active(s,deadline)?;
+            let raw=io::read32(s,SCOREBOARD)?;self.bt.update_score(raw);
+            if raw&4!=0{return Err(Error::Whql)}
+            let bt=self.bt.state();if bt.running_rfk||bt.requests_rfk{return Err(Error::Busy)}
+            if self.shadow.value()&(1<<11)==0||self.published!=Some(self.shadow.value()){return Err(Error::Order)}
+        }
+        let remaining=left(s,deadline)?.min(10_000);s.receive_permit(remaining)?;left(s,deadline)?;Ok(())
+    }
     fn stop_rfk<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,notice:BtcNotice,deadline:u64)->Result<(),RfkFailure>{
         let bare=|cause|RfkFailure{cause,cleanup_attempted:false,clear_scoreboard:None,restore_antenna:None};
         let pending=self.rfk.as_ref().ok_or(bare(Error::Order))?;
-        if pending.notice.calibration!=notice.calibration||pending.notice.phy_map!=notice.phy_map{return Err(bare(Error::Order))}
+        if pending.nested.is_some()||pending.notice.calibration!=notice.calibration||pending.notice.phy_map!=notice.phy_map{return Err(bare(Error::Order))}
         let granted=pending.granted;
         let available=left(s,deadline).map_err(bare)?;
         let normal_deadline=deadline-u64::from((available/2).min(20_000));
@@ -253,13 +272,16 @@ pub fn last_rfk_failure<B:DeviceIo>(s:&Session<'_,'_,'_,B>)->Option<RfkFailure>{
 impl<B:DeviceIo> DackIo for Session<'_,'_,'_,B>{
     fn btc_rfk(&mut self,notice:BtcNotice,timeout_us:u32)->io::Result<()>{
         let bare=|cause|RfkFailure{cause,cleanup_attempted:false,clear_scoreboard:None,restore_antenna:None};
-        if timeout_us==0||timeout_us>100_000||!matches!(notice.phy_map,0x10|0x50){return Err(rfk_fault(Error::Order))}
+        let valid_map=match notice.state{RfkState::Start|RfkState::Stop=>matches!(notice.phy_map,0x10|0x50),
+            RfkState::OneshotStart|RfkState::OneshotStop=>notice.calibration==Calibration::Iqk&&matches!(notice.phy_map,0x13|0x53)};
+        if timeout_us==0||timeout_us>100_000||!valid_map{return Err(rfk_fault(Error::Order))}
         let mut context=self.btc.take().ok_or(rfk_fault(Error::Order))?;
         let result=(||{if context.session!=self.command_session(){return Err(bare(Error::Order))}
             let deadline=self.clock().map_err(|e|bare(e.into()))?.checked_add(timeout_us as u64).ok_or(bare(Error::Clock))?;
             match notice.state{
                 RfkState::Start=>context.start_rfk(self,notice,deadline).map_err(bare),
                 RfkState::Stop=>context.stop_rfk(self,notice,deadline),
+                RfkState::OneshotStart|RfkState::OneshotStop=>context.nested_rfk(self,notice,deadline).map_err(bare),
             }
         })();
         context.last_rfk=result.as_ref().err().copied();self.btc=Some(context);

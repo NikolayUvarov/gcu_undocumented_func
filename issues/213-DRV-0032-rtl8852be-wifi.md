@@ -550,3 +550,15 @@ ordinary TX remains stopped and all DMA stays owned. Eleven new fixtures compile
 execution follows raw publication. Native binding, remaining calibration and
 physical-device evidence are still open. See the
 [RFK contract](../hwdocs/rtl8852be.md#owned-calibration-coexistence-start-and-stop).
+
+
+### Shared IQK/DPK and nested coexistence prerequisite
+
+Extend source-valued callback types for IQK/DPK and require actual held outer
+IQK permission for matching RF_AB one-shots. Preserve partial nested admission
+for matching cleanup; refuse orphan, duplicate, foreign and premature outer
+release. TSSI receives an explicit stronger enclosing IQK START/STOP requirement
+approved by the maintainer, instead of copying upstream's ignored rejection.
+Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
+algorithms, their policy-bound TX prerequisites and native integration remain
+open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
