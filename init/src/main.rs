@@ -28,7 +28,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "spawn privilege", "AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
-    "RTL8852BE BAR2 with memory decoding only; read-only VFS; board probe, no radio endpoint",
+    "RTL8852BE BAR2 initially non-mastering; retained 128 KiB DMA; read-only VFS; firmware diagnostic, no radio endpoint",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
@@ -45,6 +45,7 @@ const AUDIO_DMA_BYTES: usize = (33 + 17) * 4096; // playback: 32 buffers + list;
 const HDA_DMA_BYTES: usize = (32 + 16 + 3) * 4096; // the same rings, two buffer lists, CORB and RIRB (551-DRV-0010)
 const NET_DMA_BYTES: usize = 160 * 1024; // two virtqueues (64 KiB) and 48 frame buffers of 2 KiB
 const RTL8168_DMA_BYTES: usize = 2 * 1024 * 1024;
+const RTL8852BE_DMA_BYTES: usize = 128 * 1024;
 const WIFI_DMA_BYTES: usize = 512 * 1024; // bcm_wifi: the 64-bit descriptor rings and their frame buffers (550-DRV-0025)
 // The Wi-Fi station's slots (550-KRN-0097): the radio's client and keystore's in wlan, wlan's client in netstack (its third card).
 const WIFI_RADIO: usize = 2;
@@ -362,8 +363,11 @@ impl Init {
                     grants.copy(SLOT_MEM, self.dma(index, RTL8168_DMA_BYTES)?, 0);
                     if let Ok(irq) = minted.mint(PLATFORM_DEVICE_MSI, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                     grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL | CAP_BADGE);
-                } else if self.running(service_index("vfs_server")) {
-                    grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
+                } else {
+                    grants.copy(SLOT_MEM, self.dma(index, RTL8852BE_DMA_BYTES)?, 0);
+                    if self.running(service_index("vfs_server")) {
+                        grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
+                    }
                 }
             }
             "bcm_wifi" => {

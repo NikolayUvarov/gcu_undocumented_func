@@ -168,8 +168,8 @@ actual Ryzen MAC/board-read/shutdown evidence remain pending. No host DMA,
 firmware download, BB/RF calibration, WLAN registration, association, IP
 traffic or Effector connectivity is implemented or claimed by this slice.
 
-The separate channel-12 command queue now has a bounded descriptor/payload
-ownership implementation but is not called by the native service. Its TCB
+The separate channel-12 command queue introduced a bounded descriptor/payload
+ownership implementation, initially without a native caller. Its TCB
 requires x86-64 coherent WB DMA, UC MMIO, exact PCI/MMIO identity and externally
 verified quiescence before region release. It does not grant DMA, enable
 mastering or supply MAC/PCIe startup, firmware policy or radio operation.
@@ -187,9 +187,8 @@ stopped-BB/WCPU and PCI MEM-only guards. It bounds readiness waits and retains
 independent HFC/DLE cleanup errors. Own-branch `371d41db` native x86-64 release
 build and 11 focused host tests passed on 2026-10-15 UTC, with tests after
 `fast-test` publication `60a100be`; the hardware notes retain the build
-invocation correction and precise scope. It is
-not called by the native board service and supplies no host DMA or radio
-startup; actual hardware operation and the subsequent PCIe/firmware stages
+invocation correction and precise scope. That library slice supplied no
+native host DMA or radio startup; actual hardware operation and the subsequent PCIe/firmware stages
 remain unvalidated.
 
 The later PCIe preparation implements the pinned RTL8852B MDIO/DBI path,
@@ -198,8 +197,8 @@ after command-ring installation. It checks the MAC download profile and
 preserves PCI MEM-only/HCI-off state. Primary and independent restoration/
 stop failures remain explicit, and no DMA map is freed. Own-branch `4feee434`
 native x86-64 release build and all 16 focused host fixtures passed on
-2026-10-15 UTC after `fast-test` publication `1dee0b3f`. This stage is not
-invoked by the native service. No hardware DMA, firmware download or radio
+2026-10-15 UTC after `fast-test` publication `1dee0b3f`, before native
+integration. No hardware DMA, firmware download or radio
 operation is established, and the frozen earlier `a99cc44a` gate does not
 cover this additional slice.
 
@@ -209,6 +208,19 @@ Its TCB includes the existing SHA-256 implementation, trusted board-map origin
 and the command queue's coherent DMA/kernel-quiescence contract. It bounds
 reset/start, header/section transfer and status polling and retains failed
 DMA ownership with separate cleanup errors. This is pinned-file integrity,
-not vendor-signature verification. Native integration, build/host evidence
-for this later slice and actual Ryzen firmware/radio operation remain pending;
-the existing board executable still performs no download or host DMA.
+not vendor-signature verification. Build/host evidence for this library slice
+is recorded separately by its owner; actual Ryzen firmware/radio operation remains pending;
+the original board executable at that stage performed no download or host DMA.
+
+The 213-KRN-0114 continuation wires a single native firmware diagnostic into
+that executable. It verifies the private file before board MMIO, admits the
+actual board/OTP policy before queue initialization, and keeps a 128 KiB
+coherent WB DMA mapping through all outcomes. MAC/PCIe/ring setup precedes
+kernel mastering; only the command channel and TXHCI are enabled. Independent
+DMA/WCPU stop, kernel-verified MEM-only state, fresh-budget power-off and a
+final kernel stop follow every modified attempt. A failed MEM-only check
+prevents further MMIO. No cleanup result permits memory reuse; there is no
+radio endpoint or retry. Startup-model tests are not hardware or IOMMU
+containment evidence, and native Ryzen firmware/DMA operation remains pending.
+The integration branch builds `rtw89_wifi` and `init` for x86-64; its ten
+startup/activation host cases are compiled and await execution after publication.
