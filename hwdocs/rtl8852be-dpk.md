@@ -72,7 +72,7 @@ full upstream behavioral equivalence.
 
 ## Evidence and remaining work
 
-Fourteen new model cases compile against the production engine: both source
+Fourteen model cases exercise the production engine: both source
 paths and restoration, actual backoff branch, both NCTL timeouts, signed DC/PAS
 and correlation thresholds, AGC saturation/nonconvergence, BTC/scheduler denial,
 RX-mode timeout, possibly applied writes, independent cleanup errors, late
@@ -81,7 +81,7 @@ hardware callbacks; it does not supply a native transmission authority.
 The typed outer entry compiles with the actual TSSI and channel token types;
 a full real-token cold-start composition remains a separate integration test.
 Two table-provenance tests and the focused harness are registered in the host
-gate. Test execution follows source commit/build/raw publication.
+gate. The focused execution record is below.
 
 Not implemented by this slice: 5 GHz/40/80 MHz, DBCC, coefficient reload,
 thermal DPK tracking, native RFK-power policy or real-device calibration-quality
@@ -107,4 +107,9 @@ strict STOP-last ordering for earlier failures, and require exactly one STOP
 plus only radio-shutdown writes after failed or late STOP. DPD enable bits may
 remain set in an inactive radio; no working radio or hardware abort is claimed.
 The two Python provenance checks and exact pinned-table regeneration passed
-on the first run. The corrected Rust case is compiled pending raw publication.
+on the first run. After source `40addff026369c01da5cc3f4f72654d19f99eb6f`
+built and was published in `fast-test`
+`c38df1ddff7151af1e1ededf551f736c2f6b6766`, all 14 corrected DPK cases
+passed on its own source branch (0.01 s, no failures or ignored cases,
+178 unrelated cases filtered). The first failed run above remains part of
+the evidence; this focused model result does not establish hardware behavior.
