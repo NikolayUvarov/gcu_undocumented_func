@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-15: `rtw89_wifi/` has an initial native board-access service: MAC power, XTAL and EFUSE reads, then power-off. This slice is not a working network driver. It starts no host DMA, downloads no firmware, applies no RF calibration and registers no WLAN radio. Its build/host checks and actual hardware status are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -234,9 +234,9 @@ After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
 2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
 `fast-test`. The earlier frozen `a99cc44a` full gate excludes this later slice.
 The actual RTL8852BE has not used this queue.
-The native board service still has no DMA capability and does not call it;
-KRN integration must remain disabled until a complete MAC/PCIe startup and
-quiescence path is reviewed. Firmware authentication/address policy, H2C
+At that library commit the native board service had no DMA capability and
+did not call it; the later diagnostic integration is described below.
+Firmware authentication/address policy, H2C
 encoding, WCPU sequencing and RX/C2H completion are not supplied by this queue.
 
 ## MAC download-memory preparation (213-DRV-0032)
@@ -413,15 +413,51 @@ a delayed-index fixture. Integration review corrected the optional I/O BAR
 decode contract and an invented CMAC-off prerequisite: the real power-on
 sequence already enables CMAC functions while BB remains reset.
 
-The native board service does not invoke this stage. Actual Ryzen security
-bytes, DMA/WCPU firmware operation and complete integration remain
-unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
+Actual Ryzen security bytes and DMA/WCPU firmware operation remain
+unvalidated; native diagnostic integration is described next. The frozen
+`a99cc44a` gate does not contain this later library slice.
+
+## Native firmware diagnostic integration (213-KRN-0114)
+
+The native entry reads `data/firmware/rtw89/rtw8852b_fw-1.bin` through its
+read-only VFS client into private process pages. Missing, wrong-sized or
+wrong-hash files stop before board MMIO access; no firmware bytes enter the
+image. VFS open/close calls have two-second IPC timeouts; chunked reads share
+a five-second deadline. The exact hash check is repeated with the actual
+board's cut/RFE/OTP/image policy after the board-read power-off cycle.
+
+`init` retains a 128 KiB DMA region and passes it in `SLOT_MEM`, along with
+the existing decimal PCI device index. The adapter verifies its DMA kind,
+4 KiB virtual/physical alignment and full bounds below 4 GiB before queue
+construction. The x86 kernel maps DMA as WB and BAR MMIO as UC. The native
+adapter uses `ManuallyDrop` for the DMA mapping and never frees or remaps it
+after a queue exists, including on setup failure or failed cleanup.
+
+`startup.rs` enforces verification before queue initialization, then MAC
+power-on, download-memory preparation, PCIe preparation, ring installation,
+BDRAM finish, kernel mastering, command-only activation and one download.
+Ordinary packet DMA/WPDMA and RXHCI remain stopped; only channel 12 and PCIe
+I/O are unstopped with TXHCI. A successful firmware status 7 is logged with
+its version, then independently bounded DMA/WCPU stop always follows.
+
+Kernel `registers_only` disables bus mastering while preserving MEM decode;
+an explicit PCI Command read must confirm low bits 2. If either check fails,
+no more MMIO is performed. Otherwise MAC power-off gets a fresh one-second
+budget, followed by a final kernel quiesce and Command readback. Primary,
+DMA/WCPU stop, kernel transition and power-off errors remain separate.
+Even complete cleanup does not release the retained DMA mapping or claim
+IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
+radio endpoint, packet traffic or native hardware evidence yet.
+
+Ten production startup/activation host fixtures are compiled but await
+execution after raw `fast-test` publication. They cover orchestration and
+register models, not the actual PCIe fabric or RTL8852BE power/firmware path.
 
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
-After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue above is not wired into a device startup. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
+After the board/firmware diagnostic passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue is wired only into the bounded diagnostic above. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from these host tests.
 
 ## Reproducible host evidence
 

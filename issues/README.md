@@ -19,7 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
-| [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and verified DMA stop/restart | `KRN` / ASTRA auditor-fixer | P1 | Driver binaries; x86 and hardware checks | H / 213 |
+| [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and retained-DMA firmware diagnostic | `KRN` / ASTRA auditor-fixer | P1 | x86 and hardware checks | H / 213 |
 | [000-ASR-0010](000-ASR-0010-owned-tcp-refusal-fixture.md) | Reserve a non-listening TCP endpoint for the exact QEMU connection-refused assertion | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [000-ASR-0011](000-ASR-0011-monotonic-tsc-reference.md) | Compare guest elapsed time against the host monotonic clock | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [213-KRN-0112](213-KRN-0112-firmware-ram-cache-types.md) | Firmware RAM above 3 GiB stays cached; regressions cover the Ryzen arena and mixed RAM/MMIO pages | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen rerun | H / 213 |
