@@ -682,3 +682,16 @@ shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
 and hardware traffic remain open. Five cumulative cold-device fixtures and
 the fifteen-stage cleanup matrix compile; execution follows raw publication.
 See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
+
+### Initial channel RXDCK and host IQK preparation
+
+Implement the pinned initial non-DBCC 2 GHz/20 MHz wideband IQK engine, including
+source register backups, bounded NCTL completion, LOK retries and both TX/RX
+group paths. A private wrapper requires the actual same-attempt BTC owner,
+channel token and separate calibration-transmit authority, runs production
+channel RXDCK first and returns an opaque identity-bound result for TSSI.
+No native authority provider exists yet. Unknown NCTL completion forbids another
+trigger and forces independent radio shutdown before coexistence release.
+Meaningful register/timeout/cleanup fixtures and source-table regeneration will
+be registered in the host gate; execution follows commit/build/raw publication.
+Physical quality, full channel RFK coordination and hardware traffic stay open.
