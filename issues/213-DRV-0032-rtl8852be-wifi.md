@@ -83,5 +83,16 @@ review checked the pinned descriptor/retention contract and found a missing
 `0xffff` PCI Command guard, which was corrected before publication. The
 implementation rejects non-x86-64 architectures and requires coherent WB
 DMA with UC MMIO. Host fixtures do not establish hardware ordering or actual
-DMA operation. The frozen earlier `a99` full gate does not contain this slice;
+DMA operation. The frozen earlier `a99cc44a` full gate does not contain this slice;
 its full gate, integration and hardware acceptance remain pending.
+
+### Next slice: MAC download-memory preparation
+
+Port the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
+including the SCC WCPU minimum quota override, followed by HFC channel-12
+pre-cost/enabling. Require supported cut, active MAC, reset baseband, stopped
+WCPU and disabled PCI mastering/HCI before any write. Bound readiness polls
+and attempt independently budgeted HFC/DLE disable with explicit cleanup
+errors on every modified failure. This slice prepares internal device memory
+only; it neither enables host DMA nor replaces the still-required PCIe
+MDIO/DBI/mode/BDRAM startup, firmware download or calibration.

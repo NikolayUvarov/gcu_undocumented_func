@@ -7,5 +7,6 @@ pub mod efuse;
 pub mod firmware;
 pub mod fwcmd;
 pub mod io;
+pub mod mac;
 pub mod power;
 pub mod registers;

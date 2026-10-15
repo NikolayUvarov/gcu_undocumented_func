@@ -102,5 +102,13 @@ build passed; all 14 focused host tests passed on 2026-10-15 at 21:01 UTC
 (0.03 seconds), after `fast-test` publication `dd735d0a`. The tests use a
 simulated coherent DMA device; no hardware DMA evidence or portable
 architecture guarantee is claimed. See the hardware notes for the
-eight-completed-command retention and fault contract. The frozen `a99` gate
+eight-completed-command retention and fault contract. The frozen `a99cc44a` gate
 does not include this later change and cannot be used as its full-gate evidence.
+
+The later MAC download-memory preparation implements the pinned RTL8852B
+DLFW WDE/PLE quotas and HFC command-channel configuration under active-MAC,
+stopped-BB/WCPU and PCI MEM-only guards. It bounds readiness waits and retains
+independent HFC/DLE cleanup errors. Its build/host evidence is pending. It is
+not called by the native board service and supplies no host DMA or radio
+startup; actual hardware operation and the subsequent PCIe/firmware stages
+remain unvalidated.

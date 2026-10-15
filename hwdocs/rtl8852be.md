@@ -228,12 +228,48 @@ doorbell, wrap/full/retention and register/fault bounds. On own-branch commit
 `f6caafca`, the x86-64 native release build passed (0.34 seconds, no warnings).
 After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
 2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
-`fast-test`. The earlier frozen `a99` full gate excludes this later slice.
+`fast-test`. The earlier frozen `a99cc44a` full gate excludes this later slice.
 The actual RTL8852BE has not used this queue.
 The native board service still has no DMA capability and does not call it;
 KRN integration must remain disabled until a complete MAC/PCIe startup and
 quiescence path is reviewed. Firmware authentication/address policy, H2C
 encoding, WCPU sequencing and RX/C2H completion are not supplied by this queue.
+
+## MAC download-memory preparation (213-DRV-0032)
+
+`mac::prepare_download` implements `rtw89_mac_dmac_pre_init`'s RTL8852B
+memory/flow-control portion from the pinned `mac.c`, `mac.h`, `reg.h` and
+`rtw8852b.c`. The entry requires the verified RTL8852BE MEM-only BAR grant,
+digital cut 1, active MAC state 1, stopped WCPU, reset baseband, disabled
+TX/RX HCI and no reported PCI DMA activity. A failed guard performs no write.
+The native board service does not call this new preparation function.
+
+The DLFW profile uses 1024 unlinked 64-byte WDE pages and 64 linked plus
+960 unlinked 128-byte PLE pages, accounting for the chip's 196608-byte FIFO.
+PLE starts at the 64 KiB boundary. WDE quotas are zero except the WCPU
+minimum **48** inherited from the future SCC profile, while its DLFW maximum
+remains **0**, as in upstream's explicit override. PLE reserves 16 pages for
+C2H and 48 for H2C; other DLFW quotas are zero. Configuration fields preserve
+unrelated bits; programmed sizes/quotas get readback before readiness polling.
+Each WDE/PLE ready poll has a 2 ms deadline and a finite iteration bound.
+Only then is HFC CH12 enabled with pre-cost 40 and full-condition 0;
+ordinary data-channel flow control remains disabled. The whole stage has a
+10 ms software budget.
+
+Every failure after the first mutation independently attempts HFC disable
+and DLE disable, with a fresh 1 ms budget for each and readback. Primary and
+both cleanup errors are retained. The caller still owes the full MAC
+power-off cycle; successful local cleanup is not a device DMA-quiescence
+claim. This function never writes PCI Command, HCI DMA controls, WCPU, BB/RF
+or CMAC controls and supplies no firmware, radio or host DMA startup.
+
+Build/host evidence is pending for this new slice. The eleven focused fixtures
+in `tests/rtw89_mac_host.rs` cover the exact download quotas and WCPU override,
+pre-write guards, both readiness states, every forward-write fault, failed
+readback, cleanup failures and frozen/late/absolute deadlines. Actual Ryzen
+MAC/DLE/HFC operation remains untested. PCIe MDIO/DBI configuration, modes,
+BDRAM reset, ring installation and external DMA ownership must be integrated
+before the command transport can run; this preparation alone is insufficient.
 
 ## What blocks radio operation
 
