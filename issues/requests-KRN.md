@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (13 requests waiting, 2026-10-14, three of them for 750, one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018 and 550-NET-0024, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (6 requests waiting, 2026-10-14, three of them for 750; the Wi-Fi station in the boot services, `keystore`'s client for it and the station's configuration slot became [550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.md), the read-only card client and the badged TLS client [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.md); a launch session holding every launch slot became [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md), `init` saying whether it confirmed a trial boot [000-KRN-0102](000-KRN-0102-init-says-how-the-boot-went.md), the tools stopping when their console is gone [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md); a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -23,78 +23,6 @@ The request on `bcm_wifi`'s DMA region and interrupt became [550-KRN-0091](550-K
 ### Acceptance criteria
 
 The shell holds a client of `updater` (`caps` shows it), and `status` answers through it.
-
-## init says whether it confirmed a trial boot
-
-**Recorded by:** the update track (`UPD`), 2026-10-10, for [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
-
-### Problem
-
-`init` confirms a healthy trial boot to the kernel (`BOOT_CONFIRM`, 351-KRN-0014), and the confirmed boot record is the updater's to write. The updater cannot ask whether the boot was confirmed. It waits until 5 s past the kernel's deadline (120 s): had the boot not been confirmed, the kernel would have restarted the machine by then. That is sound but slow. The other slot stays untouched for two minutes after every update, and the QEMU `update` check waits that long.
-
-### Plan (a proposal; the kernel track decides)
-
-- `init.wit` 1.4: `boot: func() -> result<boot, error>`, with the slot, whether it booted on trial and whether `init` confirmed it. Any client of `init` may call it, or only the `BADGE_REBOOT` one.
-- The updater asks for it every second while it waits, and keeps the deadline as the bound.
-
-### Acceptance criteria
-
-On a trial boot, the updater writes the confirmed record within a few seconds of `[INIT] TRIAL BOOT CONFIRMED`, and the `update` check passes.
-
-## A launch session holds as many grants as there are launch slots (211-APP-0044)
-
-**Recorded by:** the tools track (APP), 2026-10-10, for [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done).
-
-### Problem
-
-`loader`'s launch session keeps at most 5 grants (`Session.grants: [(u8, usize); 5]` in `loader/src/main.rs`). A sixth `grant` is refused with `limit`. `LAUNCH_SLOTS` (211-KRN-0058) names 16 slots a launcher may fill.
-
-`console` started by `wm` now asks for the shell's commands too, so it may need six grants:
-
-- the window;
-- the user's files;
-- system information;
-- the camera;
-- the shell's commands (`SLOT_SHELL`);
-- for `record -w`, the window to see.
-
-The `wm` suite's `record -w` lost its window lease to the limit. The tools track now grants `SLOT_SHELL` last and lets a start go on without it (wm and the shell), so the program runs without the shell's commands when the session is full.
-
-On the MacBook Pro `wm` itself now asks for six: the window manager's client, the user's files, system information, the camera, the shell's commands and the battery (211-APP-0070). The battery comes last and `wm` asks the shell for a copy when it did not fit (`shell.wit` 1.4 `battery`), so nothing waits on this; a larger session would make that call unneeded.
-
-### Plan (a proposal; the kernel track decides)
-
-- **The session's array** holds `LAUNCH_SLOTS.len()` grants, or `SPAWN_GRANTS_MAX` less the loader's own.
-- **A refused grant** still answers `limit`.
-
-### Acceptance criteria
-
-A launcher grants each of `LAUNCH_SLOTS` in one session and the program holds them all. `console` from `wm` gets the shell's commands beside the window lease of `record -w`.
-
-## A console program ends when its console is gone (000-APP-0056)
-
-**Recorded by:** the tools track (`APP`), 2026-10-10, from the walk through wm's menu in [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done).
-
-### Problem
-
-wm's menu has a category "Tests and performance": `check`, `bench` and `kbench` run there in a `console` window. Closing that window ends `console`, but not the program it ran:
-
-- `mind::output::send` stops sending when the launcher's endpoint answers `Peer`, and the program goes on.
-- A full `kbench` or `bench` then measures for minutes with nobody watching it, and takes processor time from whatever the user does next.
-- `console` cannot end its programs. Ending another program is the shell's (process control), and the shell asks the user first.
-
-000-APP-0056 asks that nothing started from the menu runs unseen. Until this is settled, the wm suite waits for these three to end before it closes their window (`RUN_TO_END` in `tests/qemu_smoke.py`).
-
-### Plan (a proposal; the kernel track decides)
-
-One of these:
-
-- **In libmind.** A program whose launcher's endpoint is gone ends at its next output, with a nonzero status, as a Unix program does on a hang-up. A program that must outlive its console (none is known) could opt out.
-- **In the three tools.** libmind says whether the output still reaches the launcher (`mind::output::open()`). `check`, `bench` and `kbench` look at it between rows, write the log they have, and say in it that they stopped because their console closed.
-
-### Acceptance criteria
-
-In QEMU, `kbench` started from wm's menu ends within one row after its window is closed, and the kernel's log shows it. The wm suite's walk then closes the window without waiting, and `RUN_TO_END` is empty.
 
 ## The aarch64 boot check waits for `[BLOCKSTORE] READY` on the serial line, and it no longer comes there
 
@@ -238,92 +166,6 @@ No cause found yet. What was ruled out, and what is left:
 
   Neither fits one press in seven while `wm` keeps the focus.
 - **Asked of the tools track if it fails again:** the run's serial log and `wm`'s state lines around the lost key, and whether `wm` logs one line for each event it reads or one for each read. If it can read two presses in one call, "6 lines for 7 presses" may be two presses in one line, and the press that went missing may be the Enter the shell needed.
-
-## A slot for the Wi-Fi station's configuration client (550-APP-0033)
-
-**Recorded by:** the tools track (APP), 2026-10-12, for `wifi` and the station's configuration interface proposed to `NET` (requests-NET.md, "`idl/wifi.wit`: what `wifi` needs of the station").
-
-### Problem
-
-`wifi` will talk to the network track's 802.11 station (`wlan`) through its configuration interface. A program gets a service's client only in a fixed slot its launcher lends, and there is none for this one.
-
-### Plan (a proposal; the kernel track decides)
-
-- `SLOT_WIFI` and `REQUEST_WIFI`, as `SLOT_BATTERY` and `REQUEST_BATTERY` came (211-KRN-0090).
-- `init` gives the shell the station's configuration client with the badge that changes settings, once `wlan` runs.
-- The shell lends it to a program that asks for `REQUEST_WIFI`; `wm` asks for it too and passes it on, as it passes the camera.
-
-### Acceptance criteria
-
-With the station (or a stand-in service of the agreed interface in QEMU), `wifi` started from the shell and from `wm` holds the client in `SLOT_WIFI`, and `caps` shows it there.
-
-## A read-only client of a network card for a program, for `wm`'s background (000-NET-0015, 000-APP-0049)
-
-**Recorded by:** the network track (`NET`), 2026-10-12, for [000-NET-0015](000-NET-0015-a-card-read-only-client.md) and the tools track's [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md).
-
-### Problem
-
-`idl/net.wit` 1.3 gives a card's driver a client that only reads the card: with `BADGE_COUNTERS` (`mind::network`) it may call `info`, `counters` and `offloads`, and nothing that sends, receives or lends a ring. Only a holder of a client with `CAP_BADGE` can mint it, and nobody that would lend it to a program has one: `init` lends the shell's `SLOT_NET` copy of `virtio_net` with `CLIENT` rights, and no program can ask for such a client.
-
-### Plan (a proposal; the kernel track decides)
-
-- **The client for the shell to lend.** Either:
-  - `init` gives the shell's `SLOT_NET` copy `CAP_BADGE` too, as it gives `netstack` its own endpoint, so the shell mints the read-only copy itself; or
-  - `init` mints the read-only client for the shell in a slot the kernel track chooses.
-- **A request flag,** for example `REQUEST_NET_COUNTERS`, for which the shell lends the read-only client to a program in `SLOT_NET` (programs do not hold `SLOT_NET` otherwise). The shell's part is the tools track's, in 000-APP-0049.
-- `wm` would hold one more lent client: the launch session's limit of 5 grants ("A launch session holds as many grants as there are launch slots" above) may come first.
-
-### Acceptance criteria
-
-A program that asks for the flag holds the read-only client in `SLOT_NET`: it reads the counters, and `send`, `receive` and `attach` answer `denied`.
-
-## The Wi-Fi station in the boot services (550-NET-0018)
-
-**Recorded by:** the network track (`NET`), 2026-10-12, for [550-NET-0018](550-NET-0018-the-station-service.md).
-
-### Problem
-
-The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/wlanhw.wit` and the network stack. The radio is `bcm_wifi` on the MacBook Pro (550-DRV-0027), and a stand-in, `wlansim`, in QEMU. Only `init` can start it and hand out its clients, and the stack has slots for two cards only (`SLOT_DEV0`, `SLOT_DEV1`).
-
-### Plan (a proposal; the kernel track decides)
-
-- **Starting it.** `init` starts `wlan` when a radio service runs. On the MacBook Pro the radio is `bcm_wifi` as a frame service. In the `net` suite's image it is `wlansim`, which the test puts on the boot disk; a boot entry or a file could name it.
-- **The radio's client.** `init` lends the radio's endpoint, the `idl/wlanhw.wit` endpoint of `bcm_wifi` (or of `wlansim`), to `wlan` alone, in slot 2 for example (MC-2.3; the drivers track asks the same, 550-DRV-0027). Nothing else gets a client of it.
-- **The station's clients:**
-  - an unbadged client to `netstack` as its third card, in a slot the kernel track chooses: the network track then raises `netstack`'s `CARDS`;
-  - one with `BADGE_WIFI_CHANGE` (`mind::network`) to the shell. That is the client the tools track asked to lend to `wifi` ("A slot for the Wi-Fi station's configuration client" above).
-- **`keystore`'s client for the station** (added 2026-10-12, for [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md)): a client of `keystore` with `BADGE_KEY_STATION` (`mind::network`, value 2) to `wlan` alone, in slot 3. With it the station has `keystore` keep a remembered network's PMK and asks it for each handshake's keys (`idl/keystore.wit` 1.1). Without it, `remember` and `forget` answer `unsupported`.
-- **Restarts.** `wlan` restarts like the other services. The stack sees its card come back as it sees `virtio_net`'s.
-
-### Acceptance criteria
-
-In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client and `keystore`'s, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
-
-### Progress (2026-10-12)
-
-**The drivers track, 2026-10-14 (550-DRV-0027):** `bcm_wifi`'s side is written: it serves `idl/wlanhw.wit` 1.0 on `SLOT_SERVICE` when it is given one, bringing the radio up at boot, and without it the core stays in reset as before. It is on `claude/ASR-DRV` and `fast-test` (3353c57d) and reaches `main` after its gate. So `init` needs only to give `bcm_wifi` a server endpoint, as it does for the other drivers, and lend its client to `wlan` alone.
-
-The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the network branch, `netstack` now reads slot 4 as its third card (`CARDS` = 3), and `wlansim`'s network moved to 10.0.4.0/24 (the station's lease 10.0.4.15, its gateway 10.0.4.1), apart from the second card's 10.0.3.0/24 in the same suite. The join check of the `net` suite comes from the network track once 550-KRN-0097 is on `main`.
-
-**On `main` since aedea68 (2026-10-14):** the code of 550-NET-0017 and 550-NET-0018 (`wpa`, `dot11`, `wlan`, `tests/wlansim`, `idl/wifi.wit`), `netstack`'s slot 4, and `keystore.wit` 1.1 for the station's client (550-NET-0024), gated on x86 and aarch64. 550-KRN-0097 can follow.
-
-## The right to badge the shell's TLS client (351-NET-0022)
-
-**Recorded by:** the network track (`NET`), 2026-10-12, for [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md).
-
-### Problem
-
-`tls` now refuses the device certificate to a client badged `BADGE_TLS_NO_DEVICE` (`idl/tls.wit` 1.2). The shell lends its own unbadged copy to programs (351-APP-0017), and it cannot make a badged one: `init` lends `SLOT_TLS` without `CAP_BADGE` (000-KRN-0073).
-
-### Plan (a proposal; the kernel track decides)
-
-- **The shell's copy.** `init` gives the shell's `SLOT_TLS` copy `CAP_BADGE` too. The shell then mints a `BADGE_TLS_NO_DEVICE` copy for each program it lends to (the tools track's part, requests-APP.md).
-- **Or init mints it.** Alternatively, `init` mints the badged client for the shell in a slot of the kernel track's choosing.
-- **The updater.** `init`'s client for `updater` may be the badged kind, unless the update server asks for the device's certificate.
-
-### Acceptance criteria
-
-`stat caps` shows the shell's TLS client with the right to badge (or the second client). The `tls` suite's check comes with the tools track's lending.
 
 ## The SSH service in the boot services (351-NET-0027)
 

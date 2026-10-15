@@ -10,3 +10,4 @@ pub mod platform;
 pub mod report;
 pub mod port;
 pub mod serial;
+pub mod watchdog;

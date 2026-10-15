@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::child::{self, ECHO, PEEK, SURVIVED};
+use bench::child::{self, ECHO, HASH, PEEK, READ, READ_END, SLOTS, SURVIVED};
 use bench::out::{self, Log};
 use bench::report::{self, Align, Table, Verdict};
 use mind::abi::*;
@@ -23,6 +23,9 @@ const GROUPS: [(&str, &str); 8] = [
 ];
 const USAGE: &str = "usage: check [kernel|security|clock|files|services|devices|sound|network …]";
 const SYSMON: Endpoint = Endpoint(SLOT_SYSINFO);
+// Where a text input's writer arrives from the loader, as record's copies do: an application holds no SLOT_WINDOWS.
+const RECEIVE: usize = SLOT_WINDOWS;
+const FED_BYTES: usize = 100 * 1024; // more than the kernel queues (TEXT_QUEUE)
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 
 fn now() -> u64 { mind::time::monotonic_ns() }
@@ -104,6 +107,117 @@ fn kernel(run: &mut Run) {
     });
     run.report("a program ends", if child::stop(endpoint, pid) { pass(format!("PID {} ended when told", pid)) } else { fail(format!("PID {} still runs", pid)) });
     let _ = ipc::drop_cap(endpoint.0);
+    text_input(run);
+    every_slot(run);
+    console_closes(run);
+}
+
+// A tool whose console is gone stops at its next row (176-KRN-0103): kbench, its output sent to an endpoint that goes.
+fn console_closes(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.report("a tool's console closes", fail(String::from("no endpoint created"))) };
+    let verdict = match child::start_with_console("kbench", "", endpoint) {
+        Err(why) => { let _ = ipc::drop_cap(endpoint.0); fail(why) }
+        Ok(pid) => {
+            let pieces = (0..4).take_while(|_| endpoint.recv_timeout(0, 10_000).is_ok()).count();
+            let t = now();
+            let _ = ipc::drop_cap(endpoint.0);
+            let gone = child::gone_within(pid, 30_000);
+            if !gone && granted(SLOT_LIFECYCLE) { let _ = lifecycle::stop_task(Endpoint(SLOT_LIFECYCLE), pid); }
+            match (pieces, gone) {
+                (4, true) => pass(format!("kbench ended {} after its console went", report::duration(now() - t))),
+                (4, false) => fail(String::from("kbench still ran 30 s after its console went")),
+                (n, _) => fail(format!("{} pieces of kbench's output came, not 4", n)),
+            }
+        }
+    };
+    run.report("a tool's console closes", verdict);
+}
+
+// A launch session that lends every launch slot at once (000-KRN-0101): the program holds them all.
+fn every_slot(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.report("launch: every slot", fail(String::from("no endpoint created"))) };
+    let all = (1usize << LAUNCH_SLOTS.len()) - 1;
+    let verdict = match child::start_in_every_slot("check", "--slots", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)) {
+        Err(why) => fail(why),
+        Ok(pid) => {
+            let said = endpoint.recv_timeout(0, 5000);
+            let _ = child::gone_within(pid, 2000);
+            match said {
+                Ok(m) if m.data == [SLOTS, all] => pass(format!("{} slots lent in one session, all held", LAUNCH_SLOTS.len())),
+                Ok(m) => fail(format!("slots held {:#x} of {:#x}", m.data[1], all)),
+                Err(e) => fail(format!("no answer: {:?}", e)),
+            }
+        }
+    };
+    run.report("launch: every slot", verdict);
+    let _ = ipc::drop_cap(endpoint.0);
+}
+
+// What a `--reader` child said: the bytes it read, their hash and how its input ended.
+fn reader_said(endpoint: Endpoint) -> Result<(usize, u64, usize), String> {
+    let read = endpoint.recv_timeout(0, 10_000).map_err(|e| format!("no answer from the reader: {:?}", e))?;
+    let hash = endpoint.recv_timeout(0, 5000).map_err(|e| format!("no hash from the reader: {:?}", e))?;
+    if read.data[0] & 0xFF != READ || hash.data[0] != HASH { return Err(format!("the reader said {:?} {:?}", read.data, hash.data)); }
+    Ok((read.data[1], hash.data[1] as u64, read.data[0] >> 8))
+}
+
+// A program's text input (000-KRN-0094): none without one; 100 KiB through the kernel's 4 KiB queue to its end; the
+// writer's rights; and the end once no writer is left.
+fn text_input(run: &mut Run) {
+    let t = now();
+    let none = mind::io::read(&mut [0u8; 16]);
+    run.report("text input: none", match none {
+        Err(mind::Error::NotFound) if !mind::io::has_input() => pass(format!("a program started without one is told so in {}", report::duration(now() - t))),
+        other => fail(format!("a read without one: {:?}", other)),
+    });
+    let Ok(endpoint) = Endpoint::create() else { return run.report("text input: to its end", fail(String::from("no endpoint created"))) };
+    let data: Vec<u8> = (0..FED_BYTES).map(|i| (i * 31 + i / 4096) as u8).collect();
+    let fed = child::start_fed("check", "--reader", endpoint, RECEIVE).and_then(|(pid, writer)| child::hello(endpoint).map(|()| (pid, writer)));
+    let (pid, spare) = match fed {
+        Err(why) => { run.report("text input: to its end", fail(why)); let _ = ipc::drop_cap(endpoint.0); return; }
+        Ok((pid, writer)) => {
+            // A copy kept past the close: written through once the reader ended.
+            let spare = ipc::mint(writer.handle(), u8::MAX, 0, 0).ok().and_then(mind::io::Writer::new);
+            let t = now();
+            let written = writer.write_all(&data).and_then(|()| writer.close());
+            let verdict = match (written, reader_said(endpoint)) {
+                (Err(e), _) => fail(format!("writing: {:?}", e)),
+                (_, Err(why)) => fail(why),
+                (Ok(()), Ok((count, hash, how))) if count == data.len() && hash == child::fnv(child::FNV_START, &data) && how == READ_END =>
+                    pass(format!("{} KiB through a {} KiB queue in {}, every byte; the end seen, and again", count / 1024, TEXT_QUEUE / 1024, report::duration(now() - t))),
+                (Ok(()), Ok((count, hash, how))) => fail(format!("{} of {} bytes, hash {}, ended {}", count, data.len(), if hash == child::fnv(child::FNV_START, &data) { "right" } else { "wrong" }, how)),
+            };
+            run.report("text input: to its end", verdict);
+            (pid, spare)
+        }
+    };
+    // Only a writer writes; and nobody once the reader ended.
+    let refused = mind::sys::syscall(SYSCALL_TEXT_WRITE, endpoint.0, 0, [data.as_ptr() as usize, 16, 0, 0]).result;
+    let gone = child::gone_within(pid, 3000);
+    let late = spare.as_ref().map(|w| w.write_some(&data[..16]));
+    run.report("text input: rights", match (refused, gone, late) {
+        (ERR_RIGHTS, true, Some(Err(mind::Error::Peer))) => pass(String::from("refused through an endpoint, and to a reader that ended")),
+        (code, gone, late) => fail(format!("through an endpoint: {:#x}; reader gone: {}; to it then: {:?}", code, gone, late)),
+    });
+    drop(spare);
+    // A writer dropped without a close: the reader still comes to its end, after the bytes queued.
+    let verdict = match child::start_fed("check", "--reader", endpoint, RECEIVE).and_then(|(pid, writer)| child::hello(endpoint).map(|()| (pid, writer))) {
+        Err(why) => fail(why),
+        Ok((pid, writer)) => {
+            let written = writer.write_all(&data[..1000]);
+            drop(writer);
+            let said = reader_said(endpoint);
+            let _ = child::gone_within(pid, 2000);
+            match (written, said) {
+                (Err(e), _) => fail(format!("writing: {:?}", e)),
+                (_, Err(why)) => fail(why),
+                (Ok(()), Ok((1000, hash, READ_END))) if hash == child::fnv(child::FNV_START, &data[..1000]) => pass(String::from("1000 bytes, then the end once no writer was left")),
+                (Ok(()), Ok((count, _, how))) => fail(format!("{} of 1000 bytes, ended {}", count, how)),
+            }
+        }
+    };
+    run.report("text input: writer gone", verdict);
+    let _ = ipc::drop_cap(endpoint.0);
 }
 
 // A copy of check that makes an access the kernel must stop.
@@ -153,7 +267,7 @@ fn clock(run: &mut Run) {
         _ => fail(String::from("the RTC service did not answer")),
     });
     let (_, resolution, hz) = mind::time::clock_info();
-    run.report("the monotonic clock", if hz != 0 { pass(format!("{} ns resolution, {} MHz counter", resolution, hz / 1_000_000)) } else { skip(format!("the 10 ms tick only (resolution {})", report::duration(resolution))) });
+    run.report("the monotonic clock", if hz != 0 { pass(format!("{} ns resolution, {} MHz counter", resolution, hz / 1_000_000)) } else { skip(format!("the tick only (resolution {})", report::duration(resolution))) });
     let shorter = (0..20).filter(|_| { let t = now(); mind::time::sleep(10); now() - t < 10_000_000 }).count();
     run.report("sleeps last as asked", if shorter == 0 { pass(String::from("20 sleeps of 10 ms, none shorter")) } else { fail(format!("{}/20 sleeps of 10 ms shorter (000-KRN-0065)", shorter)) });
 }
@@ -220,8 +334,17 @@ fn files(run: &mut Run) {
     run.report("programs on the disk", verdict);
 }
 
-fn services(run: &mut Run) {
+fn services(run: &mut Run, info: &mind::BootInfo) {
     if !granted(SLOT_LIFECYCLE) { return run.report("boot services", skip(String::from("no lifecycle client: start check from the shell"))); }
+    // What init says of this boot (init.wit 1.4, 000-KRN-0102), against what the bootloader handed the kernel.
+    let slot = info.boot_slot;
+    run.report("the boot", match lifecycle::boot(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(b)) if b.slot as u32 != slot.slot || b.trial != (slot.trial != 0) => fail(format!("init says slot {}, trial {}; the bootloader said slot {}, trial {}", b.slot, b.trial, slot.slot, slot.trial != 0)),
+        Ok(Ok(b)) if b.trial && !b.confirmed => fail(String::from("a trial boot init did not confirm: the machine restarts at the deadline")),
+        Ok(Ok(b)) if !b.trial && b.confirmed => fail(String::from("init says it confirmed a boot that was not on trial")),
+        Ok(Ok(b)) => pass(format!("{}, {}", match b.slot as u32 { BOOT_SLOT_A => "slot A", BOOT_SLOT_B => "slot B", _ => "the volume's root" }, if b.trial { "on trial, confirmed" } else { "not on trial" })),
+        other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {
             let verdict = if s.running {
@@ -327,6 +450,8 @@ fn main(info: &'static mind::BootInfo) {
     mind::about!("check — a self-test of what is done: the kernel, security, clocks, files and programs, boot services, devices, sound, the network.\nUsage: check [kernel|security|clock|files|services|devices|sound|network …]   (default: every group)\n✓ passed, ✗ failed with the reason, ○ skipped with the reason; the exit status is 1 if any failed. Details in log:checkNNNN.txt (ram: without the log volume).");
     let args = mind::process::args_str().trim();
     if args == "--child" { return child::serve(); }
+    if args == "--reader" { return child::read_input(); }
+    if args == "--slots" { return child::report_slots(); }
     if let Some(kind) = args.strip_prefix("--probe ") { return child::probe(kind); }
     let chosen: Vec<&str> = args.split_whitespace().collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("check: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }
@@ -347,7 +472,7 @@ fn main(info: &'static mind::BootInfo) {
             "security" => security(&mut run, info),
             "clock" => clock(&mut run),
             "files" => files(&mut run),
-            "services" => services(&mut run),
+            "services" => services(&mut run, info),
             "devices" => devices(&mut run),
             "sound" => sound(&mut run),
             _ => network(&mut run),

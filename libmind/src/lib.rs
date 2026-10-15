@@ -31,6 +31,7 @@ pub mod hid;
 pub mod http;
 pub mod idl;
 pub mod input;
+pub mod io;
 pub mod ipc;
 pub mod keyboard;
 pub mod keys;

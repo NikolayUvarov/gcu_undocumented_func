@@ -90,7 +90,6 @@ USER_CRATES=(
     "virtio_net:virtio_net:virtio_net.elf"
     "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "wlan:wlan:wlan.elf"
-    "virtio_input:virtio_input:virtio_input.elf"
     "netstack:netstack:netstack.elf"
     "netpolicy:netpolicy:netpolicy.elf"
     "parse:parse:parse.elf"

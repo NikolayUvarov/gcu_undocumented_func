@@ -47,3 +47,11 @@ The Effector server installs software by sending a package. MIND Core signs its 
 
 - The host tool signs a test package, and the routine accepts it.
 - The routine refuses a package with a changed file, a wrong key or a lower version than one already installed, in host tests.
+
+## A note: `init` says how the boot went (000-KRN-0102)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0102](000-KRN-0102-init-says-how-the-boot-went.md), the update track's request for 351-UPD-0007.
+
+**What changed:** `init.wit` 1.4 `boot()` answers the slot the machine booted from, whether it was on trial, and whether `init` confirmed it. `init` serves requests only once it has confirmed or refused the boot, so a trial boot answered `confirmed: false` was refused. Any client of `init` may ask, the updater's badged one too.
+
+**Asked:** the updater may ask for it every second while it waits for the confirmation, and keep the kernel's deadline as the bound. The `update` check then writes the confirmed record within seconds of `[INIT] TRIAL BOOT CONFIRMED` (the acceptance criterion of the request).

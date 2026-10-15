@@ -3,9 +3,9 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 34;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "bcm_wifi", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "bcm_wifi.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tpm.elf", "keystore.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 36;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -35,11 +35,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // The system-call ABI's version (MC-11.1, issue 172): 2 since 64-bit handles, 3 since senders wait in order without
 // ERR_BUSY (000-KRN-0010), 4 since BootInfo names the boot volume and the slot (211-KRN-0012, 351-KRN-0014) and
 // BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058) and bcm_wifi is a 33rd boot image
-// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073). The bootloader writes it into BootInfo, the
+// (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073), 10 since SLOT_WIFI moved SLOT_DYNAMIC to 34 and
+// the Wi-Fi station wlan and its stand-in radio wlansim are boot images, tpm and keystore before them (550-KRN-0097).
+// The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
 // where it expects it.
-pub const ABI_VERSION: u32 = 8;
+pub const ABI_VERSION: u32 = 10;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32 }
 // BootInfo.photo_pause_s: seconds to wait for a photo of the screen, from data/pause.txt on the boot volume (at most
@@ -210,6 +212,8 @@ pub const CAP_KIND_ESCROW: usize = 15;
 // Reading and writing the firmware's variables (FIRMWARE_VARIABLE): BootNext, BootOrder, Boot####; init gives it to
 // the shell, which lends it once the user agrees, and later to the updater (ABI 4, 351-KRN-0027).
 pub const CAP_KIND_FIRMWARE: usize = 16;
+// The writer of one task's text input (SPAWN_TEXT, TEXT_WRITE; ABI 9, 000-KRN-0094): CAP_INFO's arg2 is that task's PID.
+pub const CAP_KIND_TEXT: usize = 17;
 
 // Error codes: usize::MAX - n. ALLOC still returns 0 on failure.
 pub const ERR_INVALID: usize = usize::MAX;
@@ -321,11 +325,15 @@ pub const SLOT_CLIPBOARD: usize = 31;
 // A client of the battery service (idl/battery.wit, 211-PRT-0008): the shell's, which it lends for REQUEST_BATTERY to
 // the program's same slot (ABI 8, 211-KRN-0090).
 pub const SLOT_BATTERY: usize = 32;
+// The Wi-Fi station's configuration client (idl/wifi.wit, with mind::network::BADGE_WIFI_CHANGE): the shell's, which it
+// lends for REQUEST_WIFI to the program's same slot (ABI 10, 550-KRN-0097, for 550-APP-0033).
+pub const SLOT_WIFI: usize = 33;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 33;
-// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own.
-pub const LAUNCH_SLOTS: [usize; 17] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NETWORK,
-    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY];
+pub const SLOT_DYNAMIC: usize = 34;
+// The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
+// carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
+pub const LAUNCH_SLOTS: [usize; 19] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
+    SLOT_DISPLAY, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE, SLOT_TLS, SLOT_PARSE, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI];
 // A capability handle is `slot | generation << HANDLE_GENERATION_SHIFT`. Fixed slots (below SLOT_DYNAMIC) are named with
 // generation 0; a slot the kernel hands out gets a new generation every time it is freed, so an old handle stays invalid.
 // Received capabilities and the compositor's screen are placed only in fixed slots. A handle is 64 bits (issue 172):
@@ -386,6 +394,9 @@ pub const SPAWN_SCREEN: usize = 2; // the task gets a screen buffer and can take
 // ERR_FOCUS and nothing is created; when it ends in front the focus goes back to that task (issue 160). The spawner
 // (the loader) names the task it starts the program for.
 pub const SPAWN_FOREGROUND: usize = 4;
+// The task gets a text input (000-KRN-0094, ABI 9): its writer, a CAP_KIND_TEXT capability, goes to the spawner, its
+// handle in arg2 of the reply. Without the flag the task has none: TEXT_READ answers ERR_NOT_FOUND.
+pub const SPAWN_TEXT: usize = 8;
 pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
@@ -513,7 +524,7 @@ pub const SYSCALL_STAT: usize = 51;
 // SCHED_SET (the task's lifecycle owner, or process control): arg1 = PID, arg2 = budget in microseconds per period
 // (0: no limit), msg[0] = period in microseconds (>= 10 000), msg[1] = band (BAND_*, or BAND_KEEP; changing the band
 // needs process control or the platform/restart privilege). A task that spent its budget waits for its next period;
-// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the 10 ms tick.
+// a ready task of band 0 always runs before one of band 1 (MC-5.1-5.5). Budgets are enforced at the end of each 10 ms slice.
 pub const SYSCALL_SCHED_SET: usize = 52;
 // DEVICE_CONFIG: arg1 = an MMIO or port capability over a BAR of a PCI function, arg2 = offset (< 256) -> the
 // configuration dword at that offset (aligned down to 4) of that function; read only (drivers find their capabilities).
@@ -540,6 +551,23 @@ pub const FIRMWARE_GET: usize = 0;
 pub const FIRMWARE_SET: usize = 1;
 pub const FIRMWARE_BUFFER: usize = 65536; // room for a signed dbx update (351-KRN-0028)
 pub const FIRMWARE_HEADER: usize = 26;
+// The mark of a run that has not ended well (000-KRN-0076): a firmware variable init sets at boot and clears a minute
+// after READY, and the kernel clears at a reboot or power-off a task asked for. Found at boot, the last run stopped early
+// (a freeze the watchdog reset, a cut power), and init starts safely. GUID {444E494D-4F43-4552-8076-52554E4D4152}.
+pub const RUN_MARK_GUID: [u8; 16] = [0x4D, 0x49, 0x4E, 0x44, 0x43, 0x4F, 0x52, 0x45, 0x80, 0x76, 0x52, 0x55, 0x4E, 0x4D, 0x41, 0x52];
+pub const RUN_MARK_NAME: &str = "MindCoreRun";
+// TEXT_WRITE (a CAP_KIND_TEXT writer in arg1; ABI 9, 000-KRN-0094): msg[0] = bytes, msg[1] = their length; appends what
+// fits of them (at most TEXT_QUEUE queued) to the task's text input and returns the count, 0 when it is full. With
+// TEXT_CLOSE in arg2 and every byte taken, the input ends after them. ERR_PEER when the task ended, ERR_INVALID once
+// closed, ERR_RIGHTS without the writer.
+pub const SYSCALL_TEXT_WRITE: usize = 62;
+// TEXT_READ (the task itself): arg1 = buffer, arg2 = its length → the bytes queued, up to it; 0 at the end, which comes
+// once the input was closed or no writer is left. With nothing queued yet it waits up to TEXT_WAIT_MS for bytes, a
+// close or any input event and answers ERR_BUSY: the caller asks again. ERR_NOT_FOUND for a task started without one.
+pub const SYSCALL_TEXT_READ: usize = 63;
+pub const TEXT_CLOSE: usize = 1;
+pub const TEXT_QUEUE: usize = 4096;
+pub const TEXT_WAIT_MS: u64 = 1000;
 pub const REBOOT_POWER_OFF: usize = 1;
 pub const BAND_SYSTEM: usize = 0; // init and services: their reserve survives application overload
 pub const BAND_APPLICATION: usize = 1;
