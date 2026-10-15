@@ -225,5 +225,8 @@ final kernel stop follow every modified attempt. A failed MEM-only check
 prevents further MMIO. No cleanup result permits memory reuse; there is no
 radio endpoint or retry. Startup-model tests are not hardware or IOMMU
 containment evidence, and native Ryzen firmware/DMA operation remains pending.
-The integration branch builds `rtw89_wifi` and `init` for x86-64; its ten
-startup/activation host cases are compiled and await execution after publication.
+The integration branch `5f1d940d` builds `rtw89_wifi` and `init` for x86-64.
+After raw publication `649fea37`, all ten startup/activation host cases
+passed on the own branch (2026-10-16, zero failed/ignored, 0.00 s). These are
+orchestration/register tests; a single cumulative model across all stages
+and actual hardware evidence remain separate.
