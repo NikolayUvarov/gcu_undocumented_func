@@ -21,3 +21,5 @@ pub fn find_device_id(class: u32, mask: u32, id: u32, nth: usize) -> Result<usiz
 pub fn quiesce(device: usize) -> Result<()> { check(syscall(SYSCALL_DEVICE_STATE, device, DEVICE_STOP, [0; 4]).result).map(drop) }
 /// Turns a stopped device's decoding and DMA on again for its next driver.
 pub fn resume(device: usize) -> Result<()> { check(syscall(SYSCALL_DEVICE_STATE, device, DEVICE_START, [0; 4]).result).map(drop) }
+/// Enables only memory decoding, with checked bus mastering off, using an owned BAR after bootstrap.
+pub fn registers_only(device: usize) -> Result<()> { check(syscall(SYSCALL_DEVICE_STATE, device, DEVICE_REGISTERS, [0; 4]).result).map(drop) }

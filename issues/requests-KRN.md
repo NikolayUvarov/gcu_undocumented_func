@@ -253,3 +253,26 @@ Acceptance: the threat-model paragraph agrees with the implementation and
 the other profile documents without upgrading their partial guarantee. This
 request changes no scheduler policy or existing test tolerance.
 
+
+## Realtek staging integration assigned to the ASTRA auditor
+
+The maintainer's 2026-10-15 network assignment is tracked in
+[213-KRN-0114](213-KRN-0114-realtek-driver-startup.md). ASTRA imports the kernel
+owner's original ABI 10/WLAN startup commits, then adds checked non-mastering
+BAR/start control, Realtek boot grants and the ABI 11 transition. This is the
+bounded integration dependency of DRV-0031/0032, not ownership of the remaining
+kernel backlog. No change is sent to the kernel owner's branch. Physical
+MacBook/Ryzen evidence and the deferred ARM gate remain open.
+
+## Safe-start services need a prepared plan before Platform is dropped
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-15; H10 in the hardware audit.
+
+`init` skips `SAFE_LEFT_OUT` before constructing capability plans. A later
+`svc start bcm_wifi` (also the new RTL8852BE board stage) runs hardware discovery
+after Platform was dropped and cannot start the device. Prepare narrowly scoped
+saved plans without activating these devices, or expose an explicit supported
+recovery path. Preserve safe start and the end of bootstrap authority
+(MC-3.12, MC-6.3). Acceptance: a safe boot performs no radio startup; the operator
+can explicitly start its omitted radio afterward without restoring Platform or
+rebooting, or the UI clearly describes the deliberately unsupported operation.

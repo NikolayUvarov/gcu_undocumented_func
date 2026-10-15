@@ -3,9 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
+pub const BOOT_IMAGES: usize = 38;
+// ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
+pub const BOOT_PREFIX_IMAGES: usize = 36;
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -37,13 +39,29 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // BOOT_CONFIRM ends a trial, 5 since SLOT_SHELL and SLOT_CLIPBOARD moved SLOT_DYNAMIC to 32 (211-KRN-0058) and bcm_wifi is a 33rd boot image
 // (550-KRN-0059), 6 since setting a badge needs CAP_BADGE (000-KRN-0073), 10 since SLOT_WIFI moved SLOT_DYNAMIC to 34 and
 // the Wi-Fi station wlan and its stand-in radio wlansim are boot images, tpm and keystore before them (550-KRN-0097).
+// ABI 11 adds the two Realtek boot images and a non-mastering MMIO grant (213-KRN-0114).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
-// for another one. Fields up to abi_version keep their places across versions, so each side finds the other's version
-// where it expects it.
-pub const ABI_VERSION: u32 = 10;
-#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
-    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32 }
+// for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
+// This transition does not promise detection of ABI 9 or older layouts.
+pub const ABI_VERSION: u32 = 11;
+#[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
+    pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
+    pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES] }
+impl BootInfo {
+    pub fn image(&self, index: usize) -> Option<&ProgramImage> {
+        if index < BOOT_PREFIX_IMAGES { self.programs.get(index) } else { self.extra_programs.get(index - BOOT_PREFIX_IMAGES) }
+    }
+    pub fn images(&self) -> impl Iterator<Item = &ProgramImage> { self.programs.iter().chain(self.extra_programs.iter()) }
+    /// Reads only ABI 10's fixed version field; the caller supplies a readable ABI 10 or later prefix.
+    pub unsafe fn read_abi_version(info: *const Self) -> Option<u32> {
+        if info.is_null() || (info as usize) % core::mem::align_of::<Self>() != 0 { return None; }
+        Some(core::ptr::addr_of!((*info).abi_version).read())
+    }
+}
+// Both supported architectures have 64-bit pointers; changing this offset breaks the ABI 10 rejection path.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(core::mem::offset_of!(BootInfo, abi_version) == 720);
 // BootInfo.photo_pause_s: seconds to wait for a photo of the screen, from data/pause.txt on the boot volume (at most
 // 60); 0, the default, waits for nothing (ABI 7, 211-KRN-0089).
 pub const PHOTO_PAUSE_MAX_S: u32 = 60;
@@ -166,12 +184,12 @@ pub const SYSCALL_MEM_DETACH: usize = 47;
 // TASK_WATCH: arg1 = PID of a task the caller spawned, arg2 = endpoint handle with the read right. When the task ends,
 // a receive on that endpoint gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason | lost notices << 32] (sender PID 0).
 pub const SYSCALL_TASK_WATCH: usize = 48;
-// DEVICE_STATE: arg1 = device index, arg2 = DEVICE_STOP or DEVICE_START (platform privilege, or a capability over one
-// of the device's BARs). STOP turns off I/O and memory decoding and bus mastering, so the device can no longer reach
-// memory by DMA (MC-6.3); START turns them on again for the next driver.
+// DEVICE_STATE: a platform privilege or an owned BAR authorizes checked Command transitions for the device index.
+// STOP disables decoding and mastering; START enables supported decoding and mastering; REGISTERS enables only MEM.
 pub const SYSCALL_DEVICE_STATE: usize = 49;
 pub const DEVICE_STOP: usize = 0;
 pub const DEVICE_START: usize = 1;
+pub const DEVICE_REGISTERS: usize = 2;
 // Why a task ended (a watch's notice, EXIT_STATUS): EXIT_NORMAL | code << 8 (EXIT's code, 0: success, issue 166),
 // EXIT_KILLED, or EXIT_FAULT | vector << 8.
 pub const EXIT_NORMAL: usize = 0;
@@ -419,6 +437,7 @@ pub const PLATFORM_DEVICE_MSIX: usize = 9; // device index, MSI-X table entry: a
 pub const PLATFORM_REPORT: usize = 11; // a read-only memory object with the hardware report's text, built now (174-KRN-0038)
 pub const PLATFORM_ACPI_TABLE: usize = 12; // index: a read-only copy of the n-th ACPI table of the report's list, ERR_NOT_FOUND past the last
 pub const PLATFORM_DEVICE_MSI: usize = 13; // device index: its MSI (one message), aimed by the kernel at an interrupt line 16..31 (550-KRN-0091)
+pub const PLATFORM_DEVICE_BAR_IDLE: usize = 14; // device index, memory BAR: MEM decode only, no I/O or DMA; verified readback
 pub const PLATFORM_MMIO: usize = 10; // index: registers of a platform device outside PCI (aarch64: the board's UART, RTC)
 pub const PLATFORM_UART: usize = 0; // the console UART (aarch64: a PL011 the SPCR names)
 pub const PLATFORM_RTC: usize = 1; // the RTC (aarch64: a PL031)
