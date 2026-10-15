@@ -27,6 +27,24 @@ fn policy_requires_actual_platform_and_frequency_without_country_guessing(){
     let mut r=rule();r.access=Access::PassiveOnly;assert!(Policy::resolve(&board(),r,platform()).is_ok());
 }
 #[test]
+fn calibration_admission_requires_radiation_and_exact_engine_identity(){
+    use channel::{CalibrationEngine as E,CalibrationTransmit as Permit};
+    let mut tuned=channel::Tuned{attempt:1,session:2,channel:6,policy_version:3,access:Access::InitiateRadiation};
+    let token=Permit::modeled(&tuned,E::Tssi).unwrap();
+    assert!(token.matches(&tuned,E::Tssi));
+    assert!(!token.matches(&tuned,E::Iqk));assert!(!token.matches(&tuned,E::Dpk));
+    for field in 0..5{
+        let mut other=channel::Tuned{attempt:1,session:2,channel:6,policy_version:3,access:Access::InitiateRadiation};
+        match field{0=>other.attempt+=1,1=>other.session+=1,2=>other.channel+=1,3=>other.policy_version+=1,_=>other.access=Access::PassiveOnly}
+        assert!(!token.matches(&other,E::Tssi));
+    }
+    for field in 0..5{
+        match field{0=>tuned.attempt=0,1=>{tuned.attempt=1;tuned.session=0;},2=>{tuned.session=2;tuned.policy_version=0;},
+            3=>{tuned.policy_version=3;tuned.channel=14;},_=>{tuned.channel=6;tuned.access=Access::PassiveOnly;}}
+        assert!(Permit::modeled(&tuned,E::Tssi).is_none());
+    }
+}
+#[test]
 fn complete_channel_transaction_orders_mac_bb_rf_power_and_retains_zero_packet_tx(){
     with_prepared(|p,prefix,configured,tables|{
         let done=channel::run(p,&board(),&prefix,&configured,&tables,&Policy::resolve(&board(),rule(),platform()).unwrap()).unwrap();

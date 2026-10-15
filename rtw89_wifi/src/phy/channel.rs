@@ -56,6 +56,25 @@ pub(crate) struct Failure{pub stage:Stage,pub cause:Fault,pub scheduler_restore:
 #[derive(Debug)]
 pub(crate) struct Tuned{pub attempt:u64,pub session:u64,pub channel:u8,pub policy_version:u64,pub access:Access}
 
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) enum CalibrationEngine{Iqk,Tssi,Dpk}
+/// RFK may radiate with the ordinary scheduler stopped; channel selection is insufficient authority.
+/// No production constructor exists until actual RFK raw levels and platform SAR/EIRP are resolved.
+#[derive(Debug)]
+pub(crate) struct CalibrationTransmit{attempt:u64,session:u64,channel:u8,policy_version:u64,engine:CalibrationEngine}
+impl CalibrationTransmit{
+    pub(crate) fn matches(&self,tuned:&Tuned,engine:CalibrationEngine)->bool{
+        tuned.access==Access::InitiateRadiation&&self.attempt!=0&&self.session!=0&&self.policy_version!=0
+            &&self.attempt==tuned.attempt&&self.session==tuned.session&&self.channel==tuned.channel
+            &&self.policy_version==tuned.policy_version&&self.engine==engine&&(1..=13).contains(&self.channel)
+    }
+    #[cfg(test)]
+    pub(crate) fn modeled(tuned:&Tuned,engine:CalibrationEngine)->Option<Self>{
+        let token=Self{attempt:tuned.attempt,session:tuned.session,channel:tuned.channel,policy_version:tuned.policy_version,engine};
+        token.matches(tuned,engine).then_some(token)
+    }
+}
+
 fn fault(at:usize,value:u32)->Fault{Fault::new(FaultKind::PowerState,at,value)}
 fn left(bus:&mut impl RegisterIo,start:u64)->io::Result<u64>{
     let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0,0))?;
