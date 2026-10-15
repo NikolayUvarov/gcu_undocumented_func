@@ -12,3 +12,5 @@ pub mod mac;
 pub mod pcie;
 pub mod power;
 pub mod registers;
+pub mod runtime_mac;
+mod runtime_mac_regs;

@@ -140,3 +140,12 @@ regressions passed on 2026-10-15 UTC. These establish model behavior and
 identity of the private file, not hardware operation. Native integration and
 actual Ryzen firmware/radio operation remain pending; the existing board
 executable still performs no download or host DMA.
+
+The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
+station/MPDU/security and CMAC0 preparation after verified firmware readiness.
+Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
+DMA remains stopped. An independently bounded cleanup retains errors and
+DMA. Fourteen new host cases compile, but execution/native build and
+hardware validation for this slice are pending. It is not called by the
+native service and does not establish full runtime MAC, calibrated RF or
+WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).

@@ -413,6 +413,45 @@ The native board service does not invoke this stage. Actual Ryzen security
 bytes, DMA/WCPU firmware operation and complete integration remain
 unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
 
+## Single-band runtime MAC preparation library
+
+`runtime_mac.rs` and `runtime_mac_regs.rs` implement the pinned RTL8852B
+`mac_enable_bb_rf` chip dispatch, `sys_init_ax` and SCC DMAC/CMAC0 setup.
+They require the verified downloader's `Ready` token, actual firmware status
+7, the measured cut/RFE/security profile, an idle retained command queue,
+BAR2 of at least 128 KiB and stopped ordinary host DMA. This is a library
+stage; native startup does not invoke it.
+
+Once firmware is ready, the source's scheduler pause uses register H2C/C2H
+(`mac.c` `rtw89_hw_sch_tx_en_h2c`; `fw.c` `rtw89_fw_msg_reg`). The stage
+refuses occupied mailboxes, sends CMAC0 SCH_TX_EN/all queues disabled, checks
+the TX_PAUSE reply and hardware CTN/protocol idle, and preserves the two
+host diagnostic counter nibbles. The caller owns the sole mailbox writer.
+A response alone does not substitute for scheduler/idle register checks.
+No direct writes to CTN_TXEN or the read-only protocol-idle bit occur.
+
+The chip sequence in `rtw8852b_common.c` enables BB, sets SPS ZCDC_H, toggles
+AFC, writes XTAL80/81 and sets XYN. SCC uses 510+2 64-byte WDE pages and
+496+16 128-byte PLE pages, with the source's SCC quotas and PCIe HFC values;
+normal DMA stays stopped. It configures station scheduling, MPDU/security,
+CMAC0 scheduler parameters, address/BA CAM, RX filtering, CCA/NAV, TMAC/RMAC
+and protocol controls. The RX MPDU limit is 22 units of 512 bytes from the
+minimum RX quota of 89 pages. CAM, DLE and station readiness are bounded.
+
+The preparation has a two-second absolute budget, including the mailbox's
+one-second reply deadline and final readback. A modified failure poisons
+the command queue, independently checks packet stop (80 ms), disables
+chip BB/RF (400 ms), and stops command DMA/WCPU under the downloader's
+separate budgets. Cleanup never retries the mailbox or overwrites a pending
+XTAL command. It keeps all primary/cleanup errors and does not free DMA.
+Fourteen new host cases compile; execution/native-build evidence for this
+slice is pending. None of this establishes physical firmware/MAC operation.
+
+`Prepared` deliberately does not mean full runtime MAC or WLAN readiness:
+packet-report routing, normal interrupt handling, RX rings/C2H processing,
+final offload commands, BTC/PHY/calibration, channel/regulatory setup and
+association still require their own implementation and hardware evidence.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
