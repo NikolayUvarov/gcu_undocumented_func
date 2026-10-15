@@ -900,9 +900,13 @@ Precise source anchors, all at the existing BSD-licensed pin: `coex.c`
 `rtw8852b.c` monitor register and RF parameter tables. The eighteen new
 fixtures cover packed wire formats and production H2C integration, actual
 scoreboard ownership, grant order/restoration, pending-command protection,
-applied-write failures and bounded time/clock faults. They are compiled;
-execution evidence will be recorded after raw publication. This adds no
-hardware, native-policy or calibrated-radio claim.
+applied-write failures and bounded time/clock faults. Own-branch `94762996`
+native build passed (0.80 seconds, no warnings). After raw publication
+`1006c136`, all seven codec and eleven control fixtures passed on 2026-10-16
+MSK (0.00 seconds each, none failed or ignored, x86-64 WSL2). The codec
+command selected its seven new cases; inherited downloader tests were not
+rerun in this slice. This adds no hardware, native-policy or calibrated-radio claim.
+
 ## Native MAC/RX diagnostic continuation
 
 The current 213-KRN-0114 entry extends the earlier 128 KiB firmware-only

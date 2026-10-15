@@ -395,8 +395,10 @@ The next slice adds exact firmware-profile-105 encoders for monitor, slots,
 report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
 scoreboard, antenna/grant snapshot/restoration and cold-init common BB
 operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
-separate through production H2C. Eighteen new source/format/fault fixtures
-compile; execution follows raw publication. The native no-std build passes.
+separate through production H2C. Own-branch `94762996` no-std build passed
+(0.80 seconds); after raw publication `1006c136`, all seven codec and eleven
+control source/format/fault fixtures passed (0.00 seconds each, zero failed
+or ignored). Source reviews by the PHY and MAC/RX owners found no blocker.
 These helpers cannot construct an Initialized or RFK-grant result. The
 session-bound owner context, full ordered C2H/report and common-action
 orchestration, calibrated PHY interleave and native activation remain open;
