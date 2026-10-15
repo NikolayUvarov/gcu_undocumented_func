@@ -47,7 +47,7 @@ Enter without movement preserves full screen, and Esc restores the saved
 full-screen state after movement.
 
 Validation on ASTRA: all 40 `tests/wm_host.rs` tests pass, including new
-regression covering text and pixel windows, entry before movement, pointer
+regressions covering text and pixel windows, entry before movement, pointer
 motion, keyboard movement/resizing, Enter and Esc. Existing drag and snapping
 tests remain green. The full-screen regression also checks unchanged geometry,
 no resize notification on entry, interior content and exit cleanup. The full

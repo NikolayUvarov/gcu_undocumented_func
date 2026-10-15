@@ -31,6 +31,7 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-15-hardware-audit.md](2026-10-15-hardware-audit.md) | Ryzen cache and NIC findings, bounded network work, UI reports, Effector prerequisites, task routing and separate hardware acceptance |
 | [2026-10-09-baseline.md](2026-10-09-baseline.md) | The state of the repository before the first audit |
 | [2026-10-09-repository-audit.md](2026-10-09-repository-audit.md) | Code audit at `2cbda21`: eight confirmed findings covering FAT, blockstore, packaging, CI and file-manager/editor data loss; routing and acceptance criteria |
 | [2026-10-09-validation.txt](2026-10-09-validation.txt) | Host-test results, skipped checks, existing ELF fixture hashes and audit reproduction output |
