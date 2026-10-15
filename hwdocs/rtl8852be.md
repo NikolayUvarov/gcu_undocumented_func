@@ -449,9 +449,12 @@ Even complete cleanup does not release the retained DMA mapping or claim
 IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
 radio endpoint, packet traffic or native hardware evidence yet.
 
-Ten production startup/activation host fixtures are compiled but await
-execution after raw `fast-test` publication. They cover orchestration and
-register models, not the actual PCIe fabric or RTL8852BE power/firmware path.
+Own-branch `5f1d940d` builds both the native driver and init. After raw
+`fast-test` publication `649fea37`, all ten production startup/activation
+host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
+failed/ignored). They cover orchestration and register models, not the actual
+PCIe fabric or RTL8852BE power/firmware path. A single cumulative MMIO model
+across all library stages remains a separate integration check.
 
 ## What blocks radio operation
 
