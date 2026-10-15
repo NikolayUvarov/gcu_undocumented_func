@@ -48,3 +48,6 @@ pub mod btc_context;
 #[allow(dead_code)]
 pub(crate) mod iqk;
 mod iqk_tables;
+
+#[allow(dead_code)]
+pub(crate) mod tssi;
