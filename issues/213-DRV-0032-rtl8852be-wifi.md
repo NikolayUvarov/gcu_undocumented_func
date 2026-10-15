@@ -35,7 +35,6 @@ The maintainer requests Wi-Fi first, with RTL8168 Ethernet work in parallel, the
 The first slice provides source pins, a firmware fetch/check helper and bounded, host-tested format/register helpers. It performs no radio, firmware-download, association or packet-transfer operation. The task remains open.
 
 On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md).
-
 ### Implemented slice: bounded native board access
 
 The maintainer reaffirmed Wi-Fi as the first network priority after the x86
@@ -63,7 +62,6 @@ calibrated clock; initial/final MAC power state must be zero. These results do
 not establish hardware operation or a network link. KRN-0114 integration must
 rebuild the executable with its final boot ABI; actual Ryzen board reads,
 power-off and all radio acceptance criteria remain pending.
-
 ### Implemented slice: bounded PCIe FWCMD transport
 
 Commit `f6caafca` implements channel-12 TXBD/24-byte TXWD packets,
@@ -85,7 +83,6 @@ implementation rejects non-x86-64 architectures and requires coherent WB
 DMA with UC MMIO. Host fixtures do not establish hardware ordering or actual
 DMA operation. The frozen earlier `a99cc44a` full gate does not contain this slice;
 its full gate, integration and hardware acceptance remain pending.
-
 ### Implemented slice: MAC download-memory preparation
 
 Commit `371d41db` ports the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
@@ -105,7 +102,6 @@ dedicated regression. The service-directory build passed after correcting an
 initial root-directory invocation that selected the Linux target. This library
 stage remains uncalled by the native board service. Actual hardware operation
 and a full gate containing this later commit remain pending.
-
 ### Implemented slice: bounded PCIe preparation
 
 Port the pinned RTL8852B-specific PCIe preparation through MDIO/DBI, link
@@ -123,7 +119,6 @@ After `fast-test` publication `1dee0b3f`, all 16 focused PCIe host tests passed
 on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
 source review found no remaining blocking defect; actual hardware behavior
 and a full gate containing this slice remain unvalidated.
-
 ### Implemented slice: hash-pinned firmware and WCPU download
 
 Verify the entire private file against the documented immutable SHA-256 and
@@ -150,7 +145,6 @@ final-drain deadline handling; actual source/kernel integration checks
 corrected optional PCI I/O decoding and the existing powered-CMAC state.
 No native activation, hardware firmware readiness, RF or network claim
 follows from these tests. Required later integration/full gate remain open.
-
 ### Implemented slice: exact RFE-1/cut-1 PHY tables
 
 The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
@@ -184,7 +178,6 @@ extractor fixtures and pinned regeneration. It never enables packet transmission
 Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
-
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -214,7 +207,6 @@ fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
 Independent review added the live CMAC-enable prerequisite; no blocking
 source-review finding remains. Hardware validation and a full gate
 containing this library slice remain pending.
-
 ### Implemented library slice: bounded RXQ/RPQ and C2H parsing
 
 Implement the exact RTL8852BE RXBD layout and chip flags from the pinned
@@ -252,7 +244,6 @@ DMA buffers. The current board guard continues to refuse nonzero MAC power
 state. A future owned warm-state shutdown/reset must establish quiescence
 and retain any previously reachable memory before cold reinitialization;
 this slice does not pretend to provide that transition.
-
 ### Initial normal-H2C and BT-arbitration prerequisites
 
 `h2c.rs` adds normal sequence/header construction, a real command-queue
@@ -276,7 +267,6 @@ passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
 and deadline boundaries before publication. The native service and existing
 firmware-download path are unchanged. Hardware acceptance stays open.
-
 ### Initial calibration scheduler contract
 
 Expose the existing firmware-owned scheduler-zero exchange for the initial
@@ -294,7 +284,6 @@ host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
 cases filtered). The exact commit ran on the owned scheduler-test branch
 before the later post-init code was published. Independent review found
 no blocker; native RXDCK/BTC integration and hardware evidence are pending.
-
 ### Runtime MAC tail and installed receive-channel activation
 
 Implement the pinned RTL8852B MAC error-mask/host-report tail and PCIe
@@ -317,7 +306,6 @@ seconds, none ignored; 36 other module cases filtered), as did all 18
 affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
 review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
 containing this slice and actual hardware operation remain pending.
-
 ### Hardware BTC initcfg prerequisite
 
 Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
@@ -335,7 +323,6 @@ executable also ran 18 inherited synthetic downloader cases successfully
 and retained its one existing optional private-file ignored case: 27 passed,
 zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
 claim follows from this library.
-
 ### Typed receive-session revalidation
 
 Bind `Receiving` to the original command and receive objects with unique,
@@ -356,7 +343,6 @@ passed (0.12 seconds), and all 14 FWCMD fixtures passed (reported 0.00
 seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
 reviews found no blocker. These are host model results; full-gate,
 physical-device operation and the PHY/native permit consumer are pending.
-
 ### Firmware-ready command-session binding
 
 Bind the downloader's opaque `Ready` result to the successful command
@@ -376,20 +362,18 @@ also passed when explicitly invoked (0.06 seconds). The cumulative private
 fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
 file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
 found no blocker. Full-gate and hardware validation remain pending.
-
 ### Contiguous DM prefix (2026-10-16)
 
 The private `phy::dm` engine now follows the entire initial pre-NCTL register
 prefix, with a 300 ms total deadline and independent 400 ms chip-disable
 cleanup. It returns initial observations/settings and keeps the public pipeline
 closed until actual BTC `ntfy_init` completion supplies its concrete token.
-Native build and compilation of 68 fixtures pass; execution awaits publication.
+Native build passes; after publication `badae1bc`, all 68 fixtures of `727aab95` passed (0.11 seconds, none ignored).
 The [PHY contract](../hwdocs/rtl8852be-phy.md#contiguous-initial-dm-prefix-and-remaining-order)
 records exact skipped chip hooks and the remaining source order through board
 trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
-
 ### PHY consumer of the owned RX permit
 
 The shared PHY guard now accepts active RX only through the actual borrowed
@@ -397,9 +381,11 @@ The shared PHY guard now accepts active RX only through the actual borrowed
 DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
 DACK phases remain distinct. Six integration fixtures exercise real session
 objects and stale/current hardware state without fabricating a token; the
-PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
-execution awaits publication. This does not grant BTC or transmit readiness.
-
+PHY, BTC-init and post-MAC host harnesses pass 125, 66 and 57 cases respectively
+after `2a41a980` was published in `08a4c784`; all six new cases pass in each.
+These harnesses repeat shared cases and each retains the existing ignored
+private firmware-file fixture. Native build passes. This does not grant BTC
+or transmit readiness.
 ### MAC report tail after the full PHY prefix
 
 Implement the pinned single-band AX PPDU status/report forwarding and RTS
@@ -412,3 +398,12 @@ applied write error, independently disable PPDU reports, stop RX, disable
 BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
 Add exact mask/order, threshold boundary, stale-session, applied-failure
 and final-deadline fixtures without enabling native operation.
+### Board calibration decoder
+
+Add a pure cut-1/RFE-1 decoder for logical TSSI/thermal/gain fields and physical
+power-calibration, TSSI/thermal/PA trims and gain compensation. Preserve exact
+packed offsets, signed nibbles and source global sentinel rules; never replace
+missing firmware PHY-capability replies with these OTP bytes. Nine fixtures
+compile and native build passes; execution awaits publication. Register the
+mandatory calibration harness in host CI. No register write or native PHY
+activation is introduced by the decoder; DM tail and channel work remain open.
