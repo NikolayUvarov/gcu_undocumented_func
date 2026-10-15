@@ -268,8 +268,11 @@ retained-memory preconditions. The BT RFK prerequisite only observes actual
 RUN/REQ scoreboard bits under a bounded read-only wait; that snapshot does
 not authorize calibration. Actual BTC state, WLAN scoreboard ownership,
 antenna/grant and TDMA policy remain required for a DACK START/STOP callback.
-Thirteen H2C and six BT-observation fixtures compile; execution/native
-integration and hardware validation remain pending for this slice.
+Own-branch `d951d101` native build and thirteen H2C plus six BT-observation
+fixtures passed after raw publication `d9266c7b` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571; zero failures/ignored). These include a
+modeled DMA/C2H path, not actual firmware execution. Native integration and
+hardware validation remain pending for this slice.
 
 The subsequent MAC-tail/PCIe post-init library validates installed receive
 rings before enabling RXHCI and RXQ/RPQ. All uninstalled data-TX channels,

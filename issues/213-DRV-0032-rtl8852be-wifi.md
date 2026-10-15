@@ -277,9 +277,12 @@ version-matched TDMA policy and restoration/cleanup. The BT read view cannot
 be used as the WLAN write shadow. No fake successful callback is supplied.
 The exact source flow and next integration boundaries are in the
 [hardware notes](../hwdocs/rtl8852be.md#normal-h2c-sequencing-and-bt-rfk-observation-prerequisites).
-Thirteen H2C and six BT-observation fixtures compile; execution awaits raw
-publication. The native service and existing firmware-download path are
-unchanged by these prerequisite libraries. Hardware acceptance stays open.
+Own-branch `d951d101` builds natively (0.53 seconds, no warnings). After
+raw publication `d9266c7b`, all thirteen H2C and six BT-observation fixtures
+passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
+and deadline boundaries before publication. The native service and existing
+firmware-download path are unchanged. Hardware acceptance stays open.
 
 ### Runtime MAC tail and installed receive-channel activation
 
