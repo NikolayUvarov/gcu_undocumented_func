@@ -61,6 +61,9 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     pub(crate) fn clock(&mut self)->Result<u64,Error>{self.now()}
     pub(crate) fn registers<T>(&mut self,deadline:u64,run:impl FnOnce(&mut Window<'_,B>)->io::Result<T>)->Result<T,Error>{
         if let Some(e)=self.failed{return Err(e)}
+        self.cleanup_registers(deadline,run)
+    }
+    pub(crate) fn cleanup_registers<T>(&mut self,deadline:u64,run:impl FnOnce(&mut Window<'_,B>)->io::Result<T>)->Result<T,Error>{
         let mut window=Window{bus:self.bus,deadline,last:self.last,clock_bad:false};
         let result=run(&mut window).and_then(|v|{window.delay_us(0)?;Ok(v)});self.last=window.last;
         result.map_err(Error::Register)
