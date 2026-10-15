@@ -20,6 +20,10 @@ pub mod firmware;
 pub mod fwcmd;
 pub mod h2c;
 pub mod io;
+#[allow(dead_code)]
+pub(crate) mod tx;
+#[allow(dead_code)]
+pub(crate) mod txdesc;
 pub mod mac;
 pub mod pcie;
 pub mod power;
