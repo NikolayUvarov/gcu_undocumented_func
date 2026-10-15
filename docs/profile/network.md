@@ -2,6 +2,12 @@
 
 The network stack benchmark of issue 106 and what it decided. Appendix B.2: performance features are taken on the evidence of a measurement on a profile, not by default.
 
+## Bounded service work (550-NET-0031, 2026-10-15)
+
+On ASTRA, each card turn has a two-second deadline shared by all of its driver calls. Calls after expiry are skipped; the five-second cooldown applies only to an attempted IPC that times out, not to a healthy card whose work budget expires. The stack processes at most 64 incoming packets before one egress pass and the next card. WLAN shares a turn deadline across its radio and key-store calls, including client request handlers. These bounds limit service work; they are not a real-time scheduling guarantee.
+
+Four host tests exercise the production deadline and smoltcp polling helper with slow or silent peers and continuously arriving packets (`tests/network_budget/Cargo.toml`); the two affected services build for x86-64. QEMU integration and hardware latency/loss measurements remain pending. The supplied MacBook log does not establish the cause of the reported ping loss under load, and these changes do not add a driver for the Ryzen's Realtek NICs.
+
 ## How it is measured
 
 `netbench <a.b.c.d>:<port> [MiB]` is a console program. It gets a flow grant from the policy broker and a `sysmon` client. It runs against the host's bench server (`tests/qemu_smoke.py`, `netbench` suite) in these phases:

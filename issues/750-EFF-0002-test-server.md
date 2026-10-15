@@ -37,3 +37,9 @@ The QEMU suites need a server on the host that speaks the contract of 0001. The 
 ## Related
 
 [750-EFF-0001](750-EFF-0001-protocol-contract.md), [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0012](750-EFF-0012-run-against-the-effector-server.md), `scripts/serve_release.py`, `tests/qemu_smoke.py`.
+
+## Progress — 2026-10-15
+
+- Implemented `tests/effector_server.py`, a bounded host fixture for [contract 1.0](../docs/effector/protocol.md), with TLS 1.3, bearer authentication, `/effector` prefix, heartbeat, poll/SSE, string ACK, file/package exchange, host-only controls and the planned fault hooks. Python uses only its standard library; the existing OpenSSL executable generates temporary test certificates.
+- `python3 tests/effector_server_test.py`: 12 wire-level host tests pass on Linux, including independent heartbeat during a delayed poll, a lost ACK, duplicate delivery, malformed framing/JSON, cut stream/download and a changed certificate. No live endpoint was registered.
+- [Fixture guide and limits](../docs/effector/README.md). No QEMU effector suite exists until 0006/0007; its integration and macOS/MSYS2 checks remain open. The acceptance criteria above are unchanged.

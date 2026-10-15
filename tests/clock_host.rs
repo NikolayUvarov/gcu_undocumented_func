@@ -113,6 +113,31 @@ fn dzen_indicators_orbit_and_keys() {
 }
 
 #[test]
+fn current_hour_sector_points_to_its_corner_without_moving_the_cycle_origin() {
+    let (cols, rows_) = (80, 25);
+    let l = dzen::layout(cols, rows_);
+    let mut cells = vec![Cell::BLANK; cols * rows_];
+    let mut grid = Grid::new(&mut cells, cols, rows_);
+    for (seconds, right, down) in [(0, true, true), (21599, true, true), (21600, false, true),
+        (8 * 3600 + 20 * 60, false, true), (43200, false, false), (64800, true, false), (0, true, true)] {
+        let face = Face::at(seconds).unwrap();
+        let show = dzen::Show { digits: false, hints: false, mode: OrbitMode::Simple, switch: false };
+        dzen::draw(&mut grid, face, Some(seconds), None, show);
+        let markers: Vec<_> = (0..rows_).flat_map(|y| (0..cols).map(move |x| (x, y)))
+            .filter(|&(x, y)| grid.get(x, y).ch == '◆').collect();
+        assert_eq!(markers.len(), 1);
+        let (x, y) = markers[0];
+        assert_eq!((x as isize > l.x, 2 * y as isize > l.y), (right, down));
+        assert_eq!(grid.get(x, y).style.fg, COLORS[seconds / 3600 % 6]);
+        let (dx, dy) = cycle::point_at(0, (l.half * 3 / 4) as usize);
+        assert_eq!(grid.get((l.x + dx) as usize, ((l.y + dy) / 2) as usize).ch, '■', "fixed zero reference remains");
+        dzen::draw(&mut grid, face, Some(seconds), None, dzen::Show { mode: OrbitMode::Off, ..show });
+        assert!(!rows(&grid).iter().any(|row| row.contains('◆')));
+    }
+    assert_eq!(cycle::hour_sector_at(Face::DARK, 100), None);
+}
+
+#[test]
 fn the_dzen_clock_on_one_line() {
     // Issue u016: the time, then the discs' colors — top left and right, the center, bottom left and right.
     let seconds = 12 * 3600 + 34 * 60 + 56; // hour 12: red at the top left; step 2: white at the bottom left; cyan center

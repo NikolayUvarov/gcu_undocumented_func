@@ -8,6 +8,7 @@
 use dot11::scan::{Bss, Security};
 use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
+use mind::deadline::Deadline;
 use mind::idl::codec::List;
 use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
@@ -37,11 +38,11 @@ fn mac64(m: &[u8; 6]) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
 fn wipe(bytes: &mut [u8]) { for byte in bytes.iter_mut() { unsafe { core::ptr::write_volatile(byte, 0) }; } }
 
 // A remembered network's keys, one handshake at a time, from `keystore` (its SSID).
-struct Kept([u8; 32], usize);
+struct Kept([u8; 32], usize, Deadline);
 
 impl wpa::handshake::Pairwise for Kept {
     fn ptk(&mut self, ap: &[u8; 6], own: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> Option<wpa::keys::Ptk> {
-        let mut keys = match keystore::wifi_keys(KEYSTORE, &self.0[..self.1], mac64(ap), mac64(own), anonce, snonce) { Ok(Ok(keys)) => keys, _ => return None };
+        let mut keys = match self.2.call(|| keystore::wifi_keys(KEYSTORE, &self.0[..self.1], mac64(ap), mac64(own), anonce, snonce)) { Ok(Ok(keys)) => keys, _ => return None };
         let k = keys.as_slice();
         let ptk = (k.len() == 48).then(|| wpa::keys::Ptk { kck: k[..16].try_into().unwrap(), kek: k[16..32].try_into().unwrap(), tk: k[32..].try_into().unwrap() });
         unsafe { core::ptr::write_volatile(&mut keys, List::default()) };
@@ -50,7 +51,7 @@ impl wpa::handshake::Pairwise for Kept {
 }
 
 // The names `keystore` keeps networks for (none without its client).
-fn remembered() -> List<keystore::WifiNetwork, 16> { match keystore::wifi_networks(KEYSTORE) { Ok(Ok(list)) => list, _ => List::default() } }
+fn remembered(deadline: Deadline) -> List<keystore::WifiNetwork, 16> { match deadline.call(|| keystore::wifi_networks(KEYSTORE)) { Ok(Ok(list)) => list, _ => List::default() } }
 
 // Received Ethernet frames for the stack, oldest first (on the heap: 48 KiB would not fit the 64 KiB stack).
 struct Queue { frames: Vec<u8>, lens: [usize; QUEUE], head: usize, count: usize }
@@ -76,6 +77,7 @@ impl Queue {
 
 struct Wlan {
     station: Station,
+    deadline: Deadline,
     // Whether the radio has answered `info`: until then the station has no channels and answers no-device.
     radio: bool,
     own: [u8; 6],
@@ -104,13 +106,13 @@ impl Wlan {
 
     // What the station asked of the radio: tune, filter, send; a received Ethernet frame for the stack.
     fn apply(&mut self, out: Out) {
-        if let Some(channel) = out.channel { let _ = wlanhw::set_channel(RADIO, channel); }
+        if let Some(channel) = out.channel { let _ = self.deadline.call(|| wlanhw::set_channel(RADIO, channel)); }
         if let Some(f) = out.filter {
-            let _ = wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 });
+            let _ = self.deadline.call(|| wlanhw::set_filter(RADIO, &wlanhw::Filter { all_beacons: f.all_beacons, bssid: mac64(&f.bssid), own: 0 }));
         }
         if let Some((len, rate)) = out.send {
             let unicast_data = self.tx[0] & 0x0C == 0x08 && self.tx[4] & 1 == 0;
-            match wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS) {
+            match self.deadline.call(|| wlanhw::send(RADIO, &self.tx[..len], rate, ATTEMPTS)) {
                 Ok(Ok(sent)) => { if unicast_data { self.station.sent(sent.acked); } }
                 _ => if unicast_data { self.station.sent(false) },
             }
@@ -125,7 +127,7 @@ impl Wlan {
     fn pump(&mut self) {
         let now = mind::time::uptime_ms() as u64;
         for _ in 0..BURST {
-            let len = match wlanhw::receive(RADIO, &mut self.radio_frame) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => break };
+            let len = match self.deadline.call(|| wlanhw::receive(RADIO, &mut self.radio_frame)) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => break };
             if len < RADIO_HEADER { continue; }
             let header = &self.radio_frame[..RADIO_HEADER];
             let frame_len = u16::from_le_bytes([header[0], header[1]]) as usize;
@@ -137,7 +139,7 @@ impl Wlan {
             let mut random = [0u8; 32];
             if frame_len > 0 && frame[0] & 0x0C == 0x08 && !mind::random::fill(&mut random) { continue; }
             let mut out = Out::default();
-            let mut kept = Kept([0; 32], 0);
+            let mut kept = Kept([0; 32], 0, self.deadline);
             if let Some(bss) = self.station.network() { kept.1 = bss.ssid().len(); kept.0[..kept.1].copy_from_slice(bss.ssid()); }
             let _ = self.station.receive(&frame[..frame_len], channel, weakness, now, &random, &mut kept, &mut out, &mut self.tx, &mut self.rx);
             self.apply(out);
@@ -154,7 +156,7 @@ impl Wlan {
     }
 
     fn networks(&self) -> List<wifi::Network, 32> {
-        let kept = remembered();
+        let kept = remembered(self.deadline);
         let mut list = List::default();
         for bss in self.station.networks().iter() {
             let mut n = network(bss);
@@ -244,7 +246,7 @@ impl Wlan {
                 wifi::reply_leave(call, Ok(()))
             }
             wifi::Request::Forget { ssid } => {
-                let forgotten = match keystore::wifi_forget(KEYSTORE, ssid.as_slice()) { Ok(Ok(found)) => Ok(found), _ => Err(wifi::Error::Unsupported) };
+                let forgotten = match self.deadline.call(|| keystore::wifi_forget(KEYSTORE, ssid.as_slice())) { Ok(Ok(found)) => Ok(found), _ => Err(wifi::Error::Unsupported) };
                 if forgotten == Ok(true) { mind::println!("[WLAN] FORGOT {}", Name(ssid.as_slice())); }
                 wifi::reply_forget(call, forgotten)
             }
@@ -253,15 +255,15 @@ impl Wlan {
 
     // A WPA2 network's key: a remembered one stays in keystore; a passphrase to remember goes there, and its PMK is
     // dropped here once kept; one not to remember stays here as a PMK for this join and its rejoins.
-    fn secret(ssid: &[u8], passphrase: &str, remember: bool) -> Result<Secret, wifi::Error> {
+    fn secret(&self, ssid: &[u8], passphrase: &str, remember: bool) -> Result<Secret, wifi::Error> {
         if passphrase.is_empty() {
-            let kept = remembered().as_slice().iter().any(|k| k.ssid.as_slice() == ssid);
+            let kept = remembered(self.deadline).as_slice().iter().any(|k| k.ssid.as_slice() == ssid);
             return if kept && !remember { Ok(Secret::Kept) } else { Err(wifi::Error::Invalid) };
         }
         let bytes = passphrase.as_bytes();
         let mut pmk = wpa::keys::psk_hex(bytes).or_else(|| wpa::keys::pmk(bytes, ssid)).ok_or(wifi::Error::Invalid)?;
         if !remember { return Ok(Secret::Pmk(pmk)); }
-        let kept = keystore::wifi_remember(KEYSTORE, ssid, &pmk);
+        let kept = self.deadline.call(|| keystore::wifi_remember(KEYSTORE, ssid, &pmk));
         wipe(&mut pmk);
         match kept {
             Ok(Ok(())) => { mind::println!("[WLAN] {} REMEMBERED BY KEYSTORE", Name(ssid)); Ok(Secret::Kept) }
@@ -276,7 +278,7 @@ impl Wlan {
             Some(Security::Wpa2) => {
                 // Without RDRAND there is no SNonce to trust: fail closed (issue 103).
                 if !mind::random::available() { mind::println!("[WLAN] NO {}: WPA2 REFUSED", mind::random::SOURCE); return Err(wifi::Error::Unsupported); }
-                Some(Self::secret(ssid, passphrase, remember)?)
+                Some(self.secret(ssid, passphrase, remember)?)
             }
             // An open network has no key to remember.
             _ => None,
@@ -337,7 +339,7 @@ fn main(_info: &'static BootInfo) {
     mind::about!("wlan — the 802.11 station (a service): joins Wi-Fi networks through a radio's wlanhw.wit client and is the network stack's card for them.");
     // Without a radio's client (started by hand, not by init with a radio) there is nothing to drive.
     if mind::dev::cap_info(RADIO.0).0 != mind::abi::CAP_KIND_ENDPOINT { mind::println!("[WLAN] NO RADIO: NOTHING TO DRIVE"); mind::process::exit_with(1) }
-    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
+    let mut wlan = Wlan { station: Station::new([0; 6], &[], false), deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
                           waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS] };
@@ -346,9 +348,11 @@ fn main(_info: &'static BootInfo) {
     let (mut asked, mut waited) = (0u64, false);
     loop {
         let now = mind::time::uptime_ms() as u64;
+        // Pump and client dispatch share the remaining time, including radio and key-store calls.
+        wlan.deadline = Deadline::after(mind::time::monotonic_ns() / 1_000_000, RADIO_MS);
         if !wlan.radio && (asked == 0 || now - asked >= RADIO_MS as u64) {
             asked = now.max(1);
-            match wire::with_timeout(RADIO_MS, || wlanhw::info(RADIO)) {
+            match wlan.deadline.call(|| wlanhw::info(RADIO)) {
                 Ok(Ok(info)) => wlan.radio_up(&info),
                 Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => if !core::mem::replace(&mut waited, true) {
                     mind::println!("[WLAN] THE RADIO HAS NOT ANSWERED IN {} S: SERVING WITHOUT IT, ASKING AGAIN", RADIO_MS / 1000);
@@ -358,8 +362,8 @@ fn main(_info: &'static BootInfo) {
             }
         }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
-        // The radio's calls are bounded too: one that stops answering does not hold the station's clients.
-        if wlan.radio { wire::with_timeout(RADIO_MS, || wlan.pump()); }
+        // The same deadline applies to operations reached from client handlers below.
+        if wlan.radio { wlan.pump(); }
         let state = wlan.station.state();
         if state != last {
             mind::println!("[WLAN] {:?}{}", state, if state == State::Failed || wlan.station.reason() == Reason::Lost { match wlan.station.reason() {

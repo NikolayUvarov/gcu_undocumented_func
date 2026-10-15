@@ -57,3 +57,9 @@ Something on the machine must keep the connection to the server, report the mach
 ## Related
 
 [750-EFF-0001](750-EFF-0001-protocol-contract.md), [750-EFF-0002](750-EFF-0002-test-server.md), [750-EFF-0007](750-EFF-0007-gateway-service.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), 173-KRN-0035 (`init` reads the service configuration; on the kernel track's branch until it merges).
+
+## Implementation inputs — 2026-10-15
+
+[Contract 1.0](../docs/effector/protocol.md) and the [host fixture](../docs/effector/README.md) now exist. The runtime service has not been implemented. HTTP POST/headers/keep-alive, two certificate pins and parser-service JSON are already present in the linked NET tasks; use them rather than recreating transports.
+
+The first token-authenticated slice can heartbeat and poll independently while all local actions are denied. It needs a native AgentToken; the owner's operator API key is not a substitute. The device-certificate part above remains separate: `connect-pins` currently cannot request a client certificate, and the reviewed server does not yet persist the proposed device-key/manifest heartbeat fields. Keep those acceptance/evidence requirements open until an explicit protocol/interface extension is implemented.
