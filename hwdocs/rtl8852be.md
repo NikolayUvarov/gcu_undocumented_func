@@ -162,8 +162,13 @@ replaced with invented defaults. No DMA capability, IRQ, `platform::resume`,
 firmware download, WLAN service endpoint or radio registration is used. The
 binary logs the outcome and sleeps rather than causing an init restart loop.
 
-Validation for this slice is pending its own-branch build, publication to
-`fast-test` and focused host fault-injection tests in the required order.
+Validation on `codex/213-DRV-0032-rtl8852be`, commit `a6e69a07`,
+2026-10-15: the x86-64 native release build passed; after publication to
+`origin/fast-test` merge `0b5bd1bf`, all 16 tests in
+`tests/rtw89_power_host.rs` passed (0.05 seconds). They cover grant/clock/cut
+refusal, every power-on write failure, independent cleanup budgets, frozen
+and late clocks, DDV/DAV limits, malformed logical maps, board identity and
+failed/transitional shutdown. No suite was run on `fast-test`.
 The actual Ryzen MAC power/EFUSE/shutdown cycle is untested. A QEMU boot with
 no RTL8852BE cannot establish it. The earlier Linux identity observation and
 parser tests are not evidence for this new device sequence.

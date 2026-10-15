@@ -72,3 +72,22 @@ The rates doubled and the stack's and the drivers' CPU time per MiB fell by abou
   - Receive checksums are always verified by the stack. The card is not trusted to vouch for the integrity of received data, and `VIRTIO_NET_F_GUEST_CSUM` is not negotiated.
 - **Segmentation offloads** are not used. Frames still cost about 110 µs of stack time each, and much of that is the client calls (`tcp-receive` moves 4 KiB per call) and smoltcp itself. Larger frames would need a frame size beyond 1514 bytes in the ring and TCP segmentation that smoltcp does not do. Decide again with a measurement on hardware with KVM.
 - **The frame ring** is used whenever the driver offers it (`net.wit` 1.2).
+
+## RTL8852BE initial board access (213-DRV-0032)
+
+The native `rtw89_wifi` service provides a bounded initial MAC power/XTAL/EFUSE
+read cycle for digital cut 1, under KRN-0114's MEM-only BAR2 grant. It requires
+known inactive MAC state and a calibrated high-resolution clock, holds the
+baseband in reset, attempts independent OTP/power cleanup, and rejects
+unsupported RFE or missing identity data. Its TCB includes the PCI/MMIO grant,
+uncached mapping, calibrated kernel clock and the pinned BSD register/power
+sequence documented in [the hardware notes](../../hwdocs/rtl8852be.md).
+
+Evidence: own branch `codex/213-DRV-0032-rtl8852be`, `a6e69a07`, x86-64
+release build and 16 host state-machine/fault-injection tests passed on
+2026-10-15, with tests run after `fast-test` publication `0b5bd1bf`. The
+mock hardware checks bounds, state transitions and cleanup; it does not
+establish device timing or electrical behavior. KRN integration/full gate and
+actual Ryzen MAC/board-read/shutdown evidence remain pending. No host DMA,
+firmware download, BB/RF calibration, WLAN registration, association, IP
+traffic or Effector connectivity is implemented or claimed by this slice.

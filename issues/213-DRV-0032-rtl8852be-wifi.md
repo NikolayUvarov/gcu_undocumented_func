@@ -36,14 +36,14 @@ The first slice provides source pins, a firmware fetch/check helper and bounded,
 
 On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
-### Next slice: bounded native board access
+### Implemented slice: bounded native board access
 
 The maintainer reaffirmed Wi-Fi as the first network priority after the x86
 validation stage. Work proceeds on `codex/213-DRV-0032-rtl8852be`, from ASTRA
-`1aea9100` merged with main `bd7b5493`. The intended slice is an executable
+`1aea9100` merged with main `bd7b5493`. The slice is an executable
 `rtw89_wifi` service with exact PCI/cut checks, the pinned RTL8852B MAC power
 lifecycle, bounded indirect XTAL operations, board EFUSE reads and shutdown.
-Tests will exercise the same register sequence through a simulated I/O seam;
+Tests exercise the same register sequence through a simulated I/O seam;
 they cannot establish operation on the actual adapter.
 
 The service must begin with memory decoding enabled and PCI bus mastering
@@ -53,3 +53,13 @@ this task does not change the boot ABI or borrow the Broadcom service identity.
 Firmware download, DMA rings, BB/RF calibration, WLAN registration and traffic
 remain later work. No Linux driver unbinding, reset or radio experiment is part
 of this slice.
+
+Own-branch commit `a6e69a07` builds for `x86_64-unknown-none`. After its
+publication in `origin/fast-test` merge `0b5bd1bf`, all 16 focused host tests
+passed on 2026-10-15 (0.05 seconds). No tests ran on `fast-test`. Independent
+review found and corrected the native 10 ms sleep-tick mismatch and acceptance
+of transitional MAC power states. Short hardware waits now require the
+calibrated clock; initial/final MAC power state must be zero. These results do
+not establish hardware operation or a network link. KRN-0114 integration must
+rebuild the executable with its final boot ABI; actual Ryzen board reads,
+power-off and all radio acceptance criteria remain pending.
