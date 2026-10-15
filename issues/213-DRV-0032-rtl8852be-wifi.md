@@ -229,8 +229,11 @@ host fixtures before native integration; no live Linux NIC access.
 The RX region occupies 5,902,336 bytes (4096 descriptor bytes plus 512
 64-byte-aligned buffer strides of 11520), disjoint from the 86,016-byte
 command region. The combined layout fits within a future 8 MiB retained
-grant. Eighteen focused host fixtures compile; execution/native-build and
-hardware evidence for this new slice remain pending. The current firmware
+grant. Own-branch `b112406d` native build passed (0.47 seconds, no warnings).
+After raw publication in `fast-test` `cfc4515bf1d1164c75a11ecd959aaca05326d88c`,
+all 18 RX host fixtures passed on 2026-10-16 (0.13 seconds, none ignored).
+Independent source/ownership review found no remaining blocker. Hardware
+validation and a full gate containing this slice remain pending. The current firmware
 diagnostic's grant and native entry are unchanged.
 
 A warm inherited device remains an explicit integration precondition:
@@ -263,3 +266,44 @@ passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
 and deadline boundaries before publication. The native service and existing
 firmware-download path are unchanged. Hardware acceptance stays open.
+
+### Initial calibration scheduler contract
+
+Expose the existing firmware-owned scheduler-zero exchange for the initial
+RXDCK wrapper. Both pause and restore are restricted to an already-zero
+saved scheduler mask, with live firmware/CMAC guards, exclusive register
+mailbox ownership, caller timeout and actual CTN/PTCL idle readback. No
+nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
+further mailbox calls in that session; callers must retain DMA and perform
+their independent shutdown. Add focused zero/occupied/deadline fixtures;
+native calibration and BTC arbitration are still separate prerequisites.
+
+Own-branch `b947aa40` built without warnings in 0.46 seconds. After raw
+publication `d9266c7b24ba3f3946c32e3ba56592a8b5ad1769`, all 17 runtime-MAC
+host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
+cases filtered). The exact commit ran on the owned scheduler-test branch
+before the later post-init code was published. Independent review found
+no blocker; native RXDCK/BTC integration and hardware evidence are pending.
+
+### Runtime MAC tail and installed receive-channel activation
+
+Implement the pinned RTL8852B MAC error-mask/host-report tail and PCIe
+LTR/address-info setup, then activate only the installed RXQ/RPQ and
+existing command channel. Require the previous MAC preparation, matching
+unchanged ring descriptors, quiet TX scheduler, ready firmware and disabled
+host interrupt masks before any writes. BACAM V0 makes this chip's
+`mac_feat_init` a no-op; do not send another chip's V1 BA-CAM command.
+Preserve STOP on every uninstalled data-TX channel and WPDMA. Keep host
+interrupts masked for the bounded polling path. A failure independently
+stops receive DMA, disables the radio and stops command/WCPU operation;
+retained allocations still require external PCI quiescence. Add applied
+write-failure, stale-ring, status-bit preservation and deadline fixtures.
+No native grant expansion, normal H2C/BTC/PHY claim or WLAN registration
+is included in this slice.
+
+Own-branch `06a0b932` built without warnings in 0.66 seconds. After raw
+publication `b50f52c0`, all nine focused post-init fixtures passed (0.81
+seconds, none ignored; 36 other module cases filtered), as did all 18
+affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
+review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
+containing this slice and actual hardware operation remain pending.

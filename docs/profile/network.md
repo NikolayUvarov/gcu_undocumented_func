@@ -252,8 +252,10 @@ The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
 copies each bounded packet before releasing its descriptor, and parses AX
 RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
 future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
-is unchanged. Eighteen host fixtures compile; execution/native build and
-hardware validation remain pending. It provides neither RX activation nor
+is unchanged. Own-branch `b112406d` native build passed (0.47 seconds, no
+warnings); after raw publication `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Hardware validation and a
+full gate containing this slice remain pending. It provides neither RX activation nor
 interrupt/WLAN integration. Warm-state ownership/quiescence is still a
 precondition, not established by PCI MEM-only decoding.
 
@@ -271,3 +273,15 @@ fixtures passed after raw publication `d9266c7b` (2026-10-16, x86-64 WSL2,
 rustc 1.101.0-nightly c36f14571; zero failures/ignored). These include a
 modeled DMA/C2H path, not actual firmware execution. Native integration and
 hardware validation remain pending for this slice.
+
+The subsequent MAC-tail/PCIe post-init library validates installed receive
+rings before enabling RXHCI and RXQ/RPQ. All uninstalled data-TX channels,
+WPDMA and host interrupt masks remain stopped/masked. The 10 ms stage and
+its independent cleanup retain DMA after failures. Own-branch `06a0b932`
+native build passed (0.66 seconds, no warnings); after raw publication
+`b50f52c0`, nine focused post-init cases passed (0.81 seconds) plus all 18
+affected RX cases (0.12 seconds), none ignored, on 2026-10-16 MSK. The
+shared zero-only scheduler helper `b947aa40` also passed its build (0.46
+seconds) and 17 runtime-MAC cases (0.12 seconds) after publication
+`d9266c7b`. Full-gate and hardware evidence remain pending. Its `Receiving` result is not H2C/BTC/PHY or WLAN readiness,
+and the native firmware-only service still does not call this library.

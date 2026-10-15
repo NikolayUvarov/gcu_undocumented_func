@@ -499,8 +499,11 @@ bits 31:24 and return status 23:16). Matching includes category, class,
 function and sequence; receipt or DMA consumption does not imply success
 of the requested firmware operation.
 
-Eighteen focused host fixtures compile; native-build, execution and hardware
-evidence for this new slice are pending. Interrupts, RX activation, command
+Own-branch `b112406d` native build passed in 0.47 seconds without warnings;
+after raw publication in `fast-test` `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Independent source and
+ownership review found no remaining blocker. Hardware validation and a full
+gate containing this slice remain pending. Interrupts, RX activation, command
 ACK routing, BTC coordination and WLAN service registration remain separate.
 A warm device is not silently reset: MEM-only PCI decoding does not imply
 MAC-off or establish ownership of old DMA. The board's cold-state guard
@@ -567,6 +570,45 @@ requires a separately fetched file and writes no payload to a report:
 rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
 /tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
 ```
+
+## MAC tail and receive-only post-init library
+
+`post_mac::activate` follows pinned `mac.c:3569–3909` and
+`pci.c:3132–3247`: RTL8852B error masks, PCIe host release reports
+(`RTW89_RPR_MODE_POH=0`, aggregation 30, timeout 255), LTR spacing 500 us,
+idle timer 3.2 ms, RX thresholds 40, idle/active latency values
+`0x90039003`/`0x880b880b`, and eight-byte address-info mode. The chip uses
+BACAM V0 (`rtw8852b.c:961`); `mac_feat_init` performs no V1 BA-CAM H2C.
+Known combined IMR/ISR status fields are written as zero rather than echoed
+while mask fields change. Host interrupt masks stay zero for bounded polling.
+
+An existing `runtime_mac::Prepared` value, actual runtime register state,
+quiet scheduler, ready firmware, unchanged command ring, and both installed
+receive rings are prerequisites. The whole stage has a 10 ms deadline,
+including the final ring validation. It sets RXHCI before releasing RXQ/RPQ,
+retains CH12, and keeps every uninstalled data-TX channel and WPDMA stopped.
+It deliberately does not copy upstream's enable-all-TX-queues step.
+The opaque `Receiving` result is receive-DMA readiness only; later callers
+must revalidate actual ring/device state after any intervening operation.
+No native entry, DMA grant, IRQ handler or WLAN registration changes.
+
+Failure independently attempts receive stop, chip BB/RF disable and command
+DMA/WCPU stop, preserving their errors and retaining all DMA allocations
+until external PCI quiescence. Own-branch `06a0b932` native build passed
+(0.66 seconds, no warnings); after raw publication `b50f52c0`, all nine
+post-init host fixtures passed (0.81 seconds) and all 18 affected RX cases
+passed (0.12 seconds), none ignored, on 2026-10-16 MSK. Independent source
+review found no blocker. Full-gate and hardware evidence remain pending. Normal
+H2C/offload, BTC policy, PHY/calibration and data TX remain separate.
+
+The initial calibration `runtime_mac::scheduler_zero` helper uses the same
+exclusive firmware register mailbox for zero-only pause and restore. It
+rejects live TX, unavailable firmware/CMAC and occupied exchanges before
+publishing, and checks actual CTN/PTCL idle and the caller's deadline. An
+uncertain error forbids further mailbox use. Own-branch `b947aa40` built
+in 0.46 seconds without warnings; after publication `d9266c7b`, all 17
+runtime-MAC cases passed (0.12 seconds, none ignored). This does not supply
+BTC arbitration or activate native calibration.
 
 ## What blocks radio operation
 

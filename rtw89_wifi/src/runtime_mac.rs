@@ -123,6 +123,19 @@ fn packet_stop(bus: &mut impl RegisterIo) -> io::Result<()> {
     packet_status(bus)
 }
 
+/// Initial calibration pause/restore may only send an already-zero scheduler mask.
+/// Caller exclusively owns the register mailbox; any error forbids retry or restore through this mailbox.
+/// Firmware ACK must be followed by actual CTN/PTCL idle; no packet TX is enabled by this exchange.
+pub fn scheduler_zero(bus: &mut impl RegisterIo, timeout_us: u32) -> io::Result<()> {
+    if timeout_us==0 || timeout_us>1_000_000 { return Err(Fault::new(FaultKind::Access,R_AX_CTN_TXEN,timeout_us)); }
+    let mut timed=TimedIo::new(bus,u64::from(timeout_us));
+    require(&mut timed,download::FW_CONTROL,0xe0,0xe0)?;
+    require(&mut timed,R_AX_CMAC_FUNC_EN,1<<30,1<<30)?;
+    require(&mut timed,R_AX_CTN_TXEN,0xffff,0)?;
+    packet_stop(&mut timed)?;
+    timed.delay_us(0)
+}
+
 fn xtal(bus: &mut impl RegisterIo, offset: u8, value: u8) -> io::Result<()> {
     io::poll32(bus,R_AX_WLAN_XTAL_SI_CTRL,B_AX_WL_XTAL_SI_CMD_POLL,0,50,50_000)?;
     power::xtal_write(bus,offset,value,255)?;
@@ -137,7 +150,7 @@ fn enable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     bus.write8(0x8040,0xe)?;
     let actual=bus.read8(0x8040)?; if actual!=0xe { return Err(fault(0x8040,actual as u32)); } Ok(())
 }
-fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
+pub(crate) fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     let mut timed=TimedIo::new(bus,400_000);
     let mut first=None;
     let mut remember=|result:io::Result<()>| { if let Err(error)=result { if first.is_none() { first=Some(error); } } };
