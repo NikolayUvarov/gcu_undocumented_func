@@ -65,4 +65,4 @@ pub fn query(bus:&mut impl Bus,queue:&mut Queue<'_>,board:&Board,bar_bytes:usize
 
 #[cfg(test)]
 #[path="../../tests/rtw89_phycap_cases.rs"]
-mod tests;
+pub(crate) mod tests;
