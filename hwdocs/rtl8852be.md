@@ -263,8 +263,13 @@ power-off cycle; successful local cleanup is not a device DMA-quiescence
 claim. This function never writes PCI Command, HCI DMA controls, WCPU, BB/RF
 or CMAC controls and supplies no firmware, radio or host DMA startup.
 
-Build/host evidence is pending for this new slice. The eleven focused fixtures
-in `tests/rtw89_mac_host.rs` cover the exact download quotas and WCPU override,
+Own-branch commit `371d41db` built for `x86_64-unknown-none` (0.31 seconds,
+no warnings). After `fast-test` publication `60a100be`, all 11 focused tests
+passed on 2026-10-15 UTC (reported 0.00 seconds, none ignored). A prior build
+invocation from the repository root used the Linux default target, missing
+the service's nested Cargo configuration, and failed in `libmind`; the native
+build was rerun from `rtw89_wifi/` without changing code for that error.
+The eleven focused fixtures in `tests/rtw89_mac_host.rs` cover the exact download quotas and WCPU override,
 pre-write guards, both readiness states, every forward-write fault, failed
 readback, cleanup failures and frozen/late/absolute deadlines. Actual Ryzen
 MAC/DLE/HFC operation remains untested. PCIe MDIO/DBI configuration, modes,
