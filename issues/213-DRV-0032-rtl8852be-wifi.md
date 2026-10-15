@@ -704,3 +704,14 @@ Fourteen engine fixtures and two provenance cases compile/are registered;
 execution follows raw publication. Full typed cold-start integration, RFK power
 policy, hardware quality and association remain open. See the
 [DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
+
+### Initial channel coexistence callbacks (2026-10-16)
+
+The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
+30 ms preservation and first-slot RTL8852B MCC notification callbacks, described
+in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
+initialized context, normal H2C sequence and retained RX, refuse pending RFK,
+preserve errors and allow a matching host END even after poisoning. Ten new
+Session model cases compile; execution awaits raw publication. The channel
+coordinator must still validate real IQK/TSSI/DPK results and transmission
+admission. No native RFK-power provider or working WLAN is claimed.
