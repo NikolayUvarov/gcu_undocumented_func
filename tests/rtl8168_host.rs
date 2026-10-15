@@ -2,6 +2,8 @@
 mod identity;
 #[path = "../rtl8168/src/rings.rs"]
 mod rings;
+#[path = "../rtl8168/src/controller.rs"]
+mod controller;
 
 use rings::{DropReason, Received, RegionError, Rings, SendError};
 use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -337,4 +339,203 @@ fn identity_decodes_revision_from_raw_registers_without_claiming_chip_support() 
         identity::Identity::from_snapshot(0x8139_10ec, &[]),
         Err(identity::Error::WrongDevice)
     );
+}
+
+#[derive(Clone)]
+struct RegisterModel(std::rc::Rc<std::cell::RefCell<Model>>);
+struct Model {
+    bytes: [u8; 256], phy: [u16; 32], writes: Vec<(usize, usize, u32)>,
+    clock: u64, tick: u64, sleeps: usize, reads: usize, length: usize,
+    reset_stuck: bool, mdio_stuck: bool, phy_reset_stuck: bool,
+}
+impl RegisterModel {
+    fn new() -> Self {
+        let mut model = Model { bytes: [0; 256], phy: [0; 32], writes: Vec::new(),
+            clock: 0, tick: 1, sleeps: 0, reads: 0, length: 256,
+            reset_stuck: false, mdio_stuck: false, phy_reset_stuck: false };
+        model.bytes[..6].copy_from_slice(&[0x02, 0x13, 0x24, 0x35, 0x46, 0x57]);
+        model.bytes[0x40..0x44].copy_from_slice(&0x4f00_0f80u32.to_le_bytes());
+        model.bytes[0x6c] = 2;
+        model.phy[2] = 0x001c; model.phy[3] = 0xc800; model.phy[1] = 0x796d;
+        Self(std::rc::Rc::new(std::cell::RefCell::new(model)))
+    }
+    fn load(&self, at: usize, width: usize) -> u32 {
+        let mut model = self.0.borrow_mut();
+        assert!(at + width <= model.length); model.reads += 1;
+        if at == 0x37 && model.bytes[at] == 0x10 && !model.reset_stuck { model.bytes[at] = 0; }
+        let mut bytes = [0; 4]; bytes[..width].copy_from_slice(&model.bytes[at..at + width]);
+        u32::from_le_bytes(bytes)
+    }
+    fn store(&self, at: usize, width: usize, value: u32) {
+        let mut model = self.0.borrow_mut();
+        assert!(at + width <= model.length); model.writes.push((at, width, value));
+        if at == 0x3e { for i in 0..width { model.bytes[at + i] &= !(value >> (8 * i)) as u8; } return; }
+        model.bytes[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+        if at == 0x60 && width == 4 && !model.mdio_stuck {
+            let register = (value >> 16 & 31) as usize;
+            let reply = if value & 0x8000_0000 != 0 {
+                model.phy[register] = value as u16;
+                if register == 0 && value & 0x8000 != 0 && !model.phy_reset_stuck { model.phy[0] &= !0x8000; }
+                value & !0x8000_0000
+            } else { 0x8000_0000 | model.phy[register] as u32 };
+            model.bytes[at..at + 4].copy_from_slice(&reply.to_le_bytes());
+        }
+    }
+    fn controller(&self) -> controller::Controller<Self> { controller::Controller::new(self.clone(), identity::PCI_ID).unwrap() }
+    fn assert_unpublished(&self) {
+        assert!(!self.0.borrow().writes.iter().any(|&(at, _, value)| [0x20, 0x24, 0xe4, 0xe8].contains(&at) || at == 0x37 && value & 0x0c != 0));
+    }
+}
+impl controller::Registers for RegisterModel {
+    fn len(&self) -> usize { self.0.borrow().length }
+    fn read8(&mut self, at: usize) -> u8 { self.load(at, 1) as u8 }
+    fn read16(&mut self, at: usize) -> u16 { self.load(at, 2) as u16 }
+    fn read32(&mut self, at: usize) -> u32 { self.load(at, 4) }
+    fn write8(&mut self, at: usize, value: u8) { self.store(at, 1, value as u32); }
+    fn write16(&mut self, at: usize, value: u16) { self.store(at, 2, value as u32); }
+    fn write32(&mut self, at: usize, value: u32) { self.store(at, 4, value); }
+    fn now_ms(&self) -> u64 { self.0.borrow().clock }
+    fn sleep_ms(&mut self, _: u32) { let mut model = self.0.borrow_mut(); model.sleeps += 1; model.clock += model.tick; }
+}
+
+#[test]
+fn controller_identity_rejects_unreviewed_or_unavailable_hardware_without_writes() {
+    use controller::Error;
+    for (case, expected) in [(0, Error::WrongDevice), (1, Error::Mmio), (2, Error::UnknownXid(0x540)),
+        (3, Error::Gone), (4, Error::Mac), (5, Error::Mac)] {
+        let io = RegisterModel::new();
+        let mut pci = identity::PCI_ID;
+        {
+            let mut model = io.0.borrow_mut();
+            match case {
+                0 => pci ^= 1,
+                1 => model.length = 0xf3,
+                2 => model.bytes[0x40..0x44].copy_from_slice(&0x5400_0000u32.to_le_bytes()),
+                3 => model.bytes[0x40..0x44].fill(0xff),
+                4 => model.bytes[..6].fill(0),
+                5 => model.bytes[0] |= 1,
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(controller::Controller::new(io.clone(), pci).err(), Some(expected));
+        assert!(io.0.borrow().writes.is_empty());
+    }
+}
+
+#[test]
+fn reset_timeout_and_frozen_clock_are_both_finite_and_do_not_publish_dma() {
+    for tick in [0, 1] {
+        let io = RegisterModel::new();
+        { let mut model = io.0.borrow_mut(); model.tick = tick; model.reset_stuck = true; }
+        let mut nic = io.controller();
+        assert_eq!(nic.prepare(), Err(controller::Error::Reset));
+        assert_eq!(nic.state(), controller::State::Failed);
+        assert!(io.0.borrow().sleeps <= 1000);
+        assert!(io.0.borrow().clock <= 100);
+        assert!(!io.0.borrow().writes.iter().any(|&(at, _, _)| at == 0x60));
+        io.assert_unpublished();
+        assert_eq!(nic.prepare(), Err(controller::Error::State));
+    }
+}
+
+#[test]
+fn mdio_and_phy_reset_failures_are_bounded_before_dma_publication() {
+    for phy in [false, true] {
+        let io = RegisterModel::new();
+        { let mut model = io.0.borrow_mut(); model.mdio_stuck = !phy; model.phy_reset_stuck = phy; }
+        let mut nic = io.controller();
+        assert_eq!(nic.prepare(), Err(if phy { controller::Error::PhyReset } else { controller::Error::Mdio }));
+        assert!(io.0.borrow().clock <= 600);
+        assert!(io.0.borrow().reads < 1000);
+        assert_eq!(nic.state(), controller::State::Failed);
+        io.assert_unpublished();
+    }
+}
+
+#[test]
+fn initialization_has_one_total_budget_even_with_successful_slow_mdio() {
+    let io = RegisterModel::new();
+    io.0.borrow_mut().tick = 200;
+    let mut nic = io.controller();
+    assert_eq!(nic.prepare(), Err(controller::Error::Budget));
+    assert!(io.0.borrow().clock >= controller::STARTUP_MS);
+    assert!(io.0.borrow().clock < controller::STARTUP_MS + 200);
+    io.assert_unpublished();
+}
+
+#[test]
+fn unknown_phy_stops_before_negotiation_and_dma() {
+    let io = RegisterModel::new(); io.0.borrow_mut().phy[3] = 0xc801;
+    let mut nic = io.controller();
+    assert_eq!(nic.prepare(), Err(controller::Error::Phy(0x001c_c801)));
+    let model = io.0.borrow();
+    assert!(!model.writes.iter().any(|&(at, _, value)| at == 0x60 && value & 0x801f_0000 == 0x8000_0000));
+    drop(model); io.assert_unpublished();
+}
+
+#[test]
+fn startup_arms_real_rings_before_separate_engine_enable_and_preserves_station_address() {
+    let io = RegisterModel::new(); let mut nic = io.controller();
+    let dma = Dma::new(); let queues = dma.initialize();
+    assert_eq!(unsafe { nic.enable(true) }, Err(controller::Error::State));
+    assert_eq!(nic.identity.xid, 0x4c0);
+    nic.prepare().unwrap();
+    assert_eq!(nic.state(), controller::State::Prepared);
+    io.assert_unpublished();
+    unsafe { nic.program(&queues) }.unwrap();
+    assert_eq!(nic.state(), controller::State::Armed);
+    assert_eq!(io.load(0x37, 1), 0);
+    assert_eq!(io.load(0x3c, 2), 0);
+    assert_eq!(io.load(0x20, 4), PHYSICAL as u32);
+    assert_eq!(io.load(0xe4, 4), PHYSICAL as u32 + 4096);
+    assert_eq!(io.load(0x24, 4), 0); assert_eq!(io.load(0xe8, 4), 0);
+    assert_eq!(io.load(0xe0, 2), 0x0089);
+    assert_eq!(io.load(0x44, 4), 0x0000_ff0e);
+    assert_eq!(io.load(0x40, 4), 0x0300_0700);
+    assert_eq!(io.load(0xda, 2), 2048);
+    assert_eq!(io.0.borrow().bytes[..6], [0x02, 0x13, 0x24, 0x35, 0x46, 0x57]);
+    assert_eq!(io.0.borrow().phy[4], 0x1e1);
+    assert_eq!(io.0.borrow().phy[9], 0x300);
+    assert_eq!(io.0.borrow().phy[0], 0x1200);
+    assert!(!io.0.borrow().writes.iter().any(|&(at, _, value)| at == 0x37 && value & 0x0c != 0));
+    let programmed = io.0.borrow().writes.len();
+    unsafe { nic.enable(true) }.unwrap();
+    assert_eq!(&io.0.borrow().writes[programmed..], &[(0x37, 1, 0x0c), (0x3c, 2, 0x803f)]);
+    assert_eq!(nic.state(), controller::State::Running); assert!(nic.link());
+    assert_eq!(unsafe { nic.program(&queues) }, Err(controller::Error::State));
+    nic.kick(); assert_eq!(io.0.borrow().writes.last(), Some(&(0x38, 1, 0x40)));
+    io.0.borrow_mut().bytes[0x3e] = 5;
+    assert_eq!(nic.acknowledge(), Ok(5)); assert_eq!(io.load(0x3e, 2), 0);
+}
+
+#[test]
+fn disappearance_after_programming_does_not_enable_engines_or_reclaim_owned_dma() {
+    let io = RegisterModel::new(); let mut nic = io.controller();
+    let dma = Dma::new(); let mut queues = dma.initialize();
+    nic.prepare().unwrap(); unsafe { nic.program(&queues) }.unwrap();
+    queues.send(&[0x5a; 60]).unwrap();
+    let tx = dma.word(0); let rx = dma.word(4096);
+    io.0.borrow_mut().bytes[0x37] = 0xff;
+    let before = io.0.borrow().writes.len();
+    assert_eq!(unsafe { nic.enable(false) }, Err(controller::Error::Gone));
+    assert_eq!(io.0.borrow().writes.len(), before);
+    assert_eq!(nic.state(), controller::State::Failed);
+    assert_eq!(dma.word(0), tx); assert_eq!(dma.word(4096), rx);
+    assert_eq!(queues.tx_pending(), 1); assert_eq!(queues.reclaim(), None);
+}
+
+#[test]
+fn fault_masks_interrupts_and_gates_receive_without_reinitializing_dma() {
+    let io = RegisterModel::new(); let mut nic = io.controller();
+    let dma = Dma::new(); let mut queues = dma.initialize();
+    nic.prepare().unwrap(); unsafe { nic.program(&queues).unwrap(); nic.enable(false).unwrap(); }
+    queues.send(&[0xa5; 60]).unwrap(); let tx = dma.word(0); let rx = dma.word(4096);
+    nic.fail();
+    assert_eq!(nic.state(), controller::State::Failed);
+    assert_eq!(io.load(0x3c, 2), 0); assert_eq!(io.load(0x44, 4) & 0xf, 0);
+    assert_ne!(io.load(0xf0, 4) & (1 << 19), 0); assert_eq!(io.load(0x37, 1), 0x8c);
+    assert_eq!(dma.word(0), tx); assert_eq!(dma.word(4096), rx);
+    assert_eq!(queues.tx_pending(), 1); assert_eq!(queues.reclaim(), None);
+    let before = io.0.borrow().writes.len(); nic.kick();
+    assert_eq!(io.0.borrow().writes.len(), before); assert!(!nic.link());
 }
