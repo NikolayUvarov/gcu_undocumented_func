@@ -195,19 +195,22 @@ At the reviewed source revision, `programsForPlatform` falls back to the
 Windows list for `mindcore`, file transfer chooses Windows paths for every
 non-Linux platform, and native version/download routing has no MIND platform.
 Add explicit MIND configuration and path/capability rules in the ConfigAgent
-project; do not work around them by lying about the OS. The old MIND issue
-references to the external project's task 75 are stale: its current task 75
-concerns console credentials. Track the new external issue by its actual path
-and revision once created.
+project; do not work around them by lying about the OS. The historical
+external task 75 now concerns console credentials; the current MIND-specific
+records are the task paths below.
 
 The 2026-10-15 audit prepared external task
-`81-mindcore-server-platform-boundary.task.md` on an isolated ConfigAgent
+`issues-done/81-mindcore-server-platform-boundary.task.md.done` on an isolated ConfigAgent
 `ASTRA` branch from `a29dd0086bf278e3e913f9b5203a70c96a4abcec`: separate MIND
 programs, explicit MIND path roots and refusal of generic binary metadata.
 Its server tests pass locally; the change has not been deployed. Active
-external follow-up `81-mindcore-01-agent-and-live-acceptance.task.md` records
-the remaining real-agent checks. These changes do not change the observed
-live-server compatibility statement above.
+external follow-up `issues/81-mindcore-01-agent-and-live-acceptance.task.md`
+records release and real-agent checks. The separate open requirement
+`issues/81-mindcore-02-package-metadata.task.md` covers exact package
+size/hash binding and MIND architecture/non-shell entries with
+[750-EFF-0008](../../issues/750-EFF-0008-application-packages.md); neither
+task 81 nor 81-01 establishes signed-package support. These prepared changes
+do not change the observed live-server compatibility statement above.
 
 The next MIND slice is a persistent token-authenticated session, not a port of
 the Linux Go binary: that binary requires Linux processes, files and systemd.

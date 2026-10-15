@@ -27,13 +27,13 @@
   - `os_version` `mindcore`;
   - `arch` `x64` or `arm64`;
   - the release version as `agent_version`.
-- **Path grammar for files:** the MIND Core volume paths the agent accepts (`data/…`, `log:/…`), agreed with the server's side (its task 75).
+- **Path grammar for files:** the MIND Core volume paths the agent accepts (`data/…`, `log:/…`). The local server boundary is recorded in `sst-test-deploy: issues-done/81-mindcore-server-platform-boundary.task.md.done`; deployment and real-agent checks remain in `issues/81-mindcore-01-agent-and-live-acceptance.task.md`. The prepared server change has not been deployed.
 - **Compatibility rules:**
   - unknown fields are ignored;
   - a missing required field is an error the agent reports;
   - a server contract the agent does not know is not guessed at;
   - a change to the subset is a new contract version.
-- **What the subset leaves out, and why:** shell actions, the console, Windows identities and plain HTTP.
+- **What the subset leaves out, and why:** legacy/unrestricted shell actions, the console, Windows identities and plain HTTP. A future `exec_v1` invocation of test-account msh is allowed only through the declared grants and gateway policy of 501; until implemented it returns `denied`, as contract 1.0 specifies.
 - **What stays out of this public document:** the server's internal weaknesses. They belong to the server's own project.
 
 ## Acceptance criteria
