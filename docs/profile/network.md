@@ -327,8 +327,10 @@ The following `btc_codec`/`btc_control` prerequisite slice adds only exact
 profile-105 wire encoding and bounded low-level no-link coexistence register
 steps. It distinguishes BT scoreboard reads from the WLAN write shadow,
 refuses pending-LTE overwrite, and retains separate source ACK choices.
-The eighteen new host fixtures are compiled; execution is pending raw
-publication. The complete session-bound owner and applied policy/C2H
+Own-branch `94762996` built without warnings (0.80 seconds); after raw
+publication `1006c136`, its seven codec and eleven control fixtures passed
+on 2026-10-16 MSK (0.00 seconds each, zero failed or ignored, x86-64 WSL2).
+The complete session-bound owner and applied policy/C2H
 orchestration remain unimplemented, and no Initialized or RFK-grant token
 is available from this slice. No native or hardware guarantee changes;
 [scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
