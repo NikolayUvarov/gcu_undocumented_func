@@ -123,8 +123,11 @@ fn board() -> Board {
 fn synthetic_file() -> Vec<u8> {
     let mut file = vec![0; FILE_BYTES];
     let w = |bytes: &mut [u8],at: usize,value: u32| bytes[at..at+4].copy_from_slice(&value.to_le_bytes());
-    file[0] = 0xff; file[1] = 1; file[16] = 1; file[17] = 5;
-    w(&mut file,20,96); w(&mut file,24,326616);
+    file[0] = 0xff; file[1] = 5;
+    for (i,(cut,kind,offset,length)) in [(1,5,96,326616),(2,5,326712,326536),
+        (1,3,653248,269896),(2,3,923144,269824),(0,255,1192968,52976)].into_iter().enumerate() {
+        let at=16+i*16; file[at]=cut;file[at+1]=kind;w(&mut file,at+4,offset);w(&mut file,at+8,length);
+    }
     let image = &mut file[96..96+326616];
     image[4..8].copy_from_slice(&VERSION); w(image,8,0x6fb3ec41); w(image,12,144<<16);
     w(image,24,3<<8); w(image,28,1<<16|2020); w(image,80,64);
@@ -175,6 +178,43 @@ fn pinned_metadata_rejects_changed_version_addresses_and_section_sizes() {
         let mut file=synthetic_file(); file[at]=value;
         assert!(Verified::parse_pinned(&file).is_err());
     }
+}
+
+#[test]
+fn provenance_requires_the_complete_last_image_to_end_at_the_pinned_file_boundary() {
+    let w=|bytes:&mut[u8],at:usize,value:u32|bytes[at..at+4].copy_from_slice(&value.to_le_bytes());
+    let mut file=synthetic_file();w(&mut file,88,52975);
+    assert_eq!(Verified::parse_pinned(&file).unwrap_err(),VerifyError::Elements);
+    let mut file=synthetic_file();file[1]=4;
+    assert_eq!(Verified::parse_pinned(&file).unwrap_err(),VerifyError::Elements);
+    let mut file=synthetic_file();file.push(0);
+    assert_eq!(Verified::parse_pinned(&file).unwrap_err(),VerifyError::Elements);
+    let mut file=synthetic_file();
+    for byte in 0..16 {file.swap(64+byte,80+byte);}
+    let layout=firmware::container_layout(&file).unwrap();
+    assert_eq!(layout.maximum_image_end(),FILE_BYTES);assert_ne!(layout.last_image_end(),FILE_BYTES);
+    assert_eq!(Verified::parse_pinned(&file).unwrap_err(),VerifyError::Elements);
+    let mut file=synthetic_file();w(&mut file,84,u32::MAX);
+    assert!(matches!(Verified::parse_pinned(&file),Err(VerifyError::Format(_))));
+}
+
+#[test]
+fn completed_download_carries_default_table_identity_without_authorizing_another_queue() {
+    let file=synthetic_file();let mut region=Region::new();let mut bus=Device::new();
+    let first={
+        let mut queue=region.queue(&mut bus);let ready=run(&mut bus,&mut queue,fixture(&file)).unwrap();
+        let provenance=ready.default_tables();assert!(provenance.belongs_to(&ready));
+        assert_eq!(provenance.session(),queue.session());assert_eq!(provenance.file_sha256(),FILE_SHA256);
+        assert_eq!(provenance.file_bytes(),FILE_BYTES);assert_eq!(provenance.image_count(),5);
+        assert_eq!(provenance.elements_offset(),1_245_952);
+        assert_eq!(stop(&mut bus,&mut queue),Stop{dma:None,cpu:None});bus.stopped();
+        provenance
+    };
+    let mut bus=Device::new();let mut queue=region.queue(&mut bus);
+    let ready=run(&mut bus,&mut queue,fixture(&file)).unwrap();
+    assert_eq!(queue.physical(),0x100000);assert_ne!(first.session(),queue.session());
+    assert!(!first.belongs_to(&ready));assert!(ready.default_tables().belongs_to(&ready));
+    assert_eq!(stop(&mut bus,&mut queue),Stop{dma:None,cpu:None});bus.stopped();
 }
 
 #[test]
@@ -310,7 +350,14 @@ fn failed_wcpu_cleanup_is_reported_separately_from_download_failure() {
 fn private_pinned_file_passes_real_hash_policy_and_a_mutation_fails() {
     let path=std::env::var("RTW89_FIRMWARE").expect("set RTW89_FIRMWARE to private fetched file");
     let mut file=std::fs::read(path).unwrap(); let b=board();
-    assert!(Verified::verify(&b,&file).is_ok()); file[96+144]^=1;
+    let verified=Verified::verify(&b,&file).unwrap();
+    assert_eq!(verified.layout.image_count(),5);assert_eq!(verified.layout.last_image_end(),FILE_BYTES);
+    assert_eq!(verified.layout.maximum_image_end(),FILE_BYTES);assert_eq!(verified.layout.elements_offset(),1_245_952);
+    let mut region=Region::new();let mut bus=Device::new();let mut queue=region.queue(&mut bus);
+    let ready=run(&mut bus,&mut queue,verified).unwrap();let provenance=ready.default_tables();
+    assert!(provenance.belongs_to(&ready));assert_eq!(provenance.session(),queue.session());
+    assert_eq!(provenance.elements_offset(),1_245_952);assert_eq!(provenance.file_sha256(),FILE_SHA256);
+    assert_eq!(stop(&mut bus,&mut queue),Stop{dma:None,cpu:None});bus.stopped();file[96+144]^=1;
     assert_eq!(Verified::verify(&b,&file).unwrap_err(),VerifyError::Hash);
 }
 
