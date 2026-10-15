@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
