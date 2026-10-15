@@ -75,8 +75,20 @@ in the host gate. They cover exact command/group paths and backup restoration,
 LOK bounded retry/coordinates, every command's quality flag, uncertain
 completion, frozen time, BTC denial/late response, uncertain scheduler exchange,
 every applied register-write failure, final-read deadline/cleanup errors,
-single-attempt STOP and identity/admission boundaries. They are compiled,
-not executed, pending own-branch commit/build and raw publication. The device
-model completes register commands ideally and does not simulate RF physics.
+single-attempt STOP and identity/admission boundaries.
+
+On 2026-10-16, own-branch source `9941024bcde1daa94f8b64d87376685da33d1311`
+(including the immediate uncertain-NCTL shutdown correction) built in release
+mode in 1.16 seconds. After its raw publication in `fast-test`
+`b169a2753535d74968635e95740941abda175d0a`, the same compiled source passed
+all 11 IQK fixtures in 0.03 seconds, with zero ignored tests; 160 unrelated
+fixtures in the shared harness were filtered out. The two Python extraction
+and shape fixtures passed, and `rtw89_iqk_tables.py --check` reproduced the
+tables from the exact pinned source. The host was Linux
+`6.6.87.2-microsoft-standard-WSL2`, Rust
+`1.101.0-nightly (c36f14571 2026-10-01)` and Python `3.12.3`.
+No build or test ran on `fast-test`.
+
+The device model completes register commands ideally and does not simulate RF physics.
 Full gate, complete native calibration policy, calibration chain integration
 and physical RTL8852BE observations remain open.
