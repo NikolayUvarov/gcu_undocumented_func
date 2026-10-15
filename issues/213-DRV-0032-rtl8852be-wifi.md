@@ -679,9 +679,10 @@ and the final report registers. Consume Ready exactly once; never replace
 BTC permission or scheduler mailbox responses with successful placeholders.
 Return observations only and always run the existing independent native
 shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
-and hardware traffic remain open. Five cumulative cold-device fixtures and
-the fifteen-stage cleanup matrix compile; execution follows raw publication.
+and hardware traffic remain open. All five cumulative cold-device cases passed after publication `b169a275`
+(0.08 s); the twelve fixtures of the fifteen-stage cleanup matrix also passed.
 See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
+
 
 ### Initial channel RXDCK and host IQK preparation
 
@@ -703,10 +704,26 @@ PMAC calibration samples on both paths, board thermal/DE tables, actual
 owned BTC notices and bounded cleanup. It requires the actual IQK result
 and a consumed engine-specific calibration authority; there is no native
 provider until raw PMAC/RFK power and platform policy are resolved. Native
-build and fixture compilation pass; execution waits for raw publication.
+build passes. After raw publication `b169a275` of code `983e4c72`, the exact
+owner PHY harness passed 183 cases (twelve new TSSI cases), zero failures and
+one existing private-firmware ignore; five extractor cases and exact pinned
+table regeneration also passed. These are model and source-integrity results.
 This does not complete channel RFK, association or physical WLAN evidence.
 
 Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
 combined Session cases passed in 0.24 s on the own branch with no failures or
 ignores. The seven new register-mailbox regressions are included; hardware
 calibration, association and normal traffic acceptance remain open.
+
+### Private initial host DPK
+
+Implement the source initial 2 GHz/20 MHz, non-DBCC, both-path DPK engine and
+same-session/channel/policy entry after actual BTC initialization and TSSI.
+Consume separate DPK calibration-transmit authority; no native provider exists.
+Actual BTC/scheduler callbacks, bounded NCTL/AGC, source backups and independent
+cleanup retain primary and secondary errors. Unknown NCTL completion switches
+radio off before mailbox cleanup and skips unsafe register restoration.
+Fourteen engine fixtures and two provenance cases compile/are registered;
+execution follows raw publication. Full typed cold-start integration, RFK power
+policy, hardware quality and association remain open. See the
+[DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
