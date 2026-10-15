@@ -105,3 +105,15 @@ dedicated regression. The service-directory build passed after correcting an
 initial root-directory invocation that selected the Linux target. This library
 stage remains uncalled by the native board service. Actual hardware operation
 and a full gate containing this later commit remain pending.
+
+### Next slice: bounded PCIe preparation
+
+Port the pinned RTL8852B-specific PCIe preparation through MDIO/DBI, link
+workarounds, stopped DMA/index clearing and descriptor modes. Use only the
+supported BAR2 DBI fallback for the named vendor bytes; do not widen the
+kernel configuration-write interface. Restore the temporary L1 bit with a
+fresh budget on every attempted change, preserving primary and restoration
+errors. Keep PCI mastering and both HCI engines off. After command-ring
+installation, configure the source's single-band BDRAM table and bound its
+reset; leave all DMA channels stopped. No native call or DMA grant is added
+until firmware sequencing, ring ownership and kernel quiescence are reviewed.
