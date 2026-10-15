@@ -36,3 +36,4 @@ python3 tests/rtl8852be_fetch_test.py
 python3 tests/rtl8852be_probe_test.py
 
 python3 tests/rtw89_phy_tables_test.py
+python3 tests/rtw89_dack_tables_test.py
