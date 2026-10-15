@@ -124,7 +124,7 @@ on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
 source review found no remaining blocking defect; actual hardware behavior
 and a full gate containing this slice remain unvalidated.
 
-### Next slice: hash-pinned firmware and WCPU download
+### Implemented slice: hash-pinned firmware and WCPU download
 
 Verify the entire private file against the documented immutable SHA-256 and
 size before device writes; select only the measured cut-1 normal-CE image
@@ -140,6 +140,16 @@ backpressure, retain the last eight command buffers, and poison failed
 attempts while independently stopping HCI and WCPU. Do not retry or free DMA
 without the separate quiescence contract. Native activation, complete MAC,
 C2H/RX, calibration and the WLAN frame service remain separate integration.
+
+Own-branch `cf768d22` (following `27033a43`) native build passed (0.39 seconds,
+no warnings). After `fast-test` publication `45387d45`, all 18 synthetic
+host cases passed (0.19 seconds), the explicitly requested private-file
+hash/mutation fixture passed (0.05 seconds), and all 14 affected FWCMD tests
+passed (reported 0.00 seconds) on 2026-10-15 UTC. Independent review fixed
+final-drain deadline handling; actual source/kernel integration checks
+corrected optional PCI I/O decoding and the existing powered-CMAC state.
+No native activation, hardware firmware readiness, RF or network claim
+follows from these tests. Required later integration/full gate remain open.
 
 ### Implemented slice: exact RFE-1/cut-1 PHY tables
 
