@@ -71,3 +71,6 @@ with the merged report/capability modules; no new skip is introduced.
 Native build passed in 0.88 seconds. Execution awaits raw publication. These
 are host model checks, not evidence of analog calibration quality or physical
 Ryzen association, ping or Effector connectivity.
+
+The next [channel/RFK dependency plan](rtl8852be-channel-plan.md) records the
+missing actual board/regulatory inputs and exact channel/power/calibration order.
