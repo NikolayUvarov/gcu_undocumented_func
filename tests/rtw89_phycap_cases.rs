@@ -53,6 +53,13 @@ fn query_default(d:&mut Device,q:&mut Queue<'_>,ready:&download::Ready)->Result<
     query(d,q,&board(),runtime_mac::BAR_BYTES,ready,MAX_TIMEOUT_US)
 }
 
+pub(crate) fn with_capabilities(raw:[u32;4],check:impl FnOnce(Capabilities)){
+    download::tests::with_downloaded_queue(|ready,q|{
+        let mut d=Device::new(q);d.response=raw;let capabilities=query_default(&mut d,q,&ready).unwrap();
+        check(capabilities);
+    });
+}
+
 #[test]
 fn actual_exchange_returns_raw_session_bound_capabilities_without_enabling_radio(){
     download::tests::with_downloaded_queue(|ready,q|{
