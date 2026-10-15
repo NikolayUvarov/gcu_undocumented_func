@@ -75,9 +75,13 @@ The focused startup fixture checks the production stage ordering and a
 failure at every stage, independent cleanup, unavailable mastering, missing
 ordinary-channel stops, activation readback failure and DMA bounds. Own-branch
 `rtw89_wifi` and `init` x86-64 release builds passed (final incremental native
-build 0.22 s, init build 3.64 s); ten startup/activation cases compiled with
-`rustc --test` but have not run. Execution follows raw `fast-test` publication
-on the own branch. Actual board reads, DMA/WCPU startup and cleanup remain
+build 0.22 s, init build 3.64 s). Implementation `5f1d940de69e7ab03843ddb620698044bcc6afb1`
+was published in `fast-test` `649fea37`; all ten startup/activation cases
+then passed on the own branch (0.00 s, zero failed/ignored, x86_64 Linux
+6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571). Command:
+`rustc --edition=2021 --test tests/rtw89_startup_host.rs -o /tmp/mind-rtw-startup-tests-20261016`
+then `/tmp/mind-rtw-startup-tests-20261016`. Nothing was built or tested on
+`fast-test`. Actual board reads, DMA/WCPU startup and cleanup remain
 untested on Ryzen. The driver owner's independent review found no blocking
 integration/ownership defect; it does not establish hardware operation.
 
