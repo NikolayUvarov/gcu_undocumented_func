@@ -158,6 +158,17 @@ additional evidence. Each harness retains one previously ignored private
 firmware-file fixture, requiring separately fetched proprietary bytes. No new
 conditional skip is introduced. These are host models, not hardware results.
 
+## PHY attempt identity
+
+Every `Phy::new` allocates a bounded, nonwrapping software session identity from
+`io::dma_session`, independently of the bus address. Allocation failure creates
+an already-failed PHY before register access. The crate-private `attempt()`
+lets the BTC owner bind its prepared configuration to this exact attempt as well
+as to the actual firmware/queue/receive sessions; pointer reuse cannot establish
+that relationship. This identifier is not hardware readiness or a BTC token.
+Two fixtures compile for same-address reconstruction and counter exhaustion
+before MMIO; native build and execution evidence are recorded after publication.
+
 ## Contiguous initial DM prefix and remaining order
 
 The crate-private `phy::dm` engine implements the contiguous register prefix

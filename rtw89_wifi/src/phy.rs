@@ -275,19 +275,28 @@ fn poll_rck(io: &mut impl RegisterIo, path: u8) -> io::Result<()> {
 
 /// One startup attempt, with failed attempts poisoned until the caller destroys and powers down the device.
 /// The caller has verified the pinned firmware, read this board's EFUSE and initialized full single-band MAC.
-/// Only command DMA may run; ordinary RX/TX channels and all MAC scheduler queues must remain stopped.
+/// Command DMA and validated owned RX may run; ordinary TX channels and all MAC scheduler queues stay stopped.
 /// No concurrent firmware calibration, scan, autonomous TX or register writer may run during these stages.
-pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State }
+pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State, attempt: u64 }
 
 impl<'a, B: PhyIo> Phy<'a, B> {
-    pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self { bus, identity, state: State::Fresh } }
+    pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self::from_attempt(bus,identity,io::dma_session()) }
+    fn from_attempt(bus:&'a mut B,identity:Identity,allocated:io::Result<u64>)->Self{
+        let attempt=allocated.unwrap_or(0);
+        Self{bus,identity,state:if attempt==0{State::Failed}else{State::Fresh},attempt}
+    }
+    pub(crate) fn attempt(&self)->u64{self.attempt}
+    #[cfg(test)]
+    pub(crate) fn new_with_counter(bus:&'a mut B,identity:Identity,counter:&core::sync::atomic::AtomicU64)->Self{
+        Self::from_attempt(bus,identity,io::next_dma_session(counter))
+    }
     pub fn state(&self) -> State { self.state }
     pub(crate) fn mark_failed(&mut self) { self.state=State::Failed; }
     /// Execute the documented interleaved chip steps on this same device, retaining all startup restrictions.
     pub fn bus_between_stages(&mut self) -> &mut B { self.bus }
 
     fn begin(&mut self, stage: Stage, expected: State) -> core::result::Result<u64, Failure> {
-        if self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
+        if self.attempt() == 0 || self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
         let start = self.bus.now_us();
         let phase = if expected == State::DackDone { RegisterPhase::AfterDack } else { RegisterPhase::BeforeDack };
         if let Err(cause) = guard(self.bus, &self.identity, phase).and_then(|()| remaining(self.bus, start).map(|_| ())) {
