@@ -206,3 +206,29 @@ In the `update` suite, the updater's check runs its parsing in a helper that hol
 
 `caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it. With `audio.wit` 1.2, `say` cannot change the volume and the shell can.
 
+## CPU-budget threat-model wording (for 000-KRN-0105)
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-15; MC-12.1, MC-12.3, MC-12.9.
+
+The [hardware audit](../issues-audit/2026-10-15-hardware-audit.md), H08, found
+another stale profile statement for [000-KRN-0105](000-KRN-0105-root-documents-agree-with-the-code.md):
+`docs/profile/threat-model.md` says there are no CPU budgets and only
+round-robin sharing. At the reviewed `1aea9100` candidate, `scheduler.rs`
+implements budget exhaustion and period renewal (`Scheduler::ready`, `select`),
+system-band precedence and `SCHED_SET`; new tasks default to unlimited.
+`docs/profile/README.md` correctly marks MC-5.1–5.5 partial, and `clocks.md`
+states the ten-millisecond slice limitation. The `busy` suite checks a 20/100
+budget with an observed 12–35% range; that is not a guarantee of exactly 20%.
+
+Please include this paragraph in the existing documentation task. Proposed
+wording: complete protection against CPU denial of service is not claimed;
+per-task budgets exist, default to unlimited and are enforced at scheduling
+points, including the end of each ten-millisecond slice. Ready system-band
+tasks take precedence over applications. Admission control, deadline/jitter
+bounds and automatic service CPU-budget assignment by `init` are not provided.
+Retain the limitations of [038](../issues-done/038-scheduling-budgets.done).
+
+Acceptance: the threat-model paragraph agrees with the implementation and
+the other profile documents without upgrading their partial guarantee. This
+request changes no scheduler policy or existing test tolerance.
+

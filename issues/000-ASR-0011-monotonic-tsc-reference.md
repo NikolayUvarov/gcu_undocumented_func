@@ -45,3 +45,11 @@ using the new test function: deliberately skewed 3511 MHz was remeasured as
 3201 MHz, and the 30-second guest/host monotonic ratio was 1.003. The original
 three-percent assertion was retained. This focused run is separate from the
 required full gate on the resulting commit.
+
+On the final code candidate `1aea9100`, the dedicated native-Ryzen
+`x86: TSC measured again` group passed in 47 s (Effector operation
+`20261015193238.156862195_000072`). The deliberately skewed 3593 MHz was
+remeasured as 3294 MHz; the 30-second guest/host monotonic ratio was 1.000.
+The maintainer then explicitly deferred ARM to prioritize Intel/x86. The
+cross-architecture gate criterion therefore remains open; the x86 result is
+recorded in [the validation report](../issues-audit/2026-10-15-astra-validation.md).

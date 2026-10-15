@@ -199,4 +199,10 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 ## Related
 
+The maintainer's [2026-10-15 server handoff](requests-EFF.md) asks MIND Core
+to implement the native agent under this task and agree the signed-package
+contract with UPD/KRN. Effector's local task-81 server integration is prepared;
+real-agent and signed-package acceptance remain open. This is a cross-project
+request, not a new agent implementation or a completed acceptance claim.
+
 [501](501-effector.md) (tests on real hardware, now through this agent), [351](351-self-update.md), 173 (the boot services' configuration; on the kernel track's branch until it merges), [550](550-network-on-real-hardware.md), [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [109](../issues-done/109-session-parsers.done), [108](../issues-done/108-editable-network-policy.done), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [500](500-fuzzing-abi-and-idl.md), [docs/profile/threat-model.md](../docs/profile/threat-model.md).
