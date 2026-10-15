@@ -13,10 +13,10 @@ const RF_MASK:u32=0xfffff;
 pub enum Band { Ghz2=0, Ghz5=1 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u8)]
-pub enum Calibration { Dack=4, Rxdck=5 }
+pub enum Calibration { Iqk=0, Dpk=2, Dack=4, Rxdck=5 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 #[repr(u8)]
-pub enum RfkState { Stop=0, Start=1 }
+pub enum RfkState { Stop=0, Start=1, OneshotStart=2, OneshotStop=3 }
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct BtcNotice { pub calibration:Calibration, pub state:RfkState, pub phy_map:u8 }
 
