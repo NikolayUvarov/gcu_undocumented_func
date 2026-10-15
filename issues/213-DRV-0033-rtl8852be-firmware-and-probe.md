@@ -42,3 +42,13 @@ The corrected collector was then run on the same Ryzen by Effector operation
 `identity-collected`, exit 0, cut 1 and RFE 1, with no warnings. Source SHA-256:
 `704925aa0b2a362d54c4a088093b443799306731a437e5b6a6526599e2844b3a`.
 The private report remains under the ASR evidence directory on that machine.
+
+## Disk preparation integration (2026-10-16)
+
+The standard `build-and-write.sh` path called only the Broadcom fetcher.
+`proprietary.sh fetch` now also calls the existing bounded, hash-pinned Realtek
+fetcher, including its licence. The existing post-write copy includes both
+subdirectories and verifies the copied bytes. The separate Realtek command
+remains available without requiring `b43-fwcutter`. No firmware enters Git,
+`usb_root` or a disk image. Full wrapper fetch verification is pending; no
+MIND firmware download or radio result is claimed.
