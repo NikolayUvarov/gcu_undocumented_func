@@ -88,10 +88,12 @@ production `no_std` library code with no local-action authority. The journal
 write is an internal effect for the trusted store adapter, not a remote API
 that can assert an action completed.
 
-The x86_64-unknown-none library and `tests/effector_session_host.rs` test binary
-compile. At this initial commit, tests are pending the coordinator's
-`fast-test` publication under AGENTS.md section 4, then run on the own branch.
-[Session core and limits](../docs/effector/session.md) records the exact scope.
+Implementation `e947245086957218e3c3db92ddedb5dba767c0e4` builds for
+`x86_64-unknown-none`. After publication in `fast-test` `b8e02e3a`, all 20
+`tests/effector_session_host.rs` regressions passed on the implementation's
+own branch (zero failures or ignored tests). No test ran on `fast-test`.
+[Session core and limits](../docs/effector/session.md) records the exact
+configuration and scope; no QEMU, transport, hardware or full gate ran.
 
 This does not supply a running boot service. The current HTTP client is
 synchronous: separate connections alone do not make heartbeat independent.
