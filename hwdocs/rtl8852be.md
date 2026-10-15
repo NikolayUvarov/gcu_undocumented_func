@@ -1009,3 +1009,12 @@ mirror sequencing, ACK ownership/rejection, retained events and overflow,
 poisoned-PHY refusal with raw cleanup, live-ring corruption, clock jumps before
 publication, frozen clocks and incomplete hardware consumption. Execution is
 pending raw publication. No native radio endpoint or hardware guarantee changes.
+
+Own-branch session commit `3ee6dd54` built for x86-64 without warnings in
+1.09 seconds. After raw publication `539b588e`, all 13 session fixtures passed
+in 0.08 seconds on 2026-10-16 MSK (zero failed/ignored, x86-64 WSL2).
+The two existing runtime-MAC identity tests using the changed downloader helper
+also passed separately (0.00 seconds each). Other inherited fixtures were
+filtered from this focused run. Independent review found no remaining blocker
+in this slice. These seeded-handoff models do not establish cumulative device
+behavior, complete BTC initialization, RFK permission or hardware connectivity.
