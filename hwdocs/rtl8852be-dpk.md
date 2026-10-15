@@ -90,3 +90,21 @@ connection-RFK notifications, the source 30 ms BT-preservation gaps between
 IQK/TSSI/DPK and the final MCC notification; this entry does not fake them.
 [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md)
 remains open.
+
+### Failed final STOP boundary
+
+The first published run of `2fc291a5` on 2026-10-16 passed 13 of 14 DPK
+models and failed the final-STOP case. The test incorrectly required even a
+failed STOP to be the final MMIO event; independent emergency shutdown must
+still occur. The failure also exposed unnecessary AFE/KIP/RF restoration
+following a possibly released grant. The correction does not retry STOP.
+Once STOP was attempted, only bounded BB/RF shutdown runs; DPD control,
+coefficient, AFE/KIP/RF and TSSI restoration and scheduler callbacks are skipped.
+`disable_skipped` distinguishes an unattempted, unknown DPD-disable result from
+an attempted write failure, and `restore_skipped` records the cleanup refusal.
+The primary STOP/deadline error and radio-off result stay separate. Tests retain
+strict STOP-last ordering for earlier failures, and require exactly one STOP
+plus only radio-shutdown writes after failed or late STOP. DPD enable bits may
+remain set in an inactive radio; no working radio or hardware abort is claimed.
+The two Python provenance checks and exact pinned-table regeneration passed
+on the first run. The corrected Rust case is compiled pending raw publication.
