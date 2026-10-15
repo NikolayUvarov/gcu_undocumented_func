@@ -347,8 +347,11 @@ The private MAC report-tail engine requires a real receive permit and live
 post-DACK register state before programming PPDU forwarding and RTS fields.
 It remains inaccessible to native startup until the complete PHY/RFK/trim
 and path prerequisites are implemented. A 10 ms stage and independent
-report/RX/radio/command cleanup retain DMA on failure. Seven host cases
-compile; new-slice build/execution and hardware validation are pending.
+report/RX/radio/command cleanup retain DMA on failure. Own `150f5b80` built
+without warnings in 0.71 seconds. After raw publication `1006c136`, seven
+tail cases passed (0.27 seconds) and 16 affected post/session cases passed
+(0.88 seconds), none ignored, on 2026-10-16 MSK. Full-gate/native/hardware
+validation remains pending.
 
 The following `btc_codec`/`btc_control` prerequisite slice adds only exact
 profile-105 wire encoding and bounded low-level no-link coexistence register
@@ -366,5 +369,17 @@ returns a capability token after a matching complete firmware response within
 the total deadline. Raw fields and explicit successful-zero-NSS fallback flags
 remain available; OTP data or a missing reply cannot replace the response.
 Session identity, independent command/WCPU cleanup and retained DMA remain
-part of the contract. Ten new host cases compile; execution, native integration
-and physical-device evidence are pending.
+part of the contract. Final own tip `a877030f` built without warnings in
+0.73 seconds; after raw publication `1006c136`, 10 query cases passed in
+0.14 seconds and 19 affected runtime-MAC cases passed in 0.13 seconds,
+none ignored, on 2026-10-16 MSK. Native integration and physical-device
+evidence remain pending; synthetic responses do not establish hardware
+capabilities on the maintainer's device.
+
+The pure BTC profile-105 decoder validates a complete bounded C2H report
+stream before yielding typed TDMA/slot/BT-version records, preserves all
+policy fields and explicitly surfaces BTINFO, scoreboard, overflow and
+unsupported events. It carries no session correlation or RFK permission;
+the future owner must process state changes and verify policy application.
+Seven host parser fixtures compile; build, execution and native/hardware
+evidence are pending for this slice.

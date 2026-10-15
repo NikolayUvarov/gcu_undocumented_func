@@ -677,6 +677,12 @@ query is not the OTP trim decoder, regulatory authorization, a completed PHY
 attempt or a working radio. Native integration and hardware validation are
 pending; the synthetic regression executable is `tests/rtw89_phycap_host.rs`.
 
+Final own tip `a877030f` built without warnings in 0.73 seconds. After raw
+publication `1006c136`, all 10 query fixtures passed (0.14 seconds) and
+all 19 affected runtime-MAC fixtures passed (0.13 seconds), none ignored,
+on 2026-10-16 MSK. Source review found no blocker. This is modeled firmware
+response evidence; a physical response and native integration are pending.
+
 ## MAC report tail
 
 The crate-private `report_tail.rs` implements the pinned MAC report tail
@@ -701,7 +707,37 @@ the external owner must still verify PCI quiescence before releasing DMA.
 Seven focused fixtures compile using the real receive-token constructor,
 covering exact writes, thresholds, stale/incorrect state, all applied or
 ignored writes, independent cleanup failures and final-read deadlines.
-Execution/build and hardware evidence for this slice are pending.
+Own `150f5b80` built without warnings in 0.71 seconds. After raw publication
+`1006c136`, all seven fixtures passed (0.27 seconds) and all 16 affected
+post-init/session fixtures passed (0.88 seconds), none ignored, on
+2026-10-16 MSK. Independent source review found no blocker; native,
+full-gate and hardware evidence remain pending.
+
+## BTC profile 105 receive envelopes
+
+`btc_reports::parse_105` reuses the complete C2H-header parser and implements
+the pinned `coex.c` `_parse_btc_report`, `_chk_btc_report`, report/event ID
+mapping and `core.h` packed layouts for RTL8852B firmware 0.29.29.15. BTC
+events are category two/class `0x12`; report payloads are bounded at the
+profile's 1800 bytes. The whole TLV stream is validated before a borrowed
+iterator exposes any item, including malformed trailing records.
+
+Legacy report IDs zero through five are unchanged and six through twelve
+map to the following canonical ID, so BT-version-v1 arrives as wire ID
+eight. TDMA-v3 is 12 bytes with all eight policy bytes preserved; slots-v1
+is 152 bytes with raw count/update bitmap and all 18 typed slot records;
+BT-version-v1 is 16 bytes with complete coexistence/firmware/features words.
+Unknown report contents remain explicit borrowed records. Reserved bytes
+and the slot update bitmap are not treated as invented command correlation.
+
+Profile `fwc2hfunc=1` maps function seven to overflow and eight to loopback.
+BTINFO requires its eight-byte shape and source length marker six, and
+remains a visible event for the session owner, alongside scoreboard changes
+and unhandled events. This decoder has no MMIO, heap allocation, MAC ACK
+correlation, applied-policy or RFK token. The owner must process state changes
+and compare actual policy contents in the same session; source policy checks
+compare all eight TDMA bytes, including instant execution, and all 18 slots.
+Seven parser fixtures compile; execution and hardware evidence are pending.
 
 ## What blocks radio operation
 

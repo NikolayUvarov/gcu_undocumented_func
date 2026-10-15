@@ -432,6 +432,13 @@ orchestration, calibrated PHY interleave and native activation remain open;
 see [precise scope](../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
 
 
+Own-branch `150f5b80` built without warnings in 0.71 seconds. After raw
+publication `1006c136` (including PHY-capability tip `a877030f`), all seven
+report-tail fixtures passed in 0.27 seconds and all 16 affected post-init/
+session fixtures passed in 0.88 seconds, none ignored, on 2026-10-16 MSK.
+Independent source review found no blocker. Native/full-gate/hardware
+operation remains pending.
+
 ### Actual firmware PHY capability query
 
 Add the pinned AX GET_FEATURE register exchange before runtime MAC setup,
@@ -453,3 +460,23 @@ receive-path/NSS sequence, using actual session-bound firmware capabilities
 and DM gain baselines from this same PHY attempt. Keep it crate-private until
 actual BTC and the full source startup ordering are integrated. Detailed
 scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
+
+### PHY capability execution evidence
+
+Own-branch source `1c854cda`, identity-consumer API `2629a614` and test-only
+production-query reuse helper `a877030f` built without warnings at the final
+tip in 0.73 seconds. After raw publication `1006c136`, all 10 PHY-capability
+fixtures passed in 0.14 seconds and all 19 affected runtime-MAC fixtures
+passed in 0.13 seconds, none ignored, on 2026-10-16 MSK. Independent source
+review found no blocker. These are synthetic device results, not a firmware
+response observed on physical hardware; native integration remains pending.
+
+### BTC 105 receive-envelope prerequisites
+
+Decode complete bounded C2H envelopes for the exact pinned BTC 105 profile,
+including the source's legacy report/event ID mapping. Validate the whole
+report stream before exposing borrowed typed TDMA-v3, slots-v1 and BT-version-v1
+records; preserve unsupported records/events explicitly. BTINFO and scoreboard
+notifications must reach the session owner, not disappear as ignored traffic.
+The pure decoder neither correlates a report with a command nor grants RFK;
+the session owner must validate provenance and actual applied-policy contents.
