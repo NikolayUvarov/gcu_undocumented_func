@@ -749,3 +749,13 @@ preserve errors and allow a matching host END even after poisoning. Ten new
 Session model cases compile; execution awaits raw publication. The channel
 coordinator must still validate real IQK/TSSI/DPK results and transmission
 admission. No native RFK-power provider or working WLAN is claimed.
+
+### Initial channel calibration coordination (2026-10-16)
+
+The private [channel RFK continuation](../hwdocs/rtl8852be-channel-rfk.md)
+connects actual same-session RXDCK/IQK, conditional A2DP windows, TSSI, DPK,
+connection end and final MCC notification. Three consumed engine-specific
+power authorities and live owner/PHY checks are mandatory. There is no native
+power-authority provider or packet-transmit activation. Seven cumulative cold
+model cases compile, preserving the existing five initial-PHY cases; execution
+follows raw publication. Physical RF calibration and WLAN acceptance stay open.
