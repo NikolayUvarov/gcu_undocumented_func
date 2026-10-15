@@ -459,3 +459,11 @@ Session/owner/RFK/nested cases and all 11 control cases with no failures or
 ignores. This replaces the pending execution status for code `a134b5a0` and
 its RFK prerequisite `a6df7c83`; the seeded-model and hardware limitations above
 remain unchanged.
+
+The private RTL8852B initial host DPK entry now requires same-attempt BTC,
+channel and completed TSSI tokens plus consumed engine-specific calibration
+transmit authority. The source 2 GHz/20 MHz/both-path algorithm has bounded
+NCTL/AGC and explicit uncertain-command shutdown; fourteen model regressions
+compile, with execution pending raw publication. No native authority provider
+exists, and full typed cold-start composition, physical RFK quality and WLAN
+traffic are unvalidated. [Scope and failure evidence](../../hwdocs/rtl8852be-dpk.md).
