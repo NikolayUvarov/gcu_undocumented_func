@@ -12,6 +12,23 @@ impl Fault {
 
 pub type Result<T> = core::result::Result<T, Fault>;
 
+static DMA_SESSIONS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+pub(crate) fn dma_session() -> Result<u64> { next_dma_session(&DMA_SESSIONS) }
+
+pub(crate) fn next_dma_session(counter: &core::sync::atomic::AtomicU64) -> Result<u64> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let mut previous=counter.load(Relaxed);
+    for _ in 0..32 {
+        let next=previous.checked_add(1).filter(|_|previous!=0).ok_or(Fault::new(FaultKind::Access,0,0))?;
+        match counter.compare_exchange_weak(previous,next,Relaxed,Relaxed) {
+            Ok(_) => return Ok(previous),
+            Err(actual) => previous=actual,
+        }
+    }
+    Err(Fault::new(FaultKind::Access,0,0))
+}
+
 pub trait RegisterIo {
     fn read8(&mut self, at: usize) -> Result<u8>;
     fn read16(&mut self, at: usize) -> Result<u16>;

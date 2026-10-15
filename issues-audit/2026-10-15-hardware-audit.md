@@ -182,7 +182,8 @@ now preserves the ABI 10 prefix, checks the version first, appends image slots,
 uses BAR-authorized MEM-only restart, and leaves Command untouched during MSI.
 Init stops devices before restart-budget quarantine and clears DMA only after
 the old process has ended and device stop/mapping succeed. Focused PCI and ABI
-fixtures are compiled; execution and the new integrated x86 run remain pending.
+fixtures passed (8 PCI-control and 6 ABI cases); the later integrated runs
+and their limits are recorded in [the network validation](2026-10-16-network-validation.md).
 No physical Realtek guarantee follows from these software changes.
 
 ## H10 — Safe-start devices have no retained launch plan for later operator start
@@ -196,3 +197,17 @@ This existing behavior contradicts the old comment that each omitted service
 can be started later. The comment is corrected; a kernel-owner request asks for
 preparing narrow restart authority without starting the risky device. A normal
 subsequent boot remains distinct from an operator start within safe mode.
+
+## H11 — Accepted WLAN requests wait behind background receives
+
+**Priority:** P1 · **Task:** [550-NET-0033](../issues/550-NET-0033-wlan-client-and-bulk-fairness.md)
+
+The station previously accepted a client, then received up to 64 radio
+frames under a two-second deadline before dispatching that client. The
+stack's fair-turn deadline can expire after 250 ms. Client-first dispatch
+and a cooperative eight-frame/100 ms receive batch now remove that queued
+work from the front of an already accepted request. All 26 network-budget
+and 12 unchanged station protocol host cases passed after publication.
+One slow synchronous call can still exceed the slice; asynchronous radio
+progress remains separate. This finding is not yet a measured explanation
+of the original MacBook's packet loss, nor evidence of working Ryzen Wi-Fi.

@@ -2,7 +2,7 @@
 
 The network stack benchmark of issue 106 and what it decided. Appendix B.2: performance features are taken on the evidence of a measurement on a profile, not by default.
 
-## Bounded service work (550-NET-0031/0032, 2026-10-15)
+## Bounded service work (550-NET-0031/0032/0033, 2026-10-15)
 
 The per-card two-second deadline from 550-NET-0031 allowed three slow cards
 to accumulate six seconds in one poll; polling both before and after a client
@@ -40,7 +40,7 @@ or CPU-time guarantee.
 
 A short-budget timeout does not erase link state or label a card dead.
 Quota exhaustion yields until old work charges expire; no new five-second
-cooldown starts from a timeout. The unchanged WLAN
+cooldown starts from a timeout. The WLAN
 pump can spend up to two seconds in radio/key-store calls: a live WLAN that
 becomes ready after exhausting its allowance can wait until older charges
 expire (the tests exercise readiness after two seconds and retry at 5.5 s). Other cards and clients continue meanwhile. Quick raw-frame
@@ -61,6 +61,28 @@ latency/loss measurements remain pending for this configuration. The supplied
 MacBook log does not establish the cause of the reported ping loss under
 load. No Effector heartbeat or physical NIC result follows from these host
 checks.
+
+The separate 550-NET-0033 change dispatches an accepted WLAN client before
+background receives. Each receive batch starts at most eight frames and
+checks a 100 ms cooperative slice before starting another frame. A frame
+already received completes its station processing and actions using the
+original two-second deadline shared with the client handler. The slice does
+not shorten radio/control/key IPC deadlines. If the aggregate deadline has
+expired, the loop does not start background processing or a new station tick.
+Protocol handshake and link-loss timers are unchanged.
+
+With a continuous stream of 10 ms receives and no other work, a new client
+gets a dispatch opportunity after eight receives (80 ms), instead of waiting
+behind a 64-frame batch. This is the model for the added production-helper
+tests, not a measured hardware limit. Implementation `31af1f01` built for
+`x86_64-unknown-none`; after publication in `fast-test` `a98052b5`, all 26
+network-budget host tests and all 12 unchanged `dot11` station tests passed
+on the own branch on 2026-10-15 (zero failures/ignored, Linux 6.6.87.2 WSL2,
+rustc 1.101.0-nightly c36f14571). No tests ran on `fast-test`.
+A single synchronous call or the final frame's actions can still exceed
+100 ms and the caller's 250 ms budget. Existing action losses when the
+aggregate two-second deadline expires during frame actions are not repaired
+by this change. Integrated WLAN QEMU and MacBook measurements remain pending.
 
 ## How it is measured
 
@@ -145,3 +167,147 @@ establish device timing or electrical behavior. KRN integration/full gate and
 actual Ryzen MAC/board-read/shutdown evidence remain pending. No host DMA,
 firmware download, BB/RF calibration, WLAN registration, association, IP
 traffic or Effector connectivity is implemented or claimed by this slice.
+
+The separate channel-12 command queue introduced a bounded descriptor/payload
+ownership implementation, initially without a native caller. Its TCB
+requires x86-64 coherent WB DMA, UC MMIO, exact PCI/MMIO identity and externally
+verified quiescence before region release. It does not grant DMA, enable
+mastering or supply MAC/PCIe startup, firmware policy or radio operation.
+Evidence for this additional slice: own-branch `f6caafca` native x86-64 release
+build passed; all 14 focused host tests passed on 2026-10-15 at 21:01 UTC
+(0.03 seconds), after `fast-test` publication `dd735d0a`. The tests use a
+simulated coherent DMA device; no hardware DMA evidence or portable
+architecture guarantee is claimed. See the hardware notes for the
+eight-completed-command retention and fault contract. The frozen `a99cc44a` gate
+does not include this later change and cannot be used as its full-gate evidence.
+
+The later MAC download-memory preparation implements the pinned RTL8852B
+DLFW WDE/PLE quotas and HFC command-channel configuration under active-MAC,
+stopped-BB/WCPU and PCI MEM-only guards. It bounds readiness waits and retains
+independent HFC/DLE cleanup errors. Own-branch `371d41db` native x86-64 release
+build and 11 focused host tests passed on 2026-10-15 UTC, with tests after
+`fast-test` publication `60a100be`; the hardware notes retain the build
+invocation correction and precise scope. That library slice supplied no
+native host DMA or radio startup; actual hardware operation and the subsequent PCIe/firmware stages
+remain unvalidated.
+
+The later PCIe preparation implements the pinned RTL8852B MDIO/DBI path,
+temporary L1 restoration, channel stops/index/mode setup and BDRAM reset
+after command-ring installation. It checks the MAC download profile and
+preserves PCI MEM-only/HCI-off state. Primary and independent restoration/
+stop failures remain explicit, and no DMA map is freed. Own-branch `4feee434`
+native x86-64 release build and all 16 focused host fixtures passed on
+2026-10-15 UTC after `fast-test` publication `1dee0b3f`, before native
+integration. No hardware DMA, firmware download or radio
+operation is established, and the frozen earlier `a99cc44a` gate does not
+cover this additional slice.
+
+The separate WCPU downloader requires the exact full private file SHA-256,
+cut-1/RFE-1 metadata and actually read nonsecure OTP pair before device writes.
+Its TCB includes the existing SHA-256 implementation, trusted board-map origin
+and the command queue's coherent DMA/kernel-quiescence contract. It bounds
+reset/start, header/section transfer and status polling and retains failed
+DMA ownership with separate cleanup errors. This is pinned-file integrity,
+not vendor-signature verification. Own-branch `cf768d22` native build passed;
+after `fast-test` publication `45387d45`, all 18 synthetic downloader cases,
+the separately invoked private-file hash/mutation fixture and 14 FWCMD
+regressions passed on 2026-10-15 UTC. These establish model behavior and
+identity of the private file, not hardware operation. Native integration is described next;
+actual Ryzen firmware/radio operation remains pending.
+
+The 213-KRN-0114 continuation wires a single native firmware diagnostic into
+that executable. It verifies the private file before board MMIO, admits the
+actual board/OTP policy before queue initialization, and keeps a 128 KiB
+coherent WB DMA mapping through all outcomes. MAC/PCIe/ring setup precedes
+kernel mastering; only the command channel and TXHCI are enabled. Independent
+DMA/WCPU stop, kernel-verified MEM-only state, fresh-budget power-off and a
+final kernel stop follow every modified attempt. A failed MEM-only check
+prevents further MMIO. No cleanup result permits memory reuse; there is no
+radio endpoint or retry. Startup-model tests are not hardware or IOMMU
+containment evidence, and native Ryzen firmware/DMA operation remains pending.
+The integration branch `5f1d940d` builds `rtw89_wifi` and `init` for x86-64.
+After raw publication `649fea37`, all ten startup/activation host cases
+passed on the own branch (2026-10-16, zero failed/ignored, 0.00 s). These are
+orchestration/register tests. The separate cumulative model in `09d1ceaa`
+then passed two standard host cases and three explicit local private-file
+scenarios after publication `8461fd20` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). It carries one modeled device through
+board/power/MAC/PCIe/command-queue/download/stop stages, compares every section
+byte with the pinned file, and checks missing-readiness cleanup. Readiness,
+OTP, PCI transitions and synchronous DMA consumption are simulated; actual
+Ryzen firmware/DMA operation and hardware timing remain unvalidated.
+
+The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
+station/MPDU/security and CMAC0 preparation after verified firmware readiness.
+Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
+DMA remains stopped. An independently bounded cleanup retains errors and
+DMA. Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings);
+after `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds), on 2026-10-15 UTC. Hardware validation and
+a full gate containing this slice remain pending. It is not called by the
+native service and does not establish full runtime MAC, calibrated RF or
+WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).
+
+The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
+copies each bounded packet before releasing its descriptor, and parses AX
+RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
+future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
+is unchanged. Own-branch `b112406d` native build passed (0.47 seconds, no
+warnings); after raw publication `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Hardware validation and a
+full gate containing this slice remain pending. It provides neither RX activation nor
+interrupt/WLAN integration. Warm-state ownership/quiescence is still a
+precondition, not established by PCI MEM-only decoding.
+
+The initial normal-H2C library adds bounded eight-slot correlation of typed
+receipt/DONE events, absolute command deadlines, failure poisoning and a
+256-command no-wrap limit for startup work. It does not establish a
+continuous runtime firmware transport. Its production adapter reuses the
+existing DMA command queue and therefore inherits that queue's TCB and
+retained-memory preconditions. The BT RFK prerequisite only observes actual
+RUN/REQ scoreboard bits under a bounded read-only wait; that snapshot does
+not authorize calibration. Actual BTC state, WLAN scoreboard ownership,
+antenna/grant and TDMA policy remain required for a DACK START/STOP callback.
+Own-branch `d951d101` native build and thirteen H2C plus six BT-observation
+fixtures passed after raw publication `d9266c7b` (2026-10-16, x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571; zero failures/ignored). These include a
+modeled DMA/C2H path, not actual firmware execution. Native integration and
+hardware validation remain pending for this slice.
+
+The subsequent MAC-tail/PCIe post-init library validates installed receive
+rings before enabling RXHCI and RXQ/RPQ. All uninstalled data-TX channels,
+WPDMA and host interrupt masks remain stopped/masked. The 10 ms stage and
+its independent cleanup retain DMA after failures. Own-branch `06a0b932`
+native build passed (0.66 seconds, no warnings); after raw publication
+`b50f52c0`, nine focused post-init cases passed (0.81 seconds) plus all 18
+affected RX cases (0.12 seconds), none ignored, on 2026-10-16 MSK. The
+shared zero-only scheduler helper `b947aa40` also passed its build (0.46
+seconds) and 17 runtime-MAC cases (0.12 seconds) after publication
+`d9266c7b`. Full-gate and hardware evidence remain pending. Its `Receiving` result is not H2C/BTC/PHY or WLAN readiness,
+and the native firmware-only service still does not call this library.
+
+
+The hardware-only `btc_init` library requires the actual RadioLoaded PHY
+phase and the unchanged stopped-data-path guard before the source-derived
+RTL8852B/RFE-1 PTA/LTE/RF-LUT setup. It has a 200 ms attempt deadline and
+independent LUT-close/chip-disable cleanup; modified failures poison the
+PHY attempt. Its opaque result is not an RFK grant or complete coexistence
+initialization. Actual policy, scoreboard ownership, antenna/grant state and
+native integration remain absent from this slice. Own-branch `e6ed1e2c` native build passed (3.53 seconds). After raw
+publication `c2facb84`, all nine new fixtures passed on 2026-10-16; the
+executable also passed 18 inherited downloader cases and retained that
+module's existing optional private-file ignored case (27 passed, zero failed,
+one inherited ignored, 0.19 seconds, x86-64 WSL2). No hardware
+or calibrated-radio guarantee is added; [scope and source](../../hwdocs/rtl8852be.md#hardware-coexistence-initialization-before-nctl).
+
+The later receive-session validation binds that result to both exact DMA
+objects and fresh non-wrapping process-local session numbers. It returns a
+borrowed opaque permit only after bounded live register/index checks, with
+no MMIO writes. This prevents old tokens accepting reconstructed pools at
+the same addresses; it still trusts the adapter's same-function capability
+contract. Own-branch `b8f41cb5` built without warnings in 0.51 seconds.
+After raw publication `767c2cb8`, all 16 post-init/session cases passed
+(0.82 seconds), together with 18 RX cases (0.12 seconds) and 14 FWCMD
+cases (reported 0.00 seconds), none ignored, on 2026-10-16 MSK. Full-gate
+and hardware evidence remain pending. PHY/native integration does not
+yet consume this permit.

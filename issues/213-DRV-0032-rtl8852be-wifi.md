@@ -64,6 +64,93 @@ not establish hardware operation or a network link. KRN-0114 integration must
 rebuild the executable with its final boot ABI; actual Ryzen board reads,
 power-off and all radio acceptance criteria remain pending.
 
+### Implemented slice: bounded PCIe FWCMD transport
+
+Commit `f6caafca` implements channel-12 TXBD/24-byte TXWD packets,
+installation while PCI mastering/HCI engines are off, register readback,
+ordered descriptor publication, guarded hardware-index reclamation and a
+bounded drain. A separate payload pool preserves the pinned Linux driver's
+eight-completed-command retention requirement (`RTW89_PCI_MULTITAG`).
+The initial native board service remains without DMA and does not call it.
+MAC DLE/HFC/PCIe pre-initialization, hash-pinned firmware/WCPU sequencing,
+RX/C2H and the KRN DMA integration are explicitly separate prerequisites;
+the transport must not enable bus mastering or release DMA on its own.
+
+The own-branch x86-64 native release build passed (0.34 seconds). Following
+`fast-test` publication `dd735d0a`, all 14 focused command-queue tests passed
+on 2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). Independent
+review checked the pinned descriptor/retention contract and found a missing
+`0xffff` PCI Command guard, which was corrected before publication. The
+implementation rejects non-x86-64 architectures and requires coherent WB
+DMA with UC MMIO. Host fixtures do not establish hardware ordering or actual
+DMA operation. The frozen earlier `a99cc44a` full gate does not contain this slice;
+its full gate, integration and hardware acceptance remain pending.
+
+### Implemented slice: MAC download-memory preparation
+
+Commit `371d41db` ports the exact RTL8852B PCIe `RTW89_QTA_DLFW` WDE/PLE sizes and quotas,
+including the SCC WCPU minimum quota override, followed by HFC channel-12
+pre-cost/enabling. Require supported cut, active MAC, reset baseband, stopped
+WCPU and disabled PCI mastering/HCI before any write. Bound readiness polls
+and attempt independently budgeted HFC/DLE disable with explicit cleanup
+errors on every modified failure. This slice prepares internal device memory
+only; it neither enables host DMA nor replaces the still-required PCIe
+MDIO/DBI/mode/BDRAM startup, firmware download or calibration.
+
+The native x86-64 build passed (0.31 seconds, no warnings), and all 11 focused
+host fixtures passed on 2026-10-15 UTC after `fast-test` publication `60a100be`.
+Independent source review confirmed the quota/ordering/cleanup mapping and
+identified a final-read deadline gap, corrected before publication with a
+dedicated regression. The service-directory build passed after correcting an
+initial root-directory invocation that selected the Linux target. This library
+stage remains uncalled by the native board service. Actual hardware operation
+and a full gate containing this later commit remain pending.
+
+### Implemented slice: bounded PCIe preparation
+
+Port the pinned RTL8852B-specific PCIe preparation through MDIO/DBI, link
+workarounds, stopped DMA/index clearing and descriptor modes. Use only the
+supported BAR2 DBI fallback for the named vendor bytes; do not widen the
+kernel configuration-write interface. Restore the temporary L1 bit with a
+fresh budget on every attempted change, preserving primary and restoration
+errors. Keep PCI mastering and both HCI engines off. After command-ring
+installation, configure the source's single-band BDRAM table and bound its
+reset; leave all DMA channels stopped. No native call or DMA grant is added
+until firmware sequencing, ring ownership and kernel quiescence are reviewed.
+
+Own-branch `4feee434` built for native x86-64 (0.64 seconds, no warnings).
+After `fast-test` publication `1dee0b3f`, all 16 focused PCIe host tests passed
+on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
+source review found no remaining blocking defect; actual hardware behavior
+and a full gate containing this slice remain unvalidated.
+
+### Implemented slice: hash-pinned firmware and WCPU download
+
+Verify the entire private file against the documented immutable SHA-256 and
+size before device writes; select only the measured cut-1 normal-CE image
+and explicitly check its version, header and section address/length metadata.
+This is local pinned-file integrity, not manufacturer-signature verification.
+Permit only the pinned source's explicitly nonsecure OTP pair `ff/ff` at
+physical `0x5ec`/`0x5ed`, already covered by the board's PHY-capability read;
+other security states fail closed. Keep the file immutably borrowed while
+sending it. Implement the pinned WCPU reset/start, header H2C, raw bounded
+section chunks and readiness sequence through the real channel-12 queue.
+Require reviewed DMA/ring activation beforehand, bound the whole attempt and
+backpressure, retain the last eight command buffers, and poison failed
+attempts while independently stopping HCI and WCPU. Do not retry or free DMA
+without the separate quiescence contract. Native activation, complete MAC,
+C2H/RX, calibration and the WLAN frame service remain separate integration.
+
+Own-branch `cf768d22` (following `27033a43`) native build passed (0.39 seconds,
+no warnings). After `fast-test` publication `45387d45`, all 18 synthetic
+host cases passed (0.19 seconds), the explicitly requested private-file
+hash/mutation fixture passed (0.05 seconds), and all 14 affected FWCMD tests
+passed (reported 0.00 seconds) on 2026-10-15 UTC. Independent review fixed
+final-drain deadline handling; actual source/kernel integration checks
+corrected optional PCI I/O decoding and the existing powered-CMAC state.
+No native activation, hardware firmware readiness, RF or network claim
+follows from these tests. Required later integration/full gate remain open.
+
 ### Implemented slice: exact RFE-1/cut-1 PHY tables
 
 The separate branch `codex/213-DRV-0032-rtl8852be-phy` provides the pinned
@@ -110,3 +197,174 @@ records exact skipped chip hooks and the remaining source order through board
 trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
+### Implemented library slice: single-band MAC preparation after firmware readiness
+
+Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
+then source-derived `sys_init_ax`, SCC DLE/HFC and DMAC/CMAC0 preparation.
+Stop all packet scheduler queues through the firmware register mailbox, keep ordinary host DMA stopped, retain the
+command queue and verify real firmware status before writes. Bound CAM,
+scheduler and DLE readiness; a partial failure poisons the attempt and
+independently disables chip RF/BB and command DMA/WCPU without freeing DMA.
+This prepares the configuration needed by the reviewed PHY stages; it must
+not claim calibrated RF, usable RX/TX or a complete WLAN link. Packet report
+routing/interrupts, normal H2C sequence/C2H processing and final offload setup
+remain explicit subsequent runtime integration, not silently omitted from a
+full-MAC guarantee. Native main/init are owned by the separate integration
+agent and are not modified here.
+
+The firmware-ready scheduler path follows `rtw89_hw_sch_tx_en_h2c`: refuse
+occupied/foreign register mailboxes, send SCH_TX_EN for CMAC0/all queues,
+check the TX_PAUSE response and actual scheduler/protocol idle, and never
+replace or retry a pending command during cleanup. Hardware diagnostic
+counter nibbles retain the sole-writer contract. The whole preparation is
+bounded by two seconds; failure separately checks packet stop, disables
+chip BB/RF, and stops command DMA/WCPU while retaining the primary error.
+The packet-report/interrupt and final runtime H2C/C2H work remains open.
+Own-branch `02b6b4e3` native build passed (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review added the live CMAC-enable prerequisite; no blocking
+source-review finding remains. Hardware validation and a full gate
+containing this library slice remain pending.
+
+### Implemented library slice: bounded RXQ/RPQ and C2H parsing
+
+Implement the exact RTL8852BE RXBD layout and chip flags from the pinned
+PCIe source: 256 descriptors per RXQ/RPQ, 11498-byte buffers, normal
+empty-equal indices, FS/LS present and no RX-tag check. Use a retained,
+disjoint coherent DMA region within a future 8 MiB allocation, without
+changing the current 128 KiB native firmware diagnostic grant. Install
+only while bus mastering/RXHCI are off; activation validates already
+installed rings and never releases an uninstalled DMA channel.
+
+Each receive call processes at most one descriptor under the caller's
+absolute budget, copies volatile DMA bytes into caller storage before the
+16-bit host-index release, and never allocates per packet. Reject invalid
+indices/lengths and partial/fragmented frames explicitly; preserve buffers
+on a possibly applied doorbell error. Decode short/long AX RX descriptors,
+RPQ reports and complete bounded C2H headers, distinguishing receipt ACK
+from done ACK and matching category/class/function/sequence. This is not
+interrupt handling, full H2C/C2H integration, BTC arbitration, association
+or WLAN registration. Add meaningful malformed-data/ownership/wrap/budget
+host fixtures before native integration; no live Linux NIC access.
+
+The RX region occupies 5,902,336 bytes (4096 descriptor bytes plus 512
+64-byte-aligned buffer strides of 11520), disjoint from the 86,016-byte
+command region. The combined layout fits within a future 8 MiB retained
+grant. Own-branch `b112406d` native build passed (0.47 seconds, no warnings).
+After raw publication in `fast-test` `cfc4515bf1d1164c75a11ecd959aaca05326d88c`,
+all 18 RX host fixtures passed on 2026-10-16 (0.13 seconds, none ignored).
+Independent source/ownership review found no remaining blocker. Hardware
+validation and a full gate containing this slice remain pending. The current firmware
+diagnostic's grant and native entry are unchanged.
+
+A warm inherited device remains an explicit integration precondition:
+PCI MEM-only does not imply MAC power state zero or ownership of previous
+DMA buffers. The current board guard continues to refuse nonzero MAC power
+state. A future owned warm-state shutdown/reset must establish quiescence
+and retain any previously reachable memory before cold reinitialization;
+this slice does not pretend to provide that transition.
+
+### Initial normal-H2C and BT-arbitration prerequisites
+
+`h2c.rs` adds normal sequence/header construction, a real command-queue
+adapter and bounded receipt/DONE correlation through `c2h.rs`. Eight slots,
+one-second maximum absolute deadlines and a first-stage 256-command limit
+bound state. Full before publication consumes no sequence; ambiguous sends,
+time regression and timeout poison the session without retransmission.
+Unrequested/mismatched ACKs cannot turn a command into success. Continuous
+sequence reuse, RX activation and native command routing remain separate.
+
+`btc.rs` implements an actual bounded read-only BT RFK RUN/REQ wait. Its
+snapshot is not an RFK grant: DACK START/STOP still needs initialized BTC
+context, an owned WLAN scoreboard shadow, antenna/grant configuration,
+version-matched TDMA policy and restoration/cleanup. The BT read view cannot
+be used as the WLAN write shadow. No fake successful callback is supplied.
+The exact source flow and next integration boundaries are in the
+[hardware notes](../hwdocs/rtl8852be.md#normal-h2c-sequencing-and-bt-rfk-observation-prerequisites).
+Own-branch `d951d101` builds natively (0.53 seconds, no warnings). After
+raw publication `d9266c7b`, all thirteen H2C and six BT-observation fixtures
+passed on 2026-10-16 (both 0.00 seconds, zero failed/ignored; x86-64 WSL2,
+rustc 1.101.0-nightly c36f14571). Independent reviews corrected two clock
+and deadline boundaries before publication. The native service and existing
+firmware-download path are unchanged. Hardware acceptance stays open.
+
+### Initial calibration scheduler contract
+
+Expose the existing firmware-owned scheduler-zero exchange for the initial
+RXDCK wrapper. Both pause and restore are restricted to an already-zero
+saved scheduler mask, with live firmware/CMAC guards, exclusive register
+mailbox ownership, caller timeout and actual CTN/PTCL idle readback. No
+nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
+further mailbox calls in that session; callers must retain DMA and perform
+their independent shutdown. Add focused zero/occupied/deadline fixtures;
+native calibration and BTC arbitration are still separate prerequisites.
+
+Own-branch `b947aa40` built without warnings in 0.46 seconds. After raw
+publication `d9266c7b24ba3f3946c32e3ba56592a8b5ad1769`, all 17 runtime-MAC
+host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
+cases filtered). The exact commit ran on the owned scheduler-test branch
+before the later post-init code was published. Independent review found
+no blocker; native RXDCK/BTC integration and hardware evidence are pending.
+
+### Runtime MAC tail and installed receive-channel activation
+
+Implement the pinned RTL8852B MAC error-mask/host-report tail and PCIe
+LTR/address-info setup, then activate only the installed RXQ/RPQ and
+existing command channel. Require the previous MAC preparation, matching
+unchanged ring descriptors, quiet TX scheduler, ready firmware and disabled
+host interrupt masks before any writes. BACAM V0 makes this chip's
+`mac_feat_init` a no-op; do not send another chip's V1 BA-CAM command.
+Preserve STOP on every uninstalled data-TX channel and WPDMA. Keep host
+interrupts masked for the bounded polling path. A failure independently
+stops receive DMA, disables the radio and stops command/WCPU operation;
+retained allocations still require external PCI quiescence. Add applied
+write-failure, stale-ring, status-bit preservation and deadline fixtures.
+No native grant expansion, normal H2C/BTC/PHY claim or WLAN registration
+is included in this slice.
+
+Own-branch `06a0b932` built without warnings in 0.66 seconds. After raw
+publication `b50f52c0`, all nine focused post-init fixtures passed (0.81
+seconds, none ignored; 36 other module cases filtered), as did all 18
+affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
+review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
+containing this slice and actual hardware operation remain pending.
+
+### Hardware BTC initcfg prerequisite
+
+Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
+LUT and counter initialization between actual `Phy::RadioLoaded` and NCTL.
+`ConfigPrepared` deliberately represents only this hardware stage; actual
+BTC software context, scoreboard ownership, report/control policy, antenna
+selection and RFK START/STOP restoration remain open. The existing live
+PHY guard continues to reject active ordinary RX/TX. A failed modified
+attempt independently closes both LUT write gates, disables BB/RF and
+poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
+The native service is unchanged. Own-branch `e6ed1e2c` native build passed
+(3.53 seconds, no warnings). After raw publication `c2facb84`, all nine
+new phase/source-order/failure/deadline fixtures passed on 2026-10-16. The
+executable also ran 18 inherited synthetic downloader cases successfully
+and retained its one existing optional private-file ignored case: 27 passed,
+zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
+claim follows from this library.
+
+### Typed receive-session revalidation
+
+Bind `Receiving` to the original command and receive objects with unique,
+nonzero process-local session numbers; never wrap or reuse an exhausted
+number. Add a bounded public read-only validation that checks those objects,
+running state, real DMA addresses/counts/indices, firmware and MAC state,
+RX-only DMA configuration, stopped packet TX, and masked host interrupts.
+Return an opaque permit borrowed from the token and both rings, not a bool.
+The future PHY adapter may request this permit for an owned receive path;
+the existing stopped-RX guard is unchanged until that integration. Test
+same-address pool reconstruction, stale/foreign tokens, partial live traffic,
+actual register corruption and timeout without publishing MMIO writes.
+
+Own-branch `b8f41cb5` built without warnings in 0.51 seconds. After raw
+publication `767c2cb8`, all 16 post-init/session fixtures passed (0.82
+seconds; 36 unchanged module cases filtered), all 18 affected RX fixtures
+passed (0.12 seconds), and all 14 FWCMD fixtures passed (reported 0.00
+seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
+reviews found no blocker. These are host model results; full-gate,
+physical-device operation and the PHY/native permit consumer are pending.

@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-15: `rtw89_wifi/` has an initial native board-access service: MAC power, XTAL and EFUSE reads, then power-off. This slice is not a working network driver. It starts no host DMA, downloads no firmware, applies no RF calibration and registers no WLAN radio. Its build/host checks and actual hardware status are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -34,11 +34,15 @@ The listed source files carry `GPL-2.0 OR BSD-3-Clause`. The adapted public defi
 Realtek permits unmodified binary redistribution with its notice and conditions; the licence prohibits reverse engineering, decompilation and disassembly. This work uses the published open-source header definitions, not disassembled firmware. The project's personal-store policy is still followed: neither binary nor licence download is packaged in an image or committed. The fetcher saves both together.
 
 ```bash
+scripts/proprietary.sh fetch  # both MacBook Broadcom and Ryzen Realtek firmware
+# Realtek alone, without the Broadcom extractor dependency:
 python3 scripts/firmware/rtl8852be.py fetch
 python3 scripts/firmware/rtl8852be.py check
 # After an image is written, explicitly copy the personal store to the intended volume:
 scripts/proprietary.sh copy /path/to/mounted/MINDCORE
 ```
+
+`build-and-write.sh` invokes `scripts/proprietary.sh fetch`, which now includes the pinned Realtek firmware and licence. They remain in the personal store until the existing post-write copy; neither enters the image.
 
 `fetch` uses an immutable source revision, a bounded read, exact size/hash checks and atomic replacement. `check` never uses the network. Neither command writes a disk. The existing `proprietary.sh copy` copies all files under `proprietary/firmware/`, retaining the Realtek licence alongside its binary; run it only against the intended written volume.
 
@@ -173,11 +177,468 @@ The actual Ryzen MAC power/EFUSE/shutdown cycle is untested. A QEMU boot with
 no RTL8852BE cannot establish it. The earlier Linux identity observation and
 parser tests are not evidence for this new device sequence.
 
+## Bounded PCIe command queue (213-DRV-0032)
+
+`fwcmd.rs` implements the channel-12 transport separately from the native
+board service. It is adapted under the same BSD option from immutable
+[`pci.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/pci.c)
+(`rtw89_pci_fwcmd_submit`, `rtw89_pci_release_fwcmd`, TXBD initialization),
+[`pci.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/pci.h)
+(eight-byte TXBD, channel registers and `RTW89_PCI_MULTITAG`),
+[`txrx.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/txrx.h)
+and `core.c` (24-byte TXWD), and
+[`rtw8852be.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852be.c)
+(original AX register layout and single-band BDRAM table).
+
+The queue uses 32 descriptors with one position reserved and 40 separate
+2 KiB payload slots, retaining the last eight completed commands even after
+their descriptor positions are reusable. This matches upstream's distinction
+between hardware-index completion and safe payload release. A single,
+exclusive 86,016-byte DMA region, aligned to 4 KiB and entirely below 4 GiB,
+holds the descriptor page and payloads. The choice of 32 descriptors is a
+bounded MIND policy: it is a multiple of upstream's required alignment of 16
+and below its configured 256, but it has not been validated on hardware.
+
+Construction rejects unsupported architectures, active PCI mastering,
+invalid physical/virtual bounds and alignment before clearing the region.
+Installation requires MEM-only PCI Command, both HCI engines off and channel
+12 stopped. It bounds the idle/index-reset polls to 100 microseconds each,
+programs CH12 count/BDRAM/base and checks readback. It does not enable PCI
+mastering or HCI, unstop the channel, initialize other rings or change RF.
+The unsafe `start` boundary requires the caller to complete the supported
+MAC/DLE/HFC/PCIe setup and enable DMA only after valid rings exist. It verifies
+Command (including rejection of inaccessible `0xffff`), HCI, channel, indices
+and retained register configuration before accepting packets.
+
+Each submission copies a complete H2C packet or firmware part of at most 2020
+bytes behind the TXWD, then publishes the TXBD and 16-bit doorbell. The current
+ordering contract is x86-64 coherent WB DMA memory with strongly ordered UC
+MMIO and no WC aliases. Release/Acquire fences constrain compiler movement;
+x86 WB/UC ordering supplies device-visible ordering. Other architectures are
+rejected; neither generic Rust atomics nor host fixtures establish portable
+DMA ordering. The caller must retain exclusive ownership of the mapped region
+through failures, driver exit and the eight-command prefetch tail until the
+kernel/device has independently established quiescence.
+
+Index disagreement, unavailable MMIO, impossible completion or a failed
+doorbell poisons the queue. A doorbell failure still retains the possibly
+published payload. Drain uses a caller budget of at most one second and a
+finite poll count even if the clock stops. Successful drain retains the last
+eight payloads; no error, destructor or drain releases DMA memory or claims
+that hardware stopped. There is no timeout recovery or restart contract yet.
+
+The focused x86-64 fixture `tests/rtw89_fwcmd_host.rs` models DMA reads at the
+doorbell, wrap/full/retention and register/fault bounds. On own-branch commit
+`f6caafca`, the x86-64 native release build passed (0.34 seconds, no warnings).
+After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
+2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
+`fast-test`. The earlier frozen `a99cc44a` full gate excludes this later slice.
+The actual RTL8852BE has not used this queue.
+At that library commit the native board service had no DMA capability and
+did not call it; the later diagnostic integration is described below.
+Firmware authentication/address policy, H2C
+encoding, WCPU sequencing and RX/C2H completion are not supplied by this queue.
+
+## MAC download-memory preparation (213-DRV-0032)
+
+`mac::prepare_download` implements `rtw89_mac_dmac_pre_init`'s RTL8852B
+memory/flow-control portion from the pinned `mac.c`, `mac.h`, `reg.h` and
+`rtw8852b.c`. The entry requires the verified RTL8852BE MEM-only BAR grant,
+digital cut 1, active MAC state 1, stopped WCPU, reset baseband, disabled
+TX/RX HCI and no reported PCI DMA activity. A failed guard performs no write.
+The native board service does not call this new preparation function.
+
+The DLFW profile uses 1024 unlinked 64-byte WDE pages and 64 linked plus
+960 unlinked 128-byte PLE pages, accounting for the chip's 196608-byte FIFO.
+PLE starts at the 64 KiB boundary. WDE quotas are zero except the WCPU
+minimum **48** inherited from the future SCC profile, while its DLFW maximum
+remains **0**, as in upstream's explicit override. PLE reserves 16 pages for
+C2H and 48 for H2C; other DLFW quotas are zero. Configuration fields preserve
+unrelated bits; programmed sizes/quotas get readback before readiness polling.
+Each WDE/PLE ready poll has a 2 ms deadline and a finite iteration bound.
+Only then is HFC CH12 enabled with pre-cost 40 and full-condition 0;
+ordinary data-channel flow control remains disabled. The whole stage has a
+10 ms software budget.
+
+Every failure after the first mutation independently attempts HFC disable
+and DLE disable, with a fresh 1 ms budget for each and readback. Primary and
+both cleanup errors are retained. The caller still owes the full MAC
+power-off cycle; successful local cleanup is not a device DMA-quiescence
+claim. This function never writes PCI Command, HCI DMA controls, WCPU, BB/RF
+or CMAC controls and supplies no firmware, radio or host DMA startup.
+
+Own-branch commit `371d41db` built for `x86_64-unknown-none` (0.31 seconds,
+no warnings). After `fast-test` publication `60a100be`, all 11 focused tests
+passed on 2026-10-15 UTC (reported 0.00 seconds, none ignored). A prior build
+invocation from the repository root used the Linux default target, missing
+the service's nested Cargo configuration, and failed in `libmind`; the native
+build was rerun from `rtw89_wifi/` without changing code for that error.
+The eleven focused fixtures in `tests/rtw89_mac_host.rs` cover the exact download quotas and WCPU override,
+pre-write guards, both readiness states, every forward-write fault, failed
+readback, cleanup failures and frozen/late/absolute deadlines. Actual Ryzen
+MAC/DLE/HFC operation remains untested. PCIe MDIO/DBI configuration, modes,
+BDRAM reset, ring installation and external DMA ownership must be integrated
+before the command transport can run; this preparation alone is insufficient.
+
+## PCIe preparation with host DMA disabled (213-DRV-0032)
+
+`pcie.rs` ports the RTL8852B-specific path from the pinned `pci.c`, `pci.h`,
+`reg.h` and `rtw8852be.c`. `prepare` verifies the previous DLFW MAC profile,
+idle indirect interfaces, reset BB/stopped WCPU and PCI MEM-only/HCI-off state
+before any write. RTL8852A/C-only workarounds and unrelated PHY generations
+are not applied. The fixed observed function has no subsystem BER quirk in
+the pinned `rtw8852be.c` entry.
+
+The path applies PCIe power/LDO controls, GEN1 MDIO DPHY delay (register
+`0x1b`, 25 microseconds) and AUTOK N (`0x1d`, 4), then disables refclock
+calibration in MDIO register `0x30` for the observed link speed GEN1 or GEN2.
+Its DBI fallback accesses only PCI vendor/link byte `0x82` and L1 byte `0x719`
+through BAR2 `0x1090/0x1094/0x1098`; no generic configuration-write ABI is
+introduced. If L1 bit 3 was set, its original byte is saved before the first
+attempted change and restored with readback. Failure during that interval
+gets a fresh 1 ms restoration budget, distinct from the original error and
+the DMA-stop cleanup. A pending DBI operation must complete before its write
+data is replaced, including during cleanup. Already-disabled calibration
+and L1 are not rewritten.
+
+After the pinned wake/watchdog/debug settings, the implementation stops all
+supported TX/RX channels, PCIe I/O and WPDMA with both HCI engines off. Unlike
+the complete upstream driver, it has no ordinary RX/TX rings and therefore
+leaves these channels stopped throughout this slice. It clears the supported
+indices and applies packet RXBD mode, 2048-byte TX/128-byte RX bursts,
+multi-tag count 8, 256 ns descriptor intervals and truncated address-info
+format. Each index/idle wait is bounded by 100 microseconds; MDIO transactions
+by 2 ms and DBI transactions by 200 microseconds, each with finite polls even
+if the clock stops. `prepare` has a 50 ms total budget, including its final
+readback. There is no PCI mastering, HCI, WCPU or RF enabling operation.
+
+The returned `Prepared` value is consumed by `finish` after the same function's
+`Queue` reaches `Installed`. It rechecks the profile and command-ring
+base/count/zero indices before writing the exact single-band BDRAM table
+(starts 0/5/10/15/20/24/28, with the source's per-channel limits), then polls
+BDRAM reset for at most 100 microseconds within a 5 ms stage budget. A guard
+failure performs no write. A modified failure independently attempts to
+retain channel stops/HCI-off and verifies idle under a fresh 1 ms budget.
+Primary, L1-restoration and stop errors are separate; no queue or DMA memory
+is freed. The caller must still power the MAC off on failure and retain any
+DMA allocation until external quiescence. Success leaves all host DMA off.
+
+Own-branch `4feee434` native x86-64 release build passed (0.64 seconds, no
+warnings). After `fast-test` publication `1dee0b3f`, all 16 focused fixtures
+in `tests/rtw89_pcie_host.rs` passed on 2026-10-15 UTC (reported 0.00 seconds,
+no ignored tests). They model both PHY pages, DBI byte lanes, pending command
+completion, every preparation/BDRAM write fault, deadline/restore failures,
+ring guards and BDRAM-reset ordering. Independent source review found no
+remaining blocking discrepancy. These are not actual PCIe hardware
+observations. The frozen `a99cc44a` gate does not contain this slice. The native board service does not call this library stage.
+Actual MAC/PCIe preparation, DMA enable/quiescence and firmware/WCPU download
+remain unvalidated and must be integrated before a hardware-network claim.
+
+## Hash-pinned WCPU download (213-DRV-0032)
+
+`download.rs` implements a single bounded attempt from the same immutable
+BSD-licensed `fw.c`, `fw.h` and `mac.c`: `rtw89_mac_disable_cpu_ax`,
+`rtw89_mac_enable_cpu_ax`, `rtw89_h2c_pkt_set_hdr_fwdl`,
+`rtw89_fw_download_hdr`, `__rtw89_fw_download_main` and
+`__rtw89_fw_download`. It reuses the project's `mind::sha256` implementation;
+no new cryptographic dependency or vendor-signature verification is added.
+
+Before any device write, `Verified::verify` checks the complete private file's
+1,245,944-byte size and pinned SHA-256, measured cut 1/RFE 1 and the explicitly
+nonsecure physical OTP pair `ff/ff` at `0x5ec`/`0x5ed`. Those bytes are already
+within `Maps::phycap` (`0x580..0x600`); they must come from the actual board
+read, not defaults. Any other security value is unsupported and rejected.
+The selected CE image must have offset 96, length 326,616, version
+0.29.29.15, commit field `6fb3ec41`, 144-byte header including 64-byte dynamic
+extension and exactly these sections, without checksum/redownload flags:
+
+| Type | Decoded destination | Bytes |
+|---|---|---|
+| 2 | `0x18970000` | 310,992 |
+| 1 | `0x18e12400` | 13,432 |
+| 9, zero MSS count | `0x18e11928` | 2,048 |
+
+This policy establishes equality to the locally approved pinned file, not a
+manufacturer signature or secure-boot support. The opaque `Verified` value
+keeps the file immutably borrowed until sending finishes. Host state-machine
+fixtures construct synthetic metadata only inside the private test module;
+they cannot enter through the production hash policy. The optional private
+fixture checks the actual full digest and rejects a one-byte mutation.
+
+The caller must complete MAC/PCIe preparation and command-ring installation
+before kernel-enabled bus mastering, leave ordinary RX/TX/WPDMA stopped and
+RXHCI off, enable only PCIe I/O/CH12 with TXHCI, then start the queue. `run`
+rechecks MEM+MASTER (PCI Command I/O decode may remain enabled), the actual
+cut, active MAC, reset BB/WCPU and the DLFW memory
+profile, command-only DMA state, exact ring registers and never-used queue.
+It resets WCPU/APB/platform, clears communication registers, enables the CPU
+clock, sets IDMEM size 2 and boot reason 0, then starts WCPU in download mode.
+The header is 8 bytes of H2C plus 80 static header bytes; the dynamic extension
+is not sent. Sequence/ACK fields stay zero and part size is 2020. Each section
+is sent in at most 2020-byte raw parts through the actual `Queue`; backpressure
+reclaims ring positions without reusing the eight retained payloads.
+
+The active PCI Command accepts low bits 6 or 7, matching pinned
+`rtw89_pci_claim_device` (`pci_enable_device` then `pci_set_master`) and the
+kernel's BAR-derived resume: the observed function has an I/O BAR0 as well
+as MMIO BAR2. Every driver access still uses the owned UC BAR2; this stage
+performs no PIO or PCI Command writes. The earlier idle/preparation stages
+continue to require exact MEM-only low bits 2.
+
+The attempt has a two-second total budget; H2C/FWDL readiness, backpressure
+and final drain/status each have 400 ms bounds and finite loop limits even
+with a frozen clock. After drain, five 1 ms calibrated delays preserve the
+source's 5 ms wait, followed by an actual status-7 check. Status 2/3/4 is
+reported separately as firmware checksum/security/cut failure. The final
+read must finish within its deadline. There are no blind retries.
+
+Any modified failure poisons the queue and independently attempts all-channel
+stop/HCI disable plus bounded idle, then WCPU reset under a fresh budget;
+primary and both cleanup failures are retained. Public `stop` gives the same
+bounded cleanup after a successful diagnostic. Even successful stop leaves
+PCI mastering unchanged and retains all DMA memory, including the final
+eight command buffers. Only separately verified kernel quiescence permits
+region release. `Ready` means status 7 was observed, not full MAC, calibrated
+RF, WLAN service registration or usable networking.
+
+Own-branch `cf768d22` (following `27033a43`) built for native x86-64 in
+0.39 seconds without warnings. After `fast-test` publication `45387d45`,
+18 synthetic downloader tests passed (0.19 seconds), the explicitly invoked
+private-file digest/mutation fixture passed (0.05 seconds), and all 14 FWCMD
+regressions passed (reported 0.00 seconds), on 2026-10-15 UTC. The private
+fixture is intentionally excluded from ordinary CI because it requires the
+separately fetched proprietary file; it was run explicitly in this session.
+Independent review caught the final drain-read deadline gap, corrected with
+a delayed-index fixture. Integration review corrected the optional I/O BAR
+decode contract and an invented CMAC-off prerequisite: the real power-on
+sequence already enables CMAC functions while BB remains reset.
+
+The native diagnostic integration is described below. Actual Ryzen security
+bytes and DMA/WCPU firmware operation remain unvalidated. The frozen `a99cc44a` gate does not contain this library slice.
+
+## Single-band runtime MAC preparation library
+
+`runtime_mac.rs` and `runtime_mac_regs.rs` implement the pinned RTL8852B
+`mac_enable_bb_rf` chip dispatch, `sys_init_ax` and SCC DMAC/CMAC0 setup.
+They require the verified downloader's `Ready` token, actual firmware status
+7, the measured cut/RFE/security profile, an idle retained command queue,
+BAR2 of at least 128 KiB and stopped ordinary host DMA. This is a library
+stage; native startup does not invoke it.
+
+Once firmware is ready, the source's scheduler pause uses register H2C/C2H
+(`mac.c` `rtw89_hw_sch_tx_en_h2c`; `fw.c` `rtw89_fw_msg_reg`). The stage
+refuses occupied mailboxes, sends CMAC0 SCH_TX_EN/all queues disabled, checks
+the TX_PAUSE reply and hardware CTN/protocol idle, and preserves the two
+host diagnostic counter nibbles. The caller owns the sole mailbox writer.
+A response alone does not substitute for scheduler/idle register checks.
+No direct writes to CTN_TXEN or the read-only protocol-idle bit occur.
+
+The chip sequence in `rtw8852b_common.c` enables BB, sets SPS ZCDC_H, toggles
+AFC, writes XTAL80/81 and sets XYN. SCC uses 510+2 64-byte WDE pages and
+496+16 128-byte PLE pages, with the source's SCC quotas and PCIe HFC values;
+normal DMA stays stopped. It configures station scheduling, MPDU/security,
+CMAC0 scheduler parameters, address/BA CAM, RX filtering, CCA/NAV, TMAC/RMAC
+and protocol controls. The RX MPDU limit is 22 units of 512 bytes from the
+minimum RX quota of 89 pages. CAM, DLE and station readiness are bounded.
+
+The preparation has a two-second absolute budget, including the mailbox's
+one-second reply deadline and final readback. A modified failure poisons
+the command queue, independently checks packet stop (80 ms), disables
+chip BB/RF (400 ms), and stops command DMA/WCPU under the downloader's
+separate budgets. Cleanup never retries the mailbox or overwrites a pending
+XTAL command. It keeps all primary/cleanup errors and does not free DMA.
+Own-branch `02b6b4e3` built for native x86-64 (0.43 seconds, no warnings).
+After `fast-test` publication `8461fd20`, all 14 focused runtime-MAC host
+fixtures passed (0.12 seconds, no ignored tests), on 2026-10-15 UTC.
+Independent review checked the mailbox/source ordering and added the
+live CMAC-enable prerequisite before the first firmware command. Hardware
+validation and a full gate containing this slice remain pending. None of
+this establishes physical firmware/MAC operation.
+
+`Prepared` deliberately does not mean full runtime MAC or WLAN readiness:
+packet-report routing, normal interrupt handling, RX rings/C2H processing,
+final offload commands, BTC/PHY/calibration, channel/regulatory setup and
+association still require their own implementation and hardware evidence.
+
+## RXQ/RPQ ownership and C2H parsing libraries
+
+`rx.rs`, `rxdesc.rs` and `c2h.rs` adapt the same pinned `pci.c`, `pci.h`,
+`rtw8852be.c`, `core.c`, `core.h`, `txrx.h`, `fw.h`, `fw.c` and `mac.h`
+layouts. RTL8852BE explicitly uses `rx_ring_eq_is_full=false`,
+`check_rx_tag=false` and `no_rxbd_fs=false`; the library therefore uses
+normal empty-equal indices and FS/LS, without importing another chip's
+RX-tag validation. Each RXQ/RPQ has 256 eight-byte descriptors and 11498-byte
+buffers. The 512 buffer strides are aligned to 64 bytes (11520 bytes).
+
+The 5,902,336-byte RX region and 86,016-byte FWCMD region must be disjoint
+subregions of a future retained 8 MiB coherent-WB grant below 4 GiB. This
+library does not change the existing 128 KiB native diagnostic allocation.
+DMA initialization requires MEM-only PCI Command and no prior device
+access to the region. Installation requires stopped RX DMA, RXHCI off and
+bounded receive-engine idle; it writes only owned RX ring registers.
+`start` validates externally activated, unchanged installed rings; it never
+enables mastering, HCI or another DMA channel. Both objects and all mappings
+must remain alive until external PCI quiescence, including after errors.
+The ordering contract is x86-64 coherent WB plus UC MMIO, without WC aliases.
+
+`receive` processes at most one descriptor under a nonzero caller budget.
+It validates host/hardware indices, reads DMA bytes with volatile accesses,
+checks time during bounded chunks, and copies into caller-owned storage
+before the 16-bit host-index release. No packet heap allocation or DMA
+reference escapes. Malformed lengths/descriptors and fragmented packets
+are explicitly dropped; fragment reassembly is not implemented. A possibly
+applied doorbell error poisons the receiver and retains the memory. Local
+stop independently attempts RX stop bits, RXHCI disable and bounded idle,
+preserving separate errors and the TX command channel.
+
+The AX descriptor parser bounds short/long headers, shift and driver-info
+bytes against the actual write length. RPQ reports use the chip's four-byte
+format. The C2H parser requires a complete declared packet length, then
+keeps receipt ACK (sequence bits 23:16) separate from done ACK (sequence
+bits 31:24 and return status 23:16). Matching includes category, class,
+function and sequence; receipt or DMA consumption does not imply success
+of the requested firmware operation.
+
+Own-branch `b112406d` native build passed in 0.47 seconds without warnings;
+after raw publication in `fast-test` `cfc4515b`, all 18 focused host fixtures
+passed on 2026-10-16 (0.13 seconds, none ignored). Independent source and
+ownership review found no remaining blocker. Hardware validation and a full
+gate containing this slice remain pending. Interrupts, RX activation, command
+ACK routing, BTC coordination and WLAN service registration remain separate.
+A warm device is not silently reset: MEM-only PCI decoding does not imply
+MAC-off or establish ownership of old DMA. The board's cold-state guard
+remains; an owned quiescence/reset transition is still required for warm
+boot/restart support.
+
+## Native firmware diagnostic integration (213-KRN-0114)
+
+The native entry reads `data/firmware/rtw89/rtw8852b_fw-1.bin` through its
+read-only VFS client into private process pages. Missing, wrong-sized or
+wrong-hash files stop before board MMIO access; no firmware bytes enter the
+image. VFS open/close calls have two-second IPC timeouts; chunked reads share
+a five-second deadline. The exact hash check is repeated with the actual
+board's cut/RFE/OTP/image policy after the board-read power-off cycle.
+
+`init` retains a 128 KiB DMA region and passes it in `SLOT_MEM`, along with
+the existing decimal PCI device index. The adapter verifies its DMA kind,
+4 KiB virtual/physical alignment and full bounds below 4 GiB before queue
+construction. The x86 kernel maps DMA as WB and BAR MMIO as UC. The native
+adapter uses `ManuallyDrop` for the DMA mapping and never frees or remaps it
+after a queue exists, including on setup failure or failed cleanup.
+
+`startup.rs` enforces verification before queue initialization, then MAC
+power-on, download-memory preparation, PCIe preparation, ring installation,
+BDRAM finish, kernel mastering, command-only activation and one download.
+Ordinary packet DMA/WPDMA and RXHCI remain stopped; only channel 12 and PCIe
+I/O are unstopped with TXHCI. A successful firmware status 7 is logged with
+its version, then independently bounded DMA/WCPU stop always follows.
+
+Kernel `registers_only` disables bus mastering while preserving MEM decode;
+an explicit PCI Command read must confirm low bits 2. If either check fails,
+no more MMIO is performed. Otherwise MAC power-off gets a fresh one-second
+budget, followed by a final kernel quiesce and Command readback. Primary,
+DMA/WCPU stop, kernel transition and power-off errors remain separate.
+Even complete cleanup does not release the retained DMA mapping or claim
+IOMMU containment, drained PCIe transactions or safe reuse. There is no retry,
+radio endpoint, packet traffic or native hardware evidence yet.
+
+Own-branch `5f1d940d` builds both the native driver and init. After raw
+`fast-test` publication `649fea37`, all ten production startup/activation
+host fixtures passed on the own branch on 2026-10-16 (0.00 s, zero
+failed/ignored). They cover orchestration and register models, not the actual
+PCIe fabric or RTL8852BE power/firmware path. The cumulative MMIO model below
+adds a separate compatibility check across the library stages.
+
+The cumulative `tests/rtw89_pipeline_host.rs` fixture carries one MMIO model
+from cold board access through power/MAC/PCIe and command activation, without
+reseeding guard registers between stages. Its explicit local companion adds
+production pinned-file verification, full transfer/status and stop/power-off,
+including missing-H2C-readiness cleanup. After raw publication `8461fd20`,
+own-branch `09d1ceaa` passed both standard cases (zero failed/ignored, 0.00 s)
+and three explicit private-file scenarios on 2026-10-16. GEN1/GEN2 each
+transferred 164 packets, with all 326,472 section bytes matching the pinned
+file, reached status 7/version 0.29.29.15 and completed stop/power-off.
+Withheld H2C readiness timed out before the first packet and still completed
+independent cleanup. These runs used x86-64 Linux 6.6.87.2 WSL2 and
+rustc 1.101.0-nightly c36f14571. Their modeled durations are not device timings.
+The model synthesizes readiness and consumes doorbells synchronously; it
+does not model PCIe timing, ordering faults, real OTP or firmware execution.
+There is no new ignored/conditional pass in the host gate. The private check
+requires a separately fetched file and writes no payload to a report:
+
+```sh
+rustc --edition=2021 tests/rtw89_pipeline_private.rs -o /tmp/rtw89-pipeline-private
+/tmp/rtw89-pipeline-private "$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin"
+```
+
+## MAC tail and receive-only post-init library
+
+`post_mac::activate` follows pinned `mac.c:3569–3909` and
+`pci.c:3132–3247`: RTL8852B error masks, PCIe host release reports
+(`RTW89_RPR_MODE_POH=0`, aggregation 30, timeout 255), LTR spacing 500 us,
+idle timer 3.2 ms, RX thresholds 40, idle/active latency values
+`0x90039003`/`0x880b880b`, and eight-byte address-info mode. The chip uses
+BACAM V0 (`rtw8852b.c:961`); `mac_feat_init` performs no V1 BA-CAM H2C.
+Known combined IMR/ISR status fields are written as zero rather than echoed
+while mask fields change. Host interrupt masks stay zero for bounded polling.
+
+An existing `runtime_mac::Prepared` value, actual runtime register state,
+quiet scheduler, ready firmware, unchanged command ring, and both installed
+receive rings are prerequisites. The whole stage has a 10 ms deadline,
+including the final ring validation. It sets RXHCI before releasing RXQ/RPQ,
+retains CH12, and keeps every uninstalled data-TX channel and WPDMA stopped.
+It deliberately does not copy upstream's enable-all-TX-queues step.
+The opaque `Receiving` result is receive-DMA readiness only; later callers
+must revalidate actual ring/device state after any intervening operation.
+No native entry, DMA grant, IRQ handler or WLAN registration changes.
+
+Failure independently attempts receive stop, chip BB/RF disable and command
+DMA/WCPU stop, preserving their errors and retaining all DMA allocations
+until external PCI quiescence. Own-branch `06a0b932` native build passed
+(0.66 seconds, no warnings); after raw publication `b50f52c0`, all nine
+post-init host fixtures passed (0.81 seconds) and all 18 affected RX cases
+passed (0.12 seconds), none ignored, on 2026-10-16 MSK. Independent source
+review found no blocker. Full-gate and hardware evidence remain pending. Normal
+H2C/offload, BTC policy, PHY/calibration and data TX remain separate.
+
+The initial calibration `runtime_mac::scheduler_zero` helper uses the same
+exclusive firmware register mailbox for zero-only pause and restore. It
+rejects live TX, unavailable firmware/CMAC and occupied exchanges before
+publishing, and checks actual CTN/PTCL idle and the caller's deadline. An
+uncertain error forbids further mailbox use. Own-branch `b947aa40` built
+in 0.46 seconds without warnings; after publication `d9266c7b`, all 17
+runtime-MAC cases passed (0.12 seconds, none ignored). This does not supply
+BTC arbitration or activate native calibration.
+
+The later `Receiving::validate` API returns an opaque `ReceivePermit` whose
+borrow covers the original token and both DMA objects. Each object receives
+a fresh process-local session number before initialization; allocation is
+bounded and permanently refuses counter exhaustion instead of wrapping.
+The token records both sessions and physical bases, so reconstructing a
+pool at the same address does not revive an old token. The bus adapter must
+still refer to the same exclusively owned PCI function; software session
+identity does not replace the kernel capability or warm-state quiescence.
+
+Validation performs no MMIO writes. It rechecks both running objects,
+command/RX bases and counts, current host/hardware index bounds, firmware,
+MAC memory/functions, RX-only HCI/STOP configuration, quiet scheduler and
+masked host interrupts within the caller's deadline. Live RX and CH12
+traffic is allowed; ordinary TX/WPDMA must remain stopped and idle. Command
+reclaim changes only CPU completion counters. The permit is an observation
+at that instant, not a promise that future hardware state cannot change.
+The PHY guard remains unchanged until its separate typed integration.
+Own-branch `b8f41cb5` native build passed (0.51 seconds, no warnings).
+After raw publication `767c2cb8`, all 16 post-init/session fixtures passed
+(0.82 seconds), all 18 affected RX fixtures passed (0.12 seconds), and all
+14 FWCMD fixtures passed (reported 0.00 seconds), none ignored, on
+2026-10-16 MSK. Two independent read-only reviews found no blocker.
+Full-gate and physical-device evidence remain pending.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
-After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. Firmware H2C/C2H transport, secure-boot handling, PCIe rings/interrupts, ownership recovery, channel control, RX/TX and the WLAN service integration are all still absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
+After the board/firmware diagnostic passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue is wired only into the bounded diagnostic above. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from these host tests.
 
 ## Reproducible host evidence
 
@@ -186,13 +647,134 @@ rustc --edition=2021 --test tests/rtw89_firmware_host.rs -o /tmp/rtw89_firmware_
 /tmp/rtw89_firmware_host
 python3 tests/rtl8852be_fetch_test.py
 python3 tests/rtl8852be_probe_test.py
-rustc --edition=2021 --crate-type lib rtw89_wifi/src/lib.rs -o /tmp/librtw89_wifi.rlib
+(cd rtw89_wifi && cargo build --release --locked)
 python3 scripts/firmware/rtl8852be.py check
 RTW89_FIRMWARE="$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin" /tmp/rtw89_firmware_host --ignored
 ```
 
 On 2026-10-15, 12 synthetic Rust tests, five offline fetcher tests, the `no_std` build and the separate two-cut proprietary-file validation passed. The normal suite intentionally does not require or embed the proprietary file. These checks do not exercise the Ryzen hardware or establish radio functionality.
 
+## Normal H2C sequencing and BT RFK observation prerequisites
+
+The initial `h2c.rs` library uses the pinned `fw.c:1480`
+`rtw89_h2c_pkt_set_hdr` contract: an eight-byte header, delivery type zero,
+category/class/function, byte sequence and total packet length. Every fourth
+sequence requests a receipt ACK even when the caller did not ask for one.
+Firmware-download headers keep their existing separate, unadvanced sequence.
+The implementation uses the typed `c2h.rs` receipt/done decoder, whose
+sequence positions differ. All four identity fields must match. An
+unsolicited DONE, an unrelated event, descriptor consumption or receipt
+alone cannot complete a command that requires DONE. Firmware rejection
+preserves its status byte. Results distinguish transport submission,
+receipt, successful requested completion and rejection.
+
+`Engine` admits eight outstanding or uncollected results and bodies up to
+2012 bytes; the production `CommandQueue` adapter uses the existing bounded
+channel-12 queue. Packet construction, publication and ACK waiting share an
+absolute deadline of at most one second. A pre-publication clock check
+passes only the remaining budget to the adapter; a final check rejects late
+completion. `poll` must run between bounded RX polls even without events.
+Full without publication does not advance the sequence. Uncertain sends,
+backward clocks and expired commands poison the entire session; no command
+is automatically resent, and this object does not stop DMA or free memory.
+
+This is a startup prerequisite, not continuous runtime transport: only
+sequences 0 through 255 are admitted. Exhaustion refuses new work instead
+of wrapping and misidentifying a delayed old ACK. Reconstructing an engine
+against the same live firmware session is outside its contract. Continuous
+operation needs a separate ordered C2H-drain/session-recovery contract; a
+firmware reset every 256 commands is not an implemented networking service.
+The native firmware diagnostic does not invoke this library or activate RX.
+
+`btc.rs` reads the actual BT-side scoreboard at BAR2 `0xac`, polling RFK RUN
+and REQUEST bits 5/6 every 40 microseconds for at most 100 milliseconds.
+Unavailable reads, time regression and timeout fail closed; no unobserved
+BT timeout report overrides a busy adapter. A returned `ClearSnapshot` is
+only a transient observation. It performs no write and is **not** an RFK
+START grant or a successful DACK coexistence callback.
+
+The remaining START/STOP integration is concrete. Pinned `coex.c`
+`_ntfy_wl_rfk` and `_run_coex` require initialized BTC state, antenna/grant
+selection, TDMA/coexistence policy and an owned WLAN scoreboard shadow.
+WLRFK is bit 11 in that WLAN shadow. The read view of `0xac` is BT's
+scoreboard, so copying its lower 24 bits into WLAN's write view is incorrect.
+`mac.c:6359` `rtw89_mac_cfg_sb` preserves the firmware notification field,
+sets the toggle and waits one millisecond after a write. START must return
+success only after actual arbitration and the applicable policy have been
+applied; STOP must clear the owned WLRFK state and restore/apply the proper
+post-calibration policy, including failure cleanup. Normal H2C DONE alone
+establishes none of those conditions. There is no native success stub.
+
+Source SHA-256 at the pinned revision: `fw.c`
+`64c86436e8e0f7f9ecd4364d2d2c48be4549a0448b3ce738eee7e8c25e5875ce`,
+`fw.h` `bae6675fc95c3f6edd348aaa78c2bbb5cc7768f1961a91fb95ff49624aa9e345`,
+`coex.c` `c38d8a42a57300c0c376217d3472e2a3176760346ab44b8c21cca6b98c63a11c`,
+`mac.c` `ce5c09696ba6dcdc2003ce28803052fd3238c9da55188046e3e6e1ed82658055`.
+These source files offer the BSD-3-Clause option used here; notices are in
+`THIRD_PARTY.md` and the retained Realtek licence.
+
+The own-branch native x86-64 release build passed (0.53 seconds, no warnings).
+After raw publication `d9266c7b`, own-branch `d951d101` passed all thirteen
+H2C and six BT-observation host fixtures on 2026-10-16 (both 0.00 seconds,
+zero failed/ignored; x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly
+c36f14571). Independent reviews corrected a pre-publication deadline gap
+and a consecutive-clock regression gap, each with regression cases. The
+fixtures include the actual DMA queue adapter and C2H parser through a
+stateful model; they do not establish hardware transport or BTC grants.
+
 The separately guarded BB/RF/NCTL table library and its integration limits are
 described in [RTL8852BE PHY stages](rtl8852be-phy.md). It is not called by the
-native board-read service and does not establish calibrated radio operation.
+native firmware diagnostic and does not establish calibrated radio operation.
+
+
+## Hardware coexistence initialization before NCTL
+
+`btc_init::prepare(&mut Phy, &Board, &download::Ready)` accepts only the
+actual supported cut-1/RFE-1 board, nonsecure OTP `ff/ff` and pinned firmware
+0.29.29.15. The existing private PHY state must be `RadioLoaded`, and its
+live `BeforeDack` register guard still requires ordinary RX/TX stopped.
+The order is the pinned `core.c:5654–5658`: radio tables, BTC initialization,
+then PHY dynamic management/NCTL. No receive-only guard exception is added.
+
+This slice ports `rtw8852b_common.c:1799` `__rtw8852bx_btc_init_cfg` and
+`mac.c:6122` `rtw89_mac_coex_init`: internal Realtek PTA, LTE SW_CFG2,
+WLAN response/beacon priorities, RF grant-debug disable, the four shared
+antenna RF LUT entries, the break table and BT counters. The selected RFE
+uses A/B sleep masks `0x5ff`, A TX `0x5ff` and B TX `0x55f`. Register
+operations preserve the source's access widths and unrelated bits.
+
+The whole stage has a 200 ms deadline, including its initial live guard.
+LTE readiness waits are capped at 50 ms with finite polls even if the clock
+stops. Unlike the source's log-and-continue path, failed readiness returns
+before any new indirect command. The source's immediate RDATA read after
+its read command is retained. A final readiness check after the write uses
+the same condition required by the next source transaction. Failure never
+replaces/retries a pending LTE command. Both RF LUT write gates are closed
+and read back independently under fresh 1 ms budgets after a modified
+failure, followed by the shared independently bounded chip BB/RF disable.
+Primary and cleanup errors stay separate; the PHY attempt becomes Failed.
+DMA remains owned by the caller; neither success nor cleanup frees memory.
+This cleanup does not claim to restore every previously changed PTA field.
+
+The opaque `ConfigPrepared` result means hardware initcfg only. It does not
+set a complete software BTC initialized flag, publish a WLAN scoreboard,
+send TDMA policy, select RFK antenna/grants or authorize calibration. Actual
+coexistence context, firmware-profile-matched control/init/report messages,
+policy application and STOP restoration remain subsequent prerequisites.
+`Phy::nctl` still documents the interleave obligation; a complete typed BTC
+prerequisite will enforce it in the later integration. Native main/init and
+its firmware-only diagnostic are unchanged.
+
+Source hashes at the same BSD-licensed pin: `rtw8852b_common.c`
+`34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb`,
+`rtw8852b.c` `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a`,
+`core.c` `41ea6a22a4ff78035364def00c70edb49d821f2d4cb12869f1a0a87e6ee54886`;
+`mac.c` and `coex.c` hashes are recorded above. Own-branch `e6ed1e2c`
+no-std native build passed (3.53 seconds, no warnings). After raw publication
+`c2facb84`, all nine new BTC-init fixtures passed on 2026-10-16. Their
+executable also includes 18 inherited downloader synthetic tests, all passing,
+and its existing optional private-file ignored case: 27 passed, zero failed,
+one inherited ignored, 0.19 seconds (x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571). No new BTC test is ignored. The fixtures run real BB/radio
+stages into a stateful register model before BTC; hardware initialization,
+calibration and network acceptance remain open.
