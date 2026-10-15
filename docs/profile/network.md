@@ -91,3 +91,12 @@ establish device timing or electrical behavior. KRN integration/full gate and
 actual Ryzen MAC/board-read/shutdown evidence remain pending. No host DMA,
 firmware download, BB/RF calibration, WLAN registration, association, IP
 traffic or Effector connectivity is implemented or claimed by this slice.
+
+The separate channel-12 command queue now has a bounded descriptor/payload
+ownership implementation but is not called by the native service. Its TCB
+requires x86-64 coherent WB DMA, UC MMIO, exact PCI/MMIO identity and externally
+verified quiescence before region release. It does not grant DMA, enable
+mastering or supply MAC/PCIe startup, firmware policy or radio operation.
+Build/host evidence for this additional slice is pending; no hardware DMA
+evidence or portable architecture guarantee is claimed. See the hardware
+notes for the eight-completed-command retention and fault contract.
