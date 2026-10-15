@@ -1073,3 +1073,12 @@ phase/session identity, aggregate deadlines, optional reports, pre-completion
 snapshots, malformed envelopes, post-boundary contradictions, unmarked slots and
 later reconciliation. Execution awaits raw publication. The seeded handoff model
 is not physical-device evidence or the separate cumulative cold-device model.
+
+
+After raw publication `1a62e46f` containing code `8b2caed7`, the owner's own
+branch passed all 26 Session/owner fixtures (0.18 s), all 11 initcfg fixtures
+(0.01 s), and all 11 control fixtures (0.00 s) on 2026-10-16. Each selected set
+had zero failures and zero ignored cases. The native release build passed in
+3.33 s without warnings. The tests exercise the production init/common path
+against the documented stateful seeded model; they do not validate physical
+coexistence, RFK START/STOP, native integration or continuous WLAN operation.

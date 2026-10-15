@@ -530,3 +530,10 @@ is not an RFK grant: actual START/STOP arbitration, remaining calibration,
 native integration and hardware evidence remain open. Thirteen new owner and
 two identity fixtures compile; execution follows raw publication. See the
 [contract and report limits](../hwdocs/rtl8852be.md#owned-normalno-link-btc-initialization).
+
+
+Owner evidence after raw publication `1a62e46f` / code `8b2caed7`: all 26
+Session/owner, 11 initcfg and 11 control cases passed on the own branch with no
+failures or ignores. Native build passed without warnings. The normal-mode
+startup library boundary is tested in the seeded model; real RFK arbitration,
+native integration, remaining calibration and hardware connectivity stay open.
