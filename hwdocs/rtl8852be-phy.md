@@ -1,4 +1,4 @@
-# RTL8852BE RFE-1/cut-1 PHY and initial RCK stages
+# RTL8852BE RFE-1/cut-1 PHY, RCK and DACK stages
 
 This is an executable library slice of [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), not a complete radio startup. The native board-read service does not call it. It has no WLAN endpoint and cannot establish association, IP traffic or Effector connectivity.
 
@@ -16,6 +16,9 @@ All adaptations select the BSD-3-Clause option from Linux commit `05f7e89ab97315
 | [rtw8852b_common.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.c) | Actual RTL8852B BB/RF dispatch, TX-power unit and common BB reset | `34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb` |
 | [rtw8852b.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b.c) | Chip BB-reset wrapper and ops dispatch | `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a` |
 | [rtw8852b_rfk.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_rfk.c) | DPK backoff initialization and RCK sequence | `c4613e3d2755f14649154a1c8393bf72ae215e8b683219a0763a033b224c715f` |
+| [rtw8852b_rfk_table.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_rfk_table.c) | DACK/AFE/diagnostic register tables | `ebc6840d2e15c7a9f12fb7d7121ca19bb8acff93524d3902a7ce892e0714fc21` |
+| [coex.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/coex.c) | Actual BTC RFK arbitration/notification prerequisites | `c38d8a42a57300c0c376217d3472e2a3176760346ab44b8c21cca6b98c63a11c` |
+| [coex.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/coex.h) | DACK type, START/STOP and PHY/band map | `164a6975c1fcf24eb71bf015cc9998404e0a627c19197ce33b3e8e6daadafd3e` |
 
 The offline [extractor](../scripts/hardware/rtw89_phy_tables.py) checks the source hash before parsing. It accepts only the exact RFE-1/cut-1 headline `0x00010001`, not the upstream fallback to a different cut/RFE. It rejects unsupported flow control, unknown gain fields, delays/bypasses requiring new review and unexpected table sizes. The generated file preserves every selected write, including duplicates and their order:
 
@@ -42,14 +45,56 @@ Source order in `core.c::rtw89_core_start` and `phy.c` requires these separate s
 3. `radio()` applies path A, mirrors its digital words, then applies and mirrors B. `send_rf_page` must use H2C type 0, category 2, class 8/9, function page 0, with explicit receive/done ACK flags false and the normal advancing H2C sequence/periodic receive-ACK policy (`fw.c::rtw89_h2c_pkt_set_hdr` requests receive ACK every fourth command). It must copy the payload and drain hardware command consumption/PCIe TX busy within the supplied remaining budget. Hardware consumption is not firmware acknowledgement.
 4. Complete BTC initialization and the pre-NCTL prefix of `phy.c::rtw89_phy_dm_init` before `nctl()`: chip BB setup, monitoring, DIG/CFO/wrapper/EDCCA, antenna/RFE and other preceding steps. NCTL and RFK are themselves inside that upstream function; completing all DM before NCTL would be circular. This caller-owned prefix remains unimplemented in this library.
 5. `rck()` requires `TablesLoaded`, rechecks hardware guards, initializes single-band DPK backoff and runs RCK on paths A then B. The caller retains fresh TSSI/MCC software state as required by `rtw8852b.c::rtw8852b_rfk_init`. The returned RCK values and DPK software gain do not imply full calibration. RCK itself has no BTC START/STOP wrapper in the pinned source; DACK and RXDCK do, and remain separate mandatory stages.
-6. `RckDone` still requires DACK/RXDCK, board trims, channel-dependent IQK/TSSI/DPK, coexistence coordination, channel selection and regulatory/SAR/TPE limits. It does not authorize transmission. Missing calibration or policy cannot be replaced by these generic gain defaults.
+6. `dack(band)` requires `RckDone` and a mandatory `DackIo::btc_rfk` implementation. It runs the source AFE, DRCK, ADDCK A/B, backup/reload, DACK A/B and diagnostic sampling sequence, returning results only after RF restoration and BTC STOP.
+7. `DackDone` still requires RXDCK, board trims, channel-dependent IQK/TSSI/DPK, coexistence coordination, channel selection and regulatory/SAR/TPE limits. It does not authorize transmission. Missing calibration or policy cannot be replaced by these generic gain defaults.
 
-The private state enforces BB→radio→NCTL→RCK and blocks reuse after failure. It does not verify the external chip interleaves; the caller remains responsible for them. `bus_between_stages()` exists for these required steps, not for concurrent data traffic. The library never enables PCI bus mastering, HCI engines, data queues or MAC scheduler transmission.
+The private state enforces BB→radio→NCTL→RCK→DACK and blocks reuse after failure. It does not verify the external chip interleaves; the caller remains responsible for them. `bus_between_stages()` exists for these required steps, not for concurrent data traffic. The library never enables PCI bus mastering, HCI engines, data queues or MAC scheduler transmission.
 
 Each stage has a 100 ms total software budget, including both RF paths and their H2C calls; SWSI polls have a 30 µs sublimit and finite iteration guard. NCTL readiness has a 1 ms sublimit. Analog RF reads preserve the source 2 µs trigger delay and finite 30 µs idle/completion sublimits; masked writes preserve other RF bits through the SWSI hardware mask or direct-window RMW. Each RCK completion poll has a 30 µs total sublimit, and both paths/DPK setup share one 100 ms stage deadline. A failed RCK path first attempts RF5 restoration/readback under an independent 200 µs ceiling; a busy SWSI command cannot be replaced. Primary, RF5-restore and chip-disable errors remain distinct. Unlike the upstream logging-only RCK timeout path, this implementation aborts, skips later paths and never marks RCK complete after timeout. A failed modified stage attempts the chip-dispatched BB/RF disable sequence (clear AFC bit17, assert BB reset, read/clear XTAL80/81 low3 while preserving other bits) with an independent 400 ms total budget (two XTAL paths, each with four finite 50 ms idle/read/write/readback ceilings), preserving the primary and cleanup errors. It waits for an existing XTAL command to finish before issuing another, so a failed path cannot overwrite a pending command. This does not undo table writes, stop/reclaim command DMA, power down the MAC or prove RF silence. The caller must retain all DMA memory, stop the transport and perform verified outer shutdown; a fresh object cannot substitute for that shutdown. Guard refusal performs no writes. These limits rely on bounded register/transport methods and a calibrated monotonic clock; they do not bound physical MMIO faults or arbitrary scheduler delay.
 
+## DACK and BTC boundary
+
+`dack.rs` follows `_dac_cal` and its helpers in pinned `rtw8852b_rfk.c`.
+The [offline DACK extractor](../scripts/hardware/rtw89_dack_tables.py) hashes
+`rtw8852b_rfk_table.c`, selects exactly 11 tables/86 operations and rejects
+unknown effects, invalid fields, addresses or unreviewed delays. Run it with
+`/path/to/pinned/rtw8852b_rfk_table.c --check` to compare committed output.
+Those BSD tables are calibration instructions, not proprietary firmware.
+
+BTC notification is mandatory and typed: calibration DACK=4, START=1/STOP=0,
+path map 0, PHY0 map bit 4, and the current 2.4/5 GHz channel-band map in bits
+7:6. The caller supplies the actual initialized band, not an invented default.
+START success must mean that `_chk_wl_rfk_request`-equivalent arbitration,
+WLRFK scoreboard and coexistence actions have allowed the calibration.
+An H2C receipt or firmware ACK alone is insufficient. The callback must also
+implement STOP/release after a possibly applied START failure. No successful
+native callback is provided here; actual BTC and the DM prefix remain blockers.
+
+One 400 ms deadline covers callbacks and both calibration paths. Each callback
+receives at most 100 ms and its elapsed time is checked after return. DRCK,
+ADDCK and each DACK part retain 10 ms finite polling ceilings. Failures preserve
+the primary error, independent BTC STOP error, per-path RF0/RF5 restoration
+errors (one 1 ms total restoration ceiling) and BB/RF-disable error (400 ms).
+STOP is attempted once, including after partial START, and is not blindly
+retried. On failures before STOP, RF restoration and BB/RF disable run while
+START arbitration is still held; STOP follows that independently bounded cleanup.
+If STOP itself has already failed, cleanup still runs without retrying STOP.
+DMA memory must still remain owned until verified outer shutdown.
+
+Success restores the saved RF0 values and sets RF5 bit0 as the source does.
+Failure restores saved RF0/RF5 values before disabling BB/RF. AFE writes the
+source `PHYREG_SET=0x0f`; later stages must validate that post-DACK state rather
+than reusing the pre-DACK `0x0e` guard. The source requires both completion bits
+on path A but either bit on path B; the engine preserves this asymmetry and
+returns the actual two-bit completion masks. Calibration arrays and five
+100-sample signed DC averages are returned only after all stages and STOP
+succeed. Diagnostic averages are observations, not additional success limits.
+This is not channel calibration, association or permission to transmit.
+
 ## Validation scope
 
-Initial `59a77177` execution passed 18/19 Rust fixtures and failed the RF-prefix assertion because it incorrectly placed RF register 0 before the source table's register 5. After publication of `f4766604`, all 20 Rust and four extractor fixtures passed, as did pinned-source regeneration. After publication of `78cf274a`, all 24 Rust fixtures passed, including exact TX-power/reset order, field preservation, every added write failure and deadline failures. The RCK slice builds natively and 34 fixtures compile; execution of those revised fixtures awaits publication to `fast-test` and runs only on this branch. Ten added cases cover RF field validation/readback, frozen/pending SWSI, state/guard refusal, DPK threshold branches, both RCK paths, timeout restoration, distinct cleanup errors and late completion. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.
+Initial `59a77177` execution passed 18/19 Rust fixtures and failed the RF-prefix assertion because it incorrectly placed RF register 0 before the source table's register 5. After publication of `f4766604`, all 20 Rust and four extractor fixtures passed, as did pinned-source regeneration. After publication of `78cf274a`, all 24 Rust fixtures passed, including exact TX-power/reset order, field preservation, every added write failure and deadline failures. After publication of `0d6c66bf`, all 34 RCK/RF/PHY fixtures passed. The DACK slice builds natively and 44 fixtures compile; its execution awaits publication to `fast-test` and runs only on this branch. Ten added cases cover RF field validation/readback, frozen/pending SWSI, state/guard refusal, DPK threshold branches, both RCK paths, timeout restoration, distinct cleanup errors and late completion. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.
 
 Independent review found and corrected an initial generic-MAC dispatch mistake before native integration or test execution: this slice now follows `rtw8852b.c::rtw8852b_chip_ops` into `rtw8852b_common.c` for the actual chip BB/RF state and cleanup.
+
+The ten DACK cases cover BTC ordering/refusal/late completion, captured calibration data, every stage timeout, the source S1 flag asymmetry, every applied register-write failure, independent cleanup errors and the whole-stage deadline. Three extractor regressions cover parsing, unsupported effects and source-hash refusal; their execution also waits for publication.

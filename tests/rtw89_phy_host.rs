@@ -6,6 +6,8 @@
 #[path = "../rtw89_wifi/src/board.rs"] mod board;
 #[path = "../rtw89_wifi/src/phy_tables.rs"] mod phy_tables;
 #[path = "../rtw89_wifi/src/phy.rs"] mod phy;
+#[path = "../rtw89_wifi/src/dack.rs"] mod dack;
+#[path = "../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
 
 use io::{Fault, FaultKind, RegisterIo, Result};
 use phy::{Phy, PhyIo, State, Stage};
@@ -14,13 +16,14 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
+    btc: Vec<(dack::BtcNotice,u32)>, btc_event_positions: Vec<usize>, btc_start_fail: bool, btc_stop_fail: bool, btc_start_delay: u64, btc_stop_delay: u64, dack_model: bool,
     rf: [[u32; 256]; 2], swsi_pending: Option<(u64,u8,u8)>, swsi_latched: u32, read_stuck: bool,
     rck_pending: [Option<u64>;2], rck_values: [u8;2], rck_delay: u64, rck_stuck: Option<u8>,
     rck_bus_stuck: bool, restore_fail: bool, late_restore: bool,
     memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, xtal_delay_us: u64, xtal_pending: Option<(u64, u32)>, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
-    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>, deadline_write_number: Option<usize>, delay_jump: Option<u32>,
+    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>, deadline_us: u64, deadline_write_number: Option<usize>, delay_jump: Option<u32>,
 }
 
 fn identity() -> board::Identity {
@@ -29,10 +32,10 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+        let mut d = Self { btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
             rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
-            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_write_number: None, delay_jump: None };
+            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
             (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03)] {
@@ -81,6 +84,11 @@ impl Device {
             }
             return Ok(self.swsi_latched);
         }
+        if self.dack_model && width==4 {
+            for (reg,index,base) in [(0x1c05c,0x1c000,0x10),(0x1c080,0x1c020,0x30),(0x1c15c,0x1c100,0x50),(0x1c180,0x1c120,0x70)] {
+                if at==reg {return Ok((self.get(at,4)&0xffffff)|((base+((self.get(index,4)>>1)&15))<<24));}
+            }
+        }
         if at == 0x18080 && self.nctl_stuck { return Ok(0); }
         Ok(self.get(at, width))
     }
@@ -89,7 +97,7 @@ impl Device {
         self.tick(1); self.writes += 1;
         self.events.push(Event::Write(at, width, value));
         self.put(at, width, value);
-        if self.deadline_write == Some(at) { self.now += 100_000; self.deadline_write = None; }
+        if self.deadline_write == Some(at) { self.now += self.deadline_us; self.deadline_write = None; }
         if self.deadline_write_number == Some(self.writes) { self.now+=100_000; self.deadline_write_number=None; }
         if at == 0x10378 && width == 4 {
             assert!(self.swsi_pending.is_none(), "pending RF read cannot be replaced");
@@ -535,3 +543,16 @@ fn late_last_rck_restore_cannot_report_completed_calibration() {
     assert!(error.restore_rf.is_none()); assert!(error.disable_bb_rf.is_none()); assert_eq!(p.state(),State::Failed);
     p.bus_between_stages().reset();
 }
+
+impl dack::DackIo for Device {
+    fn btc_rfk(&mut self,notice:dack::BtcNotice,timeout_us:u32)->Result<()> {
+        assert!(timeout_us>0 && timeout_us<=100_000); self.btc.push((notice,timeout_us)); self.btc_event_positions.push(self.events.len());
+        let (delay,fail)=match notice.state {
+            dack::RfkState::Start=>(self.btc_start_delay,self.btc_start_fail),
+            dack::RfkState::Stop=>(self.btc_stop_delay,self.btc_stop_fail),
+        };
+        self.tick(delay);
+        if fail {Err(Fault::new(FaultKind::Access,0xaa,notice.state as u32))} else {Ok(())}
+    }
+}
+#[path="rtw89_dack_cases.rs"] mod dack_cases;

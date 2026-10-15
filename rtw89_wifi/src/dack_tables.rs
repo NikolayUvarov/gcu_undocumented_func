@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright(c) 2019-2020 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
+// Generated from pinned RTL8852B RFK tables by scripts/hardware/rtw89_dack_tables.py.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Op { Bb(u32,u32,u32), Rf(u8,u32,u32,u32), Delay(u32) }
+
+pub(crate) const AFE_INIT_DEFS: &[Op] = &[
+    Op::Bb(0x0000c0d4, 0xffffffff, 0x4486888c),
+    Op::Bb(0x0000c0d8, 0xffffffff, 0xc6ba10e0),
+    Op::Bb(0x0000c0dc, 0xffffffff, 0x30c52868),
+    Op::Bb(0x0000c0e0, 0xffffffff, 0x05008128),
+    Op::Bb(0x0000c0e4, 0xffffffff, 0x0000272b),
+    Op::Bb(0x0000c1d4, 0xffffffff, 0x4486888c),
+    Op::Bb(0x0000c1d8, 0xffffffff, 0xc6ba10e0),
+    Op::Bb(0x0000c1dc, 0xffffffff, 0x30c52868),
+    Op::Bb(0x0000c1e0, 0xffffffff, 0x05008128),
+    Op::Bb(0x0000c1e4, 0xffffffff, 0x0000272b),
+];
+
+pub(crate) const CHECK_ADDC_DEFS_A: &[Op] = &[
+    Op::Bb(0x000020f4, 0x01000000, 0x00000000),
+    Op::Bb(0x000020f8, 0x80000000, 0x00000001),
+    Op::Bb(0x000020f0, 0x00ff0000, 0x00000001),
+    Op::Bb(0x000020f0, 0x00000f00, 0x00000002),
+    Op::Bb(0x000020f0, 0x0000000f, 0x00000000),
+    Op::Bb(0x000020f0, 0x000000c0, 0x00000002),
+];
+
+pub(crate) const CHECK_ADDC_DEFS_B: &[Op] = &[
+    Op::Bb(0x000020f4, 0x01000000, 0x00000000),
+    Op::Bb(0x000020f8, 0x80000000, 0x00000001),
+    Op::Bb(0x000020f0, 0x00ff0000, 0x00000001),
+    Op::Bb(0x000020f0, 0x00000f00, 0x00000002),
+    Op::Bb(0x000020f0, 0x0000000f, 0x00000000),
+    Op::Bb(0x000020f0, 0x000000c0, 0x00000003),
+];
+
+pub(crate) const CHECK_DADC_EN_DEFS_B: &[Op] = &[
+    Op::Bb(0x0000032c, 0x40000000, 0x00000000),
+    Op::Bb(0x0000030c, 0x0f000000, 0x0000000f),
+    Op::Bb(0x0000030c, 0x0f000000, 0x00000003),
+    Op::Bb(0x0000032c, 0x00010000, 0x00000000),
+    Op::Bb(0x000032dc, 0x00000001, 0x00000001),
+    Op::Bb(0x000032e8, 0x00000004, 0x00000001),
+    Op::Rf(0x00000001, 0x0000008f, 0x00002000, 0x00000001),
+];
+
+pub(crate) const CHECK_DADC_DIS_DEFS_B: &[Op] = &[
+    Op::Bb(0x000032dc, 0x00000001, 0x00000000),
+    Op::Bb(0x000032e8, 0x00000004, 0x00000000),
+    Op::Rf(0x00000001, 0x0000008f, 0x00002000, 0x00000000),
+    Op::Bb(0x0000032c, 0x00010000, 0x00000001),
+];
+
+pub(crate) const DACK_S0_1_DEFS: &[Op] = &[
+    Op::Bb(0x000012a0, 0x00008000, 0x00000001),
+    Op::Bb(0x000012a0, 0x00007000, 0x00000003),
+    Op::Bb(0x000012b8, 0x40000000, 0x00000001),
+    Op::Bb(0x0000030c, 0x10000000, 0x00000001),
+    Op::Bb(0x0000032c, 0x80000000, 0x00000000),
+    Op::Bb(0x0000c0d8, 0x00010000, 0x00000001),
+    Op::Bb(0x0000c0dc, 0x0c000000, 0x00000003),
+    Op::Bb(0x0000c004, 0x40000000, 0x00000000),
+    Op::Bb(0x0000c024, 0x40000000, 0x00000000),
+    Op::Bb(0x0000c004, 0x3ff00000, 0x00000030),
+    Op::Bb(0x0000c004, 0xc0000000, 0x00000000),
+    Op::Bb(0x0000c004, 0x00020000, 0x00000001),
+    Op::Bb(0x0000c024, 0x00020000, 0x00000001),
+    Op::Bb(0x0000c00c, 0x00000004, 0x00000000),
+    Op::Bb(0x0000c02c, 0x00000004, 0x00000000),
+    Op::Bb(0x0000c004, 0x00000001, 0x00000001),
+    Op::Bb(0x0000c024, 0x00000001, 0x00000001),
+    Op::Delay(0x00000001),
+];
+
+pub(crate) const DACK_S0_2_DEFS: &[Op] = &[
+    Op::Bb(0x0000c0dc, 0x0c000000, 0x00000000),
+    Op::Bb(0x0000c00c, 0x00000004, 0x00000001),
+    Op::Bb(0x0000c02c, 0x00000004, 0x00000001),
+];
+
+pub(crate) const DACK_S0_3_DEFS: &[Op] = &[
+    Op::Bb(0x0000c004, 0x00000001, 0x00000000),
+    Op::Bb(0x0000c024, 0x00000001, 0x00000000),
+    Op::Bb(0x0000c0d8, 0x00010000, 0x00000000),
+    Op::Bb(0x000012a0, 0x00008000, 0x00000000),
+    Op::Bb(0x000012a0, 0x00007000, 0x00000007),
+];
+
+pub(crate) const DACK_S1_1_DEFS: &[Op] = &[
+    Op::Bb(0x000032a0, 0x00008000, 0x00000001),
+    Op::Bb(0x000032a0, 0x00007000, 0x00000003),
+    Op::Bb(0x000032b8, 0x40000000, 0x00000001),
+    Op::Bb(0x0000030c, 0x10000000, 0x00000001),
+    Op::Bb(0x0000032c, 0x80000000, 0x00000000),
+    Op::Bb(0x0000c1d8, 0x00010000, 0x00000001),
+    Op::Bb(0x0000c1dc, 0x0c000000, 0x00000003),
+    Op::Bb(0x0000c104, 0x40000000, 0x00000000),
+    Op::Bb(0x0000c124, 0x40000000, 0x00000000),
+    Op::Bb(0x0000c104, 0x3ff00000, 0x00000030),
+    Op::Bb(0x0000c104, 0xc0000000, 0x00000000),
+    Op::Bb(0x0000c104, 0x00020000, 0x00000001),
+    Op::Bb(0x0000c124, 0x00020000, 0x00000001),
+    Op::Bb(0x0000c10c, 0x00000004, 0x00000000),
+    Op::Bb(0x0000c12c, 0x00000004, 0x00000000),
+    Op::Bb(0x0000c104, 0x00000001, 0x00000001),
+    Op::Bb(0x0000c124, 0x00000001, 0x00000001),
+    Op::Delay(0x00000001),
+];
+
+pub(crate) const DACK_S1_2_DEFS: &[Op] = &[
+    Op::Bb(0x0000c1dc, 0x0c000000, 0x00000000),
+    Op::Bb(0x0000c10c, 0x00000004, 0x00000001),
+    Op::Bb(0x0000c12c, 0x00000004, 0x00000001),
+    Op::Delay(0x00000001),
+];
+
+pub(crate) const DACK_S1_3_DEFS: &[Op] = &[
+    Op::Bb(0x0000c104, 0x00000001, 0x00000000),
+    Op::Bb(0x0000c124, 0x00000001, 0x00000000),
+    Op::Bb(0x0000c1d8, 0x00010000, 0x00000000),
+    Op::Bb(0x000032a0, 0x00008000, 0x00000000),
+    Op::Bb(0x000032a0, 0x00007000, 0x00000007),
+];
