@@ -648,5 +648,10 @@ These source files offer the BSD-3-Clause option used here; notices are in
 `THIRD_PARTY.md` and the retained Realtek licence.
 
 The own-branch native x86-64 release build passed (0.53 seconds, no warnings).
-Thirteen H2C and six BT-observation host fixtures compile. Execution awaits
-raw publication; no host-test or hardware success is claimed for this slice yet.
+After raw publication `d9266c7b`, own-branch `d951d101` passed all thirteen
+H2C and six BT-observation host fixtures on 2026-10-16 (both 0.00 seconds,
+zero failed/ignored; x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly
+c36f14571). Independent reviews corrected a pre-publication deadline gap
+and a consecutive-clock regression gap, each with regression cases. The
+fixtures include the actual DMA queue adapter and C2H parser through a
+stateful model; they do not establish hardware transport or BTC grants.
