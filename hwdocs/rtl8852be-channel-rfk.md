@@ -58,3 +58,20 @@ and their exact H2C trace remain registered; the new coordinator harness is
 registered separately. Native build passed in 1.45 s without warnings and the
 seven new cases compile. Execution follows raw publication on the owner branch;
 these device reactions are models, not hardware calibration evidence.
+
+## First published execution and trigger correction
+
+After raw publication of `9ad494eb` in `c38df1dd`, all seven new cases failed
+in the model before calibration: the baseband table writes `0x9c0` with
+`0x980` TX grant disabled, but the model treated that initialization pulse as
+PMAC transmission. A captured backtrace locates the failure in `Phy::baseband`,
+not in the coordinator. The preserved five initial-PHY cases passed, as did
+two cold PCIe cases and 186 MAC/RX/session cases (one existing private-firmware
+case ignored). Logs remain under `/tmp/mind-channel-*-results-9ad494eb.log`.
+
+The model now requires the source PMAC TX grant and packet-enable bit before
+a trigger creates a transmission reply; raw path, power, count and period
+assertions remain intact. NCTL command replies likewise require the start
+bit, excluding the source table's `0x8000=8` initialization writes. No
+production code or successful-calibration assertion changed. Corrected
+execution remains pending its own raw publication.
