@@ -481,3 +481,12 @@ on overflow. This prerequisite deliberately cannot issue Initialized or RFK
 permission. Thirteen focused fixtures compile; execution follows publication.
 The complete BTC policy/common-action owner and native activation remain open.
 See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).
+
+Own-branch session commit `3ee6dd54` built for x86-64 without warnings in
+1.09 seconds. After raw publication `539b588e`, all 13 session fixtures passed
+in 0.08 seconds on 2026-10-16 MSK (zero failed/ignored, x86-64 WSL2).
+The two existing runtime-MAC identity tests using the changed downloader helper
+also passed separately (0.00 seconds each). Other inherited fixtures were
+filtered from this focused run. Independent review found no remaining blocker
+in this slice. These seeded-handoff models do not establish cumulative device
+behavior, complete BTC initialization, RFK permission or hardware connectivity.
