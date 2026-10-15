@@ -32,7 +32,7 @@ pub trait PhyIo: RegisterIo {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Baseband, RadioA, RadioB, Nctl }
+pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, Failed }
@@ -156,6 +156,30 @@ fn write_table(io: &mut impl RegisterIo, table: &[(u32, u32)]) -> io::Result<()>
     io.delay_us(0)
 }
 
+fn init_txpower_unit(io: &mut impl RegisterIo) -> io::Result<()> {
+    // These are single-band CMAC0 power registers, not MCU-offset PHY registers.
+    for (at, value) in [(0xd248, 0x07763333), (0xd220, 0x01ebf000), (0xd240, 0x0002f8ff)] {
+        io.write32(at, value)?;
+    }
+    io::modify32(io, 0xd288, 0, 1 << 31)?;
+    io::modify32(io, 0xd28c, 31, 0)?;
+    io::modify32(io, 0xd290, 31, 0x1d)?;
+    io.delay_us(0)
+}
+
+fn reset_baseband(io: &mut impl RegisterIo) -> io::Result<()> {
+    let tssi = [0x58dc, 0x5818, 0x78dc, 0x7818];
+    for at in tssi { io::modify32(io, PHY_BASE + at, 0, 1 << 30)?; }
+    for at in [0x1200, 0x3200] { io::modify32(io, PHY_BASE + at, 7 << 28, 7 << 28)?; }
+    io.delay_us(1)?;
+    io::modify32(io, PHY_BASE + 0x704, 0, 2)?;
+    io::modify32(io, PHY_BASE + 0x704, 2, 0)?;
+    for at in [0x1200, 0x3200] { io::modify32(io, PHY_BASE + at, 7 << 28, 0)?; }
+    io::modify32(io, PHY_BASE + 0x704, 0, 2)?;
+    for at in tssi { io::modify32(io, PHY_BASE + at, 1 << 30, 0)?; }
+    io.delay_us(0)
+}
+
 fn rf_write(io: &mut impl RegisterIo, path: u8, at: u32, value: u32) -> io::Result<()> {
     if path > 1 || at & !0x100ff != 0 || value > RF_MASK {
         return Err(Fault::new(FaultKind::Access, at as usize, value));
@@ -197,21 +221,28 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         Failure { stage, cause, disable_bb_rf: disable_bb_rf(self.bus).err() }
     }
 
-    /// Apply BB writes only; next initialize the chip TX-power unit, consume gain_defaults(), and reset BB.
-    pub fn baseband(&mut self) -> core::result::Result<(), Failure> {
+    /// Apply BB, initialize the chip TX-power unit and software gain defaults, then reset BB under one deadline.
+    pub fn baseband(&mut self) -> core::result::Result<Gain, Failure> {
         let start = self.begin(Stage::Baseband, State::Fresh)?;
+        let mut stage = Stage::Baseband;
         let result = (|| {
             let left = remaining(self.bus, start)?;
             let mut io = TimedIo::new(self.bus, left as u64);
             write_table(&mut io, tables::BB)?;
-            remaining(self.bus, start).map(|_| ())
+            stage = Stage::TxPowerUnit;
+            init_txpower_unit(&mut io)?;
+            let gain = gain_defaults();
+            stage = Stage::BasebandReset;
+            reset_baseband(&mut io)?;
+            remaining(self.bus, start)?;
+            Ok(gain)
         })();
-        if let Err(cause) = result { return Err(self.failed(Stage::Baseband, cause)); }
+        let gain = result.map_err(|cause| self.failed(stage, cause))?;
         self.state = State::BasebandLoaded;
-        Ok(())
+        Ok(gain)
     }
 
-    /// Call only after the TX-power-unit/gain/BB-reset interleave; failure never admits path B or another stage.
+    /// Follow completed baseband initialization; failure never admits path B or another stage.
     pub fn radio(&mut self) -> core::result::Result<(), Failure> {
         let start = self.begin(Stage::RadioA, State::BasebandLoaded)?;
         let mut stage = Stage::RadioA;
