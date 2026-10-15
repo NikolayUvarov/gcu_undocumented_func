@@ -247,3 +247,12 @@ fixtures passed (0.12 seconds), on 2026-10-15 UTC. Hardware validation and
 a full gate containing this slice remain pending. It is not called by the
 native service and does not establish full runtime MAC, calibrated RF or
 WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).
+
+The later RXQ/RPQ library retains exact RTL8852BE descriptor/chip settings,
+copies each bounded packet before releasing its descriptor, and parses AX
+RX/RPQ/C2H metadata without per-packet allocation. It targets a separate
+future retained 8 MiB DMA layout; the native firmware-only diagnostic grant
+is unchanged. Eighteen host fixtures compile; execution/native build and
+hardware validation remain pending. It provides neither RX activation nor
+interrupt/WLAN integration. Warm-state ownership/quiescence is still a
+precondition, not established by PCI MEM-only decoding.
