@@ -43,7 +43,7 @@ pub enum State { Allocated, Installed, Running, Faulted }
 
 /// CPU ownership is separate from the hardware read index: eight completed payloads remain immutable.
 pub struct Queue<'a> {
-    base: NonNull<u8>, physical: u64, issued: u64, completed: u64, state: State,
+    base: NonNull<u8>, physical: u64, session: u64, issued: u64, completed: u64, state: State,
     _exclusive: PhantomData<&'a mut [u8]>,
 }
 
@@ -66,14 +66,16 @@ impl<'a> Queue<'a> {
             || (base.as_ptr() as usize).checked_add(DMA_BYTES).is_none() {
             return Err(Error::Region);
         }
+        let session=io::dma_session()?;
         for at in 0..DMA_BYTES { core::ptr::write_volatile(base.as_ptr().add(at), 0); }
-        Ok(Self { base, physical, issued: 0, completed: 0, state: State::Allocated, _exclusive: PhantomData })
+        Ok(Self { base, physical, session, issued: 0, completed: 0, state: State::Allocated, _exclusive: PhantomData })
     }
 
     pub fn state(&self) -> State { self.state }
     pub fn pending(&self) -> usize { (self.issued - self.completed) as usize }
     pub fn retained(&self) -> usize { self.completed.min(RETAIN_COMPLETED as u64) as usize }
     pub fn physical(&self) -> u64 { self.physical }
+    pub(crate) fn session(&self) -> u64 { self.session }
     pub(crate) fn fresh_running(&self) -> bool { self.state == State::Running && self.issued == 0 && self.completed == 0 }
     pub(crate) fn poison(&mut self) { self.state = State::Faulted; }
 

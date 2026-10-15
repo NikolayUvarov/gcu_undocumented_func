@@ -259,3 +259,16 @@ seconds, none ignored; 36 other module cases filtered), as did all 18
 affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
 review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
 containing this slice and actual hardware operation remain pending.
+
+### Typed receive-session revalidation
+
+Bind `Receiving` to the original command and receive objects with unique,
+nonzero process-local session numbers; never wrap or reuse an exhausted
+number. Add a bounded public read-only validation that checks those objects,
+running state, real DMA addresses/counts/indices, firmware and MAC state,
+RX-only DMA configuration, stopped packet TX, and masked host interrupts.
+Return an opaque permit borrowed from the token and both rings, not a bool.
+The future PHY adapter may request this permit for an owned receive path;
+the existing stopped-RX guard is unchanged until that integration. Test
+same-address pool reconstruction, stale/foreign tokens, partial live traffic,
+actual register corruption and timeout without publishing MMIO writes.

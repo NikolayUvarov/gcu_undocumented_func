@@ -32,7 +32,7 @@ pub enum Outcome{Empty,Packet(rxdesc::Packet),Dropped(rxdesc::Error)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct Stop{pub request:Option<Fault>,pub hci:Option<Fault>,pub idle:Option<Fault>}
 
-pub struct Rings<'a>{base:NonNull<u8>,physical:u64,host:[u16;2],state:State,_exclusive:PhantomData<&'a mut[u8]>}
+pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,_exclusive:PhantomData<&'a mut[u8]>}
 impl<'a> Rings<'a>{
     /// # Safety
     /// The complete used region is exclusive coherent WB DMA on x86-64, mapped at `physical`, with UC BAR access.
@@ -45,6 +45,7 @@ impl<'a> Rings<'a>{
         let base=NonNull::new(base).ok_or(Error::Region)?;
         if length<DMA_BYTES||length>isize::MAX as usize||base.as_ptr()as usize&4095!=0||physical==0||physical&4095!=0
             ||(base.as_ptr()as usize).checked_add(DMA_BYTES).is_none()||physical.checked_add(DMA_BYTES as u64).is_none_or(|end|end>1u64<<32){return Err(Error::Region);}
+        let session=io::dma_session()?;
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
         for channel in 0..2{for index in 0..DESCRIPTORS{
             let descriptor=(channel*DESCRIPTORS+index)*DESCRIPTOR_BYTES;
@@ -52,10 +53,11 @@ impl<'a> Rings<'a>{
             base.as_ptr().add(descriptor).cast::<u32>().write_volatile((BUFFER_BYTES as u32).to_le());
             base.as_ptr().add(descriptor+4).cast::<u32>().write_volatile(((physical+buffer as u64)as u32).to_le());
         }}
-        Ok(Self{base,physical,host:[0;2],state:State::Allocated,_exclusive:PhantomData})
+        Ok(Self{base,physical,session,host:[0;2],state:State::Allocated,_exclusive:PhantomData})
     }
     pub fn state(&self)->State{self.state}
     pub fn physical(&self)->u64{self.physical}
+    pub(crate) fn session(&self)->u64{self.session}
     fn poison<T>(&mut self,result:Result<T,Error>)->Result<T,Error>{if result.is_err(){self.state=State::Faulted;}result}
     fn check_rings(&self,bus:&mut impl RegisterIo,zero:bool)->Result<(),Error>{
         for channel in 0..2{
@@ -70,6 +72,10 @@ impl<'a> Rings<'a>{
     pub(crate) fn installed(&self,bus:&mut impl RegisterIo)->Result<(),Error>{
         if self.state!=State::Installed{return Err(Error::State);}
         self.check_rings(bus,true)
+    }
+    pub(crate) fn running(&self,bus:&mut impl RegisterIo)->Result<(),Error>{
+        if self.state!=State::Running{return Err(Error::State);}
+        self.check_rings(bus,false)
     }
     /// Install both owned rings before mastering or RXHCI activation; no other channel's registers are changed.
     pub fn install(&mut self,bus:&mut impl Bus)->Result<(),Error>{

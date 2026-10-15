@@ -1,6 +1,6 @@
 #![no_std]
 
-//! RTL8852BE firmware parsing and bounded initial board access; no radio or host DMA startup.
+//! RTL8852BE firmware, bounded device initialization and retained DMA helpers.
 
 pub mod board;
 pub mod efuse;

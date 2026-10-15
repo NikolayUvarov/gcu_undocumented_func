@@ -174,3 +174,12 @@ shared zero-only scheduler helper `b947aa40` also passed its build (0.46
 seconds) and 17 runtime-MAC cases (0.12 seconds) after publication
 `d9266c7b`. Full-gate and hardware evidence remain pending. Its `Receiving` result is not H2C/BTC/PHY or WLAN readiness,
 and the native firmware-only service still does not call this library.
+
+The later receive-session validation binds that result to both exact DMA
+objects and fresh non-wrapping process-local session numbers. It returns a
+borrowed opaque permit only after bounded live register/index checks, with
+no MMIO writes. This prevents old tokens accepting reconstructed pools at
+the same addresses; it still trusts the adapter's same-function capability
+contract. Sixteen combined post-init/session fixtures compile; new-slice
+execution/build and hardware evidence are pending. PHY/native integration
+does not yet consume this permit.
