@@ -120,6 +120,8 @@ fn timeout_or_uncertain_trigger_never_replaces_nctl_or_restores_live_registers()
         let e=execute(&mut d).unwrap_err();assert!(e.nctl_uncertain);assert_eq!(d.commands.len(),command);
         let at=d.events.iter().rposition(|e|matches!(e,Event::Write(0x18000,_))).unwrap();
         assert!(!d.events[at+1..].iter().any(|e|matches!(e,Event::Rf(..)|Event::Write(0x12344|0x15800|0x17800,_))));
+        let off=d.events.iter().position(|e|matches!(e,Event::Write(0x2f0,_))).unwrap();
+        let resume=d.events.iter().rposition(|e|matches!(e,Event::Scheduler)).unwrap();assert!(off<resume);
         assert_eq!(d.notices.last(),Some(&RfkState::Stop));d.off();}}
 }
 #[test]
