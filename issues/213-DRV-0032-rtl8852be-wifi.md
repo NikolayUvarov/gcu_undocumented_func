@@ -284,6 +284,10 @@ selection and RFK START/STOP restoration remain open. The existing live
 PHY guard continues to reject active ordinary RX/TX. A failed modified
 attempt independently closes both LUT write gates, disables BB/RF and
 poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
-The native service is unchanged. Native build passes and nine meaningful
-phase/source-order/failure/deadline fixtures compile; execution follows raw
-publication. No hardware or working-radio claim follows from this library.
+The native service is unchanged. Own-branch `e6ed1e2c` native build passed
+(3.53 seconds, no warnings). After raw publication `c2facb84`, all nine
+new phase/source-order/failure/deadline fixtures passed on 2026-10-16. The
+executable also ran 18 inherited synthetic downloader cases successfully
+and retained its one existing optional private-file ignored case: 27 passed,
+zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
+claim follows from this library.
