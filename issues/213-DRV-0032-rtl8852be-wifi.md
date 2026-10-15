@@ -77,6 +77,8 @@ still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
 RFK calibration, board trims and regulatory authorization remain integration
 work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
 
-The x86 native release build and compilation of 16 host fixtures pass.
+The x86 native release build and compilation of 19 host fixtures pass.
 Focused test execution waits for publication of this commit to `fast-test`,
 then runs on this branch; no hardware or radio success is claimed.
+
+Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.

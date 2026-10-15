@@ -14,7 +14,7 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
-    memory: Vec<u8>, id: u32, command: u16, now: u64, frozen: bool,
+    memory: Vec<u8>, xtal: [u8; 256], xtal_stuck: bool, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
     now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>,
@@ -26,15 +26,15 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { memory: vec![0; 0x20000], id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
+        let mut d = Self { memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
-            (0xc004, 0x4000003f), (0x2f0, 0x8282), (0x1000, 0x800), (0x1010, 0xb0f03)] {
+            (0xc004, 0x4000003f), (0x200, 1 << 17), (0x2f0, 1 << 17), (0x1000, 0x800), (0x1010, 0xb0f03)] {
             d.put(at, 4, value);
         }
-        d.put(2, 1, 3); d.put(0x8040, 1, 8);
+        d.put(2, 1, 3); d.put(0x8040, 1, 14); d.xtal[0x80]=0xc7; d.xtal[0x81]=0xc7;
         d
     }
     fn tick(&mut self, us: u64) { if !self.frozen { self.now += us; } }
@@ -62,13 +62,23 @@ impl Device {
         if self.fail_write == Some(self.writes) || self.fail_cleanup == Some(at) {
             return Err(Fault::new(FaultKind::Access, at, value));
         }
+        if at == 0x270 && width == 4 && !self.xtal_stuck {
+            let offset=(value&255) as usize;
+            if value & (1<<24) != 0 { self.put(at,4,offset as u32 | (self.xtal[offset] as u32)<<8); }
+            else {
+                let mask=(value>>16) as u8;
+                self.xtal[offset]=(self.xtal[offset]&!mask)|((value>>8) as u8 & mask);
+                self.put(at,4,value&!(1<<31));
+            }
+        }
         if at == 0x10370 { self.swsi_busy = 1; }
         Ok(())
     }
     fn reset(&self) {
         assert_eq!(self.get(2, 1) & 3, 0);
-        assert_eq!(self.get(0x2f0, 4) & 0x8282, 0);
-        assert_eq!(self.get(0x8040, 1) & 8, 0);
+        assert_eq!(self.get(0x2f0, 4) & (1<<17), 0);
+        assert_eq!(self.get(0x8040, 1), 14);
+        assert_eq!(self.xtal[0x80]&7,0); assert_eq!(self.xtal[0x81]&7,0);
         assert_eq!(self.command, 6, "PHY cleanup cannot release or revoke the command DMA region");
     }
     fn pages(&self) -> Vec<(u8, &[u8], u32)> {
@@ -122,7 +132,7 @@ fn exact_selected_tables_retain_order_duplicates_and_pinned_fingerprints() {
 fn wrong_device_board_firmware_dlfw_only_and_live_data_paths_cannot_write() {
     for (at, width, value) in [(0xf0,4,0x2000), (0x3f0,4,0), (0x3f0,4,0x300), (0x88,4,1), (0x1e0,4,0xc0),
         (0x1e0,4,u32::MAX), (0x8400,4,0x64c40000), (0x8404,4,0x04840000), (0xc000,4,0),
-        (0xc004,4,0), (0xe000,4,1<<30), (2,1,0), (0x2f0,4,0), (0x8040,1,0),
+        (0xc004,4,0), (0xe000,4,1<<30), (0x200,4,3<<17), (0x2f0,4,0x8282), (0x8040,1,8), (2,1,0), (0x2f0,4,0), (0x8040,1,0),
         (0x1000,4,0x2800), (0x1010,4,0), (0x1010,4,0xf0f03), (0x101c,4,1<<16),
         (0xc348,4,1), (0xc6ec,4,1<<7)] {
         let mut d = Device::new(); d.put(at, width, value);
@@ -230,7 +240,7 @@ fn partial_bb_write_failure_is_poisoned_and_reports_independent_cleanup_failure(
     let mut p=Phy::new(&mut d,identity()); let error=p.baseband().unwrap_err();
     assert_eq!(error.cause.kind,FaultKind::Access); assert!(error.cause.register>=0x10000);
     assert_eq!(error.disable_bb_rf.unwrap().register,0x2f0); assert_eq!(p.state(),State::Failed);
-    assert!(d.events.iter().any(|e| matches!(e,Event::Write(0x8040,1,0))));
+    assert!(d.events.iter().any(|e| matches!(e,Event::Write(0x270,4,v) if v&255==0x81)));
     assert_eq!(d.get(2,1)&3,0);
 }
 
@@ -285,4 +295,32 @@ fn clock_gap_before_inner_budget_does_not_extend_absolute_stage_success() {
     let mut d=Device::new(); d.jump_call=Some(4);
     let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
     assert_eq!(error.cause.kind,FaultKind::Timeout); d.reset();
+}
+
+#[test]
+fn chip_specific_disable_preserves_xtal_other_bits_and_clears_both_rf_enables() {
+    let mut d=Device::new(); d.xtal[0x80]=0xd7; d.xtal[0x81]=0xf7; d.fail_write=Some(20);
+    let error=Phy::new(&mut d,identity()).baseband().unwrap_err(); assert!(error.disable_bb_rf.is_none());
+    assert_eq!(d.xtal[0x80],0xd0); assert_eq!(d.xtal[0x81],0xf0); d.reset();
+    let cleanup=&d.events[20..];
+    assert!(matches!(cleanup[0],Event::Write(0x2f0,4,0)));
+    assert!(matches!(cleanup[1],Event::Write(2,1,0)));
+}
+
+#[test]
+fn cleanup_does_not_overwrite_an_already_pending_xtal_command() {
+    let mut d=Device::new(); d.fail_write=Some(20); d.put(0x270,4,1<<31);
+    let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
+    assert_eq!(error.disable_bb_rf.unwrap().kind,FaultKind::Timeout);
+    assert!(!d.events.iter().any(|event| matches!(event,Event::Write(0x270,_,_))));
+    assert_eq!(d.get(2,1)&3,0); assert_eq!(d.get(0x2f0,4)&(1<<17),0);
+}
+
+#[test]
+fn cleanup_xtal_read_timeout_reports_failure_without_overwriting_for_the_other_path() {
+    let mut d=Device::new(); d.fail_write=Some(20); d.xtal_stuck=true;
+    let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
+    assert_eq!(error.disable_bb_rf.unwrap().kind,FaultKind::Timeout);
+    let commands:Vec<_>=d.events.iter().filter(|e| matches!(e,Event::Write(0x270,4,_))).collect();
+    assert_eq!(commands.len(),1); assert_eq!(d.xtal[0x80],0xc7); assert_eq!(d.xtal[0x81],0xc7);
 }

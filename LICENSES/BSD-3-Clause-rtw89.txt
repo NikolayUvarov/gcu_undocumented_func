@@ -10,7 +10,8 @@ drivers/net/wireless/realtek/rtw89/{fw.h,fw.c,core.h,core.c,reg.h,mac.h,mac.c,ef
 Those source files offer GPL-2.0 OR BSD-3-Clause. MIND Core uses the
 BSD-3-Clause option for rtw89_wifi/src/{firmware,registers,power,efuse}.rs.
 The same BSD option covers rtw89_wifi/src/{phy,phy_tables}.rs, adapted from
-phy.c, phy.h, rtw8852b_table.c, mac.c, reg.h and fw.c/fw.h at the same commit.
+phy.c, phy.h, rtw8852b_table.c, rtw8852b_common.c, mac.c, reg.h and fw.c/fw.h
+at the same commit.
 Copyright(c) 2019-2022 Realtek Corporation.
 The firmware binary has separate terms and is not part of this repository.
 

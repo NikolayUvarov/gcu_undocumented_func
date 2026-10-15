@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
-// Copyright(c) 2019-2022 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
+// Copyright(c) 2019-2022, 2024 Realtek Corporation; see LICENSES/BSD-3-Clause-rtw89.txt.
 //! Bounded RFE-1/cut-1 table stages from pinned phy.c; these do not calibrate or authorize transmission.
 
 use crate::board::Identity;
 use crate::io::{self, Fault, FaultKind, RegisterIo, TimedIo};
 use crate::phy_tables as tables;
+use crate::power;
 use crate::registers::*;
 
 pub const BAR_BYTES: usize = 0x20000;
@@ -107,9 +108,10 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     require(bus, 0xe000, 1 << 30, 0)?;
     let bb = bus.read8(R_AX_SYS_FUNC_EN)?;
     if bb == u8::MAX || bb & 3 != 3 { return Err(state(R_AX_SYS_FUNC_EN, bb as u32)); }
-    require(bus, R_AX_WLRF_CTRL, 0x8282, 0x8282)?;
+    require(bus, R_AX_SPS_DIG_ON_CTRL0, B_AX_REG_ZCDC_H_MASK, 1 << 17)?;
+    require(bus, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG, B_AX_AFC_AFEDIG)?;
     let cycle = bus.read8(0x8040)?;
-    if cycle == u8::MAX || cycle & 8 != 8 { return Err(state(0x8040, cycle as u32)); }
+    if cycle == u8::MAX || cycle & 15 != 14 { return Err(state(0x8040, cycle as u32)); }
     require(bus, 0x1000, 1 << 11 | 1 << 13, 1 << 11)?;
     require(bus, 0x1010, DATA_STOP | 1 << 18 | 1 << 20, DATA_STOP)?;
     require(bus, 0x101c, DATA_BUSY, 0)?;
@@ -123,22 +125,27 @@ fn disable_bb_rf(bus: &mut impl RegisterIo) -> io::Result<()> {
     let mut first = None;
     let mut remember = |result: io::Result<()>| { if let Err(error) = result { if first.is_none() { first = Some(error); } } };
     remember((|| {
+        io::modify32(&mut io, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG, 0)?;
+        require(&mut io, R_AX_WLRF_CTRL, B_AX_AFC_AFEDIG, 0)?;
+        io.delay_us(0)
+    })());
+    remember((|| {
         io::modify8(&mut io, R_AX_SYS_FUNC_EN, 3, 0)?;
         let value = io.read8(R_AX_SYS_FUNC_EN)?;
         if value & 3 != 0 { return Err(state(R_AX_SYS_FUNC_EN, value as u32)); }
         io.delay_us(0)
     })());
-    remember((|| {
-        io::modify32(&mut io, R_AX_WLRF_CTRL, 0x8282, 0)?;
-        require(&mut io, R_AX_WLRF_CTRL, 0x8282, 0)?;
-        io.delay_us(0)
-    })());
-    remember((|| {
-        io::modify8(&mut io, 0x8040, 8, 0)?;
-        let value = io.read8(0x8040)?;
-        if value & 8 != 0 { return Err(state(0x8040, value as u32)); }
-        io.delay_us(0)
-    })());
+    for offset in [0x80u8, 0x81] {
+        remember((|| {
+            // Do not replace an XTAL command still pending after an earlier failed read or write.
+            io::poll32(&mut io, R_AX_WLAN_XTAL_SI_CTRL, B_AX_WL_XTAL_SI_CMD_POLL, 0, 50, 50_000)?;
+            let original = power::xtal_read(&mut io, offset)?;
+            power::xtal_write(&mut io, offset, original & !7, 255)?;
+            let actual = power::xtal_read(&mut io, offset)?;
+            if actual != original & !7 { return Err(state(offset as usize, actual as u32)); }
+            io.delay_us(0)
+        })());
+    }
     first.map_or(Ok(()), Err)
 }
 
