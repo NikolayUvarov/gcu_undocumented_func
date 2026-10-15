@@ -650,6 +650,30 @@ Full-gate and physical-device evidence remain pending.
 
 ## What blocks radio operation
 
+The crate-private `report_tail.rs` implements the pinned MAC report tail
+from `core.c:5660–5662`, `mac.c:6046–6105` and AX dispatch `mac.c:7194–7195`.
+It is not invoked natively: the eventual caller must first complete actual
+BTC initialization, the complete PHY/RFK pipeline, board power trims and
+RX/TX path setup. Its live receive permit and post-DACK BB guards do not
+substitute for that missing pipeline state.
+
+The stage writes CMAC0 PPDU status `0xce40=0x2b`, forwards its reports to
+HOST (`0x9c18` low two bits `1`), and writes only the two 16-bit RTS fields
+at `0xc614`. The upper aggregation-length halfword is preserved. AX's
+separate PHY-report hook is null. The source default (`None` or the source
+`u32::MAX` sentinel) encodes time `88 >> 5` and length `4080 >> 4`;
+explicit thresholds use time `255` and length `min(bytes >> 4, 255)`.
+Legitimate all-ones RTS data is not treated as an unavailable register.
+
+The absolute 10 ms deadline includes receive validation, readback and the
+final clock check. A modified failure independently disables PPDU reports,
+stops RX, disables BB/RF and stops command DMA/WCPU. Every error is retained;
+the external owner must still verify PCI quiescence before releasing DMA.
+Seven focused fixtures compile using the real receive-token constructor,
+covering exact writes, thresholds, stale/incorrect state, all applied or
+ignored writes, independent cleanup failures and final-read deadlines.
+Execution/build and hardware evidence for this slice are pending.
+
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
 After the board/firmware diagnostic passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue is wired only into the bounded diagnostic above. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from these host tests.

@@ -342,3 +342,10 @@ all thirteen startup-stage failure positions and independent cleanup.
 The later own-branch integration `f314d00c` also builds the complete x86
 image with the queue-session and typed PHY/RX guards. These checks do not
 establish cumulative runtime device behavior or physical connectivity.
+
+The private MAC report-tail engine requires a real receive permit and live
+post-DACK register state before programming PPDU forwarding and RTS fields.
+It remains inaccessible to native startup until the complete PHY/RFK/trim
+and path prerequisites are implemented. A 10 ms stage and independent
+report/RX/radio/command cleanup retain DMA on failure. Seven host cases
+compile; new-slice build/execution and hardware validation are pending.

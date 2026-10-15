@@ -398,3 +398,16 @@ DACK phases remain distinct. Six integration fixtures exercise real session
 objects and stale/current hardware state without fabricating a token; the
 PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
 execution awaits publication. This does not grant BTC or transmit readiness.
+
+### MAC report tail after the full PHY prefix
+
+Implement the pinned single-band AX PPDU status/report forwarding and RTS
+threshold writes as a crate-private bounded stage. The AX PHY-report hook
+is null and requires no substitute command. Require a fresh actual owned
+receive-session permit and post-DACK register state; the eventual caller
+must also establish complete BTC/PHY/RFK/power-trim/path prerequisites.
+Never treat this stage as WLAN or regulatory readiness. On a possibly
+applied write error, independently disable PPDU reports, stop RX, disable
+BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
+Add exact mask/order, threshold boundary, stale-session, applied-failure
+and final-deadline fixtures without enabling native operation.
