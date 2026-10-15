@@ -334,6 +334,78 @@ observations. The frozen `a99cc44a` gate does not contain this slice. The native
 Actual MAC/PCIe preparation, DMA enable/quiescence and firmware/WCPU download
 remain unvalidated and must be integrated before a hardware-network claim.
 
+## Hash-pinned WCPU download (213-DRV-0032)
+
+`download.rs` implements a single bounded attempt from the same immutable
+BSD-licensed `fw.c`, `fw.h` and `mac.c`: `rtw89_mac_disable_cpu_ax`,
+`rtw89_mac_enable_cpu_ax`, `rtw89_h2c_pkt_set_hdr_fwdl`,
+`rtw89_fw_download_hdr`, `__rtw89_fw_download_main` and
+`__rtw89_fw_download`. It reuses the project's `mind::sha256` implementation;
+no new cryptographic dependency or vendor-signature verification is added.
+
+Before any device write, `Verified::verify` checks the complete private file's
+1,245,944-byte size and pinned SHA-256, measured cut 1/RFE 1 and the explicitly
+nonsecure physical OTP pair `ff/ff` at `0x5ec`/`0x5ed`. Those bytes are already
+within `Maps::phycap` (`0x580..0x600`); they must come from the actual board
+read, not defaults. Any other security value is unsupported and rejected.
+The selected CE image must have offset 96, length 326,616, version
+0.29.29.15, commit field `6fb3ec41`, 144-byte header including 64-byte dynamic
+extension and exactly these sections, without checksum/redownload flags:
+
+| Type | Decoded destination | Bytes |
+|---|---|---|
+| 2 | `0x18970000` | 310,992 |
+| 1 | `0x18e12400` | 13,432 |
+| 9, zero MSS count | `0x18e11928` | 2,048 |
+
+This policy establishes equality to the locally approved pinned file, not a
+manufacturer signature or secure-boot support. The opaque `Verified` value
+keeps the file immutably borrowed until sending finishes. Host state-machine
+fixtures construct synthetic metadata only inside the private test module;
+they cannot enter through the production hash policy. The optional private
+fixture checks the actual full digest and rejects a one-byte mutation.
+
+The caller must complete MAC/PCIe preparation and command-ring installation
+before kernel-enabled bus mastering, leave ordinary RX/TX/WPDMA stopped and
+RXHCI off, enable only PCIe I/O/CH12 with TXHCI, then start the queue. `run`
+rechecks MEM+MASTER (PCI Command I/O decode may remain enabled), the actual
+cut, active MAC, reset BB/WCPU, disabled CMAC, DLFW memory
+profile, command-only DMA state, exact ring registers and never-used queue.
+It resets WCPU/APB/platform, clears communication registers, enables the CPU
+clock, sets IDMEM size 2 and boot reason 0, then starts WCPU in download mode.
+The header is 8 bytes of H2C plus 80 static header bytes; the dynamic extension
+is not sent. Sequence/ACK fields stay zero and part size is 2020. Each section
+is sent in at most 2020-byte raw parts through the actual `Queue`; backpressure
+reclaims ring positions without reusing the eight retained payloads.
+
+The active PCI Command accepts low bits 6 or 7, matching pinned
+`rtw89_pci_claim_device` (`pci_enable_device` then `pci_set_master`) and the
+kernel's BAR-derived resume: the observed function has an I/O BAR0 as well
+as MMIO BAR2. Every driver access still uses the owned UC BAR2; this stage
+performs no PIO or PCI Command writes. The earlier idle/preparation stages
+continue to require exact MEM-only low bits 2.
+
+The attempt has a two-second total budget; H2C/FWDL readiness, backpressure
+and final drain/status each have 400 ms bounds and finite loop limits even
+with a frozen clock. After drain, five 1 ms calibrated delays preserve the
+source's 5 ms wait, followed by an actual status-7 check. Status 2/3/4 is
+reported separately as firmware checksum/security/cut failure. The final
+read must finish within its deadline. There are no blind retries.
+
+Any modified failure poisons the queue and independently attempts all-channel
+stop/HCI disable plus bounded idle, then WCPU reset under a fresh budget;
+primary and both cleanup failures are retained. Public `stop` gives the same
+bounded cleanup after a successful diagnostic. Even successful stop leaves
+PCI mastering unchanged and retains all DMA memory, including the final
+eight command buffers. Only separately verified kernel quiescence permits
+region release. `Ready` means status 7 was observed, not full MAC, calibrated
+RF, WLAN service registration or usable networking.
+
+Build and focused host evidence are pending. The native board service does
+not invoke this stage, and the actual Ryzen security bytes, DMA/WCPU firmware
+operation and required complete integration remain unvalidated. The frozen
+`a99cc44a` gate does not contain this later library slice.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
@@ -347,7 +419,7 @@ rustc --edition=2021 --test tests/rtw89_firmware_host.rs -o /tmp/rtw89_firmware_
 /tmp/rtw89_firmware_host
 python3 tests/rtl8852be_fetch_test.py
 python3 tests/rtl8852be_probe_test.py
-rustc --edition=2021 --crate-type lib rtw89_wifi/src/lib.rs -o /tmp/librtw89_wifi.rlib
+(cd rtw89_wifi && cargo build --release --locked)
 python3 scripts/firmware/rtl8852be.py check
 RTW89_FIRMWARE="$PWD/proprietary/firmware/rtw89/rtw8852b_fw-1.bin" /tmp/rtw89_firmware_host --ignored
 ```

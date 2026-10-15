@@ -202,3 +202,13 @@ native x86-64 release build and all 16 focused host fixtures passed on
 invoked by the native service. No hardware DMA, firmware download or radio
 operation is established, and the frozen earlier `a99cc44a` gate does not
 cover this additional slice.
+
+The separate WCPU downloader requires the exact full private file SHA-256,
+cut-1/RFE-1 metadata and actually read nonsecure OTP pair before device writes.
+Its TCB includes the existing SHA-256 implementation, trusted board-map origin
+and the command queue's coherent DMA/kernel-quiescence contract. It bounds
+reset/start, header/section transfer and status polling and retains failed
+DMA ownership with separate cleanup errors. This is pinned-file integrity,
+not vendor-signature verification. Native integration, build/host evidence
+for this later slice and actual Ryzen firmware/radio operation remain pending;
+the existing board executable still performs no download or host DMA.
