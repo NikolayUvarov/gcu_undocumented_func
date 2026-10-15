@@ -1,6 +1,6 @@
 # 550-NET-0032 — One fair driver-wait budget between socket clients
 
-**Type:** network reliability · **Owner:** ASTRA auditor-fixer, for `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** focused and integration tests · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, MC-12.1, MC-12.3
+**Type:** network reliability · **Owner:** ASTRA auditor-fixer, for `NET` · **Priority:** P1 · **Status:** in progress · **Blocked by:** integrated network QEMU checks · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -68,3 +68,16 @@ state follows from that wait.
 [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md),
 [750-EFF-0006](750-EFF-0006-session-service.md),
 [network profile](../docs/profile/network.md).
+
+## Progress — 2026-10-15
+
+Implementation `b5b9b3ddb946b6c2aa223f6dcb7ca6ddf979ab34` builds for
+`x86_64-unknown-none`. After publication in `fast-test` `0b5bd1bf`, all 18
+production deadline/ingress/scheduling host tests passed on the own branch
+with no failures or ignored tests. The exact host configuration is in the
+linked profile. No build or test ran on `fast-test`.
+
+The service now calls one fair, globally bounded poll between client receives.
+Per-card rolling quotas are independent of liveness. Integrated network QEMU
+checks remain open for this code; hardware ping/loss and Effector heartbeat
+behavior have not been measured. No full gate was run for this change.

@@ -168,3 +168,31 @@ failed candidates remain distinct from the final gate in
 
 No new MIND hardware run, working Realtek driver, MIND endpoint registration
 or successful Effector command on MIND is claimed by this audit.
+
+## H09 — Realtek boot integration needs staged PCI authority and stable ABI layout
+
+**Priority:** P1 · **Task:** [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md)
+
+Independent integration review found that MSI setup enabled mastering before
+ring initialization, fixed Command bits rejected devices without both decode
+spaces, and post-bootstrap restart attempted to mint a new Platform capability.
+It also found a larger boot-image array shifting the ABI-version field, which
+made version rejection occur after invalid pointer use. The ASTRA integration
+now preserves the ABI 10 prefix, checks the version first, appends image slots,
+uses BAR-authorized MEM-only restart, and leaves Command untouched during MSI.
+Init stops devices before restart-budget quarantine and clears DMA only after
+the old process has ended and device stop/mapping succeed. Focused PCI and ABI
+fixtures are compiled; execution and the new integrated x86 run remain pending.
+No physical Realtek guarantee follows from these software changes.
+
+## H10 — Safe-start devices have no retained launch plan for later operator start
+
+**Priority:** P2 · **Request:** [kernel coordination](../issues/requests-KRN.md)
+
+`init` skips safe-start services before hardware discovery or capability plans
+are created. After dropping Platform, `svc start bcm_wifi` cannot rediscover its
+device; the same limitation applies to the added RTL8852BE board-stage service.
+This existing behavior contradicts the old comment that each omitted service
+can be started later. The comment is corrected; a kernel-owner request asks for
+preparing narrow restart authority without starting the risky device. A normal
+subsequent boot remains distinct from an operator start within safe mode.

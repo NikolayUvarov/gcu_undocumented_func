@@ -88,6 +88,8 @@ USER_CRATES=(
     "tts:tts:tts.elf"
     "video_gw:video_gw:video_gw.elf"
     "virtio_net:virtio_net:virtio_net.elf"
+    "rtl8168:rtl8168:rtl8168.elf"
+    "rtw89_wifi:rtw89_wifi:rtw89_wifi.elf"
     "bcm_wifi:bcm_wifi:bcm_wifi.elf"
     "wlan:wlan:wlan.elf"
     "netstack:netstack:netstack.elf"

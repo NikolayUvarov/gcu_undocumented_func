@@ -50,10 +50,13 @@ on the MacBook. This policy does not establish a heartbeat latency bound.
 The existing four production deadline/ingress host tests remain, with fourteen
 new production scheduling regressions for silent peers, slow successful
 peers, remaining time, recovery, idle slots, continuous ingress, rolling
-work quotas, fixed-window boundary bursts, cheap healthy peers, clock reversal and a live WLAN completing its long operation
-(`tests/network_budget/Cargo.toml`). At the implementation commit the build
-and host test binary compile; focused tests await `fast-test` publication.
-Integrated network QEMU checks and hardware
+work quotas, fixed-window boundary bursts, cheap healthy peers, clock reversal
+and a live WLAN completing its long operation (`tests/network_budget/Cargo.toml`).
+Implementation `b5b9b3ddb946b6c2aa223f6dcb7ca6ddf979ab34` built for
+`x86_64-unknown-none`. After its publication in `fast-test` `0b5bd1bf`, all
+18 host tests passed on the own branch on 2026-10-15 (zero failures/ignored;
+x86_64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571). Nothing was
+built or tested on `fast-test`. Integrated network QEMU checks and hardware
 latency/loss measurements remain pending for this configuration. The supplied
 MacBook log does not establish the cause of the reported ping loss under
 load. No Effector heartbeat or physical NIC result follows from these host
@@ -123,3 +126,22 @@ The rates doubled and the stack's and the drivers' CPU time per MiB fell by abou
   - Receive checksums are always verified by the stack. The card is not trusted to vouch for the integrity of received data, and `VIRTIO_NET_F_GUEST_CSUM` is not negotiated.
 - **Segmentation offloads** are not used. Frames still cost about 110 µs of stack time each, and much of that is the client calls (`tcp-receive` moves 4 KiB per call) and smoltcp itself. Larger frames would need a frame size beyond 1514 bytes in the ring and TCP segmentation that smoltcp does not do. Decide again with a measurement on hardware with KVM.
 - **The frame ring** is used whenever the driver offers it (`net.wit` 1.2).
+
+## RTL8852BE initial board access (213-DRV-0032)
+
+The native `rtw89_wifi` service provides a bounded initial MAC power/XTAL/EFUSE
+read cycle for digital cut 1, under KRN-0114's MEM-only BAR2 grant. It requires
+known inactive MAC state and a calibrated high-resolution clock, holds the
+baseband in reset, attempts independent OTP/power cleanup, and rejects
+unsupported RFE or missing identity data. Its TCB includes the PCI/MMIO grant,
+uncached mapping, calibrated kernel clock and the pinned BSD register/power
+sequence documented in [the hardware notes](../../hwdocs/rtl8852be.md).
+
+Evidence: own branch `codex/213-DRV-0032-rtl8852be`, `a6e69a07`, x86-64
+release build and 16 host state-machine/fault-injection tests passed on
+2026-10-15, with tests run after `fast-test` publication `0b5bd1bf`. The
+mock hardware checks bounds, state transitions and cleanup; it does not
+establish device timing or electrical behavior. KRN integration/full gate and
+actual Ryzen MAC/board-read/shutdown evidence remain pending. No host DMA,
+firmware download, BB/RF calibration, WLAN registration, association, IP
+traffic or Effector connectivity is implemented or claimed by this slice.

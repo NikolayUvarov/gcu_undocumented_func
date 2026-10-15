@@ -29,7 +29,7 @@ pub struct View {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{ProgramImage, BOOT_IMAGES, PIXEL_BGR};
+    use crate::abi::{ProgramImage, BOOT_IMAGES, BOOT_PREFIX_IMAGES, PIXEL_BGR};
 
     // A framebuffer of `width` × `height` at the start of `pixels`.
     fn framebuffer(pixels: &mut [u32], width: usize, height: usize) -> BootInfo {
@@ -41,7 +41,7 @@ mod tests {
             programs: [ProgramImage {
                 data: core::ptr::null(),
                 len: 0,
-            }; BOOT_IMAGES],
+            }; BOOT_PREFIX_IMAGES],
             heap_ptr: core::ptr::null_mut(),
             heap_len: 0,
             ap_trampoline: 0,
@@ -60,6 +60,7 @@ mod tests {
             efi_runtime: 0,
             device_tree: 0,
             photo_pause_s: 0,
+            extra_programs: [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
         }
     }
 

@@ -726,10 +726,10 @@ impl Scheduler {
                 if base == platform::console() { MIRROR_LOGS.store(false, Ordering::Relaxed); } // its driver shows the logs now
                 Ok(Capability::Mmio(base, bytes))
             }
-            PLATFORM_DEVICE_BAR => {
+            PLATFORM_DEVICE_BAR | PLATFORM_DEVICE_BAR_IDLE => {
                 let device = *self.devices.get(a).ok_or(ERR_NOT_FOUND)?; let mut bar = *device.bars.get(b).ok_or(ERR_INVALID)?;
                 if bar.size == 0 { return Err(ERR_NOT_FOUND); }
-                if bar.io { unsafe { pci::enable(&device); } return Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)); }
+                if bar.io { if kind == PLATFORM_DEVICE_BAR_IDLE { return Err(ERR_INVALID); } if !unsafe { pci::enable(&device) } { return Err(ERR_IO); } return Ok(Capability::IoPorts(bar.base as u16, bar.size.min(0xFFFF) as u16)); }
                 // Registers are mapped by the page, and firmware may pack small BARs into one (Apple's EHCI next to AHCI,
                 // 211-KRN-0021): such a BAR moves to a free page first. If none is free, other kinds of device there go
                 // to no other driver once this one is granted, nor this one after theirs.
@@ -753,11 +753,12 @@ impl Scheduler {
                 if let Some((_, other)) = sharers.next() {
                     let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: PCI: BAR {} OF {:06X} AT {:X} SHARES ITS PAGE WITH {:06X} (CLASS {:06X}), WHICH NO OTHER DRIVER GETS\n", b, device.location(), bar.base, other.location(), other.class));
                 }
+                let enabled = unsafe { if kind == PLATFORM_DEVICE_BAR_IDLE { pci::registers_only(&device) } else { pci::enable(&device) } };
+                if !enabled { return Err(ERR_IO); }
                 self.devices[a].granted = true;
-                unsafe { pci::enable(&device); }
                 Ok(Capability::Mmio(bar.base as usize, (end - bar.base) as usize))
             }
-            PLATFORM_DEVICE_IRQ => match self.devices.get(a).ok_or(ERR_NOT_FOUND)?.irq { 0 | 2 => Err(ERR_NOT_FOUND), irq => Ok(Capability::Interrupt(irq)) },
+            PLATFORM_DEVICE_IRQ => match self.devices.get(a).ok_or(ERR_NOT_FOUND)?.irq { 0 | 2 | 255 => Err(ERR_NOT_FOUND), irq => Ok(Capability::Interrupt(irq)) },
             // An MSI-X vector for table entry `b` of device `a`, aimed at the BSP; the entry is programmed here, so a
             // driver never chooses where its device's messages go. The vector stays with that entry for good.
             PLATFORM_DEVICE_MSIX => {
@@ -807,7 +808,7 @@ impl Scheduler {
         // A free slot, or a new chunk of the table (issue 171): the kernel heap is the only limit beyond the quotas.
         let slot = match (1..self.tasks.len()).find(|&i| self.tasks[i].is_none()) { Some(slot) => slot, None => { let len = self.tasks.len(); if !self.tasks.grow() { return Err("OUT OF MEMORY: TASK TABLE"); } len } };
         let pid = self.next_pid; let next_pid = pid.checked_add(1).ok_or("PID SPACE EXHAUSTED")?;
-        let file = match source { Source::Boot(index) => { let image = self.boot.programs.get(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
+        let file = match source { Source::Boot(index) => { let image = self.boot.image(index).ok_or("UNKNOWN PROGRAM")?; if image.len == 0 { return Err("UNKNOWN PROGRAM"); } unsafe { core::slice::from_raw_parts(image.data, image.len) } } Source::Image(bytes) => bytes };
         let elf = elf::Image::parse(file)?;
         let screen_bytes = if has_screen { frame_bytes(&self.boot) } else { 0 };
         if !self.leaves_reserve(!service, elf.size.div_ceil(4096) * 4096 + STACK_SIZE + screen_bytes + core::mem::size_of::<Task>() + 3 * 4096 + context::size()) { return Err("OUT OF MEMORY: RECOVERY RESERVE"); }
@@ -817,7 +818,7 @@ impl Scheduler {
         let stack = Region::task(STACK_SIZE, 4096)?; let abi = Region::task(8192, 4096)?;
         let text = if flags & SPAWN_TEXT != 0 { Some(alloc::boxed::Box::try_new_in(Text::new(), Frames).map_err(|_| "OUT OF MEMORY: TEXT")?) } else { None };
         let screen = if has_screen { Some(Region::task(screen_bytes, 4096)?) } else { None };
-        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
+        let mut info = self.boot; info.cpu_features = cpu::features(); info.fb_ptr = if has_screen { paging::USER_SCREEN as *mut u32 } else { core::ptr::null_mut() }; info.heap_ptr = core::ptr::null_mut(); info.heap_len = 0; info.programs = self.boot.programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.extra_programs = self.boot.extra_programs.map(|image| ProgramImage { data: core::ptr::null(), len: image.len }); info.ap_trampoline = 0; info.cpu_count = 0; info.apic_ids = [0; 8]; info.abi_version = if cfg!(feature = "abi-test") { ABI_VERSION + 1 } else { ABI_VERSION }; info.efi_runtime = 0; info.device_tree = 0; // which images exist, not where; no CPU or firmware addresses
         unsafe { (abi.ptr() as *mut BootInfo).write(info); }
         let args = &args[..args.len().min(ARGS_MAX)];
         unsafe { let page = core::slice::from_raw_parts_mut(abi.ptr().add(ARGS_OFFSET), 2 + ARGS_MAX); page[..2].copy_from_slice(&(args.len() as u16).to_le_bytes()); page[2..2 + args.len()].copy_from_slice(args); }
@@ -1374,7 +1375,7 @@ impl Scheduler {
                     Capability::Mmio(base, size) => !b.io && base as u64 >= b.base && (base + size) as u64 <= b.base + b.size.div_ceil(4096) * 4096,
                     Capability::IoPorts(base, count) => b.io && base as u64 >= b.base && base as u64 + count as u64 <= b.base + b.size,
                     _ => false,
-                })) => match request.arg2 { DEVICE_STOP => { pci::quiesce(&device); Ok(0) } DEVICE_START => { pci::enable(&device); Ok(0) } _ => Err(ERR_INVALID) },
+                })) => match request.arg2 { DEVICE_STOP => if pci::quiesce(&device) { Ok(0) } else { Err(ERR_IO) }, DEVICE_START => if pci::enable(&device) { Ok(0) } else { Err(ERR_IO) }, DEVICE_REGISTERS => if pci::registers_only(&device) { Ok(0) } else { Err(ERR_IO) }, _ => Err(ERR_INVALID) },
                 Some(_) => Err(ERR_RIGHTS),
                 None => Err(ERR_NOT_FOUND),
             },

@@ -89,22 +89,28 @@ fn serial_print(text: &str) { serial_only(text); screen::print(text); klog::keep
 
 #[no_mangle]
 #[link_section = ".text._start"]
-pub extern "C" fn _start(info: &BootInfo) -> ! {
+pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
     unsafe {
         cpu::disable_interrupts();
         init_serial();
+        // Read the fixed ABI 10 prefix before any heap, firmware, memory-map or appended-image pointer is used.
+        let Some(version) = BootInfo::read_abi_version(raw_info) else {
+            serial_only("KERNEL STOPPED: INVALID BOOT INFORMATION POINTER.\n");
+            cpu::halt_here();
+        };
+        let own = if cfg!(feature = "loader-abi-test") { abi::ABI_VERSION + 1 } else { abi::ABI_VERSION };
+        if version != own {
+            if version == 10 || version == abi::ABI_VERSION { screen::init_early(raw_info); }
+            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER IS OF ABI {}, THIS KERNEL OF ABI {}. WRITE BOTH FROM ONE BUILD.\n", version, own));
+            cpu::halt_here();
+        }
+        let info = &*raw_info;
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
         // The identity map first: the frame pool writes its lists into RAM above 4 GiB, which only it maps (issue 171).
         paging::init(core::slice::from_raw_parts(info.memory_map, info.memory_map_len)).expect("Kernel page tables");
         // Before anything else can stop the kernel: a PC without a serial port shows why on the screen.
         screen::init(info);
-        // A bootloader of another ABI fills BootInfo another way; its version is where every version keeps it (211-KRN-0012).
-        let own = if cfg!(feature = "loader-abi-test") { abi::ABI_VERSION + 1 } else { abi::ABI_VERSION };
-        if info.abi_version != own {
-            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER IS OF ABI {}, THIS KERNEL OF ABI {}. WRITE BOTH FROM ONE BUILD.\n", info.abi_version, own));
-            cpu::halt_here();
-        }
         trial::start(&info.boot_slot);
         firmware::init(info.efi_runtime);
         firmware::device_tree(info.device_tree);

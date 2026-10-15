@@ -145,7 +145,7 @@ impl Scheduler {
                 out.push(StatPhys { kind: PHYS_ARENA, index: 0, start: self.boot.heap_ptr as u64, pages: pages(self.boot.heap_len) });
                 out.push(StatPhys { kind: PHYS_FRAMEBUFFER, index: 0, start: self.boot.fb_ptr as u64, pages: pages(frame_bytes(&self.boot)) });
                 out.push(StatPhys { kind: PHYS_AP_TRAMPOLINE, index: 0, start: self.boot.ap_trampoline as u64, pages: 1 });
-                for (index, image) in self.boot.programs.iter().enumerate() { out.push(StatPhys { kind: PHYS_BOOT_IMAGE, index: index as u32, start: image.data as u64, pages: pages(image.len) }); }
+                for (index, image) in self.boot.images().enumerate() { out.push(StatPhys { kind: PHYS_BOOT_IMAGE, index: index as u32, start: image.data as u64, pages: pages(image.len) }); }
                 for (index, device) in self.devices.iter().enumerate() {
                     for bar in device.bars.iter().filter(|b| b.size != 0 && !b.io) { out.push(StatPhys { kind: PHYS_PCI_BAR, index: index as u32, start: bar.base, pages: pages(bar.size as usize) }); }
                 }

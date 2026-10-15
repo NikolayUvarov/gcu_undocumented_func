@@ -663,7 +663,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 14 | CAP_DROP | slot |
 | 45 | CAP_MINT | slot, rights mask; msg[0] = offset, msg[1] = length (0: to the end), msg[2] = endpoint badge (0: keep) → slot of a narrower child |
 | 46 | CAP_REVOKE | slot → number of descendants removed; their mappings are gone everywhere when it returns |
-| 49 | DEVICE_STATE | device index, `DEVICE_STOP`/`DEVICE_START` → 0 — platform privilege or a capability over one of the device's BARs |
+| 49 | DEVICE_STATE | device index, `DEVICE_STOP`/`DEVICE_START`/`DEVICE_REGISTERS` → 0 — platform privilege or a capability over one of the device's BARs |
 | 48 | TASK_WATCH | PID of a task the caller spawned, endpoint with the read right → 0; the task's exit arrives there as a message with `MSG_FLAG_EXIT` (PID, reason) |
 | 58 | EXIT_STATUS | PID of one of the last 16 tasks that ended → how it ended: `EXIT_NORMAL \| code << 8`, `EXIT_KILLED`, `EXIT_FAULT \| vector << 8` — needs process control (issue 166) |
 | 47 | MEM_DETACH | heap block address → slot of a move-only memory object; `ERR_BUSY` if the block is shared |
@@ -868,3 +868,13 @@ Licensed under either of
 at your option. Data files from other projects keep their own licences, listed in [THIRD_PARTY.md](THIRD_PARTY.md): the Russian stress dictionary `phonetics/data/stress_ru.txt` is CC BY-SA 4.0 (OpenRussian), the English lexicon `phonetics/data/lexicon_en.txt` is under the CMUdict BSD-style licence, the voice model `voice/model.bin`, trained on speech made with them, is shared under CC BY-SA 4.0 to be safe, and the 8×16 font MIND Mono (`fonts/mind-mono-16.bdf`, a subset of Terminus Font 4.49.1) is under the SIL Open Font License 1.1.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+### Ryzen network staging (213-KRN-0114)
+
+ABI 11 adds boot entries for RTL8168 Ethernet and the RTL8852BE board-access
+stage. Rebuild and write the bootloader, kernel and services from one build.
+Realtek BARs start with memory decoding only; MSI setup does not enable DMA.
+The Ethernet service enables mastering after its rings are ready. The current
+Wi-Fi stage reads board data and powers down; it cannot associate or carry
+network traffic. Hardware acceptance remains separate for Ryzen and the original
+MacBook; see [the integration task](issues/213-KRN-0114-realtek-driver-startup.md).

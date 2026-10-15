@@ -173,16 +173,25 @@ pub unsafe fn move_bar(device: &mut Device, index: usize, base: u64) -> bool {
     taken
 }
 
-// Stops a device before its driver is restarted: no decoding, no bus mastering (no DMA).
-pub unsafe fn quiesce(device: &Device) {
-    let command = read(device.bus, device.device, device.function, 0x04);
-    write(device.bus, device.device, device.function, 0x04, command & !0x7);
+#[path = "pci_control.rs"]
+mod control;
+
+struct CommandAccess<'a>(&'a Device);
+impl control::Access for CommandAccess<'_> {
+    fn read(&mut self) -> u32 { unsafe { config(self.0, 4) } }
+    fn write_command(&mut self, value: u16) { unsafe { command(self.0, value); } }
 }
 
-// Enables I/O, memory decoding and bus mastering once a resource of the device is handed to a driver.
-pub unsafe fn enable(device: &Device) {
-    let command = read(device.bus, device.device, device.function, 0x04);
-    write(device.bus, device.device, device.function, 0x04, command | 0x7);
+// Readback must confirm stopping before init clears a driver's retained DMA region.
+pub unsafe fn quiesce(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Stopped) }
+
+// New Realtek drivers install their rings before explicitly enabling bus mastering.
+pub unsafe fn registers_only(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Registers) }
+
+// Request only address spaces the function implements; unsupported Command bits may be hardwired to zero.
+pub unsafe fn enable(device: &Device) -> bool {
+    let decode = device.bars.iter().filter(|bar| bar.size != 0).fold(0, |bits, bar| bits | if bar.io { 1 } else { 2 });
+    control::transition(&mut CommandAccess(device), control::Mode::Dma { decode })
 }
 
 /// A dword of the device's configuration space (offset < 256, aligned down to 4); reading has no side effects.
@@ -217,17 +226,16 @@ pub unsafe fn msix_entry(device: &Device, entry: u16) -> Option<u64> {
     (!bar.io && bar.size != 0 && at + 16 <= crate::mmu::IDENTITY_END && at + 16 <= bar.base + bar.size).then_some(at)
 }
 
-/// Points MSI-X table entry `entry` (mapped uncached by the caller) at MSI line `index` (the arch's message), unmasks
-/// it and enables MSI-X, which turns the legacy line off. None where the platform has no MSI target.
 /// Aims the device's MSI (one message, Multiple Message Enable 0) at MSI vector `index`, unmasked, and turns it on; None
 /// without the capability (550-KRN-0091: the BCM4331 has MSI, not MSI-X).
 pub unsafe fn msi(device: &Device, index: usize) -> Option<()> {
+    if config(device, 4) == u32::MAX { return None; }
     let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
     let cap = capability(device, 0x05)?;
     let header = config(device, cap);
     let control = header >> 16;
     let (wide, masking) = (control & 0x80 != 0, control & 0x100 != 0);
-    enable(device);
+    // Configuration-space programming must not change decode or bus-master state.
     write(device.bus, device.device, device.function, cap + 4, target as u32);
     let data_at = if wide { write(device.bus, device.device, device.function, cap + 8, (target >> 32) as u32); cap + 12 } else { cap + 8 };
     write(device.bus, device.device, device.function, data_at, data & 0xFFFF);
@@ -246,14 +254,16 @@ pub unsafe fn msi_state(device: &Device) -> Option<(bool, u64, u32)> {
     Some((control & 1 != 0, address, data & 0xFFFF))
 }
 
+/// Programs the caller-mapped table only when memory decoding is already enabled; never enables bus mastering.
 pub unsafe fn msix(device: &Device, entry: u16, index: usize) -> Option<()> {
+    let command = config(device, 4);
+    if command == u32::MAX || command & 2 == 0 { return None; }
     let (target, data) = crate::pcicfg::msi_message(device.location(), index)?;
     let cap = capability(device, 0x11)?;
     let header = config(device, cap);
     let control = header >> 16;
     if entry as u32 > control & 0x7FF { return None; }
     let at = msix_entry(device, entry)?;
-    enable(device);
     let entry = at as *mut u32;
     entry.write_volatile(target as u32); entry.add(1).write_volatile((target >> 32) as u32); entry.add(2).write_volatile(data); entry.add(3).write_volatile(0);
     write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control | 0x8000) & !0x4000) << 16);

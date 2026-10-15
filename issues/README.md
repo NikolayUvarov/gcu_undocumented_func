@@ -19,6 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and verified DMA stop/restart | `KRN` / ASTRA auditor-fixer | P1 | Driver binaries; x86 and hardware checks | H / 213 |
 | [000-ASR-0010](000-ASR-0010-owned-tcp-refusal-fixture.md) | Reserve a non-listening TCP endpoint for the exact QEMU connection-refused assertion | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [000-ASR-0011](000-ASR-0011-monotonic-tsc-reference.md) | Compare guest elapsed time against the host monotonic clock | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [213-KRN-0112](213-KRN-0112-firmware-ram-cache-types.md) | Firmware RAM above 3 GiB stays cached; regressions cover the Ryzen arena and mixed RAM/MMIO pages | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen rerun | H / 213 |
@@ -133,7 +134,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [550-NET-0028](550-NET-0028-rates-the-radio-has.md) | The station offers only the rates the radio has (`wlanhw.wit` 1.1, `bands` bit 2): 802.11b while `bcm_wifi` hears no OFDM — built and host-tested; the QEMU check waits for `init` | `NET` | P1 | 550-KRN-0097 for starting `wlan` | track D |
 | [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md) | The stack bounds its calls to cards, and the station serves before its radio answers — built; the QEMU check waits for `init` | `NET` | P1 | 550-KRN-0097 on `main` | track D |
 | [550-NET-0031](550-NET-0031-bounded-driver-calls-and-ingress.md) | All card and radio calls share a deadline; continuous ingress yields after a bounded burst | `NET` / ASTRA auditor-fixer | P1 | Integrated QEMU and hardware checks | track D |
-| [550-NET-0032](550-NET-0032-whole-stack-turn-budget.md) | One fair 250 ms driver-wait budget between socket clients | `NET` / ASTRA auditor-fixer | P1 | Focused and integrated network tests | track D |
+| [550-NET-0032](550-NET-0032-whole-stack-turn-budget.md) | One fair 250 ms driver-wait budget between socket clients; rolling card quotas; 18 host tests pass | `NET` / ASTRA auditor-fixer | P1 | Integrated network QEMU checks | track D |
 | [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md) | A TLS client that cannot present the device certificate (`BADGE_TLS_NO_DEVICE`, `tls.wit` 1.2), for programs the shell lends one to | `NET` | P2 | `KRN`, `APP` for lending it ([requests-KRN.md](requests-KRN.md)) | track D |
 | [351-NET-0004](351-NET-0004-ssh-client.md) | An SSH client: curve25519, ssh-ed25519, a pinned host key, SFTP reads | `NET` | P3 | — | track D |
 | [351-NET-0027](351-NET-0027-the-ssh-service.md) | The SSH service (`idl/ssh.wit` 1.0), `keystore`'s `ssh-login` purpose (`keystore.wit` 1.2), `download`'s `sftp://` — the service and the key service's part built; `download` and the QEMU check wait | `NET` | P3 | `KRN` for starting it, `SLOT_SSH`, `REQUEST_SSH` ([requests-KRN.md](requests-KRN.md)) | track D |
