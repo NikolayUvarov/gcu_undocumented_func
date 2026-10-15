@@ -660,3 +660,12 @@ zero failures or ignores. Native build passed in 3.24 s without warnings.
 These seeded-device fixtures cover actual production owner/session logic;
 hardware calibration, policy-authorized RFK transmission and native networking
 remain open.
+
+### Actual calibration scheduler adapter
+
+Native composition exposed a missing `Session: RxdckIo` implementation. Add
+the owned adapter to the existing `runtime_mac::scheduler_zero` exchange with
+one absolute budget, live firmware/queue/RX checks, final elapsed check and
+terminal poison on uncertainty. Seven production-entry fixtures compile;
+native build passes. Execution follows raw publication, and this does not
+close calibration or hardware acceptance.
