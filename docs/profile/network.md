@@ -434,3 +434,9 @@ Nested success requires an actual matching outer grant; TSSI must obtain an
 extra enclosing IQK grant rather than relying on upstream's discarded rejection.
 Eight regression cases compile pending execution. This stricter admission is
 not a claim of complete upstream equivalence or completed calibration/TX policy.
+
+After raw publication `8ebd2da1`, the own source branches passed all 45 combined
+Session/owner/RFK/nested cases and all 11 control cases with no failures or
+ignores. This replaces the pending execution status for code `a134b5a0` and
+its RFK prerequisite `a6df7c83`; the seeded-model and hardware limitations above
+remain unchanged.
