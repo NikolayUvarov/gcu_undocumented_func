@@ -738,3 +738,14 @@ radio shutdown after an attempted STOP, records skipped/unknown DPD disable
 explicitly, and never repeats STOP or restores calibration state. The failed
 run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
 await publication. Hardware acceptance is unchanged and remains open.
+
+### Initial channel coexistence callbacks (2026-10-16)
+
+The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
+30 ms preservation and first-slot RTL8852B MCC notification callbacks, described
+in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
+initialized context, normal H2C sequence and retained RX, refuse pending RFK,
+preserve errors and allow a matching host END even after poisoning. Ten new
+Session model cases compile; execution awaits raw publication. The channel
+coordinator must still validate real IQK/TSSI/DPK results and transmission
+admission. No native RFK-power provider or working WLAN is claimed.
