@@ -329,3 +329,12 @@ It remains inaccessible to native startup until the complete PHY/RFK/trim
 and path prerequisites are implemented. A 10 ms stage and independent
 report/RX/radio/command cleanup retain DMA on failure. Seven host cases
 compile; new-slice build/execution and hardware validation are pending.
+
+The PHY-capability query shares the scheduler's register mailbox and counters,
+requires an actual downloader token for the same live DLFW queue, and only
+returns a capability token after a matching complete firmware response within
+the total deadline. Raw fields and explicit successful-zero-NSS fallback flags
+remain available; OTP data or a missing reply cannot replace the response.
+Session identity, independent command/WCPU cleanup and retained DMA remain
+part of the contract. Ten new host cases compile; execution, native integration
+and physical-device evidence are pending.

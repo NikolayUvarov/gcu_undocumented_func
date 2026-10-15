@@ -389,3 +389,16 @@ applied write error, independently disable PPDU reports, stop RX, disable
 BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
 Add exact mask/order, threshold boundary, stale-session, applied-failure
 and final-deadline fixtures without enabling native operation.
+
+### Actual firmware PHY capability query
+
+Add the pinned AX GET_FEATURE register exchange before runtime MAC setup,
+using the scheduler's existing exclusive mailbox and counter implementation.
+Require the downloader's actual Ready token for the same running command
+queue and the live DLFW state; preserve all four response words and distinguish
+firmware fields from the source's successful-zero-field NSS fallback. Only a
+complete matching response may create a session-bound capability result.
+Missing, malformed, late or foreign-session responses cannot imply two NSS.
+Retain an uncertain mailbox and DMA until independent command/WCPU cleanup;
+never retry a failed exchange. Test the real exchange, counter rollover,
+source resolution, busy/malformed/frozen-clock cases and independent cleanup.
