@@ -5,7 +5,7 @@ use core::mem::ManuallyDrop;
 use mind::abi::{BootInfo, CAP_KIND_DMA, CAP_KIND_ENDPOINT, CAP_KIND_MMIO, SLOT_DEV0, SLOT_MEM, SLOT_VFS};
 use mind::dev::{cap_info, device_config, Dma, Mmio};
 use mind::mem::Pages;
-use rtw89_wifi::{board, download, fwcmd, mac, pcie, power, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
+use rtw89_wifi::{board, download, fwcmd, mac, pcie, power, post_mac, runtime_mac, rx, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 mod startup;
 
 const FIRMWARE_PATH: &str = "data/firmware/rtw89/rtw8852b_fw-1.bin";
@@ -31,8 +31,12 @@ impl fwcmd::Bus for Native {
 
 enum Error {
     Grant, Length, State, System(mind::sys::Error), File(mind::fs::Error), Verify(download::VerifyError),
-    Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure), Stop(download::Stop),
+    Io(Fault), Mac(mac::Failure), Pcie(pcie::Failure), Queue(fwcmd::Error), Download(download::Failure),
+    Runtime(runtime_mac::Failure), Receive(rx::Error), PostMac(post_mac::Failure), Stop(Stopped),
 }
+
+#[derive(Debug)]
+struct Stopped { receive: Option<rx::Stop>, radio: Option<Fault>, command: download::Stop }
 
 impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -41,6 +45,7 @@ impl core::fmt::Debug for Error {
             Self::System(e) => ("System", Some(e)), Self::File(e) => ("File", Some(e)), Self::Verify(e) => ("Verify", Some(e)),
             Self::Io(e) => ("Io", Some(e)), Self::Mac(e) => ("Mac", Some(e)), Self::Pcie(e) => ("Pcie", Some(e)),
             Self::Queue(e) => ("Queue", Some(e)), Self::Download(e) => ("Download", Some(e)), Self::Stop(e) => ("Stop", Some(e)),
+            Self::Runtime(e) => ("Runtime", Some(e)), Self::Receive(e) => ("Receive", Some(e)), Self::PostMac(e) => ("PostMac", Some(e)),
         };
         match detail { Some(value) => f.debug_tuple(name).field(value).finish(), None => f.write_str(name) }
     }
@@ -65,7 +70,9 @@ fn firmware_file() -> Result<Pages, Error> {
 
 struct Attempt<'a> {
     native: Native, index: usize, board: &'a board::Board, file: &'a [u8], verified: Option<download::Verified<'a>>,
-    dma: Option<ManuallyDrop<Dma>>, queue: Option<fwcmd::Queue<'a>>, prepared: Option<pcie::Prepared>, version: Option<[u8; 4]>,
+    dma: Option<ManuallyDrop<Dma>>, queue: Option<fwcmd::Queue<'a>>, rings: Option<rx::Rings<'a>>,
+    prepared: Option<pcie::Prepared>, ready: Option<download::Ready>, runtime: Option<runtime_mac::Prepared>,
+    receiving: Option<post_mac::Receiving>, radio_attempted: bool,
 }
 
 impl Attempt<'_> {
@@ -90,8 +97,11 @@ impl startup::Diagnostic for Attempt<'_> {
                 let (length, physical) = (dma.len(), dma.physical(0));
                 let address = dma.bytes(0, length).as_mut_ptr();
                 if !startup::valid_dma(address as usize, length, physical) { return Err(Error::Grant); }
-                // Kernel DMA maps are coherent WB and BAR maps UC on x86; this retained mapping has no later CPU alias.
-                self.queue = Some(unsafe { fwcmd::Queue::new(&mut self.native, address, length, physical) }.map_err(Error::Queue)?);
+                if fwcmd::DMA_BYTES > startup::COMMAND_REGION_BYTES || rx::DMA_BYTES > startup::RECEIVE_REGION_BYTES { return Err(Error::Grant); }
+                // These page-aligned disjoint WB regions have no later CPU alias; the allocation is retained after every error.
+                self.queue = Some(unsafe { fwcmd::Queue::new(&mut self.native, address, startup::COMMAND_REGION_BYTES, physical) }.map_err(Error::Queue)?);
+                let offset = startup::COMMAND_REGION_BYTES;
+                self.rings = Some(unsafe { rx::Rings::new(&mut self.native, address.add(offset), startup::RECEIVE_REGION_BYTES, physical + offset as u64) }.map_err(Error::Receive)?);
                 mind::println!("[RTW89] VERIFIED FILE; RETAINED DMA {:X}, {} BYTES, PCI MEM ONLY", physical, length);
             }
             Stage::Power => {
@@ -103,6 +113,7 @@ impl startup::Diagnostic for Attempt<'_> {
             Stage::Pcie => self.prepared = Some(pcie::prepare(&mut self.native).map_err(Error::Pcie)?),
             Stage::Install => self.queue.as_mut().ok_or(Error::State)?.install(&mut self.native).map_err(Error::Queue)?,
             Stage::Finish => self.prepared.take().ok_or(Error::State)?.finish(&mut self.native, self.queue.as_ref().ok_or(Error::State)?).map_err(Error::Pcie)?,
+            Stage::InstallReceive => self.rings.as_mut().ok_or(Error::State)?.install(&mut self.native).map_err(Error::Receive)?,
             Stage::Resume => mind::platform::resume(self.index).map_err(Error::System)?,
             Stage::Start => {
                 startup::command_dma(&mut self.native).map_err(Error::Io)?;
@@ -111,16 +122,35 @@ impl startup::Diagnostic for Attempt<'_> {
             }
             Stage::Download => {
                 let ready = download::run(&mut self.native, self.queue.as_mut().ok_or(Error::State)?, self.verified.take().ok_or(Error::State)?).map_err(Error::Download)?;
-                self.version = Some(ready.version());
+                mind::println!("[RTW89] FW STATUS 7 OBSERVED: {:?}", ready.version());
+                self.ready = Some(ready);
+            }
+            Stage::RuntimeMac => {
+                self.radio_attempted = true;
+                let bar_bytes = self.native.bar.len();
+                self.runtime = Some(runtime_mac::prepare(&mut self.native, self.queue.as_mut().ok_or(Error::State)?, self.board,
+                    bar_bytes, self.ready.as_ref().ok_or(Error::State)?).map_err(Error::Runtime)?);
+            }
+            Stage::Receive => {
+                let bar_bytes = self.native.bar.len();
+                self.receiving = Some(post_mac::activate(&mut self.native, self.queue.as_mut().ok_or(Error::State)?,
+                    self.rings.as_mut().ok_or(Error::State)?, self.board, bar_bytes, self.runtime.as_ref().ok_or(Error::State)?).map_err(Error::PostMac)?);
+                mind::println!("[RTW89] MAC/RX DMA PREPARED; DATA TX STOPPED, RADIO CALIBRATION AND WLAN PENDING");
             }
         }
         Ok(())
     }
     fn stop(&mut self) -> Result<(), Error> {
         let command = device_config(SLOT_DEV0, 4).map_err(Error::System)?;
-        if command == u32::MAX || command & 2 == 0 { return Err(Error::Io(Fault::new(FaultKind::Access, 4, command))); }
-        let stopped = download::stop(&mut self.native, self.queue.as_mut().ok_or(Error::State)?);
-        if stopped.dma.is_some() || stopped.cpu.is_some() { Err(Error::Stop(stopped)) } else { Ok(()) }
+        if command as u16 == u16::MAX || command & 2 == 0 { return Err(Error::Io(Fault::new(FaultKind::Access, 4, command))); }
+        let receive = self.rings.as_mut().map(|rings| rings.stop(&mut self.native));
+        let radio = if self.radio_attempted { runtime_mac::disable_radio(&mut self.native).err() } else { None };
+        let command = download::stop(&mut self.native, self.queue.as_mut().ok_or(Error::State)?);
+        let stopped = Stopped { receive, radio, command };
+        if stopped.receive.is_some_and(|stop| stop.request.is_some() || stop.hci.is_some() || stop.idle.is_some())
+            || stopped.radio.is_some() || stopped.command.dma.is_some() || stopped.command.cpu.is_some() {
+            Err(Error::Stop(stopped))
+        } else { Ok(()) }
     }
     fn registers_only(&mut self) -> Result<(), Error> {
         mind::platform::registers_only(self.index).map_err(Error::System)?;
@@ -128,6 +158,7 @@ impl startup::Diagnostic for Attempt<'_> {
     }
     fn power_off(&mut self) -> Result<(), Error> {
         let mut timed = TimedIo::new(&mut self.native, 1_000_000);
+        startup::power_off_ready(&mut timed).map_err(Error::Io)?;
         power::off(&mut timed, Some(self.board.identity.rfe)).map_err(Error::Io)?;
         timed.delay_us(0).map_err(Error::Io)
     }
@@ -139,7 +170,7 @@ impl startup::Diagnostic for Attempt<'_> {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::println!("[RTW89] BOUNDED FIRMWARE DIAGNOSTIC: NO WLAN RADIO OR NETWORK LINK");
+    mind::println!("[RTW89] BOUNDED FIRMWARE/MAC/RX DIAGNOSTIC: NO WLAN RADIO OR NETWORK LINK");
     if !cfg!(target_arch = "x86_64") { mind::println!("[RTW89] UNSUPPORTED DMA ARCHITECTURE"); idle(); }
     let (_, resolution, frequency) = mind::time::clock_info();
     if let Err(error) = io::validate_clock(resolution, frequency) {
@@ -172,9 +203,8 @@ fn main(_info: &'static BootInfo) {
         Err(error) => { mind::println!("[RTW89] BOARD ACCESS FAILED {:?}; NO NETWORK LINK", error); idle(); }
     };
     let mut attempt = Attempt { native, index, board: &board, file: bytes.as_slice(), verified: None,
-        dma: None, queue: None, prepared: None, version: None };
+        dma: None, queue: None, rings: None, prepared: None, ready: None, runtime: None, receiving: None, radio_attempted: false };
     let report = startup::run(&mut attempt);
-    if let Some(version) = attempt.version { mind::println!("[RTW89] FW STATUS 7 OBSERVED: {}.{}.{}.{}", version[0], version[1], version[2], version[3]); }
     mind::println!("[RTW89] DIAGNOSTIC {:?}", report);
     mind::println!("[RTW89] DMA RETAINED={}; NO RETRY, CALIBRATED RF, WLAN ENDPOINT OR NETWORK LINK", attempt.dma.is_some());
     idle()

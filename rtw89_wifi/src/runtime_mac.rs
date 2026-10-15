@@ -150,7 +150,8 @@ fn enable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     bus.write8(0x8040,0xe)?;
     let actual=bus.read8(0x8040)?; if actual!=0xe { return Err(fault(0x8040,actual as u32)); } Ok(())
 }
-pub(crate) fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
+/// Shut down this attempt's known, exclusively owned RTL8852B radio; caller retains DMA and verifies PCI quiescence separately.
+pub fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     let mut timed=TimedIo::new(bus,400_000);
     let mut first=None;
     let mut remember=|result:io::Result<()>| { if let Err(error)=result { if first.is_none() { first=Some(error); } } };

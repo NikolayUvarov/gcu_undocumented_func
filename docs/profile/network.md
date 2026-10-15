@@ -319,3 +319,14 @@ stopped queue. Two additional host fixtures compile using a synthetic
 download completion, including a stale token and a replacement queue at
 the same physical base; correction build/execution and hardware evidence
 are pending. This does not bind the separate future BTC/PHY attempt.
+
+The subsequent native MAC/RX continuation supersedes the earlier firmware-only
+entry: init grants retained 8 MiB DMA, with disjoint command/RX reservations,
+RX installation before mastering, then runtime MAC and receive-only startup
+after verified firmware. Independent receive/radio/command stop follows every
+modified attempt. Before power-off, a bounded idle-XTAL check prevents cleanup
+from replacing an uncertain command. No WLAN endpoint, calibrated channel,
+association or network link is claimed. The full x86 image builds; twelve
+startup fixtures compile and await publication before execution. Earlier gate
+`ac1854f2` does not cover this continuation; physical Ryzen operation and a
+cumulative runtime-MAC/RX model remain unvalidated.
