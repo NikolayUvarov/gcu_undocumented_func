@@ -22,11 +22,15 @@ pub mod phy;
 mod phy_tables;
 pub mod registers;
 pub mod runtime_mac;
+pub mod phycap;
 mod runtime_mac_regs;
 pub mod rx;
 pub mod rxdesc;
 pub mod c2h;
 pub mod post_mac;
 mod post_mac_regs;
+
+#[allow(dead_code)]
+pub(crate) mod report_tail;
 
 pub mod rxdck;

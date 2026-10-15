@@ -419,3 +419,29 @@ address. Allocation exhaustion creates Failed before MMIO. The BTC owner can
 bind ConfigPrepared to this identity and actual firmware/ring sessions without
 a raw bool or pointer identity. Two model fixtures cover same-address reuse and
 exhaustion; test execution awaits raw publication. No native activation changes.
+
+### MAC report tail after the full PHY prefix
+
+Implement the pinned single-band AX PPDU status/report forwarding and RTS
+threshold writes as a crate-private bounded stage. The AX PHY-report hook
+is null and requires no substitute command. Require a fresh actual owned
+receive-session permit and post-DACK register state; the eventual caller
+must also establish complete BTC/PHY/RFK/power-trim/path prerequisites.
+Never treat this stage as WLAN or regulatory readiness. On a possibly
+applied write error, independently disable PPDU reports, stop RX, disable
+BB/RF and stop command DMA/WCPU, preserving all errors and retaining DMA.
+Add exact mask/order, threshold boundary, stale-session, applied-failure
+and final-deadline fixtures without enabling native operation.
+
+### Actual firmware PHY capability query
+
+Add the pinned AX GET_FEATURE register exchange before runtime MAC setup,
+using the scheduler's existing exclusive mailbox and counter implementation.
+Require the downloader's actual Ready token for the same running command
+queue and the live DLFW state; preserve all four response words and distinguish
+firmware fields from the source's successful-zero-field NSS fallback. Only a
+complete matching response may create a session-bound capability result.
+Missing, malformed, late or foreign-session responses cannot imply two NSS.
+Retain an uncertain mailbox and DMA until independent command/WCPU cleanup;
+never retry a failed exchange. Test the real exchange, counter rollover,
+source resolution, busy/malformed/frozen-clock cases and independent cleanup.

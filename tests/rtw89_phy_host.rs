@@ -617,3 +617,5 @@ fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
     let mut p=Phy::new_with_counter(&mut d,identity(),&counter);assert_eq!(p.state(),State::Failed);assert!(p.baseband().is_err());
     assert_eq!(counter.load(Ordering::Relaxed),u64::MAX);assert!(d.events.is_empty());assert_eq!(d.reads,0);
 }
+
+#[path="../rtw89_wifi/src/report_tail.rs"] mod report_tail;
