@@ -173,11 +173,114 @@ The actual Ryzen MAC power/EFUSE/shutdown cycle is untested. A QEMU boot with
 no RTL8852BE cannot establish it. The earlier Linux identity observation and
 parser tests are not evidence for this new device sequence.
 
+## Bounded PCIe command queue (213-DRV-0032)
+
+`fwcmd.rs` implements the channel-12 transport separately from the native
+board service. It is adapted under the same BSD option from immutable
+[`pci.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/pci.c)
+(`rtw89_pci_fwcmd_submit`, `rtw89_pci_release_fwcmd`, TXBD initialization),
+[`pci.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/pci.h)
+(eight-byte TXBD, channel registers and `RTW89_PCI_MULTITAG`),
+[`txrx.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/txrx.h)
+and `core.c` (24-byte TXWD), and
+[`rtw8852be.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852be.c)
+(original AX register layout and single-band BDRAM table).
+
+The queue uses 32 descriptors with one position reserved and 40 separate
+2 KiB payload slots, retaining the last eight completed commands even after
+their descriptor positions are reusable. This matches upstream's distinction
+between hardware-index completion and safe payload release. A single,
+exclusive 86,016-byte DMA region, aligned to 4 KiB and entirely below 4 GiB,
+holds the descriptor page and payloads. The choice of 32 descriptors is a
+bounded MIND policy: it is a multiple of upstream's required alignment of 16
+and below its configured 256, but it has not been validated on hardware.
+
+Construction rejects unsupported architectures, active PCI mastering,
+invalid physical/virtual bounds and alignment before clearing the region.
+Installation requires MEM-only PCI Command, both HCI engines off and channel
+12 stopped. It bounds the idle/index-reset polls to 100 microseconds each,
+programs CH12 count/BDRAM/base and checks readback. It does not enable PCI
+mastering or HCI, unstop the channel, initialize other rings or change RF.
+The unsafe `start` boundary requires the caller to complete the supported
+MAC/DLE/HFC/PCIe setup and enable DMA only after valid rings exist. It verifies
+Command (including rejection of inaccessible `0xffff`), HCI, channel, indices
+and retained register configuration before accepting packets.
+
+Each submission copies a complete H2C packet or firmware part of at most 2020
+bytes behind the TXWD, then publishes the TXBD and 16-bit doorbell. The current
+ordering contract is x86-64 coherent WB DMA memory with strongly ordered UC
+MMIO and no WC aliases. Release/Acquire fences constrain compiler movement;
+x86 WB/UC ordering supplies device-visible ordering. Other architectures are
+rejected; neither generic Rust atomics nor host fixtures establish portable
+DMA ordering. The caller must retain exclusive ownership of the mapped region
+through failures, driver exit and the eight-command prefetch tail until the
+kernel/device has independently established quiescence.
+
+Index disagreement, unavailable MMIO, impossible completion or a failed
+doorbell poisons the queue. A doorbell failure still retains the possibly
+published payload. Drain uses a caller budget of at most one second and a
+finite poll count even if the clock stops. Successful drain retains the last
+eight payloads; no error, destructor or drain releases DMA memory or claims
+that hardware stopped. There is no timeout recovery or restart contract yet.
+
+The focused x86-64 fixture `tests/rtw89_fwcmd_host.rs` models DMA reads at the
+doorbell, wrap/full/retention and register/fault bounds. On own-branch commit
+`f6caafca`, the x86-64 native release build passed (0.34 seconds, no warnings).
+After `fast-test` publication `dd735d0a`, all 14 focused tests passed on
+2026-10-15 at 21:01 UTC (0.03 seconds, no ignored tests). No test ran on
+`fast-test`. The earlier frozen `a99cc44a` full gate excludes this later slice.
+The actual RTL8852BE has not used this queue.
+The native board service still has no DMA capability and does not call it;
+KRN integration must remain disabled until a complete MAC/PCIe startup and
+quiescence path is reviewed. Firmware authentication/address policy, H2C
+encoding, WCPU sequencing and RX/C2H completion are not supplied by this queue.
+
+## MAC download-memory preparation (213-DRV-0032)
+
+`mac::prepare_download` implements `rtw89_mac_dmac_pre_init`'s RTL8852B
+memory/flow-control portion from the pinned `mac.c`, `mac.h`, `reg.h` and
+`rtw8852b.c`. The entry requires the verified RTL8852BE MEM-only BAR grant,
+digital cut 1, active MAC state 1, stopped WCPU, reset baseband, disabled
+TX/RX HCI and no reported PCI DMA activity. A failed guard performs no write.
+The native board service does not call this new preparation function.
+
+The DLFW profile uses 1024 unlinked 64-byte WDE pages and 64 linked plus
+960 unlinked 128-byte PLE pages, accounting for the chip's 196608-byte FIFO.
+PLE starts at the 64 KiB boundary. WDE quotas are zero except the WCPU
+minimum **48** inherited from the future SCC profile, while its DLFW maximum
+remains **0**, as in upstream's explicit override. PLE reserves 16 pages for
+C2H and 48 for H2C; other DLFW quotas are zero. Configuration fields preserve
+unrelated bits; programmed sizes/quotas get readback before readiness polling.
+Each WDE/PLE ready poll has a 2 ms deadline and a finite iteration bound.
+Only then is HFC CH12 enabled with pre-cost 40 and full-condition 0;
+ordinary data-channel flow control remains disabled. The whole stage has a
+10 ms software budget.
+
+Every failure after the first mutation independently attempts HFC disable
+and DLE disable, with a fresh 1 ms budget for each and readback. Primary and
+both cleanup errors are retained. The caller still owes the full MAC
+power-off cycle; successful local cleanup is not a device DMA-quiescence
+claim. This function never writes PCI Command, HCI DMA controls, WCPU, BB/RF
+or CMAC controls and supplies no firmware, radio or host DMA startup.
+
+Own-branch commit `371d41db` built for `x86_64-unknown-none` (0.31 seconds,
+no warnings). After `fast-test` publication `60a100be`, all 11 focused tests
+passed on 2026-10-15 UTC (reported 0.00 seconds, none ignored). A prior build
+invocation from the repository root used the Linux default target, missing
+the service's nested Cargo configuration, and failed in `libmind`; the native
+build was rerun from `rtw89_wifi/` without changing code for that error.
+The eleven focused fixtures in `tests/rtw89_mac_host.rs` cover the exact download quotas and WCPU override,
+pre-write guards, both readiness states, every forward-write fault, failed
+readback, cleanup failures and frozen/late/absolute deadlines. Actual Ryzen
+MAC/DLE/HFC operation remains untested. PCIe MDIO/DBI configuration, modes,
+BDRAM reset, ring installation and external DMA ownership must be integrated
+before the command transport can run; this preparation alone is insufficient.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
-After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. Firmware H2C/C2H transport, secure-boot handling, PCIe rings/interrupts, ownership recovery, channel control, RX/TX and the WLAN service integration are all still absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
+After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue above is not wired into a device startup. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
 
 ## Reproducible host evidence
 
