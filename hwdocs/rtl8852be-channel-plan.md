@@ -109,3 +109,43 @@ Additional read-only source files cached for this dependency review are:
 These references describe driver behavior, not a jurisdiction-specific legal
 determination or current regulatory database. No new regulatory table or
 firmware payload is included by this document.
+
+## Implemented default-table decoder
+
+`channel_policy.rs` exposes only pure observations and computations. The
+country decoder preserves the raw plan byte, reports a recognized source
+country hint, and explicitly requires external policy for worldwide, erased
+or unknown bytes. It does not choose an allowed frequency or issue a token
+permitting transmission. The default map preserves all three source band
+groups and function flags; it is not a regulatory frequency database.
+
+`scripts/hardware/rtw89_power_tables.py` requires the exact two pinned source
+hashes and deterministically extracts 242 countries, 2,184 ordinary 2 GHz
+entries, 1,092 RU entries, 49 by-rate bytes and 36 TX-shape entries into
+`power_tables.rs`. It validates complete initializer syntax, dimensions,
+signed values, duplicates and packed little-endian by-rate slots. Explicit
+zero entries remain distinguishable from implicit C zeros. Lookup follows
+the source's zero-to-worldwide fallback for limits, including the explicit
+zero case; this fallback grants no frequency permission. All 2 GHz source
+bandwidth slots are retained because even 20 MHz power programming reads
+the CCK-40 field. New combined RU formats and all invalid coordinates refuse.
+
+Signed RF-quarter-dBm to MAC-half-dBm conversion rounds downward, and the
+source dBm conversion saturates to the signed seven-bit hardware range. Pure
+constraint arithmetic accepts explicit antenna/SAR/TPE inputs, checks range
+and avoids intermediate wrap. Passing such numbers is not evidence that
+platform policy has actually been obtained. No register or network operation
+is performed by this module.
+
+`core.c::rtw89_core_setup_rfe_parms` starts with the chip defaults, then
+`fw.c::rtw89_load_rfe_data_from_fw` may replace individual by-rate, ordinary,
+RU, antenna and shape tables. `regd_setup` may likewise select a firmware
+country map; platform rules can select ETSI instead of the UK power group.
+The decoder is explicitly **default-only** until the selected firmware's
+element provenance and platform rule inputs have been established. It must
+not silently ignore an applicable override when future code programs power.
+
+Twelve Rust model cases and seven Python parser cases are registered in
+`scripts/host_tests.sh`. They are compile-only until own build, raw publication
+and an explicit publication ACK. Actual board/policy input, MMIO programming,
+calibration and physical validation remain separate acceptance work.

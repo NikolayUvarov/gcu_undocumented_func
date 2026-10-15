@@ -4,6 +4,8 @@
 
 pub mod board;
 pub mod calibration;
+pub mod channel_policy;
+mod power_tables;
 pub mod btc;
 pub mod btc_codec;
 pub mod btc_control;

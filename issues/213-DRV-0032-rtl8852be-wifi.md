@@ -514,3 +514,11 @@ receive-path/NSS sequence, using actual session-bound firmware capabilities
 and DM gain baselines from this same PHY attempt. Keep it crate-private until
 actual BTC and the full source startup ordering are integrated. Detailed
 scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
+
+### Channel policy and pinned power-data preparation
+
+Add the source-ordered [channel/RFK plan](../hwdocs/rtl8852be-channel-plan.md)
+and pure pinned default power/country decoder. Preserve unknown policy,
+firmware overrides and platform constraints as explicit dependencies; no
+channel permission, native MMIO or transmit activation is added. See the
+linked document for exact table provenance and pending/executed evidence.
