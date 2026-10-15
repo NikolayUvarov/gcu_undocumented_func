@@ -1,7 +1,9 @@
 use super::*;
 
 pub(super) fn prepared(p:&mut Phy<Device>) {
-    to_nctl(p); p.rck().unwrap();
+    to_nctl(p); p.rck().unwrap(); prepare_results(p);
+}
+pub(super) fn prepare_results(p:&mut Phy<Device>){
     let d=p.bus_between_stages(); d.events.clear(); d.dack_model=true;
     for (at,value) in [(0x1c0d0,(17<<15)|8),(0x1c0fc,(0x123<<10)|0x155),(0x1c1fc,(0x234<<10)|0x2ab),
         (0x1c040,1<<31),(0x1c064,1<<31),(0x1c05c,4),(0x1c080,4),

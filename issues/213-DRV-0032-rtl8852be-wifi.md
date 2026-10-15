@@ -440,8 +440,10 @@ The next slice adds exact firmware-profile-105 encoders for monitor, slots,
 report/control/init/role/AFH and no-link/RFK policy, plus bounded owned
 scoreboard, antenna/grant snapshot/restoration and cold-init common BB
 operations. Generic BTC DONE and direct CXDRVINFO ACK behavior stay
-separate through production H2C. Eighteen new source/format/fault fixtures
-compile; execution follows raw publication. The native no-std build passes.
+separate through production H2C. Own-branch `94762996` no-std build passed
+(0.80 seconds); after raw publication `1006c136`, all seven codec and eleven
+control source/format/fault fixtures passed (0.00 seconds each, zero failed
+or ignored). Source reviews by the PHY and MAC/RX owners found no blocker.
 These helpers cannot construct an Initialized or RFK-grant result. The
 session-bound owner context, full ordered C2H/report and common-action
 orchestration, calibrated PHY interleave and native activation remain open;
@@ -486,3 +488,23 @@ records; preserve unsupported records/events explicitly. BTINFO and scoreboard
 notifications must reach the session owner, not disappear as ignored traffic.
 The pure decoder neither correlates a report with a command nor grants RFK;
 the session owner must validate provenance and actual applied-policy contents.
+### Post-RXDCK initial DM tail
+
+Implement the source-contiguous power-reference, board thermal/PA trim and
+receive-path/NSS sequence, using actual session-bound firmware capabilities
+and DM gain baselines from this same PHY attempt. Keep it crate-private until
+actual BTC and the full source startup ordering are integrated. Detailed
+scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).
+
+### Owned normal H2C/RX startup session
+
+Add an adapter that consumes the actual successful downloader token, retains
+exclusive command/RX/Receiving/scratch ownership and preserves one normal H2C
+sequence across PHY mirror and subsequent BTC commands. Enforce one absolute
+100 ms maximum command budget, actual ACK correlation and final DMA drain;
+uncertain failures reject subsequent PHY stages while leaving raw cleanup
+accessible. Retain ordered BTC C2H messages in bounded copied storage and fail
+on overflow. This prerequisite deliberately cannot issue Initialized or RFK
+permission. Thirteen focused fixtures compile; execution follows publication.
+The complete BTC policy/common-action owner and native activation remain open.
+See [session contract and limits](../hwdocs/rtl8852be.md#exclusive-startup-command-and-receive-session).

@@ -166,8 +166,10 @@ an already-failed PHY before register access. The crate-private `attempt()`
 lets the BTC owner bind its prepared configuration to this exact attempt as well
 as to the actual firmware/queue/receive sessions; pointer reuse cannot establish
 that relationship. This identifier is not hardware readiness or a BTC token.
-Two fixtures compile for same-address reconstruction and counter exhaustion
-before MMIO; native build and execution evidence are recorded after publication.
+After publication `1006c136`, both new attempt fixtures passed within the
+127-pass PHY harness at `323269dc` (1.00 seconds, zero failed, one existing
+private firmware-file fixture ignored). Same-address reconstruction and
+allocator exhaustion perform no MMIO. Native build passed in 0.80 seconds.
 
 ## Contiguous initial DM prefix and remaining order
 
@@ -237,10 +239,11 @@ substitute for the firmware PHY-capability reply or authorize transmit power.
 
 Nine pure fixtures cover independent packed offsets, signed fields, global
 sentinels, every thermal-byte encoding, unused subband, exact marker and foreign
-cut/RFE refusal. Native build and fixture compilation pass; execution awaits
-publication. The next DM tail must consume these decoded values in source
-order after RXDCK: TX-power reference, thermal/PA trim, then RX-path/NSS setup
-with actual firmware capabilities and the preserved DM gain baselines.
+cut/RFE refusal. After publication `1006c136`, all nine own-branch decoder
+fixtures passed (zero failed/ignored, 0.00 seconds) at `34e5f9cc`; native
+build passed in 0.80 seconds. The private [DM tail](rtl8852be-phy-tail.md)
+consumes these values after RXDCK, with actual firmware capabilities and
+DM gain baselines bound to the same PHY attempt.
 
 ## Validation scope
 
