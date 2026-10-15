@@ -187,6 +187,22 @@ fn expired_or_frozen_poll_has_finite_reads_and_rejects_late_ready() {
 }
 
 #[test]
+fn short_device_delays_do_not_round_up_to_the_ten_ms_sleep_tick() {
+    assert!(io::validate_clock(10_000_000, 0).is_err());
+    assert!(io::validate_clock(0, 3_600_000_000).is_err());
+    io::validate_clock(1, 3_600_000_000).unwrap();
+    let mut now = 0;
+    for _ in 0..1216 {
+        io::short_delay(|| { now += 100; now }, 1).unwrap();
+    }
+    assert!(now >= 1_216_000 && now < 2_000_000);
+    assert_eq!(io::short_delay(|| 0, 1).unwrap_err().kind, FaultKind::Clock);
+    let mut now = 10;
+    assert_eq!(io::short_delay(|| { now -= 1; now }, 1).unwrap_err().kind, FaultKind::Clock);
+    assert!(io::short_delay(|| 0, 1_001).is_err());
+}
+
+#[test]
 fn ddv_read_failure_and_restore_failure_are_both_preserved() {
     let mut baseline = Device::new(); efuse::read_ddv(&mut baseline, 0, &mut [0; 1]).unwrap();
     let command = baseline.writes.iter().position(|w| w.at == R_AX_EFUSE_CTRL).unwrap();

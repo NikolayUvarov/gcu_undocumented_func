@@ -3,7 +3,7 @@
 
 use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0};
 use mind::dev::{cap_info, device_config, Mmio};
-use rtw89_wifi::{board, io::{self, Fault, FaultKind, RegisterIo, Result}};
+use rtw89_wifi::{board, io::{self, RegisterIo, Result}};
 
 struct Native { bar: Mmio }
 
@@ -15,20 +15,17 @@ impl RegisterIo for Native {
     fn write16(&mut self, at: usize, value: u16) -> Result<()> { io::check_offset(at, 2, self.bar.len())?; self.bar.write16(at, value); Ok(()) }
     fn write32(&mut self, at: usize, value: u32) -> Result<()> { io::check_offset(at, 4, self.bar.len())?; self.bar.write32(at, value); Ok(()) }
     fn now_us(&mut self) -> u64 { mind::time::monotonic_ns() / 1_000 }
-    fn delay_us(&mut self, us: u32) -> Result<()> {
-        let start = self.now_us();
-        for _ in 0..8 {
-            let elapsed = self.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, 0, 0))?;
-            if elapsed >= us as u64 { return Ok(()); }
-            mind::time::sleep(((us as u64 - elapsed).div_ceil(1_000)) as usize);
-        }
-        Err(Fault::new(FaultKind::Clock, 0, us))
-    }
+    fn delay_us(&mut self, us: u32) -> Result<()> { io::short_delay(mind::time::monotonic_ns, us) }
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::println!("[RTW89] INITIAL BOARD ACCESS ONLY: NO FIRMWARE, DMA OR WLAN RADIO");
+    let (_, resolution, frequency) = mind::time::clock_info();
+    if let Err(error) = io::validate_clock(resolution, frequency) {
+        mind::println!("[RTW89] PRECISE CLOCK REQUIRED: {:?}", error);
+        idle();
+    }
     let (kind, _, len) = cap_info(SLOT_DEV0);
     if kind != CAP_KIND_MMIO { mind::println!("[RTW89] NO MMIO BAR2 GRANT"); idle(); }
     let values = [0, 4, 0x18, 0x1c].map(|offset| device_config(SLOT_DEV0, offset));

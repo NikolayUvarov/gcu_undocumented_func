@@ -147,9 +147,9 @@ a failed shutdown cannot be reported as successful board access.
 The software bounds are: power-on/off 1 second each, each XTAL command 50 ms,
 each DDV read 1 second within a 4-second map budget, DAV 3 seconds total with
 a nested 10 ms ready/read budget per byte, and DDV restoration 100 ms.
-Polling also has a finite iteration limit if the clock stops. Native waits
-sleep for at least the requested interval (rounded up to milliseconds),
-recheck monotonic time and reject backward/stalled clocks. These are software
+Polling also has a finite iteration limit if the clock stops. Native short waits use calibrated monotonic nanoseconds with a finite
+65,536-read guard, rather than the scheduler's 10 ms sleep tick. A tick-only
+clock is rejected before device writes; backward/stalled clocks fail explicitly. These are software
 polling bounds, not a guarantee that faulty hardware MMIO or a scheduler
 cannot stall. Cleanup is attempted; hardware refusal remains an explicit
 failure, while the kernel keeps bus mastering disabled.

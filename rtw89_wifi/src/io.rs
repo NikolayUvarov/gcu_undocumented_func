@@ -82,6 +82,25 @@ pub fn check_offset(at: usize, width: usize, len: usize) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_clock(resolution_ns: u64, frequency_hz: u64) -> Result<()> {
+    if resolution_ns == 0 || resolution_ns > 1_000 || frequency_hz == 0 {
+        return Err(Fault::new(FaultKind::Clock, 0, resolution_ns.min(u32::MAX as u64) as u32));
+    }
+    Ok(())
+}
+
+/// Short device delays cannot use the scheduler's 10 ms sleep tick; a stalled clock has a finite read limit.
+pub fn short_delay(mut now_ns: impl FnMut() -> u64, us: u32) -> Result<()> {
+    if us > 1_000 { return Err(Fault::new(FaultKind::Clock, 0, us)); }
+    let start = now_ns();
+    for _ in 0..65_536 {
+        let elapsed = now_ns().checked_sub(start).ok_or(Fault::new(FaultKind::Clock, 0, us))?;
+        if elapsed >= u64::from(us) * 1_000 { return Ok(()); }
+        core::hint::spin_loop();
+    }
+    Err(Fault::new(FaultKind::Clock, 0, us))
+}
+
 /// One stage's total budget; cleanup gets a separate budget even after an earlier timeout.
 pub struct TimedIo<'a, I> { io: &'a mut I, start: u64, timeout_us: u64 }
 
