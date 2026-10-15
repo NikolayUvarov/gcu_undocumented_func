@@ -15,7 +15,7 @@ this assertion after its DHCP, ping, DNS and HTTP checks had passed.
 Bind a loopback TCP socket to an allocated ephemeral port and keep it open
 without listening during the request from MIND. This reserves the endpoint
 against another process while the host rejects connections to it. Keep the
-exact `FETCH: Refused` assertion and all other network assertions.
+exact `FETCH: Refused` and `HTTPS: Refused` assertions and all other network assertions.
 
 ## Acceptance criteria
 
@@ -23,12 +23,13 @@ exact `FETCH: Refused` assertion and all other network assertions.
   on success or failure.
 - The test still requires a refused connection; a timeout fails the test.
 - A focused QEMU network run and the coordinated full gate pass. Results name
-  their configuration and make no claim about physical NIC behavior.
+  their configuration and make no claim about physical NIC behavior. The TLS
+  suite uses the same owned-endpoint contract and retains its exact refusal.
 
 ## Related
 
 [550-NET-0031](550-NET-0031-bounded-driver-calls-and-ingress.md),
-`tests/qemu_smoke.py::net_suite`.
+`tests/qemu_smoke.py::{net_suite,tls_suite}`.
 
 ## Investigation (2026-10-15)
 
@@ -51,3 +52,19 @@ The final `1aea9100` host/x86 stage passed all 24 groups, including the
 normal network suite on Ryzen and the 6 GiB suite on Intel i9. ARM was
 explicitly deferred by the maintainer, so the full-gate acceptance criterion
 remains open. These tests do not establish either physical NIC driver.
+
+## TLS follow-up (2026-10-16)
+
+Candidate `0c4205e77322c3f751d26990e139e677d8bb30e6` passed the fixture
+build (31 s) and the boot/display/network checks on UN-LEGION9, but its main
+QEMU group failed after 557 s at the TLS suite's remaining fixed-port
+request. The shell timed out waiting for `HTTPS: Refused`; this is not a
+passing group. A native loopback check on this same host observed port 1
+time out after 1.000450 s, while the held non-listening ephemeral endpoint
+returned ECONNREFUSED after 0.000582 s.
+
+Apply the existing fixture fix to `tls_suite` as well, retaining the exact
+`HTTPS: Refused` assertion and default guest timeout. No TLS or TCP source,
+policy, certificate assertion or timing limit changes. The corrected focused
+TLS run and subsequent integrated candidate results must be recorded
+separately; earlier Ryzen/i9 results do not cover this failed local run.

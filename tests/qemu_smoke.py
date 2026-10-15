@@ -6135,7 +6135,10 @@ def tls_suite(args, disk):
                 server.kill(); server.wait()
         require(vm.command(f"https 10.0.2.2:{ports['good']} / other.test"), "HTTPS: Certificate")
         require(vm.command(f"https 10.0.2.2:{ports['rogue']} / mind.test"), "HTTPS: Certificate")
-        require(vm.command("https 10.0.2.2:1 / mind.test"), "HTTPS: Refused")
+        # Reserve the non-listening endpoint until TLS reports the underlying TCP refusal.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"https 10.0.2.2:{refused.getsockname()[1]} / mind.test"), "HTTPS: Refused")
         log = vm.command("dmesg -s tls")
         for line in ("mind.test VERIFIED, SUITE", "other.test REFUSED: CERTIFICATE NotValidForName", "mind.test REFUSED: CERTIFICATE UnknownIssuer"):
             require(log, line)
