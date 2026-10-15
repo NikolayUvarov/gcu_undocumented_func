@@ -5,7 +5,8 @@
 pub mod board;
 pub mod calibration;
 pub mod btc;
-
+pub mod btc_codec;
+pub mod btc_control;
 pub mod btc_init;
 pub mod dack;
 mod dack_tables;
@@ -27,6 +28,7 @@ mod runtime_mac_regs;
 pub mod rx;
 pub mod rxdesc;
 pub mod c2h;
+pub mod btc_reports;
 pub mod post_mac;
 mod post_mac_regs;
 
