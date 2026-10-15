@@ -88,8 +88,12 @@ extractor fixtures passed, as did pinned-source regeneration. Published
 `78cf274a` passed all 24 Rust cases including the TX-power/BB-reset interleave.
 Published `0d6c66bf` passed all 34 RCK/RF/PHY fixtures. The separate DACK
 engine follows with mandatory typed BTC START/STOP, pinned BSD calibration
-tables and preserved per-stage/cleanup failures. Its native build passes and
-44 fixtures compile; those cases plus three extractor tests await publication.
+tables and preserved per-stage/cleanup failures. After publication of
+`7c6d5ecc` and `a8418545`, all 44 Rust and three DACK extractor fixtures
+passed, as did pinned table regeneration. The next initial RXDCK slice uses
+the shared zero-only scheduler mailbox, post-DACK phase guard and actual BTC
+contract. Native build passes and 56 fixtures compile; execution awaits its
+publication. It never enables packet transmission.
 Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
