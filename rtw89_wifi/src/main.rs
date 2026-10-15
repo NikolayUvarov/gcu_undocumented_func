@@ -30,15 +30,15 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     mind::println!("[RTW89] INITIAL BOARD ACCESS ONLY: NO FIRMWARE, DMA OR WLAN RADIO");
     let (kind, _, len) = cap_info(SLOT_DEV0);
-    if kind != CAP_KIND_MMIO { mind::println!("[RTW89] NO MMIO BAR2 GRANT"); return idle(); }
+    if kind != CAP_KIND_MMIO { mind::println!("[RTW89] NO MMIO BAR2 GRANT"); idle(); }
     let values = [0, 4, 0x18, 0x1c].map(|offset| device_config(SLOT_DEV0, offset));
-    let [Ok(id), Ok(command), Ok(low), Ok(high)] = values else { mind::println!("[RTW89] PCI CONFIG UNAVAILABLE"); return idle(); };
+    let [Ok(id), Ok(command), Ok(low), Ok(high)] = values else { mind::println!("[RTW89] PCI CONFIG UNAVAILABLE"); idle(); };
     if let Err(error) = io::validate_grant(id, command as u16, low, high, len) {
         mind::println!("[RTW89] REJECTED GRANT {:?}; PCI {:08X}, COMMAND {:04X}", error, id, command as u16);
-        return idle();
+        idle();
     }
-    let Ok(bar) = Mmio::map(SLOT_DEV0) else { mind::println!("[RTW89] BAR2 MAP FAILED"); return idle(); };
-    if bar.len() != len { mind::println!("[RTW89] BAR2 SIZE CHANGED"); return idle(); }
+    let Ok(bar) = Mmio::map(SLOT_DEV0) else { mind::println!("[RTW89] BAR2 MAP FAILED"); idle(); };
+    if bar.len() != len { mind::println!("[RTW89] BAR2 SIZE CHANGED"); idle(); }
     let mut native = Native { bar };
     match board::read(&mut native) {
         Ok(board) => {
