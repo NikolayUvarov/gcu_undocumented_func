@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-15: `rtw89_wifi/` contains allocation-free format/register helpers, not a working driver. It does not power on the MAC, touch RF, start DMA, download firmware or associate. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-15: `rtw89_wifi/` has an initial native board-access service: MAC power, XTAL and EFUSE reads, then power-off. This slice is not a working network driver. It starts no host DMA, downloads no firmware, applies no RF calibration and registers no WLAN radio. Its build/host checks and actual hardware status are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -15,7 +15,7 @@ Linux v6.19 is commit `05f7e89ab9731565d8a62e3b5d1ec206485eeb0b`:
 - [reg.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/reg.h), [core.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.c), [core.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.h): register layout, `rtw89_read_chip_ver`, `rtw89_chip_info_setup`, firmware type IDs.
 - [rtw8852b_common.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.c): RFE, XTAL, country, TSSI, gain, thermal and PA-bias handling.
 
-The listed source files carry `GPL-2.0 OR BSD-3-Clause`. The adapted public definitions use the BSD option, with [the retained notice](../LICENSES/BSD-3-Clause-rtw89.txt). No GPL-only implementation has been imported.
+The listed source files carry `GPL-2.0 OR BSD-3-Clause`. The adapted public definitions and initial board-access sequences use the BSD option, with [the retained notice](../LICENSES/BSD-3-Clause-rtw89.txt). No GPL-only implementation has been imported.
 
 ## Firmware pin and personal store
 
@@ -66,7 +66,7 @@ Dynamic extension contents remain opaque after checking their enclosing length. 
 
 Read one aligned 32-bit value at **BAR2 + `0x00F0`**, `R_AX_SYS_CFG1`; digital cut is `(value >> 12) & 0xf`. Linux `rtw89_chip_info_setup` calls `rtw89_read_chip_ver` before `rtw89_mac_pwr_on`, providing a primary-source basis for this initial read. Preserve the raw value. All-ones is an unavailable-device read; zero is suspicious/unconfirmed, even though the pure decoder extracts cut 0.
 
-Validate the exact PCI ID and a usable MMIO BAR/window. The supplied run has memory decode off, so a KRN collector may need a scoped enable/restore of PCI command memory decode. Bus mastering and RF power are unnecessary for this read. Do not scan arbitrary offsets or enable DMA. No helper in `rtw89_wifi/` performs MMIO itself.
+Validate the exact PCI ID and a usable MMIO BAR/window. The supplied run has memory decode off, so a KRN collector may need a scoped enable/restore of PCI command memory decode. Bus mastering and RF power are unnecessary for this read. Do not scan arbitrary offsets or enable DMA. This probe is independent of the later native board-access service described below.
 
 [213-KRN-0113](../issues/213-KRN-0113-realtek-boot-identification.md) adds this guarded read to the x86 hardware report: ungranted/non-mastering endpoint, D0 when PM exists, current BAR2 and actual uncached identity mapping. It temporarily enables MEM decode only when needed and verifies restoration without clearing PCI Status flags. Raw values and skip/failure reasons are retained. Eight host guard tests, an actual page-table-walk regression and the kernel build pass; the raw register observation by this MIND probe still needs a Ryzen run. Linux boot-log evidence of the digital cut is recorded below. Neither radio power nor an indirect analog-cut/EFUSE transaction is performed.
 
@@ -110,11 +110,68 @@ Thus digital cut is **1 (CBV)**, analog cut 1 and RFE 1. Preceding operations `2
 
 No debugfs selector, raw MMIO, RF transaction, driver reload or network-state change was used for this observation. The private operation reports remain outside the repository. The pinned file's SHA-256 and explicit proprietary-fixture parser check were rerun successfully after identifying cut 1: its compatible normal-CE image is version `0.29.29.15`, offset 96, size 326616. No download or operation of that image on the Ryzen has been tested in MIND. The raw `SYS_CFG1` value remains uncollected.
 
+## Initial native board access (213-DRV-0032)
+
+The new `rtw89_wifi` executable consumes the exact RTL8852BE MEM-only BAR2
+contract from [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md).
+It rejects a different PCI function, I/O decoding, enabled bus mastering,
+unsupported BAR type/extent and a short mapping before device writes.
+`CAP_INFO` hides the physical MMIO base, so matching the capability to BAR2 is
+part of the kernel grant contract, not independently verified by this service.
+Digital cut must be 1. An already-active MAC is rejected without writes: the
+service does not assume that firmware left in an unknown power-save state can
+be reset by the initial cold-start sequence.
+
+The power and indirect-read sequence is adapted under BSD-3-Clause from the
+same immutable Linux source above:
+[`rtw8852b.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b.c)
+(`rtw8852b_pwr_on_func`, `rtw8852b_pwr_off_func`),
+[`mac.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/mac.c)
+(XTAL SI commands, power state, coexistence scoreboard),
+[`mac.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/mac.h),
+[`efuse.c`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/efuse.c)
+(DDV/DAV reads and logical decoding), and
+[`rtw8852b_common.h`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.h)
+(the packed board map). No firmware payload is included.
+
+The service holds the baseband in reset, uses the first power-on path before
+EFUSE validity/power-trim information is known, reads physical DDV 1216 bytes,
+DAV 96 bytes and PHY capability bytes `0x580..0x600`, and decodes each logical
+map against its own size (2048/16 bytes). DDV never sets OTP program bits.
+Every DDV attempt restores the OTP supply state with a fresh budget, including
+failures during enable or read. After any power-on attempt, successful or
+failed, the outer cycle attempts the official power-off sequence with another
+fresh budget. Errors preserve both the original fault and cleanup failures;
+a failed shutdown cannot be reported as successful board access.
+
+The software bounds are: power-on/off 1 second each, each XTAL command 50 ms,
+each DDV read 1 second within a 4-second map budget, DAV 3 seconds total with
+a nested 10 ms ready/read budget per byte, and DDV restoration 100 ms.
+Polling also has a finite iteration limit if the clock stops. Native waits
+sleep for at least the requested interval (rounded up to milliseconds),
+recheck monotonic time and reject backward/stalled clocks. These are software
+polling bounds, not a guarantee that faulty hardware MMIO or a scheduler
+cannot stall. Cleanup is attempted; hardware refusal remains an explicit
+failure, while the kernel keeps bus mastering disabled.
+
+Board identity requires a unicast nonzero MAC, observed RFE 1 and a present
+XTAL trim byte. Country/channel plan and complete raw calibration maps are
+retained; they do not authorize transmission, and unknown calibration is not
+replaced with invented defaults. No DMA capability, IRQ, `platform::resume`,
+firmware download, WLAN service endpoint or radio registration is used. The
+binary logs the outcome and sleeps rather than causing an init restart loop.
+
+Validation for this slice is pending its own-branch build, publication to
+`fast-test` and focused host fault-injection tests in the required order.
+The actual Ryzen MAC power/EFUSE/shutdown cycle is untested. A QEMU boot with
+no RTL8852BE cannot establish it. The earlier Linux identity observation and
+parser tests are not evidence for this new device sequence.
+
 ## What blocks radio operation
 
-`rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected and none is yet read by a MIND RTL8852BE driver.
+`rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
-Next implement the bounded RTL8852B MAC power state machine and board reads, then validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. Firmware H2C/C2H transport, secure-boot handling, PCIe rings/interrupts, ownership recovery, channel control, RX/TX and the WLAN service integration are all still absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
+After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. Firmware H2C/C2H transport, secure-boot handling, PCIe rings/interrupts, ownership recovery, channel control, RX/TX and the WLAN service integration are all still absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
 
 ## Reproducible host evidence
 
