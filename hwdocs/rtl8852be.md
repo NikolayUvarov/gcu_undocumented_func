@@ -365,7 +365,7 @@ The caller must complete MAC/PCIe preparation and command-ring installation
 before kernel-enabled bus mastering, leave ordinary RX/TX/WPDMA stopped and
 RXHCI off, enable only PCIe I/O/CH12 with TXHCI, then start the queue. `run`
 rechecks MEM+MASTER (PCI Command I/O decode may remain enabled), the actual
-cut, active MAC, reset BB/WCPU, disabled CMAC, DLFW memory
+cut, active MAC, reset BB/WCPU and the DLFW memory
 profile, command-only DMA state, exact ring registers and never-used queue.
 It resets WCPU/APB/platform, clears communication registers, enables the CPU
 clock, sets IDMEM size 2 and boot reason 0, then starts WCPU in download mode.

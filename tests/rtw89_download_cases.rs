@@ -37,7 +37,7 @@ impl Device {
             slow_final: false, no_h2c: false, no_fwdl: false, status: 7, hold: false, hold_until: 0,
             slow_drain: false, status_reads: 0, busy_after_error: false, cpu_stuck_after_error: false, error_applied: false };
         for (at,value) in [(SYS_CFG1,1 << 12), (R_AX_IC_PWR_STATE,1 << 8), (R_AX_PLATFORM_ENABLE,5),
-            (R_AX_DMAC_FUNC_EN,0x64c40000), (mac::DMAC_CLOCK,0x04840000), (mac::PLE_CONFIG,0x00400801),
+            (R_AX_CMAC_FUNC_EN,0x7000803f), (R_AX_DMAC_FUNC_EN,0x64c40000), (mac::DMAC_CLOCK,0x04840000), (mac::PLE_CONFIG,0x00400801),
             (mac::WDE_READY,3), (mac::PLE_READY,3), (mac::HFC_CONTROL,8), (mac::CHANNEL_PAGE,40 << 16),
             (fwcmd::DMA_STOP,ALL_STOP)] { d.set(at,value); }
         d
@@ -176,7 +176,7 @@ fn exact_header_and_all_section_chunks_cross_ring_wraps_then_require_ready_statu
     assert_eq!(packet,bus.packets.len()); assert!(packet>160);
     assert_eq!(queue.pending(),0); assert_eq!(queue.retained(),8); assert_eq!(queue.state(),fwcmd::State::Running);
     assert_eq!(bus.get(fwcmd::DMA_STOP),DATA_STOP); assert_eq!(bus.command,6);
-    assert_eq!(bus.regs[R_AX_SYS_FUNC_EN]&3,0); assert_eq!(bus.time,5000);
+    assert_eq!(bus.regs[R_AX_SYS_FUNC_EN]&3,0); assert_eq!(bus.get(R_AX_CMAC_FUNC_EN),0x7000803f); assert_eq!(bus.time,5000);
     let cpu_start=bus.writes.iter().position(|&(at,v)| at==R_AX_PLATFORM_ENABLE&&v&WCPU!=0).unwrap();
     let first_packet=bus.writes.iter().position(|&(at,_)| at==fwcmd::INDEX).unwrap(); assert!(cpu_start<first_packet);
 }
