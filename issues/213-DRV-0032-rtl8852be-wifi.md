@@ -317,3 +317,21 @@ seconds, none ignored; 36 other module cases filtered), as did all 18
 affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
 review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
 containing this slice and actual hardware operation remain pending.
+
+### Hardware BTC initcfg prerequisite
+
+Implement bounded RTL8852B/RFE-1 PTA/LTE, WLAN priorities, shared-antenna RF
+LUT and counter initialization between actual `Phy::RadioLoaded` and NCTL.
+`ConfigPrepared` deliberately represents only this hardware stage; actual
+BTC software context, scoreboard ownership, report/control policy, antenna
+selection and RFK START/STOP restoration remain open. The existing live
+PHY guard continues to reject active ordinary RX/TX. A failed modified
+attempt independently closes both LUT write gates, disables BB/RF and
+poisons the PHY state, retaining primary/cleanup diagnostics and DMA.
+The native service is unchanged. Own-branch `e6ed1e2c` native build passed
+(3.53 seconds, no warnings). After raw publication `c2facb84`, all nine
+new phase/source-order/failure/deadline fixtures passed on 2026-10-16. The
+executable also ran 18 inherited synthetic downloader cases successfully
+and retained its one existing optional private-file ignored case: 27 passed,
+zero failed, one inherited ignored, 0.19 seconds. No hardware or working-radio
+claim follows from this library.
