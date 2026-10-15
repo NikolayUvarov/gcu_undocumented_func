@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -35,3 +35,21 @@ The maintainer requests Wi-Fi first, with RTL8168 Ethernet work in parallel, the
 The first slice provides source pins, a firmware fetch/check helper and bounded, host-tested format/register helpers. It performs no radio, firmware-download, association or packet-transfer operation. The task remains open.
 
 On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md).
+
+### Next slice: bounded native board access
+
+The maintainer reaffirmed Wi-Fi as the first network priority after the x86
+validation stage. Work proceeds on `codex/213-DRV-0032-rtl8852be`, from ASTRA
+`1aea9100` merged with main `bd7b5493`. The intended slice is an executable
+`rtw89_wifi` service with exact PCI/cut checks, the pinned RTL8852B MAC power
+lifecycle, bounded indirect XTAL operations, board EFUSE reads and shutdown.
+Tests will exercise the same register sequence through a simulated I/O seam;
+they cannot establish operation on the actual adapter.
+
+The service must begin with memory decoding enabled and PCI bus mastering
+disabled. The current generic BAR grant enables both, and no RTL8852BE boot
+service exists. KRN-0114 supplies the required boot image and MEM-only BAR grant;
+this task does not change the boot ABI or borrow the Broadcom service identity.
+Firmware download, DMA rings, BB/RF calibration, WLAN registration and traffic
+remain later work. No Linux driver unbinding, reset or radio experiment is part
+of this slice.
