@@ -34,11 +34,15 @@ The listed source files carry `GPL-2.0 OR BSD-3-Clause`. The adapted public defi
 Realtek permits unmodified binary redistribution with its notice and conditions; the licence prohibits reverse engineering, decompilation and disassembly. This work uses the published open-source header definitions, not disassembled firmware. The project's personal-store policy is still followed: neither binary nor licence download is packaged in an image or committed. The fetcher saves both together.
 
 ```bash
+scripts/proprietary.sh fetch  # both MacBook Broadcom and Ryzen Realtek firmware
+# Realtek alone, without the Broadcom extractor dependency:
 python3 scripts/firmware/rtl8852be.py fetch
 python3 scripts/firmware/rtl8852be.py check
 # After an image is written, explicitly copy the personal store to the intended volume:
 scripts/proprietary.sh copy /path/to/mounted/MINDCORE
 ```
+
+`build-and-write.sh` invokes `scripts/proprietary.sh fetch`, which now includes the pinned Realtek firmware and licence. They remain in the personal store until the existing post-write copy; neither enters the image.
 
 `fetch` uses an immutable source revision, a bounded read, exact size/hash checks and atomic replacement. `check` never uses the network. Neither command writes a disk. The existing `proprietary.sh copy` copies all files under `proprietary/firmware/`, retaining the Realtek licence alongside its binary; run it only against the intended written volume.
 
