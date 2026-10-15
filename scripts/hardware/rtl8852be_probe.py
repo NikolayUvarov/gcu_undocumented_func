@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect read-only Linux RTL8852BE identity; exit 1: chip cut still missing, 2: refusal/error."""
+"""Collect read-only Linux RTL8852BE identity; exit 0: identified, 1: partial, 2: refusal/error."""
 
 import argparse
 import datetime
@@ -17,9 +17,10 @@ IDENTITY = (0x10EC, 0xB852)
 DRIVER = "rtw89_8852be"
 SOURCE_REVISION = "05f7e89ab9731565d8a62e3b5d1ec206485eeb0b"
 SOURCE = f"https://github.com/torvalds/linux/tree/{SOURCE_REVISION}/drivers/net/wireless/realtek/rtw89"
+BOOT_SOURCE = "https://github.com/torvalds/linux/blob/028ef9c96e96197026887c0f092424679298aae8/drivers/net/wireless/realtek/rtw89/core.c#L6535"
 MAX_TEXT = 32768
 CUT_MISSING = (
-    "No reviewed read-only Linux API exposes the digital chip cut: mac80211's ethtool "
+    "No unambiguous digital chip cut was found in the current-boot driver log. mac80211's ethtool "
     "register dump is empty; reading rtw89/btc_info changes firmware reporting. "
     "Collect SYS_CFG1 with the MIND read-only probe; do not infer the cut from PCI revision."
 )
@@ -89,7 +90,7 @@ def driver_info(text):
 
 def log_pattern(bus):
     prefix = re.escape(f"{DRIVER} {pci_address(bus)}: ")
-    return "^" + prefix + r"(chip rfe_type is [0-9]+|Firmware version [0-9.]+ \([0-9a-fA-F]{8}\), cmd version [0-9]+, type [0-9]+)$"
+    return "^" + prefix + r"(chip rfe_type is [0-9]+|chip info CID: [0-9a-fA-F]+, CV: [0-9a-fA-F]+, AID: [0-9a-fA-F]+, ACV: [0-9a-fA-F]+, RFE: [0-9]+|Firmware version [0-9.]+ \([0-9a-fA-F]{8}\), cmd version [0-9]+, type [0-9]+)$"
 
 
 def parse_boot_records(text, bus):
@@ -98,15 +99,20 @@ def parse_boot_records(text, bus):
         raise ProbeError("Oversized kernel identity query")
     prefix = re.escape(f"{DRIVER} {pci_address(bus)}: ")
     rfe_pattern = re.compile(prefix + r"chip rfe_type is ([0-9]{1,3})")
+    chip_pattern = re.compile(prefix + r"chip info CID: ([0-9a-fA-F]{1,2}), CV: ([0-9a-fA-F]), AID: ([0-9a-fA-F]{1,4}), ACV: ([0-9a-fA-F]{1,2}), RFE: ([0-9]{1,3})")
     fw_pattern = re.compile(prefix + r"Firmware version ([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}) \(([0-9a-fA-F]{8})\), cmd version ([0-9]{1,3}), type ([0-9]{1,3})")
     records = []
     for line in text.splitlines():
         line = line.strip()
         rfe = rfe_pattern.fullmatch(line)
+        chip = chip_pattern.fullmatch(line)
         fw = fw_pattern.fullmatch(line)
         record = None
         if rfe and int(rfe[1]) <= 255:
             record = {"kind": "rfe_type", "value": int(rfe[1])}
+        elif chip and int(chip[5]) <= 255:
+            record = {"kind": "chip_info", "cid": int(chip[1], 16), "chip_cut": int(chip[2], 16),
+                      "aid": int(chip[3], 16), "analog_cut": int(chip[4], 16), "rfe_type": int(chip[5])}
         elif fw and all(int(fw[n]) <= 255 for n in (1, 2, 3, 4, 6, 7)):
             record = {"kind": "firmware", "version": ".".join(fw.group(n) for n in (1, 2, 3, 4)),
                       "commit": fw[5].lower(), "command_version": int(fw[6]), "type": int(fw[7])}
@@ -141,9 +147,9 @@ def collect(device, output, ethtool, journalctl):
         "schema": "mind-rtl8852be-probe-v1", "read_only": True,
         "collected_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "host": platform.node(), "kernel": platform.release(), "architecture": platform.machine(),
-        "pci": device.name, "source": SOURCE, "identity": {}, "interfaces": [],
+        "pci": device.name, "source": SOURCE, "boot_record_source": BOOT_SOURCE, "identity": {}, "interfaces": [],
         "commands": {}, "boot_identity_records": [], "rfe_type": None,
-        "chip_cut": None, "chip_cut_missing_reason": CUT_MISSING, "warnings": [],
+        "chip_cut": None, "chip_cut_source": None, "chip_cut_missing_reason": CUT_MISSING, "warnings": [],
     }
     warnings = report["warnings"]
 
@@ -199,7 +205,7 @@ def collect(device, output, ethtool, journalctl):
     elif not journalctl:
         warnings.append("Missing journalctl; existing boot RFE/firmware records unavailable")
     else:
-        argv = [journalctl, "--kernel", "--boot=0", "--no-pager", "--output=cat", "--lines=32",
+        argv = [journalctl, "-k", "--boot=0", "--no-pager", "--output=cat", "--lines=32",
                 "--grep=" + log_pattern(device.name)]
         data, command = query(argv)
         report["commands"]["boot_identity"] = command
@@ -207,16 +213,25 @@ def collect(device, output, ethtool, journalctl):
             records = parse_boot_records(data.decode("utf-8", "replace"), device.name)
             report["boot_identity_records"] = records
             rfe = {row["value"] for row in records if row["kind"] == "rfe_type"}
+            chip_records = [row for row in records if row["kind"] == "chip_info"]
+            rfe.update(row["rfe_type"] for row in chip_records)
             if len(rfe) == 1:
                 report["rfe_type"] = next(iter(rfe))
             elif len(rfe) > 1:
                 warnings.append("Conflicting RFE records in this boot; no RFE value selected")
+            if len(chip_records) == 1 and len(rfe) == 1:
+                report["chip_cut"] = chip_records[0]["chip_cut"]
+                report["chip_cut_source"] = "current-boot-driver-log"
+                report["chip_cut_missing_reason"] = None
+            elif len(chip_records) > 1:
+                warnings.append("Conflicting chip identity records in this boot; no chip cut selected")
         else:
             warnings.append("No accessible matching boot identity records; see boot_identity command diagnostic")
     if report["rfe_type"] is None:
         warnings.append("RFE type not established; it is not inferred from PCI/subsystem identity")
-    warnings.append(CUT_MISSING)
-    report["status"] = "partial"
+    if report["chip_cut"] is None:
+        warnings.append(CUT_MISSING)
+    report["status"] = "partial" if warnings else "identity-collected"
     write_private(output / "report.json", (json.dumps(report, indent=2) + "\n").encode())
     return report
 
@@ -235,10 +250,10 @@ def main(argv=None):
     except (OSError, ProbeError) as error:
         print(f"rtl8852be-probe: {error}", file=sys.stderr)
         return 2
-    print(f"{report['pci']}: partial; report: {args.output.resolve() / 'report.json'}")
+    print(f"{report['pci']}: {report['status']}; report: {args.output.resolve() / 'report.json'}")
     for warning in report["warnings"]:
         print(f"warning: {warning}", file=sys.stderr)
-    return 1
+    return 0 if report["status"] == "identity-collected" else 1
 
 
 if __name__ == "__main__":

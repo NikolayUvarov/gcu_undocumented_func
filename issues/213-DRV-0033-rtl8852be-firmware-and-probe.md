@@ -1,6 +1,6 @@
 # 213-DRV-0033 — Pin RTL8852BE firmware and identify the chip before radio initialization
 
-**Type:** firmware format / hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV`, with a `KRN` read-only probe · **Priority:** P1 · **Status:** in progress (host foundation checked; hardware evidence pending) · **Blocked by:** the Ryzen digital chip-cut observation · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
+**Type:** firmware format / hardware evidence · **Owner:** ASTRA auditor-fixer, for `DRV`, with a `KRN` read-only probe · **Priority:** P1 · **Status:** in progress (Linux chip identity collected; MIND raw register observation pending) · **Blocked by:** the Ryzen MIND `SYS_CFG1` report · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -13,7 +13,7 @@ The PCI ID `10ec:b852` establishes the adapter family, but not its silicon cut, 
 3. Add `rtw89_wifi/src/firmware.rs`: bounded MFW selection by measured cut and image type, AX header-v0 parsing, section/overlap/length checks and explicit rejection of unsupported security layouts. Use synthetic test fixtures in the repository.
 4. Add pure register identification helpers. KRN's hardware-report path may read `BAR2 + 0xF0` (`SYS_CFG1`) after validating the PCI function and memory BAR; no bus mastering, RF writes or indirect XTAL/EFUSE transactions in this probe. Preserve any PCI configuration state changed to permit the read.
 5. Record actual raw `SYS_CFG1` and cut on the Ryzen, then select and validate that cut's normal-CE image from the verified file. Record which power/EFUSE/calibration dependencies still block the driver.
-6. When Linux is available, collect existing driver/kernel/firmware/RFE observations using `scripts/hardware/rtl8852be_probe.py`. The reviewed Linux APIs do not safely expose digital cut: `btc_info` changes firmware reporting even on read, and mac80211 exposes no register bytes. This collector must report missing cut explicitly and never substitute PCI revision or access live BAR MMIO. It does not replace step 5.
+6. When Linux is available, collect existing driver/kernel/firmware/RFE observations using `scripts/hardware/rtl8852be_probe.py`. Linux 7.0 emits the digital cut and RFE in a numeric `chip info` boot message; reading it is passive. Missing or conflicting log evidence remains unresolved: never substitute PCI revision or access live BAR MMIO. `btc_info` changes firmware reporting even on read, and mac80211 exposes no register bytes. Boot-log evidence does not replace the raw-register requirement in step 5.
 
 ## Acceptance criteria
 
@@ -29,6 +29,16 @@ The PCI ID `10ec:b852` establishes the adapter family, but not its silicon cut, 
 
 ## Progress (2026-10-15)
 
-Twelve Rust host tests pass, covering hostile/truncated synthetic inputs and pure register decoding; five offline fetcher tests pass, including bounded reads and preservation of an existing file on an invalid download. The helper library builds as `no_std`. A separately invoked proprietary-fixture test passes for both CE images (cuts 1 and 2) in the pinned firmware, version 0.29.29.15, header version 0, three sections. Cut 0 has no compatible CE image in that file and is rejected. This is host format evidence only. The actual Ryzen chip cut, KRN probe run and radio operation remain untested, so the issue stays open.
+Twelve Rust host tests pass, covering hostile/truncated synthetic inputs and pure register decoding; five offline fetcher tests pass, including bounded reads and preservation of an existing file on an invalid download. The helper library builds as `no_std`. A separately invoked proprietary-fixture test passes for both CE images (cuts 1 and 2) in the pinned firmware, version 0.29.29.15, header version 0, three sections. Cut 0 has no compatible CE image in that file and is rejected. These are host format checks, not firmware-download or radio evidence.
 
-The Linux identity collector and ten tests in `tests/rtl8852be_probe_test.py` are prepared and pass. It verifies the exact PCI/driver/bus identity, queries only `ethtool -i` and a tightly filtered current-boot journal, and persists only known numeric RFE/firmware records. It neither reads debugfs nor maps MMIO. Conflicting or absent evidence remains unresolved; SSIDs and unrelated log text are excluded. The expected exit code is 1 (`partial`) because no safe digital-cut API was established. Collection on the actual Ryzen remains pending. See [usage and primary-source review](../hwdocs/rtl8852be.md#linux-identity-collector).
+At 2026-10-15 18:34:35 UTC, Effector operation `20261015183435.268000692_000025` on the Ubuntu Ryzen returned the existing `rtw89_8852be 0000:03:00.0` boot record: `CID: 0, CV: 1, AID: 0, ACV: 1, RFE: 1`. Kernel `7.0.0-38-generic` has the ordinary driver bound to `wlp3s0`; the preceding identity operations observed D0/runtime active and carrier 1. The measured digital cut is 1 (CBV), with RFE 1. This came from the passive journal, without debugfs/MMIO or a radio-state change. The pinned file's CE cut-1 image is selected at offset 96, length 326616, version 0.29.29.15, commit field `0x6fb3ec41`; its hash and explicit proprietary-file parser test were rechecked after the observation. Ubuntu's separately observed running firmware is 0.29.29.5 (`da87cccd`); it is not the pinned MIND file.
+
+The collector now uses the valid `journalctl -k` option and recognizes both legacy RFE records and the Linux 7.0 numeric chip-identity message. Fourteen tests pass, including a real `journalctl` CLI check against an empty temporary journal directory. The host test requires `journalctl` to be installed. Verified, unambiguous chip identity returns `identity-collected`/exit 0; missing/conflicting evidence returns `partial`/exit 1. SSIDs and unrelated text are excluded; it neither reads debugfs nor maps MMIO. See [usage, provenance and limitations](../hwdocs/rtl8852be.md#linux-identity-collector).
+
+The original raw `SYS_CFG1` acceptance criterion remains pending: the Linux log gives the cut but not that register's raw value. The guarded KRN probe has not run on this Ryzen in MIND. This issue stays open; Linux identity does not establish MIND radio operation.
+
+The corrected collector was then run on the same Ryzen by Effector operation
+`20261015183831.617344254_000027` at 18:38:32 UTC. It returned
+`identity-collected`, exit 0, cut 1 and RFE 1, with no warnings. Source SHA-256:
+`704925aa0b2a362d54c4a088093b443799306731a437e5b6a6526599e2844b3a`.
+The private report remains under the ASR evidence directory on that machine.

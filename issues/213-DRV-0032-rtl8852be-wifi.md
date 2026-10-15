@@ -33,3 +33,5 @@ The maintainer requests Wi-Fi first, with RTL8168 Ethernet work in parallel, the
 ## Progress (2026-10-15)
 
 The first slice provides source pins, a firmware fetch/check helper and bounded, host-tested format/register helpers. It performs no radio, firmware-download, association or packet-transfer operation. The task remains open.
+
+On 2026-10-15 at 18:34:35 UTC, the Ryzen's Ubuntu `7.0.0-38-generic` driver boot log established digital cut 1 (CBV), analog cut 1 and RFE 1 for `0000:03:00.0`, through Effector operation `20261015183435.268000692_000025`. No debugfs/MMIO access was needed. The compatible pinned normal-CE image is cut 1, version 0.29.29.15, offset 96, size 326616. This removes the unknown-cut/RFE selection question; it does not provide the remaining EFUSE/PHY calibration values or a MIND MAC power, firmware-download, DMA or radio implementation. The raw MIND `SYS_CFG1` observation remains in [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md).
