@@ -123,3 +123,20 @@ After `fast-test` publication `1dee0b3f`, all 16 focused PCIe host tests passed
 on 2026-10-15 UTC (reported 0.00 seconds, no ignored tests). Independent
 source review found no remaining blocking defect; actual hardware behavior
 and a full gate containing this slice remain unvalidated.
+
+### Next slice: hash-pinned firmware and WCPU download
+
+Verify the entire private file against the documented immutable SHA-256 and
+size before device writes; select only the measured cut-1 normal-CE image
+and explicitly check its version, header and section address/length metadata.
+This is local pinned-file integrity, not manufacturer-signature verification.
+Permit only the pinned source's explicitly nonsecure OTP pair `ff/ff` at
+physical `0x5ec`/`0x5ed`, already covered by the board's PHY-capability read;
+other security states fail closed. Keep the file immutably borrowed while
+sending it. Implement the pinned WCPU reset/start, header H2C, raw bounded
+section chunks and readiness sequence through the real channel-12 queue.
+Require reviewed DMA/ring activation beforehand, bound the whole attempt and
+backpressure, retain the last eight command buffers, and poison failed
+attempts while independently stopping HCI and WCPU. Do not retry or free DMA
+without the separate quiescence contract. Native activation, complete MAC,
+C2H/RX, calibration and the WLAN frame service remain separate integration.
