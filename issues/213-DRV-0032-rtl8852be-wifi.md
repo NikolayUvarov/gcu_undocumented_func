@@ -174,3 +174,29 @@ slice builds natively and 24 fixtures compile; those revised fixtures await
 publication before execution. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
+
+### Implemented library slice: single-band MAC preparation after firmware readiness
+
+Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
+then source-derived `sys_init_ax`, SCC DLE/HFC and DMAC/CMAC0 preparation.
+Stop all packet scheduler queues through the firmware register mailbox, keep ordinary host DMA stopped, retain the
+command queue and verify real firmware status before writes. Bound CAM,
+scheduler and DLE readiness; a partial failure poisons the attempt and
+independently disables chip RF/BB and command DMA/WCPU without freeing DMA.
+This prepares the configuration needed by the reviewed PHY stages; it must
+not claim calibrated RF, usable RX/TX or a complete WLAN link. Packet report
+routing/interrupts, normal H2C sequence/C2H processing and final offload setup
+remain explicit subsequent runtime integration, not silently omitted from a
+full-MAC guarantee. Native main/init are owned by the separate integration
+agent and are not modified here.
+
+The firmware-ready scheduler path follows `rtw89_hw_sch_tx_en_h2c`: refuse
+occupied/foreign register mailboxes, send SCH_TX_EN for CMAC0/all queues,
+check the TX_PAUSE response and actual scheduler/protocol idle, and never
+replace or retry a pending command during cleanup. Hardware diagnostic
+counter nibbles retain the sole-writer contract. The whole preparation is
+bounded by two seconds; failure separately checks packet stop, disables
+chip BB/RF, and stops command DMA/WCPU while retaining the primary error.
+The packet-report/interrupt and final runtime H2C/C2H work remains open.
+Fourteen new host fixtures compile; execution, native build and hardware
+validation have not yet been recorded for this new slice.

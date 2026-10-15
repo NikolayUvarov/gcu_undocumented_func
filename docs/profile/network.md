@@ -230,3 +230,12 @@ After raw publication `649fea37`, all ten startup/activation host cases
 passed on the own branch (2026-10-16, zero failed/ignored, 0.00 s). These are
 orchestration/register tests; a single cumulative model across all stages
 and actual hardware evidence remain separate.
+
+The later `runtime_mac` library adds bounded source-derived SCC DLE/HFC,
+station/MPDU/security and CMAC0 preparation after verified firmware readiness.
+Firmware-mediated scheduler pause precedes chip BB/RF enable; ordinary host
+DMA remains stopped. An independently bounded cleanup retains errors and
+DMA. Fourteen new host cases compile, but execution/native build and
+hardware validation for this slice are pending. It is not called by the
+native service and does not establish full runtime MAC, calibrated RF or
+WLAN service operation; see [exact scope](../../hwdocs/rtl8852be.md#single-band-runtime-mac-preparation-library).
