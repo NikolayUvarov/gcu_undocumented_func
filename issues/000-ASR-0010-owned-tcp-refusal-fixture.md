@@ -1,0 +1,41 @@
+# 000-ASR-0010 — Own the closed TCP endpoint used by the network test
+
+**Type:** assurance / QEMU fixture · **Owner:** ASTRA auditor-fixer (the maintainer's assignment, 2026-10-15) · **Priority:** P1 · **Status:** in progress · **Blocked by:** full gate · **Roadmap:** Assurance · **Constitution:** MC-12.1, MC-12.3, MC-12.9
+
+## Problem
+
+The network suite assumes that host loopback port 1 refuses TCP connections.
+On the audit host it silently drops them instead: native connects to ports 1
+and 9 time out. QEMU user networking therefore cannot deliver the TCP reset
+needed to exercise MIND's `Refused` path. The full gate at `9a47d0dd` failed
+this assertion after its DHCP, ping, DNS and HTTP checks had passed.
+
+## Plan
+
+Bind a loopback TCP socket to an allocated ephemeral port and keep it open
+without listening during the request from MIND. This reserves the endpoint
+against another process while the host rejects connections to it. Keep the
+exact `FETCH: Refused` assertion and all other network assertions.
+
+## Acceptance criteria
+
+- The fixture owns the port until the guest command returns, then closes it
+  on success or failure.
+- The test still requires a refused connection; a timeout fails the test.
+- A focused QEMU network run and the coordinated full gate pass. Results name
+  their configuration and make no claim about physical NIC behavior.
+
+## Related
+
+[550-NET-0031](550-NET-0031-bounded-driver-calls-and-ingress.md),
+`tests/qemu_smoke.py::net_suite`.
+
+## Investigation (2026-10-15)
+
+In four-CPU x86 QEMU with the unchanged `9a47d0dd` image, the fixed port timed
+out after 4.968 seconds; packet capture contains three outgoing SYNs and no
+incoming reset. A held non-listening ephemeral socket returned `Refused`
+twice, each in about 0.242 seconds. Captured SYN-to-RST/ACK delays were 469
+and 357 microseconds. HTTP succeeded before and after, without a netstack
+driver cooldown. The correction is to the test endpoint, not the TCP stack
+or its expected behavior. The full gate remains pending.

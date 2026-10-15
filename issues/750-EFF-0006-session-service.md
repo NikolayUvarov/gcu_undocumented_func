@@ -18,7 +18,7 @@ Something on the machine must keep the connection to the server, report the mach
   - an endpoint to `effector_gw`.
 - **Configuration** in `data/effector/` (written by the owner through the shell):
   - the server's HTTPS URL;
-  - the current and next certificate pins: SHA-256 of the server's public key (SPKI) for `tls.wit` 1.1 `connect-pinned`, or of the leaf certificate with `tls.wit` 1.2 `connect-pins` (750-NET-0020; Effector's task 75 publishes both);
+  - the current and next SHA-256 leaf-certificate pins for `tls.wit` 1.2 `connect-pins` (750-NET-0020), as [contract 1.0](../docs/effector/protocol.md) requires; verify the pins through the owner's trust channel in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md`, without assuming a server-side publication feature exists;
   - the token, taken into the private directory on first start, with the shell's copy removed;
   - the agent ID, made once from `mind::random` and kept.
 - **Trust both ways.** The server's pinned leaf certificate; the machine's token, and the device key's certificate (`tls` offers it), which identifies the machine once Effector accepts agents by device key.

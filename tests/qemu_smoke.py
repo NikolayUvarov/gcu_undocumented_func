@@ -5742,7 +5742,10 @@ def net_suite(args, disk):
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
         require(page, "HTTP/1.0 200 OK"); require(page, "hello from the host: /mind")
-        require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
+        # Keep a non-listening port reserved: fixed low ports can be filtered by the host.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"fetch 10.0.2.2:{refused.getsockname()[1]} /"), "FETCH: Refused")
         # Flow grants (issue 102): what the policy names and nothing else; a program without policy gets no grant.
         checks = vm.command(f"netcheck tcp:10.0.2.2:{web_port} tcp:10.0.2.2:{web_port + 1} udp:10.0.2.2:9 ping:10.0.2.2 ping:10.0.2.3")
         for line in (f"NETCHECK tcp:10.0.2.2:{web_port} OK", f"NETCHECK tcp:10.0.2.2:{web_port + 1} Denied", "NETCHECK udp:10.0.2.2:9 Denied",
