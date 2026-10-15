@@ -727,3 +727,14 @@ Fourteen engine fixtures and two provenance cases compile/are registered;
 execution follows raw publication. Full typed cold-start integration, RFK power
 policy, hardware quality and association remain open. See the
 [DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
+
+### DPK first-run cleanup finding (2026-10-16)
+
+Published `2fc291a5` passed 13/14 focused DPK models; the final-STOP model
+failed. Both Python provenance cases and exact source-table regeneration
+passed. Review of that failure found redundant AFE/KIP/RF restore after a STOP
+that may already have released the grant. The correction allows only emergency
+radio shutdown after an attempted STOP, records skipped/unknown DPD disable
+explicitly, and never repeats STOP or restores calibration state. The failed
+run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
+await publication. Hardware acceptance is unchanged and remains open.
