@@ -17,7 +17,7 @@ struct Device {
     memory: Vec<u8>, id: u32, command: u16, now: u64, frozen: bool,
     events: Vec<Event>, reads: usize, writes: usize, fail_write: Option<usize>,
     fail_cleanup: Option<usize>, swsi_stuck: bool, swsi_busy: u8, nctl_stuck: bool,
-    h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>,
+    now_calls: usize, jump_call: Option<usize>, h2c_delay: u64, h2c_fail: Option<u8>, deadline_write: Option<usize>,
 }
 
 fn identity() -> board::Identity {
@@ -28,7 +28,7 @@ impl Device {
     fn new() -> Self {
         let mut d = Self { memory: vec![0; 0x20000], id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
-            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, h2c_delay: 0, h2c_fail: None, deadline_write: None };
+            swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None };
         for (at, value) in [(0xf0, 0x1000), (0x3f0, 0x100), (0x88, 3), (0x1e0, 0xe0),
             (0x8400, 0xfffd0000), (0x8404, 0x0f9f0000), (0xc000, 0xf000003f),
             (0xc004, 0x4000003f), (0x2f0, 0x8282), (0x1000, 0x800), (0x1010, 0xb0f03)] {
@@ -83,7 +83,11 @@ impl RegisterIo for Device {
     fn write8(&mut self, at: usize, v: u8) -> Result<()> { self.write(at, 1, v as u32) }
     fn write16(&mut self, at: usize, v: u16) -> Result<()> { self.write(at, 2, v as u32) }
     fn write32(&mut self, at: usize, v: u32) -> Result<()> { self.write(at, 4, v) }
-    fn now_us(&mut self) -> u64 { self.now }
+    fn now_us(&mut self) -> u64 {
+        self.now_calls += 1;
+        if self.jump_call == Some(self.now_calls) { self.now += 100_000; }
+        self.now
+    }
     fn delay_us(&mut self, us: u32) -> Result<()> { self.tick(us as u64); Ok(()) }
 }
 
@@ -130,7 +134,7 @@ fn wrong_device_board_firmware_dlfw_only_and_live_data_paths_cannot_write() {
     for option in 0..7 {
         let mut d = Device::new(); let mut board = identity();
         match option { 0=>d.command=2, 1=>d.command=u16::MAX, 2=>d.id=0xb85b10ec,
-            3=>d.memory.resize(0x1ffff,0), 4=>board.cut=0, 5=>board.rfe=2, _=>d.command=7 }
+            3=>d.memory.resize(0x1ffff,0), 4=>board.cut=0, 5=>board.rfe=2, _=>d.command=5 }
         assert!(Phy::new(&mut d, board).baseband().is_err()); assert!(d.events.is_empty());
     }
 }
@@ -266,4 +270,19 @@ fn subsequent_stage_rechecks_real_firmware_state_and_does_not_write_on_refusal()
     let d=p.bus_between_stages(); d.put(0x1e0,4,0); let before=d.events.len();
     assert!(p.radio().is_err()); assert_eq!(p.state(),State::Failed);
     assert_eq!(p.bus_between_stages().events.len(),before);
+}
+
+#[test]
+fn active_grant_may_also_decode_io_while_phy_uses_only_mmio() {
+    let mut d=Device::new(); d.command=7;
+    let mut p=Phy::new(&mut d,identity()); p.baseband().unwrap(); p.radio().unwrap(); p.nctl().unwrap();
+    assert_eq!(p.state(),State::TablesLoaded); assert_eq!(d.command,7);
+    assert!(d.events.iter().all(|event| match event { Event::Write(at,_,_) => *at>=0x10000, Event::H2c(_,_,_) => true }));
+}
+
+#[test]
+fn clock_gap_before_inner_budget_does_not_extend_absolute_stage_success() {
+    let mut d=Device::new(); d.jump_call=Some(4);
+    let error=Phy::new(&mut d,identity()).baseband().unwrap_err();
+    assert_eq!(error.cause.kind,FaultKind::Timeout); d.reset();
 }

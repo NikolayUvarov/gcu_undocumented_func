@@ -30,7 +30,7 @@ This tool never downloads or changes a network device. PHY offsets add the AX MC
 
 ## Integration contract
 
-`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. The DLFW-only MAC state is rejected. Only the command channel may run: ordinary RX/TX/WP channels and all MAC scheduler queues must be stopped, and ordinary DMA/protocol TX must be idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
+`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. The DLFW-only MAC state is rejected. Active PCI Command must have MEM and MASTER set; the kernel may additionally decode BAR0 I/O, which this MMIO-only library never accesses. Only the command channel may run: ordinary RX/TX/WP channels and all MAC scheduler queues must be stopped, and ordinary DMA/protocol TX must be idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
 
 Source order in `core.c::rtw89_core_start` and `phy.c` requires these separate stages and interleaves:
 
@@ -46,4 +46,4 @@ Each stage has a 100 ms total software budget, including both RF paths and their
 
 ## Validation scope
 
-The native x86-64 release build passes and the 14 production-code host fixtures compile. Test execution is pending commit publication to `fast-test`; it will run on the implementation branch. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.
+The native x86-64 release build passes and the 16 production-code host fixtures compile. Test execution is pending commit publication to `fast-test`; it will run on the implementation branch. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.

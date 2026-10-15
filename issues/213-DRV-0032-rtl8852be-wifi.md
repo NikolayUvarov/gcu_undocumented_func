@@ -77,6 +77,6 @@ still does not call it. Required TX-power/BB-reset and BTC/DM interleaves,
 RFK calibration, board trims and regulatory authorization remain integration
 work, as specified in [the PHY contract](../hwdocs/rtl8852be-phy.md).
 
-The x86 native release build and compilation of 14 host fixtures pass.
+The x86 native release build and compilation of 16 host fixtures pass.
 Focused test execution waits for publication of this commit to `fast-test`,
 then runs on this branch; no hardware or radio success is claimed.

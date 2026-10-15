@@ -93,7 +93,7 @@ fn guard(bus: &mut impl PhyIo, identity: &Identity) -> io::Result<()> {
     if bus.bar_len() < BAR_BYTES { return Err(Fault::new(FaultKind::Access, BAR_BYTES, bus.bar_len().min(u32::MAX as usize) as u32)); }
     let id = bus.pci_id()?;
     let command = bus.pci_command()?;
-    if id != 0xb852_10ec || command == u16::MAX || command & 7 != 6 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }
+    if id != 0xb852_10ec || command == u16::MAX || command & 6 != 6 { return Err(Fault::new(FaultKind::Access, 4, command as u32)); }
     if identity.cut != 1 { return Err(Fault::new(FaultKind::UnsupportedCut, SYS_CFG1, identity.cut as u32)); }
     if identity.rfe != 1 { return Err(Fault::new(FaultKind::Rfe, crate::efuse::RFE_AT, identity.rfe as u32)); }
     require(bus, SYS_CFG1, CHIP_VERSION_MASK, 1 << 12)?;
@@ -194,7 +194,8 @@ impl<'a, B: PhyIo> Phy<'a, B> {
         let result = (|| {
             let left = remaining(self.bus, start)?;
             let mut io = TimedIo::new(self.bus, left as u64);
-            write_table(&mut io, tables::BB)
+            write_table(&mut io, tables::BB)?;
+            remaining(self.bus, start).map(|_| ())
         })();
         if let Err(cause) = result { return Err(self.failed(Stage::Baseband, cause)); }
         self.state = State::BasebandLoaded;
@@ -254,7 +255,8 @@ impl<'a, B: PhyIo> Phy<'a, B> {
                 poll.delay_us(10)?;
             }
             if !ready { return Err(Fault::new(FaultKind::Timeout, PHY_BASE + 0x8080, 0)); }
-            write_table(&mut io, tables::NCTL)
+            write_table(&mut io, tables::NCTL)?;
+            remaining(self.bus, start).map(|_| ())
         })();
         if let Err(cause) = result { return Err(self.failed(Stage::Nctl, cause)); }
         self.state = State::TablesLoaded;
