@@ -74,7 +74,11 @@ Protocol handshake and link-loss timers are unchanged.
 With a continuous stream of 10 ms receives and no other work, a new client
 gets a dispatch opportunity after eight receives (80 ms), instead of waiting
 behind a 64-frame batch. This is the model for the added production-helper
-tests, not a measured hardware limit; the new tests have not yet run.
+tests, not a measured hardware limit. Implementation `31af1f01` built for
+`x86_64-unknown-none`; after publication in `fast-test` `a98052b5`, all 26
+network-budget host tests and all 12 unchanged `dot11` station tests passed
+on the own branch on 2026-10-15 (zero failures/ignored, Linux 6.6.87.2 WSL2,
+rustc 1.101.0-nightly c36f14571). No tests ran on `fast-test`.
 A single synchronous call or the final frame's actions can still exceed
 100 ms and the caller's 250 ms budget. Existing action losses when the
 aggregate two-second deadline expires during frame actions are not repaired
@@ -192,6 +196,9 @@ The later PCIe preparation implements the pinned RTL8852B MDIO/DBI path,
 temporary L1 restoration, channel stops/index/mode setup and BDRAM reset
 after command-ring installation. It checks the MAC download profile and
 preserves PCI MEM-only/HCI-off state. Primary and independent restoration/
-stop failures remain explicit, and no DMA map is freed. Build/host evidence
-for this additional slice is pending; it is not invoked by the native service
-and provides no tested hardware DMA, firmware download or radio operation.
+stop failures remain explicit, and no DMA map is freed. Own-branch `4feee434`
+native x86-64 release build and all 16 focused host fixtures passed on
+2026-10-15 UTC after `fast-test` publication `1dee0b3f`. This stage is not
+invoked by the native service. No hardware DMA, firmware download or radio
+operation is established, and the frozen earlier `a99cc44a` gate does not
+cover this additional slice.
