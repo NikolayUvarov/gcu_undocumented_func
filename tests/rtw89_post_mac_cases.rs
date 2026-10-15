@@ -49,7 +49,7 @@ impl RegisterIo for Device{
 }
 impl Bus for Device{fn pci_command(&mut self)->io::Result<u16>{Ok(self.command)}}
 fn board()->Board{Board{identity:crate::board::Identity{cut:1,rfe:1,mac:[2,1,2,3,4,5],xtal:1,country:*b"US",channel_plan:1},maps:crate::efuse::Maps{logical:[0xff;2048],dav_logical:[0xff;16],phycap:[0xff;128]}}}
-fn prepared<'a>(d:&mut Device,command:&'a mut Region,receive:&'a mut Region)->(Queue<'a>,rx::Rings<'a>){
+fn prepared<'a,'b>(d:&mut Device,command:&'a mut Region,receive:&'b mut Region)->(Queue<'a>,rx::Rings<'b>){
     let mut q=unsafe{Queue::new(d,command.base,command.layout.size(),0x100000).unwrap()};q.install(d).unwrap();
     let mut r=unsafe{rx::Rings::new(d,receive.base,receive.layout.size(),0x200000).unwrap()};r.install(d).unwrap();
     d.command=6;d.put(fwcmd::INIT_CONFIG,4,1<<11);d.put(fwcmd::DMA_STOP,4,STOPPED);unsafe{q.start(d).unwrap()};d.writes.clear();(q,r)
@@ -128,4 +128,70 @@ fn stage_and_final_ring_read_deadlines_cannot_publish_success(){
 fn optional_pci_io_decode_does_not_change_memory_mastering_requirement(){
     let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);d.command=7;
     activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();stop(&mut d,&mut q,&mut r);
+}
+#[test]
+fn typed_permit_accepts_live_rx_and_pending_commands_without_hardware_writes(){
+    let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+    let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();
+    q.submit(&mut d,&[1,2,3],false).unwrap();d.put(0x1050,4,5<<16);d.put(0x1054,4,7<<16);
+    d.put(fwcmd::DMA_BUSY,4,(1<<22)|(1<<21)|(1<<20)|(1<<18)|3);d.writes.clear();
+    {let _permit=token.validate(&mut d,&mut q,&r,1000).unwrap();}
+    assert_eq!(q.pending(),1);assert!(d.writes.is_empty());
+    d.put(fwcmd::INDEX,4,1|1<<16);
+    {let _permit=token.validate(&mut d,&mut q,&r,1000).unwrap();}
+    assert_eq!(q.pending(),0);assert!(d.writes.is_empty());d.put(fwcmd::DMA_BUSY,4,0);stop(&mut d,&mut q,&mut r);
+}
+#[test]
+fn permit_rechecks_corrupted_live_registers_without_writing_or_releasing_rx(){
+    for (at,width,value)in[(0x1108,4,0x300000),(0x110c,4,1),(0x1020,2,32),(0x1050,4,1),(0x1054,4,256<<16),
+        (fwcmd::BASE_LOW,4,0x300000),(fwcmd::BASE_HIGH,4,1),(fwcmd::NUMBER,2,31),(fwcmd::BDRAM,4,0),
+        (fwcmd::INIT_CONFIG,4,1<<11),(fwcmd::DMA_STOP,4,RECEIVING&!(1<<8)),(fwcmd::DMA_BUSY,4,1<<19),
+        (0xc348,4,1),(0xc6ec,4,1<<7),(download::FW_CONTROL,4,0),(HOST_MASKS[2],4,1),(mac::HFC_CONTROL,4,0)]{
+        let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+        let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();d.writes.clear();d.put(at,width,value);
+        assert!(token.validate(&mut d,&mut q,&r,1000).is_err(),"register {at:x}");assert!(d.writes.is_empty());assert_eq!(r.state(),rx::State::Running);d.command=0;
+    }
+}
+#[test]
+fn same_addresses_reconstructed_dma_objects_cannot_reuse_old_receiving_token(){
+    let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);
+    let old={let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();stop(&mut d,&mut q,&mut r);token};
+    d=Device::new();let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+    let fresh=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();d.writes.clear();
+    assert!(old.validate(&mut d,&mut q,&r,1000).is_err());assert!(d.writes.is_empty());
+    {let _permit=fresh.validate(&mut d,&mut q,&r,1000).unwrap();}assert!(d.writes.is_empty());stop(&mut d,&mut q,&mut r);
+}
+#[test]
+fn replacing_only_command_object_cannot_reuse_receive_session(){
+    let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+    let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();
+    let original=q.session();d.command=0;drop(q);
+    d.command=2;d.put(fwcmd::INIT_CONFIG,4,0);d.put(fwcmd::DMA_STOP,4,STOP_MASK);
+    let mut q=unsafe{Queue::new(&mut d,a.base,a.layout.size(),0x100000).unwrap()};assert_ne!(original,q.session());q.install(&mut d).unwrap();
+    d.command=6;d.put(fwcmd::INIT_CONFIG,4,1<<11);d.put(fwcmd::DMA_STOP,4,STOPPED);unsafe{q.start(&mut d).unwrap()};
+    d.put(fwcmd::INIT_CONFIG,4,HCI);d.put(fwcmd::DMA_STOP,4,RECEIVING);d.writes.clear();
+    assert!(token.validate(&mut d,&mut q,&r,1000).is_err());assert!(d.writes.is_empty());stop(&mut d,&mut q,&mut r);
+}
+#[test]
+fn faulted_or_stopped_objects_and_invalid_budget_never_get_permit(){
+    for variant in 0..5{
+        let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+        let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();let mut budget=1000;
+        match variant{0=>{r.stop(&mut d);},1=>q.poison(),2=>budget=0,3=>budget=1_000_001,_=>d.command=2}
+        d.writes.clear();assert!(token.validate(&mut d,&mut q,&r,budget).is_err());assert!(d.writes.is_empty());d.command=0;
+    }
+}
+#[test]
+fn late_final_receive_index_read_never_issues_typed_permit(){
+    let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+    let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();d.late_start=true;d.writes.clear();
+    let error=token.validate(&mut d,&mut q,&r,1000).unwrap_err();assert!(matches!(error,Error::Register(Fault{kind:FaultKind::Timeout,..})|Error::Receive(rx::Error::Io(Fault{kind:FaultKind::Timeout,..}))));
+    assert!(d.writes.is_empty());stop(&mut d,&mut q,&mut r);
+}
+#[test]
+fn session_counter_is_unique_and_exhaustion_stays_latched_without_wrap(){
+    use core::sync::atomic::{AtomicU64,Ordering};
+    let counter=AtomicU64::new(u64::MAX-1);assert_eq!(io::next_dma_session(&counter).unwrap(),u64::MAX-1);
+    for _ in 0..3{assert!(io::next_dma_session(&counter).is_err());assert_eq!(counter.load(Ordering::Relaxed),u64::MAX);}
+    let zero=AtomicU64::new(0);assert!(io::next_dma_session(&zero).is_err());assert_eq!(zero.load(Ordering::Relaxed),0);
 }
