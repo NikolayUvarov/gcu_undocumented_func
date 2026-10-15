@@ -75,6 +75,10 @@ firmware/queue/RX tokens and the existing production Session fixture. They cover
 owner/state refusal, END after failure, A2DP versus other profiles, queued and
 later BTINFO, genuine elapsed time, frozen/regressing/late clocks, pending RFK,
 malformed input, MCC bytes and periodic ACK, and no retry after uncertain send,
-missing receipt or busy DMA. They compile; execution follows raw publication.
+missing receipt or busy DMA. After source
+`bf6747f58975f9ba15b73d06948f3a32819d16cc` built and was published in
+`fast-test` `c38df1ddff7151af1e1ededf551f736c2f6b6766`, all 62 Session
+cases, including these ten, passed on the own source branch (2026-10-16,
+0.29 s; no failures or ignored cases, 115 unrelated cases filtered).
 These are host models with a reseeded register handoff, not hardware evidence
 or the full channel coordinator's cumulative cold-state test.

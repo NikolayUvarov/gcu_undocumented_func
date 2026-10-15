@@ -126,7 +126,10 @@ The full tables are in the resolutions of [176-KRN-0062](../../issues-done/176-K
 
 The RTL8852BE initial-channel coexistence callbacks in
 [connection RFK notes](../../hwdocs/rtl8852be-connection-rfk.md) have ten additional
-compiled Session model cases, pending raw publication and execution. They cover
+Session model cases. All 62 Session cases passed on own source
+`bf6747f58975f9ba15b73d06948f3a32819d16cc`, after native build and raw
+publication `c38df1ddff7151af1e1ededf551f736c2f6b6766` (2026-10-16,
+0.29 s; no failures or ignored cases). They cover
 source host-state notifications, conditional measured A2DP time and exact normal
 MCC packets through the owned command/RX session. They do not establish hardware
 calibration, RFK transmission authority, a continuous coexistence service or WLAN
