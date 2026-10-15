@@ -79,10 +79,13 @@ impl From<fwcmd::Error> for Cause { fn from(value: fwcmd::Error) -> Self { Self:
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Failure { pub stage: Stage, pub cause: Cause, pub dma_stop: Option<Fault>, pub cpu_stop: Option<Fault> }
 
-/// Status 7 observed for this attempt; full MAC initialization, C2H, RF calibration and WLAN remain separate.
+/// Status 7 observed for this command session; full MAC initialization, C2H, RF calibration and WLAN remain separate.
 #[derive(Debug)]
-pub struct Ready { _private: () }
-impl Ready { pub fn version(&self) -> [u8; 4] { VERSION } }
+pub struct Ready { queue_session: u64 }
+impl Ready {
+    pub fn version(&self) -> [u8; 4] { VERSION }
+    pub(crate) fn session(&self) -> u64 { self.queue_session }
+}
 
 fn require(bus: &mut impl RegisterIo, at: usize, mask: u32, expected: u32) -> io::Result<()> {
     let value = io::read32(bus, at)?;
@@ -231,9 +234,9 @@ pub fn run(bus: &mut impl Bus, queue: &mut Queue<'_>, firmware: Verified<'_>) ->
         let stopped = stop(bus, queue);
         return Err(Failure { stage, cause, dma_stop: stopped.dma, cpu_stop: stopped.cpu });
     }
-    Ok(Ready { _private: () })
+    Ok(Ready { queue_session: queue.session() })
 }
 
 #[cfg(test)]
 #[path = "../../tests/rtw89_download_cases.rs"]
-mod tests;
+pub(crate) mod tests;

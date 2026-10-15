@@ -202,3 +202,10 @@ a retained BAR capability, without retaining the platform privilege.
 Command readback does not match; START enables decoding only for implemented
 BAR spaces. MSI configuration never changes Command; MSI-X requires MEM
 already enabled. Drivers must prepare their DMA engine before DEVICE_START.
+
+The RTL8852BE native diagnostic (213-KRN-0114) uses the existing ABI 11
+`SLOT_MEM` DMA grant with 8 MiB retained storage. Command DMA occupies a
+128 KiB reservation and RX DMA the remaining disjoint region. No new syscall,
+IDL version or WLAN endpoint is introduced. Drivers install every ring before
+mastering and retain memory through shutdown failures; these conventions do
+not establish PCIe transaction drainage or safe reuse.

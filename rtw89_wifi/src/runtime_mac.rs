@@ -150,7 +150,8 @@ fn enable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     bus.write8(0x8040,0xe)?;
     let actual=bus.read8(0x8040)?; if actual!=0xe { return Err(fault(0x8040,actual as u32)); } Ok(())
 }
-pub(crate) fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
+/// Shut down this attempt's known, exclusively owned RTL8852B radio; caller retains DMA and verifies PCI quiescence separately.
+pub fn disable_radio(bus: &mut impl RegisterIo) -> io::Result<()> {
     let mut timed=TimedIo::new(bus,400_000);
     let mut first=None;
     let mut remember=|result:io::Result<()>| { if let Err(error)=result { if first.is_none() { first=Some(error); } } };
@@ -273,7 +274,10 @@ fn cmac(bus: &mut impl RegisterIo) -> io::Result<()> {
 /// The same device must have completed the verified downloader; no other MMIO or firmware command writer may run.
 /// Ordinary host DMA stays stopped; the sole register-mailbox writer must own its mirrored diagnostic counters.
 /// This does not enable interrupts, create RX rings or configure a usable channel.
-pub fn prepare(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize, _firmware: &download::Ready) -> core::result::Result<Prepared,Failure> {
+pub fn prepare(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize, firmware: &download::Ready) -> core::result::Result<Prepared,Failure> {
+    if firmware.session()!=queue.session() {
+        return Err(Failure{stage:Stage::Guard,cause:fault(fwcmd::INDEX,0),packet_stop:None,radio_stop:None,command_stop:None});
+    }
     prepare_inner(bus,queue,board,bar_bytes)
 }
 fn prepare_inner(bus: &mut impl Bus, queue: &mut Queue<'_>, board: &Board, bar_bytes: usize) -> core::result::Result<Prepared,Failure> {

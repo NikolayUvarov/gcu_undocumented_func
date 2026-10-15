@@ -80,6 +80,32 @@ fn board()->Board{Board{identity:crate::board::Identity{cut:1,rfe:1,mac:[2,1,2,3
     maps:crate::efuse::Maps{logical:[0xff;2048],dav_logical:[0xff;16],phycap:[0xff;128]}}}
 
 #[test]
+fn completed_download_token_admits_only_its_still_running_queue(){
+    download::tests::with_downloaded_queue(|ready,q|{
+        let mut d=Device::new();d.command=6;
+        for (at,value) in [(fwcmd::INIT_CONFIG,1<<11),(fwcmd::DMA_STOP,PACKET_STOP),
+            (fwcmd::BASE_LOW,q.physical()as u32),(fwcmd::BDRAM,28|4<<8|1<<16),(fwcmd::NUMBER,32)]{d.set(at,value);}
+        prepare(&mut d,q,&board(),BAR_BYTES,&ready).unwrap();
+        d.stopped_for_drop(q);d.writes.clear();
+        let error=prepare(&mut d,q,&board(),BAR_BYTES,&ready).unwrap_err();
+        assert_eq!(error.stage,Stage::Guard);assert!(d.writes.is_empty());
+    });
+}
+
+#[test]
+fn prior_download_token_rejects_a_new_queue_at_the_same_physical_base(){
+    let mut old=None;
+    download::tests::with_downloaded_queue(|ready,_|old=Some(ready));
+    let ready=old.unwrap();let mut d=Device::new();let mut r=Region::new();let mut q=r.queue(&mut d);
+    assert_eq!(q.physical(),0x100000);assert_ne!(ready.session(),q.session());
+    let error=prepare(&mut d,&mut q,&board(),BAR_BYTES,&ready).unwrap_err();
+    assert_eq!(error.stage,Stage::Guard);assert_eq!(error.cause.kind,FaultKind::PowerState);
+    assert!(d.writes.is_empty());assert_eq!(q.state(),fwcmd::State::Running);
+    assert_eq!((error.packet_stop,error.radio_stop,error.command_stop),(None,None,None));
+    d.stopped_for_drop(&mut q);
+}
+
+#[test]
 fn source_scc_geometry_and_quiet_packet_paths_after_preparation(){
     let mut d=Device::new();let mut r=Region::new();let mut q=r.queue(&mut d);
     prepare_inner(&mut d,&mut q,&board(),BAR_BYTES).unwrap();

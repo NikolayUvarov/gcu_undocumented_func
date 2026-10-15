@@ -369,6 +369,26 @@ seconds), with none ignored, on 2026-10-16 MSK. Two independent read-only
 reviews found no blocker. These are host model results; full-gate,
 physical-device operation and the PHY/native permit consumer are pending.
 
+### Firmware-ready command-session binding
+
+Bind the downloader's opaque `Ready` result to the successful command
+queue's existing non-wrapping session identity. Require that exact identity
+in `runtime_mac::prepare` before hardware access, while retaining all live
+register checks. A stopped or reconstructed queue cannot reuse an old
+firmware token. Add host regressions using an actual synthetic downloader
+completion, including old-token/new-queue rejection at the same physical
+base. Future BTC context must also bind its PHY/init attempt and revalidate
+live receiving state; a matching firmware token alone is not an RFK grant.
+
+Own-branch `383b27e5`, based on consolidated ASTRA `1b6518e3`, built without
+warnings in 3.31 seconds. After raw publication `badae1bc`, all 19 runtime
+MAC cases passed (0.12 seconds) and 18 synthetic downloader cases passed
+(0.19 seconds). The separately fetched private-file hash/mutation fixture
+also passed when explicitly invoked (0.06 seconds). The cumulative private
+fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
+file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
+found no blocker. Full-gate and hardware validation remain pending.
+
 ### PHY consumer of the owned RX permit
 
 The shared PHY guard now accepts active RX only through the actual borrowed
