@@ -264,6 +264,13 @@ further mailbox calls in that session; callers must retain DMA and perform
 their independent shutdown. Add focused zero/occupied/deadline fixtures;
 native calibration and BTC arbitration are still separate prerequisites.
 
+Own-branch `b947aa40` built without warnings in 0.46 seconds. After raw
+publication `d9266c7b24ba3f3946c32e3ba56592a8b5ad1769`, all 17 runtime-MAC
+host fixtures passed (0.12 seconds, none ignored; 19 unchanged downloader
+cases filtered). The exact commit ran on the owned scheduler-test branch
+before the later post-init code was published. Independent review found
+no blocker; native RXDCK/BTC integration and hardware evidence are pending.
+
 ### Initial normal-H2C and BT-arbitration prerequisites
 
 `h2c.rs` adds normal sequence/header construction, a real command-queue
@@ -303,6 +310,13 @@ retained allocations still require external PCI quiescence. Add applied
 write-failure, stale-ring, status-bit preservation and deadline fixtures.
 No native grant expansion, normal H2C/BTC/PHY claim or WLAN registration
 is included in this slice.
+
+Own-branch `06a0b932` built without warnings in 0.66 seconds. After raw
+publication `b50f52c0`, all nine focused post-init fixtures passed (0.81
+seconds, none ignored; 36 other module cases filtered), as did all 18
+affected RX fixtures (0.12 seconds, none ignored). The source/mask/ownership
+review found no blocker. These checks ran on 2026-10-16 MSK; a full gate
+containing this slice and actual hardware operation remain pending.
 
 ### Hardware BTC initcfg prerequisite
 

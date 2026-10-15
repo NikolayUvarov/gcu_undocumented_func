@@ -572,9 +572,7 @@ MAC-off or establish ownership of old DMA. The board's cold-state guard
 remains; an owned quiescence/reset transition is still required for warm
 boot/restart support.
 
-## What blocks radio operation
-
-### MAC tail and receive-only post-init library
+## MAC tail and receive-only post-init library
 
 `post_mac::activate` follows pinned `mac.c:3569–3909` and
 `pci.c:3132–3247`: RTL8852B error masks, PCIe host release reports
@@ -597,9 +595,23 @@ No native entry, DMA grant, IRQ handler or WLAN registration changes.
 
 Failure independently attempts receive stop, chip BB/RF disable and command
 DMA/WCPU stop, preserving their errors and retaining all DMA allocations
-until external PCI quiescence. Nine host fixtures compile; execution, native
-build, full-gate and hardware evidence for this slice are pending. Normal
+until external PCI quiescence. Own-branch `06a0b932` native build passed
+(0.66 seconds, no warnings); after raw publication `b50f52c0`, all nine
+post-init host fixtures passed (0.81 seconds) and all 18 affected RX cases
+passed (0.12 seconds), none ignored, on 2026-10-16 MSK. Independent source
+review found no blocker. Full-gate and hardware evidence remain pending. Normal
 H2C/offload, BTC policy, PHY/calibration and data TX remain separate.
+
+The initial calibration `runtime_mac::scheduler_zero` helper uses the same
+exclusive firmware register mailbox for zero-only pause and restore. It
+rejects live TX, unavailable firmware/CMAC and occupied exchanges before
+publishing, and checks actual CTN/PTCL idle and the caller's deadline. An
+uncertain error forbids further mailbox use. Own-branch `b947aa40` built
+in 0.46 seconds without warnings; after publication `d9266c7b`, all 17
+runtime-MAC cases passed (0.12 seconds, none ignored). This does not supply
+BTC arbitration or activate native calibration.
+
+## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
