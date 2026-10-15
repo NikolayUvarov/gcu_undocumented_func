@@ -45,6 +45,94 @@ mod user_heap;
 #[path = "../kernel/src/task_table.rs"]
 mod task_table;
 
+fn phys(kind: u32, start: u64, end: u64) -> abi::StatPhys {
+    assert_eq!(start % 4096, 0);
+    assert_eq!(end % 4096, 0);
+    abi::StatPhys { kind, index: 0, start, pages: (end - start) / 4096 }
+}
+
+#[test]
+fn identity_cache_keeps_ryzen_loader_ram_write_back_above_three_gib() {
+    // Adjacent types and addresses from the Ryzen report; the 64 MiB kernel arena is inside the loader-data range.
+    let map = [
+        phys(2, 0xC68F_B000, 0xC6D0_B000),
+        phys(7, 0xA20_F000, 0xC20A_B000),
+        phys(4, 0xC68F_6000, 0xC68F_B000),
+        phys(2, 0xC20A_B000, 0xC68F_6000),
+        phys(4, 0xC6D0_B000, 0xCA8F_C000),
+    ];
+    for address in (0xC200_0000..0xC6E0_0000).step_by(0x20_0000) {
+        let (entry, table) = mmu::identity_region(&map, address).unwrap();
+        assert!(table.is_none(), "adjacent RAM descriptors cover this whole region");
+        assert_eq!(entry, address | 0x83, "RAM at {address:x} must use PAT entry 0, supervisor writable");
+    }
+}
+
+#[test]
+fn identity_cache_splits_ram_mmio_and_unknown_pages_in_one_large_region() {
+    let start = 0xC800_0000;
+    let map = [
+        phys(7, start, start + 7 * 4096),
+        phys(11, start + 7 * 4096, start + 8 * 4096),
+        phys(2, start + 9 * 4096, start + 0x20_0000),
+    ];
+    let (entry, table) = mmu::identity_region(&map, start).unwrap();
+    let table = table.expect("a 4 KiB table is required at a RAM/device boundary");
+    assert_eq!(entry, table.ptr() as u64 | 3, "the table itself is cached and supervisor-only");
+    let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+    for (page, &leaf) in leaves.iter().enumerate() {
+        let cache = if matches!(page, 7 | 8) { 0x18 } else { 0 };
+        assert_eq!(leaf, (start + page as u64 * 4096) | 3 | cache, "page {page}");
+    }
+}
+
+#[test]
+fn identity_cache_never_assumes_low_addresses_are_ram() {
+    for start in [0, 0x8000_0000, 0xC000_0000, 0xFEE0_0000] {
+        for kind in [0, 8, 11, 12, 13, 14, u32::MAX] {
+            let (entry, table) = mmu::identity_region(&[phys(kind, start, start + 0x20_0000)], start).unwrap();
+            assert!(table.is_none());
+            assert_eq!(entry, start | 0x9B, "kind {kind} at {start:x}");
+        }
+        let (entry, table) = mmu::identity_region(&[], start).unwrap();
+        assert!(table.is_none());
+        assert_eq!(entry, start | 0x9B, "an absent descriptor is not RAM");
+    }
+}
+
+#[test]
+fn identity_cache_reserved_overlap_stays_uncached_regardless_of_descriptor_order() {
+    let start = 0xC800_0000;
+    let mut map = [phys(2, start, start + 0x20_0000), phys(0, start + 4096, start + 8192)];
+    for _ in 0..2 {
+        let (_, table) = mmu::identity_region(&map, start).unwrap();
+        let table = table.unwrap();
+        let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+        assert_eq!(leaves[0], start | 3);
+        assert_eq!(leaves[1], (start + 4096) | 0x1B);
+        assert_eq!(leaves[2], (start + 8192) | 3);
+        map.reverse();
+    }
+}
+
+#[test]
+fn identity_cache_device_remap_changes_large_and_small_leaves_not_table_pointer() {
+    let start = 0xC800_0000;
+    let (mut entry, table) = mmu::identity_region(&[phys(2, start, start + 0x20_0000)], start).unwrap();
+    assert!(table.is_none());
+    unsafe { mmu::uncache_identity(&mut entry, start as usize); }
+    assert_eq!(entry, start | 0x9B);
+    let (mut entry, table) = mmu::identity_region(&[phys(2, start, start + 4096)], start).unwrap();
+    let table = table.unwrap();
+    let pointer = entry;
+    unsafe { mmu::uncache_identity(&mut entry, start as usize); }
+    assert_eq!(entry, pointer, "PCD/PWT on a table pointer do not change the memory type of its leaves");
+    let leaves = unsafe { core::slice::from_raw_parts(table.ptr() as *const u64, 512) };
+    for (page, &leaf) in leaves.iter().enumerate() {
+        assert_eq!(leaf, (start + page as u64 * 4096) | 0x1B);
+    }
+}
+
 #[test]
 fn real_program_instances_have_fresh_bss_and_rebased_private_pointers() {
     for file in [

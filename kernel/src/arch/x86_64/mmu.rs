@@ -37,6 +37,37 @@ pub const IDENTITY_END: u64 = 1 << 32;
 pub const RAM_END: u64 = 1 << 39;
 const LARGE: u64 = 0x20_0000;
 const CONVENTIONAL: u32 = 7;
+
+// UEFI RAM types; reserved, unusable, MMIO and unknown types never justify a cached identity mapping.
+fn ram(kind: u32) -> bool { matches!(kind, 1..=7 | 9 | 10) }
+fn end(entry: &crate::abi::StatPhys) -> u64 { entry.start.saturating_add(entry.pages.saturating_mul(PAGE as u64)) }
+
+// The whole interval must be RAM, even across adjacent descriptors; a conflicting non-RAM descriptor wins.
+fn ram_covers(map: &[crate::abi::StatPhys], start: u64, limit: u64) -> bool {
+    if map.iter().any(|e| !ram(e.kind) && e.start < limit && start < end(e)) { return false; }
+    let mut at = start;
+    while at < limit {
+        let next = map.iter().filter(|e| ram(e.kind) && e.start <= at).map(end).max().unwrap_or(0);
+        if next <= at { return false; }
+        at = next;
+    }
+    true
+}
+
+// One supervisor identity PDE and, at a RAM/device boundary, its owned 4 KiB page table (213-KRN-0112).
+pub(crate) fn identity_region(map: &[crate::abi::StatPhys], physical: u64) -> Result<(u64, Option<Region>), &'static str> {
+    let limit = physical + LARGE;
+    if ram_covers(map, physical, limit) { return Ok((physical | 0x83, None)); }
+    if !map.iter().any(|e| ram(e.kind) && e.start < limit && physical < end(e)) { return Ok((physical | 0x83 | UNCACHED, None)); }
+    let table = Region::new(PAGE, PAGE)?;
+    for page in 0..512 {
+        let at = physical + (page * PAGE) as u64;
+        let cache = if ram_covers(map, at, at + PAGE as u64) { 0 } else { UNCACHED };
+        unsafe { (table.ptr() as *mut u64).add(page).write(at | VALID | WRITE | cache); }
+    }
+    Ok((table.ptr() as u64 | VALID | WRITE, Some(table)))
+}
+
 /// The part of free RAM [start, end) above IDENTITY_END that the identity map covers: whole 2 MiB pages.
 pub fn high_ram(start: u64, end: u64) -> Option<(u64, u64)> {
     let (start, end) = (start.max(IDENTITY_END).next_multiple_of(LARGE), end.min(RAM_END) & !(LARGE - 1));
@@ -61,18 +92,18 @@ pub fn kernel_root() -> usize {
 }
 
 pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
-    // The bootloader reserves all runtime RAM below 4 GiB. Retain supervisor
-    // identity mappings for the kernel, boot stack and MMIO on every CR3.
+    // Firmware RAM may extend above 3 GiB: the Ryzen's kernel arena lies there (213-KRN-0112).
     let root = Region::new(PAGE, PAGE)?;
     let pdpt = Region::new(PAGE, PAGE)?;
     for gigabyte in 0..4 {
         let pd = Region::new(PAGE, PAGE)?;
         for page in 0..512 {
             let physical = (gigabyte * 512 + page) * 0x200000;
-            let uncached = if physical >= 0xc0000000 { 0x18 } else { 0 };
+            let (entry, table) = identity_region(map, physical as u64)?;
             (pd.ptr() as *mut u64)
                 .add(page)
-                .write(physical as u64 | 0x83 | uncached);
+                .write(entry);
+            if let Some(table) = table { core::mem::forget(table); }
         }
         (pdpt.ptr() as *mut u64)
             .add(gigabyte)
@@ -209,6 +240,24 @@ pub unsafe fn uncached(physical: usize) {
     let pdpt = KERNEL_PDPT.load(Ordering::Acquire) as *const u64;
     let pd = (pdpt.add(physical >> 30).read() & !0xFFF) as *mut u64;
     let entry = pd.add(physical >> 21 & 511);
-    entry.write(entry.read() | 0x18);
-    core::arch::asm!("invlpg [{}]", in(reg) physical, options(nostack));
+    uncache_identity(entry, physical & !(LARGE as usize - 1));
+}
+
+// The caller has checked this whole 2 MiB region for RAM; split mappings need their leaves changed, not the PDE.
+pub(crate) unsafe fn uncache_identity(entry: *mut u64, physical: usize) {
+    if entry.read() & (1 << 7) != 0 {
+        entry.write(entry.read() | UNCACHED);
+        #[cfg(not(test))]
+        asm!("invlpg [{}]", in(reg) physical, options(nostack));
+    } else {
+        let table = (entry.read() & !0xFFF) as *mut u64;
+        for page in 0..512 {
+            let leaf = table.add(page);
+            leaf.write(leaf.read() | UNCACHED);
+            #[cfg(not(test))]
+            asm!("invlpg [{}]", in(reg) physical + page * PAGE, options(nostack));
+        }
+    }
+    #[cfg(test)]
+    let _ = physical;
 }
