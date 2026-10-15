@@ -593,6 +593,9 @@ toward the first hour corner (bottom right, 00–05); **P** selects the same orb
 ticks every ten seconds. Pressing the active mode's key again hides the entire
 orbit and dot; pressing the other key switches modes directly. The orbit
 starts hidden. The simple **C** orbit uses a darker gray than the **P** orbit.
+A colored marker just outside the orbit points toward the current hour corner
+(bottom-left at 08:20), using that corner's color. The gray bottom-right tick
+remains the fixed zero of the 100-second cycle.
 The dot's diameter is half the former moving stroke's length
 (six pixels at the usual display size).
 The dot starts toward the bottom-right corner and moves clockwise, completing

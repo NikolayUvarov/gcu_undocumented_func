@@ -44,6 +44,13 @@ impl OrbitMode {
     }
 }
 
+// The hour indicator's direction and color, independent of the fixed 100-second origin.
+pub fn hour_sector_at(face: crate::face::Face, radius: usize) -> Option<((isize, isize), u32)> {
+    let corner = face.corners.iter().position(|color| crate::face::COLORS.contains(color))?;
+    let phase = (corner + 4 - crate::face::FIRST_CORNER) % 4 * 25_000;
+    Some((point_at(phase, radius), face.corners[corner]))
+}
+
 // One clockwise turn per 100,000 ms, starting toward the first hour corner.
 // Corners are 45 + 90*index degrees clockwise from twelve o'clock. Fixed
 // point quarter-sine samples (scale 10,000), interpolated between samples,
