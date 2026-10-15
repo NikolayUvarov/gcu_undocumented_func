@@ -99,8 +99,12 @@ shutdown. The future owner must coordinate scheduler/radio/PCI teardown.
 
 ## Evidence and outstanding integration
 
-Sixteen host fixtures are registered and compile, but have not run before
-the required own-branch commit/build and raw publication. They exercise exact
+Sixteen host fixtures are registered and passed on source `97195003`, after
+raw publication `6b29b215` (2026-10-16). Own native release build passed in
+1.35 s without warnings. TX: 16 passed, 0 failed, 0 ignored, 0.18 s; affected
+RX: 18 passed, 0 failed, 0 ignored, 0.11 s. Configuration: x86-64 Linux
+6.6.87.2-microsoft-standard-WSL2, rustc 1.101.0-nightly
+(c36f14571 2026-10-01), own branch only. They exercise exact
 WD/WP/address fields, management HT-Control/header boundaries, all rates, separate RPQ/DMA completion,
 bounded resubmission and explicitly unknown attempt counts, actual RX-copy release, ring/tag
 rollover beyond sixteen frames, faulted publication, stale/malformed reports,
