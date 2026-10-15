@@ -176,7 +176,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [750-EFF-0003](750-EFF-0003-interface-and-policy.md) | `idl/effector.wit` between the two services, the owner's policy, the audit record, the threat analysis | `EFF` (open) | P1 | — | stage V |
 | [750-EFF-0004](750-EFF-0004-json.md) | `mind::json`: a bounded JSON reader and writer | `EFF` (open) | P1 | — | track D |
 | [750-EFF-0005](750-EFF-0005-zip-reader.md) | `mind::zip`: a bounded ZIP reader (stored, deflate) | `EFF` (open) | P2 | — | track D |
-| [750-EFF-0006](750-EFF-0006-session-service.md) | `effector`: the session with the server (heartbeat, commands, ACK journal, pinned HTTPS) | `EFF` (open) | P1 | 0001–0004; `NET`, `KRN`, `APP` requests | track D |
+| [750-EFF-0006](750-EFF-0006-session-service.md) | Bounded session core implemented; transport, durable gateway and boot/live acceptance remain | `EFF` / ASTRA auditor-fixer | P1 | 0001–0004; `NET`, `KRN`, `APP` requests | track D |
 | [750-EFF-0007](750-EFF-0007-gateway-service.md) | `effector_gw`: the policy-bound gateway (services, logs, files, audit) | `EFF` (open) | P1 | 0003; `KRN` requests | stage V |
 | [750-EFF-0008](750-EFF-0008-application-packages.md) | Signed application packages: install, update and remove an application | `EFF` (open) | P1 | 0005, 0007; `UPD`, `KRN` requests; the server's package hash | track C |
 | [750-EFF-0009](750-EFF-0009-system-update.md) | System update from the server, only through `updater` | `EFF` (open) | P2 | 0007; 351-UPD-0007; `UPD` request | track C |
