@@ -312,6 +312,17 @@ cases (reported 0.00 seconds), none ignored, on 2026-10-16 MSK. Full-gate
 and hardware evidence remain pending. PHY/native integration does not
 yet consume this permit.
 
+The subsequent native MAC/RX continuation supersedes the earlier firmware-only
+entry: init grants retained 8 MiB DMA, with disjoint command/RX reservations,
+RX installation before mastering, then runtime MAC and receive-only startup
+after verified firmware. Independent receive/radio/command stop follows every
+modified attempt. Before power-off, a bounded idle-XTAL check prevents cleanup
+from replacing an uncertain command. No WLAN endpoint, calibrated channel,
+association or network link is claimed. The full x86 image builds; twelve
+startup fixtures compile and await publication before execution. Earlier gate
+`ac1854f2` does not cover this continuation; physical Ryzen operation and a
+cumulative runtime-MAC/RX model remain unvalidated.
+
 The subsequent firmware-ready token correction binds `Ready` to the
 successful command queue session and checks that identity before runtime
 MAC preparation accesses the device. Existing live guards still reject a
@@ -332,3 +343,27 @@ publication. The complete session-bound owner and applied policy/C2H
 orchestration remain unimplemented, and no Initialized or RFK-grant token
 is available from this slice. No native or hardware guarantee changes;
 [scope](../../hwdocs/rtl8852be.md#exact-coexistence-command-codecs-and-bounded-register-transitions).
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.
+
+The private MAC report-tail engine requires a real receive permit and live
+post-DACK register state before programming PPDU forwarding and RTS fields.
+It remains inaccessible to native startup until the complete PHY/RFK/trim
+and path prerequisites are implemented. A 10 ms stage and independent
+report/RX/radio/command cleanup retain DMA on failure. Seven host cases
+compile; new-slice build/execution and hardware validation are pending.
+
+The PHY-capability query shares the scheduler's register mailbox and counters,
+requires an actual downloader token for the same live DLFW queue, and only
+returns a capability token after a matching complete firmware response within
+the total deadline. Raw fields and explicit successful-zero-NSS fallback flags
+remain available; OTP data or a missing reply cannot replace the response.
+Session identity, independent command/WCPU cleanup and retained DMA remain
+part of the contract. Ten new host cases compile; execution, native integration
+and physical-device evidence are pending.

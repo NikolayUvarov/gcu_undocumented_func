@@ -26,10 +26,14 @@ pub(crate) struct Cfo{
 /// Initial observations/settings, not periodic tracking, calibrated PHY state or permission to transmit.
 #[derive(Debug,Eq,PartialEq)]
 pub(crate) struct Prefix{
+    attempt:u64,
+    pub band:Band,
     pub thermal:[u8;2],pub thermal_ewma_fixed4:[u16;2],pub last_thermal_max:u8,
     pub gain_offset:i8,pub gain_rssi:i8,pub ccx_unit:u8,pub ifs_low:[u16;4],pub ifs_high:[u16;4],
     pub dig:Dig,pub cfo:Cfo,pub edcca_backup:[u8;4],pub dynamic_tb:bool,pub bandedge:u8,
 }
+
+impl Prefix{pub(crate) fn attempt(&self)->u64{self.attempt}}
 
 fn field(bus:&mut impl RegisterIo,at:usize,mask:u32,value:u32)->io::Result<()>{
     io::modify32(bus,at,mask,(value<<mask.trailing_zeros())&mask)
@@ -108,6 +112,7 @@ pub(crate) fn run<B:PhyIo>(phy:&mut Phy<'_,B>,band:Band)->Result<Prefix,Failure>
     let fail=|cause|Failure{stage:Stage::Guard,cause,radio_stop:None};
     if phy.state!=State::RadioLoaded{return Err(fail(Fault::new(FaultKind::PowerState,0,phy.state as u32)));}
     if phy.identity.xtal==255{return Err(fail(Fault::new(FaultKind::Xtal,crate::efuse::XTAL_AT,255)));}
+    let attempt=phy.attempt();
     let start=phy.bus.now_us();
     let budget=guard(phy.bus,&phy.identity,RegisterPhase::BeforeDack).and_then(|()|remaining(phy.bus,start));
     let budget=budget.map_err(|cause|{phy.mark_failed();fail(cause)})?;
@@ -125,7 +130,7 @@ pub(crate) fn run<B:PhyIo>(phy:&mut Phy<'_,B>,band:Band)->Result<Prefix,Failure>
         stage=Stage::Edcca;bb(&mut timed,0xc70,0x03f00000,0x29)?;
         stage=Stage::UlTb;let bandedge=read_bb(&mut timed,0x4498,1<<30)?as u8;
         timed.delay_us(0)?;
-        Ok(Prefix{thermal:[a,b],thermal_ewma_fixed4:[u16::from(a)<<4,u16::from(b)<<4],last_thermal_max:a.max(b),
+        Ok(Prefix{attempt,band,thermal:[a,b],thermal_ewma_fixed4:[u16::from(a)<<4,u16::from(b)<<4],last_thermal_max:a.max(b),
             gain_offset,gain_rssi,ccx_unit:3,ifs_low,ifs_high,dig,cfo,edcca_backup:[0;4],dynamic_tb:true,bandedge})
     })().and_then(|value|remaining(phy.bus,start).map(|_|value));
     result.map_err(|cause|{phy.mark_failed();Failure{stage,cause,radio_stop:disable_bb_rf(phy.bus).err()}})

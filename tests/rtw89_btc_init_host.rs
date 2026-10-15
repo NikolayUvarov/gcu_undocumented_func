@@ -23,3 +23,8 @@ extern crate self as mind;
 #[path="../rtw89_wifi/src/c2h.rs"] mod c2h;
 #[path="../rtw89_wifi/src/post_mac_regs.rs"] mod post_mac_regs;
 #[path="../rtw89_wifi/src/post_mac.rs"] mod post_mac;
+
+#[path="../rtw89_wifi/src/report_tail.rs"] mod report_tail;
+
+#[path="../rtw89_wifi/src/calibration.rs"] mod calibration;
+#[path="../rtw89_wifi/src/phycap.rs"] mod phycap;

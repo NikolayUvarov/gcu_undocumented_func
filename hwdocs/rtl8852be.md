@@ -1,6 +1,6 @@
 # RTL8852BE: source pins, firmware format and the first hardware observation
 
-Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware diagnostic using retained command DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
+Status, 2026-10-16: `rtw89_wifi/` has a native board-read cycle followed by one hash-pinned firmware/MAC/RX diagnostic using retained, disjoint command and receive DMA, then independent shutdown. This is not a working network driver: RF calibration and the WLAN endpoint are absent. Native integration and actual hardware evidence are recorded separately below. Tasks: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](../issues/213-KRN-0114-realtek-driver-startup.md), [213-DRV-0033](../issues/213-DRV-0033-rtl8852be-firmware-and-probe.md).
 
 ## Observed card
 
@@ -648,6 +648,61 @@ After raw publication `767c2cb8`, all 16 post-init/session fixtures passed
 2026-10-16 MSK. Two independent read-only reviews found no blocker.
 Full-gate and physical-device evidence remain pending.
 
+## Actual firmware PHY capabilities
+
+`phycap::query` sends AX GET_FEATURE part zero (`0x103, 0, 0, 0`) through
+the same exclusive register mailbox and counter implementation used by
+`runtime_mac::scheduler_zero`. Pinned `mac.c` `rtw89_mac_read_phycap` and
+`rtw89_mac_setup_phycap_part0`, `fw.c` register-message helpers and `fw.h`
+`RTW89_C2HREG_PHYCAP_*` define the request, four-word response and field
+resolution. AX's EFUSE-state conversion hook is empty and part one is skipped.
+
+The call requires actual successful download for the same queue session,
+live firmware status and the pre-runtime DLFW geometry with BB reset. The
+entire call has a caller-supplied maximum 1.1-second deadline; source H2C-idle
+and C2H-response polls remain bounded at 5 ms and 1 second, with finite poll
+counts even for a frozen clock. A matching function-three response with four
+words and a final deadline check creates the opaque `Capabilities` token.
+Busy, malformed, uncertain or late exchanges never create a token or retry;
+command-DMA and WCPU shutdown errors remain independently available.
+
+The token retains all four words, raw NSS/antenna counts and command-session
+identity. Nonzero NSS is clamped to the chip's two-stream limit; only an
+actual successful zero-NSS reply selects the source chip-limit fallback,
+reported by explicit defaulted flags. Antenna count one selects RF_B; other
+counts retain the source's initial unspecified mask zero. The effective RX
+path then follows `rtw8852b_common.c`'s zero-to-RF_AB rule. Raw TX NSS one with
+two antennas in each direction selects RF_B TX and path diversity. This
+query is not the OTP trim decoder, regulatory authorization, a completed PHY
+attempt or a working radio. Native integration and hardware validation are
+pending; the synthetic regression executable is `tests/rtw89_phycap_host.rs`.
+
+## MAC report tail
+
+The crate-private `report_tail.rs` implements the pinned MAC report tail
+from `core.c:5660–5662`, `mac.c:6046–6105` and AX dispatch `mac.c:7194–7195`.
+It is not invoked natively: the eventual caller must first complete actual
+BTC initialization, the complete PHY/RFK pipeline, board power trims and
+RX/TX path setup. Its live receive permit and post-DACK BB guards do not
+substitute for that missing pipeline state.
+
+The stage writes CMAC0 PPDU status `0xce40=0x2b`, forwards its reports to
+HOST (`0x9c18` low two bits `1`), and writes only the two 16-bit RTS fields
+at `0xc614`. The upper aggregation-length halfword is preserved. AX's
+separate PHY-report hook is null. The source default (`None` or the source
+`u32::MAX` sentinel) encodes time `88 >> 5` and length `4080 >> 4`;
+explicit thresholds use time `255` and length `min(bytes >> 4, 255)`.
+Legitimate all-ones RTS data is not treated as an unavailable register.
+
+The absolute 10 ms deadline includes receive validation, readback and the
+final clock check. A modified failure independently disables PPDU reports,
+stops RX, disables BB/RF and stops command DMA/WCPU. Every error is retained;
+the external owner must still verify PCI quiescence before releasing DMA.
+Seven focused fixtures compile using the real receive-token constructor,
+covering exact writes, thresholds, stale/incorrect state, all applied or
+ignored writes, independent cleanup failures and final-read deadlines.
+Execution/build and hardware evidence for this slice are pending.
+
 ## What blocks radio operation
 
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
@@ -848,3 +903,31 @@ scoreboard ownership, grant order/restoration, pending-command protection,
 applied-write failures and bounded time/clock faults. They are compiled;
 execution evidence will be recorded after raw publication. This adds no
 hardware, native-policy or calibrated-radio claim.
+## Native MAC/RX diagnostic continuation
+
+The current 213-KRN-0114 entry extends the earlier 128 KiB firmware-only
+stage to retained 8 MiB DMA: command reservation `[0, 128 KiB)`, receive
+reservation `[128 KiB, 8 MiB)`. The actual command and receive footprints
+fit those disjoint regions. No CPU alias accesses them after construction.
+RX installation follows PCIe finish before mastering; runtime MAC and the
+post-MAC receive-only activation follow successful firmware download.
+The service then shuts down; it does not run normal H2C/C2H transport or
+register a radio. This supersedes the native integration limits recorded
+with the earlier library slices above, without changing their test evidence.
+
+Independent RX, radio and command shutdown precedes the checked MEM-only
+transition. Before MAC power-off, pending XTAL readiness is bounded by 50 ms
+inside a fresh one-second cleanup budget; failure skips all power-off writes
+and still requests final quiescence. All primary/cleanup errors and DMA stay
+retained. The full own-branch image builds and twelve startup fixtures compile;
+execution awaits publication. Cumulative runtime-MAC/RX modeling and actual
+hardware verification remain separate, incomplete evidence requirements.
+
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.
