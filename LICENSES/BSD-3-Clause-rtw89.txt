@@ -10,7 +10,7 @@ Adapted from Linux v6.19, commit
 05f7e89ab9731565d8a62e3b5d1ec206485eeb0b,
 drivers/net/wireless/realtek/rtw89/{fw.h,fw.c,core.h,core.c,reg.h,mac.h,mac.c,efuse.c,rtw8852b.c,rtw8852b_common.c,rtw8852b_common.h,pci.c,pci.h,txrx.h,rtw8852be.c,coex.c}.
 Those source files offer GPL-2.0 OR BSD-3-Clause. MIND Core uses the
-BSD-3-Clause option for rtw89_wifi/src/{firmware,registers,power,efuse,fwcmd,mac,pcie,download,runtime_mac,runtime_mac_regs,rx,rxdesc,c2h,post_mac,post_mac_regs,report_tail,phycap,h2c,btc,btc_init}.rs.
+BSD-3-Clause option for rtw89_wifi/src/{firmware,registers,power,efuse,fwcmd,mac,pcie,download,runtime_mac,runtime_mac_regs,rx,rxdesc,c2h,post_mac,post_mac_regs,report_tail,phycap,btc_reports,h2c,btc,btc_init}.rs.
 The same BSD option covers rtw89_wifi/src/{phy,phy_tables}.rs, adapted from
 phy.c, phy.h, rtw8852b_table.c, rtw8852b_common.c, mac.c, reg.h and fw.c/fw.h
 at the same commit.
