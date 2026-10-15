@@ -652,3 +652,11 @@ approved by the maintainer, instead of copying upstream's ignored rejection.
 Eight regressions compile; execution follows publication. Host IQK/TSSI/DPK
 algorithms, their policy-bound TX prerequisites and native integration remain
 open; [semantics](../hwdocs/rtl8852be.md#iqkdpk-and-nested-iqk-notices).
+
+RFK/nested execution evidence: after raw publication `8ebd2da170902c5679ff5450e674007dd1dfb9ee`
+containing code `a134b5a0` and `a6df7c83`, the own source branch passed all 45
+Session/owner/RFK/nested cases (0.18 s) and all 11 control cases (0.00 s), with
+zero failures or ignores. Native build passed in 3.24 s without warnings.
+These seeded-device fixtures cover actual production owner/session logic;
+hardware calibration, policy-authorized RFK transmission and native networking
+remain open.
