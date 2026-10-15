@@ -169,13 +169,50 @@ fn every_failed_power_on_write_still_attempts_independent_shutdown() {
 }
 
 #[test]
-fn timeout_does_not_consume_the_cleanup_budget() {
+fn pending_xtal_timeout_gets_an_independent_cleanup_budget_without_command_replacement() {
     let mut d = Device::new(); d.stuck_xtal = Some(1);
     let error = board::read(&mut d).err().unwrap();
     assert_eq!(error.cause.kind, FaultKind::Timeout);
-    assert!(error.shutdown.is_none());
-    assert!(d.now >= 50_000 && d.now < 80_000);
-    assert_eq!(d.get(R_AX_SCOREBOARD + 3, 1), 0x80);
+    assert_eq!(error.shutdown.unwrap().kind, FaultKind::Timeout);
+    assert!(d.now >= 100_000 && d.now < 110_000);
+    assert_eq!(d.xtal_count, 1);
+    assert_ne!(d.get(R_AX_WLAN_XTAL_SI_CTRL, 4) & B_AX_WL_XTAL_SI_CMD_POLL, 0);
+    assert_ne!(d.get(R_AX_SCOREBOARD + 3, 1), 0x80);
+}
+
+#[test]
+fn new_xtal_reads_and_writes_never_replace_pending_or_unavailable_commands() {
+    for read in [false, true] {
+        for (value, frozen, kind) in [(B_AX_WL_XTAL_SI_CMD_POLL | 0x123456, false, FaultKind::Timeout),
+            (B_AX_WL_XTAL_SI_CMD_POLL | 0x123456, true, FaultKind::Timeout), (u32::MAX, false, FaultKind::Unavailable)] {
+            let mut d = Device::new(); d.freeze = frozen;
+            d.put(R_AX_WLAN_XTAL_SI_CTRL, 4, value);
+            let result = if read { power::xtal_read(&mut d, 0x80).map(|_| ()) } else { power::xtal_write(&mut d, 0x80, 3, 3) };
+            assert_eq!(result.unwrap_err().kind, kind);
+            assert!(d.writes.is_empty());
+            assert_eq!(d.get(R_AX_WLAN_XTAL_SI_CTRL, 4), value);
+            assert_eq!(d.now, if !frozen && kind == FaultKind::Timeout { 50_000 } else { 0 });
+        }
+    }
+}
+
+#[test]
+fn completed_pending_xtal_allows_a_fresh_command_within_the_callers_budget() {
+    for read in [false, true] {
+        let mut d = Device::new(); d.late_ready = true;
+        d.put(R_AX_WLAN_XTAL_SI_CTRL, 4, B_AX_WL_XTAL_SI_CMD_POLL | 0x123456);
+        let mut timed = io::TimedIo::new(&mut d, 100);
+        if read { power::xtal_read(&mut timed, 0x80).unwrap(); } else { power::xtal_write(&mut timed, 0x80, 3, 3).unwrap(); }
+        assert_eq!(d.xtal_count, 1);
+        assert_eq!(d.now, 50);
+        assert_eq!(d.writes.len(), 1);
+    }
+    let mut d = Device::new();
+    d.put(R_AX_WLAN_XTAL_SI_CTRL, 4, B_AX_WL_XTAL_SI_CMD_POLL);
+    let mut timed = io::TimedIo::new(&mut d, 25);
+    assert_eq!(power::xtal_write(&mut timed, 0x80, 3, 3).unwrap_err().kind, FaultKind::Timeout);
+    assert!(d.writes.is_empty());
+    assert!(d.now <= 25);
 }
 
 #[test]

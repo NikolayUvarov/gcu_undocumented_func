@@ -15,12 +15,14 @@ pub fn identify(io: &mut impl RegisterIo) -> Result<u8> {
 }
 
 pub fn xtal_write(io: &mut impl RegisterIo, offset: u8, value: u8, mask: u8) -> Result<()> {
+    poll32(io, R_AX_WLAN_XTAL_SI_CTRL, B_AX_WL_XTAL_SI_CMD_POLL, 0, 50, 50_000)?;
     let command = B_AX_WL_XTAL_SI_CMD_POLL | (mask as u32) << 16 | (value as u32) << 8 | offset as u32;
     io.write32(R_AX_WLAN_XTAL_SI_CTRL, command)?;
     poll32(io, R_AX_WLAN_XTAL_SI_CTRL, B_AX_WL_XTAL_SI_CMD_POLL, 0, 50, 50_000).map(|_| ())
 }
 
 pub fn xtal_read(io: &mut impl RegisterIo, offset: u8) -> Result<u8> {
+    poll32(io, R_AX_WLAN_XTAL_SI_CTRL, B_AX_WL_XTAL_SI_CMD_POLL, 0, 50, 50_000)?;
     let command = B_AX_WL_XTAL_SI_CMD_POLL | (XTAL_SI_NORMAL_READ << 24) | offset as u32;
     io.write32(R_AX_WLAN_XTAL_SI_CTRL, command)?;
     poll32(io, R_AX_WLAN_XTAL_SI_CTRL, B_AX_WL_XTAL_SI_CMD_POLL, 0, 50, 50_000)?;
