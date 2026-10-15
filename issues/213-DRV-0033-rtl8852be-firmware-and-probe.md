@@ -50,5 +50,9 @@ The standard `build-and-write.sh` path called only the Broadcom fetcher.
 fetcher, including its licence. The existing post-write copy includes both
 subdirectories and verifies the copied bytes. The separate Realtek command
 remains available without requiring `b43-fwcutter`. No firmware enters Git,
-`usb_root` or a disk image. Full wrapper fetch verification is pending; no
-MIND firmware download or radio result is claimed.
+`usb_root` or a disk image. After publication in fast-test `c01a1cd1`, the wrapper fetched and verified
+three Broadcom files plus the Realtek binary and licence. A copy into a new
+local temporary directory read back all five files with matching SHA-256;
+Realtek offline `check` and all five fetcher regressions passed. Git tracks
+none of the store or build-image files. This verifies Linux directory copying,
+not the Windows disk path, MIND firmware download or radio operation.
