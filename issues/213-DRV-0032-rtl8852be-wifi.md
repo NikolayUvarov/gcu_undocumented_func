@@ -527,6 +527,18 @@ reseeding stage guards; exercise missing replies, runtime readiness failure,
 failed RX installation/activation and independent shutdown. This model is
 not evidence of physical firmware timing, RF calibration or WLAN traffic.
 
+### Pinned firmware default-table provenance
+
+Validate the complete MFW directory and source-aligned appended-element
+boundary before accepting the exact pinned file. Its last and maximum image
+end equal EOF; no appended firmware power/country override is present.
+Carry this checked result through Verified and successful Ready into an
+opaque default-table provenance value bound to the same command session.
+Keep the public hash/board policy unchanged; no constructor may attest other
+pins. Test malformed/unordered/trailing directories and old/new sessions.
+This does not establish platform country/SAR/EIRP constraints or authorize TX.
+See [metadata, API boundary and evidence](../hwdocs/rtl8852be-firmware-tables.md).
+
 ### Post-RXDCK initial DM tail
 
 Implement the source-contiguous power-reference, board thermal/PA trim and

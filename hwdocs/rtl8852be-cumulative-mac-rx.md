@@ -35,5 +35,21 @@ and is never bundled with this test, the repository or a disk image.
 
 ## Evidence
 
-Implementation and fixtures are awaiting own-branch build, raw publication
-and focused execution. Full gate and physical-device acceptance remain open.
+Own-branch commit `fdb77f1d`, based on consolidated ASTRA `bf5f3df0` plus
+`origin/main` at `abb639`, built without warnings in 0.92 seconds. The three
+affected harnesses compiled and `bash -n scripts/host_tests.sh` passed.
+After raw publication `f566311f`, the following ran on the unchanged own
+branch on 2026-10-16 MSK:
+
+- All six new cumulative cases passed (0.11 seconds), none ignored.
+- Both prior cold-board/PCIe cases passed (0.01 seconds), none ignored.
+- All 18 synthetic downloader cases passed (0.19 seconds). Its one private
+  file case was excluded from that ordinary run, then explicitly invoked
+  with the separately fetched pinned file and passed.
+- The explicit private-file binary passed GEN1 and GEN2 download (164 packets
+  each) and the missing-H2C GEN2 case (zero packets). Reported device-model
+  durations were 12,344 / 12,344 / 407,344 microseconds, not hardware timings.
+
+The focused filters select the named suites; unrelated imported module cases
+were not rerun. Independent read-only review found no blocker. No build or
+test ran on `fast-test`; full gate and physical-device acceptance remain open.

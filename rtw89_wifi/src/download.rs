@@ -24,11 +24,11 @@ const VERSION: [u8; 4] = [0, 29, 29, 15];
 const SECTIONS: [(u8, u32, usize); 3] = [(2, 0x1897_0000, 310_992), (1, 0x18e1_2400, 13_432), (9, 0x18e1_1928, 2_048)];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum VerifyError { Board, Security, Length, Hash, Format(firmware::Error), Image, Section }
+pub enum VerifyError { Board, Security, Length, Hash, Format(firmware::Error), Image, Section, Elements }
 
 /// The private file remains immutably borrowed; only the exact pinned cut-1 normal-CE image is admitted.
 #[derive(Debug)]
-pub struct Verified<'a> { selected: SelectedImage<'a>, image: Image<'a> }
+pub struct Verified<'a> { selected: SelectedImage<'a>, image: Image<'a>, layout: firmware::ContainerLayout }
 
 impl<'a> Verified<'a> {
     /// Board maps must be the completed OTP read from this same exclusively owned function, not defaults.
@@ -43,6 +43,11 @@ impl<'a> Verified<'a> {
     }
 
     fn parse_pinned(file: &'a [u8]) -> core::result::Result<Self, VerifyError> {
+        let layout = firmware::container_layout(file).map_err(VerifyError::Format)?;
+        if file.len() != FILE_BYTES || layout.image_count() != 5 || layout.last_image_end() != file.len()
+            || layout.maximum_image_end() != file.len() || layout.elements_offset() < file.len() {
+            return Err(VerifyError::Elements);
+        }
         let selected = firmware::select(file, 1, firmware::NORMAL_CE).map_err(VerifyError::Format)?;
         let image = firmware::parse(selected.bytes).map_err(VerifyError::Format)?;
         if selected.cut != 1 || selected.container_offset != 96 || selected.bytes.len() != 326_616
@@ -54,7 +59,7 @@ impl<'a> Verified<'a> {
             if section.kind != kind || section.download_address != address || section.bytes.len() != length
                 || section.checksum_present || section.redownload { return Err(VerifyError::Section); }
         }
-        Ok(Self { selected, image })
+        Ok(Self { selected, image, layout })
     }
 
     fn header(&self) -> [u8; 88] {
@@ -81,9 +86,24 @@ pub struct Failure { pub stage: Stage, pub cause: Cause, pub dma_stop: Option<Fa
 
 /// Status 7 observed for this command session; full MAC initialization, C2H, RF calibration and WLAN remain separate.
 #[derive(Debug)]
-pub struct Ready { queue_session: u64 }
+pub struct Ready { queue_session: u64, layout: firmware::ContainerLayout }
 impl Ready {
     pub fn version(&self) -> [u8; 4] { VERSION }
+    pub(crate) fn session(&self) -> u64 { self.queue_session }
+    /// Preserve provenance before moving Ready into the exclusive command session; this is not live readiness.
+    pub fn default_tables(&self) -> DefaultTables { DefaultTables { queue_session: self.queue_session, layout: self.layout } }
+}
+
+/// The exact hash-pinned file has no appended override elements; platform limits and live session checks remain mandatory.
+#[derive(Debug)]
+pub struct DefaultTables { queue_session: u64, layout: firmware::ContainerLayout }
+impl DefaultTables {
+    pub fn file_sha256(&self) -> [u8; 32] { FILE_SHA256 }
+    pub fn file_bytes(&self) -> usize { FILE_BYTES }
+    pub fn image_count(&self) -> u8 { self.layout.image_count() }
+    pub fn elements_offset(&self) -> usize { self.layout.elements_offset() }
+    /// Identity only; callers still validate current owned DMA/firmware/PHY state before device operations.
+    pub fn belongs_to(&self, ready: &Ready) -> bool { self.session() == ready.session() && self.layout == ready.layout }
     pub(crate) fn session(&self) -> u64 { self.queue_session }
 }
 
@@ -234,7 +254,7 @@ pub fn run(bus: &mut impl Bus, queue: &mut Queue<'_>, firmware: Verified<'_>) ->
         let stopped = stop(bus, queue);
         return Err(Failure { stage, cause, dma_stop: stopped.dma, cpu_stop: stopped.cpu });
     }
-    Ok(Ready { queue_session: queue.session() })
+    Ok(Ready { queue_session: queue.session(), layout: firmware.layout })
 }
 
 #[cfg(test)]
