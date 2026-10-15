@@ -41,3 +41,4 @@ python3 tests/rtw89_dack_tables_test.py
 python3 tests/rtw89_power_tables_test.py
 
 python3 tests/rtw89_iqk_tables_test.py
+python3 tests/rtw89_tssi_tables_test.py

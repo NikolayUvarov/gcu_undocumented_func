@@ -30,7 +30,12 @@ use phy::{Phy, PhyIo, State, Stage};
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
+#[derive(Default)]
+struct TssiModel{outer:bool,nested:bool,shots:Vec<(usize,u32,u32,u32)>,pending:Option<(u64,usize,u16)>,
+    stuck:bool,stale:bool,ignore_pmac_stop:bool,fail_pmac_stop:bool,delay:u64,fail_notice:Option<dack::RfkState>,late_notice:Option<dack::RfkState>}
+
 struct Device {
+    tssi:Option<TssiModel>,
     session:u64,ignore_write:Option<usize>,
     late_read:Option<usize>,late_read_skip:usize,late_read_us:u64,xtal_bad_read:bool,freeze_read:Option<usize>,
     scheduler_calls:Vec<(u32,usize)>, scheduler_fail:Option<usize>, scheduler_late:Option<usize>, scheduler_dirty:bool, rx_delay_fail:bool, rx_delay_late:bool,
@@ -50,7 +55,7 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { session:0,ignore_write:None,late_read:None,late_read_skip:0,late_read_us:0,xtal_bad_read:false,freeze_read:None,scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+        let mut d = Self { tssi:None,session:0,ignore_write:None,late_read:None,late_read_skip:0,late_read_us:0,xtal_bad_read:false,freeze_read:None,scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
             rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
@@ -110,6 +115,13 @@ impl Device {
                 if at==reg {return Ok((self.get(at,4)&0xffffff)|((base+((self.get(index,4)>>1)&15))<<24));}
             }
         }
+        if let Some(model)=self.tssi.as_ref(){
+            if let Some((ready,path,value))=model.pending{
+                if self.now>=ready&&!model.stuck&&at==0x11c18+path*0x2000{
+                    self.put(at,4,1<<16|u32::from(value));
+                }
+            }
+        }
         if at == 0x18080 && self.nctl_stuck { return Ok(0); }
         Ok(self.get(at, width))
     }
@@ -118,7 +130,27 @@ impl Device {
         self.tick(1); self.writes += 1;
         self.events.push(Event::Write(at, width, value));
         if self.ignore_write==Some(self.writes){return Ok(());}
+        let previous=self.get(at,width);
+        if self.tssi.as_ref().is_some_and(|m|m.ignore_pmac_stop)&&at==0x109c4&&previous&16!=0&&value&16==0{return Ok(());}
         self.put(at, width, value);
+        if self.tssi.is_some(){
+            if [0x15820,0x17820].contains(&at)&&value&(1<<31)!=0&&previous&(1<<31)==0{
+                let path=usize::from(at==0x17820);let stale=self.tssi.as_ref().unwrap().stale;
+                self.put(0x11c18+path*0x2000,4,if stale{1<<16|77}else{0});
+            }
+            if at==0x109c0&&value&1==1&&previous&1==0{
+                let path=match self.get(0x1458c,4)>>28&15{1=>0,2=>1,v=>panic!("invalid PMAC path {v}")};
+                let power=self.get(0x14594,4)>>22&511;let count=self.get(0x109c8,4);let period=self.get(0x109c4,4)>>8;
+                assert_ne!(self.get(0x109c4,4)&16,0);assert_eq!(self.get(0x10980,4)&0x10001,0x10001);
+                let model=self.tssi.as_mut().unwrap();assert!(model.outer&&model.nested,"PMAC needs actual modeled outer and inner grant");
+                let report=match(path,power){(0,48)=>160,(0,20)=>100,(1,48)=>200,(1,20)=>142,_=>panic!("unexpected power")};
+                model.shots.push((path,power,count,period));model.pending=Some((self.now+model.delay,path,report));
+            }
+            if at==0x109c4&&value&16==0{
+                let model=self.tssi.as_mut().unwrap();model.pending=None;
+                if previous&16!=0&&model.fail_pmac_stop{return Err(Fault::new(FaultKind::Access,at,value));}
+            }
+        }
         if self.deadline_write == Some(at) { self.now += self.deadline_us; self.deadline_write = None; }
         if self.deadline_write_number == Some(self.writes) { self.now+=100_000; self.deadline_write_number=None; }
         if at == 0x10378 && width == 4 {
@@ -572,6 +604,17 @@ fn late_last_rck_restore_cannot_report_completed_calibration() {
 impl dack::DackIo for Device {
     fn btc_rfk(&mut self,notice:dack::BtcNotice,timeout_us:u32)->Result<()> {
         assert!(timeout_us>0 && timeout_us<=100_000); self.btc.push((notice,timeout_us)); self.btc_event_positions.push(self.events.len());
+        if let Some(model)=self.tssi.as_mut(){
+            assert_eq!(notice.calibration,dack::Calibration::Iqk);
+            match notice.state{
+                dack::RfkState::Start=>{assert!(!model.outer);assert_eq!(notice.phy_map,0x10);model.outer=true;},
+                dack::RfkState::OneshotStart=>{assert!(model.outer&&!model.nested);assert_eq!(notice.phy_map,0x13);model.nested=true;},
+                dack::RfkState::OneshotStop=>{assert!(model.outer&&model.nested);model.nested=false;},
+                dack::RfkState::Stop=>{assert!(model.outer&&!model.nested);model.outer=false;},
+            }
+            if model.late_notice==Some(notice.state){self.now+=u64::from(timeout_us);}
+            return if model.fail_notice==Some(notice.state){Err(Fault::new(FaultKind::Access,0xaa,notice.state as u32))}else{Ok(())};
+        }
         let (delay,fail)=match notice.state {
             dack::RfkState::Start=>(self.btc_start_delay,self.btc_start_fail),
             dack::RfkState::Stop=>(self.btc_stop_delay,self.btc_stop_fail),
@@ -634,3 +677,5 @@ fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
 #[path="../rtw89_wifi/src/channel_power.rs"] mod channel_power;
 
 #[path="rtw89_channel_cases.rs"] mod channel_cases;
+
+#[path="rtw89_tssi_cases.rs"] mod tssi_cases;

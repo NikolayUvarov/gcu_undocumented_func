@@ -220,9 +220,10 @@ fn engine(bus:&mut impl RxdckIo,channel:u8,start:u64)->core::result::Result<[Pat
         Ok(done)=>Ok(done),
         Err(cause)=>{
             let register_restore=if pending{None}else{saved.and_then(|v|restore_registers(&mut TimedIo::new(bus,20_000),v).err())};
+            let early_radio=if pending&&outer{Some(phy::disable_bb_rf(bus).err())}else{None};
             let scheduler_restore=if paused&&!resumed{scheduler(bus,1_000_000).err()}else{resume_error};
             let scheduler_status=if outer{status(&mut TimedIo::new(bus,80_000)).err()}else{None};
-            let radio_stop=if outer{phy::disable_bb_rf(bus).err()}else{None};
+            let radio_stop=early_radio.unwrap_or_else(||if outer{phy::disable_bb_rf(bus).err()}else{None});
             let nested_stop=if nested{dack::notify(bus,notice(RfkState::OneshotStop),100_000).err()}else{nested_error};
             let btc_stop=if outer&&!outer_stopped{dack::notify(bus,notice(RfkState::Stop),100_000).err()}else{outer_error};
             Err(Failure{stage,cause,channel_rx:None,results,nctl_uncertain:pending,register_restore,scheduler_restore,scheduler_status,radio_stop,nested_stop,btc_stop})

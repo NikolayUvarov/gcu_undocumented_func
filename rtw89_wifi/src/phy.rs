@@ -18,6 +18,9 @@ pub(crate) mod tail;
 #[allow(dead_code)]
 #[path="phy/channel.rs"]
 pub(crate) mod channel;
+#[allow(dead_code)]
+#[path="phy/tssi.rs"]
+pub(crate) mod tssi;
 
 pub const BAR_BYTES: usize = 0x20000;
 pub const PHY_BASE: usize = 0x10000;

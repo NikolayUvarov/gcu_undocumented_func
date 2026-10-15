@@ -23,6 +23,10 @@ The same BSD option covers rtw89_wifi/src/{iqk,iqk_tables}.rs, adapted from
 rtw8852b_rfk.c and reg.h at the same pinned commit, Copyright(c) 2019-2022
 Realtek Corporation.
 
+The same BSD option covers the initial TSSI engine and tables in
+rtw89_wifi/src/{tssi,tssi_tables}.rs and rtw89_wifi/src/phy/tssi.rs, from
+rtw8852b_rfk.c, rtw8852b_rfk_table.c, rtw8852b_common.c and rtw8852b_table.c.
+
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:
 
