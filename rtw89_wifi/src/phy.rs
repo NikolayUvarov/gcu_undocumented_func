@@ -8,6 +8,11 @@ use crate::phy_tables as tables;
 use crate::power;
 use crate::registers::*;
 
+// The public entry awaits actual BTC ntfy_init completion; this private engine cannot grant that readiness.
+#[allow(dead_code)]
+#[path="phy/dm.rs"]
+pub(crate) mod dm;
+
 pub const BAR_BYTES: usize = 0x20000;
 pub const PHY_BASE: usize = 0x10000;
 const RF_MASK: u32 = 0xfffff;
