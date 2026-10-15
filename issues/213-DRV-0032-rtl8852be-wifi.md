@@ -374,6 +374,7 @@ records exact skipped chip hooks and the remaining source order through board
 trim, actual firmware PHY capabilities, channel calibration and association.
 Owned active-RX permits and actual BTC policy remain integration dependencies;
 no fake readiness callback, radio activation or hardware success is supplied.
+
 ### PHY consumer of the owned RX permit
 
 The shared PHY guard now accepts active RX only through the actual borrowed
@@ -443,3 +444,12 @@ Missing, malformed, late or foreign-session responses cannot imply two NSS.
 Retain an uncertain mailbox and DMA until independent command/WCPU cleanup;
 never retry a failed exchange. Test the real exchange, counter rollover,
 source resolution, busy/malformed/frozen-clock cases and independent cleanup.
+
+
+### Post-RXDCK initial DM tail
+
+Implement the source-contiguous power-reference, board thermal/PA trim and
+receive-path/NSS sequence, using actual session-bound firmware capabilities
+and DM gain baselines from this same PHY attempt. Keep it crate-private until
+actual BTC and the full source startup ordering are integrated. Detailed
+scope, failure behavior and pending evidence: [PHY tail](../hwdocs/rtl8852be-phy-tail.md).

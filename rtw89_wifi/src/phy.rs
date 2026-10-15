@@ -12,6 +12,9 @@ use crate::registers::*;
 #[allow(dead_code)]
 #[path="phy/dm.rs"]
 pub(crate) mod dm;
+#[allow(dead_code)]
+#[path="phy/tail.rs"]
+pub(crate) mod tail;
 
 pub const BAR_BYTES: usize = 0x20000;
 pub const PHY_BASE: usize = 0x10000;
@@ -33,6 +36,8 @@ pub trait PhyIo: RegisterIo {
     fn pci_id(&mut self) -> io::Result<u32>;
     fn pci_command(&mut self) -> io::Result<u16>;
     fn bar_len(&self) -> usize;
+    /// Actual owned command queue identity, or zero when no bound queue is available.
+    fn command_session(&self)->u64{0}
     fn send_rf_page(&mut self, path: u8, page: u8, payload: &[u8], timeout_us: u32) -> io::Result<()>;
     /// Revalidate the actual same-device Receiving token and both retained DMA objects, without MMIO writes.
     /// No adapter inherits active-RX permission; a callback must return the real borrowed session permit.
@@ -45,7 +50,7 @@ pub trait PhyIo: RegisterIo {
 pub enum Stage { Baseband, TxPowerUnit, BasebandReset, RadioA, RadioB, Nctl, Dack, Rxdck, DpkBackoff, RckA, RckB }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, Failed }
+pub enum State { Fresh, BasebandLoaded, RadioLoaded, TablesLoaded, RckDone, DackDone, RxdckDone, PathsConfigured, Failed }
 
 #[derive(Clone, Copy)]
 pub(crate) enum RegisterPhase { BeforeDack, AfterDack }

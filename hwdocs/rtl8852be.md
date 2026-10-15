@@ -923,3 +923,14 @@ scoreboard ownership, grant order/restoration, pending-command protection,
 applied-write failures and bounded time/clock faults. They are compiled;
 execution evidence will be recorded after raw publication. This adds no
 hardware, native-policy or calibrated-radio claim.
+
+## Native startup execution evidence
+
+Own-branch `b0987183` was published in `fast-test` `7e280d0c` before
+executing its compiled startup harness. All twelve cases passed on 2026-10-16
+(0.00 seconds, zero failed/ignored, x86-64 WSL2, rustc 1.101.0-nightly
+c36f14571), including pending-XTAL refusal, disjoint retained DMA bounds,
+all thirteen startup-stage failure positions and independent cleanup.
+The later own-branch integration `f314d00c` also builds the complete x86
+image with the queue-session and typed PHY/RX guards. These checks do not
+establish cumulative runtime device behavior or physical connectivity.

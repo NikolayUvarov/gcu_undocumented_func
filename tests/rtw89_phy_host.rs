@@ -31,7 +31,8 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
-    late_read:Option<usize>,late_read_us:u64,xtal_bad_read:bool,freeze_read:Option<usize>,
+    session:u64,ignore_write:Option<usize>,
+    late_read:Option<usize>,late_read_skip:usize,late_read_us:u64,xtal_bad_read:bool,freeze_read:Option<usize>,
     scheduler_calls:Vec<(u32,usize)>, scheduler_fail:Option<usize>, scheduler_late:Option<usize>, scheduler_dirty:bool, rx_delay_fail:bool, rx_delay_late:bool,
     btc: Vec<(dack::BtcNotice,u32)>, btc_event_positions: Vec<usize>, btc_start_fail: bool, btc_stop_fail: bool, btc_start_delay: u64, btc_stop_delay: u64, dack_model: bool,
     rf: [[u32; 256]; 2], swsi_pending: Option<(u64,u8,u8)>, swsi_latched: u32, read_stuck: bool,
@@ -49,7 +50,7 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { late_read:None,late_read_us:0,xtal_bad_read:false,freeze_read:None,scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+        let mut d = Self { session:0,ignore_write:None,late_read:None,late_read_skip:0,late_read_us:0,xtal_bad_read:false,freeze_read:None,scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
             rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
@@ -79,7 +80,7 @@ impl Device {
         io::check_offset(at, width, self.memory.len())?;
         if self.freeze_read==Some(at){self.frozen=true;}
         self.reads += 1; self.tick(1);
-        if self.late_read==Some(at){self.now+=self.late_read_us;self.late_read=None;}
+        if self.late_read==Some(at){if self.late_read_skip>0{self.late_read_skip-=1;}else{self.now+=self.late_read_us;self.late_read=None;}}
         if at==0x271&&width==1&&self.xtal_bad_read&&self.get(0x270,1)==4{return Ok(self.get(at,width)^1);}
         if at == 0x270 && width == 4 {
             if let Some((ready, command)) = self.xtal_pending {
@@ -116,6 +117,7 @@ impl Device {
         io::check_offset(at, width, self.memory.len())?;
         self.tick(1); self.writes += 1;
         self.events.push(Event::Write(at, width, value));
+        if self.ignore_write==Some(self.writes){return Ok(());}
         self.put(at, width, value);
         if self.deadline_write == Some(at) { self.now += self.deadline_us; self.deadline_write = None; }
         if self.deadline_write_number == Some(self.writes) { self.now+=100_000; self.deadline_write_number=None; }
@@ -183,6 +185,7 @@ impl PhyIo for Device {
     fn pci_id(&mut self) -> Result<u32> { Ok(self.id) }
     fn pci_command(&mut self) -> Result<u16> { Ok(self.command) }
     fn bar_len(&self) -> usize { self.memory.len() }
+    fn command_session(&self)->u64{self.session}
     fn send_rf_page(&mut self, path: u8, page: u8, payload: &[u8], timeout_us: u32) -> Result<()> {
         assert_eq!(page, 0); assert!(timeout_us > 0 && timeout_us <= 100_000);
         self.events.push(Event::H2c(path, payload.to_vec(), timeout_us));
@@ -617,3 +620,10 @@ fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
     let mut p=Phy::new_with_counter(&mut d,identity(),&counter);assert_eq!(p.state(),State::Failed);assert!(p.baseband().is_err());
     assert_eq!(counter.load(Ordering::Relaxed),u64::MAX);assert!(d.events.is_empty());assert_eq!(d.reads,0);
 }
+
+#[path="../rtw89_wifi/src/report_tail.rs"] mod report_tail;
+
+#[path="../rtw89_wifi/src/calibration.rs"] mod calibration;
+#[path="../rtw89_wifi/src/phycap.rs"] mod phycap;
+
+#[path="rtw89_tail_cases.rs"] mod tail_cases;
