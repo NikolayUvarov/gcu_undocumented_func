@@ -140,3 +140,9 @@ policy version and named IQK/TSSI/DPK engine, and refuses passive channels.
 It has no production constructor: actual calibration gain/PMAC level units,
 regulatory and platform SAR/EIRP admission are still unresolved. A test-only
 model constructor exercises identity refusal without granting native rights.
+
+After raw publication `8ebd2da1`, the corrected power fixture passed all eight
+cases (0.00 s), and the saved updated PHY/admission binary passed 171 cases
+(0.89 s), with one inherited private-firmware ignore and no failures. The
+original 7/8 failure remains recorded above. These are register-model and
+packing results, not physical power measurements or calibration authorization.
