@@ -30,8 +30,10 @@ tested commit and the audit's starting `origin/main`, `94ec83a0`.
    keeping unknown, reserved and device ranges uncached.
 2. Use 2 MiB leaves for uniform ranges and 4 KiB leaves at RAM/device boundaries;
    adjacent RAM descriptors must not leave the kernel arena partly uncached.
-3. Keep the device remapping helper correct for either leaf size. Do not change
-   the ABI, MTRRs, user-page permissions or the storage flush protocol.
+3. Keep the device remapping helper correct for either leaf size. Serialize the
+   BSP's firmware-to-kernel PAT/page-table transition with cache and TLB flushes;
+   preserve the firmware's MTRR configuration after the transition. Do not change
+   the ABI, user-page permissions or the storage flush protocol.
 4. Add host regressions for the observed Ryzen RAM placement, descriptor
    boundaries and mixed RAM/MMIO mappings. Run the required kernel suites and
    gate on the agent's own branch.
@@ -47,6 +49,10 @@ tested commit and the audit's starting `origin/main`, `94ec83a0`.
   2 MiB region; mappings remain supervisor-only and writable.
 - The helper used for MSI-X register mappings handles both large and small
   identity-map leaves without changing a page-table pointer's cache type.
+- The BSP changes PAT and CR3 with caches in no-fill mode, flushing caches and
+  translations before and after, restoring the firmware MTRR configuration and
+  enabling normal caching before later initialization. The critical sequence
+  makes no calls or allocations and is not applied again by AP initialization.
 - Focused host regressions and the project's kernel gate pass on the stated
   configuration.
 - A new Ryzen run records whether the reported delays improved; until then,
@@ -69,6 +75,24 @@ for the reported Ryzen ranges, RAM/MMIO boundaries, unknown ranges, reserved
 overlaps and device remapping. The full kernel gate and Ryzen rerun remain.
 
 `StatPhys` carries memory kinds and ranges but no UEFI cache attributes. This
-change does not extend that ABI or rewrite firmware MTRRs. Consequently, the
+change does not extend that ABI or alter the final firmware MTRR configuration. Consequently, the
 new tests establish the page-table PAT choice, not the CPU's effective memory
 type for every possible firmware allocation.
+
+The follow-up review found that replacing firmware cache types also needs a
+serialized transition. After all page tables are allocated and CPU protection
+state prepared, the BSP now disables interrupts, enters no-fill mode
+(`CR0.CD=1`, `NW=0`), writes back/invalidates caches and flushes global and local
+translations. It temporarily disables MTRRs through their enable bit, writes
+the existing PAT value, installs the new root, restores the exact firmware
+MTRR configuration, flushes caches/translations again and enables normal
+caching. Feature checks guard both MSRs. AP initialization retains its separate
+per-CPU PAT setup; it does not rebuild or replace the identity map.
+
+The procedure follows [Intel SDM volume 3A, sections 11.12.4 and 11.11.8](https://www.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-vol-3a-part-1-manual.pdf)
+and the cacheability-transition requirement in [AMD APM volume 2, section 7.8.7](https://docs.amd.com/v/u/en-US/24593_3.44_APM_Vol2).
+Disassembly of the compiled host object confirms no calls or explicit stack/data
+accesses between disabling and enabling caches. All five cache-selection host
+regressions still pass. These host checks do not execute the privileged
+transition or establish hardware cache coherency; kernel boot/SMP checks and
+the Ryzen rerun remain required.
