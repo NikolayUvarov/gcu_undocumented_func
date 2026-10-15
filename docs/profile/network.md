@@ -467,9 +467,9 @@ The native RTL8852BE diagnostic now attempts the initial PHY/BTC chain over
 its actual retained command/RX allocations and consumed Ready. It uses actual
 coexistence and scheduler callbacks for DACK/RXDCK, returns observations and
 always shuts down afterward. This does not complete channel calibration,
-policy admission, association or usable networking. The new cold-device
-composition fixtures are compiled; execution and hardware evidence remain
-pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).
+policy admission, association or usable networking. After publication `b169a275`, the five cold-device composition fixtures
+passed (0.08 s, zero failures/ignores); all twelve fifteen-stage startup
+fixtures passed separately. Hardware evidence remains pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).
 
 The private RTL8852B initial host DPK entry now requires same-attempt BTC,
 channel and completed TSSI tokens plus consumed engine-specific calibration

@@ -679,8 +679,8 @@ and the final report registers. Consume Ready exactly once; never replace
 BTC permission or scheduler mailbox responses with successful placeholders.
 Return observations only and always run the existing independent native
 shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
-and hardware traffic remain open. Five cumulative cold-device fixtures and
-the fifteen-stage cleanup matrix compile; execution follows raw publication.
+and hardware traffic remain open. All five cumulative cold-device cases passed after publication `b169a275`
+(0.08 s); the twelve fixtures of the fifteen-stage cleanup matrix also passed.
 See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
 
 
