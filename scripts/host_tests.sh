@@ -30,3 +30,4 @@ python3 tests/gate_test.py
 python3 tests/mirror_test.py
 python3 tests/usb_image_test.py
 python3 tests/media_test.py
+python3 tests/effector_server_test.py
