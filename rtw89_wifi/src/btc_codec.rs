@@ -24,7 +24,7 @@ impl Profile {
     pub fn select(board: &Board, firmware: &download::Ready) -> Result<Self, Error> {
         Self::select_version(board, firmware.version())
     }
-    fn select_version(board: &Board, version: [u8; 4]) -> Result<Self, Error> {
+    pub(crate) fn select_version(board: &Board, version: [u8; 4]) -> Result<Self, Error> {
         if version != [0,29,29,15] || board.identity.cut != 1 || board.identity.rfe != 1
             || board.maps.phycap[0x6c..0x6e] != [0xff,0xff] { return Err(Error::Profile); }
         Ok(Self { _private: () })
@@ -58,6 +58,9 @@ impl Profile {
     }
     /// Source no-link width starts at enum 20MHz=0 and still encodes the six-channel guard on both sides.
     pub fn afh_no_link(&self) -> Encoded { let mut out = Encoded::set(10); out.put(&[0,0,32]); out }
+    pub(crate) fn bt_ignore_wlan(&self) -> Encoded { let mut out=Encoded::set(12);out.put(&[0]);out }
+    pub(crate) fn bt_lna_normal(&self) -> Encoded { let mut out=Encoded::set(14);out.put(&[7]);out }
+
 
     /// Match source delta TLVs; RFK START forces all slots and TDMA's instant-execute bit.
     pub fn policy(&self, previous: Policy, next: Policy) -> Option<Encoded> {
@@ -80,8 +83,8 @@ impl Profile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Policy { ResetDefaults, NoLink, Rfk }
 impl Policy {
-    fn tdma(self) -> [u8; 8] { [0,0,0,0,0,0,0,if self == Self::Rfk { 1 } else { 0 }] }
-    fn slot(self, index: usize) -> (u16,u32,u16) {
+    pub(crate) fn tdma(self) -> [u8; 8] { [0,0,0,0,0,0,0,if self == Self::Rfk { 1 } else { 0 }] }
+    pub(crate) fn slot(self, index: usize) -> (u16,u32,u16) {
         if index != 0 { return SLOTS[index]; }
         match self { Self::ResetDefaults => SLOTS[0], Self::NoLink => (100,0xe5555555,0), Self::Rfk => (100,0xaaaaaaaa,1) }
     }

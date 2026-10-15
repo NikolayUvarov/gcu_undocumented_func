@@ -26,7 +26,8 @@ pub struct Failure {
 
 /// Hardware initcfg only; policy, antenna/grants, reports and owned WLAN scoreboard state remain mandatory.
 #[derive(Debug)]
-pub struct ConfigPrepared { _private: () }
+pub struct ConfigPrepared { attempt:u64,session:u64 }
+impl ConfigPrepared{pub(crate) fn matches(&self,attempt:u64,session:u64)->bool{attempt!=0&&session!=0&&self.attempt==attempt&&self.session==session}}
 
 fn fault(at: usize, value: u32) -> Fault { Fault::new(FaultKind::PowerState, at, value) }
 
@@ -94,13 +95,15 @@ fn close_lut(bus: &mut impl RegisterIo, path: u8) -> io::Result<()> {
 }
 
 /// Use the same exclusively owned function and actual board as the successful firmware and PHY stages.
-/// Ordinary RX/TX remain stopped; a failed modified attempt requires retained-DMA shutdown, never retry.
+/// Owned receive-only DMA may run, ordinary TX remains stopped; a failed modified attempt requires retained-DMA shutdown, never retry.
 pub fn prepare<B: PhyIo>(phy: &mut Phy<'_, B>, board: &Board, firmware: &download::Ready) -> core::result::Result<ConfigPrepared, Failure> {
-    prepare_inner(phy, board, firmware.version())
+    prepare_inner(phy, board, firmware.version(),firmware.session())
 }
 
-fn prepare_inner<B: PhyIo>(phy: &mut Phy<'_, B>, board: &Board, version: [u8; 4]) -> core::result::Result<ConfigPrepared, Failure> {
+pub(crate) fn prepare_inner<B: PhyIo>(phy: &mut Phy<'_, B>, board: &Board, version: [u8; 4],session:u64) -> core::result::Result<ConfigPrepared, Failure> {
     let fail = |cause| Failure { stage: Stage::Guard, cause, close_lut: [None; 2], disable_bb_rf: None };
+    if session==0||phy.attempt()==0||phy.bus_between_stages().command_session()!=session{return Err(fail(fault(0,0)));}
+    let attempt=phy.attempt();
     if phy.state() != State::RadioLoaded { return Err(fail(fault(0, phy.state() as u32))); }
     if board.identity.cut != 1 || board.identity.rfe != 1 || version != [0, 29, 29, 15]
         || board.maps.phycap[0x6c..0x6e] != [0xff, 0xff] {
@@ -142,7 +145,7 @@ fn prepare_inner<B: PhyIo>(phy: &mut Phy<'_, B>, board: &Board, version: [u8; 4]
         phy.mark_failed();
         return Err(Failure { stage, cause, close_lut, disable_bb_rf });
     }
-    Ok(ConfigPrepared { _private: () })
+    Ok(ConfigPrepared { attempt,session })
 }
 
 #[cfg(test)]
