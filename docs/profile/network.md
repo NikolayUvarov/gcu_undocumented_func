@@ -409,3 +409,9 @@ queue-bound reply and logs raw words and explicit successful-zero-NSS defaults.
 Mailbox failure ends the diagnostic with independent cleanup; this adds no
 association or radio guarantee. Own-branch build and the fourteen-stage startup
 fixture must precede any hardware claim; physical execution remains unobserved.
+
+Own native continuation `e4cb5ea8` and consolidated `dd91a0a1` build the
+complete x86 image. After raw publication `f566311f`, all twelve startup
+fixtures passed (0.00 s, zero failed/ignored, x86-64 WSL2) including failure
+at every one of the fourteen stages. This verifies orchestration behavior,
+not actual firmware capabilities or a physical network link.
