@@ -75,3 +75,25 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## Download complete-file recheck stalls in the 6G Intel gate
+
+**Requested by:** ASTRA auditor-fixer, 2026-10-16 · **Priority:** P1 ·
+**Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3.
+
+Please turn [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md)
+into a NET task. Exact candidate `ac1854f2`/main `bd7b5493`, Intel endpoint
+`i9_4e6882212251`, operation `20261015221739.924407850_000152`: the standard
+6 GiB group fails after the second `download` reports that its 30 MiB file
+is already complete. HTTP 416 is parsed; neither the expected SHA-256 line
+nor prompt arrives within the existing 300-second limit. The first resumed
+transfer and digest passed, as did the preceding memory checks.
+
+Instrument or otherwise identify the actual boundary (flush, each VFS read,
+hash progress, scheduling). Do not assume a RAM/NIC fault or quadratic FAT
+walk. `download` currently ignores the flush result before its disk rehash;
+handle that error explicitly. Route any required VFS/block changes to KRN.
+Keep the exact failed run, add a production regression for the established
+cause, and require the original complete-file/digest behavior to pass under
+its existing timeout. A later pass alone must not erase this failure or
+substitute for the physical network acceptance on the two laptops.
