@@ -13,6 +13,7 @@ use mind::idl::codec::List;
 use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BADGE_COUNTERS, BADGE_WIFI, BADGE_WIFI_CHANGE};
+mod service_turn;
 
 extern crate alloc;
 use alloc::vec::Vec;
@@ -21,8 +22,7 @@ const RADIO: Endpoint = Endpoint(2);
 const KEYSTORE: Endpoint = Endpoint(3);
 const RECEIVED_CAP: usize = 9;
 const POLL_MS: u32 = 10;
-// Frames taken from the radio per poll, received Ethernet frames kept for the stack, parked `wait` calls.
-const BURST: usize = 64;
+// Received Ethernet frames kept for the stack and parked `wait` calls.
 const QUEUE: usize = 32;
 const WAITERS: usize = 4;
 const ATTEMPTS: u8 = 4;
@@ -123,27 +123,34 @@ impl Wlan {
         }
     }
 
-    // Takes the radio's frames (a burst at most), runs the station's timers, answers parked calls.
-    fn pump(&mut self) {
+    // Complete a started frame and its actions under the existing aggregate radio deadline.
+    fn pump_frame(&mut self) -> bool {
+        let len = match self.deadline.call(|| wlanhw::receive(RADIO, &mut self.radio_frame)) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => return false };
+        if len < RADIO_HEADER { return true; }
+        let header = &self.radio_frame[..RADIO_HEADER];
+        let frame_len = u16::from_le_bytes([header[0], header[1]]) as usize;
+        let (weakness, channel) = (header[2], header[3]);
+        if RADIO_HEADER + frame_len > len { return true; }
+        let mut frame = [0u8; FRAME_MAX];
+        frame[..frame_len].copy_from_slice(&self.radio_frame[RADIO_HEADER..RADIO_HEADER + frame_len]);
+        // A fresh SNonce is drawn only for data frames, where message 1 may be; without RDRAND they are dropped.
+        let mut random = [0u8; 32];
+        if frame_len > 0 && frame[0] & 0x0C == 0x08 && !mind::random::fill(&mut random) { return true; }
+        let mut out = Out::default();
+        let mut kept = Kept([0; 32], 0, self.deadline);
+        if let Some(bss) = self.station.network() { kept.1 = bss.ssid().len(); kept.0[..kept.1].copy_from_slice(bss.ssid()); }
         let now = mind::time::uptime_ms() as u64;
-        for _ in 0..BURST {
-            let len = match self.deadline.call(|| wlanhw::receive(RADIO, &mut self.radio_frame)) { Ok(Ok(len)) => len.min(self.radio_frame.len()), _ => break };
-            if len < RADIO_HEADER { continue; }
-            let header = &self.radio_frame[..RADIO_HEADER];
-            let frame_len = u16::from_le_bytes([header[0], header[1]]) as usize;
-            let (weakness, channel) = (header[2], header[3]);
-            if RADIO_HEADER + frame_len > len { continue; }
-            let mut frame = [0u8; FRAME_MAX];
-            frame[..frame_len].copy_from_slice(&self.radio_frame[RADIO_HEADER..RADIO_HEADER + frame_len]);
-            // A fresh SNonce is drawn only for data frames, where message 1 may be; without RDRAND they are dropped.
-            let mut random = [0u8; 32];
-            if frame_len > 0 && frame[0] & 0x0C == 0x08 && !mind::random::fill(&mut random) { continue; }
-            let mut out = Out::default();
-            let mut kept = Kept([0; 32], 0, self.deadline);
-            if let Some(bss) = self.station.network() { kept.1 = bss.ssid().len(); kept.0[..kept.1].copy_from_slice(bss.ssid()); }
-            let _ = self.station.receive(&frame[..frame_len], channel, weakness, now, &random, &mut kept, &mut out, &mut self.tx, &mut self.rx);
-            self.apply(out);
-        }
+        let _ = self.station.receive(&frame[..frame_len], channel, weakness, now, &random, &mut kept, &mut out, &mut self.tx, &mut self.rx);
+        self.apply(out);
+        true
+    }
+
+    // Yield between radio frames; the time slice never shortens a started frame's radio/key-store calls.
+    fn pump(&mut self) {
+        service_turn::receive_batch(self, || mind::time::monotonic_ns() / 1_000_000, |wlan| wlan.pump_frame());
+        // Do not advance the station and produce another action when no aggregate radio time remains.
+        if self.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_none() { return; }
+        let now = mind::time::uptime_ms() as u64;
         let mut out = Out::default();
         let _ = self.station.tick(now, &mut out, &mut self.tx);
         self.apply(out);
@@ -362,27 +369,28 @@ fn main(_info: &'static BootInfo) {
             }
         }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
-        // The same deadline applies to operations reached from client handlers below.
-        if wlan.radio { wlan.pump(); }
+        // Dispatch accepted calls before bulk work; a long handler cannot renew the shared two-second deadline.
+        service_turn::run(&mut wlan, received, |wlan, received| {
+            let Ok(request) = received else { return };
+            let badge = request.badge;
+            if badge & BADGE_WIFI != 0 {
+                match wifi::decode(&request, RECEIVED_CAP) {
+                    Ok((request, call)) => wlan.wifi(request, call, badge),
+                    Err(reason) => if request.is_call { let _ = wire::reject(reason); },
+                }
+            } else {
+                match net::decode(&request, RECEIVED_CAP, &mut scratch) {
+                    Ok((request, call)) => wlan.net(request, call, badge),
+                    Err(reason) => if request.is_call { let _ = wire::reject(reason); },
+                }
+            }
+        }, |wlan| wlan.radio && wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some(), Wlan::pump);
         let state = wlan.station.state();
         if state != last {
             mind::println!("[WLAN] {:?}{}", state, if state == State::Failed || wlan.station.reason() == Reason::Lost { match wlan.station.reason() {
                 Reason::WrongPassphrase => ": WRONG PASSPHRASE", Reason::NoAnswer => ": NO ANSWER", Reason::Refused => ": REFUSED",
                 Reason::NotFound => ": NOT FOUND", Reason::Unsupported => ": UNSUPPORTED", Reason::Lost => ": LOST", Reason::None => "" } } else { "" });
             last = state;
-        }
-        let Ok(request) = received else { continue };
-        let badge = request.badge;
-        if badge & BADGE_WIFI != 0 {
-            match wifi::decode(&request, RECEIVED_CAP) {
-                Ok((request, call)) => wlan.wifi(request, call, badge),
-                Err(reason) => if request.is_call { let _ = wire::reject(reason); },
-            }
-        } else {
-            match net::decode(&request, RECEIVED_CAP, &mut scratch) {
-                Ok((request, call)) => wlan.net(request, call, badge),
-                Err(reason) => if request.is_call { let _ = wire::reject(reason); },
-            }
         }
     }
 }
