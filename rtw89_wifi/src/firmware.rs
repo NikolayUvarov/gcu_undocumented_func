@@ -41,6 +41,16 @@ pub struct SelectedImage<'a> {
     pub container_offset: usize,
 }
 
+/// Structural directory metadata only; arbitrary input cannot establish pinned-file provenance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContainerLayout { count: u8, last_end: usize, maximum_end: usize, elements_at: usize }
+impl ContainerLayout {
+    pub fn image_count(&self) -> u8 { self.count }
+    pub fn last_image_end(&self) -> usize { self.last_end }
+    pub fn maximum_image_end(&self) -> usize { self.maximum_end }
+    pub fn elements_offset(&self) -> usize { self.elements_at }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Section<'a> {
     pub kind: u8,
@@ -95,8 +105,8 @@ fn entry_range(bytes: &[u8], at: usize, table_end: usize) -> Result<(usize, usiz
     Ok((start, end))
 }
 
-/// Select the newest non-manufacturing image compatible with the measured chip cut.
-pub fn select(bytes: &[u8], chip_cut: u8, kind: u8) -> Result<SelectedImage<'_>, Error> {
+/// Validate every image range; upstream locates elements after the aligned final directory entry, not the maximum.
+pub fn container_layout(bytes: &[u8]) -> Result<ContainerLayout, Error> {
     if bytes.len() > MAX_FILE_SIZE {
         return Err(Error::TooLarge);
     }
@@ -110,10 +120,13 @@ pub fn select(bytes: &[u8], chip_cut: u8, kind: u8) -> Result<SelectedImage<'_>,
     }
     let table_end = MFW_HEADER + count * MFW_ENTRY;
     range(bytes, 0, table_end)?;
-    let mut chosen: Option<SelectedImage<'_>> = None;
+    let mut last_end = 0;
+    let mut maximum_end = 0;
     for i in 0..count {
         let at = MFW_HEADER + i * MFW_ENTRY;
         let (start, end) = entry_range(bytes, at, table_end)?;
+        last_end = end;
+        maximum_end = maximum_end.max(end);
         for j in 0..i {
             let prev = MFW_HEADER + j * MFW_ENTRY;
             let (prev_start, prev_end) = entry_range(bytes, prev, table_end)?;
@@ -124,6 +137,20 @@ pub fn select(bytes: &[u8], chip_cut: u8, kind: u8) -> Result<SelectedImage<'_>,
                 return Err(Error::AmbiguousImage);
             }
         }
+    }
+    let elements_at = last_end.checked_add(15).ok_or(Error::ImageRange)? & !15;
+    Ok(ContainerLayout { count: count as u8, last_end, maximum_end, elements_at })
+}
+
+/// Select the newest non-manufacturing image compatible with the measured chip cut.
+pub fn select(bytes: &[u8], chip_cut: u8, kind: u8) -> Result<SelectedImage<'_>, Error> {
+    let layout = container_layout(bytes)?;
+    let count = layout.count as usize;
+    let table_end = MFW_HEADER + count * MFW_ENTRY;
+    let mut chosen: Option<SelectedImage<'_>> = None;
+    for i in 0..count {
+        let at = MFW_HEADER + i * MFW_ENTRY;
+        let (start, end) = entry_range(bytes, at, table_end)?;
         let cut = bytes[at];
         if bytes[at + 1] != kind || bytes[at + 2] != 0 || cut > chip_cut {
             continue;
