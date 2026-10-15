@@ -131,3 +131,13 @@ source host-state notifications, conditional measured A2DP time and exact normal
 MCC packets through the owned command/RX session. They do not establish hardware
 calibration, RFK transmission authority, a continuous coexistence service or WLAN
 connectivity; no profile guarantee is expanded by this slice.
+
+RTL8852BE private DPK source `40addff026369c01da5cc3f4f72654d19f99eb6f`
+passed all 14 focused production-engine models on its own branch after native
+build and raw publication `c38df1ddff7151af1e1ededf551f736c2f6b6766`
+(2026-10-16, 0.01 s; no failures or ignored cases). The earlier published source
+`2fc291a5` passed 13/14; that failure exposed post-STOP restoration and remains
+recorded in [DPK notes](../../hwdocs/rtl8852be-dpk.md). Both table-provenance
+Python cases and exact pinned-table regeneration passed on that first run;
+the correction changed neither table nor generator. This is host-model evidence,
+not physical RFK quality, transmission authority or working WLAN.

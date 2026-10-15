@@ -723,9 +723,9 @@ Consume separate DPK calibration-transmit authority; no native provider exists.
 Actual BTC/scheduler callbacks, bounded NCTL/AGC, source backups and independent
 cleanup retain primary and secondary errors. Unknown NCTL completion switches
 radio off before mailbox cleanup and skips unsafe register restoration.
-Fourteen engine fixtures and two provenance cases compile/are registered;
-execution follows raw publication. Full typed cold-start integration, RFK power
-policy, hardware quality and association remain open. See the
+Fourteen engine fixtures and two provenance cases are registered; the
+execution and first-run correction are recorded below. Full typed cold-start
+integration, RFK power policy, hardware quality and association remain open. See the
 [DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
 
 ### DPK first-run cleanup finding (2026-10-16)
@@ -737,7 +737,9 @@ that may already have released the grant. The correction allows only emergency
 radio shutdown after an attempted STOP, records skipped/unknown DPD disable
 explicitly, and never repeats STOP or restores calibration state. The failed
 run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
-await publication. Hardware acceptance is unchanged and remains open.
+passed 14/14 on the own source branch at `40addff0`, after build and raw
+publication `c38df1dd` (0.01 s; no failures or ignored cases). Hardware
+acceptance is unchanged and remains open.
 
 ### Initial channel coexistence callbacks (2026-10-16)
 
