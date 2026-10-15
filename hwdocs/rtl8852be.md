@@ -677,6 +677,12 @@ query is not the OTP trim decoder, regulatory authorization, a completed PHY
 attempt or a working radio. Native integration and hardware validation are
 pending; the synthetic regression executable is `tests/rtw89_phycap_host.rs`.
 
+Final own tip `a877030f` built without warnings in 0.73 seconds. After raw
+publication `1006c136`, all 10 query fixtures passed (0.14 seconds) and
+all 19 affected runtime-MAC fixtures passed (0.13 seconds), none ignored,
+on 2026-10-16 MSK. Source review found no blocker. This is modeled firmware
+response evidence; a physical response and native integration are pending.
+
 ## MAC report tail
 
 The crate-private `report_tail.rs` implements the pinned MAC report tail
@@ -701,7 +707,11 @@ the external owner must still verify PCI quiescence before releasing DMA.
 Seven focused fixtures compile using the real receive-token constructor,
 covering exact writes, thresholds, stale/incorrect state, all applied or
 ignored writes, independent cleanup failures and final-read deadlines.
-Execution/build and hardware evidence for this slice are pending.
+Own `150f5b80` built without warnings in 0.71 seconds. After raw publication
+`1006c136`, all seven fixtures passed (0.27 seconds) and all 16 affected
+post-init/session fixtures passed (0.88 seconds), none ignored, on
+2026-10-16 MSK. Independent source review found no blocker; native,
+full-gate and hardware evidence remain pending.
 
 ## What blocks radio operation
 
