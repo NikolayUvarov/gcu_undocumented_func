@@ -669,3 +669,8 @@ one absolute budget, live firmware/queue/RX checks, final elapsed check and
 terminal poison on uncertainty. Seven production-entry fixtures compile;
 native build passes. Execution follows raw publication, and this does not
 close calibration or hardware acceptance.
+
+Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
+combined Session cases passed in 0.24 s on the own branch with no failures or
+ignores. The seven new register-mailbox regressions are included; hardware
+calibration, association and normal traffic acceptance remain open.

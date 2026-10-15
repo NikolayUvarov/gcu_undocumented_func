@@ -1202,3 +1202,9 @@ invalid budgets, stale live ownership, missing/wrong response, actual busy
 CTN/PTCL, outstanding C2H, expired aggregate budget and possibly applied
 doorbell failure. Execution follows raw publication. This closes a missing
 native trait implementation, not physical calibration or network acceptance.
+
+Execution after raw publication `180f9559cc7b17aa42195c826893845638c1d291`
+containing `ea66207f`: all 52 Session/owner/RFK/nested/scheduler cases passed in
+0.24 s on the own source branch, with zero failures/ignores and 115 unrelated
+cases filtered. This supersedes the scheduler pending-execution statement;
+physical calibration and native network traffic remain unvalidated.
