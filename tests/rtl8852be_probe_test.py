@@ -7,6 +7,7 @@ import io
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,7 @@ SPEC.loader.exec_module(probe)
 BUS = "0000:03:00.0"
 RFE = f"rtw89_8852be {BUS}: chip rfe_type is 1"
 FW = f"rtw89_8852be {BUS}: Firmware version 0.29.29.15 (6fb3ec41), cmd version 0, type 5"
+CHIP = f"rtw89_8852be {BUS}: chip info CID: 0, CV: 2, AID: 0, ACV: 1, RFE: 1"
 
 
 class RecordTests(unittest.TestCase):
@@ -47,8 +49,21 @@ class RecordTests(unittest.TestCase):
         pattern = re.compile(probe.log_pattern("03:00.0"))
         self.assertRegex(RFE, pattern)
         self.assertRegex(FW, pattern)
-        for text in [RFE.replace(BUS, "0000:04:00.0"), "SSID=" + RFE, RFE + " secret"]:
+        self.assertRegex(CHIP, pattern)
+        for text in [RFE.replace(BUS, "0000:04:00.0"), "SSID=" + RFE, RFE + " secret",
+                     CHIP.replace(BUS, "0000:04:00.0"), CHIP + " SSID private-network"]:
             self.assertIsNone(pattern.search(text))
+
+    def test_linux_7_chip_identity_is_hexadecimal_and_strictly_bounded(self):
+        text = CHIP.replace("CID: 0", "CID: a").replace("CV: 2", "CV: f").replace("AID: 0", "AID: abcd")
+        self.assertEqual(probe.parse_boot_records(text, BUS),
+                         [{"kind": "chip_info", "cid": 10, "chip_cut": 15, "aid": 0xabcd,
+                           "analog_cut": 1, "rfe_type": 1}])
+        for text in [CHIP.replace("CID: 0", "CID: 100"), CHIP.replace("CV: 2", "CV: 10"),
+                     CHIP.replace("AID: 0", "AID: 10000"), CHIP.replace("ACV: 1", "ACV: 100"),
+                     CHIP.replace("RFE: 1", "RFE: 256"), CHIP.replace("CV: 2", "CV: -1"),
+                     CHIP.replace(BUS, "0000:04:00.0"), CHIP + " password=secret"]:
+            self.assertEqual(probe.parse_boot_records(text, BUS), [])
 
     def test_driver_info_ignores_unrelated_fields_and_rejects_duplicates(self):
         info = probe.driver_info("driver: rtw89_8852be\nSSID: private-network\nbus-info: 0000:03:00.0\n")
@@ -86,7 +101,7 @@ class CollectionTests(unittest.TestCase):
         self.calls.append(argv)
         if argv == ["/usr/sbin/ethtool", "-i", "wlp3s0"]:
             data = f"driver: rtw89_8852be\nversion: 6.19\nfirmware-version: N/A\nbus-info: {self.info_bus}\nSSID: private-network\n".encode()
-        elif argv == ["/usr/bin/journalctl", "--kernel", "--boot=0", "--no-pager", "--output=cat",
+        elif argv == ["/usr/bin/journalctl", "-k", "--boot=0", "--no-pager", "--output=cat",
                       "--lines=32", "--grep=" + probe.log_pattern(BUS)]:
             data = self.journal
         else:
@@ -160,6 +175,27 @@ class CollectionTests(unittest.TestCase):
         self.assertIsNone(report["rfe_type"])
         self.assertTrue(any("Conflicting RFE" in warning for warning in report["warnings"]))
 
+    def test_linux_7_boot_identity_establishes_cut_without_debugfs_or_inference(self):
+        self.journal = (CHIP + "\n" + CHIP + "\n" + FW + "\n").encode()
+        report, _ = self.collect()
+        self.assertEqual(report["chip_cut"], 2)
+        self.assertEqual(report["chip_cut_source"], "current-boot-driver-log")
+        self.assertIsNone(report["chip_cut_missing_reason"])
+        self.assertEqual(report["rfe_type"], 1)
+        self.assertEqual(report["status"], "identity-collected")
+        self.assertEqual(report["warnings"], [])
+        self.assertEqual(len(self.calls), 2)
+
+    def test_conflicting_boot_identity_never_selects_a_cut(self):
+        for name, other in [("cut", CHIP.replace("CV: 2", "CV: 1")),
+                            ("rfe", RFE.replace("is 1", "is 2")),
+                            ("analog", CHIP.replace("ACV: 1", "ACV: 2"))]:
+            self.journal = (CHIP + "\n" + other + "\n").encode()
+            report, _ = self.collect(name)
+            self.assertIsNone(report["chip_cut"])
+            self.assertIsNone(report["chip_cut_source"])
+            self.assertEqual(report["status"], "partial")
+
     def test_existing_output_is_preserved(self):
         output = self.root / "existing"
         output.mkdir()
@@ -170,8 +206,22 @@ class CollectionTests(unittest.TestCase):
             query.assert_not_called()
         self.assertEqual((output / "keep").read_text(), "keep")
 
+    def test_generated_journal_command_uses_options_accepted_by_real_journalctl(self):
+        executable = shutil.which("journalctl")
+        self.assertIsNotNone(executable, "This CLI regression requires the journalctl executable")
+        self.collect()
+        argv = next(argv for argv in self.calls if argv[0] == "/usr/bin/journalctl")
+        empty_journal = self.root / "empty-journal"
+        empty_journal.mkdir()
+        result = subprocess.run([executable, *argv[1:],
+                                 "--directory=" + str(empty_journal)],
+                                capture_output=True, text=True, timeout=10, env={"LC_ALL": "C"})
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        self.assertNotRegex(result.stderr, r"(?i)(unrecognized|unknown|invalid) option|option.*requires an argument")
+        self.assertNotRegex(result.stdout, r"rtw89_8852be")
+
     def test_permission_timeout_and_oversized_output_are_reported_without_escalation(self):
-        argv = ["journalctl", "--kernel"]
+        argv = ["journalctl", "-k"]
         denied = subprocess.CompletedProcess(argv, 1, b"", b"Operation not permitted")
         with mock.patch.object(probe.subprocess, "run", return_value=denied) as run:
             _, status = probe.query(argv)

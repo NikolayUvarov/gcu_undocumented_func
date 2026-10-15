@@ -56,7 +56,7 @@ The pinned container has five entries:
 | 2 | 3 | 923144 | 269824 |
 | 0 | 255 | 1192968 | 52976 |
 
-Both normal-CE images report version `0.29.29.15`, commit field `0x6fb3ec41`, AX header version 0, total header length 144 and three sections. There is **no compatible normal-CE entry for cut 0**. Cut 1/2 has not yet been observed on this Ryzen; the PCI revision does not supply it.
+Both normal-CE images report version `0.29.29.15`, commit field `0x6fb3ec41`, AX header version 0, total header length 144 and three sections. There is **no compatible normal-CE entry for cut 0**. The Ryzen's Linux boot log establishes digital cut 1 (CBV), as recorded below; the selected normal-CE image is therefore cut 1, offset 96, length 326616. PCI revision alone does not supply the cut.
 
 `firmware.rs` caps input at 4 MiB, images at 32 and sections at 10. It rejects image/table overlap, overlapping images, duplicate selection keys, malformed dynamic lengths, truncated sections, future header versions and trailing bytes. AX download addresses are decoded with mask `0x1fffffff`; section sizes include the optional eight-byte checksum trailer. The fixed AX transfer part limit is 2020 bytes.
 
@@ -68,7 +68,7 @@ Read one aligned 32-bit value at **BAR2 + `0x00F0`**, `R_AX_SYS_CFG1`; digital c
 
 Validate the exact PCI ID and a usable MMIO BAR/window. The supplied run has memory decode off, so a KRN collector may need a scoped enable/restore of PCI command memory decode. Bus mastering and RF power are unnecessary for this read. Do not scan arbitrary offsets or enable DMA. No helper in `rtw89_wifi/` performs MMIO itself.
 
-[213-KRN-0113](../issues/213-KRN-0113-realtek-boot-identification.md) adds this guarded read to the x86 hardware report: ungranted/non-mastering endpoint, D0 when PM exists, current BAR2 and actual uncached identity mapping. It temporarily enables MEM decode only when needed and verifies restoration without clearing PCI Status flags. Raw values and skip/failure reasons are retained. Eight host guard tests, an actual page-table-walk regression and the kernel build pass; the digital cut still needs observation on the Ryzen. Neither radio power nor an indirect analog-cut/EFUSE transaction is performed.
+[213-KRN-0113](../issues/213-KRN-0113-realtek-boot-identification.md) adds this guarded read to the x86 hardware report: ungranted/non-mastering endpoint, D0 when PM exists, current BAR2 and actual uncached identity mapping. It temporarily enables MEM decode only when needed and verifies restoration without clearing PCI Status flags. Raw values and skip/failure reasons are retained. Eight host guard tests, an actual page-table-walk regression and the kernel build pass; the raw register observation by this MIND probe still needs a Ryzen run. Linux boot-log evidence of the digital cut is recorded below. Neither radio power nor an indirect analog-cut/EFUSE transaction is performed.
 
 The subsequent analog-cut `XTAL_SI_CV` read in Linux uses an indirect transaction which **writes** request registers and polls; it is not part of this read-only slice. EFUSE access also requires reviewed power/indirect-access sequencing. No board calibration may be inferred from `SYS_CFG1`.
 
@@ -82,9 +82,9 @@ python3 scripts/hardware/rtl8852be_probe.py --pci 0000:03:00.0 --output /tmp/rtl
 
 Omit `--pci` to select the sole `10ec:b852` device, since enumeration can differ between operating systems. The output directory must be new. It is created with mode 0700, and `report.json` with mode 0600. The report contains kernel/architecture, PCI IDs and resource metadata, driver identity, interface administrative observations, and available firmware/RFE evidence. It does not mount debugfs, bind/unbind a driver, scan networks, configure a link, read PCI resource MMIO, reset or write the device. No SSIDs, keys, peer addresses, station lists or general kernel-log dump are collected.
 
-The only external queries are `ethtool -i <interface>` and `journalctl --kernel --boot=0 --no-pager --output=cat --lines=32 --grep=<exact-device-numeric-identity-pattern>`. The journal filter admits only the driver's existing `chip rfe_type` and `Firmware version` messages for the selected PCI function. Parsing independently enforces the same identity and numeric fields; unrelated text is discarded. Multiple conflicting RFE values remain unresolved, rather than choosing one. The collector never turns on debug logging or firmware reports. Missing tools, journal access or matching messages are recorded; it does not escalate itself. Authorized administrative read access can be used for another run into a new output directory when journal access is denied.
+The only external queries are `ethtool -i <interface>` and `journalctl -k --boot=0 --no-pager --output=cat --lines=32 --grep=<exact-device-numeric-identity-pattern>`. The journal filter admits only the driver's existing `chip rfe_type`, Linux 7.0 `chip info CID/CV/AID/ACV/RFE`, and `Firmware version` messages for the selected PCI function. Parsing independently enforces identity, numeric fields and their bounds; unrelated text is discarded. Conflicting chip records or RFE values leave the cut unresolved. The collector never turns on debug logging or firmware reports. Missing tools, journal access or matching messages are recorded; it does not escalate itself. Authorized administrative read access can be used for another run into a new output directory when journal access is denied.
 
-**The collector intentionally returns exit 1 with a partial report: it cannot establish the digital cut from the reviewed Linux interfaces.** Exit 2 means a refusal/error, such as another device or an existing output directory. A successful identity/RFE query does not satisfy the hardware chip-cut criterion in 213-DRV-0033; use the MIND `SYS_CFG1` observation for that criterion.
+An unambiguous chip-identity log and complete collection return **exit 0 (`identity-collected`)**; missing/conflicting evidence or query failures return exit 1 (`partial`). Exit 2 means a refusal/error, such as another device or an existing output directory. Boot-log evidence establishes the digital cut but not raw `SYS_CFG1`; the MIND probe's raw-register acceptance criterion in 213-DRV-0033 remains separate.
 
 The source review at Linux v6.19 found the following boundaries:
 
@@ -94,11 +94,25 @@ The source review at Linux v6.19 found the following boundaries:
 - The `read_reg` debugfs interface requires a selector write and uses mutable shared selection; `mac_reg_dump` reads whole register ranges. Neither belongs to this strictly read-only identity collector.
 - Existing RFE and firmware boot messages originate in `__rtw8852bx_read_efuse` in `rtw8852b_common.c` and `rtw89_fw_update_ver` in `fw.c`. Reading already-emitted messages does not rerun their device initialization.
 
-The collector is an independent consumer of existing Linux interfaces; no Linux implementation is copied into it. Its ten host tests cover device/bus mismatch, ambiguity, truncated/invalid identity messages, conflicting RFE values, privacy filtering, absence of MMIO/debugfs access, missing tools/driver, timeout/permission failure and private output preservation. These are synthetic tests, not a collection from the Ryzen.
+For the actual Ubuntu 7.0 boot, a further review of upstream Linux v7.0 commit `028ef9c96e96197026887c0f092424679298aae8` found [`core.c:6535`](https://github.com/torvalds/linux/blob/028ef9c96e96197026887c0f092424679298aae8/drivers/net/wireless/realtek/rtw89/core.c#L6535): `rtw89_chip_info_setup` emits `chip info CID: %x, CV: %x, AID: %x, ACV: %x, RFE: %d`. CV is the cached digital cut read from `SYS_CFG1`; the first four fields are hexadecimal, RFE decimal. This replaces the separate RFE message. The reviewed source explains the observed log format; it does not assert that Ubuntu's entire driver is identical to upstream.
+
+The collector is an independent consumer of existing Linux interfaces; no Linux implementation is copied into it. Its fourteen host tests cover device/bus mismatch, ambiguity, invalid legacy/new identity messages, conflicting cuts/RFE, privacy filtering, absence of MMIO/debugfs access, missing tools/driver, timeout/permission failure and private output preservation. One test requires the installed `journalctl` executable and checks the production options against an empty temporary journal directory, without reading system logs. These checks are distinct from the Ryzen evidence below.
+
+### Actual Ryzen Linux observation
+
+At 2026-10-15 18:34:35 UTC, Effector operation `20261015183435.268000692_000025` on endpoint `un-rizen_2a8b108d5593` read the existing current-boot kernel record:
+
+```text
+rtw89_8852be 0000:03:00.0: chip info CID: 0, CV: 1, AID: 0, ACV: 1, RFE: 1
+```
+
+Thus digital cut is **1 (CBV)**, analog cut 1 and RFE 1. Preceding operations `20261015182720.825418577_000021` and `20261015182901.902681326_000022` identified kernel `7.0.0-38-generic`, bound driver `rtw89_8852be`, interface `wlp3s0`, D0/runtime active and carrier 1. The driver reported running firmware `0.29.29.5` (`da87cccd`), types 3 and 5, loaded from `rtw8852b_fw-1.bin`. That installed Ubuntu file differs from MIND's pinned personal-store firmware; it was not replaced.
+
+No debugfs selector, raw MMIO, RF transaction, driver reload or network-state change was used for this observation. The private operation reports remain outside the repository. The pinned file's SHA-256 and explicit proprietary-fixture parser check were rerun successfully after identifying cut 1: its compatible normal-CE image is version `0.29.29.15`, offset 96, size 326616. No download or operation of that image on the Ryzen has been tested in MIND. The raw `SYS_CFG1` value remains uncollected.
 
 ## What blocks radio operation
 
-`rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. The values are not yet collected.
+`rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected and none is yet read by a MIND RTL8852BE driver.
 
 Next implement the bounded RTL8852B MAC power state machine and board reads, then validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. Firmware H2C/C2H transport, secure-boot handling, PCIe rings/interrupts, ownership recovery, channel control, RX/TX and the WLAN service integration are all still absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
 
