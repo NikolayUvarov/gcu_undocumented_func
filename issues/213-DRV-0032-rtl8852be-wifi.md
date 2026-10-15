@@ -759,3 +759,21 @@ power authorities and live owner/PHY checks are mandatory. There is no native
 power-authority provider or packet-transmit activation. Seven cumulative cold
 model cases compile, preserving the existing five initial-PHY cases; execution
 follows raw publication. Physical RF calibration and WLAN acceptance stay open.
+
+### Raw MPDU transmit ownership and status prerequisite
+
+Implement exact RTL8852B TXWD/WP/address descriptors and bounded retained DMA
+queues for band-zero management and four ordinary access categories. Use a
+fixed legacy rate, no aggregation or hardware sequence replacement, a selected
+hardware limit of one and no RTS. Count actual DONE/RETRY_LIMIT RPQ-completed
+descriptors separately from DMA consumption; bound resubmission to 1..15
+descriptors with the original sequence and Retry bit. The exact-chip
+transmission-versus-retry limit semantics remain unresolved, so preserve raw
+status and explicit `AttemptCount::Unknown`; the exact-attempt `wlanhw` 1.1
+adapter stays closed until that boundary is resolved.
+Lifetime/MACID drops cannot manufacture a transmission count. Preserve
+ownership on uncertain publication, malformed reports, deadlines or stop
+failures. No native caller or IDL/ABI change is part of this library stage;
+activation still requires actual channel/calibration/policy and CMAC setup.
+Register meaningful descriptor, ring, status and cleanup fixtures in the host
+gate; run them only after own commit/build and raw publication.
