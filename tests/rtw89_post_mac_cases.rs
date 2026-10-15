@@ -1,6 +1,8 @@
 use super::*;
 use std::alloc::{alloc_zeroed,dealloc,Layout};
 
+#[path="rtw89_phy_receive_cases.rs"] mod phy_receive;
+
 struct Region{base:*mut u8,layout:Layout}
 impl Region{fn new(size:usize)->Self{let layout=Layout::from_size_align(size,4096).unwrap();let base=unsafe{alloc_zeroed(layout)};assert!(!base.is_null());Self{base,layout}}}
 impl Drop for Region{fn drop(&mut self){unsafe{dealloc(self.base,self.layout)}}}

@@ -8,6 +8,11 @@ use crate::phy_tables as tables;
 use crate::power;
 use crate::registers::*;
 
+// The public entry awaits actual BTC ntfy_init completion; this private engine cannot grant that readiness.
+#[allow(dead_code)]
+#[path="phy/dm.rs"]
+pub(crate) mod dm;
+
 pub const BAR_BYTES: usize = 0x20000;
 pub const PHY_BASE: usize = 0x10000;
 const RF_MASK: u32 = 0xfffff;
@@ -29,6 +34,11 @@ pub trait PhyIo: RegisterIo {
     fn pci_command(&mut self) -> io::Result<u16>;
     fn bar_len(&self) -> usize;
     fn send_rf_page(&mut self, path: u8, page: u8, payload: &[u8], timeout_us: u32) -> io::Result<()>;
+    /// Revalidate the actual same-device Receiving token and both retained DMA objects, without MMIO writes.
+    /// No adapter inherits active-RX permission; a callback must return the real borrowed session permit.
+    fn receive_permit(&mut self, _timeout_us:u32) -> io::Result<crate::post_mac::ReceivePermit<'_>> {
+        Err(Fault::new(FaultKind::Access,0x1000,0))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,9 +131,21 @@ pub(crate) fn guard(bus: &mut impl PhyIo, identity: &Identity, phase: RegisterPh
     let cycle = bus.read8(0x8040)?;
     let expected = match phase { RegisterPhase::BeforeDack=>14, RegisterPhase::AfterDack=>15 };
     if cycle == u8::MAX || cycle & 15 != expected { return Err(state(0x8040, cycle as u32)); }
-    require(bus, 0x1000, 1 << 11 | 1 << 13, 1 << 11)?;
-    require(bus, 0x1010, DATA_STOP | 1 << 18 | 1 << 20, DATA_STOP)?;
-    require(bus, 0x101c, DATA_BUSY, 0)?;
+    let hci=io::read32(bus,0x1000)?;
+    let stopped=io::read32(bus,0x1010)?;
+    let stop_mask=DATA_STOP|1<<18|1<<20;
+    if hci&(1<<11|1<<13|1<<18)==1<<11 && stopped&stop_mask==DATA_STOP {
+        require(bus,0x101c,DATA_BUSY,0)?;
+    } else if hci&(1<<11|1<<13|1<<18)==(1<<11|1<<13) && stopped&stop_mask==(DATA_STOP&!3) {
+        let start=bus.now_us();
+        {let _permit=bus.receive_permit(10_000)?;}
+        let elapsed=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0x1000,0))?;
+        if elapsed>=10_000{return Err(Fault::new(FaultKind::Timeout,0x1000,elapsed.min(u32::MAX as u64)as u32));}
+        require(bus,0x1000,1<<11|1<<13|1<<18,1<<11|1<<13)?;
+        require(bus,0x1010,stop_mask,DATA_STOP&!3)?;
+        // Only the owned RX and command channels may be busy; ordinary TX and WPDMA remain stopped.
+        require(bus,0x101c,0x000b0f00,0)?;
+    } else {return Err(state(0x1010,stopped));}
     require(bus, 0xc348, 0xffff, 0)?;
     require(bus, 0xc6ec, 1 << 7, 0)?;
     Ok(())
@@ -253,19 +275,28 @@ fn poll_rck(io: &mut impl RegisterIo, path: u8) -> io::Result<()> {
 
 /// One startup attempt, with failed attempts poisoned until the caller destroys and powers down the device.
 /// The caller has verified the pinned firmware, read this board's EFUSE and initialized full single-band MAC.
-/// Only command DMA may run; ordinary RX/TX channels and all MAC scheduler queues must remain stopped.
+/// Command DMA and validated owned RX may run; ordinary TX channels and all MAC scheduler queues stay stopped.
 /// No concurrent firmware calibration, scan, autonomous TX or register writer may run during these stages.
-pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State }
+pub struct Phy<'a, B> { bus: &'a mut B, identity: Identity, state: State, attempt: u64 }
 
 impl<'a, B: PhyIo> Phy<'a, B> {
-    pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self { bus, identity, state: State::Fresh } }
+    pub fn new(bus: &'a mut B, identity: Identity) -> Self { Self::from_attempt(bus,identity,io::dma_session()) }
+    fn from_attempt(bus:&'a mut B,identity:Identity,allocated:io::Result<u64>)->Self{
+        let attempt=allocated.unwrap_or(0);
+        Self{bus,identity,state:if attempt==0{State::Failed}else{State::Fresh},attempt}
+    }
+    pub(crate) fn attempt(&self)->u64{self.attempt}
+    #[cfg(test)]
+    pub(crate) fn new_with_counter(bus:&'a mut B,identity:Identity,counter:&core::sync::atomic::AtomicU64)->Self{
+        Self::from_attempt(bus,identity,io::next_dma_session(counter))
+    }
     pub fn state(&self) -> State { self.state }
     pub(crate) fn mark_failed(&mut self) { self.state=State::Failed; }
     /// Execute the documented interleaved chip steps on this same device, retaining all startup restrictions.
     pub fn bus_between_stages(&mut self) -> &mut B { self.bus }
 
     fn begin(&mut self, stage: Stage, expected: State) -> core::result::Result<u64, Failure> {
-        if self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
+        if self.attempt() == 0 || self.state != expected { return Err(Failure { stage, cause: state(0, self.state as u32), disable_bb_rf: None, restore_rf: None }); }
         let start = self.bus.now_us();
         let phase = if expected == State::DackDone { RegisterPhase::AfterDack } else { RegisterPhase::BeforeDack };
         if let Err(cause) = guard(self.bus, &self.identity, phase).and_then(|()| remaining(self.bus, start).map(|_| ())) {

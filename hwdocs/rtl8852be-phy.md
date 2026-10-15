@@ -13,12 +13,17 @@ All adaptations select the BSD-3-Clause option from Linux commit `05f7e89ab97315
 | [reg.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/reg.h) | MAC/BB/RF guard and access definitions | `a302f390b451ce1dcdf8dd1d5149910a71cb8621b309b274eb5b1ce060335333` |
 | [mac.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/mac.c) | Full DMAC/CMAC definitions and single-band TX-power register mapping | `ce5c09696ba6dcdc2003ce28803052fd3238c9da55188046e3e6e1ed82658055` |
 | [fw.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/fw.c) | RF H2C layout | `64c86436e8e0f7f9ecd4364d2d2c48be4549a0448b3ce738eee7e8c25e5875ce` |
+| [rtw8852b_common.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.h) | Packed logical board calibration layout | `f58fead1913d8bf4c9453e47bbe12241f96bb68109d1806eccf9b11c8ce54666` |
 | [rtw8852b_common.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_common.c) | Actual RTL8852B BB/RF dispatch, TX-power unit and common BB reset | `34dcc96967f408ba2b7589af26f49e8ba26c0a822934811e599a2974b86a3afb` |
 | [rtw8852b.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b.c) | Chip BB-reset wrapper and ops dispatch | `644f8f7f3900181fb1bf0acbd17adeacafd5ba77a63ed9dd83c751a0c705179a` |
 | [rtw8852b_rfk.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_rfk.c) | DPK backoff, RCK, DACK and initial RXDCK sequences | `c4613e3d2755f14649154a1c8393bf72ae215e8b683219a0763a033b224c715f` |
 | [rtw8852b_rfk_table.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/rtw8852b_rfk_table.c) | DACK/AFE/diagnostic register tables | `ebc6840d2e15c7a9f12fb7d7121ca19bb8acff93524d3902a7ce892e0714fc21` |
 | [coex.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/coex.c) | Actual BTC RFK arbitration/notification prerequisites | `c38d8a42a57300c0c376217d3472e2a3176760346ab44b8c21cca6b98c63a11c` |
 | [coex.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/coex.h) | DACK type, START/STOP and PHY/band map | `164a6975c1fcf24eb71bf015cc9998404e0a627c19197ce33b3e8e6daadafd3e` |
+| [phy.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/phy.h) | DM bins, page numbers, DIG and CFO constants | `9ee6c68363c286a842b50237eb322094a6c6051d0e4e8c242b4cd7fe249ff321` |
+| [core.c](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.c) | Startup order and RTL8852B cut-specific DIG support | `41ea6a22a4ff78035364def00c70edb49d821f2d4cb12869f1a0a87e6ee54886` |
+| [core.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.h) | Initial PHY/DM software settings and thermal scale | `48ebe2404ae8f57ff3260687580d6f867d3b2725bdf93db01ceb9ab3a8c9f138` |
+| [mac.h](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/mac.h) | RTL8852B indirect XO/XI addresses and masks | `911b0258c04474c9acc6505c253ac63ff82483f7e24e645095bee9e59b3ea4d6` |
 
 The offline [extractor](../scripts/hardware/rtw89_phy_tables.py) checks the source hash before parsing. It accepts only the exact RFE-1/cut-1 headline `0x00010001`, not the upstream fallback to a different cut/RFE. It rejects unsupported flow control, unknown gain fields, delays/bypasses requiring new review and unexpected table sizes. The generated file preserves every selected write, including duplicates and their order:
 
@@ -36,7 +41,7 @@ This tool never downloads or changes a network device. PHY offsets add the AX MC
 
 ## Integration contract
 
-`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. RTL8852B chip dispatch requires SPS ZCDC_H=1, WLRF AFC_AFEDIG bit17 and PHYREG_XYN cycle 0xe before DACK and 0xf after it; it does not use the generic MAC WLRF0x8282 sequence. Successful chip enable must also have set XTAL80/81 to0xc7 before these read-only guards. The DLFW-only MAC state is rejected. Active PCI Command must have MEM and MASTER set; the kernel may additionally decode BAR0 I/O, which this MMIO-only library never accesses. Only the command channel may run: ordinary RX/TX/WP channels and all MAC scheduler queues must be stopped, and ordinary DMA/protocol TX must be idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
+`PhyIo` is an exclusively owned same-function adapter with a bounded command-ring transport. Every stage rechecks PCI identity/Command, cut 1, board RFE 1, MAC power active, WCPU enabled with actual firmware status 7, full DMAC/CMAC and clocks, BB/RF access and single-band mode. RTL8852B chip dispatch requires SPS ZCDC_H=1, WLRF AFC_AFEDIG bit17 and PHYREG_XYN cycle 0xe before DACK and 0xf after it; it does not use the generic MAC WLRF0x8282 sequence. Successful chip enable must also have set XTAL80/81 to0xc7 before these read-only guards. The DLFW-only MAC state is rejected. Active PCI Command must have MEM and MASTER set; the kernel may additionally decode BAR0 I/O, which this MMIO-only library never accesses. The command-only path retains its stopped-RX contract. Active RXQ/RPQ additionally requires the actual owned receive-session permit described below; ordinary TX/WP channels and all MAC scheduler queues remain stopped, and ordinary DMA/protocol TX remains idle. The caller must also exclude concurrent firmware calibration, scan, autonomous transmission and register writers.
 
 Source order in `core.c::rtw89_core_start` and `phy.c` requires these separate stages and interleaves:
 
@@ -123,6 +128,120 @@ retained until verified outer quiescence. The shared crate-private phase guard
 and `Phy::mark_failed` also let the BTC-init interleave reuse the same live
 checks and poison a modified failure without copying the register contract.
 
+## Typed owned receive-session guard
+
+`PhyIo::receive_permit(timeout_us)` defaults to refusal. An adapter admitting
+active RX must return the concrete `post_mac::ReceivePermit` borrowed from
+`Receiving::validate`, which rechecks the actual command and receive objects,
+non-reused session IDs, live addresses/counts/indices, firmware/MAC state and
+masked host interrupts. A bool or raw matching register masks cannot construct
+this permit. The adapter must retain the original same-device/exclusive-owner
+contract; the permit is an observation, not lasting hardware authorization.
+
+The PHY guard recognizes only the command-only stopped-RX configuration or
+command plus owned RXQ/RPQ. The latter callback has a 10 ms ceiling with an
+independent elapsed-clock check, after which HCI/STOP, ordinary TX/WPDMA busy
+and CTN/PTCL are checked again. No DMA, interrupt or transmit register is
+written. Both pre-DACK and post-DACK BB/RF phases retain their exact checks.
+An expired or failed callback prevents the PHY stage from starting. The native
+adapter must delegate to the same sole ring owners; this change supplies no
+native activation or BTC initialization.
+
+Six integration fixtures use the real queue/ring/session implementation and
+post-MAC activation model, not a constructed-success permit. They check live
+RX/command traffic, default refusal, corrupted live rings/indices, ordinary
+TX/WPDMA/phase refusal, late/backwards clocks and post-permit STOP changes.
+After publication `08a4c784`, the PHY harness passed 125 cases, post-MAC 57
+and BTC-init 66 on the own branch `2a41a980` (1.13 seconds each). All six
+new cases pass in every harness; shared module cases are repeated, not unique
+additional evidence. Each harness retains one previously ignored private
+firmware-file fixture, requiring separately fetched proprietary bytes. No new
+conditional skip is introduced. These are host models, not hardware results.
+
+## PHY attempt identity
+
+Every `Phy::new` allocates a bounded, nonwrapping software session identity from
+`io::dma_session`, independently of the bus address. Allocation failure creates
+an already-failed PHY before register access. The crate-private `attempt()`
+lets the BTC owner bind its prepared configuration to this exact attempt as well
+as to the actual firmware/queue/receive sessions; pointer reuse cannot establish
+that relationship. This identifier is not hardware readiness or a BTC token.
+Two fixtures compile for same-address reconstruction and counter exhaustion
+before MMIO; native build and execution evidence are recorded after publication.
+
+## Contiguous initial DM prefix and remaining order
+
+The crate-private `phy::dm` engine implements the contiguous register prefix
+between actual BTC `ntfy_init(NORMAL)` and NCTL. It requires `RadioLoaded`
+and the same live pre-DACK guard. There is no public entry or successful
+BTC-ready stand-in: hardware-only `ConfigPrepared` does not establish completed
+BTC software/control/policy initialization. Integration must obtain the actual
+private-constructor `btc::Initialized` token before exposing this engine.
+
+The single 300 ms deadline covers both RF thermal triggers/200 µs waits,
+chip `bb_sethw` (sound bits, all 128 MACID power-limit words and signed gain
+baselines), CCX/IFS bins, all 15 AX PHYSTS pages, initial DIG, board XO/XI
+and DCFO, EDCCA collision distance and UL-TB bandedge snapshot. XTAL operations
+retain their finite 50 ms ceilings and never replace an outstanding command.
+Readback mismatch and late final reads fail. Modified failure poisons `Phy`
+and independently attempts chip BB/RF disable under 400 ms, retaining DMA.
+A successful result contains observations and initial nonzero software settings;
+it does not advance the public PHY pipeline or enable periodic tracking.
+The integration must create fresh zeroed packet/statistics/tracking counters,
+keep both TSSI software modes false and preserve the unassociated state.
+
+The chip dispatch skips NHM (`support_noise=false`), unsupported IGI gain
+programming (`support_igi=false`), AX-null BB-wrapper/channel-info hooks,
+null RFE-GPIO/RFK-hardware hooks and antenna diversity (two physical RF paths).
+CCK packet detection remains required on cut 1. Its initial zero IGI RSSI gives
+CCK threshold byte `0x80` for every supported starting bandwidth; no channel
+or regulatory choice is fabricated here. The private engine's caller-supplied
+band selects only the source unlinked DIG software profile.
+
+The remaining integration order is explicit:
+
+1. Actual BTC initialization and this DM prefix, then NCTL and existing
+   RCK/DACK/RXDCK with actual BTC arbitration and shared firmware scheduler.
+2. Source `set_txpwr_ctrl`, physical-board thermal/PA trims and `cfg_txrx_path`.
+   The board decoder must preserve programmed/unprogrammed sentinel semantics.
+   RX path and NSS require the actual firmware PHY-capability register exchange;
+   the physical OTP `phycap` byte array is a different input. Chip maximum NSS
+   is not a substitute for a firmware response.
+3. MAC PPDU/PHY-report/RTS tail and owned RX-channel validation. Active RX
+   requires an opaque live session permit, not relaxed raw DMA masks.
+4. A validated regulatory channel, actual BB/RF channel setup and the required
+   channel RXDCK/IQK/TSSI/DPK plus BTC intervals and rate/power limits, followed
+   by MAC roles/CAM/security, data TX rings, authentication and association.
+
+None of these steps is replaced by an ACK-only BTC callback or by these model
+fixtures. Actual Ryzen calibration, association, ping and Effector remain open.
+
+## Board calibration decoder
+
+`calibration::decode` interprets the actual `Board` logical map and 128-byte
+physical map starting at OTP `0x580`. It supports only the identified cut-1,
+RFE-1 device. The logical TSSI blocks start at `0x210` and `0x23a`; thermal
+references are `0x2d0/0x2d1`, and signed gain offsets retain the chip band order.
+The physical map provides the exact power-calibration marker, descending TSSI
+trim bytes, thermal/PA fields and signed gain compensation. It performs no
+MMIO and does not change the supplied maps.
+
+Sentinels follow the source globally: all sixteen erased TSSI trim bytes become
+zero, but one programmed byte preserves every other `0xff` as signed -1.
+Thermal/PA writes are omitted only when both respective bytes are erased;
+when one is programmed the other path retains the source's `0xff`-derived
+setting. Gain validity is likewise global, with signed -1 preserved for erased
+entries and the unused 5 GHz subband index 2 left zero. Unprogrammed logical
+TSSI and thermal references are not silently replaced. These data do not
+substitute for the firmware PHY-capability reply or authorize transmit power.
+
+Nine pure fixtures cover independent packed offsets, signed fields, global
+sentinels, every thermal-byte encoding, unused subband, exact marker and foreign
+cut/RFE refusal. Native build and fixture compilation pass; execution awaits
+publication. The next DM tail must consume these decoded values in source
+order after RXDCK: TX-power reference, thermal/PA trim, then RX-path/NSS setup
+with actual firmware capabilities and the preserved DM gain baselines.
+
 ## Validation scope
 
 Initial `59a77177` execution passed 18/19 Rust fixtures and failed the RF-prefix assertion because it incorrectly placed RF register 0 before the source table's register 5. After publication of `f4766604`, all 20 Rust and four extractor fixtures passed, as did pinned-source regeneration. After publication of `78cf274a`, all 24 Rust fixtures passed, including exact TX-power/reset order, field preservation, every added write failure and deadline failures. After publication of `0d6c66bf`, all 34 RCK/RF/PHY fixtures passed. After publication of `7c6d5ecc` and registration `a8418545`, all 44 Rust and three DACK extractor fixtures passed, as did pinned DACK-table regeneration. Ten added cases cover RF field validation/readback, frozen/pending SWSI, state/guard refusal, DPK threshold branches, both RCK paths, timeout restoration, distinct cleanup errors and late completion. The fixtures cover exact data fingerprints and write order, guards, signed gain decoding, indirect/direct RF windows, H2C error propagation, shared/late deadlines, frozen polling, failed cleanup and NCTL readiness. Four offline extractor fixtures cover exact selection and rejection. No native integration, actual Ryzen register sequence or radio behavior is established by this slice.
@@ -131,4 +250,6 @@ Independent review found and corrected an initial generic-MAC dispatch mistake b
 
 The ten DACK cases cover BTC ordering/refusal/late completion, captured calibration data, every stage timeout, the source S1 flag asymmetry, every applied register-write failure, independent cleanup errors and the whole-stage deadline. Three extractor regressions cover parsing, unsupported effects and source-hash refusal.
 
-The RXDCK slice builds natively and 56 Rust fixtures compile; execution awaits fast-test publication. Twelve added cases cover exact two-path writes and timing, phase/queue guards, BTC and uncertain scheduler failures, source RF-mode timeout, late completion, every applied write failure, cleanup ordering and distinct cleanup errors. Native activation and actual Ryzen radio validation remain pending.
+After publication of `abe309ea` in fast-test `b50f52c0`, all 56 Rust fixtures, three DACK extractor fixtures and pinned DACK regeneration passed. Twelve added cases cover exact two-path writes and timing, phase/queue guards, BTC and uncertain scheduler failures, source RF-mode timeout, late completion, every applied write failure, cleanup ordering and distinct cleanup errors. Native activation and actual Ryzen radio validation remain pending.
+
+After publication of `727aab95` in fast-test `badae1bc`, the exact compiled DM binary passed all 68 Rust fixtures (0.11 seconds, none ignored). Its native build passed (0.48 seconds). Twelve new cases cover the full order, all MACID words, PHYSTS compression, CCX units, signed/zero observations, DIG/cap branches, stuck or mismatched XTAL, every applied write error, independent cleanup and late total deadlines.
