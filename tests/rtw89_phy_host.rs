@@ -10,6 +10,20 @@
 #[path = "../rtw89_wifi/src/dack_tables.rs"] mod dack_tables;
 #[path = "../rtw89_wifi/src/rxdck.rs"] mod rxdck;
 
+extern crate self as mind;
+#[path="../libmind/src/sha256.rs"] pub mod sha256;
+#[path="../rtw89_wifi/src/firmware.rs"] mod firmware;
+#[path="../rtw89_wifi/src/fwcmd.rs"] mod fwcmd;
+#[path="../rtw89_wifi/src/mac.rs"] mod mac;
+#[path="../rtw89_wifi/src/download.rs"] mod download;
+#[path="../rtw89_wifi/src/runtime_mac_regs.rs"] mod runtime_mac_regs;
+#[path="../rtw89_wifi/src/runtime_mac.rs"] mod runtime_mac;
+#[path="../rtw89_wifi/src/rx.rs"] mod rx;
+#[path="../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
+#[path="../rtw89_wifi/src/c2h.rs"] mod c2h;
+#[path="../rtw89_wifi/src/post_mac_regs.rs"] mod post_mac_regs;
+#[path="../rtw89_wifi/src/post_mac.rs"] mod post_mac;
+
 use io::{Fault, FaultKind, RegisterIo, Result};
 use phy::{Phy, PhyIo, State, Stage};
 
@@ -17,6 +31,7 @@ use phy::{Phy, PhyIo, State, Stage};
 enum Event { Write(usize, usize, u32), H2c(u8, Vec<u8>, u32) }
 
 struct Device {
+    late_read:Option<usize>,late_read_us:u64,xtal_bad_read:bool,freeze_read:Option<usize>,
     scheduler_calls:Vec<(u32,usize)>, scheduler_fail:Option<usize>, scheduler_late:Option<usize>, scheduler_dirty:bool, rx_delay_fail:bool, rx_delay_late:bool,
     btc: Vec<(dack::BtcNotice,u32)>, btc_event_positions: Vec<usize>, btc_start_fail: bool, btc_stop_fail: bool, btc_start_delay: u64, btc_stop_delay: u64, dack_model: bool,
     rf: [[u32; 256]; 2], swsi_pending: Option<(u64,u8,u8)>, swsi_latched: u32, read_stuck: bool,
@@ -34,7 +49,7 @@ fn identity() -> board::Identity {
 
 impl Device {
     fn new() -> Self {
-        let mut d = Self { scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
+        let mut d = Self { late_read:None,late_read_us:0,xtal_bad_read:false,freeze_read:None,scheduler_calls:Vec::new(),scheduler_fail:None,scheduler_late:None,scheduler_dirty:false,rx_delay_fail:false,rx_delay_late:false,btc: Vec::new(), btc_event_positions: Vec::new(), btc_start_fail: false, btc_stop_fail: false, btc_start_delay: 0, btc_stop_delay: 0, dack_model: false, rf: [[0;256];2], swsi_pending: None, swsi_latched: 0, read_stuck: false,
             rck_pending: [None;2], rck_values: [7,11], rck_delay: 4, rck_stuck: None, rck_bus_stuck: false, restore_fail: false, late_restore: false, memory: vec![0; 0x20000], xtal: [0; 256], xtal_stuck: false, xtal_delay_us: 0, xtal_pending: None, id: 0xb852_10ec, command: 6, now: 1000, frozen: false,
             events: Vec::new(), reads: 0, writes: 0, fail_write: None, fail_cleanup: None,
             swsi_stuck: false, swsi_busy: 0, nctl_stuck: false, now_calls: 0, jump_call: None, h2c_delay: 0, h2c_fail: None, deadline_write: None, deadline_us: 100_000, deadline_write_number: None, delay_jump: None };
@@ -62,7 +77,10 @@ impl Device {
     }
     fn read(&mut self, at: usize, width: usize) -> Result<u32> {
         io::check_offset(at, width, self.memory.len())?;
+        if self.freeze_read==Some(at){self.frozen=true;}
         self.reads += 1; self.tick(1);
+        if self.late_read==Some(at){self.now+=self.late_read_us;self.late_read=None;}
+        if at==0x271&&width==1&&self.xtal_bad_read&&self.get(0x270,1)==4{return Ok(self.get(at,width)^1);}
         if at == 0x270 && width == 4 {
             if let Some((ready, command)) = self.xtal_pending {
                 if self.now >= ready { self.xtal_pending=None; self.complete_xtal(command); }
@@ -575,3 +593,4 @@ impl rxdck::RxdckIo for Device {
     }
 }
 #[path="rtw89_rxdck_cases.rs"] mod rxdck_cases;
+#[path="rtw89_dm_cases.rs"] mod dm_cases;

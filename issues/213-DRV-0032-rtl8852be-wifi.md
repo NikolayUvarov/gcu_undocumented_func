@@ -179,12 +179,24 @@ tables and preserved per-stage/cleanup failures. After publication of
 `7c6d5ecc` and `a8418545`, all 44 Rust and three DACK extractor fixtures
 passed, as did pinned table regeneration. The next initial RXDCK slice uses
 the shared zero-only scheduler mailbox, post-DACK phase guard and actual BTC
-contract. Native build passes and 56 fixtures compile; execution awaits its
-publication. It never enables packet transmission.
+contract. Published `abe309ea` passed all 56 Rust fixtures, three DACK
+extractor fixtures and pinned regeneration. It never enables packet transmission.
 Actual BTC arbitration and the pre-NCTL DM prefix still block native activation. No hardware or radio success is claimed.
 
 Independent review corrected the generic-MAC BB/RF guard/cleanup to the actual RTL8852B common-chip dispatch before native activation. Cleanup now clears AFC/BB reset and both XTAL RF-enable fields without replacing a pending indirect command.
 
+### Contiguous DM prefix (2026-10-16)
+
+The private `phy::dm` engine now follows the entire initial pre-NCTL register
+prefix, with a 300 ms total deadline and independent 400 ms chip-disable
+cleanup. It returns initial observations/settings and keeps the public pipeline
+closed until actual BTC `ntfy_init` completion supplies its concrete token.
+Native build and compilation of 68 fixtures pass; execution awaits publication.
+The [PHY contract](../hwdocs/rtl8852be-phy.md#contiguous-initial-dm-prefix-and-remaining-order)
+records exact skipped chip hooks and the remaining source order through board
+trim, actual firmware PHY capabilities, channel calibration and association.
+Owned active-RX permits and actual BTC policy remain integration dependencies;
+no fake readiness callback, radio activation or hardware success is supplied.
 ### Implemented library slice: single-band MAC preparation after firmware readiness
 
 Implement the actual RTL8852B chip-dispatched BB/RF enable (AFC/SPS/XTAL/XYN),
@@ -376,3 +388,13 @@ also passed when explicitly invoked (0.06 seconds). The cumulative private
 fixture passed GEN1/GEN2 download and the missing-H2C case with real pinned
 file bytes and modeled board/PCI/DMA, on 2026-10-16 MSK. Independent review
 found no blocker. Full-gate and hardware validation remain pending.
+
+### PHY consumer of the owned RX permit
+
+The shared PHY guard now accepts active RX only through the actual borrowed
+`ReceivePermit`, with default refusal, a 10 ms callback ceiling and repeated
+DMA/packet-TX checks after validation. Stopped-RX behavior and exact before/after
+DACK phases remain distinct. Six integration fixtures exercise real session
+objects and stale/current hardware state without fabricating a token; the
+PHY, BTC-init and post-MAC host harnesses compile. Native build passes;
+execution awaits publication. This does not grant BTC or transmit readiness.
