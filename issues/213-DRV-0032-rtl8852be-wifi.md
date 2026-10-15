@@ -229,3 +229,19 @@ nonzero TX scheduling is enabled. A failed or uncertain exchange forbids
 further mailbox calls in that session; callers must retain DMA and perform
 their independent shutdown. Add focused zero/occupied/deadline fixtures;
 native calibration and BTC arbitration are still separate prerequisites.
+
+### Runtime MAC tail and installed receive-channel activation
+
+Implement the pinned RTL8852B MAC error-mask/host-report tail and PCIe
+LTR/address-info setup, then activate only the installed RXQ/RPQ and
+existing command channel. Require the previous MAC preparation, matching
+unchanged ring descriptors, quiet TX scheduler, ready firmware and disabled
+host interrupt masks before any writes. BACAM V0 makes this chip's
+`mac_feat_init` a no-op; do not send another chip's V1 BA-CAM command.
+Preserve STOP on every uninstalled data-TX channel and WPDMA. Keep host
+interrupts masked for the bounded polling path. A failure independently
+stops receive DMA, disables the radio and stops command/WCPU operation;
+retained allocations still require external PCI quiescence. Add applied
+write-failure, stale-ring, status-bit preservation and deadline fixtures.
+No native grant expansion, normal H2C/BTC/PHY claim or WLAN registration
+is included in this slice.

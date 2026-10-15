@@ -162,3 +162,11 @@ passed on 2026-10-16 (0.13 seconds, none ignored). Hardware validation and a
 full gate containing this slice remain pending. It provides neither RX activation nor
 interrupt/WLAN integration. Warm-state ownership/quiescence is still a
 precondition, not established by PCI MEM-only decoding.
+
+The subsequent MAC-tail/PCIe post-init library validates installed receive
+rings before enabling RXHCI and RXQ/RPQ. All uninstalled data-TX channels,
+WPDMA and host interrupt masks remain stopped/masked. The 10 ms stage and
+its independent cleanup retain DMA after failures. Nine focused host
+fixtures compile; execution, native-build, full-gate and hardware evidence
+remain pending. Its `Receiving` result is not H2C/BTC/PHY or WLAN readiness,
+and the native firmware-only service still does not call this library.

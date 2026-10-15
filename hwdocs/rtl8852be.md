@@ -509,6 +509,33 @@ boot/restart support.
 
 ## What blocks radio operation
 
+### MAC tail and receive-only post-init library
+
+`post_mac::activate` follows pinned `mac.c:3569–3909` and
+`pci.c:3132–3247`: RTL8852B error masks, PCIe host release reports
+(`RTW89_RPR_MODE_POH=0`, aggregation 30, timeout 255), LTR spacing 500 us,
+idle timer 3.2 ms, RX thresholds 40, idle/active latency values
+`0x90039003`/`0x880b880b`, and eight-byte address-info mode. The chip uses
+BACAM V0 (`rtw8852b.c:961`); `mac_feat_init` performs no V1 BA-CAM H2C.
+Known combined IMR/ISR status fields are written as zero rather than echoed
+while mask fields change. Host interrupt masks stay zero for bounded polling.
+
+An existing `runtime_mac::Prepared` value, actual runtime register state,
+quiet scheduler, ready firmware, unchanged command ring, and both installed
+receive rings are prerequisites. The whole stage has a 10 ms deadline,
+including the final ring validation. It sets RXHCI before releasing RXQ/RPQ,
+retains CH12, and keeps every uninstalled data-TX channel and WPDMA stopped.
+It deliberately does not copy upstream's enable-all-TX-queues step.
+The opaque `Receiving` result is receive-DMA readiness only; later callers
+must revalidate actual ring/device state after any intervening operation.
+No native entry, DMA grant, IRQ handler or WLAN registration changes.
+
+Failure independently attempts receive stop, chip BB/RF disable and command
+DMA/WCPU stop, preserving their errors and retaining all DMA allocations
+until external PCI quiescence. Nine host fixtures compile; execution, native
+build, full-gate and hardware evidence for this slice are pending. Normal
+H2C/offload, BTC policy, PHY/calibration and data TX remain separate.
+
 `rtw8852b_chip_info` requires physical EFUSE 1216 bytes, logical EFUSE 2048 bytes (limit 1280), DAV physical/logical regions 96/16 bytes, and PHY capability data at `0x580`, size 128. The resulting board state supplies MAC address, RFE type, country, XTAL trim, TSSI, gain offset, thermal/power/PA calibration. RFE 1 is now observed through Linux; the remaining calibration values have not been collected on the actual Ryzen under MIND. The native board-access service now implements the reads, but its physical operation is unvalidated.
 
 After the board-access slice passes its hardware check, validate RFE-specific BB/gain/RF-path/NCTL tables and calibration. The command queue above is not wired into a device startup. Full firmware H2C/C2H transport, secure-boot handling, packet rings/interrupts, ownership recovery, channel control, RX/TX and WLAN service integration remain absent. Existing WPA2 logic can be reused only after the radio provides the necessary frame interface. No DHCP, ping or Effector claim follows from host parser tests.
