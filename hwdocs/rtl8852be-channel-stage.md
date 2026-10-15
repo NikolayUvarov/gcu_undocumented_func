@@ -112,6 +112,39 @@ These are collection results, not a resolved platform SAR policy. The source
 `acpi.h` is
 `90a87fc398bbd90b043c6c06779cae4e746bfde203717b81b7f8a967926354a9`.
 
+### Privileged read-only collection on the actual Ryzen
+
+Effector operation `20261015233912.417877721_000172` used the supported root
+execution identity and completed successfully on 2026-10-15 at 23:39:13 UTC.
+It read the existing DSDT and nine SSDTs; each contained zero occurrences of
+`WRDS`, `RWRD`, `RWSI`, `RWGS` and `RTAG`. PCI `0000:03:00.0` had neither a
+`firmware_node` nor a `physical_node` entry and remained bound to
+`rtw89_8852be`. No AML evaluation, driver rebinding or interface change ran.
+
+| Table | Bytes read | SHA-256 |
+| --- | ---: | --- |
+| DSDT | 21297 | `f5f816726584284293179c691e48b66d80782720257714fb5a7c17102f7d6902` |
+| SSDT1 | 29360 | `1852e25b348809c53e227395054a7f638d4d2846945da8c066a4d0f34fd4a405` |
+| SSDT2 | 14883 | `596923d34b2826b6322b04bb620a2c38fddde686aa498bc26472eb6aaad5ff90` |
+| SSDT3 | 21332 | `1eab001c5030a0552dd59b117fcb0f84cbe6f107cb3c5abd39d60be537eb807d` |
+| SSDT4 | 329 | `ac0ea48dac99317cf74bd46dcb072b2222c1f8100c3aa471a1914d4a6d432845` |
+| SSDT5 | 5262 | `72044c9097e9b8f5edb149d9afa8d66bd77172985f6a460f2da8e81f9f8498b7` |
+| SSDT6 | 5406 | `451f56cc1ab1af4cde5cdea31c0bd145609bfd260caeb483d72e5c25bfec54dd` |
+| SSDT7 | 14458 | `803047529d04f3e03cd3e903c82b9ed936e8a46f53f8a724d9137068a2c05c12` |
+| SSDT8 | 141 | `e561fbcab4aac2fafbdb0bb8835b072030577f4515604a394b9abdef16353295` |
+| SSDT9 | 2288 | `182135af19554feaf1421a56e3d2a4573a293619457b33a6e85a2c22d0a64d01` |
+
+These hashes identify the bytes inspected, not a validated complete namespace.
+This operation did not check declared table lengths/checksums or account for
+dynamically loaded AML. Static name absence and an Ubuntu PCI-node observation
+are not a MIND runtime policy. The
+[KRN request](../issues/requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver)
+asks for bounded device-bound policy input that distinguishes checked absence
+from partial, invalid or unsupported input. The earlier unprivileged collection
+failure is retained above; operation `20261015233719.225235054_000171` also
+confirmed that passwordless sudo was unavailable before the supported root
+identity was selected.
+
 ## Validation status
 
 The native library/service builds without warnings in 1.05 seconds. All six
