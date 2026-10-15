@@ -748,7 +748,9 @@ The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
 in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
 initialized context, normal H2C sequence and retained RX, refuse pending RFK,
 preserve errors and allow a matching host END even after poisoning. Ten new
-Session model cases compile; execution awaits raw publication. The channel
+Session model cases and the existing 52 passed together on the own branch
+at `bf6747f5` after native build and raw publication `c38df1dd`: 62/62,
+0.29 s, no failures or ignored cases. The channel
 coordinator must still validate real IQK/TSSI/DPK results and transmission
 admission. No native RFK-power provider or working WLAN is claimed.
 
