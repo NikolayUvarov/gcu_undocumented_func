@@ -226,3 +226,13 @@ Four cumulative cold fixtures compile for real TX after the full chain,
 callback-error shutdown, missing actual initial command completion and rejected
 data activation. Their execution follows own-branch build and raw publication.
 
+
+Connection source `b8515c5c` and integration `498a82dc` built the complete own
+x86 image (2 seconds). After raw publication `d4e55fcc`, all four
+`connection_cases::` fixtures passed (0.04 seconds, zero failed/ignored,
+242 unrelated cases filtered). This run includes actual `0x02ff` RTS readback,
+PHY-status forwarding and callback/activation failure boundaries. Command:
+`rustc --edition=2021 --test tests/rtw89_connection_host.rs -o /tmp/mind-connection-tests`,
+then `/tmp/mind-connection-tests connection_cases::`; log
+`/tmp/mind-connection-results.log`, x86-64 WSL2/rustc c36f14571.
+These model results do not establish a native endpoint or physical link.
