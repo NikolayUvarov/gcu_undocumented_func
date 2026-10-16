@@ -24,7 +24,7 @@ impl Layout{
 }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum Stage{Guard,Station,Dma,Scheduler,Verify,Runtime}
+pub(crate) enum Stage{Guard,Station,Dma,Scheduler,Verify,Runtime,Filter(station::Stage)}
 #[derive(Debug)]
 pub(crate) enum Cause{Identity,State,Register(Fault),Session(super::Error),Station(station::CheckFailure),Tx(tx::Error)}
 impl From<Fault> for Cause{fn from(v:Fault)->Self{Self::Register(v)}}
@@ -252,3 +252,6 @@ fn radio(bus:&mut impl RegisterIo,channel:u8)->io::Result<()>{
         if actual!=0x1c00|u32::from(channel){return Err(Fault::new(FaultKind::PowerState,at as usize,actual))}
     }}Ok(())
 }
+
+#[path="active_control.rs"]mod control;
+pub(crate) use control::FilterChange;
