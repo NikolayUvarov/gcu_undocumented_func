@@ -85,6 +85,35 @@ packet owner, with per-command receipt, requested DONE and DMA completion.
 Native input/grants, reset/reconnect, service dispatch and
 physical under-load validation remain open under DRV-0032.
 
+## Association boundary
+
+[`wlanhw` 1.1](../idl/wlanhw.wit) deliberately exchanges raw MPDUs, channel,
+filter and rate information. [`wlan::Wlan::apply`](../wlan/src/main.rs) forwards
+those actions from [`dot11::Station`](../dot11/src/station.rs): `management`
+handles authentication/association, `eapol` runs the WPA2 handshake, and `data`
+and `send_frame` decrypt/encrypt CCMP in software. Keys remain with the station
+and its keystore. Neither an additional key-upload interface nor hardware WPA2
+offload is required by that software design.
+
+The current [`station::prepare` and `cam`](../rtw89_wifi/src/station.rs) still
+configure a NO_LINK client, disconnected JOIN and zero AID. `set_filter` changes
+CAM/BSSID/address selection, not association state. In contrast, pinned Linux
+[`core.c:4889–4905`](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.c#L4889)
+updates association CCTL, JOIN(false), and CAM AID/MACID/network type during
+`rtw89_core_sta_link_assoc`. The current wlanhw contract conveys neither link
+state nor AID; `dot11::Station::management` does not retain the response AID.
+
+Whether the selected fixed-rate, software-crypto raw path needs those hardware
+association updates remains unconfirmed. The host packet model does not establish
+real auto-ACK, protected-frame reception or WPA2 association in NO_LINK mode.
+This is a validation boundary, not an established hardware blocker or a reason
+to invent association from a filter update. If source or physical evidence
+establishes a required link-state/AID notification, coordinate an explicit,
+versioned NET interface change while preserving software key ownership and
+existing radios. The native policy/endpoint KRN requests address configuration
+and capability routing; they do not establish this device behavior. Actual
+WPA2 association, DHCP and traffic under load remain pending.
+
 ## Validation
 
 Thirteen new cold continuation cases and the strict original ReceivePermit

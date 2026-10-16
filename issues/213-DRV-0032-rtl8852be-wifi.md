@@ -986,3 +986,16 @@ and raw publication. The [source/trust notes](../hwdocs/rtl8852be-h2c-runtime.md
 explicitly distinguish stale software tickets from indistinguishable ancient
 wire ACKs. Native binding, connected-role coexistence and physical acceptance
 remain open.
+
+### Audited association boundary
+
+Document the [NO_LINK association boundary](../hwdocs/rtl8852be-data-mode.md#association-boundary):
+`dot11` already handles authentication, association, EAPOL and CCMP through raw
+wlanhw frames, while this driver's initial station remains disconnected with
+zero AID. Pinned Linux association updates CCTL/JOIN/CAM; the current interface
+does not convey association state or AID. The need for those device updates in
+our fixed-rate software-crypto path is unconfirmed, not a demonstrated blocker.
+Do not infer hardware WPA2 readiness or a new ABI requirement from host packet
+tests. Record actual association/traffic evidence; request a versioned NET
+notification only if its necessity is established. No code, interface or
+hardware behavior changes in this documentation update.
