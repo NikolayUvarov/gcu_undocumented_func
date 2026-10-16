@@ -26,7 +26,7 @@ pub struct Failure { pub cause: Cause, pub coexistence: Option<btc_context::RfkF
 pub struct Observations {
     pub thermal: [u8; 2], pub rck: phy::RckResult, pub dack: dack::ResultData,
     pub rxdck: rxdck::Completed, pub rx_path: u8, pub rx_nss: u8,
-    pub submitted: u16, pub received: btc_session::Counts, pub encoded_rts: u16,
+    pub submitted: u64, pub received: btc_session::Counts, pub encoded_rts: u16,
 }
 
 /// Private continuation state from this live PHY attempt, not channel calibration or transmission authority.

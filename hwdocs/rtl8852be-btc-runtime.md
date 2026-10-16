@@ -67,9 +67,10 @@ without returning the startup owner or creating a new hardware permit.
 
 The actual MACID role remains NO_LINK. Selecting a BSSID or receiving a frame
 does not establish the upper WLAN service's association/scan state; connected
-coexistence policy needs that explicit input. The normal command sequence is
-still limited to its first 256 submissions pending the separately reviewed
-ordered wrap contract. Native endpoint binding, reset/reconnect and physical
+coexistence policy needs that explicit input. The separately documented
+[serial H2C continuation](rtl8852be-h2c-runtime.md) permits sustained commands
+only after the actual idle packet-owner transition; startup remains bounded.
+Native endpoint binding, reset/reconnect and physical
 under-load behavior remain open.
 
 Twelve new cumulative cases compile against the real cold firmware, PHY,

@@ -917,3 +917,16 @@ unknown controls. Twelve new cumulative cases compile, including a valid 15 ms
 ACK and report bursts; own build/raw publication precede execution. Sustained H2C sequence reuse,
 associated-role policy inputs, native service binding and hardware acceptance
 remain open.
+
+### Sustained serial H2C through the packet owner
+
+Keep startup's 256-command limit and enable serial wrap only after actual
+DataSession ownership, CH12 consumption and DMA idle. Require receipt for
+each runtime command, all requested DONE results and final hardware command
+consumption; retain the same engine and a checked `u64` ticket generation.
+Seven core and three cumulative cases compile, including 514 commands with
+continuous Wi-Fi and unconsumed DMA despite ACKs. Execution follows own build
+and raw publication. The [source/trust notes](../hwdocs/rtl8852be-h2c-runtime.md)
+explicitly distinguish stale software tickets from indistinguishable ancient
+wire ACKs. Native binding, connected-role coexistence and physical acceptance
+remain open.

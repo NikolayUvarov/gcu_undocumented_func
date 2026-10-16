@@ -34,6 +34,8 @@ Everything else was written for this project, including the 8×8 bitmap font in 
 
 `rtl8168/src/identity.rs`, `rtl8168/src/rings.rs` and `scripts/hardware/rtl8168_probe.py` use hardware facts (descriptor fields, register offsets and the XID mask) cross-checked against FreeBSD releng/14.2 `sys/dev/rl/if_rlreg.h` and `sys/dev/re/if_re.c`, and Linux v6.12 `r8169_main.c`. [The RTL8168 notes](hwdocs/rtl8168.md) record the primary links. Those files copy no implementation or firmware payload; the controller adaptation is listed separately above.
 
+The [RTL8852BE serial H2C notes](hwdocs/rtl8852be-h2c-runtime.md) also compare protocol facts with Realtek's vendor `fwcmd.c` at `68212c16b229080742280f954b3ffde173e63fcc`. No GPL-only vendor implementation is copied; the existing Linux BSD-3-Clause adaptation and notice remain the implementation's source attribution.
+
 ## Rust dependencies (fetched by Cargo, not stored here)
 
 | Crate | Used by | Licence |

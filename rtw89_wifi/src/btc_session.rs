@@ -129,7 +129,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     pub fn firmware_version(&self)->[u8;4] { self.firmware.version() }
     pub fn failed(&self)->Option<Error> { self.failed }
     pub fn counts(&self)->Counts { self.counts }
-    pub fn submitted(&self)->u16 { self.engine.submitted() }
+    pub fn submitted(&self)->u64 { self.engine.submitted() }
     pub fn pending_events(&self)->usize { self.event_count }
     /// BTC events are retained in order for the policy owner; no event is treated as an ACK or RFK grant.
     pub fn event(&self)->Option<c2h::Event<'_>> {

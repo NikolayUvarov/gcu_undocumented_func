@@ -130,13 +130,24 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             self.session.last=window.last;outcome?;
             self.session.mode=Mode::Data(layout);stage=Stage::Verify;
             let left=self.session.left(deadline)?;self.session.live(left.min(LIVE_US))?;
-            self.session.left(deadline)?;Ok(())
+            self.enable_runtime_commands(deadline)?;self.session.left(deadline)?;Ok(())
         })();
         if let Err(cause)=result{
             let shutdown=modified.then(||self.shutdown());
             let _=self.session.fail::<()>(super::Error::Session);
             return Err(Failure{stage,cause,shutdown});
         }Ok(())
+    }
+    fn enable_runtime_commands(&mut self,deadline:u64)->Result<(),Cause>{
+        let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
+        let observed=(||{
+            self.session.queue.reclaim(&mut window).map_err(super::Error::Dma)?;
+            let busy=io::read32(&mut window,fwcmd::DMA_BUSY)?;window.delay_us(0)?;
+            if self.session.queue.pending()!=0||busy&super::TX_BUSY!=0{return Err(Cause::State)}
+            Ok(())
+        })();self.session.last=window.last;observed?;
+        self.session.left(deadline)?;
+        self.session.engine.enable_serial(self.session.last).map_err(super::Error::Command)?;Ok(())
     }
     fn drain_previous_epoch(&mut self,deadline:u64)->Result<(),Cause>{
         while let Some(record)=self.session.packet(){
