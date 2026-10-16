@@ -71,13 +71,15 @@ The caller supplies 135,168 disjoint coherent WB bytes below 4 GiB on x86-64,
 with strongly ordered UC MMIO and no aliases. Five 32-entry TXBD rings occupy
 the first page; 32 separate 4 KiB slots hold each WD and payload. Only one
 logical MPDU is outstanding. This is deliberate for the synchronous `send`
-contract; there is no per-packet heap allocation. The future session owner
-must give this engine exclusive RXQ/RPQ polling
-while a request is pending. Separate `poll_receive` and `poll` calls each
-consume at most one descriptor through the actual RX engine. Unrelated C2H,
-Wi-Fi and descriptor-drop observations are returned explicitly; callers must
-handle returned packet bytes before reusing scratch. Nothing silently steals
-BTC/ACK/data traffic, and both methods share the same absolute/call budget.
+contract; there is no per-packet heap allocation. The single `Session` RX
+owner retains copied records while handling command ACKs. `Queue::ingest`
+accepts a retained channel/descriptor/byte record and fresh monotonic time;
+`Queue::advance` revalidates TX registers and reclaims descriptor consumption.
+Neither production entry reads or releases RXQ/RPQ. Unrelated packets are
+returned for their own handler, and ingest alone cannot publish or complete
+an MPDU. The old polling adapters exist only in host fixtures. Ingestion and
+progress share the request's absolute and finite-call budgets. See the
+[retained RX ownership contract](rtl8852be-rx-dispatch.md).
 
 A payload is immutable until its actual RPQ release, descriptor consumption
 and final correlated firmware report are all observed. The RPQ and descriptor
@@ -133,9 +135,10 @@ does not prove over-the-air transmission, acknowledgements or timing.
 Native integration must first validate the actual completed channel token,
 current policy and PHY/session identity, install this disjoint DMA before
 mastering, configure CMAC and the zero-to-active scheduler transition, and
-give this owner exclusive RXQ/RPQ status routing. Current BTC `Session` owns
-`&mut Rings`; it cannot coexist with an independent TX RXQ poller. A concrete
-central dispatcher or explicit session handoff remains necessary. Existing receive-only permits
+use the caller-owned Session inbox and route each retained RPQ/final-C2H
+record to the actual TX owner. The Session remains the only `&mut Rings`
+reader, including during H2C waits. A typed transition to active data mode
+and concrete native dispatch integration remain necessary. Existing receive-only permits
 intentionally reject active ordinary TX and must not be bypassed or relaxed
 by raw mask changes. Association, WPA2 and hardware traffic remain open.
 
