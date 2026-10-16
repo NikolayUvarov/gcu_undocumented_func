@@ -816,8 +816,10 @@ source TSSI HT20 MCS7 maximum request of 12 dBm. It binds the exact written poli
 and OTP fingerprint to the current PHY/firmware attempt and issues three consumed
 engine-specific permissions once, after actual live ownership validation. IQK/DPK
 use the supported source sequence without inventing a numerical output guarantee
-or a new certification prerequisite. Fourteen focused cases compile, including
-the actual cold coordinator; execution follows publication. The native scoped
+or a new certification prerequisite. Source `202bba96` passed all fourteen focused
+cases, including the actual cold coordinator, and all nine affected complete host
+harnesses after own build and raw `882bd735` publication (2026-10-16; inherited
+private-firmware ignores unchanged, detailed counts in the provider notes). The native scoped
 input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
 open. This provider does not start native transmission.
 
@@ -831,3 +833,28 @@ modified failure independently disables radio/port and retains DMA. Eleven cold
 continuation fixtures compile; execution follows raw publication. Association,
 receive filtering and native WLAN/TX activation are not established by this
 initial context.
+
+
+### Raw receive-frame service boundary
+
+Add the private [receive serializer](../hwdocs/rtl8852be-frames.md) for complete
+legacy-rate MPDUs: retain the original protected payload, reject hardware error,
+decryption and unsupported aggregation, remove the source-included FCS and
+encode the existing wlanhw 1.1 prefix. Signal remains explicitly unmeasured.
+The actual runtime filter/channel epoch is a caller obligation. Five focused
+cases compile; execution follows build and raw publication. This does not
+activate the endpoint or establish physical reception.
+
+### One retained runtime RX owner
+
+Keep `Session` as the exclusive reader of both receive rings during H2C waits.
+Add an explicitly caller-owned bounded inbox for runtime Wi-Fi packets, RPQ,
+other C2H and unrelated ACKs; keep matched ACK and BTC policy routing intact.
+Retain bytes and descriptor metadata before scratch reuse, expose ordered
+borrowed records, and make overflow terminal with the offending scratch
+record still inspectable. The existing no-inbox constructor remains a
+pre-data startup diagnostic only. Runtime activation must require the inbox.
+Refactor the private TX engine to ingest retained records and advance DMA
+without reading RX rings; keep native TX and receive-only guards unchanged.
+Validate command-wait interleaving, copy ownership, capacity, terminal failure
+and source-preserving TX completion on the owning branch after publication.

@@ -348,3 +348,38 @@ fn missing_firmware_report_forwarding_refuses_publication(){
         assert_eq!(q.state(),State::Faulted);assert!(d.published.is_empty());
     });}
 }
+
+#[test]
+fn retained_dispatch_records_complete_tx_without_any_tx_receive_ring_poll(){
+    for reverse in [false,true]{run(|d,q,r,s,_|{
+        q.begin(d,&frame(0,None,false),12,3,0,100_000).unwrap();
+        let mut records=Vec::new();
+        for channel in if reverse{[rx::Channel::Rpq,rx::Channel::Rxq]}else{[rx::Channel::Rxq,rx::Channel::Rpq]}{
+            let outcome=r.receive(d,channel,s,1000).unwrap();let rx::Outcome::Packet(packet)=outcome else{panic!("missing owned record")};
+            records.push((channel,outcome,s[..packet.offset+packet.length].to_vec()));s.fill(0x99);
+        }
+        let indices=[d.get(0x1050,4),d.get(0x1054,4)];let writes=d.writes.len();
+        for(channel,outcome,bytes)in records{
+            let observed=q.ingest(d.now_us(),channel,outcome,&bytes).unwrap();
+            assert_eq!(observed,if channel==rx::Channel::Rpq{Receive::Rpq}else{Receive::TxReport{final_report:true}});
+        }
+        assert_eq!(d.writes.len(),writes);
+        let completed=q.advance(d).unwrap().unwrap();assert!(completed.acked);assert_eq!(completed.completed_descriptors,1);
+        assert_eq!([d.get(0x1050,4),d.get(0x1054,4)],indices);assert_eq!(d.writes.len(),writes);
+    });}
+}
+#[test]
+fn retained_tx_ingest_preserves_other_packet_and_rejects_corrupt_rpq(){run(|d,q,_,_,_|{
+    d.auto_rpq=false;d.auto_firmware=false;q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();
+    let mut packet=crate::rxdesc::Packet{offset:0,length:4,kind:0,long:false,crc_error:false,icv_error:false,hardware_decrypted:false};
+    let outcome=rx::Outcome::Packet(packet);assert_eq!(q.ingest(d.now_us(),rx::Channel::Rxq,outcome,&[1,2,3,4]).unwrap(),Receive::Other(outcome));
+    assert!(q.advance(d).unwrap().is_none());
+    packet.crc_error=true;packet.kind=7;assert_eq!(q.ingest(d.now_us(),rx::Channel::Rpq,rx::Outcome::Packet(packet),&[0;4]),Err(Error::Report));
+    assert_eq!(q.state(),State::Faulted);
+});}
+#[test]
+fn retained_ingest_and_dma_progress_share_finite_deadline_and_poll_budget(){run(|d,q,_,_,_|{
+    d.frozen=true;d.auto_rpq=false;d.auto_firmware=false;d.auto_dma=false;q.begin(d,&frame(0,None,false),2,1,0,8).unwrap();
+    for _ in 0..4{assert_eq!(q.ingest(d.now_us(),rx::Channel::Rxq,rx::Outcome::Empty,&[]).unwrap(),Receive::Empty);assert_eq!(q.advance(d).unwrap(),None);}
+    assert!(matches!(q.advance(d),Err(Error::Io(Fault{kind:FaultKind::Timeout,..}))));assert_eq!(d.published.len(),1);
+});}
