@@ -44,9 +44,10 @@ the existing retained-memory shutdown behavior.
 Serial mode permits one outstanding or uncollected software command. Every
 command requests receipt, plus any explicitly requested DONE. Either missing
 class prevents completion; a rejected DONE also waits for receipt before its
-result can be collected. The concrete Session then waits for CH12 consumption
-and DMA idle before returning or allowing another command. ACK and descriptor
-consumption are separate observations. A full pre-publication queue consumes
+result can be collected. The concrete Session waits for CH12 consumption and
+DMA idle before a successful return or another command. Rejection is terminal
+and does not establish DMA quiescence. ACK and descriptor consumption are
+separate observations. A full pre-publication queue consumes
 no sequence or generation; uncertain publication or timeout remains terminal.
 
 The host counter, ticket generation, Session observation and initial-PHY
