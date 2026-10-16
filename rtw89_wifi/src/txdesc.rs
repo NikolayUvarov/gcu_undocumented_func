@@ -77,7 +77,7 @@ pub(crate) fn rpq(bytes:&[u8])->Result<Report,Error>{
     Ok(Report{sequence:value.sequence,status:Status::decode(value.status)?,qsel:value.queue,mac_id:value.mac_id})
 }
 
-/// Optional firmware diagnostic; RPQ itself has no attempt count and DMA has no over-the-air status.
+/// Actual firmware attempt counter; RPQ itself has no count and DMA has no over-the-air status.
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct FirmwareReport{pub sequence:u8,pub status:Status,pub raw_data_tx_count:u8}
 pub(crate) fn firmware_report(bytes:&[u8])->Result<Option<FirmwareReport>,Error>{

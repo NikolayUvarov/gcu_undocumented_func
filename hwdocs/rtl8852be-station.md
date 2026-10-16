@@ -146,7 +146,10 @@ without FCS; descriptor errors and variable headers belong to `frames`.
 
 The pure `Filter` value is address policy, not hardware authority. Data-mode
 activation must consume a real `Prepared` whose `current_filter()` is present
-and revalidate its registers. A second initial configuration is refused;
+and revalidate its registers. RX already runs during earlier initialization,
+so initial exposure must also drain/drop or accurately tag pre-configuration
+records in both the inbox and hardware rings; the station token does not
+attest that these are empty. A second initial configuration is refused;
 future runtime updates must drain or tag the old receive epoch before changing
 the scan flag/filter, including records retained during firmware ACK waits.
 The single RX owner must dispatch/filter ordinary traffic during those waits;
@@ -158,6 +161,16 @@ preserved MPDU limit, required CAM ACK/DMA completion, changed policy/filter,
 ignored/applied-failed/late writes, forbidden initial reconfiguration, own
 override, group-address direction rules, scan selection and malformed input.
 No hardware RX, association or packet-TX evidence is claimed.
+
+After source `29175647` and its epoch clarification `2919a3c3` were published
+in `bc802db7`, the exact saved binaries passed all seven new cold filter cases
+and seven pure policy cases. The station harness passed all 22 station cases;
+its complete run passed 225 cases, failed none and retained one existing
+private-firmware case as ignored, in 7.02 s. The pure filter run passed 7/7 in
+0.00 s. Logs are `/tmp/mind-station-filter-cold-results-29175647.log` and
+`/tmp/mind-station-filter-results-29175647.log`. Native release compilation
+passed in 1.56 s. These are host-model observations on the source branch,
+not tests of `fast-test` or evidence of physical receive/transmit operation.
 
 
 ## Active owner-bound filter updates

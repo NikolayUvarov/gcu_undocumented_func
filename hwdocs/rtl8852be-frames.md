@@ -63,3 +63,9 @@ validated descriptor and retained bytes, checks all accessed fields/payload
 bounds and removes only the FCS. Full-buffer `decode` remains strict. A sixth
 fixture covers padded full buffers, the shortened valid copy and missing
 payload bytes; its execution awaits publication of this correction.
+
+
+The correction `63a4dbe0` built in 2 s and was published in `fast-test`
+`b5ba07ab` before running its saved binary. All six focused cases passed
+(0.00 s, zero failures/ignores), including the retained padded-packet boundary.
+These remain parser/serialization checks, not hardware reception evidence.

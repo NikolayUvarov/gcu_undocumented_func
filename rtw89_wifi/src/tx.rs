@@ -31,7 +31,7 @@ type Result<T>=core::result::Result<T,Error>;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum State{Allocated,Installed,Running,Faulted,Stopped}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum AttemptCount{Unknown}
+pub(crate) enum AttemptCount{Unknown,Known(u8)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Completion{pub status:Status,pub acked:bool,pub attempts:AttemptCount,pub completed_descriptors:u8,pub raw_data_tx_count:u16}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
@@ -140,7 +140,7 @@ impl<'a> Queue<'a>{
             self.completed[q]=self.completed[q].checked_add(count as u64).ok_or(Error::Count)?;
         }fence(Ordering::Acquire);Ok(())
     }
-    /// Copy one raw management/data MPDU; only matching RPQ and DMA completion advance the descriptor count.
+    /// Copy one raw MPDU; actual final firmware counts require matching RPQ and DMA completion.
     pub(crate) fn begin(&mut self,bus:&mut impl Bus,frame:&[u8],rate:u8,max_submissions:u8,mac_id:u8,timeout_us:u32)->Result<()>{
         if self.state!=State::Running{return Err(Error::State);}
         if self.request.is_some(){return Err(Error::Busy);}
@@ -195,15 +195,19 @@ impl<'a> Queue<'a>{
         if matches!(status,Status::Lifetime|Status::MacIdDrop){return Err(Error::Dropped{status,completed_descriptors:request.completed});}
         let Some(firmware)=pending.firmware else{return Ok(None);};
         if firmware.status!=status{return Err(Error::Report);}
+        if firmware.raw_data_tx_count!=txdesc::SELECTED_LIMIT{return Err(Error::Report);}
         request.raw_count=request.raw_count.checked_add(u16::from(firmware.raw_data_tx_count)).ok_or(Error::Count)?;
         request.completed=request.completed.checked_add(1).ok_or(Error::Count)?;self.pending=None;
         if status==Status::Done||request.completed==request.limit{
-            let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Unknown,completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
+            let attempts=u8::try_from(request.raw_count).map_err(|_|Error::Count)?;
+            if attempts==0||attempts>request.limit{return Err(Error::Count);}
+            let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Known(attempts),completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
             self.time(bus)?;self.request=None;return Ok(Some(completion));
         }
         self.submit(bus)?;Ok(None)
     }
     fn firmware(&mut self,report:txdesc::FirmwareReport)->Result<bool>{
+        if report.raw_data_tx_count>txdesc::SELECTED_LIMIT||report.status==Status::Done&&report.raw_data_tx_count==0{return Err(Error::Report);}
         if self.last_firmware==Some(report){return Ok(true);}
         let pending=self.pending.as_mut().ok_or(Error::Report)?;
         if report.sequence!=(pending.sequence&15)as u8||report.raw_data_tx_count<pending.last_counter{return Err(Error::Report);}

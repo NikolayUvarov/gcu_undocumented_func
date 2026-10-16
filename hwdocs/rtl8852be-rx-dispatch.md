@@ -78,3 +78,36 @@ return unrelated data, reject corrupt RPQ and share a finite frozen-clock
 budget between ingest and progress. Two new RX fixtures distinguish a validated copy from successful release and reject partial/previous-copy metadata. Existing Session/TX/RX and cumulative
 fixtures remain applicable. Compilation and own release build precede raw
 publication; test execution evidence will be added after that publication.
+
+### Executed evidence
+
+Source `b6069281165867f2337e843cb8e0940d825a2e5b` (production change
+`55882d5e`) was published in raw `fast-test`
+`3881b6297bf24606b2efae20eb107886fd0c9031` before execution, on 2026-10-16.
+Own branch release build passed in 1.42 s, then 0.00 s at the committed tip.
+It retained the inherited `initial_phy::Prepared` dead-field warning; this
+slice added no new warning. Native files were not changed.
+
+On x86-64 Linux 6.6.87.2-microsoft-standard-WSL2, rustc
+1.101.0-nightly (c36f14571 2026-10-01), the own-branch host runs were:
+
+| Group | Result | Duration |
+| --- | --- | --- |
+| Full Session harness, including BTC/ownership/dependency fixtures | 184 passed, 0 failed; one private-file case deferred to the explicit run below | 1.36 s |
+| Raw TX fixtures | 27 passed, 0 failed, 0 ignored | 0.58 s |
+| RX fixtures | 20 passed, 0 failed, 0 ignored | 0.25 s |
+| Cold cumulative MAC/RX/Session fixtures | 10 passed, 0 failed, 0 ignored | 0.11 s |
+| Explicit actual private firmware hash/download policy fixture | 1 passed, 0 failed, 0 ignored | 0.05 s |
+
+An initial cumulative command used a nonmatching module filter and executed
+zero cases; it is not evidence. The corrected `cumulative::` filter ran all
+ten cases above. No test failed, and no test was skipped to obtain a green
+result. The private firmware bytes remain outside version control and images.
+These are host models, not physical RF/throughput/latency observations.
+
+During actual data operation, command waits must dispatch/filter retained
+traffic as they progress, not wait until a synchronous command returns to
+drain this four-record bank. The next typed data-session owner must process
+TX reports and apply actual software receive policy through the same reader;
+genuine accepted-traffic overload remains explicit. This integration limit
+is not removed by the successful bounded-storage fixtures.

@@ -60,7 +60,7 @@ fn run(fault:u8,configure:bool,inbox:bool,check:impl FnOnce(&mut DataSession<'_,
 #[test]
 fn cold_source_profile_station_and_single_rx_owner_activate_then_complete_actual_tx(){run(0,true,true,|data,_|{
     command(data);data.begin(&frame(),12,3,100_000).unwrap();let c=data.advance(100_000).unwrap().unwrap();
-    assert!(c.acked);assert_eq!(c.completed_descriptors,1);assert_eq!(c.attempts,tx::AttemptCount::Unknown);assert_eq!(c.raw_data_tx_count,1);
+    assert!(c.acked);assert_eq!(c.completed_descriptors,1);assert_eq!(c.attempts,tx::AttemptCount::Known(1));assert_eq!(c.raw_data_tx_count,1);
     assert_eq!(data.pending_packets(),0);command(data);
 });}
 #[test]

@@ -2,9 +2,9 @@
 
 Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md).
 This private library moves management and ordinary/QoS data MPDUs through
-band-zero ACH0..3 and CH8. It is not yet a `wlanhw` service. Its start transition
-has no production caller: actual channel RFK/policy, station CMAC configuration,
-live session ownership and ordinary scheduler activation remain prerequisites.
+band-zero ACH0..3 and CH8. It is not yet a `wlanhw` service. Its private start transition is owned by the checked DataSession after actual
+channel RFK/policy, station CMAC configuration, live session ownership and
+ordinary scheduler activation. Native service exposure remains separate.
 No ABI, IDL, native grant or live radio configuration changes here.
 
 ## Primary source and descriptor contract
@@ -38,32 +38,29 @@ checks require PTCLRPT_FULL_HDL.SPE_RPT_PATH=WLCPU, established by the actual
 runtime-MAC stage; missing forwarding refuses descriptor publication.
 
 Each WD selects DATA_TXCNT_LMT=1, a fixed legacy rate with DISDATAFB, no
-aggregation and no RTS/HW_RTS. The pinned source packs that field directly
-(`core.c::rtw89_build_txwd_info1`) and compares firmware TX count to the selected
-limit (`mac.c::rtw89_mac_c2h_tx_rpt`), but does not explicitly settle whether
-one means one total transmission or one retry. An independent
-[OpenIPC primary measurement](https://github.com/OpenIPC/devourer/blob/master/docs/scheduled-mac.md#unicast-ack--txreport-capability-matrix)
-reports total-transmission semantics on RTL8832CU. That is supporting evidence
-on a different chip, not RTL8852BE hardware evidence.
+aggregation and no RTS/HW_RTS. The upstream author/maintainer discussion
+explicitly defines limit one as one transmission attempt and a returned
+DATA_TX_CNT of one. The pinned RTL8852B uses that descriptor field and original
+C2H count layout. See the [primary-source chain and scope](rtl8852be-tx-attempts.md).
+This uses explicitly requested firmware reports on PCIe in addition to its
+own RPQ and descriptor completion; USB transport completion is not substituted.
 
-Accordingly every `Completion` retains the actual RPQ `Status`, ACK result,
-completed-descriptor count and **`AttemptCount::Unknown`**. It cannot satisfy
-`wlanhw` 1.1's exact on-air attempts contract, and no service adapter or native
-start is exposed. The actual correlated firmware result is named
-`raw_data_tx_count`; it is not silently substituted for an established on-air
-count. Resolving this boundary requires exact-chip primary semantics
-or independent physical observation before the adapter can open.
+The engine advances only after matching RPQ status, PCI read-index consumption
+and a consistent final C2H report have all arrived. Final DONE with a zero count,
+or any report exceeding the selected limit, poisons the queue immediately.
+Checked final counters are accumulated and returned as `AttemptCount::Known(n)`;
+raw counters and descriptor counts remain separately inspectable. This resolves
+the `wlanhw` 1.1 exact-attempt semantic prerequisite without an IDL change.
+It does not by itself expose the service or establish physical transmission.
 
-The engine advances its descriptor count only after matching RPQ status, PCI
-read-index consumption and a consistent final C2H report have all arrived.
-DONE ends the request; a group address
-always returns `acked=false` and is never resubmitted. RETRY_LIMIT permits
-another descriptor up to the caller's explicit submission limit, preserving
-sequence and setting the MPDU Retry bit. This is not yet a promised bound on
-on-air attempts. LIFE_TIME/MACID_DROP retain raw status and the count of earlier
-completed descriptors, then require shutdown; they do not manufacture a
-transmission count. The source and tests distinguish descriptor completion
-from both DMA-only completion and actual attempt accounting.
+DONE ends the request. A group address always returns `acked=false` and is
+never resubmitted. RETRY_LIMIT permits another single-attempt descriptor up
+to the caller's explicit 1..15 bound, preserving sequence and setting the MPDU
+Retry bit. Interim reports do not increment the result. LIFE_TIME/MACID_DROP
+retain raw status and the count of earlier completed descriptors, then require
+shutdown without inventing attempts for the dropped descriptor. DMA-only or
+C2H-only completion never returns a sent result. Firmware and hardware remain
+part of the TCB for the meaning and truthfulness of their reports.
 
 ## Ownership, limits and shutdown
 
@@ -138,7 +135,8 @@ mastering, configure CMAC and the zero-to-active scheduler transition, and
 use the caller-owned Session inbox and route each retained RPQ/final-C2H
 record to the actual TX owner. The Session remains the only `&mut Rings`
 reader, including during H2C waits. A typed transition to active data mode
-and concrete native dispatch integration remain necessary. Existing receive-only permits
+is implemented by the private DataSession; concrete native dispatch integration
+remains necessary. Existing receive-only permits
 intentionally reject active ordinary TX and must not be bypassed or relaxed
 by raw mask changes. Association, WPA2 and hardware traffic remain open.
 
@@ -157,3 +155,10 @@ On source `709721d6`, after raw publication `7ec8fbee` (2026-10-16), all
 warnings. Host/compiler configuration is the same as the baseline above;
 execution occurred only on the own branch. No physical transmission or exact
 on-air attempt interpretation is established by this host model.
+
+### Source-defined attempt accounting follow-up
+
+The [attempt-accounting follow-up](rtl8852be-tx-attempts.md) supersedes the
+baseline Unknown result and its deliberately unresolved interpretation above.
+Its build/publication/test evidence is recorded separately; the earlier
+configuration results are not carried forward as evidence of this change.

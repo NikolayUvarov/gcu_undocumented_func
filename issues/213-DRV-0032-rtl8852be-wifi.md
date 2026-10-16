@@ -771,10 +771,10 @@ queues for band-zero management and four ordinary access categories. Use a
 fixed legacy rate, no aggregation or hardware sequence replacement, a selected
 hardware limit of one and no RTS. Count actual DONE/RETRY_LIMIT RPQ-completed
 descriptors separately from DMA consumption; bound resubmission to 1..15
-descriptors with the original sequence and Retry bit. The exact-chip
-transmission-versus-retry limit semantics remain unresolved, so preserve raw
-status and explicit `AttemptCount::Unknown`; the exact-attempt `wlanhw` 1.1
-adapter stays closed until that boundary is resolved.
+descriptors with the original sequence and Retry bit. At this baseline the exact-chip transmission-versus-retry limit semantics
+were unresolved, so raw status and `AttemptCount::Unknown` were retained.
+The later [source-defined accounting follow-up](../hwdocs/rtl8852be-tx-attempts.md)
+resolves that semantic prerequisite for the existing `wlanhw` 1.1 interface.
 Lifetime/MACID drops cannot manufacture a transmission count. Preserve
 ownership on uncertain publication, malformed reports, deadlines or stop
 failures. No native caller or IDL/ABI change is part of this library stage;
@@ -841,8 +841,9 @@ Add the private [receive serializer](../hwdocs/rtl8852be-frames.md) for complete
 legacy-rate MPDUs: retain the original protected payload, reject hardware error,
 decryption and unsupported aggregation, remove the source-included FCS and
 encode the existing wlanhw 1.1 prefix. Signal remains explicitly unmeasured.
-The actual runtime filter/channel epoch is a caller obligation. Five focused
-cases compile; execution follows build and raw publication. This does not
+The actual runtime filter/channel epoch is a caller obligation. After raw
+publication `b5ba07ab`, corrected source `63a4dbe0` passed six focused cases,
+including validated inbox copies without trailing RXBD padding. This does not
 activate the endpoint or establish physical reception.
 
 ### One retained runtime RX owner
@@ -874,6 +875,19 @@ passed on own corrected source `974088b1` after raw `33fa88bf` publication
 recorded in the linked notes). Continuous BTC event
 processing, H2C sequence reuse, native service exposure and physical under-load
 acceptance remain open. This slice does not establish a working Wi-Fi endpoint.
+
+### Source-defined transmit attempt accounting
+
+Resolve the raw-TX attempt boundary using the upstream rtw89 author/maintainer
+discussion and the pinned RTL8852B descriptor/C2H implementation, detailed in
+[the attempt-counter source notes](../hwdocs/rtl8852be-tx-attempts.md). The selected
+limit of one means one transmission attempt. Return a checked known count from
+actual final C2H counters only after matching RPQ and DMA consumption; reject
+impossible counters and keep lifetime/drop/timeout failures without an invented
+count. Preserve group-address ACK semantics and the caller's 1..15 attempt bound.
+Add focused impossible-counter/retention regressions and update the real cold
+data-mode fixture. The service IDL remains unchanged; own build, raw publication
+and affected host runs precede evidence updates. Physical traffic remains open.
 
 
 ### Active scan/BSSID filter transition
