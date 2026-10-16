@@ -115,3 +115,5 @@ fn control_overflow_stays_terminal_and_retains_fifth_record(){run(0,true,true,|d
         h2c::Acks{received:true,done:true},100_000).is_err());assert_eq!(data.pending_packets(),4);
     assert_eq!(data.terminal_packet().unwrap().bytes()[8],4);assert_eq!(data.counts().pressure,0);
 });}
+
+#[path="rtw89_btc_runtime_cases.rs"]mod btc_runtime;

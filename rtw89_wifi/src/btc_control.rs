@@ -124,10 +124,20 @@ impl SavedAntenna {
 /// The caller owns a freshly validated MAC/PHY/RX session; ordinary TX stays stopped throughout this transition.
 /// A prior snapshot and independent radio-disable path are mandatory if any applied write fails.
 pub fn antenna(bus: &mut impl RegisterIo, desired: Antenna, timeout_us: u32) -> io::Result<BtState> {
+    antenna_inner(bus,desired,timeout_us,false)?.ok_or(Fault::new(FaultKind::PowerState,SCOREBOARD,0x60))
+}
+
+/// The actual packet owner keeps its live permit; source BT RFK running defers antenna writes without blocking common actions.
+pub(crate) fn antenna_runtime(bus:&mut impl RegisterIo,desired:Antenna,timeout_us:u32)->io::Result<bool>{
+    if !matches!(desired,Antenna::NoLink|Antenna::WlanOnly){return Err(Fault::new(FaultKind::PowerState,SCOREBOARD,0))}
+    antenna_inner(bus,desired,timeout_us,true).map(|result|result.is_some())
+}
+fn antenna_inner(bus:&mut impl RegisterIo,desired:Antenna,timeout_us:u32,runtime:bool)->io::Result<Option<BtState>>{
     if timeout_us == 0 || timeout_us > 100_000 { return Err(Fault::new(FaultKind::Access, LTE_CTRL, timeout_us)); }
     let mut timed = TimedIo::new(bus, timeout_us as u64);
     let bt = BtState::read(&mut timed)?;
-    if bt.running_rfk || bt.requests_rfk { return Err(Fault::new(FaultKind::PowerState, SCOREBOARD, 0x60)); }
+    if runtime&&bt.running_rfk{timed.delay_us(0)?;return Ok(None)}
+    if bt.running_rfk || !runtime&&bt.requests_rfk { return Err(Fault::new(FaultKind::PowerState, SCOREBOARD, 0x60)); }
     let grants = match desired { Antenna::NoLink => 0,
         Antenna::Initial if bt.enabled => 0xdd00dd00, _ => 0x77007700 };
     let pollution = if matches!(desired,Antenna::Rfk|Antenna::WlanOnly) { 0x100 } else { 0x166 };
@@ -139,7 +149,7 @@ pub fn antenna(bus: &mut impl RegisterIo, desired: Antenna, timeout_us: u32) -> 
     if actual != grants { return Err(Fault::new(FaultKind::PowerState, 0x38, actual)); }
     let actual = timed.read16(0xc67c)?;
     if actual != pollution { return Err(Fault::new(FaultKind::PowerState, 0xc67c, actual as u32)); }
-    timed.delay_us(0)?; Ok(bt)
+    timed.delay_us(0)?; Ok(Some(bt))
 }
 
 const PRE_AGC_DISABLED: &[(usize,u32,u32)] = &[(0x46d0,3,0),(0x4790,3,0),(0x4ad4,u32::MAX,0x60),(0x4ae0,u32::MAX,0x60),
