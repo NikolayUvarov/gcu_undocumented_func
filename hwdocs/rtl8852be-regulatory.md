@@ -90,8 +90,34 @@ does not override the operator's explicit UZ choice or establish board OTP.
 
 ## Validation state
 
-Before publication: the native crate and host harness are compiled, with
-strict parser/source-reproduction and consumer-boundary fixtures registered
-in `scripts/host_tests.sh`. Executions wait for the project's raw-publication
-step; results will be appended with exact commits. No hardware or new full
-gate evidence is claimed by this slice.
+Source `1e2cf1dd3996ca3ed2a475e7ded4aff4fde6d8ae` built on its own branch
+(`cargo build --release`, from `rtw89_wifi/`, 1.77 s). The parent integrated
+ASTRA `4ece2057b770db9b49c9fbae4aa3e00e007821b1`, completed the full own-tree
+build (2 s), and published raw `fast-test`
+`94ab2a0b0436a586317bc2d8366376868e1af9fc` before any new fixture ran.
+
+On 2026-10-16 the following ran on the own source branch, Linux
+`6.6.87.2-microsoft-standard-WSL2` x86_64, Rust
+`1.101.0-nightly (c36f14571 2026-10-01)`, Python `3.12.3`:
+
+| Check | Result |
+| --- | --- |
+| `rustc --edition=2021 --test tests/rtw89_regulatory_host.rs`, then its binary | 9 passed, 0 failed/ignored, 0.00 s |
+| `python3 tests/rtw89_regdb_test.py` | 11 passed, 0 failed, 0.063 s |
+| `python3 scripts/rtw89_regdb.py --check` | Exit 0; generated source exactly matches the pinned input |
+
+The consumer fixtures cover the complete catalog, exact selection/refusal,
+UZ/US edge channels, world passive rules, JP channel 14, all six indoor-only
+2 GHz entries, TG DFS, full-source NO-INDOOR/WMM retention and nonoverflowing
+downward power conversion. Parser fixtures include complete-WMM zero-contention
+rejection, duplicate/unknown syntax, malformed units, ambiguous rule overlap,
+source/license hashes and deterministic regeneration. Both harnesses are
+registered in `scripts/host_tests.sh`.
+
+Independent read-only review found a WMM parser boundary (`cw_min=0`) before
+execution; the parser and a complete-eight-category regression were corrected
+before the published source commit. All executed new fixtures passed. Exact
+upstream whitespace in the database and ISC notice is retained for hash
+identity rather than normalized. No new full gate, physical radio, native
+country consumption, persistence, UI or hardware-switching evidence is claimed
+by this slice.

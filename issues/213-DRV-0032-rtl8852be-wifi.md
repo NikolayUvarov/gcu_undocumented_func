@@ -1019,6 +1019,8 @@ Exact country selection and complete-width 2G20 coverage expose limits for
 driver intersection; they do not create platform policy or TX authority, infer
 a country, weaken programmed-board equality, or change the native endpoint.
 UZ deployment intent is explicit, with UI/persistence/native consumers in the
-owner requests. Host fixtures are compiled and registered; execution evidence
-follows the raw-publication step. This task remains open for native integration
-and actual radio acceptance.
+owner requests. Source `1e2cf1dd` built and was published in raw `94ab2a0b`
+before the 9 Rust and 11 Python fixtures all passed on its own branch;
+exact source regeneration also passed. Configuration and evidence are in the
+catalog document. This task remains open for native integration and actual
+radio acceptance.
