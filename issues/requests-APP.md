@@ -286,3 +286,29 @@ Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST
 ### Acceptance criteria
 
 In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
+
+## Wi-Fi country and channel selector
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's request;
+roadmap G / 550 and H / 213; MC-2.3, MC-12.3, MC-12.4.
+
+Add a country selector to the existing Wi-Fi/settings flow, backed by the
+[NET-owned versioned country contract](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog).
+The user chose **all countries from the verified regulatory database**, with
+Uzbekistan (`UZ`) as the initial explicit selection for their two machines.
+Please number this APP task; the current radio catalogue work remains DRV-0032.
+
+Show readable country names/codes and the effective supported channels. Do
+not maintain a separate hand-written permissions table in the UI. Distinguish
+a requested setting from the one applied to the radio; if application needs a
+disconnect/restart, make that behavior clear and report a failure without
+pretending the new setting is active. Keep the selected country visible while
+scanning/joining, preserve it across restarts through the scoped owner and
+handle missing/unknown configuration explicitly. All countries should remain
+browsable even where the current radio cannot use any eligible channel.
+
+Acceptance: country selection and restoration, bounded paging/search over the
+complete catalogue, read-only denial, no-device/unsupported-channel behavior,
+failed application and preservation of ordinary scan/join/leave are checked
+against the agreed NET interface. Do not turn the existing demo mode into a
+claim that the live radio applied a country.

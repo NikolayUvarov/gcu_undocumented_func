@@ -288,3 +288,24 @@ Once `bcm_wifi` receives OFDM, it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, 
 ### Acceptance criteria
 
 On the MacBook Pro, with the bit set, `wlan` logs `2.4 GHZ 802.11G`, joins a WPA2 network and sends at OFDM rates.
+
+## BCM4331 applies the selected country and channel policy
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
+country-switching request; roadmap D / 550; MC-2.3, MC-6.1, MC-12.1, MC-12.3.
+
+The original Intel MacBook and Ryzen are physically in Uzbekistan (`UZ`). The
+maintainer wants switching among all countries in the verified regulatory
+catalogue. Please coordinate BCM4331's part with the
+[NET policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP selector](requests-APP.md#wifi-country-and-channel-selector); ASTRA
+implements the RTL8852BE catalogue portion in its existing DRV-0032 task.
+
+Intersect the selected country's frequency/EIRP restrictions with the actual
+BCM/SPROM/platform limits; do not treat a chip country table as the whole
+regulatory decision. Keep unsupported constraints visible and ensure old
+channel/TX decisions cannot survive a country-policy change. Coordinate the
+versioned radio interface or restart boundary rather than silently changing an
+existing wire contract. Preserve normal association, software WPA2 and the
+original MacBook path; validate actual hardware separately from policy fixtures.
+This request does not replace the preceding H12 deadline correction.

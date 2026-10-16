@@ -97,3 +97,46 @@ Keep the exact failed run, add a production regression for the established
 cause, and require the original complete-file/digest behavior to pass under
 its existing timeout. A later pass alone must not erase this failure or
 substitute for the physical network acceptance on the two laptops.
+
+## Wi-Fi country selection from the complete verified regulatory catalog
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
+request; for 213-DRV-0032 and roadmap D / 550; MC-2.3, MC-3.3, MC-6.1,
+MC-12.1, MC-12.3, MC-12.4, MC-12.7.
+
+The maintainer confirmed Uzbekistan (`UZ`) for both the original Intel MacBook
+and Ryzen and requested switching among **all countries in the verified
+regulatory database**, not a fixed shortlist. The current `wifi` 1.0 interface
+has scan/join/status/leave/forget but no country selection. Please number the
+station/interface task; ASTRA supplies the RTL8852BE catalogue/driver portion
+under DRV-0032, without editing NET's interface or station in passing.
+
+- Use the pinned upstream wireless-regdb catalogue as frequency/EIRP evidence;
+  chip power-table groups are not regulatory permission. Preserve restrictions
+  and unsupported states. Catalogue all country entries, with bounded paging
+  if needed; treat world/unknown `00` distinctly from a selected country.
+- Add explicit current/pending/applied country state and authorized selection
+  through a new interface version and migration. Reuse the existing Wi-Fi
+  change badge or document a narrower right; read-only callers cannot change it.
+  Persist a two-letter code, not a row index that changes with database updates.
+- UZ is this deployment's operator-provided initial choice. Missing/invalid
+  state or a missing database country must not silently become DE/US/world or
+  permission to transmit. Database presence is not itself operator authority.
+- Derive scan/join channels from the intersection of country restrictions and
+  actual driver capability. Retain NO-IR, DFS, indoor/outdoor and modulation
+  constraints. Do not label all database bands as implemented hardware support.
+- Coordinate with KRN's scoped configuration and native endpoint work, APP's
+  selector and both radio owners. Changing country must invalidate old scan/
+  join decisions and avoid TX under an obsolete admission. Stop/restart and
+  re-admit when live reconfiguration is unavailable; expose applied versus
+  requested state and a bounded error if application fails.
+- Country selection must not replace board-locked restrictions, verified
+  platform/SAR limits or the EIRP-to-conducted-power/antenna relationship.
+
+Acceptance: every catalogued country is selectable as configuration; unknown
+codes, read-only mutation, stale scan/join state and failed application are
+covered. Radio limits and effective channels are honest on both MacBook and
+Ryzen; a configuration round trip is not evidence of physical networking.
+Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
+[KRN](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission),
+[DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).

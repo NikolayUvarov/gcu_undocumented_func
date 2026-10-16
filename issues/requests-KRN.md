@@ -443,6 +443,15 @@ The new driver-side data owner therefore cannot become a usable station by
 itself. Please number the radio-service extension and coordinate activation
 with DRV-0032 rather than advertising the diagnostic as a working radio.
 
+The maintainer confirmed on 2026-10-16 that both target machines are physically
+in Uzbekistan (`UZ`), and then requested switching among every country in the
+verified regulatory database. Use UZ as this deployment's explicit initial
+selection; do not turn it into an implicit worldwide default for other installs.
+
+- Reserve the current private service's receive-capability slots 9 and 10 as
+  empty, or coordinate an explicit driver-contract change. Its constructor
+  checks both slots; the endpoint/configuration grants must not collide with
+  deferred request ownership. Preserve the current log, BAR, DMA and VFS grants.
 - Give the selected RTL8852BE instance its `wlanhw` server endpoint and lend
   its client only to `wlan`, preserving the original MacBook BCM4331 and QEMU
   selections. Do not alter their authority or replace a running radio merely
@@ -453,7 +462,10 @@ with DRV-0032 rather than advertising the diagnostic as a working radio.
   or invalid input must remain visible as unavailable radio service.
 - Preserve retained DMA, verified non-mastering restart and safe-start rules;
   neither this endpoint nor its configuration grants ambient Platform access.
-  If an interface changes, version it and document the migration.
+  Support a persisted, owner-scoped selection for all catalogued countries,
+  coordinated with the NET/APP requests below; configuration data alone must
+  not grant transmission. If an interface changes, version it and document
+  the migration.
 - Sequence the change with the actual persistent driver loop and its admitted
   capabilities. Initial driver support may advertise one explicitly admitted
   2.4 GHz / 20 MHz channel; other channels must be rejected, never reported as
@@ -466,3 +478,13 @@ establish association, DHCP and ping under test load before physical readiness
 is claimed. Driver DMA partitioning, active RX/TX and service dispatch stay in
 DRV-0032; this request does not transfer their implementation to KRN.
 
+
+### Country-selection integration requests (2026-10-16)
+
+See [NET's policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP's selector request](requests-APP.md#wifi-country-and-channel-selector).
+The current driver is limited to a single admitted 2.4 GHz/20 MHz channel; a
+country selection must intersect radio capabilities and existing board/platform
+constraints. A configuration change must never reuse an active admission made
+under a different policy. Coordinate stop/restart/re-admission and bounded
+failure reporting with the driver and station owners.
