@@ -171,3 +171,15 @@ private-firmware case as ignored, in 7.02 s. The pure filter run passed 7/7 in
 `/tmp/mind-station-filter-results-29175647.log`. Native release compilation
 passed in 1.56 s. These are host-model observations on the source branch,
 not tests of `fast-test` or evidence of physical receive/transmit operation.
+
+
+## Active owner-bound filter updates
+
+`Prepared::reconfigure` is available only through the actual sealed
+`DataSession::FilterChange` adapter. It checks the station attempt, command
+session, channel, policy and physical board MAC, uses the real CAM command,
+verifies filter/station registers and preserves selector restoration errors.
+Only the successful final live/receive-epoch check publishes the new Filter.
+The original stopped-TX PHY validation is unchanged; this does not construct a
+startup ReceivePermit while ordinary TX is enabled. See the
+[active transition contract](rtl8852be-data-mode.md#active-filter-continuation).
