@@ -85,3 +85,24 @@ in 1.44 s; the inherited unused continuation-field warning does not affect
 this model evidence. The log is `/tmp/mind-station-results-08b9faeb.log`.
 No physical station setup, packet reception or transmission is established by
 these host-model results.
+
+## Revalidation before data activation
+
+`Prepared::validate` checks the same board, channel/policy, PHY attempt,
+firmware session and actual BTC/RX owner again under a caller limit of at most
+10 ms. The original stopped-TX PHY guard is unchanged. It rechecks port,
+MACID pause, report routing and the exact written CCTL masks, restoring the
+indirect selector. Completion after the common deadline is rejected; no time
+bound promises progress under indefinite preemption. A failed live check
+marks the PHY failed and independently stops radio/port. Invalid identity or
+policy is refused before these hardware checks.
+
+The separate `check_registers` helper performs fixed context reads and scoped
+selector changes for a later owner that already holds an actual active-mode
+permission. It does not validate DMA/session ownership or grant activation.
+Its caller supplies the bounded register window; a primary check failure and
+selector restoration failure remain distinct. A data-mode owner must consume
+the actual station token and retain its own policy/queue/receiver identity.
+Four additional cold continuation cases compile, covering current context,
+changed CCTL/report routing, changed policy, and owner/final-selector deadline
+failure. Execution follows this continuation's own raw publication.
