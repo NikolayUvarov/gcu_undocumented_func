@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -875,3 +875,15 @@ passed on own corrected source `974088b1` after raw `33fa88bf` publication
 recorded in the linked notes). Continuous BTC event
 processing, H2C sequence reuse, native service exposure and physical under-load
 acceptance remain open. This slice does not establish a working Wi-Fi endpoint.
+
+### Native disjoint packet-TX installation (2026-10-16)
+
+The booted service now reserves and constructs the real packet-TX queue inside
+its retained 8 MiB grant, separately from command and RX memory, and installs it
+before requesting mastering. Packet transmission remains stopped: activation
+still requires the actual channel/platform admission and persistent data owner.
+Cleanup preserves every allocation and reports TX stop independently. See
+[the native layout and limits](../hwdocs/rtl8852be-data-mode.md#native-retained-packet-queues).
+Four new cumulative/layout fixtures and the twelve updated startup cases compile;
+execution awaits the required raw publication. Endpoint/configuration grants are
+tracked by the KRN request linked above; physical networking is not established.

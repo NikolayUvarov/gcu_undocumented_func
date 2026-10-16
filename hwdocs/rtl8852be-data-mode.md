@@ -120,3 +120,24 @@ was 1.20–2.59 seconds per harness. The original ReceivePermit rejection is
 included. The JSON result manifest is
 `/tmp/rtw89-data-mode-validation-974088b1.json`, with per-harness log paths.
 These are host-model results; the issue's physical acceptance remains open.
+
+## Native retained packet queues
+
+`native_dma::Queues` now constructs command, RX and packet-TX owners from one
+retained 8 MiB coherent allocation. Command keeps its first 128 KiB; RX owns
+exactly its 5,902,336 bytes; TX begins at offset 6,033,408 and receives only the
+remaining disjoint bytes. The TX engine uses 135,168 bytes there. All boundaries
+are page aligned and the entire grant must fit below 4 GiB. No alias to the
+allocation is used after these owners are constructed. Partial construction
+failure cannot release the `ManuallyDrop` allocation or enable mastering.
+
+The native sequence installs TX after RX and before kernel mastering. All five
+packet queues and WP remain stopped through command-only activation and the
+initial PHY diagnostic. No calibration policy or working endpoint is fabricated.
+Cleanup independently attempts packet TX, RX, radio and command/WCPU stop,
+then retains the existing checked MEM-only / power-off / quiescence sequence.
+
+Four new fixtures compile for actual cumulative GEN1/GEN2 setup and installed
+ring addresses, untouched command padding/TX tail, invalid and mastering grants,
+and early installation refusal. The twelve orchestration cases now include
+failure at the added sixteenth stage. Execution is recorded after publication.
