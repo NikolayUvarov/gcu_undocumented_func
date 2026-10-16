@@ -71,3 +71,6 @@ pub(crate) mod station;
 
 #[allow(dead_code)]
 pub(crate) mod frames;
+
+#[allow(dead_code)]
+pub(crate) mod service;

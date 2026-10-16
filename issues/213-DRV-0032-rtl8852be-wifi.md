@@ -912,3 +912,14 @@ Ten new cold cases compile; execution follows own build and raw publication.
 Continuous BTC reconciliation, bounded H2C sequence reuse, native endpoint
 binding and hardware traffic remain open; association is not inferred from a
 selected BSSID. See the [transition notes](../hwdocs/rtl8852be-data-mode.md#active-filter-continuation).
+
+### Private wlanhw service adapter
+
+Add the actual DataSession-to-wlanhw 1.1 adapter for its single admitted 2.4 GHz
+20 MHz channel, real CAM/filter changes, serialized raw frames and checked
+firmware TX attempt counts. Bound IPC/RX work, frame storage, deferred transmit
+and waiter ownership; preserve the retained owner and independent shutdown on
+failure. Fifteen cold/real-wire cases compile and are registered in host CI;
+execution follows own build and raw publication. Native binding, actual policy
+input, remaining runtime coexistence and physical traffic remain separate.
+See [the service ownership contract](../hwdocs/rtl8852be-service.md).
