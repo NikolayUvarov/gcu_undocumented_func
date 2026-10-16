@@ -806,3 +806,17 @@ C2H/data packets explicitly; it cannot silently steal the session's traffic.
 The firmware's ordered terminal-report behavior is an explicit TCB assumption,
 consistent with the upstream driver's tag reuse; arbitrary firmware replay
 is outside that contract. Native activation remains closed.
+
+### Checked initial calibration profile (2026-10-16)
+
+The private [calibration provider](../hwdocs/rtl8852be-calibration-policy.md)
+resolves the actual supported Board/source profile and explicit country/platform
+inputs, distinguishes checked absence from unknown/invalid SAR, and checks the
+source TSSI HT20 MCS7 maximum request of 12 dBm. It binds the exact written policy
+and OTP fingerprint to the current PHY/firmware attempt and issues three consumed
+engine-specific permissions once, after actual live ownership validation. IQK/DPK
+use the supported source sequence without inventing a numerical output guarantee
+or a new certification prerequisite. Fourteen focused cases compile, including
+the actual cold coordinator; execution follows publication. The native scoped
+input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
+open. This provider does not start native transmission.
