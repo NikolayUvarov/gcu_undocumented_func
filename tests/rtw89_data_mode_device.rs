@@ -8,7 +8,8 @@ pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usi
     pub selector:u32,pub rx_filter:u32,pub cam_wifi:usize,pub control_event:bool,
     pub bt:Option<u32>,pub command_bt:Option<u32>,pub btc_events:Vec<Vec<u8>>,pub btc_on_command:Vec<Vec<u8>>,pub continuous_wifi:usize,pub continuous_bt:usize,
     pub coex_packets:Vec<Vec<u8>>,pub lte_writes:usize,pub grants:u32,pub btg:u32,pub missing_coex_ack:bool,pub delay_next_command:u64,pub delayed_ack:bool,pub ppdu_on_command:usize,
-    pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool}
+    pub normal_packets:Vec<Vec<u8>>,pub hold_command_dma:bool,
+    pub wifi_refills:usize,pub wifi_pending:usize,pub wifi_max_pending:usize}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -21,6 +22,13 @@ impl Device{
         Self{station:station_device::Device::new(base),control,tx:region.base,active:false,published:vec![],scheduler:0,shutdowns:0,pending_ack:None}
     }
     fn raw(&mut self)->&mut crate::model::Device{&mut self.station.base.inner}
+    fn observe_wifi_queue(&mut self){
+        if !self.active||self.control.borrow().continuous_wifi==0{return}
+        let index=self.raw().get(0x1050,4);let host=(index&0xfff)as usize;let hardware=((index>>16)&0xfff)as usize;
+        assert!(host<crate::rx::DESCRIPTORS&&hardware<crate::rx::DESCRIPTORS);
+        let pending=(hardware+crate::rx::DESCRIPTORS-host)%crate::rx::DESCRIPTORS;
+        let mut c=self.control.borrow_mut();c.wifi_pending=pending;c.wifi_max_pending=c.wifi_max_pending.max(pending);
+    }
     fn inject_old(&mut self){
         if self.pending_ack.as_ref().is_some_and(|(at,_)|self.station.base.inner.now>=*at){
             let(_,packet)=self.pending_ack.take().unwrap();let identity=Self::word(&packet,0);let flags=Self::word(&packet,4);let sequence=identity>>24;
@@ -74,7 +82,10 @@ impl Device{
             if self.control.borrow().hold_command_dma{self.raw().hold_normal_dma=true;}
         }
         if armed&&self.active&&at==0x1050&&width==2{
-            if self.control.borrow().continuous_wifi>0{self.control.borrow_mut().continuous_wifi-=1;self.wifi(true,false);}
+            // Refill the final published record before release so control traffic cannot grow the Wi-Fi backlog.
+            if self.control.borrow().continuous_wifi>0&&(self.raw().get(0x1050,4)>>16)&0xfff==value{
+                {let mut c=self.control.borrow_mut();c.continuous_wifi-=1;c.wifi_refills+=1;}self.wifi(true,false);
+            }
             if self.control.borrow().continuous_bt>0{
                 self.control.borrow_mut().continuous_bt-=1;let profile=if self.control.borrow().continuous_bt&1==0{0x20}else{0x40};
                 let mut event=[0;16];event[0]=2|18<<2;event[1]=1;event[4]=16;event[9]=6;event[10]=profile;self.raw().inject_c2h(&event);
@@ -102,6 +113,7 @@ impl Device{
         let delay=if armed&&self.active&&at==fwcmd::INDEX&&width==2{std::mem::take(&mut self.control.borrow_mut().delay_next_command)}else{0};
         let previous_ack=self.raw().normal_ack;if delay!=0{self.raw().normal_ack=crate::model::NormalAck::Missing;}
         match width{1=>self.station.write8(at,value as u8)?,2=>self.station.write16(at,value as u16)?,_=>self.station.write32(at,value)?}
+        self.observe_wifi_queue();
         if delay!=0{self.raw().normal_ack=previous_ack;assert!(self.pending_ack.is_none());
             let packet=self.raw().normal_packets[normal_before].clone();self.pending_ack=Some((self.raw().now+delay,packet));}
         if armed&&self.active{
