@@ -121,6 +121,16 @@ has scan/join/status/leave/forget but no country selection. Please number the
 station/interface task; ASTRA supplies the RTL8852BE catalogue/driver portion
 under DRV-0032, without editing NET's interface or station in passing.
 
+Available implementation: ASTRA source
+[`1e2cf1dd`](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/1e2cf1dd3996ca3ed2a475e7ded4aff4fde6d8ae/hwdocs/rtl8852be-regulatory.md)
+provides all 181 source country/territory codes plus separate world `00`,
+1,016 rule references, source/license hashes and exact integer units. It is
+already in fast-test `94ab2a0b`; 9 Rust and 11 Python fixtures and deterministic
+regeneration passed after that publication. `regulatory::countries()` and
+`select()` are pure catalog operations, not a live configuration interface.
+The database supplies codes rather than translated country names. Preserve
+these boundaries when making the shared station contract and the APP list.
+
 - Use the pinned upstream wireless-regdb catalogue as frequency/EIRP evidence;
   chip power-table groups are not regulatory permission. Preserve restrictions
   and unsupported states. Catalogue all country entries, with bounded paging

@@ -375,6 +375,9 @@ DRV-0032; this request does not transfer their implementation to KRN.
 
 See [NET's policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
 and [APP's selector request](requests-APP.md#wifi-country-and-channel-selector).
+The pure catalog is now implemented in ASTRA `1e2cf1dd` and published in
+fast-test `94ab2a0b`; NET's request above links its exact source and validation.
+It grants no device authority and does not activate the native diagnostic.
 The current driver is limited to a single admitted 2.4 GHz/20 MHz channel; a
 country selection must intersect radio capabilities and existing board/platform
 constraints. A configuration change must never reuse an active admission made
