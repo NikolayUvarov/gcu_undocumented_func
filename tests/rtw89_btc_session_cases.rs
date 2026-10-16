@@ -145,6 +145,30 @@ fn receipt_and_done_required_and_rejection_preserved(){with_session(|s|{
     assert_eq!(s.failed(),Some(Error::Rejected(9)));assert_eq!(s.submitted(),2);
 });}
 #[test]
+fn startup_ppdu_burst_before_ack_does_not_fill_control_or_packet_storage(){for retained in [false,true]{with_mode(retained,|s|{
+    for n in 0..12u8{s.bus.inject_packet(0,1,&[n,0xa5,0x5a],0);}
+    assert_eq!(s.command(command(),&[],both(),1000).unwrap(),h2c::Outcome::Done);
+    assert_eq!(s.counts().ppdu_reports,12);assert_eq!(s.counts().non_c2h,0);
+    assert_eq!(s.pending_events(),0);assert_eq!(s.pending_packets(),0);assert!(s.terminal_packet().is_none());
+    assert_eq!(s.queue.pending(),0);assert_eq!(s.failed(),None);assert_eq!(s.submitted(),1);
+    assert_eq!(s.bus.get(0x1050),14|14<<16);
+});}}
+#[test]
+fn ppdu_classification_does_not_consume_rpq_or_unknown_control(){with_runtime(|s|{
+    let same_kind=[0x31,0x32];let rpq=[0,0x12,4,0];let other=c2h_bytes(3,0x17,0x77,&[0x55]);
+    for n in 0..6u8{s.bus.inject_packet(0,1,&[n],0);}
+    s.bus.inject_packet(1,1,&same_kind,0);s.bus.inject_packet(1,7,&rpq,0);s.bus.inject(0,&other);
+    assert_eq!(s.command(command(),&[],both(),1000).unwrap(),h2c::Outcome::Done);
+    assert_eq!(s.counts().ppdu_reports,6);assert_eq!(s.counts().non_c2h,2);assert_eq!(s.counts().other_c2h,1);
+    assert_eq!(s.pending_packets(),3);assert_eq!(s.pending_events(),0);
+    for(channel,kind,bytes)in[(rx::Channel::Rpq,1,same_kind.as_slice()),(rx::Channel::Rpq,7,rpq.as_slice()),
+        (rx::Channel::Rxq,rxdesc::TYPE_C2H,other.as_slice())]{
+        let record=s.packet().unwrap();assert_eq!(record.metadata().channel,channel);assert_eq!(record.metadata().packet.kind,kind);
+        assert_eq!(record.bytes(),bytes);s.consume_packet();
+    }
+    assert_eq!(s.pending_packets(),0);assert_eq!(s.failed(),None);
+});}
+#[test]
 fn wrong_or_missing_ack_poison_without_resending(){for reply in [Reply::WrongSequence,Reply::Missing]{with_session(|s|{
     s.bus.reply=reply;assert!(s.command(command(),&[],both(),100).is_err());assert_eq!(s.submitted(),1);assert_eq!(s.bus.packets.len(),1);
     let writes=s.bus.writes.len();assert!(s.command(command(),&[],both(),100).is_err());assert_eq!(s.bus.writes.len(),writes);
@@ -624,7 +648,7 @@ fn runtime_command_wait_retains_data_rpq_other_c2h_and_foreign_ack_in_dispatch_o
         if bytes==data{assert!(record.metadata().packet.crc_error);assert!(record.metadata().packet.hardware_decrypted);}
         s.consume_packet();
     }
-    assert!(s.packet().is_none());assert_eq!(s.counts(),Counts{non_c2h:2,other_c2h:1,unrelated_ack:1});
+    assert!(s.packet().is_none());assert_eq!(s.counts(),Counts{non_c2h:2,other_c2h:1,unrelated_ack:1,btc_events:0,ppdu_reports:0});
     assert_eq!(s.failed(),None);assert_eq!(s.queue.pending(),0);
 });}
 #[test]

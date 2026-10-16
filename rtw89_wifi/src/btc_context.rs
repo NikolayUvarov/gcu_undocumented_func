@@ -5,10 +5,12 @@
 use crate::dack::{BtcNotice,RfkState,Calibration,DackIo};
 use crate::{board::Board,btc_codec::{Profile,Policy,Encoded},btc_control::{self,WlanShadow,BtState,SavedAntenna,Antenna},
     btc_init,btc_reports::{self,Event,Report},btc_session::{self,Session,DeviceIo},io::{self,RegisterIo,Fault,FaultKind,TimedIo},phy::{self,Phy,PhyIo}};
+#[path="btc_runtime.rs"]pub(crate) mod runtime;
+use runtime::Transport;
 const INIT_US:u64=1_000_000;
 const SCOREBOARD:usize=0xac;
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum Error{Session(btc_session::Error),Register(Fault),Profile,Order,Clock,Timeout,Events,Reports(btc_reports::Error),Whql,Busy,PolicyMismatch,RadioOff}
+pub enum Error{Transmit,Session(btc_session::Error),Register(Fault),Profile,Order,Clock,Timeout,Events,Reports(btc_reports::Error),Whql,Busy,PolicyMismatch,RadioOff}
 impl From<btc_session::Error> for Error{fn from(e:btc_session::Error)->Self{Self::Session(e)}}
 impl From<Fault> for Error{fn from(e:Fault)->Self{Self::Register(e)}}
 #[derive(Debug)]
@@ -58,32 +60,38 @@ impl Context{
     fn new(profile:Profile,attempt:u64,session:u64)->Self{let mut shadow=WlanShadow::new();shadow.initialize();Self{
         attempt,session,profile,shadow,policy:Policy::ResetDefaults,reports:0,bt:ObservedBt::new(),published:None,btg:false,rx_gain:false,bt_lna:0,
         afh_profiles:None,ignore_pending:false,dirty:true,observed_tdma:None,observed_slots:None,other_events:0,rfk:None,last_rfk:None,connection:Connection::Fresh}}
-    fn events<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>)->Result<(),Error>{
+    pub(crate) fn observe_score(&mut self,raw:u32){self.dirty|=self.bt.update_score(raw);}
+    pub(crate) fn observe(&mut self,bytes:&[u8])->Result<bool,Error>{
+        let mut scoreboard=false;
+        match btc_reports::parse_105(bytes).map_err(Error::Reports)?{
+            Event::BtInfo(bytes)=>{self.bt.info_count=self.bt.info_count.saturating_add(1);
+                if self.bt.info!=*bytes{self.bt.info=*bytes;self.ignore_pending|=bytes[5]&8!=0;self.dirty=true;}},
+            Event::Scoreboard(_)=>{scoreboard=true;},
+            Event::Reports(reports)=>for report in reports.iter(){match report{
+                Report::Tdma(t)=>self.observed_tdma=Some(t.fields),
+                Report::Slots(v)=>self.observed_slots=Some(core::array::from_fn(|i|v.get(i).unwrap())),
+                Report::BtVersion(v)=>{self.dirty|=self.bt.version!=v.firmware_version;self.bt.version=v.firmware_version;},
+                Report::Other{..}=>self.other_events=self.other_events.saturating_add(1),
+            }},
+            Event::Overflow(_)=>return Err(Error::Events),
+            Event::Other{..}|Event::BtRegister(_)|Event::RunInfo(_)|Event::Psd(_)|Event::DeviceInfo(_)|Event::Loopback(_)=>self.other_events=self.other_events.saturating_add(1),
+        }
+        Ok(scoreboard)
+    }
+    fn events<T:Transport>(&mut self,s:&mut T,deadline:u64)->Result<(),Error>{
         while let Some(event)=s.event(){
-            match btc_reports::parse_105(event.bytes).map_err(Error::Reports)?{
-                Event::BtInfo(bytes)=>{self.bt.info_count=self.bt.info_count.saturating_add(1);
-                    if self.bt.info!=*bytes{self.bt.info=*bytes;self.ignore_pending|=bytes[5]&8!=0;self.dirty=true;}},
-                Event::Scoreboard(_)=>{let raw=io::read32(s,SCOREBOARD)?;self.dirty|=self.bt.update_score(raw);},
-                Event::Reports(reports)=>for report in reports.iter(){match report{
-                    Report::Tdma(t)=>self.observed_tdma=Some(t.fields),
-                    Report::Slots(v)=>self.observed_slots=Some(core::array::from_fn(|i|v.get(i).unwrap())),
-                    Report::BtVersion(v)=>{self.dirty|=self.bt.version!=v.firmware_version;self.bt.version=v.firmware_version;},
-                    Report::Other{..}=>self.other_events=self.other_events.saturating_add(1),
-                }},
-                Event::Overflow(_)=>return Err(Error::Events),
-                Event::Other{..}|Event::BtRegister(_)|Event::RunInfo(_)|Event::Psd(_)|Event::DeviceInfo(_)|Event::Loopback(_)=>self.other_events=self.other_events.saturating_add(1),
-            }
+            if self.observe(event.bytes)?{let raw=s.registers(deadline,|b|io::read32(b,SCOREBOARD))?;self.observe_score(raw);}
             s.consume_event();
         }Ok(())
     }
-    fn send<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,message:Encoded,deadline:u64)->Result<(),Error>{
-        s.command_before(message.command(),message.bytes(),message.acks(),deadline)?;self.events(s)
+    fn send<T:Transport>(&mut self,s:&mut T,message:Encoded,deadline:u64)->Result<(),Error>{
+        s.command_before(message.command(),message.bytes(),message.acks(),deadline,self)?;self.events(s,deadline)
     }
-    fn report<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,mask:u32,enabled:bool,deadline:u64)->Result<(),Error>{
+    fn report<T:Transport>(&mut self,s:&mut T,mask:u32,enabled:bool,deadline:u64)->Result<(),Error>{
         let next=if enabled{self.reports|mask}else{self.reports&!mask};if next==self.reports{return Ok(())}
         self.send(s,self.profile.reports(next,enabled).map_err(|_|Error::Profile)?,deadline)?;self.reports=next;Ok(())
     }
-    fn policy<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,next:Policy,deadline:u64)->Result<(),Error>{
+    fn policy<T:Transport>(&mut self,s:&mut T,next:Policy,deadline:u64)->Result<(),Error>{
         self.shadow.clear(1<<9);
         if let Some(message)=self.profile.policy(self.policy,next){
             self.drain(s,deadline)?;self.send(s,message,deadline)?;
@@ -98,7 +106,7 @@ impl Context{
             if (slot.duration,slot.table,slot.kind)!=self.policy.slot(index){return Err(Error::PolicyMismatch)}
         }}Ok(())
     }
-    fn common<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,initial:bool,deadline:u64)->Result<(),Error>{
+    fn common<T:Transport>(&mut self,s:&mut T,initial:bool,deadline:u64)->Result<(),Error>{
         let bt=self.bt.state();let btg=bt.enabled&&bt.patched;
         if self.btg!=btg{s.registers(deadline,|b|btc_control::btg(b,btg))?;self.btg=btg;}
         if initial{s.registers(deadline,|b|btc_control::preagc_off(b))?;}
@@ -120,20 +128,20 @@ impl Context{
             s.registers(deadline,|b|self.shadow.publish(b,remaining))?;self.published=Some(self.shadow.value());
         }Ok(())
     }
-    fn drain<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,deadline:u64)->Result<(),Error>{
-        for _ in 0..1024{self.events(s)?;let progress=s.poll_before(deadline)?;self.events(s)?;if progress==[false,false]{return Ok(())}}
+    fn drain<T:Transport>(&mut self,s:&mut T,deadline:u64)->Result<(),Error>{
+        for _ in 0..1024{self.events(s,deadline)?;let progress=s.poll_before(deadline,self)?;self.events(s,deadline)?;if progress==[false,false]{return Ok(())}}
         Err(Error::Events)
     }
 
-    fn radio_active<B:DeviceIo>(s:&mut Session<'_,'_,'_,B>,deadline:u64)->Result<(),Error>{
+    fn radio_active<T:Transport>(s:&mut T,deadline:u64)->Result<(),Error>{
         let active=s.registers(deadline,|b|{let sys=b.read8(2)?;
             if sys==u8::MAX{return Err(Fault::new(FaultKind::Unavailable,2,sys as u32))}
             Ok(sys&3==3&&io::read32(b,0x2f0)?&(1<<17)!=0)})?;
         if active{Ok(())}else{Err(Error::RadioOff)}
     }
-    fn transition<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,active:bool,deadline:u64)->Result<(),Error>{
+    fn transition<T:Transport>(&mut self,s:&mut T,active:bool,deadline:u64)->Result<(),Error>{
         for _ in 0..8{
-            self.drain(s,deadline)?;let raw=io::read32(s,SCOREBOARD)?;self.bt.update_score(raw);
+            self.drain(s,deadline)?;let raw=s.registers(deadline,|b|io::read32(b,SCOREBOARD))?;self.bt.update_score(raw);
             if self.bt.raw&4!=0{return Err(Error::Whql)}
             if self.bt.state().running_rfk||self.bt.state().requests_rfk{return Err(Error::Busy)}
             self.dirty=false;let enabled=self.bt.state().enabled;
@@ -141,11 +149,11 @@ impl Context{
             s.registers(deadline,|b|btc_control::antenna(b,antenna,100_000).map(|_|()))?;
             self.policy(s,if active&&enabled{Policy::Rfk}else{Policy::NoLink},deadline)?;
             self.common(s,false,deadline)?;self.drain(s,deadline)?;
-            let raw=io::read32(s,SCOREBOARD)?;self.dirty|=self.bt.update_score(raw);
+            let raw=s.registers(deadline,|b|io::read32(b,SCOREBOARD))?;self.dirty|=self.bt.update_score(raw);
             if self.bt.raw&4!=0{return Err(Error::Whql)}
             if self.bt.state().running_rfk||self.bt.state().requests_rfk{return Err(Error::Busy)}
             if !self.dirty{self.policy_consistent()?;let remaining=left(s,deadline)?.min(10_000);
-                s.receive_permit(remaining)?;left(s,deadline)?;return Ok(())}
+                s.validate_owner(remaining)?;left(s,deadline)?;return Ok(())}
         }Err(Error::Events)
     }
     fn start_rfk<B:DeviceIo>(&mut self,s:&mut Session<'_,'_,'_,B>,notice:BtcNotice,deadline:u64)->Result<(),Error>{
@@ -222,7 +230,7 @@ impl Context{
         }Err(Error::Events)
     }
 }
-fn left<B:DeviceIo>(s:&mut Session<'_,'_,'_,B>,deadline:u64)->Result<u32,Error>{
+fn left<T:Transport>(s:&mut T,deadline:u64)->Result<u32,Error>{
     deadline.checked_sub(s.clock()?).filter(|v|*v>0).map(|v|v.min(u32::MAX as u64)as u32).ok_or(Error::Timeout)
 }
 
@@ -332,7 +340,7 @@ impl<B:DeviceIo> Session<'_,'_,'_,B>{
                 if target>=deadline{return Err(Error::Timeout)}
                 for _ in 0..=30{
                     left(s,deadline)?;if s.clock()?>=target{break}
-                    c.events(s)?;s.poll_before(deadline)?;c.events(s)?;
+                    c.events(s,deadline)?;s.poll_before(deadline)?;c.events(s,deadline)?;
                     let now=s.clock()?;if now<target{s.registers(deadline,|b|b.delay_us((target-now).min(1000)as u32))?;}
                 }
                 if s.clock()?<target{return Err(Error::Clock)}

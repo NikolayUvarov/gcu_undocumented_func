@@ -5,20 +5,32 @@ use std::{cell::RefCell,rc::Rc};
 #[derive(Default)]
 pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usize,pub corrupt:bool,pub published:usize,pub unknown:bool,pub advance_us:u64,
     pub incoming:Vec<Vec<u8>>,pub filter_fault:u8,pub cam_packets:Vec<Vec<u8>>,pub filter_writes:usize,
-    pub selector:u32,pub rx_filter:u32,pub cam_wifi:usize,pub control_event:bool}
+    pub selector:u32,pub rx_filter:u32,pub cam_wifi:usize,pub control_event:bool,
+    pub bt:Option<u32>,pub command_bt:Option<u32>,pub btc_events:Vec<Vec<u8>>,pub btc_on_command:Vec<Vec<u8>>,pub continuous_wifi:usize,pub continuous_bt:usize,
+    pub coex_packets:Vec<Vec<u8>>,pub lte_writes:usize,pub grants:u32,pub btg:u32,pub missing_coex_ack:bool,pub delay_next_command:u64,pub delayed_ack:bool,pub ppdu_on_command:usize}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
 pub(super) struct Device{
     pub station:station_device::Device,pub control:Rc<RefCell<Control>>,tx:*mut u8,pub active:bool,
-    pub published:Vec<Vec<u8>>,pub scheduler:usize,pub shutdowns:usize,
+    pub published:Vec<Vec<u8>>,pub scheduler:usize,pub shutdowns:usize,pending_ack:Option<(u64,Vec<u8>)>,
 }
 impl Device{
     pub fn new(base:initial::Device,region:&Region,control:Rc<RefCell<Control>>)->Self{
-        Self{station:station_device::Device::new(base),control,tx:region.base,active:false,published:vec![],scheduler:0,shutdowns:0}
+        Self{station:station_device::Device::new(base),control,tx:region.base,active:false,published:vec![],scheduler:0,shutdowns:0,pending_ack:None}
     }
     fn raw(&mut self)->&mut crate::model::Device{&mut self.station.base.inner}
-    fn inject_old(&mut self){let count=std::mem::take(&mut self.control.borrow_mut().old);
+    fn inject_old(&mut self){
+        if self.pending_ack.as_ref().is_some_and(|(at,_)|self.station.base.inner.now>=*at){
+            let(_,packet)=self.pending_ack.take().unwrap();let identity=Self::word(&packet,0);let flags=Self::word(&packet,4);let sequence=identity>>24;
+            for done in [false,true]{if flags&(1<<if done{15}else{14})==0{continue}
+                let mut ack=[0;12];ack[0]=1;ack[1]=u8::from(done);ack[4]=12;
+                let value=(identity&0xffff)|sequence<<if done{24}else{16};ack[8..].copy_from_slice(&value.to_le_bytes());self.raw().inject_c2h(&ack);
+            }self.control.borrow_mut().delayed_ack=true;
+        }
+        if let Some(raw)=self.control.borrow_mut().bt.take(){self.station.base.bt=raw;}
+        let events=std::mem::take(&mut self.control.borrow_mut().btc_events);for event in events{self.raw().inject_c2h(&event);}
+        let count=std::mem::take(&mut self.control.borrow_mut().old);
         for _ in 0..count{self.wifi(true,false);}
         let incoming=std::mem::take(&mut self.control.borrow_mut().incoming);
         for mut frame in incoming{frame.extend_from_slice(&[0;4]);self.raw().inject_packet(0,0,&frame);}
@@ -54,6 +66,19 @@ impl Device{
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
         let filter_fault=self.control.borrow().filter_fault;
         if armed&&self.active&&at==fwcmd::INDEX&&width==2{
+            if let Some(raw)=self.control.borrow_mut().command_bt.take(){self.station.base.bt=raw;}
+            let ppdu=std::mem::take(&mut self.control.borrow_mut().ppdu_on_command);for n in 0..ppdu{self.raw().inject_packet(0,1,&[n as u8;20]);}
+            let events=std::mem::take(&mut self.control.borrow_mut().btc_on_command);for event in events{self.raw().inject_c2h(&event);}
+            if self.control.borrow().missing_coex_ack{self.raw().normal_ack=crate::model::NormalAck::Missing;}
+        }
+        if armed&&self.active&&at==0x1050&&width==2{
+            if self.control.borrow().continuous_wifi>0{self.control.borrow_mut().continuous_wifi-=1;self.wifi(true,false);}
+            if self.control.borrow().continuous_bt>0{
+                self.control.borrow_mut().continuous_bt-=1;let profile=if self.control.borrow().continuous_bt&1==0{0x20}else{0x40};
+                let mut event=[0;16];event[0]=2|18<<2;event[1]=1;event[4]=16;event[9]=6;event[10]=profile;self.raw().inject_c2h(&event);
+            }
+        }
+        if armed&&self.active&&at==fwcmd::INDEX&&width==2{
             if filter_fault==1{self.raw().hold_header=Some((1,6,0));}
             if filter_fault==2{self.raw().normal_ack=crate::model::NormalAck::Missing;}
             let count=std::mem::take(&mut self.control.borrow_mut().cam_wifi);
@@ -71,9 +96,17 @@ impl Device{
         if self.active&&at==fwcmd::INDEX&&width==2&&std::mem::take(&mut self.control.borrow_mut().unknown){
             for n in 0..5{let mut event=[0;12];event[0]=3;event[1]=0x77;event[4]=12;event[8]=n;self.raw().inject_c2h(&event);}
         }
-        let before=self.station.station_packets.len();
+        let before=self.station.station_packets.len();let normal_before=self.raw().normal_packets.len();
+        let delay=if armed&&self.active&&at==fwcmd::INDEX&&width==2{std::mem::take(&mut self.control.borrow_mut().delay_next_command)}else{0};
+        let previous_ack=self.raw().normal_ack;if delay!=0{self.raw().normal_ack=crate::model::NormalAck::Missing;}
         match width{1=>self.station.write8(at,value as u8)?,2=>self.station.write16(at,value as u16)?,_=>self.station.write32(at,value)?}
+        if delay!=0{self.raw().normal_ack=previous_ack;assert!(self.pending_ack.is_none());
+            let packet=self.raw().normal_packets[normal_before].clone();self.pending_ack=Some((self.raw().now+delay,packet));}
         if armed&&self.active{
+            let coex=self.raw().normal_packets[normal_before..].iter().filter(|p|(p[0]&3,p[0]>>2)==(2,16)).cloned().collect::<Vec<_>>();
+            self.control.borrow_mut().coex_packets.extend(coex);
+            if at==0xdaf0&&value==0xc00f0038{let grants=self.raw().get(0xdaf4,4);let mut c=self.control.borrow_mut();c.lte_writes+=1;c.grants=grants;}
+            let btg=self.raw().get(0x14738,4);self.control.borrow_mut().btg=btg;
             let packets=self.station.station_packets[before..].iter().filter(|p|(p[0]&3,p[0]>>2,p[1])==(1,6,0)).cloned().collect::<Vec<_>>();
             self.control.borrow_mut().cam_packets.extend(packets);
             if at==0xce20{
