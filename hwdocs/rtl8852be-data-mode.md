@@ -181,3 +181,34 @@ transmitter identity, banked/queued/in-flight epoch retirement, admission,
 missing ACK or DMA, corrupted/applied-failed/late filter writes, selector restore
 failure, retained control refusal and return to scanning. Execution is pending
 this continuation's own build, commit and raw publication.
+
+## Owned connection orchestration
+
+The private `connection::run` joins the production initial-PHY, channel,
+nonclone calibration admission, all channel RFK, station/CAM, initial scan
+filter and data-owner activation stages. It consumes the actual startup Session
+and an explicitly resolved policy; it has no country, power or platform default.
+Only successful completion of all stages invokes the service callback with the
+actual borrowed DataSession. Same-attempt capability, board, firmware, queue
+and calibration checks remain in their respective production entry points.
+
+After the callback returns, including an error value, packet shutdown runs and
+its independent radio/TX results accompany the callback value and initial-PHY
+observations. The callback cannot return borrowed stage state. Activation
+failures retain their recorded shutdown, and initial failures preserve their
+coexistence failure detail. The outer native caller must still stop RX/WCPU,
+verify PCI quiescence and retain every mapping; this helper never frees DMA.
+No native policy consumer or WLAN endpoint is enabled by this private function.
+
+Before data activation the same live Session applies the existing exact report
+tail: PPDU reporting, PHY-status forwarding and RTS thresholds, following
+[pinned core.c:5660-5662](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.c#L5660).
+Its original independent cleanup is preserved and the returned observation
+records the actual encoded RTS value. The single RX owner must consume/count
+ordinary PPDU status separately; report payload interpretation and RSSI are not
+established by this orchestration. Startup and runtime PPDU-pressure handling
+is a separate integration prerequisite before exposing a native endpoint.
+
+Four cumulative cold fixtures compile for real TX after the full chain,
+callback-error shutdown, missing actual initial command completion and rejected
+data activation. Their execution follows own-branch build and raw publication.

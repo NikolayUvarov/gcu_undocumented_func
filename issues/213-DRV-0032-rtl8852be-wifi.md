@@ -918,3 +918,13 @@ Ten new cold cases compile; execution follows own build and raw publication.
 Continuous BTC reconciliation, bounded H2C sequence reuse, native endpoint
 binding and hardware traffic remain open; association is not inferred from a
 selected BSSID. See the [transition notes](../hwdocs/rtl8852be-data-mode.md#active-filter-continuation).
+
+### Actual connection-to-service orchestration
+
+Consolidate the real initial PHY/channel/RFK/station/data chain in private
+`connection::run`, consuming the actual Session and resolved policy. Invoke the
+service only after all admissions succeed, then attempt packet shutdown even
+when the callback returns an error value. Preserve initial coexistence and
+activation cleanup details; retain outer RX/WCPU/PCI cleanup obligations.
+Four cold cumulative fixtures compile and the own x86 image builds; execution
+follows raw publication. The native policy consumer and endpoint remain open.
