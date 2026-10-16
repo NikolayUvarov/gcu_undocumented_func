@@ -604,7 +604,7 @@ fn connection_mcc_uses_initial_52b_payload_actual_sequence_and_only_periodic_rec
     crate::btc_context::initialize(p,&board()).unwrap();let s=p.bus_between_stages();for _ in 0..align{s.command(command(),&[0],both(),1000).unwrap();}
     s.connection_rfk(true,1000).unwrap();s.connection_rfk(false,1000).unwrap();let sequence=s.submitted();let first=s.bus.packets.len();
     s.notify_mcc(6,100_000).unwrap();let packet=s.bus.packets.last().unwrap();assert_eq!(s.bus.packets.len(),first+1);
-    assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()),2|0xa<<2|2<<8|u32::from(sequence)<<24);
+    assert_eq!(u32::from_le_bytes(packet[..4].try_into().unwrap()),2|0xa<<2|2<<8|u32::from(sequence as u8)<<24);
     assert_eq!(packet[5]&0xc0,if sequence%4==0{0x40}else{0});
     assert_eq!(&packet[8..],&[6,0,0,0,6,0,0,0,0,0,0,0,0,0,0,0,6,0,0,0]);assert_eq!(s.queue.pending(),0);
     assert!(s.notify_mcc(6,1000).is_err());assert_eq!(s.bus.packets.len(),first+1);

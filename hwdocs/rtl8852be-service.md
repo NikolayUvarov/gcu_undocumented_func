@@ -111,5 +111,9 @@ through a BT enable transition whose real H2C acknowledgment arrives after
 that actual acknowledgment, and a subsequent real Send must finish with the
 checked one-attempt result and no retained capability leak. This checks the
 100 ms progress budget at the service boundary rather than merely calling
-DataSession directly. The case is compile-only until its own build and raw
-publication complete; earlier 15-case evidence above remains unchanged.
+DataSession directly. Source `40f93daf45ac87d0dcbfd632bc521ee9415f7fa1` built
+natively in 1.86 s and its saved host harness compiled before raw publication
+`4f58ad98f8fb5e8ade91ecc3c19788afe6a82e75`. After that publication on
+2026-10-16, all 16 service cases passed in 0.05 s and the full updated harness
+passed 294 cases in 1.29 s, with the same one private-firmware case ignored.
+The earlier 15-case evidence above remains unchanged.

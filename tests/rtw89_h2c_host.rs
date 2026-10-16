@@ -11,6 +11,8 @@ extern crate self as rtw89_wifi;
 #[path = "../rtw89_wifi/src/startup.rs"] mod startup;
 #[path = "../rtw89_wifi/src/c2h.rs"] mod c2h;
 #[path = "../rtw89_wifi/src/h2c.rs"] mod h2c;
+#[path = "../rtw89_wifi/src/rx.rs"] mod rx;
+#[path = "../rtw89_wifi/src/rxdesc.rs"] mod rxdesc;
 #[path = "rtw89_pipeline_device.rs"] mod model;
 
 use c2h::{Ack, Identity};
@@ -101,7 +103,7 @@ fn full_transport_and_full_pending_table_do_not_advance_sequence() {
     sender.error = None;
     for _ in 0..h2c::PENDING { engine.submit(&mut sender, COMMAND, &[], BOTH, 100).unwrap(); }
     assert_eq!(engine.submit(&mut sender, COMMAND, &[], BOTH, 100), Err(Error::Full));
-    assert_eq!(engine.submitted(), h2c::PENDING as u16); assert_eq!(sender.packets.len(), h2c::PENDING);
+    assert_eq!(engine.submitted(), h2c::PENDING as u64); assert_eq!(sender.packets.len(), h2c::PENDING);
 }
 
 #[test]
