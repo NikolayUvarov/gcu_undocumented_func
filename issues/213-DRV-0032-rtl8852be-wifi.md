@@ -858,3 +858,17 @@ Refactor the private TX engine to ingest retained records and advance DMA
 without reading RX rings; keep native TX and receive-only guards unchanged.
 Validate command-wait interleaving, copy ownership, capacity, terminal failure
 and source-preserving TX completion on the owning branch after publication.
+
+
+### Owned initial packet-mode prerequisite
+
+The [private data-mode continuation](../hwdocs/rtl8852be-data-mode.md) consumes
+the actual startup Session and configured station, binds command/RX/TX identities
+and checks scheduler/DMA/radio state before exposing its internal packet API.
+The original startup ReceivePermit remains strict. One RX dispatcher handles
+ACKs, packet completion and software filtering during command waits; ordinary
+Wi-Fi pressure is counted/dropped instead of terminating the connection.
+Thirteen cold continuation cases and an original-permit regression compile;
+test execution follows own build and raw publication. Continuous BTC event
+processing, H2C sequence reuse, native service exposure and physical under-load
+acceptance remain open. This slice does not establish a working Wi-Fi endpoint.

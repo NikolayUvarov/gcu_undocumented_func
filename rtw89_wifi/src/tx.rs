@@ -43,7 +43,7 @@ struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>,fir
 struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
 
 pub(crate) struct Queue<'a>{
-    base:NonNull<u8>,physical:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
+    base:NonNull<u8>,physical:u64,session:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
     serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,last_firmware:Option<txdesc::FirmwareReport>,
     _exclusive:PhantomData<&'a mut[u8]>,
 }
@@ -59,11 +59,29 @@ impl<'a> Queue<'a>{
         if length<DMA_BYTES||length>isize::MAX as usize||base.as_ptr()as usize&4095!=0||physical==0||physical&4095!=0
             ||(base.as_ptr()as usize).checked_add(DMA_BYTES).is_none()
             ||physical.checked_add(DMA_BYTES as u64).is_none_or(|end|end>1u64<<32){return Err(Error::Region);}
+        let session=io::dma_session()?;
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
-        Ok(Self{base,physical,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
+        Ok(Self{base,physical,session,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
             request:None,pending:None,last_report:None,last_firmware:None,_exclusive:PhantomData})
     }
     pub(crate) fn state(&self)->State{self.state}
+    pub(crate) fn session(&self)->u64{self.session}
+    pub(crate) fn physical(&self)->u64{self.physical}
+    pub(crate) fn pending_request(&self)->bool{self.request.is_some()}
+    pub(crate) fn poison(&mut self){self.state=State::Faulted;}
+    pub(crate) fn installed_for_data(&mut self,bus:&mut impl Bus)->Result<()>{
+        if self.state!=State::Installed||self.request.is_some()||self.pending.is_some()||self.serial!=0{return Err(Error::State)}
+        if io::read32(bus,fwcmd::DMA_STOP)?&(OWN_STOP|WP_STOP)!=(OWN_STOP|WP_STOP){return Err(Error::State)}
+        self.rings(bus)?;self.reclaim(bus)?;
+        if self.issued!=[0;CHANNELS]||self.completed!=[0;CHANNELS]{return Err(Error::State)}Ok(())
+    }
+    pub(crate) fn start_data(&mut self,bus:&mut impl Bus,rings:&rx::Rings<'_>,layout:&crate::btc_session::data_mode::Layout)->Result<()>{
+        if !layout.matches(self){return Err(Error::State)}self.start(bus,rings)
+    }
+    pub(crate) fn validate_data(&mut self,bus:&mut impl Bus)->Result<()>{
+        if self.state!=State::Running{return Err(Error::State)}
+        let result=(||{self.live(bus)?;self.reclaim(bus)})();self.observe(result)
+    }
     fn observe<T>(&mut self,result:Result<T>)->Result<T>{if result.is_err(){self.state=State::Faulted;}result}
     fn physical_ring(&self,q:usize)->u32{(self.physical+(q*DESCRIPTORS*8)as u64)as u32}
     fn rings(&self,bus:&mut impl RegisterIo)->Result<()>{
@@ -267,6 +285,19 @@ impl<'a> Queue<'a>{
         let idle=(||{let mut timed=TimedIo::new(bus,1_000);io::poll32(&mut timed,fwcmd::DMA_BUSY,OWN_STOP|WP_STOP,0,10,100)?;timed.delay_us(0)})().err();
         if request.is_none()&&idle.is_none(){self.state=State::Stopped;}Stop{request,idle}
     }
+}
+
+/// Fixed read-only identity checks for the sealed data-mode owner; current descriptor counters remain with Queue.
+pub(crate) fn check_layout(bus:&mut impl RegisterIo,physical:u64)->io::Result<()>{
+    for q in 0..CHANNELS{
+        let wanted=(physical+(q*DESCRIPTORS*8)as u64)as u32;
+        for(at,value)in[(BASE[q],wanted),(BASE[q]+4,0),(BDRAM[q],RAM[q])]{
+            let actual=io::read32(bus,at)?;if actual!=value{return Err(Fault::new(FaultKind::PowerState,at,actual))}
+        }
+        let number=bus.read16(NUMBER[q])?;if number!=DESCRIPTORS as u16{return Err(Fault::new(FaultKind::PowerState,NUMBER[q],number as u32))}
+        let index=io::read32(bus,INDEX[q])?;
+        if index&0xfff>=DESCRIPTORS as u32||(index>>16)&0xfff>=DESCRIPTORS as u32{return Err(Fault::new(FaultKind::PowerState,INDEX[q],index))}
+    }Ok(())
 }
 
 #[cfg(test)]
