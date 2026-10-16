@@ -62,3 +62,12 @@ clock regression and no subsequent DMA/negotiation publication. Record the
 finding in `issues-audit` and actual post-publication host evidence separately.
 This is a deterministic controller bug, not a measured explanation of the
 Ryzen's currently unvalidated Ethernet connectivity or PHY tuning needs.
+
+
+The [H15 correction](../issues-audit/2026-10-16-rtl8168-deadline-audit.md)
+was committed as `f5ee34b08374c3a8a6267d95817cdc7cce039c44`, built on the own
+branch and published through raw merge
+`bc802db7a0ce06aae8b93da538964b57a10fb3d7`. The own-branch RTL8168 harness then
+passed 22/22 host tests (no failures, ignores or filtering), including six
+new production-path cutoff regressions. No physical NIC mutation or traffic
+test was performed, and the hardware acceptance criteria remain open.
