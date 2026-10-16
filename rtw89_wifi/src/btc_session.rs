@@ -41,9 +41,10 @@ pub trait DeviceIo:fwcmd::Bus { fn pci_id(&mut self)->io::Result<u32>; fn bar_le
 pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,InboxOverflow,Malformed,Rejected(u8),Coexistence,PacketHandler }
 impl From<Fault> for Error { fn from(e:Fault)->Self { Self::Register(e) } }
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32 }
+pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32,pub btc_events:u64,pub ppdu_reports:u64 }
 
 trait PacketHandler{
+    fn btc_event(&mut self,_:&[u8],_:Option<u32>)->Result<bool,crate::btc_context::Error>{Ok(false)}
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,Error>;
 }
 struct RetainAll;
@@ -56,7 +57,7 @@ impl PacketHandler for RetainAll{
 pub struct Session<'a,'command,'receive,B> {
     bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,mode:data_mode::Mode,
     inbox:Option<&'a mut Inbox>,terminal_copy:Option<inbox::Metadata>,firmware:download::Ready,scratch:&'a mut[u8],engine:h2c::Engine,failed:Option<Error>,counts:Counts,
-    pub(crate) btc:Option<crate::btc_context::Context>,events:[[u8;EVENT_BYTES];EVENT_SLOTS],lengths:[usize;EVENT_SLOTS],event_head:usize,event_count:usize,last:u64,
+    pub(crate) btc:Option<crate::btc_context::Context>,btc_event_error:Option<crate::btc_context::Error>,events:[[u8;EVENT_BYTES];EVENT_SLOTS],lengths:[usize;EVENT_SLOTS],event_head:usize,event_count:usize,last:u64,
 }
 impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     /// Startup diagnostic only: packets outside command/BTC handling are counted and discarded before data service exists.
@@ -71,7 +72,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         receiving.validate(bus,queue,rings,left as u32).map_err(Error::Permit)?;
         let now=bus.now_us(); if now<start { return Err(Error::Clock); } if now-start>=10_000 { return Err(Error::Timeout); }
         Ok(Self { bus,queue,rings,receiving,mode:data_mode::Mode::Startup,firmware,scratch,engine:h2c::Engine::new(now),failed:None,counts:Counts::default(),
-            inbox:None,terminal_copy:None,btc:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
+            inbox:None,terminal_copy:None,btc:None,btc_event_error:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
     }
     /// The caller owns the storage; no large runtime inbox is placed in the Session or allocated per packet.
     /// A bank is single-use for a firmware session and remains inspectable after terminal errors.
@@ -173,6 +174,12 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
             rx::Outcome::Empty=>return Ok(false),rx::Outcome::Dropped(_)=>return Err(Error::Malformed),rx::Outcome::Packet(p)=>p,
         };
         self.left(deadline)?;
+        // RXQ type 1 is source PPDU status; retain no uninterpreted telemetry as application control traffic.
+        if channel==rx::Channel::Rxq&&packet.kind==1{
+            packet.bytes(self.scratch).ok_or(Error::Malformed)?;
+            self.counts.ppdu_reports=self.counts.ppdu_reports.saturating_add(1);
+            self.left(deadline)?;self.terminal_copy=None;return Ok(true)
+        }
         if packet.kind!=rxdesc::TYPE_C2H {
             self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);self.dispatch(channel,packet,deadline,handler)?;
             self.left(deadline)?;self.terminal_copy=None;return Ok(true);
@@ -188,9 +195,21 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
                 },_=>(),
             }
         } else if event.category==2&&event.class==0x12 {
-            if bytes.len()>EVENT_BYTES||self.event_count==EVENT_SLOTS{return Err(Error::EventOverflow)}
-            let at=(self.event_head+self.event_count)%EVENT_SLOTS;
-            self.events[at][..bytes.len()].copy_from_slice(bytes);self.lengths[at]=bytes.len();self.event_count+=1;
+            if bytes.len()>EVENT_BYTES{return Err(Error::EventOverflow)}
+            if matches!(self.mode,data_mode::Mode::Data(_)){
+                let score=if event.function==2{
+                    let mut window=Window{bus:self.bus,deadline,last:self.last,clock_bad:false};
+                    let result=io::read32(&mut window,0xac).and_then(|raw|{window.delay_us(0)?;Ok(raw)});self.last=window.last;Some(result?)
+                }else{None};
+                let observed=if let Some(context)=self.btc.as_mut(){context.observe(bytes).map(|_|{if let Some(raw)=score{context.observe_score(raw);}true})}
+                    else{handler.btc_event(bytes,score)};
+                match observed{Ok(true)=>self.counts.btc_events=self.counts.btc_events.saturating_add(1),Ok(false)=>return Err(Error::Coexistence),
+                    Err(error)=>{self.btc_event_error=Some(error);return Err(Error::Coexistence)}}
+            }else{
+                if self.event_count==EVENT_SLOTS{return Err(Error::EventOverflow)}
+                let at=(self.event_head+self.event_count)%EVENT_SLOTS;
+                self.events[at][..bytes.len()].copy_from_slice(bytes);self.lengths[at]=bytes.len();self.event_count+=1;
+            }
         } else { self.counts.other_c2h=self.counts.other_c2h.saturating_add(1);self.dispatch(channel,packet,deadline,handler)?; }
         self.left(deadline)?;self.terminal_copy=None;Ok(true)
     }

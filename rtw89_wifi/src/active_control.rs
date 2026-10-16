@@ -53,7 +53,7 @@ impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
     pub(crate) fn set_filter(&mut self,all_beacons:bool,bssid:[u8;6],own:[u8;6],timeout_us:u32)->Result<(),Failure>{
         Self::request(timeout_us)?;
         if self.queue.pending_request(){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Busy),shutdown:None})}
-        let deadline=match self.deadline(timeout_us).and_then(|d|{self.live(d)?;self.drain_previous_epoch(d)?;Ok(d)}){
+        let deadline=match self.deadline(timeout_us).and_then(|d|{self.live(d)?;self.reconcile(d)?;self.drain_previous_epoch(d)?;Ok(d)}){
             Ok(deadline)=>deadline,Err(cause)=>return Err(self.runtime_failure(cause)),
         };
         let filter=self.prepared.station.filter(all_beacons,bssid,own);
@@ -61,7 +61,7 @@ impl<B:DeviceIo> DataSession<'_,'_,'_,'_,'_,'_,B>{
             attempt:self.prepared.tuned.attempt,command:self.prepared.command,channel:self.prepared.tuned.channel,
             policy:self.prepared.tuned.policy_version,board_mac:self.prepared.board.identity.mac,deadline};
         match self.prepared.station.reconfigure(&mut update,filter){
-            Ok(())=>Ok(()),Err(station::FilterFailure{stage,cause,..})=>{
+            Ok(())=>self.reconcile(deadline).map(|_|()).map_err(|cause|self.runtime_failure(cause)),Err(station::FilterFailure{stage,cause,..})=>{
                 let mut failure=self.runtime_failure(cause);failure.stage=Stage::Filter(stage);Err(failure)
             },
         }

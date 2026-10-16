@@ -26,7 +26,7 @@ impl Layout{
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum Stage{Guard,Station,Dma,Scheduler,Verify,Runtime,Filter(station::Stage)}
 #[derive(Debug)]
-pub(crate) enum Cause{Identity,State,Register(Fault),Session(super::Error),Station(station::CheckFailure),Tx(tx::Error)}
+pub(crate) enum Cause{Coexistence(crate::btc_context::Error),Identity,State,Register(Fault),Session(super::Error),Station(station::CheckFailure),Tx(tx::Error)}
 impl From<Fault> for Cause{fn from(v:Fault)->Self{Self::Register(v)}}
 impl From<super::Error> for Cause{fn from(v:super::Error)->Self{Self::Session(v)}}
 impl From<tx::Error> for Cause{fn from(v:tx::Error)->Self{Self::Tx(v)}}
@@ -65,7 +65,7 @@ pub(crate) struct ActivationFailure<'q,'memory,'p,'a,'command,'receive,B:DeviceI
 }
 
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
-pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64}
+pub(crate) struct Counts{pub filtered:u64,pub invalid:u64,pub pressure:u64,pub previous_epoch:u64,pub btc_events:u64,pub btc_deferred:u64,pub ppdu_reports:u64}
 struct Dispatcher<'q,'memory>{queue:&'q mut tx::Queue<'memory>,filter:Option<station::Filter>,counts:&'q mut Counts,error:Option<tx::Error>}
 impl super::PacketHandler for Dispatcher<'_,'_>{
     fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,super::Error>{
@@ -167,6 +167,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         Ok(self.tx_deadline.map_or(own,|tx|tx.min(own)))
     }
     fn runtime_failure(&mut self,cause:Cause)->Failure{
+        let cause=self.session.btc_event_error.map_or(cause,Cause::Coexistence);
         let shutdown=Some(self.shutdown());Failure{stage:Stage::Runtime,cause,shutdown}
     }
     fn request(timeout_us:u32)->Result<(),Failure>{
@@ -175,20 +176,20 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn command(&mut self,command:h2c::Command,body:&[u8],acks:h2c::Acks,timeout_us:u32)->Result<h2c::Outcome,Failure>{
         Self::request(timeout_us)?;
         if body.len()>h2c::MAX_BODY{return Err(Failure{stage:Stage::Runtime,cause:Cause::Session(super::Error::Request),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.command_deadline_with(command,body,acks,deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
-            self.session.left(deadline)?;Ok(outcome)})();
+            self.reconcile(deadline)?;self.session.left(deadline)?;Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
     pub(crate) fn poll_packets(&mut self,timeout_us:u32)->Result<[bool;2],Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             let outcome=self.session.poll_before_with(deadline,&mut handler)
                 .map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
-            self.session.left(deadline)?;Ok(outcome)})();
+            self.reconcile(deadline)?;self.session.left(deadline)?;Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
     pub(crate) fn begin(&mut self,frame:&[u8],rate:u8,max_submissions:u8,timeout_us:u32)->Result<(),Failure>{
@@ -197,7 +198,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
         if frame.get(10..16)!=self.prepared.station.current_filter().map(|f|f.own()).as_ref().map(|v|v.as_slice()){
             return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(txdesc::Error::Address)),shutdown:None})}
         if let Err(e)=txdesc::frame(frame,rate,max_submissions){return Err(Failure{stage:Stage::Runtime,cause:Cause::Tx(tx::Error::Input(e)),shutdown:None})}
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;let left=self.session.left(deadline)?;
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;let left=self.session.left(deadline)?;
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.begin(&mut window,frame,rate,max_submissions,self.prepared.station.mac_id(),left);
             self.session.last=window.last;result?;self.session.left(deadline)?;self.tx_deadline=Some(deadline);Ok(())})();
@@ -205,9 +206,10 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     }
     pub(crate) fn advance(&mut self,timeout_us:u32)->Result<Option<tx::Completion>,Failure>{
         Self::request(timeout_us)?;
-        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;if !self.queue.pending_request(){return Ok(None)}
+        let result=(||{let deadline=self.deadline(timeout_us)?;self.live(deadline)?;self.reconcile(deadline)?;if !self.queue.pending_request(){return Ok(None)}
             let mut handler=Dispatcher{queue:self.queue,filter:self.prepared.station.current_filter(),counts:&mut self.counts,error:None};
             self.session.poll_before_with(deadline,&mut handler).map_err(|e|handler.error.map_or(Cause::Session(e),Cause::Tx))?;
+            self.reconcile(deadline)?;
             let mut window=Window{bus:self.session.bus,deadline,last:self.session.last,clock_bad:false};
             let result=self.queue.advance(&mut window);self.session.last=window.last;
             let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
@@ -216,7 +218,7 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
     pub(crate) fn channel(&self)->u8{self.prepared.tuned.channel}
     pub(crate) fn mac(&self)->[u8;6]{self.prepared.board.identity.mac}
     pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}
-    pub(crate) fn counts(&self)->Counts{self.counts}
+    pub(crate) fn counts(&self)->Counts{Counts{btc_events:self.counts.btc_events.saturating_add(self.session.counts.btc_events),ppdu_reports:self.session.counts.ppdu_reports,..self.counts}}
     pub(crate) fn packet(&self)->Option<inbox::Record<'_>>{self.session.packet()}
     pub(crate) fn consume_packet(&mut self){self.session.consume_packet()}
     pub(crate) fn terminal_packet(&self)->Option<inbox::Record<'_>>{self.session.terminal_packet()}
@@ -258,3 +260,5 @@ fn radio(bus:&mut impl RegisterIo,channel:u8)->io::Result<()>{
 
 #[path="active_control.rs"]mod control;
 pub(crate) use control::FilterChange;
+
+#[path="runtime_control.rs"]mod coexistence;

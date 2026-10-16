@@ -938,7 +938,26 @@ Add the actual DataSession-to-wlanhw 1.1 adapter for its single admitted 2.4 GHz
 20 MHz channel, real CAM/filter changes, serialized raw frames and checked
 firmware TX attempt counts. Bound IPC/RX work, frame storage, deferred transmit
 and waiter ownership; preserve the retained owner and independent shutdown on
-failure. Fifteen cold/real-wire cases compile and are registered in host CI;
-execution follows own build and raw publication. Native binding, actual policy
+failure. After own native build and raw publication, all fifteen new
+cold/real-wire cases passed; the registered full affected harness passed 279
+cases with one inherited private-firmware case ignored. Source `ed3808cf` and
+raw publication `d4e55fcc` identify this evidence. Native binding, actual policy
 input, remaining runtime coexistence and physical traffic remain separate.
 See [the service ownership contract](../hwdocs/rtl8852be-service.md).
+
+
+### Packet-mode coexistence event processing
+
+Add the [actual runtime BTC owner](../hwdocs/rtl8852be-btc-runtime.md), preserving
+source event ordering and the existing calibration admission boundary. Known
+BT events are reduced within command ACK waits without recursive commands or
+a four-event burst limit. Actual scoreboard snapshots precede later BTINFO
+after re-enable. Ordinary BT calibration RUN defers antenna mutation and REQ
+does not reject normal traffic; finite receive batches yield under continuous
+Wi-Fi/BT updates. Commands, radio checks and TX completion share the caller's
+absolute budget. Validated RXQ PPDU-status records are consumed and counted in
+startup and packet mode without interpreting their telemetry or discarding
+unknown controls. Twelve new cumulative cases compile, including a valid 15 ms
+ACK and report bursts; own build/raw publication precede execution. Sustained H2C sequence reuse,
+associated-role policy inputs, native service binding and hardware acceptance
+remain open.
