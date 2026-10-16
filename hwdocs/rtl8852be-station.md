@@ -74,3 +74,14 @@ writes, the absolute deadline and selector restoration failure.
 | `cam.h` | `70ba40d1c1de6603162f8ebff009e3b5b28fa54aa8d4bf923282e6f1ee9cd93e` |
 
 No proprietary firmware bytes or private hardware identifiers are included.
+
+## Published execution
+
+After source `08b9faeb` was published in `5aebc778`, the exact saved station
+host binary passed all eleven new cold continuation/fault cases. The complete
+registered harness passed 212 cases, failed none, and retained one existing
+private-firmware case as ignored, in 0.61 s. Native release compilation passed
+in 1.44 s; the inherited unused continuation-field warning does not affect
+this model evidence. The log is `/tmp/mind-station-results-08b9faeb.log`.
+No physical station setup, packet reception or transmission is established by
+these host-model results.
