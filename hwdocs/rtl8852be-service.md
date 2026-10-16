@@ -128,5 +128,12 @@ The original coordinator fixture additionally checks report-tail registers,
 `encoded_rts=0x02ff`, mandatory outer shutdown and retained DMA cleanup. There
 is no guard reseeding between those stages. The ordinary four connection
 cases stay unchanged; the composed child is included by the explicitly
-registered service harness. This is a compile-only host fixture until its own
-build and raw publication, not native endpoint or radio evidence.
+registered service harness.
+
+Source `9a000fa2da9b624533ebbdf201560d754e053b48` built natively in 3.79 s
+and the saved service harness compiled before raw publication
+`4a4fa150bc430660efe696d302041a9219c36711`. After that publication on
+2026-10-16, the composed case passed in 0.03 s and the full harness passed
+299 cases in 1.27 s, with the one inherited private-firmware case ignored.
+This is evidence for that own source revision, not the later H2C changes in
+the aggregate candidate or native endpoint/radio behavior.
