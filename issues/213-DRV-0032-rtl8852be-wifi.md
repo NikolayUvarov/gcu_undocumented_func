@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), [NET country contract](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog), [APP country selector](requests-APP.md#wifi-country-and-channel-selector), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -1018,8 +1018,10 @@ world 00), all 1,016 source rules, flags, WMM data and source provenance.
 Exact country selection and complete-width 2G20 coverage expose limits for
 driver intersection; they do not create platform policy or TX authority, infer
 a country, weaken programmed-board equality, or change the native endpoint.
-UZ deployment intent is explicit, with UI/persistence/native consumers in the
-owner requests. Source `1e2cf1dd` built and was published in raw `94ab2a0b`
+UZ deployment intent is explicit; [NET configuration](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog),
+[APP selection](requests-APP.md#wifi-country-and-channel-selector) and
+[KRN native consumption](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission)
+remain owner requests. Source `1e2cf1dd` built and was published in raw `94ab2a0b`
 before the 9 Rust and 11 Python fixtures all passed on its own branch;
 exact source regeneration also passed. Configuration and evidence are in the
 catalog document. This task remains open for native integration and actual
