@@ -3,7 +3,7 @@ use super::{initial,station_device};
 use std::{cell::RefCell,rc::Rc};
 
 #[derive(Default)]
-pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usize,pub corrupt:bool,pub published:usize,pub unknown:bool}
+pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usize,pub corrupt:bool,pub published:usize,pub unknown:bool,pub advance_us:u64}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -72,7 +72,7 @@ impl RegisterIo for Device{
     fn write8(&mut self,at:usize,v:u8)->io::Result<()>{self.write(at,1,u32::from(v))}
     fn write16(&mut self,at:usize,v:u16)->io::Result<()>{self.write(at,2,u32::from(v))}
     fn write32(&mut self,at:usize,v:u32)->io::Result<()>{self.write(at,4,v)}
-    fn now_us(&mut self)->u64{self.station.now_us()}
+    fn now_us(&mut self)->u64{let delta=std::mem::take(&mut self.control.borrow_mut().advance_us);self.raw().now+=delta;self.station.now_us()}
     fn delay_us(&mut self,us:u32)->io::Result<()>{self.station.delay_us(us)}
 }
 impl fwcmd::Bus for Device{fn pci_command(&mut self)->io::Result<u16>{self.station.pci_command()}}

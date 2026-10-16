@@ -95,3 +95,13 @@ old RX epochs, TA/Busy/invalid admission, actual three-part TX completion,
 terminal control retention and 12 accepted Wi-Fi frames plus three foreign and
 one invalid frame during command/TX-report progress. Execution follows own build
 and raw publication; no test result is claimed here yet.
+
+
+The first published run of source `12a98125` on its own branch (raw
+`ea703b492d04d99ae5e52d00bb0865335a5182f7`) passed 12/13 focused cases
+(2026-10-16, 0.17 s). The missing-final-C2H fixture incorrectly assumed that
+forty immediate model polls consumed ten milliseconds; it observed no false
+completion but failed to reach the requested expiry. The correction advances
+the modeled monotonic clock explicitly beyond the original request deadline
+and retains the timeout/no-later-success assertions. Production code is
+unchanged; the failing log remains `/tmp/rtw89-data-mode-focused-12a98125.log`.
