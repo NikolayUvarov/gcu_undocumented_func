@@ -37,6 +37,7 @@ pub struct Device {
     pub packets: Vec<(bool, Vec<u8>)>, pub transferred: usize, pub no_h2c: bool,
     pub feature_reply: Option<[u32; 4]>, pub mailbox_requests: Vec<[u32; 4]>,
     pub station_stuck: bool, pub ignore_receive_base: bool, pub fail_receive_enable: bool,
+    pub hold_header: Option<(u8,u8,u8)>,
     pub normal_packets: Vec<Vec<u8>>, pub normal_ack: NormalAck, pub hold_normal_dma: bool,
 }
 
@@ -47,7 +48,7 @@ impl Device {
             writes: Vec::new(), packets: Vec::new(), transferred: 0, no_h2c: false,
             feature_reply: Some([0x02020403, 2, 0, 0x20200]), mailbox_requests: Vec::new(),
             station_stuck: false, ignore_receive_base: false, fail_receive_enable: false,
-            normal_packets: Vec::new(), normal_ack: NormalAck::Complete, hold_normal_dma: false };
+            hold_header: None, normal_packets: Vec::new(), normal_ack: NormalAck::Complete, hold_normal_dma: false };
         d.put(SYS_CFG1, 4, 1 << 12);
         d.put(R_AX_SYS_PW_CTRL, 4, B_AX_RDY_SYSPWR);
         d.put(R_AX_SYS_WL_EFUSE_CTRL, 2, B_AX_AUTOLOAD_SUS);
@@ -74,7 +75,7 @@ impl Device {
     pub fn get(&self, at: usize, width: usize) -> u32 {
         let mut raw = [0; 4]; raw[..width].copy_from_slice(&self.registers[at..at + width]); u32::from_le_bytes(raw)
     }
-    fn put(&mut self, at: usize, width: usize, value: u32) { self.registers[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]); }
+    pub(crate) fn put(&mut self, at: usize, width: usize, value: u32) { self.registers[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]); }
 
     fn consume(&mut self, index: u32) {
         assert!(index < fwcmd::DESCRIPTORS as u32);
@@ -103,9 +104,10 @@ impl Device {
         if receiving {
             assert!(!part);assert_eq!(self.get(0x1e0,4)&0xe0,0xe0);
             assert_eq!(self.get(0xc348,4)&0xffff,0);assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
+            let hold_header = self.hold_header == Some((packet[0] & 3, packet[0] >> 2, packet[1]));
             self.normal_command(&packet);
             self.normal_packets.push(packet);
-            if !self.hold_normal_dma {self.put(fwcmd::INDEX,4,index|index<<16);}
+            if !self.hold_normal_dma && !hold_header {self.put(fwcmd::INDEX,4,index|index<<16);}
             return;
         }
         if part { self.transferred += packet.len(); } else { self.registers[0x1e0] |= 4; }

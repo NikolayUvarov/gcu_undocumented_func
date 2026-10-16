@@ -82,9 +82,13 @@ completely with its expected count and validated address/mask/value fields.
 | `rtw8852b_rfk.c` | `4613e3d2755f14649154a1c8393bf72ae215e8b683219a0763a033b224c715f` |
 
 No proprietary firmware or device data enters the repository. Native build
-passed in 1.21 s without warnings. Twelve new register-model cases and five
-extractor cases are prepared; Rust fixtures compile, but execution awaits
-raw publication before running on the owner's source branch. The fixtures
+passed in 1.21 s without warnings. After code `983e4c72` was published in
+`fast-test` merge `b169a2753535d74968635e95740941abda175d0a`, the owner's
+exact saved PHY harness passed 183 cases in 1.04 s, including the twelve new
+TSSI cases, with zero failures and one existing private-firmware case ignored.
+All five Python extractor cases passed, and regeneration from the three pinned
+source files matched the committed tables exactly. All six current host
+harnesses that include `phy.rs` also compiled without extra imports. The fixtures
 model fresh/stale CW reports, actual PMAC writes and sample counts, thermal
 bytes, identity/admission refusal, timeout/uncertain callbacks, and both
 ignored and applied-but-failed stop writes. They are not RF measurements.

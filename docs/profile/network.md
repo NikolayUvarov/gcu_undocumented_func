@@ -149,7 +149,35 @@ The rates doubled and the stack's and the drivers' CPU time per MiB fell by abou
 - **Segmentation offloads** are not used. Frames still cost about 110 µs of stack time each, and much of that is the client calls (`tcp-receive` moves 4 KiB per call) and smoltcp itself. Larger frames would need a frame size beyond 1514 bytes in the ring and TCP segmentation that smoltcp does not do. Decide again with a measurement on hardware with KVM.
 - **The frame ring** is used whenever the driver offers it (`net.wit` 1.2).
 
-## RTL8852BE initial board access (213-DRV-0032)
+## RTL8852BE implementation and evidence (213-DRV-0032)
+
+### Current scope (2026-10-16)
+
+The native x86 service executes the bounded board, firmware, MAC, receive and
+initial-PHY diagnostic chain, then shuts the device down. Its initial-PHY
+stage consumes the live firmware/RX owner and runs baseband/RF tables, BTC
+initialization, NCTL, RCK, DACK, RXDCK, DM tail and reporting in order. It does
+not register a WLAN endpoint, associate or provide IP connectivity. The
+channel/IQK/TSSI/DPK coordinator and raw-packet TX queues are private library
+stages; their existence does not activate native transmission. Platform and
+country policy, final station setup, integration and actual hardware checks
+remain required. No physical Ryzen traffic or RF performance is established.
+
+The latest native-chain evidence is recorded in
+[initial PHY notes](../../hwdocs/rtl8852be-initial-phy.md): five cumulative
+host cases and twelve startup cases passed after source publication. Separate
+[DPK](../../hwdocs/rtl8852be-dpk.md) and
+[connection](../../hwdocs/rtl8852be-connection-rfk.md) records bind their
+14 and 62 passing model cases to their own source revisions. They are not a
+full gate or hardware evidence. The frozen x86 matrix predates these changes
+and has an unresolved download failure; it is not a green gate for this tree.
+
+### Historical implementation slices and their scoped evidence
+
+The following entries describe successive source revisions. A statement that
+integration was absent or execution was pending applies to that entry's
+revision; later entries record the continuation. Test results remain attached
+to the source and configuration stated in each entry.
 
 The native `rtw89_wifi` service provides a bounded initial MAC power/XTAL/EFUSE
 read cycle for digital cut 1, under KRN-0114's MEM-only BAR2 grant. It requires
@@ -467,6 +495,14 @@ The native RTL8852BE diagnostic now attempts the initial PHY/BTC chain over
 its actual retained command/RX allocations and consumed Ready. It uses actual
 coexistence and scheduler callbacks for DACK/RXDCK, returns observations and
 always shuts down afterward. This does not complete channel calibration,
-policy admission, association or usable networking. The new cold-device
-composition fixtures are compiled; execution and hardware evidence remain
-pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).
+policy admission, association or usable networking. After publication `b169a275`, the five cold-device composition fixtures
+passed (0.08 s, zero failures/ignores); all twelve fifteen-stage startup
+fixtures passed separately. Hardware evidence remains pending. [Scope and evidence](../../hwdocs/rtl8852be-initial-phy.md).
+
+The private RTL8852B initial host DPK entry now requires same-attempt BTC,
+channel and completed TSSI tokens plus consumed engine-specific calibration
+transmit authority. The source 2 GHz/20 MHz/both-path algorithm has bounded
+NCTL/AGC and explicit uncertain-command shutdown; fourteen model regressions
+compile, with execution pending raw publication. No native authority provider
+exists, and full typed cold-start composition, physical RFK quality and WLAN
+traffic are unvalidated. [Scope and failure evidence](../../hwdocs/rtl8852be-dpk.md).

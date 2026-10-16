@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -679,9 +679,10 @@ and the final report registers. Consume Ready exactly once; never replace
 BTC permission or scheduler mailbox responses with successful placeholders.
 Return observations only and always run the existing independent native
 shutdown. Channel IQK/TSSI/DPK, actual regulatory/SAR admission, association
-and hardware traffic remain open. Five cumulative cold-device fixtures and
-the fifteen-stage cleanup matrix compile; execution follows raw publication.
+and hardware traffic remain open. All five cumulative cold-device cases passed after publication `b169a275`
+(0.08 s); the twelve fixtures of the fifteen-stage cleanup matrix also passed.
 See [the diagnostic boundary](../hwdocs/rtl8852be-initial-phy.md).
+
 
 ### Initial channel RXDCK and host IQK preparation
 
@@ -703,13 +704,65 @@ PMAC calibration samples on both paths, board thermal/DE tables, actual
 owned BTC notices and bounded cleanup. It requires the actual IQK result
 and a consumed engine-specific calibration authority; there is no native
 provider until raw PMAC/RFK power and platform policy are resolved. Native
-build and fixture compilation pass; execution waits for raw publication.
+build passes. After raw publication `b169a275` of code `983e4c72`, the exact
+owner PHY harness passed 183 cases (twelve new TSSI cases), zero failures and
+one existing private-firmware ignore; five extractor cases and exact pinned
+table regeneration also passed. These are model and source-integrity results.
 This does not complete channel RFK, association or physical WLAN evidence.
 
 Scheduler evidence for `ea66207f`, after raw publication `180f9559`: all 52
 combined Session cases passed in 0.24 s on the own branch with no failures or
 ignores. The seven new register-mailbox regressions are included; hardware
 calibration, association and normal traffic acceptance remain open.
+
+### Private initial host DPK
+
+Implement the source initial 2 GHz/20 MHz, non-DBCC, both-path DPK engine and
+same-session/channel/policy entry after actual BTC initialization and TSSI.
+Consume separate DPK calibration-transmit authority; no native provider exists.
+Actual BTC/scheduler callbacks, bounded NCTL/AGC, source backups and independent
+cleanup retain primary and secondary errors. Unknown NCTL completion switches
+radio off before mailbox cleanup and skips unsafe register restoration.
+Fourteen engine fixtures and two provenance cases are registered; the
+execution and first-run correction are recorded below. Full typed cold-start
+integration, RFK power policy, hardware quality and association remain open. See the
+[DPK source and bounds](../hwdocs/rtl8852be-dpk.md).
+
+### DPK first-run cleanup finding (2026-10-16)
+
+Published `2fc291a5` passed 13/14 focused DPK models; the final-STOP model
+failed. Both Python provenance cases and exact source-table regeneration
+passed. Review of that failure found redundant AFE/KIP/RF restore after a STOP
+that may already have released the grant. The correction allows only emergency
+radio shutdown after an attempted STOP, records skipped/unknown DPD disable
+explicitly, and never repeats STOP or restores calibration state. The failed
+run remains recorded in [DPK notes](../hwdocs/rtl8852be-dpk.md); corrected tests
+passed 14/14 on the own source branch at `40addff0`, after build and raw
+publication `c38df1dd` (0.01 s; no failures or ignored cases). Hardware
+acceptance is unchanged and remains open.
+
+### Initial channel coexistence callbacks (2026-10-16)
+
+The owned Session now has source `conn_rfk` lifecycle, conditional actual A2DP
+30 ms preservation and first-slot RTL8852B MCC notification callbacks, described
+in [connection RFK notes](../hwdocs/rtl8852be-connection-rfk.md). They use the same
+initialized context, normal H2C sequence and retained RX, refuse pending RFK,
+preserve errors and allow a matching host END even after poisoning. Ten new
+Session model cases and the existing 52 passed together on the own branch
+at `bf6747f5` after native build and raw publication `c38df1dd`: 62/62,
+0.29 s, no failures or ignored cases. The channel
+coordinator must still validate real IQK/TSSI/DPK results and transmission
+admission. No native RFK-power provider or working WLAN is claimed.
+
+### Initial channel calibration coordination (2026-10-16)
+
+The private [channel RFK continuation](../hwdocs/rtl8852be-channel-rfk.md)
+connects actual same-session RXDCK/IQK, conditional A2DP windows, TSSI, DPK,
+connection end and final MCC notification. Three consumed engine-specific
+power authorities and live owner/PHY checks are mandatory. There is no native
+power-authority provider or packet-transmit activation. Seven cumulative cold
+model cases compile, preserving the existing five initial-PHY cases; execution
+follows raw publication. Physical RF calibration and WLAN acceptance stay open.
 
 ### Raw MPDU transmit ownership and status prerequisite
 
@@ -728,6 +781,17 @@ failures. No native caller or IDL/ABI change is part of this library stage;
 activation still requires actual channel/calibration/policy and CMAC setup.
 Register meaningful descriptor, ring, status and cleanup fixtures in the host
 gate; run them only after own commit/build and raw publication.
+
+
+### Shared live initial-PHY continuation
+
+Extract the existing ordered native diagnostic initialization into a private
+`prepare` function retaining actual BTC/DM/path state on the live PHY session.
+The diagnostic still shuts down; channel cumulative tests use the production
+function, including its owner validations, rather than duplicating startup.
+Own full x86 build passes and focused harnesses compile; execution follows raw
+publication. Native channel admission and station/service activation remain
+separate open work.
 
 ### Correlated final firmware TX reports
 
