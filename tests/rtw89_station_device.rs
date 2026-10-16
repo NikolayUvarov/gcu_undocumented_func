@@ -8,11 +8,13 @@ pub(super) struct Device{
     pub ignore_port:bool,pub fail_port:bool,pub late_control:bool,pub unrelated_firmware_fields:bool,
     pub window_writes:usize,pub station_packets:Vec<Vec<u8>>,pub restore_fail:bool,
     pub selector:u32,active:bool,pub late_restore:u8,restores:u8,
+    pub ignore_filter:bool,pub fail_filter:bool,pub late_filter:bool,pub filter_command_fault:u8,
 }
 impl Device{
     pub fn new(base:initial::Device)->Self{Self{base,memory:BTreeMap::new(),bar:0x100000,ignore_control:false,ignore_unpause:false,
         ignore_port:false,fail_port:false,late_control:false,unrelated_firmware_fields:false,
-        window_writes:0,station_packets:Vec::new(),restore_fail:false,selector:0x18888000,active:false,late_restore:0,restores:0}}
+        window_writes:0,station_packets:Vec::new(),restore_fail:false,selector:0x18888000,active:false,late_restore:0,restores:0,
+        ignore_filter:false,fail_filter:false,late_filter:false,filter_command_fault:0}}
     fn firmware(&mut self,start:usize){
         let packets=self.base.inner.normal_packets[start..].to_vec();
         for p in packets{let h=(p[0]&3,p[0]>>2,p[1]);if ![(1,9,8),(1,8,4),(1,8,0),(1,6,0),(1,5,2)].contains(&h){continue;}
@@ -29,6 +31,8 @@ impl Device{
                     let at=0x18840000+4*i as u32;let old=self.memory.get(&at).copied().unwrap_or(0);
                     self.memory.insert(at,(old&!mask)|(data&mask));}}
                 if self.late_control{self.base.inner.now+=600_000;}
+                if self.filter_command_fault==1{self.base.inner.hold_header=Some((1,6,0));}
+                if self.filter_command_fault==2{self.base.inner.normal_ack=crate::model::NormalAck::Missing;}
             }
             self.station_packets.push(p);
         }
@@ -41,9 +45,13 @@ impl Device{
             self.memory.insert(self.selector+(at-0x40000)as u32,value);self.window_writes+=1;return Ok(());}
         if at==0xc400{self.active=true;}
         if self.active&&at==0xc414&&self.ignore_port{return Ok(());}
+        let filter=self.station_packets.len()>=6&&at==0xce20;
+        if filter&&self.ignore_filter{return Ok(());}
         let count=self.base.inner.normal_packets.len();
         match width{1=>self.base.write8(at,value as u8)?,2=>self.base.write16(at,value as u16)?,_=>self.base.write32(at,value)?};
         self.firmware(count);
+        if filter&&self.fail_filter{return Err(io::Fault::new(io::FaultKind::Access,at,value));}
+        if filter&&self.late_filter{self.base.inner.now+=600_000;}
         if self.active&&at==0xc414&&self.fail_port{self.fail_port=false;return Err(io::Fault::new(io::FaultKind::Access,at,value));}
         Ok(())
     }
