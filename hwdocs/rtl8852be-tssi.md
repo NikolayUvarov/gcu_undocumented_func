@@ -11,16 +11,19 @@ prevent those transmissions.
 `tssi::run` requires the same PHY attempt, command session, channel and policy
 version as the actual `iqk::Completed`, actual `btc_context::Initialized`,
 the channel `Tuned`, and a consumed `CalibrationTransmit(Tssi)`. That opaque
-authority is not Clone/Copy and has no production constructor. A passive
-channel cannot match it. The host fixtures use a test-only policy model.
+authority is not Clone/Copy. The private [source-profile provider](rtl8852be-calibration-policy.md)
+checks actual board/firmware/channel/policy identity before issuing it. A
+passive channel cannot match it; the native scoped-input consumer is separate.
 
 The raw manual PMAC levels are 48 and 20 in `R_TXPWR[30:22]`; the source
 enables `MAC_SEL_PWR_EN`. Ordinary MAC limit pages alone therefore do not
-establish a safe calibration power limit. The exact units and applicable
-RFK/PMAC limits, antenna/system gain and platform SAR/EIRP still need actual
-policy resolution. The implementation does not infer those facts from a
-variable named `pwr_dbm`, Linux's observed country, or the factor used by a
-different BB reference register. No native admission provider exists yet.
+establish a safe calibration power limit. The exact setter chain now establishes quarter-dBm units, hence requested
+12/5 dBm; the [direct source evidence](rtl8852be-calibration-policy.md#direct-source-evidence-for-tssi-units-and-rate)
+uses the actual 52B caller and setter, not a similarly named variable or
+another BB reference register. The provider checks the actual HT20 MCS7/1TX
+source limit and resolved per-path platform caps against 12 dBm. Antenna/system
+gain, the real country and device-scoped SAR still require the native input
+consumer; no measured physical output or native radio readiness is claimed.
 
 ## Source sequence and bounded failure
 

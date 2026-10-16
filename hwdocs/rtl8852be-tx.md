@@ -139,13 +139,18 @@ central dispatcher or explicit session handoff remains necessary. Existing recei
 intentionally reject active ordinary TX and must not be bypassed or relaxed
 by raw mask changes. Association, WPA2 and hardware traffic remain open.
 
-### Final-C2H extension (execution pending)
+### Final-C2H extension evidence
 
-Twenty-four combined TX fixtures compile, including all six orderings of
+Twenty-four combined TX fixtures include all six orderings of
 DMA/RPQ/final-C2H completion, intermediate reports, raw counter versus
 completed-descriptor count, terminal missing/late reports, contradictory
 statuses/tags, shared frozen-clock bounds and preservation of other RXQ
 traffic. Existing 320-packet and 32,770-packet rotations now use actual modeled
 C2H headers and repeatedly reuse four-bit tags. The model emits reports only
 after reading a published descriptor, and overwrites released RX bytes.
-These additions have not run before their required source publication.
+On source `709721d6`, after raw publication `7ec8fbee` (2026-10-16), all
+24 TX fixtures passed in 0.28 s and the unchanged 18 RX fixtures passed in
+0.12 s, with zero failures/ignores. Own release build passed in 1.35 s without
+warnings. Host/compiler configuration is the same as the baseline above;
+execution occurred only on the own branch. No physical transmission or exact
+on-air attempt interpretation is established by this host model.

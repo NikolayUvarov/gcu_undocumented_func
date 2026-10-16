@@ -789,9 +789,10 @@ Extract the existing ordered native diagnostic initialization into a private
 `prepare` function retaining actual BTC/DM/path state on the live PHY session.
 The diagnostic still shuts down; channel cumulative tests use the production
 function, including its owner validations, rather than duplicating startup.
-Own full x86 build passes and focused harnesses compile; execution follows raw
-publication. Native channel admission and station/service activation remain
-separate open work.
+After publication `7ec8fbee`, source `ed63d767` passed five initial-PHY and
+seven cumulative channel/RFK cases (0.08 s each; no failures/ignores). The
+consolidated x86 build passed in 2 s. Native channel admission and station/service
+activation remain separate open work.
 
 ### Correlated final firmware TX reports
 
@@ -806,7 +807,21 @@ The firmware's ordered terminal-report behavior is an explicit TCB assumption,
 consistent with the upstream driver's tag reuse; arbitrary firmware replay
 is outside that contract. Native activation remains closed.
 
-## Initial station context continuation (2026-10-16)
+### Checked initial calibration profile (2026-10-16)
+
+The private [calibration provider](../hwdocs/rtl8852be-calibration-policy.md)
+resolves the actual supported Board/source profile and explicit country/platform
+inputs, distinguishes checked absence from unknown/invalid SAR, and checks the
+source TSSI HT20 MCS7 maximum request of 12 dBm. It binds the exact written policy
+and OTP fingerprint to the current PHY/firmware attempt and issues three consumed
+engine-specific permissions once, after actual live ownership validation. IQK/DPK
+use the supported source sequence without inventing a numerical output guarantee
+or a new certification prerequisite. Fourteen focused cases compile, including
+the actual cold coordinator; execution follows publication. The native scoped
+input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
+open. This provider does not start native transmission.
+
+### Initial station context continuation (2026-10-16)
 
 The [private station continuation](../hwdocs/rtl8852be-station.md) prepares
 source NO_LINK MACID0/port0/CAM0 after the actual channel calibration result,

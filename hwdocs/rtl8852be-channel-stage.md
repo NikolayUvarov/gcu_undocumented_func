@@ -170,9 +170,10 @@ BF values. Its corrected execution remains pending publication.
 RFK can transmit while the ordinary scheduler remains stopped. The private
 opaque `CalibrationTransmit` binds the PHY attempt, firmware session, channel,
 policy version and named IQK/TSSI/DPK engine, and refuses passive channels.
-It has no production constructor: actual calibration gain/PMAC level units,
-regulatory and platform SAR/EIRP admission are still unresolved. A test-only
-model constructor exercises identity refusal without granting native rights.
+The private [source-profile provider](rtl8852be-calibration-policy.md) now
+constructs a single-use permission set after exact policy/Board and live
+firmware-session validation. The native scoped country/platform input remains
+separate and unresolved; a model constructor grants no native rights.
 
 After raw publication `8ebd2da1`, the corrected power fixture passed all eight
 cases (0.00 s), and the saved updated PHY/admission binary passed 171 cases

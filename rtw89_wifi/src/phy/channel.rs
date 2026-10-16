@@ -6,6 +6,9 @@ use super::{Phy,PhyIo,State,RegisterPhase,PHY_BASE,Gain,dm,tail,guard,rf_read,rf
 use crate::{board::Board,calibration,channel_policy as defaults,channel_power::{self,Constraints},download::DefaultTables,
     io::{self,Fault,FaultKind,RegisterIo,TimedIo}};
 
+#[path="../calibration_policy.rs"]
+pub(crate) mod calibration_policy;
+
 const TOTAL_US:u64=2_200_000;
 const RF_MASK:u32=0xfffff;
 
@@ -16,8 +19,8 @@ pub(crate) enum Access{Disabled,PassiveOnly,InitiateRadiation}
 pub(crate) struct Rule{pub country:[u8;2],pub version:u64,pub center_mhz:u16,pub access:Access,
     pub eirp_half_dbm:i8,pub conducted_half_dbm:i8}
 pub(crate) enum Platform{Unknown,Resolved(Constraints)}
-#[derive(Debug)]
-pub(crate) struct Policy{country:[u8;2],plan:u8,version:u64,channel:u8,access:Access,group:defaults::Group,limits:Constraints}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct Policy{country:[u8;2],selected_country:[u8;2],plan:u8,version:u64,channel:u8,access:Access,eirp_half_dbm:i8,conducted_half_dbm:i8,group:defaults::Group,limits:Constraints}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum PolicyError{Board,Country,Frequency,Disabled,UnknownPlatform,Power}
 
@@ -40,8 +43,8 @@ impl Policy{
         }
         for value in &mut limits.per_ntx{*value=(*value).min(rule.conducted_half_dbm);}
         // Per-path values are source SAR reference differences, already resolved for this platform and frequency.
-        Ok(Self{country:hint.raw,plan:hint.raw_channel_plan,version:rule.version,channel:(delta/5)as u8,
-            access:rule.access,group:selected.groups[0],limits})
+        Ok(Self{country:hint.raw,selected_country:rule.country,plan:hint.raw_channel_plan,version:rule.version,channel:(delta/5)as u8,
+            access:rule.access,eirp_half_dbm:rule.eirp_half_dbm,conducted_half_dbm:rule.conducted_half_dbm,group:selected.groups[0],limits})
     }
 }
 
@@ -54,23 +57,36 @@ pub(crate) enum Stage{Guard,Pause,Prepare,Mac,Baseband,Radio,Power,Finish,Restor
 pub(crate) struct Failure{pub stage:Stage,pub cause:Fault,pub scheduler_restore:Option<Fault>,
     pub radio_cleanup:Option<Fault>,pub radio_stop:Option<Fault>}
 #[derive(Debug)]
-pub(crate) struct Tuned{pub attempt:u64,pub session:u64,pub channel:u8,pub policy_version:u64,pub access:Access}
+pub(crate) struct Tuned{pub attempt:u64,pub session:u64,pub channel:u8,pub policy_version:u64,pub access:Access,
+    policy:Policy,board_fingerprint:[u8;32],admission_attempted:bool}
+impl Tuned{
+    fn policy_matches(&self,policy:&Policy)->bool{
+        self.policy==*policy&&self.channel==policy.channel&&self.policy_version==policy.version&&self.access==policy.access
+    }
+    #[cfg(test)]
+    pub(crate) fn modeled(attempt:u64,session:u64,channel:u8,policy_version:u64,access:Access)->Self{
+        let policy=Policy{country:*b"US",selected_country:*b"US",plan:0,version:policy_version,channel,access,
+            eirp_half_dbm:63,conducted_half_dbm:63,group:defaults::Group::FCC,limits:Constraints{per_ntx:[63;2],per_path:[63;2]}};
+        Self{attempt,session,channel,policy_version,access,policy,board_fingerprint:[0;32],admission_attempted:false}
+    }
+}
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum CalibrationEngine{Iqk,Tssi,Dpk}
 /// RFK may radiate with the ordinary scheduler stopped; channel selection is insufficient authority.
-/// No production constructor exists until actual RFK raw levels and platform SAR/EIRP are resolved.
+/// The private source-profile provider binds actual channel policy and live ownership; it does not measure RF output.
 #[derive(Debug)]
-pub(crate) struct CalibrationTransmit{attempt:u64,session:u64,channel:u8,policy_version:u64,engine:CalibrationEngine}
+pub(crate) struct CalibrationTransmit{attempt:u64,session:u64,channel:u8,policy_version:u64,engine:CalibrationEngine,policy:Policy,board_fingerprint:[u8;32]}
 impl CalibrationTransmit{
     pub(crate) fn matches(&self,tuned:&Tuned,engine:CalibrationEngine)->bool{
         tuned.access==Access::InitiateRadiation&&self.attempt!=0&&self.session!=0&&self.policy_version!=0
             &&self.attempt==tuned.attempt&&self.session==tuned.session&&self.channel==tuned.channel
             &&self.policy_version==tuned.policy_version&&self.engine==engine&&(1..=13).contains(&self.channel)
+            &&tuned.policy_matches(&self.policy)&&self.board_fingerprint==tuned.board_fingerprint
     }
     #[cfg(test)]
     pub(crate) fn modeled(tuned:&Tuned,engine:CalibrationEngine)->Option<Self>{
-        let token=Self{attempt:tuned.attempt,session:tuned.session,channel:tuned.channel,policy_version:tuned.policy_version,engine};
+        let token=Self{attempt:tuned.attempt,session:tuned.session,channel:tuned.channel,policy_version:tuned.policy_version,engine,policy:tuned.policy,board_fingerprint:tuned.board_fingerprint};
         token.matches(tuned,engine).then_some(token)
     }
 }
@@ -225,7 +241,7 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         ||prefix.band!=crate::dack::Band::Ghz2||session==0||configured.session!=session||provenance.session()!=session
         ||board.identity!=phy.identity||policy.country!=board.identity.country||policy.plan!=board.identity.channel_plan
         ||!(1..=3).contains(&configured.rx_path){return Err(fail(fault(0,phy.state as u32)));}
-    let cal=calibration::decode(board).map_err(fail)?;
+    let cal=calibration::decode(board).map_err(fail)?;let fingerprint=calibration_policy::board_fingerprint(board);
     let image=channel_power::build(policy.group,policy.channel,policy.limits).map_err(|_|fail(fault(0xd200,0)))?;
     let start=phy.bus.now_us();guard(phy.bus,&phy.identity,RegisterPhase::AfterDack).and_then(|()|{
         let value=io::read32(phy.bus,PHY_BASE+0x49c4)?;
@@ -255,5 +271,6 @@ pub(crate) fn run<B:ChannelIo>(phy:&mut Phy<'_,B>,board:&Board,prefix:&dm::Prefi
         let scheduler_restore=if pause_complete&&!restore_attempted{scheduler(phy.bus,1_000_000).err()}else{None};
         return Err(Failure{stage,cause,scheduler_restore,radio_cleanup,radio_stop});
     }
-    phy.state=State::ChannelTuned;Ok(Tuned{attempt,session,channel:policy.channel,policy_version:policy.version,access:policy.access})
+    phy.state=State::ChannelTuned;Ok(Tuned{attempt,session,channel:policy.channel,policy_version:policy.version,access:policy.access,
+        policy:*policy,board_fingerprint:fingerprint,admission_attempted:false})
 }

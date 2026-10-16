@@ -165,11 +165,11 @@ fn failed_stop_is_attempted_once_and_does_not_issue_completed(){
 #[test]
 fn completed_identity_and_calibration_authority_cannot_cross_attempts_or_engines(){
     use phy::channel::{Tuned,Access,CalibrationEngine,CalibrationTransmit};
-    let tuned=Tuned{attempt:3,session:5,channel:6,policy_version:7,access:Access::InitiateRadiation};
+    let tuned=Tuned::modeled(3,5,6,7,Access::InitiateRadiation);
     let authority=CalibrationTransmit::modeled(&tuned,CalibrationEngine::Iqk).unwrap();
     assert!(authority.matches(&tuned,CalibrationEngine::Iqk));assert!(!authority.matches(&tuned,CalibrationEngine::Tssi));
     let done=Completed{attempt:3,session:5,channel:6,policy_version:7,results:[PathResult::default();2]};
     assert!(done.matches(3,5,6,7));for args in [(4,5,6,7),(3,6,6,7),(3,5,7,7),(3,5,6,8),(0,5,6,7)]{assert!(!done.matches(args.0,args.1,args.2,args.3));}
-    let passive=Tuned{access:Access::PassiveOnly,..tuned};assert!(!authority.matches(&passive,CalibrationEngine::Iqk));
+    let mut passive=tuned;passive.access=Access::PassiveOnly;assert!(!authority.matches(&passive,CalibrationEngine::Iqk));
     assert!(CalibrationTransmit::modeled(&passive,CalibrationEngine::Iqk).is_none());
 }

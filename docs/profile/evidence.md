@@ -144,3 +144,11 @@ recorded in [DPK notes](../../hwdocs/rtl8852be-dpk.md). Both table-provenance
 Python cases and exact pinned-table regeneration passed on that first run;
 the correction changed neither table nor generator. This is host-model evidence,
 not physical RFK quality, transmission authority or working WLAN.
+
+
+The RTL8852BE [initial calibration provider](../../hwdocs/rtl8852be-calibration-policy.md)
+has fourteen compiled focused models covering exact source/Board/policy binding,
+known-absent versus invalid platform input, actual PMAC units/rate limits, single-use
+permissions and the cumulative cold channel-RFK coordinator. Execution follows raw
+publication. The native scoped input consumer and actual RF output/traffic remain
+unvalidated; no platform guarantee is expanded by the internal permission type.
