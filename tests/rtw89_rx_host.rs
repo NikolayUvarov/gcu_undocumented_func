@@ -211,5 +211,7 @@ fn partial_copy_or_empty_receive_cannot_reuse_previous_validated_metadata(){
     d.put_packet(0,0,&packet(&[0x42;80],false,0));q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap();assert!(q.copied_packet().is_some());
     assert_eq!(q.receive(&mut d,Channel::Rxq,&mut out,1000).unwrap(),Outcome::Empty);assert!(q.copied_packet().is_none());
     d.put_packet(0,1,&packet(&[0x53;80],false,0));d.time_step=2;
-    assert!(q.receive(&mut d,Channel::Rxq,&mut out,5).is_err());assert!(q.copied_packet().is_none());d.time_step=0;stop(&mut q,&mut d);
+    assert!(q.receive(&mut d,Channel::Rxq,&mut out,9).is_err());assert!(q.copied_packet().is_none());
+    assert_eq!(&out[20..64],&[0x53;44]);assert_eq!(&out[64..100],&[0x42;36]);assert_eq!(d.get(0x1050)&0xfff,1);
+    d.time_step=0;stop(&mut q,&mut d);
 }
