@@ -80,3 +80,27 @@ The existing cold DataSession case checks Known(1) through the actual owned RX
 dispatcher. These are model checks of implementation against the protocol;
 the model cannot establish physical airtime, ACK reception or firmware timing.
 Execution follows own build and raw publication; results are recorded separately.
+
+### Executed evidence (2026-10-16)
+
+Source `a332c81ce5c6c1456fd463d6fdf8b1935932d3d8`, own branch
+`codex/213-DRV-0032-rtl8852be`, passed its native release build in 1.65 s;
+the exact committed rebuild took 0.00 s. The inherited unused-field warning
+for `initial_phy::Prepared::{owner,prefix,paths}` was unchanged. After raw
+publication `554cbadabe34f06654b921ebdd82a6ad86cc20e2`, the compiled complete
+host harnesses ran on that own source:
+
+| Harness | Passed | Failed | Existing private-file ignore | Time |
+| --- | ---: | ---: | ---: | ---: |
+| `rtw89_tx_host.rs` | 241 | 0 | 1 | 1.19 s |
+| `rtw89_data_mode_host.rs` | 254 | 0 | 1 | 1.12 s |
+| `rtw89_rx_host.rs` | 20 | 0 | 0 | 0.13 s |
+
+The complete runs include all 29 TX cases, all 13 cold DataSession cases
+and all 20 RX cases, with no filter or newly introduced skip. The unchanged
+ignored test is the separately fetched proprietary-file hash policy fixture;
+it does not supply TX-counter evidence. Configuration: x86-64 Linux
+`6.6.87.2-microsoft-standard-WSL2`, rustc `1.101.0-nightly`
+(`c36f14571`, 2026-10-01). Local per-harness logs and measured durations are
+listed in `/tmp/mind-rtw-attempts-a332-results.json`. These results establish
+the stated model behavior only; physical RTL8852BE traffic remains untested.
