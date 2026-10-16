@@ -661,6 +661,7 @@ These seeded-device fixtures cover actual production owner/session logic;
 hardware calibration, policy-authorized RFK transmission and native networking
 remain open.
 
+
 ### Actual calibration scheduler adapter
 
 Native composition exposed a missing `Session: RxdckIo` implementation. Add
@@ -961,3 +962,9 @@ unknown controls. Twelve new cumulative cases compile, including a valid 15 ms
 ACK and report bursts; own build/raw publication precede execution. Sustained H2C sequence reuse,
 associated-role policy inputs, native service binding and hardware acceptance
 remain open.
+
+After raw publication `173d8620`, source `f7f808b6` passed all twelve packet-mode
+BTC and both startup PPDU cases, plus thirteen complete affected host harnesses
+with zero failures. Their overlapping counts and inherited private-file ignore
+are recorded in the [runtime evidence](../hwdocs/rtl8852be-btc-runtime.md#limits-and-validation).
+The own native build passed in 3.80 s; no hardware or full-gate claim is made.
