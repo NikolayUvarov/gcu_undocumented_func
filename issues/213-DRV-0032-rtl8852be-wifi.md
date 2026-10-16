@@ -791,7 +791,9 @@ source TSSI HT20 MCS7 maximum request of 12 dBm. It binds the exact written poli
 and OTP fingerprint to the current PHY/firmware attempt and issues three consumed
 engine-specific permissions once, after actual live ownership validation. IQK/DPK
 use the supported source sequence without inventing a numerical output guarantee
-or a new certification prerequisite. Fourteen focused cases compile, including
-the actual cold coordinator; execution follows publication. The native scoped
+or a new certification prerequisite. Source `202bba96` passed all fourteen focused
+cases, including the actual cold coordinator, and all nine affected complete host
+harnesses after own build and raw `882bd735` publication (2026-10-16; inherited
+private-firmware ignores unchanged, detailed counts in the provider notes). The native scoped
 input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
 open. This provider does not start native transmission.
