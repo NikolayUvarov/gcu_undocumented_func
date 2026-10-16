@@ -834,6 +834,17 @@ continuation fixtures compile; execution follows raw publication. Association,
 receive filtering and native WLAN/TX activation are not established by this
 initial context.
 
+
+### Raw receive-frame service boundary
+
+Add the private [receive serializer](../hwdocs/rtl8852be-frames.md) for complete
+legacy-rate MPDUs: retain the original protected payload, reject hardware error,
+decryption and unsupported aggregation, remove the source-included FCS and
+encode the existing wlanhw 1.1 prefix. Signal remains explicitly unmeasured.
+The actual runtime filter/channel epoch is a caller obligation. Five focused
+cases compile; execution follows build and raw publication. This does not
+activate the endpoint or establish physical reception.
+
 ### One retained runtime RX owner
 
 Keep `Session` as the exclusive reader of both receive rings during H2C waits.
