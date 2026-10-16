@@ -874,3 +874,15 @@ passed on own corrected source `974088b1` after raw `33fa88bf` publication
 recorded in the linked notes). Continuous BTC event
 processing, H2C sequence reuse, native service exposure and physical under-load
 acceptance remain open. This slice does not establish a working Wi-Fi endpoint.
+
+
+### Active scan/BSSID filter transition
+
+Add the sealed actual data-mode command adapter and station CAM/filter update,
+including no-pending-TX admission, one deadline, actual done ACK/DMA completion,
+old receive-epoch retirement and final owner/radio/register checks. Preserve
+raw wlanhw address semantics and both primary/selector-restoration failures.
+Ten new cold cases compile; execution follows own build and raw publication.
+Continuous BTC reconciliation, bounded H2C sequence reuse, native endpoint
+binding and hardware traffic remain open; association is not inferred from a
+selected BSSID. See the [transition notes](../hwdocs/rtl8852be-data-mode.md#active-filter-continuation).

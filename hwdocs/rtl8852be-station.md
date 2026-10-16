@@ -158,3 +158,15 @@ preserved MPDU limit, required CAM ACK/DMA completion, changed policy/filter,
 ignored/applied-failed/late writes, forbidden initial reconfiguration, own
 override, group-address direction rules, scan selection and malformed input.
 No hardware RX, association or packet-TX evidence is claimed.
+
+
+## Active owner-bound filter updates
+
+`Prepared::reconfigure` is available only through the actual sealed
+`DataSession::FilterChange` adapter. It checks the station attempt, command
+session, channel, policy and physical board MAC, uses the real CAM command,
+verifies filter/station registers and preserves selector restoration errors.
+Only the successful final live/receive-epoch check publishes the new Filter.
+The original stopped-TX PHY validation is unchanged; this does not construct a
+startup ReceivePermit while ordinary TX is enabled. See the
+[active transition contract](rtl8852be-data-mode.md#active-filter-continuation).

@@ -3,7 +3,9 @@ use super::{initial,station_device};
 use std::{cell::RefCell,rc::Rc};
 
 #[derive(Default)]
-pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usize,pub corrupt:bool,pub published:usize,pub unknown:bool,pub advance_us:u64}
+pub(super) struct Control{pub armed:bool,pub fault:u8,pub burst:bool,pub old:usize,pub corrupt:bool,pub published:usize,pub unknown:bool,pub advance_us:u64,
+    pub incoming:Vec<Vec<u8>>,pub filter_fault:u8,pub cam_packets:Vec<Vec<u8>>,pub filter_writes:usize,
+    pub selector:u32,pub rx_filter:u32,pub cam_wifi:usize,pub control_event:bool}
 pub(super) struct Region{pub base:*mut u8}
 impl Region{pub fn new()->Self{let base=unsafe{std::alloc::alloc_zeroed(std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())};assert!(!base.is_null());Self{base}}}
 impl Drop for Region{fn drop(&mut self){unsafe{std::alloc::dealloc(self.base,std::alloc::Layout::from_size_align(tx::DMA_BYTES,4096).unwrap())}}}
@@ -17,7 +19,12 @@ impl Device{
     }
     fn raw(&mut self)->&mut crate::model::Device{&mut self.station.base.inner}
     fn inject_old(&mut self){let count=std::mem::take(&mut self.control.borrow_mut().old);
-        for _ in 0..count{self.wifi(true,false);}}
+        for _ in 0..count{self.wifi(true,false);}
+        let incoming=std::mem::take(&mut self.control.borrow_mut().incoming);
+        for mut frame in incoming{frame.extend_from_slice(&[0;4]);self.raw().inject_packet(0,0,&frame);}
+        if std::mem::take(&mut self.control.borrow_mut().control_event){
+            let mut event=[0;12];event[0]=3;event[1]=0x77;event[4]=12;event[8]=0xa5;self.raw().inject_c2h(&event);
+        }}
     fn wifi(&mut self,own:bool,bad:bool){let mut f=super::frame();f.extend_from_slice(&[0;4]);
         f[4..10].copy_from_slice(if own{&[2,3,4,5,6,7]}else{&[2,8,7,6,5,4]});if bad{f[0]=255;}
         self.raw().inject_packet(0,0,&f);
@@ -45,6 +52,16 @@ impl Device{
     }
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
         let(armed,fault)={let c=self.control.borrow();(c.armed,c.fault)};
+        let filter_fault=self.control.borrow().filter_fault;
+        if armed&&self.active&&at==fwcmd::INDEX&&width==2{
+            if filter_fault==1{self.raw().hold_header=Some((1,6,0));}
+            if filter_fault==2{self.raw().normal_ack=crate::model::NormalAck::Missing;}
+            let count=std::mem::take(&mut self.control.borrow_mut().cam_wifi);
+            for _ in 0..count{self.wifi(true,false);}
+        }
+        if armed&&self.active&&filter_fault==6&&!self.control.borrow().cam_packets.is_empty()&&at==0xc04&&value==0x18888000{
+            return Err(io::Fault::new(io::FaultKind::Access,at,value));
+        }
         let enable=armed&&at==fwcmd::DMA_STOP&&value&0x001f0f03==0x20000;
         if enable&&fault==1{return Ok(())}
         let scheduler=armed&&at==0x8160&&width==1&&value==1&&self.raw().get(0x8140,4)==0x010f0205;
@@ -54,7 +71,20 @@ impl Device{
         if self.active&&at==fwcmd::INDEX&&width==2&&std::mem::take(&mut self.control.borrow_mut().unknown){
             for n in 0..5{let mut event=[0;12];event[0]=3;event[1]=0x77;event[4]=12;event[8]=n;self.raw().inject_c2h(&event);}
         }
+        let before=self.station.station_packets.len();
         match width{1=>self.station.write8(at,value as u8)?,2=>self.station.write16(at,value as u16)?,_=>self.station.write32(at,value)?}
+        if armed&&self.active{
+            let packets=self.station.station_packets[before..].iter().filter(|p|(p[0]&3,p[0]>>2,p[1])==(1,6,0)).cloned().collect::<Vec<_>>();
+            self.control.borrow_mut().cam_packets.extend(packets);
+            if at==0xce20{
+                self.control.borrow_mut().filter_writes+=1;
+                if filter_fault==3{self.raw().put(at,4,value^0x4000);}
+                if filter_fault==5{self.raw().now+=100_000;}
+                if filter_fault==4{return Err(io::Fault::new(io::FaultKind::Access,at,value));}
+            }
+            let selector=self.station.selector;let filter=self.raw().get(0xce20,4);
+            let mut c=self.control.borrow_mut();c.selector=selector;c.rx_filter=filter;
+        }
         if enable{self.active=true;if fault==2{return Err(io::Fault::new(io::FaultKind::Access,at,value))}if fault==5{self.raw().now+=1_000_000;}}
         if scheduler{self.scheduler+=1;if fault==3{self.raw().put(0x8150,4,0x203);}if fault==4{self.raw().put(0x8164,1,0);}if fault==6{self.raw().put(0xc348,4,0xffff);}}
         if self.active&&width==2{if let Some(q)=[0x1058,0x105c,0x1060,0x1064,0x1078].iter().position(|v|*v==at){self.transmit(q,value);}}
