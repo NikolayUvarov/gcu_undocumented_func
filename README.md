@@ -872,6 +872,13 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 ### Ryzen network staging (213-KRN-0114)
 
+The separate [country catalog](hwdocs/rtl8852be-regulatory.md) contains all 181
+country/territory codes from pinned wireless-regdb, with world `00` separate,
+and exposes exact 2.4 GHz/20 MHz coverage, EIRP ceilings and restrictions. UZ
+is the operator's explicit deployment choice. Selection is a library input;
+UI, persistence, actual channel switching and native policy consumption remain
+integration work, and country selection alone grants no transmission authority.
+
 ABI 11 adds boot entries for RTL8168 Ethernet and the RTL8852BE board-access
 stage. Rebuild and write the bootloader, kernel and services from one build.
 Realtek BARs start with memory decoding only; MSI setup does not enable DMA.

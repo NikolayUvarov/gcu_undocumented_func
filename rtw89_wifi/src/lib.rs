@@ -5,6 +5,7 @@
 pub mod board;
 pub mod calibration;
 pub mod channel_policy;
+pub mod regulatory;
 #[allow(dead_code)]
 pub(crate) mod channel_power;
 mod power_tables;
