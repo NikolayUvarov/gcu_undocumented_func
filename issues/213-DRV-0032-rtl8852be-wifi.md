@@ -789,9 +789,10 @@ Extract the existing ordered native diagnostic initialization into a private
 `prepare` function retaining actual BTC/DM/path state on the live PHY session.
 The diagnostic still shuts down; channel cumulative tests use the production
 function, including its owner validations, rather than duplicating startup.
-Own full x86 build passes and focused harnesses compile; execution follows raw
-publication. Native channel admission and station/service activation remain
-separate open work.
+After publication `7ec8fbee`, source `ed63d767` passed five initial-PHY and
+seven cumulative channel/RFK cases (0.08 s each; no failures/ignores). The
+consolidated x86 build passed in 2 s. Native channel admission and station/service
+activation remain separate open work.
 
 ### Correlated final firmware TX reports
 

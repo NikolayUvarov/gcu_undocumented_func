@@ -92,3 +92,14 @@ This preserves the actual initialization owner checks and sequence for later
 channel/station integration. Full x86 build passed in 2 s; both focused
 harnesses compile. Execution awaits source publication. No native transmission,
 new policy authority or hardware evidence is added by this continuation.
+
+
+Source `ed63d767`, built with the consolidated ASTRA `a1008d66`, was published
+in `fast-test` `7ec8fbee` before execution. All five initial-PHY fixtures passed
+(0.08 s; 177 imported cases filtered), and all seven cumulative channel/RFK
+fixtures using this shared function passed (0.08 s; 202 imported cases filtered).
+Neither run had failures or ignored cases. An initial invocation used the wrong
+module filter and executed zero initial-PHY tests; it is not counted as evidence.
+The corrected invocation used `continuation::`. Independent review confirmed
+preserved production order, pre-MMIO identity checking and diagnostic cleanup.
+The combined full x86 build passed in 2 s. Hardware and full-gate limits remain.
