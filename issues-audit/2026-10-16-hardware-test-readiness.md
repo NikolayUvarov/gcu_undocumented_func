@@ -13,13 +13,15 @@ builds, tests or gates fast-test. The maintainer's build-and-write script remain
 the hardware-image path; firmware is fetched privately and copied only after
 writing the image, with hash checks. No firmware payload enters Git or the image.
 
-The combined source candidate `d53d9f45a17e55f9883681051d5143e1aacd71d4`
+The combined source candidate `c4933c2bca66f0cd0d81bb9a5ca33f8c587a5052`
 built on ASTRA before publication in fast-test
-`4a4fa150bc430660efe696d302041a9219c36711`. Its integration tests are tracked
-separately from the earlier [x86 matrix](2026-10-16-network-validation.md),
+`3c6eaa5648c240670dc29fd59d6b17954a01da2f`. It incorporates the sustained-H2C
+fixture corrections and the composed connection-to-service test. Its integrated
+checks are separate from the earlier [x86 matrix](2026-10-16-network-validation.md),
 which retains a RAM-above-4-GiB download failure and is not a green gate.
-A subsequently corrected fixture must receive its own publication and record;
-neither a superseded test candidate nor a model result is hardware evidence.
+The superseded `d53d9f45` host run retains the exhausted synthetic-traffic
+assertion; it is not counted as a pass. Neither a model result nor a QEMU run
+establishes physical traffic on either target machine.
 
 ## Current boundaries
 
@@ -27,14 +29,31 @@ neither a superseded test candidate nor a model result is hardware evidence.
 |---|---|---|
 | Intel MacBook / BCM4331 | Owner's driver and startup, stack deadlines and station dispatch fairness are integrated. | Owner correction of [H12](2026-10-16-bcm-tx-wait-audit.md); boot, association/DHCP, ping under the original workload, and recovery on this MacBook. H12 is not established as the observed loss's cause. |
 | Ryzen / RTL8168G | Exact XID/PHY guards, bounded controller waits, retained DMA, staged bus mastering, native card service and stack endpoint. [H15](2026-10-16-rtl8168-deadline-audit.md) has a tested correction. | Cable/link negotiation, DHCP, bidirectional ping/TCP/TLS, sustained load and unplug/replug/restart on this device. Linux identification and modeled rings do not establish MIND traffic. |
-| Ryzen / RTL8852BE | Native board/firmware/MAC/RX/initial-PHY diagnostic; private channel/calibration/data coordinator, generated-wire wlanhw service, bounded runtime coexistence and retained TX/RX queues. | Device-bound platform policy and explicit operator country/channel; native endpoint and service activation; then association, IP traffic, load and recovery. The executable still stops after its diagnostic. |
+| Ryzen / RTL8852BE | Native board/firmware/MAC/RX/initial-PHY diagnostic; private channel/calibration/data coordinator, generated-wire wlanhw service, bounded runtime coexistence and retained TX/RX queues. | Device-bound platform policy, consumption of the confirmed UZ selection and admitted channel; native endpoint and service activation; then association, IP traffic, load and recovery. The executable still stops after its diagnostic. |
 | MIND / Effector | Server-boundary work and contract foundations. | Working MIND networking first, then native agent credentials, pinned TLS, heartbeat, bounded command/configuration and reconnect acceptance. Linux Effector availability is not MIND-agent readiness. |
+
+The Ethernet controller uses the reviewed BSD PHY baseline; Linux PHY patch
+and OCP/ERI/EPHY tuning are not implemented. Its cold-start adequacy is unknown,
+so a failed physical link may require additional controller/PHY implementation,
+not merely more measurements. See [the baseline limits](../hwdocs/rtl8168.md).
+
+The Wi-Fi board stage rejects inherited active MAC power state; memory decoding
+with bus mastering disabled does not establish an inactive MAC. Warm-state reset
+is not implemented. Record cold/warm boot and the previous OS/driver separately;
+a warm-state refusal must not be misreported as a calibrated radio failure.
 
 The Wi-Fi policy and endpoint work is requested from its owning track in
 [requests-KRN](../issues/requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver)
 and [the native endpoint request](../issues/requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission).
-The Ubuntu regulatory setting is not an operator declaration of physical
-country. Missing policy data is not a checked absence of platform limits.
+The maintainer confirmed Uzbekistan (`UZ`) for both machines on 2026-10-16.
+That explicit choice supersedes the collected Ubuntu DE setting as deployment
+input. The maintainer also requested switching among every country in the
+verified regulatory database; [NET](../issues/requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog),
+[APP](../issues/requests-APP.md#wifi-country-and-channel-selector) and
+[BCM driver](../issues/requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy)
+requests carry the configuration, UI and original MacBook portions. The new
+RTL catalogue work is separate from candidate c4933c2b. A selected country does
+not replace platform limits: missing policy data is not a checked absence.
 The private service supports one explicitly admitted 2.4 GHz 20 MHz channel;
 it must reject an unsupported channel rather than silently retune.
 
@@ -46,7 +65,7 @@ establish association, and they do not by themselves justify a new WLAN ABI.
 ## Physical acceptance record
 
 For each machine/path, preserve the exact image manifest, boot/driver logs,
-firmware versions and test configuration. Record failures as well as passes.
+firmware versions, cold/warm boot history and test configuration. Record failures as well as passes.
 
 1. Boot and record driver identity, startup/cleanup outcomes, service state,
    address, route and link. A successful Wi-Fi diagnostic is a diagnostic result.
