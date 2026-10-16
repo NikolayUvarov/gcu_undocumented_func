@@ -84,3 +84,17 @@ cases use the same production reader, including twelve reports before actual
 receipt/done ACKs with and without the inbox, and preserving RPQ/type-7/unknown
 control records. Execution follows own commit/build and raw publication; these
 are models, not hardware guarantees.
+
+After raw publication `173d8620db5fbdb4c9bb9b12588ce29643736f4d`, source
+`f7f808b6` passed all twelve runtime and both startup PPDU cases on its own
+branch. Complete affected host harnesses passed: data mode 278, BTC session
+243, BTC control 11, BTC init 243, PHY 348, IQK 243, DPK 243, channel RFK 250,
+station 265, calibration policy 255, post-MAC 243, TX 243 and initial PHY 248.
+These overlapping harness counts are not independent case totals. There were
+no failures; each broad harness retains its existing one private-firmware
+ignored case, and control has none. Commands were `rustc --edition=2021 --test
+tests/rtw89_<name>_host.rs` and the resulting binaries with `--test-threads=1`,
+on Linux x86-64 with rustc `1.101.0-nightly (c36f14571 2026-10-01)`.
+The own native release build passed in 3.80 s with only the inherited unused
+initial-PHY fields warning. This is host-model evidence, not a full gate or
+physical radio validation.
