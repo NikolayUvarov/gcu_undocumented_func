@@ -143,6 +143,16 @@ ring addresses, untouched command padding/TX tail, invalid and mastering grants,
 and early installation refusal. The twelve orchestration cases now include
 failure at the added sixteenth stage. Execution is recorded after publication.
 
+Native source `9a2cc7e2` and integration `69b40829` built the complete own x86
+image (2 seconds). After raw publication `554cbada`, four `native_cases::`
+fixtures passed (0.05 seconds, zero failed/ignored, 242 unrelated cases filtered)
+and all twelve startup fixtures passed (0.00 seconds, zero failed/ignored).
+The native fixture was recompiled against the published integration before
+execution; the startup binary was unchanged since compilation of `9a2cc7e2`.
+Configuration: x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571.
+Logs: `/tmp/mind-native-dma-results.log` and
+`/tmp/mind-native-dma-startup-results.log`. No real device was accessed.
+
 ## Active filter continuation
 
 `DataSession::set_filter` requires no pending raw TX request and retains the
