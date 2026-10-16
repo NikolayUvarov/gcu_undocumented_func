@@ -64,3 +64,6 @@ mod dpk_tables;
 
 #[allow(dead_code)]
 pub(crate) mod channel_rfk;
+
+#[allow(dead_code)]
+pub(crate) mod station;
