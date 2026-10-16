@@ -7,7 +7,7 @@ pub(super) struct Device{
     pub base:initial::Device,pub memory:BTreeMap<u32,u32>,pub bar:usize,pub ignore_control:bool,pub ignore_unpause:bool,
     pub ignore_port:bool,pub fail_port:bool,pub late_control:bool,pub unrelated_firmware_fields:bool,
     pub window_writes:usize,pub station_packets:Vec<Vec<u8>>,pub restore_fail:bool,
-    pub selector:u32,active:bool,pub late_restore:u8,restores:u8,
+    pub selector:u32,active:bool,pub late_restore:usize,restores:usize,
     pub ignore_filter:bool,pub fail_filter:bool,pub late_filter:bool,pub filter_command_fault:u8,
 }
 impl Device{
