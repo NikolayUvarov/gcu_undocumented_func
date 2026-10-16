@@ -820,3 +820,14 @@ or a new certification prerequisite. Fourteen focused cases compile, including
 the actual cold coordinator; execution follows publication. The native scoped
 input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
 open. This provider does not start native transmission.
+
+### Initial station context continuation (2026-10-16)
+
+The [private station continuation](../hwdocs/rtl8852be-station.md) prepares
+source NO_LINK MACID0/port0/CAM0 after the actual channel calibration result,
+using the same command/RX owner and actual board MAC. Indirect-table access
+requires the full aperture, commands have bounded actual ACK/consumption, and
+modified failure independently disables radio/port and retains DMA. Eleven cold
+continuation fixtures compile; execution follows raw publication. Association,
+receive filtering and native WLAN/TX activation are not established by this
+initial context.
