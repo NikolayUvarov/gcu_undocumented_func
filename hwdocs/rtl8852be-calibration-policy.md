@@ -107,14 +107,23 @@ its own evidence. The present permission does not claim that guarantee.
 
 ## Validation and remaining work
 
-Fourteen focused cases compile: checked-absent/unknown/invalid inputs,
+Fourteen focused cases passed on source `202bba961c512f6b16cf501c0158bf813189a402`
+after native release build (3.54 s) and raw publication
+`882bd73575306964bb53e552cb2d073ae8f64ab3` on 2026-10-16 (0.03 s, no
+failures or ignored cases): checked-absent/unknown/invalid inputs,
 board/PA/OTP consistency, country/passive/channel refusal, quarter- and
 half-dBm boundaries on both paths/1TX, actual MCS versus OFDM limits, advisory
 calibration data, exact policy replacement, changed OTP/session, repeated
 admission, foreign firmware provenance, failed PHY/live RX and a cumulative
 cold device through actual provider, channel RFK and MCC. Existing literal
 Tuned fixtures use a test-only constructor; they cannot mint production
-permission. Execution follows commit, own build and raw publication.
+permission. The same own-branch run also passed the nine affected complete
+harnesses: PHY 283, IQK 189, channel RFK 210, post-MAC 178, BTC init 178,
+DPK 203, pipeline MAC 188, BTC Session 178 and initial PHY 183 (4.31–4.55 s
+each). These totals contain shared models and are not a count of distinct
+tests. Each retains the existing separately fetched private-firmware case
+as ignored; no new test was skipped. This change does not alter that file
+or its downloader/hash policy.
 
 The native KRN scoped input, actual selected country/platform policy and
 physical Ryzen calibration/traffic evidence remain open. The pure provider

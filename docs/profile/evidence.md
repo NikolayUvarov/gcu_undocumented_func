@@ -147,8 +147,12 @@ not physical RFK quality, transmission authority or working WLAN.
 
 
 The RTL8852BE [initial calibration provider](../../hwdocs/rtl8852be-calibration-policy.md)
-has fourteen compiled focused models covering exact source/Board/policy binding,
+source `202bba961c512f6b16cf501c0158bf813189a402` passed fourteen focused
+models (2026-10-16, 0.03 s, no failures or ignores) after own native build and raw
+publication `882bd73575306964bb53e552cb2d073ae8f64ab3`, covering exact source/Board/policy binding,
 known-absent versus invalid platform input, actual PMAC units/rate limits, single-use
-permissions and the cumulative cold channel-RFK coordinator. Execution follows raw
-publication. The native scoped input consumer and actual RF output/traffic remain
+permissions and the cumulative cold channel-RFK coordinator. All nine affected
+complete host harnesses also passed; their overlapping counts and unchanged
+private-firmware ignores are recorded in the provider notes. The native scoped
+input consumer and actual RF output/traffic remain
 unvalidated; no platform guarantee is expanded by the internal permission type.
