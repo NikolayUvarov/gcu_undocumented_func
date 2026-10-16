@@ -155,9 +155,10 @@ The private [wlanhw service adapter](../../hwdocs/rtl8852be-service.md) now
 dispatches the existing 1.1 protocol through an actual admitted DataSession,
 with a single channel, bounded frame/waiter state and retained DMA ownership.
 It is not called by the native executable and adds no physical networking
-guarantee. Its fifteen new cold/real-wire host cases compile; execution awaits
-raw publication after the successful own build. Native endpoint/configuration authority and
-hardware association/traffic acceptance remain open.
+guarantee. After the successful own build and raw publication, its fifteen new
+cold/real-wire host cases passed; the full affected harness passed 279 cases
+with one inherited private-firmware case ignored. Native endpoint/configuration
+authority and hardware association/traffic acceptance remain open.
 
 ### Current scope (2026-10-16)
 
