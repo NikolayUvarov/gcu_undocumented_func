@@ -33,16 +33,18 @@ pub(crate) enum State{Allocated,Installed,Running,Faulted,Stopped}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum AttemptCount{Unknown}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) struct Completion{pub status:Status,pub acked:bool,pub attempts:AttemptCount,pub completed_descriptors:u8}
+pub(crate) struct Completion{pub status:Status,pub acked:bool,pub attempts:AttemptCount,pub completed_descriptors:u8,pub raw_data_tx_count:u16}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) enum Receive{Empty,TxReport{final_report:bool},Other(rx::Outcome)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Stop{pub request:Option<Fault>,pub idle:Option<Fault>}
 #[derive(Clone,Copy)]
-struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>}
-struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
+struct Pending{queue:usize,sequence:u16,descriptor:u64,report:Option<Status>,firmware:Option<txdesc::FirmwareReport>,last_counter:u8}
+struct Request{meta:Frame,mac_id:u8,limit:u8,completed:u8,raw_count:u16,start:u64,budget:u32,last:u64,polls:u32,frame:[u8;txdesc::MAX_FRAME]}
 
 pub(crate) struct Queue<'a>{
     base:NonNull<u8>,physical:u64,state:State,issued:[u64;CHANNELS],completed:[u64;CHANNELS],
-    serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,
+    serial:u64,request:Option<Request>,pending:Option<Pending>,last_report:Option<txdesc::Report>,last_firmware:Option<txdesc::FirmwareReport>,
     _exclusive:PhantomData<&'a mut[u8]>,
 }
 impl<'a> Queue<'a>{
@@ -59,7 +61,7 @@ impl<'a> Queue<'a>{
             ||physical.checked_add(DMA_BYTES as u64).is_none_or(|end|end>1u64<<32){return Err(Error::Region);}
         for at in 0..DMA_BYTES{base.as_ptr().add(at).write_volatile(0);}
         Ok(Self{base,physical,state:State::Allocated,issued:[0;CHANNELS],completed:[0;CHANNELS],serial:0,
-            request:None,pending:None,last_report:None,_exclusive:PhantomData})
+            request:None,pending:None,last_report:None,last_firmware:None,_exclusive:PhantomData})
     }
     pub(crate) fn state(&self)->State{self.state}
     fn observe<T>(&mut self,result:Result<T>)->Result<T>{if result.is_err(){self.state=State::Faulted;}result}
@@ -92,7 +94,7 @@ impl<'a> Queue<'a>{
         let command=bus.pci_command()?;
         if command==u16::MAX||command&6!=6||io::read32(bus,fwcmd::INIT_CONFIG)?&(HCI|1<<18)!=HCI
             ||io::read32(bus,fwcmd::DMA_STOP)?&(OWN_STOP|WP_STOP|3|1<<20|UNUSED_STOP)!=UNUSED_STOP
-            ||io::read32(bus,0x1e0)?&0xe0!=0xe0{return Err(Error::State);}
+            ||io::read32(bus,0x1e0)?&0xe0!=0xe0||bus.read8(0xc660)?&0x30!=0x10{return Err(Error::State);}
         self.rings(bus)
     }
     /// This private transition has no native caller; future admission must validate actual channel and CMAC tokens.
@@ -123,7 +125,7 @@ impl<'a> Queue<'a>{
         if self.request.is_some(){return Err(Error::Busy);}
         let meta=txdesc::frame(frame,rate,max_submissions).map_err(Error::Input)?;
         if mac_id>127||timeout_us==0||timeout_us>1_000_000{return Err(Error::Input(txdesc::Error::Count));}
-        let now=bus.now_us();let mut request=Request{meta,mac_id,limit:if meta.group{1}else{max_submissions},completed:0,start:now,budget:timeout_us,last:now,polls:0,frame:[0;txdesc::MAX_FRAME]};
+        let now=bus.now_us();let mut request=Request{meta,mac_id,limit:if meta.group{1}else{max_submissions},completed:0,raw_count:0,start:now,budget:timeout_us,last:now,polls:0,frame:[0;txdesc::MAX_FRAME]};
         request.frame[..frame.len()].copy_from_slice(frame);self.request=Some(request);
         let result=(||{self.live(bus)?;self.reclaim(bus)?;self.submit(bus)})();self.observe(result)
     }
@@ -148,7 +150,7 @@ impl<'a> Queue<'a>{
             self.base.as_ptr().add(descriptor+4).cast::<u32>().write_volatile(((self.physical+buffer as u64)as u32).to_le());
         }
         self.time(bus)?;fence(Ordering::Release);
-        self.pending=Some(Pending{queue:q,sequence,descriptor:self.issued[q],report:None});self.serial=next;self.issued[q]=issued;
+        self.pending=Some(Pending{queue:q,sequence,descriptor:self.issued[q],report:None,firmware:None,last_counter:0});self.serial=next;self.issued[q]=issued;
         bus.write16(INDEX[q],(issued%DESCRIPTORS as u64)as u16)?;self.time(bus)?;Ok(())
     }
     fn reports(&mut self,bytes:&[u8])->Result<()>{
@@ -170,22 +172,64 @@ impl<'a> Queue<'a>{
         let Some(status)=pending.report else{return Ok(None);};
         let request=self.request.as_mut().ok_or(Error::State)?;
         if matches!(status,Status::Lifetime|Status::MacIdDrop){return Err(Error::Dropped{status,completed_descriptors:request.completed});}
+        let Some(firmware)=pending.firmware else{return Ok(None);};
+        if firmware.status!=status{return Err(Error::Report);}
+        request.raw_count=request.raw_count.checked_add(u16::from(firmware.raw_data_tx_count)).ok_or(Error::Count)?;
         request.completed=request.completed.checked_add(1).ok_or(Error::Count)?;self.pending=None;
         if status==Status::Done||request.completed==request.limit{
-            let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Unknown,completed_descriptors:request.completed};
+            let completion=Completion{status,acked:status==Status::Done&&!request.meta.group,attempts:AttemptCount::Unknown,completed_descriptors:request.completed,raw_data_tx_count:request.raw_count};
             self.time(bus)?;self.request=None;return Ok(Some(completion));
         }
         self.submit(bus)?;Ok(None)
     }
-    /// Poll exactly one owned RPQ descriptor; ordinary RXQ/C2H routing remains with its session owner.
+    fn firmware(&mut self,report:txdesc::FirmwareReport)->Result<bool>{
+        if self.last_firmware==Some(report){return Ok(true);}
+        let pending=self.pending.as_mut().ok_or(Error::Report)?;
+        if report.sequence!=(pending.sequence&15)as u8||report.raw_data_tx_count<pending.last_counter{return Err(Error::Report);}
+        if let Some(final_report)=pending.firmware{
+            if final_report==report{return Ok(true);}return Err(Error::Report);
+        }
+        pending.last_counter=report.raw_data_tx_count;
+        let final_report=report.status==Status::Done||report.raw_data_tx_count==txdesc::SELECTED_LIMIT;
+        if final_report{pending.firmware=Some(report);self.last_firmware=Some(report);}
+        Ok(final_report)
+    }
+    fn polling(&mut self,bus:&mut impl RegisterIo)->Result<()>{
+        let request=self.request.as_mut().ok_or(Error::State)?;
+        if request.polls>=request.budget{return Err(Fault::new(FaultKind::Timeout,0,request.polls).into());}
+        request.polls+=1;self.time(bus)?;Ok(())
+    }
+    /// Own RXQ exclusively while pending; handle returned packet bytes before another call reuses scratch.
+    pub(crate) fn poll_receive(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Receive>{
+        if self.state!=State::Running||self.request.is_none(){return Err(Error::State);}
+        if scratch.len()<rx::BUFFER_BYTES{return Err(Error::Rx(rx::Error::Output));}
+        let result=(||{
+            self.polling(bus)?;self.live(bus)?;rings.running(bus)?;
+            let left=self.time(bus)?;
+            let outcome=rings.receive(bus,rx::Channel::Rxq,scratch,left)?;
+            let result=match outcome{
+                rx::Outcome::Empty=>Receive::Empty,
+                rx::Outcome::Packet(packet) if packet.kind==crate::rxdesc::TYPE_C2H=>{
+                    let bytes=packet.bytes(scratch).ok_or(Error::Report)?;
+                    match txdesc::firmware_report(bytes).map_err(Error::Input)?{
+                        Some(report)=>{
+                            if packet.crc_error||packet.icv_error{return Err(Error::Report);}
+                            Receive::TxReport{final_report:self.firmware(report)?}
+                        },
+                        None=>Receive::Other(outcome),
+                    }
+                },
+                _=>Receive::Other(outcome),
+            };
+            self.time(bus)?;Ok(result)
+        })();self.observe(result)
+    }
+    /// Poll one RPQ descriptor; final completion also requires a firmware report received through owned RXQ.
     pub(crate) fn poll(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Option<Completion>>{
         if self.state!=State::Running||self.request.is_none(){return Err(Error::State);}
         if scratch.len()<rx::BUFFER_BYTES{return Err(Error::Rx(rx::Error::Output));}
         let result=(||{
-            let request=self.request.as_mut().ok_or(Error::State)?;
-            if request.polls>=request.budget{return Err(Fault::new(FaultKind::Timeout,0,request.polls).into());}
-            request.polls+=1;
-            self.time(bus)?;self.live(bus)?;rings.running(bus)?;
+            self.polling(bus)?;self.live(bus)?;rings.running(bus)?;
             let left=self.time(bus)?;
             match rings.receive(bus,rx::Channel::Rpq,scratch,left)?{
                 rx::Outcome::Empty=>{},

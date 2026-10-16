@@ -792,3 +792,16 @@ function, including its owner validations, rather than duplicating startup.
 Own full x86 build passes and focused harnesses compile; execution follows raw
 publication. Native channel admission and station/service activation remain
 separate open work.
+
+### Correlated final firmware TX reports
+
+Request actual special C2H reports and retain each TX payload until matching
+RPQ, PCI consumption and final firmware status have all arrived. Follow the
+pinned final-report rule (DONE or configured counter reached), cycle the
+four-bit report identity only after completion, and fail terminally on timeout
+or contradiction. Preserve the raw firmware count without equating it to an
+unverified on-air attempts contract. An owned RXQ polling entry returns other
+C2H/data packets explicitly; it cannot silently steal the session's traffic.
+The firmware's ordered terminal-report behavior is an explicit TCB assumption,
+consistent with the upstream driver's tag reuse; arbitrary firmware replay
+is outside that contract. Native activation remains closed.
