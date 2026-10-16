@@ -156,3 +156,15 @@ complete host harnesses also passed; their overlapping counts and unchanged
 private-firmware ignores are recorded in the provider notes. The native scoped
 input consumer and actual RF output/traffic remain
 unvalidated; no platform guarantee is expanded by the internal permission type.
+
+
+The private RTL8852BE [owned packet-mode continuation](../../hwdocs/rtl8852be-data-mode.md)
+passed thirteen cold-path cases and all thirteen affected complete host harnesses
+on own source `974088b104d11671cdcaadff8707a38f3fbf009e`, after build and raw
+publication `33fa88bff00df750b3265d4dacd9be72716f93a3` (2026-10-16).
+Counts, unchanged private-firmware ignore and the first 12/13 fixture failure
+are retained in the notes. Evidence covers the sealed startup/data transition,
+actual source scheduler/queue checks and modelled single-reader progress with
+counted Wi-Fi overflow. Continuous BTC processing, sequence reuse, native
+endpoint and actual RF traffic remain unvalidated; no platform guarantee is
+expanded by these host results.
