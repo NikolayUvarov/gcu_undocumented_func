@@ -139,6 +139,8 @@ without being erased. Source receive-filter writes, station/selector readback,
 live data/radio identity and final deadline checks precede software publication
 of the new filter. Busy and invalid timeouts do not send CAM or stop the current
 TX; uncertain mutations terminate with retained DMA and independent shutdown.
+The empty observation retires already published RX descriptors; no hardware
+airtime boundary is inferred for a frame still inside the receive engine.
 This updates address selection, not association or connected BTC policy.
 
 The station register/CAM source and licence are unchanged from
