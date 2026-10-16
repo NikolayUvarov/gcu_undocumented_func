@@ -35,3 +35,21 @@ until supervised restart. This is the documented baseline, not demonstrated
 automatic link/hang recovery. Cold-start PHY behavior, cable/replug, actual
 DMA/MSI, DHCP, sustained traffic and recovery on the specific Ryzen remain
 the open task's hardware criteria. Source review does not replace those runs.
+
+## Correction and validation
+
+Own-branch implementation `f5ee34b08374c3a8a6267d95817cdc7cce039c44` built
+successfully as the native release RTL8168 executable. Independent read-only
+review found no further blocking defect in this scoped delta. After raw
+publication `bc802db7a0ce06aae8b93da538964b57a10fb3d7`, the actual
+`rustc --edition=2021 --test tests/rtl8168_host.rs` binary passed all 22 tests:
+0 failed, 0 ignored, 0 filtered, 0.00 s reported runtime. Configuration: x86-64
+WSL2 kernel `6.6.87.2-microsoft-standard-WSL2`, Rust
+`1.101.0-nightly (c36f14571 2026-10-01)`. Six new regressions
+exercise production `prepare()` with exact/late reset and PHYAR reads,
+just-before-cutoff completions, scheduler oversleep, PHY-reset settling sleep,
+a late global-budget read and clock regression. Existing descriptor ownership
+and bounded frozen-clock tests still pass. No test or build ran on fast-test.
+
+H15's source defect is corrected. Task 213-DRV-0031 remains open for the exact
+Ryzen hardware acceptance above; no physical Ethernet success is inferred.
