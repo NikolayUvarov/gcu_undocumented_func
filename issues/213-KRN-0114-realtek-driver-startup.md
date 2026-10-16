@@ -1,6 +1,6 @@
 # 213-KRN-0114 — Start the Ryzen Realtek drivers with DMA disabled until ready
 
-**Type:** kernel / driver integration · **Owner:** ASTRA auditor-fixer (maintainer's network assignment, 2026-10-15) · **Priority:** P1 · **Status:** in progress · **Blocked by:** 213-DRV-0031/0032 native binaries; own-branch build and tests; hardware · **Roadmap:** H / 213, D / 550 · **Constitution:** MC-1.5, MC-3.3, MC-6.3, MC-12.1, MC-12.3, MC-12.4
+**Type:** kernel / driver integration · **Owner:** ASTRA auditor-fixer (maintainer's network assignment, 2026-10-15) · **Priority:** P1 · **Status:** in progress · **Blocked by:** remaining integrated x86 acceptance and actual MacBook/Ryzen boot evidence; ARM deferred · **Roadmap:** H / 213, D / 550 · **Constitution:** MC-1.5, MC-3.3, MC-6.3, MC-12.1, MC-12.3, MC-12.4
 
 ## Problem
 
