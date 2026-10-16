@@ -919,7 +919,9 @@ Add the actual DataSession-to-wlanhw 1.1 adapter for its single admitted 2.4 GHz
 20 MHz channel, real CAM/filter changes, serialized raw frames and checked
 firmware TX attempt counts. Bound IPC/RX work, frame storage, deferred transmit
 and waiter ownership; preserve the retained owner and independent shutdown on
-failure. Fifteen cold/real-wire cases compile and are registered in host CI;
-execution follows own build and raw publication. Native binding, actual policy
+failure. After own native build and raw publication, all fifteen new
+cold/real-wire cases passed; the registered full affected harness passed 279
+cases with one inherited private-firmware case ignored. Source `ed3808cf` and
+raw publication `d4e55fcc` identify this evidence. Native binding, actual policy
 input, remaining runtime coexistence and physical traffic remain separate.
 See [the service ownership contract](../hwdocs/rtl8852be-service.md).

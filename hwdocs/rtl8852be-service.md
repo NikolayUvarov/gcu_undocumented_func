@@ -74,7 +74,7 @@ continuation. Its absence is not masked by this adapter.
 
 ## Validation boundary
 
-Fifteen new fixtures compile through the cold Board, verified synthetic
+Fifteen new fixtures execute through the cold Board, verified synthetic
 firmware, capabilities, real MAC/RX/PHY/calibration, station/filter and
 DataSession owners. Only kernel calls and physical hardware responses are
 modeled. Tests use the production generated IDL decoder, encoder and wire
@@ -88,7 +88,17 @@ and RX progress; missing final TX report; retained unknown control; and Drop.
 The dedicated harness is explicitly registered in `scripts/host_tests.sh` with
 `--cfg rtw89_service`, so its child cases are not omitted by normal host CI.
 
-Execution follows own build, source commit and raw publication. This slice
-does not establish a native endpoint, RF reception/transmission on Ryzen,
+Source `ed3808cf37d90b19c5fce5def1a6bdabb34bf390` built natively from the
+crate directory in 1.70 s before publication. After raw merge
+`d4e55fccc207a33edb502a14d38c7f2b95e50441` was pushed, its saved host harness
+passed all 15 new service cases in 0.05 s, then the full affected harness
+passed 279 cases in 1.26 s on 2026-10-16. The one inherited private-firmware
+case remains explicitly ignored in the normal run; this execution did not
+claim that separately fetched payload check. No test was weakened or run on
+`fast-test`. The earlier build invocation from the repository root selected
+the Linux target and failed on target-specific libmind output; the corrected
+native crate-directory build above is the build evidence.
+
+This slice does not establish a native endpoint, RF reception/transmission on Ryzen,
 association, DHCP, ping or sustained traffic. The existing hardware acceptance
 criteria remain open.
