@@ -930,3 +930,12 @@ and raw publication. The [source/trust notes](../hwdocs/rtl8852be-h2c-runtime.md
 explicitly distinguish stale software tickets from indistinguishable ancient
 wire ACKs. Native binding, connected-role coexistence and physical acceptance
 remain open.
+
+Own source `c49edca9` passed all seven affected host harnesses after raw
+`3c6eaa56` publication on 2026-10-16, including the seven core wrap cases and
+three cumulative command/DMA/continuous-Wi-Fi cases. The two earlier failed
+host-model runs, their fixture-only corrections, exact configuration, counts
+and unchanged private ignore are retained in the
+[validation record](../docs/validation/2026-10-16-rtl8852be-h2c-runtime.md).
+These results do not close the issue or establish physical traffic or a full
+project gate.
