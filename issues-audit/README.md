@@ -31,6 +31,8 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-16-hardware-test-readiness.md](2026-10-16-hardware-test-readiness.md) | Intel MacBook/Ryzen implementation boundaries, owner requests and separate physical acceptance |
+| [2026-10-16-rtl8168-deadline-audit.md](2026-10-16-rtl8168-deadline-audit.md) | RTL8168 per-read/global/PHY deadline correction and exact host evidence |
 | [2026-10-16-xtal-cleanup-audit.md](2026-10-16-xtal-cleanup-audit.md) | Shared XTAL helpers could overwrite an unfinished command during board cleanup; bounded preflight correction and regression scope |
 | [2026-10-16-network-validation.md](2026-10-16-network-validation.md) | Later ABI/Realtek validation subsets, retained TLS-fixture failure, MacBook/Ryzen hardware acceptance still open |
 | [2026-10-15-astra-validation.md](2026-10-15-astra-validation.md) | Exact ASTRA candidate, 24 passing host/x86 groups, deferred ARM and hardware limits |

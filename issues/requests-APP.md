@@ -312,3 +312,29 @@ In the `net` suite, `download sftp://…` started from the shell reads a file fr
 - **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
 - **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
 - ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
+
+## Wi-Fi country and channel selector
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's request;
+roadmap G / 550 and H / 213; MC-2.3, MC-12.3, MC-12.4.
+
+Add a country selector to the existing Wi-Fi/settings flow, backed by the
+[NET-owned versioned country contract](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog).
+The user chose **all countries from the verified regulatory database**, with
+Uzbekistan (`UZ`) as the initial explicit selection for their two machines.
+Please number this APP task; the current radio catalogue work remains DRV-0032.
+
+Show readable country names/codes and the effective supported channels. Do
+not maintain a separate hand-written permissions table in the UI. Distinguish
+a requested setting from the one applied to the radio; if application needs a
+disconnect/restart, make that behavior clear and report a failure without
+pretending the new setting is active. Keep the selected country visible while
+scanning/joining, preserve it across restarts through the scoped owner and
+handle missing/unknown configuration explicitly. All countries should remain
+browsable even where the current radio cannot use any eligible channel.
+
+Acceptance: country selection and restoration, bounded paging/search over the
+complete catalogue, read-only denial, no-device/unsupported-channel behavior,
+failed application and preservation of ordinary scan/join/leave are checked
+against the agreed NET interface. Do not turn the existing demo mode into a
+claim that the live radio applied a country.
