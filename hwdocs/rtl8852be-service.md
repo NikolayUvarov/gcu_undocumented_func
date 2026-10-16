@@ -1,0 +1,94 @@
+# RTL8852BE private wlanhw 1.1 adapter
+
+Issue: [213-DRV-0032](../issues/213-DRV-0032-rtl8852be-wifi.md); MC-2.3,
+MC-3.3, MC-6.1, MC-12.1, MC-12.3 and Appendix B.6.
+
+`rtw89_wifi/src/service.rs` adapts an actual, borrowed `DataSession` to the
+existing generated [wlanhw 1.1](../idl/wlanhw.wit) protocol. It remains
+crate-private and uncalled by the native executable. It cannot construct a
+calibration permission, choose a country, resolve missing platform input,
+associate with an AP or create a connected firmware role. The native
+coordinator and KRN endpoint/configuration grants remain separate prerequisites.
+
+## Request behavior
+
+- `info` reports the actual board MAC, only the already admitted channel,
+  20 MHz 2.4 GHz legacy CCK/OFDM capability, and a 2346-byte MPDU limit.
+- Setting that same channel succeeds without changing hardware. Every other
+  channel, including zero, is invalid. This is not multi-channel scanning.
+- `set-filter` uses the actual active CAM command, done ACK, DMA completion,
+  software policy and epoch retirement. Successful change also discards frames
+  already serialized into the service's previous-epoch queue.
+- `send` copies the generated decoder's private request into the real TX owner
+  and defers its reply while subsequent IPC and RX work continue. Only the
+  checked final firmware count, after RPQ and descriptor consumption agree,
+  becomes `sent.attempts`; group addressing retains `acked=false`.
+- `receive` uses the real retained RX descriptor and `frames::from_packet` to
+  remove the FCS and write the existing eight-byte header. Signal zero means
+  unmeasured. Channel and scan flag describe the admitted receive epoch.
+- `attach` and `kick` return invalid, as the existing BCM adapter does: this
+  slice uses `receive` and implements no shared ring.
+
+Association, WPA2, keys and upper networking remain the station service's work.
+The software filter keeps the existing raw-six-byte address semantics. A
+selected BSSID does not fabricate a connected-role event.
+
+## Bounded ownership and scheduling
+
+Each `step` receives at most one IPC message with a 2 ms timeout, progresses
+one actual RX/TX operation with a 100 ms device budget, and dispatches at most
+one request. Both paths run under continuous traffic. A filter command has a
+100 ms absolute device deadline. Progress retains the normal command budget
+for actual BTC reconciliation; the DataSession intersects it with any pending
+TX deadline. A step with a filter request can use both bounded phases, up to
+200 ms plus IPC and scheduling before failure cleanup. The source-defined independent failure
+cleanup still applies. These budgets do not promise a hard physical scheduling
+latency or behavior of an unresponsive device.
+
+There is one outstanding transmit call, four deferred word-only wait calls,
+and four serialized frames of at most 2354 bytes. The actual DataSession inbox
+remains separately bounded. Waiters reply when frames become available; a
+full waiter set or its one-second lease expiry replies zero. No saved reply
+is abandoned on an ordinary stop or error: pending send replies failed and
+waiters reply zero. A timed-out client may make the reply fail; its local
+capability and mapping are still released by the real wire implementation.
+
+The two fixed receive slots, 9 and 10, must be reserved and empty before
+construction. A deferred buffer send keeps its received memory capability
+and mapping in one slot; the next request uses the other. Ordinary buffer
+requests finish before that slot is reused. Constructor checks refuse an
+occupied slot. The service endpoint itself must be restricted to the WLAN
+station by init; no new badge or authority is invented here. The existing
+wire/kernel capability, mapping and saved-reply semantics remain in the TCB.
+
+The generated `wire::Call` owns an attached or malformed buffer capability.
+The adapter does not explicitly drop `attach` a second time. Stop and Drop
+finish every deferred reply and call the real independent data-mode shutdown.
+`stop` returns the borrowed data owner, primary failure and shutdown result;
+it never releases DMA. Outer RX/WCPU/power/PCI quiescence remains mandatory.
+
+An unhandled retained C2H/RPQ or other control record is an explicit terminal
+error with the record still held by the owner, not a Wi-Fi frame or a silently
+discarded event. Known BTC event reconciliation is the separate active-owner
+continuation. Its absence is not masked by this adapter.
+
+## Validation boundary
+
+Fifteen new fixtures compile through the cold Board, verified synthetic
+firmware, capabilities, real MAC/RX/PHY/calibration, station/filter and
+DataSession owners. Only kernel calls and physical hardware responses are
+modeled. Tests use the production generated IDL decoder, encoder and wire
+resource lifetime implementation, including deferred calls and client buffers.
+
+The cases cover exact info and receive bytes; same-channel refusal behavior;
+pending TX versus other requests and alternating receive slots; actual filter
+epoch changes; bounded waiters, cancellation and save-reply exhaustion;
+exactly-once received-capability release; malformed requests; continuous IPC
+and RX progress; missing final TX report; retained unknown control; and Drop.
+The dedicated harness is explicitly registered in `scripts/host_tests.sh` with
+`--cfg rtw89_service`, so its child cases are not omitted by normal host CI.
+
+Execution follows own build, source commit and raw publication. This slice
+does not establish a native endpoint, RF reception/transmission on Ryzen,
+association, DHCP, ping or sustained traffic. The existing hardware acceptance
+criteria remain open.

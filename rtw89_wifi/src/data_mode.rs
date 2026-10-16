@@ -213,6 +213,9 @@ impl<'q,'memory,'p,'a,'command,'receive,B:DeviceIo> DataSession<'q,'memory,'p,'a
             let outcome=result?;self.session.left(deadline)?;if outcome.is_some(){self.tx_deadline=None;}Ok(outcome)})();
         result.map_err(|cause|self.runtime_failure(cause))
     }
+    pub(crate) fn channel(&self)->u8{self.prepared.tuned.channel}
+    pub(crate) fn mac(&self)->[u8;6]{self.prepared.board.identity.mac}
+    pub(crate) fn current_filter(&self)->station::Filter{self.prepared.station.current_filter().unwrap()}
     pub(crate) fn counts(&self)->Counts{self.counts}
     pub(crate) fn packet(&self)->Option<inbox::Record<'_>>{self.session.packet()}
     pub(crate) fn consume_packet(&mut self){self.session.consume_packet()}

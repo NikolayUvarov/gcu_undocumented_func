@@ -153,6 +153,7 @@ Configuration: x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571.
 Logs: `/tmp/mind-native-dma-results.log` and
 `/tmp/mind-native-dma-startup-results.log`. No real device was accessed.
 
+
 ## Active filter continuation
 
 `DataSession::set_filter` requires no pending raw TX request and retains the
@@ -224,3 +225,4 @@ is a separate integration prerequisite before exposing a native endpoint.
 Four cumulative cold fixtures compile for real TX after the full chain,
 callback-error shutdown, missing actual initial command completion and rejected
 data activation. Their execution follows own-branch build and raw publication.
+

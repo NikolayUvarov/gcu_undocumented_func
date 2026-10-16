@@ -45,3 +45,5 @@ python3 tests/rtw89_dpk_tables_test.py
 python3 tests/rtw89_tssi_tables_test.py
 rustc --edition=2021 --test tests/rtw89_station_filter_host.rs -o "$OUT/rtw89-station-filter-tests"
 "$OUT/rtw89-station-filter-tests"
+rustc --edition=2021 --cfg rtw89_service --test tests/rtw89_service_host.rs -o "$OUT/rtw89-service-tests"
+"$OUT/rtw89-service-tests"

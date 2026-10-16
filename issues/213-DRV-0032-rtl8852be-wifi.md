@@ -931,3 +931,14 @@ when the callback returns an error value. Preserve initial coexistence and
 activation cleanup details; retain outer RX/WCPU/PCI cleanup obligations.
 Four cold cumulative fixtures compile and the own x86 image builds; execution
 follows raw publication. The native policy consumer and endpoint remain open.
+
+### Private wlanhw service adapter
+
+Add the actual DataSession-to-wlanhw 1.1 adapter for its single admitted 2.4 GHz
+20 MHz channel, real CAM/filter changes, serialized raw frames and checked
+firmware TX attempt counts. Bound IPC/RX work, frame storage, deferred transmit
+and waiter ownership; preserve the retained owner and independent shutdown on
+failure. Fifteen cold/real-wire cases compile and are registered in host CI;
+execution follows own build and raw publication. Native binding, actual policy
+input, remaining runtime coexistence and physical traffic remain separate.
+See [the service ownership contract](../hwdocs/rtl8852be-service.md).
