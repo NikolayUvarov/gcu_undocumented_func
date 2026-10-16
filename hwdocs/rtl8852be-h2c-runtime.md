@@ -78,3 +78,16 @@ successful sustained traffic. The correction widens that counter and its
 fault-injection ordinal to `usize`, keeping the existing exact second-restore
 deadline fault. Production is unchanged; the original failures are retained
 and the long cases and station validation will be repeated after publication.
+
+The corrected `4d9f9b36` run after raw publication
+`4a4fa150bc430660efe696d302041a9219c36711` passed 287 data-mode cases and
+failed the remaining continuous-traffic assertion. All 514 commands completed,
+but the fixture replenished Wi-Fi after every released ACK as well as data,
+growing its backlog and exhausting the finite 8192-frame producer. The model
+now replenishes only the last published RX record, before its release, keeping
+one Wi-Fi record available without accumulating a new record per ACK. The test
+retains 514 commands, the original finite producer, pressure and subsequent TX
+completion assertions; every command additionally checks the actual RX-index
+backlog (one pending, at most two with its receipt) and producer progress.
+The second failure is retained. This correction changes no production code;
+execution of the corrected model still awaits raw publication.

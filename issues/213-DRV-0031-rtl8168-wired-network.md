@@ -1,6 +1,6 @@
 # 213-DRV-0031 — A wired RTL8168 path on the Ryzen for ordinary use and Effector
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (experimental executable built; boot integration and hardware validation pending) · **Blocked by:** 213-KRN-0114 boot/grant integration and hardware validation · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 · **Status:** in progress (experimental executable and boot/net endpoint integrated; physical acceptance pending) · **Blocked by:** connected-link, load and recovery validation on the actual Ryzen · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 

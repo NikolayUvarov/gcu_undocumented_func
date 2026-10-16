@@ -7,7 +7,11 @@ fn active_transition_requires_actual_command_dma_idle_before_serial_enable(){run
 fn actual_data_owner_wraps_twice_with_receipt_each_time_and_continuous_wifi(){run(0,true,true,|data,c|{
     {let mut c=c.borrow_mut();c.continuous_wifi=8192;c.old=1;}
     let request=h2c::Command{category:2,class:10,function:2};
-    for _ in 0..514{assert_eq!(data.command(request,&[0;20],h2c::Acks{received:false,done:false},100_000).unwrap(),h2c::Outcome::Received);}
+    for n in 0..514{
+        assert_eq!(data.command(request,&[0;20],h2c::Acks{received:false,done:false},100_000).unwrap(),h2c::Outcome::Received);
+        let c=c.borrow();assert!(c.continuous_wifi>0);assert_eq!(c.wifi_pending,1);
+        assert_eq!(c.wifi_max_pending,2);assert!(c.wifi_refills>=n+1);
+    }
     {let c=c.borrow();assert_eq!(c.normal_packets.len(),514);let first=c.normal_packets[0][3];
         for(n,packet)in c.normal_packets.iter().enumerate(){assert_eq!(packet[3],first.wrapping_add(n as u8));assert_eq!(packet[5]&0xc0,0x40);}
         assert!(c.continuous_wifi>0);
