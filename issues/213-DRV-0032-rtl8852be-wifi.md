@@ -868,7 +868,9 @@ and checks scheduler/DMA/radio state before exposing its internal packet API.
 The original startup ReceivePermit remains strict. One RX dispatcher handles
 ACKs, packet completion and software filtering during command waits; ordinary
 Wi-Fi pressure is counted/dropped instead of terminating the connection.
-Thirteen cold continuation cases and an original-permit regression compile;
-test execution follows own build and raw publication. Continuous BTC event
+Thirteen cold continuation cases and all thirteen affected host harnesses
+passed on own corrected source `974088b1` after raw `33fa88bf` publication
+(2026-10-16; counts, unchanged private ignore and first failed fixture run
+recorded in the linked notes). Continuous BTC event
 processing, H2C sequence reuse, native service exposure and physical under-load
 acceptance remain open. This slice does not establish a working Wi-Fi endpoint.
