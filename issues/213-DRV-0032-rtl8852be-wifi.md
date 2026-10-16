@@ -969,6 +969,11 @@ with zero failures. Their overlapping counts and inherited private-file ignore
 are recorded in the [runtime evidence](../hwdocs/rtl8852be-btc-runtime.md#limits-and-validation).
 The own native build passed in 3.80 s; no hardware or full-gate claim is made.
 
+Service/runtime integration source `40f93daf`, published by raw `4f58ad98`,
+subsequently passed all 16 real-wire service cases and the full 294-case
+harness (one inherited private-firmware ignore). The new case exercises an
+actual 15 ms coexistence ACK through service progress, then successful real TX.
+
 ### Sustained serial H2C through the packet owner
 
 Keep startup's 256-command limit and enable serial wrap only after actual
