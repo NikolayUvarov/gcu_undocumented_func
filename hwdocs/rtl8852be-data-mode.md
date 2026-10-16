@@ -182,6 +182,18 @@ missing ACK or DMA, corrupted/applied-failed/late filter writes, selector restor
 failure, retained control refusal and return to scanning. Execution is pending
 this continuation's own build, commit and raw publication.
 
+
+Active-filter source `96070fbe379eea198b13ff72664a68bb0ce64f65` passed all ten
+new cold cases and thirteen existing packet-mode cases as part of the complete
+data-mode harness after raw `4ea2d9eb93cf91c59491fc95de887ee01e081888` publication.
+The own-branch complete runs passed: data mode 264, BTC Session 241, station 263,
+post-MAC 241 and TX 241 (overlapping fixtures, not independent totals), with zero
+failures and the same one inherited private-firmware ignore in each. Execution
+was 1.07–1.21 seconds per harness on 2026-10-16; native compilation passed in
+1.55 seconds. The manifest `/tmp/rtw89-active-filter-validation-96070fbe.json`
+records exact source/publication, commands' results and per-harness log paths.
+These remain host-model observations, not physical radio or native-service evidence.
+
 ## Owned connection orchestration
 
 The private `connection::run` joins the production initial-PHY, channel,
