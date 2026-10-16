@@ -146,7 +146,10 @@ without FCS; descriptor errors and variable headers belong to `frames`.
 
 The pure `Filter` value is address policy, not hardware authority. Data-mode
 activation must consume a real `Prepared` whose `current_filter()` is present
-and revalidate its registers. A second initial configuration is refused;
+and revalidate its registers. RX already runs during earlier initialization,
+so initial exposure must also drain/drop or accurately tag pre-configuration
+records in both the inbox and hardware rings; the station token does not
+attest that these are empty. A second initial configuration is refused;
 future runtime updates must drain or tag the old receive epoch before changing
 the scan flag/filter, including records retained during firmware ACK waits.
 The single RX owner must dispatch/filter ordinary traffic during those waits;
