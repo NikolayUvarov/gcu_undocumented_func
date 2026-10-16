@@ -9,7 +9,7 @@ const WRITES: usize = 58;
 
 /// Effective conducted limits already resolved from the real regulatory and platform inputs, in half-dBm.
 /// No default or absent-policy interpretation is provided; per-path limits also control source reference differences.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Constraints { pub per_ntx: [i8; 2], pub per_path: [i8; 2] }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -21,7 +21,7 @@ pub enum Cause {
 #[derive(Debug)]
 pub struct Failure { pub cause: Cause, pub coexistence: Option<btc_context::RfkFailure> }
 
-/// Measurements from an ended diagnostic session; this cannot resume the command engine or authorize transmission.
+/// Measurements only; the public diagnostic ends its session and returns no command or transmission authority.
 #[derive(Debug)]
 pub struct Observations {
     pub thermal: [u8; 2], pub rck: phy::RckResult, pub dack: dack::ResultData,
