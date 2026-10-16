@@ -29,12 +29,12 @@ fn policy_requires_actual_platform_and_frequency_without_country_guessing(){
 #[test]
 fn calibration_admission_requires_radiation_and_exact_engine_identity(){
     use channel::{CalibrationEngine as E,CalibrationTransmit as Permit};
-    let mut tuned=channel::Tuned{attempt:1,session:2,channel:6,policy_version:3,access:Access::InitiateRadiation};
+    let mut tuned=channel::Tuned::modeled(1,2,6,3,Access::InitiateRadiation);
     let token=Permit::modeled(&tuned,E::Tssi).unwrap();
     assert!(token.matches(&tuned,E::Tssi));
     assert!(!token.matches(&tuned,E::Iqk));assert!(!token.matches(&tuned,E::Dpk));
     for field in 0..5{
-        let mut other=channel::Tuned{attempt:1,session:2,channel:6,policy_version:3,access:Access::InitiateRadiation};
+        let mut other=channel::Tuned::modeled(1,2,6,3,Access::InitiateRadiation);
         match field{0=>other.attempt+=1,1=>other.session+=1,2=>other.channel+=1,3=>other.policy_version+=1,_=>other.access=Access::PassiveOnly}
         assert!(!token.matches(&other,E::Tssi));
     }

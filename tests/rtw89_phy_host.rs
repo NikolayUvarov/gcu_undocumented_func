@@ -679,3 +679,17 @@ fn exhausted_or_invalid_attempt_allocator_fails_before_register_access(){
 #[path="rtw89_channel_cases.rs"] mod channel_cases;
 
 #[path="rtw89_tssi_cases.rs"] mod tssi_cases;
+
+#[path="../rtw89_wifi/src/h2c.rs"] mod h2c;
+
+#[path="../rtw89_wifi/src/btc_session.rs"] mod btc_session;
+
+#[path="../rtw89_wifi/src/btc_context.rs"] mod btc_context;
+
+#[path="../rtw89_wifi/src/btc_codec.rs"] mod btc_codec;
+
+#[path="../rtw89_wifi/src/btc_control.rs"] mod btc_control;
+
+#[path="../rtw89_wifi/src/btc_init.rs"] mod btc_init;
+
+#[path="../rtw89_wifi/src/btc_reports.rs"] mod btc_reports;

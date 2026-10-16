@@ -781,3 +781,17 @@ failures. No native caller or IDL/ABI change is part of this library stage;
 activation still requires actual channel/calibration/policy and CMAC setup.
 Register meaningful descriptor, ring, status and cleanup fixtures in the host
 gate; run them only after own commit/build and raw publication.
+
+### Checked initial calibration profile (2026-10-16)
+
+The private [calibration provider](../hwdocs/rtl8852be-calibration-policy.md)
+resolves the actual supported Board/source profile and explicit country/platform
+inputs, distinguishes checked absence from unknown/invalid SAR, and checks the
+source TSSI HT20 MCS7 maximum request of 12 dBm. It binds the exact written policy
+and OTP fingerprint to the current PHY/firmware attempt and issues three consumed
+engine-specific permissions once, after actual live ownership validation. IQK/DPK
+use the supported source sequence without inventing a numerical output guarantee
+or a new certification prerequisite. Fourteen focused cases compile, including
+the actual cold coordinator; execution follows publication. The native scoped
+input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
+open. This provider does not start native transmission.
