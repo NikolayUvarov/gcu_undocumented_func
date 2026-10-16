@@ -68,3 +68,13 @@ after 260 commands. Existing startup-256 tests remain unchanged in behavior.
 The standalone H2C harness imports the actual RX modules now used by its shared
 device model; no test is disabled. Execution follows own build and raw
 publication. This is not native or hardware evidence.
+
+The first own-branch execution of `7e60f2b6`, after raw publication
+`2e267e4bc17342321920c652f8c1b9f9af1d08da`, passed all 20 H2C cases. The
+complete data-mode harness passed 286 and failed both new long-command cases:
+the host station model's `u8` SRAM-selector restoration counter overflowed at
+`tests/rtw89_station_device.rs:43`. This did not establish a driver failure or
+successful sustained traffic. The correction widens that counter and its
+fault-injection ordinal to `usize`, keeping the existing exact second-restore
+deadline fault. Production is unchanged; the original failures are retained
+and the long cases and station validation will be repeated after publication.
