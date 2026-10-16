@@ -841,8 +841,9 @@ Add the private [receive serializer](../hwdocs/rtl8852be-frames.md) for complete
 legacy-rate MPDUs: retain the original protected payload, reject hardware error,
 decryption and unsupported aggregation, remove the source-included FCS and
 encode the existing wlanhw 1.1 prefix. Signal remains explicitly unmeasured.
-The actual runtime filter/channel epoch is a caller obligation. Five focused
-cases compile; execution follows build and raw publication. This does not
+The actual runtime filter/channel epoch is a caller obligation. After raw
+publication `b5ba07ab`, corrected source `63a4dbe0` passed six focused cases,
+including validated inbox copies without trailing RXBD padding. This does not
 activate the endpoint or establish physical reception.
 
 ### One retained runtime RX owner
