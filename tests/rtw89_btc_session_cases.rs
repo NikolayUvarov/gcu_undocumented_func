@@ -13,13 +13,13 @@ struct Device{
     hold:bool,busy:bool,late_index:usize,index_reads:usize,reverse_index:usize,
     bt:u32,rf:[[u32;256];2],rf_read:Option<(usize,usize)>,lte:[u32;2],lte_pending:Option<u32>,
     btc_event:Option<(usize,Vec<u8>)>,missing_at:usize,fail_at:Option<usize>,packet_us:u64,bt_release_at:Option<u64>,after_ack:Option<(usize,Vec<u8>)>,
-    scheduler_reply:u8,scheduler_us:u64,delay_event:Option<(u64,Vec<u8>)>,delay_extra:u64,
+    release_us:u64,after_release_clock:bool,clock_reads:u8,scheduler_reply:u8,scheduler_us:u64,delay_event:Option<(u64,Vec<u8>)>,delay_extra:u64,
 }
 impl Device{
     fn new(tx:*mut u8,tx_bytes:usize,index:u32)->Self{
         let mut d=Self{regs:vec![0;runtime_mac::BAR_BYTES],xtal:[0;256],command:6,time:0,frozen:false,writes:Vec::new(),
             tx,tx_bytes,rx:core::ptr::null_mut(),packets:Vec::new(),reply:Reply::Normal,events:0,hold:false,busy:false,late_index:0,index_reads:0,reverse_index:0,
-            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None,scheduler_reply:0,scheduler_us:0,delay_event:None,delay_extra:0};
+            bt:0,rf:[[0;256];2],rf_read:None,lte:[0x12345678,0x0100],lte_pending:None,btc_event:None,missing_at:0,fail_at:None,packet_us:0,bt_release_at:None,after_ack:None,release_us:0,after_release_clock:false,clock_reads:0,scheduler_reply:0,scheduler_us:0,delay_event:None,delay_extra:0};
         for (at,value)in[(0xf0,1<<12),(0x3f0,1<<8),(R_AX_PLATFORM_ENABLE,3),(download::FW_CONTROL,0xe0),
             (R_AX_CMAC_FUNC_EN,0x7000803f),(R_AX_DMAC_FUNC_EN,0x64c40000),(crate::mac::DMAC_CLOCK,0x04840000),
             (crate::mac::PLE_CONFIG,0x00400801),(crate::mac::WDE_READY,3),(crate::mac::PLE_READY,3),(crate::mac::HFC_CONTROL,8),
@@ -29,12 +29,13 @@ impl Device{
     }
     fn get(&self,at:usize)->u32{u32::from_le_bytes(self.regs[at..at+4].try_into().unwrap())}
     fn set(&mut self,at:usize,value:u32){self.regs[at..at+4].copy_from_slice(&value.to_le_bytes());}
-    fn inject(&mut self,channel:usize,event:&[u8]){
+    fn inject(&mut self,channel:usize,event:&[u8]){self.inject_packet(channel,rxdesc::TYPE_C2H,event,0);}
+    fn inject_packet(&mut self,channel:usize,kind:u8,event:&[u8],flags:u32){
         assert!(channel<2);assert!(!self.rx.is_null());assert!(20+event.len()<=rx::BUFFER_BYTES);
         let index=[0x1050,0x1054][channel];let hw=(self.get(index)>>16)as usize;assert!(hw<rx::DESCRIPTORS);
         let at=rx::BUFFERS_AT+(channel*rx::DESCRIPTORS+hw)*rx::BUFFER_STRIDE;
         let mut packet=vec![0;20+event.len()];let len=packet.len();packet[..4].copy_from_slice(&(len as u32|0xc000).to_le_bytes());
-        packet[4..8].copy_from_slice(&(event.len()as u32|(rxdesc::TYPE_C2H as u32)<<24).to_le_bytes());packet[20..].copy_from_slice(event);
+        packet[4..8].copy_from_slice(&(event.len()as u32|u32::from(kind)<<24).to_le_bytes());packet[16..20].copy_from_slice(&flags.to_le_bytes());packet[20..].copy_from_slice(event);
         unsafe{core::ptr::copy_nonoverlapping(packet.as_ptr(),self.rx.add(at),packet.len());}
         self.set(index,(self.get(index)&0xffff)|(((hw+1)%rx::DESCRIPTORS)as u32)<<16);
     }
@@ -80,6 +81,7 @@ impl Device{
             let channel=usize::from(at==0x1054);let host=(previous&0xffff)as usize;assert!(host<rx::DESCRIPTORS);
             let offset=rx::BUFFERS_AT+(channel*rx::DESCRIPTORS+host)*rx::BUFFER_STRIDE;
             unsafe{core::ptr::write_bytes(self.rx.add(offset),0xdd,rx::BUFFER_BYTES);}
+            if self.after_release_clock{self.clock_reads=1;}else{self.time+=self.release_us;}
         }
         if self.fail_at==Some(at){self.fail_at=None;return Err(Fault::new(FaultKind::Access,at,value))}
         Ok(())
@@ -98,7 +100,10 @@ impl RegisterIo for Device{
     fn write8(&mut self,a:usize,v:u8)->io::Result<()>{self.apply(a,1,v as u32)}
     fn write16(&mut self,a:usize,v:u16)->io::Result<()>{self.apply(a,2,v as u32)}
     fn write32(&mut self,a:usize,v:u32)->io::Result<()>{self.apply(a,4,v)}
-    fn now_us(&mut self)->u64{self.time}
+    fn now_us(&mut self)->u64{
+        if self.clock_reads!=0{self.clock_reads+=1;if self.clock_reads==6{self.time+=self.release_us;self.clock_reads=0;self.after_release_clock=false;}}
+        self.time
+    }
     fn delay_us(&mut self,us:u32)->io::Result<()>{if !self.frozen{self.time+=u64::from(us)+if us!=0{self.delay_extra}else{0};}
         if self.delay_event.as_ref().is_some_and(|(at,_)|self.time>=*at){let(_,event)=self.delay_event.take().unwrap();self.inject(0,&event);}Ok(())}
 }
@@ -106,14 +111,18 @@ impl Bus for Device{fn pci_command(&mut self)->io::Result<u16>{Ok(self.command)}
 impl DeviceIo for Device{fn pci_id(&mut self)->io::Result<u32>{Ok(0xb85210ec)}fn bar_len(&self)->usize{self.regs.len()}}
 fn c2h_bytes(category:u8,class:u8,function:u8,body:&[u8])->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(&(u32::from(category)|u32::from(class)<<2|u32::from(function)<<8).to_le_bytes());b.extend_from_slice(&((8+body.len())as u32).to_le_bytes());b.extend_from_slice(body);b}
 fn board()->Board{Board{identity:crate::board::Identity{cut:1,rfe:1,mac:[2,1,2,3,4,5],xtal:1,country:*b"US",channel_plan:1},maps:crate::efuse::Maps{logical:[0xff;2048],dav_logical:[0xff;16],phycap:[0xff;128]}}}
-fn with_session(check:impl FnOnce(&mut Session<'_,'_,'_,Device>)){
+fn with_session(check:impl FnOnce(&mut Session<'_,'_,'_,Device>)){with_mode(false,check);}
+fn with_runtime(check:impl FnOnce(&mut Session<'_,'_,'_,Device>)){with_mode(true,check);}
+fn with_mode(runtime:bool,check:impl FnOnce(&mut Session<'_,'_,'_,Device>)){
     download::tests::with_downloaded_storage(|ready,q,tx,tx_bytes,index|{
         let mut d=Device::new(tx,tx_bytes,index);let prepared=runtime_mac::prepare(&mut d,q,&board(),runtime_mac::BAR_BYTES,&ready).unwrap();
         let region=Region::new();d.rx=region.base;d.command=2;
         let mut rings=unsafe{rx::Rings::new(&mut d,region.base,region.layout.size(),0x200000).unwrap()};rings.install(&mut d).unwrap();d.command=6;
         let receiving=post_mac::activate(&mut d,q,&mut rings,&board(),runtime_mac::BAR_BYTES,&prepared).unwrap();let mut scratch=vec![0;rx::BUFFER_BYTES];
         d.writes.clear();d.index_reads=0;
-        let mut session=Session::new(&mut d,q,&mut rings,&receiving,ready,&mut scratch).unwrap();check(&mut session);drop(session);
+        let mut bank=Box::new(Inbox::new());
+        let mut session=if runtime{Session::new_with_inbox(&mut d,q,&mut rings,&receiving,ready,&mut scratch,&mut bank)}
+            else{Session::new(&mut d,q,&mut rings,&receiving,ready,&mut scratch)}.unwrap();check(&mut session);drop(session);
         d.set(fwcmd::DMA_BUSY,0);rings.stop(&mut d);let stopped=download::stop(&mut d,q);assert!(stopped.dma.is_none()&&stopped.cpu.is_none());d.command=0;
     });
 }
@@ -599,3 +608,75 @@ fn connection_preserve_does_not_accept_an_oversleep_after_requested_thirty_ms(){
     s.bus.inject(0,&c2h_bytes(2,0x12,1,&[0,6,0x40,0,0,0,0,0]));s.bus.delay_extra=100_000;
     assert!(s.preserve_bt_time(100_000).is_err());assert!(s.failed().is_some());s.bus.delay_extra=0;
 }));}
+
+
+#[test]
+fn runtime_command_wait_retains_data_rpq_other_c2h_and_foreign_ack_in_dispatch_order(){with_runtime(|s|{
+    let data=[0x80,0,1,2,3,4];let rpq=[0,0x12,4,0];
+    let other=c2h_bytes(1,9,1,&[0x55;24]);let foreign=c2h_bytes(1,0,0,&(200u32<<16).to_le_bytes());
+    let btc=c2h_bytes(2,0x12,0,&[1,2]);
+    s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&data,4|1<<9);s.bus.inject_packet(1,7,&rpq,0);
+    s.bus.inject(0,&other);s.bus.inject(0,&foreign);s.bus.inject(0,&btc);
+    assert!(s.retains_packets());assert_eq!(s.command(command(),&[],both(),1000).unwrap(),h2c::Outcome::Done);
+    assert_eq!(s.pending_packets(),4);assert_eq!(s.pending_events(),1);assert_eq!(s.event().unwrap().bytes,btc);
+    for(channel,bytes)in[(rx::Channel::Rxq,data.as_slice()),(rx::Channel::Rpq,rpq.as_slice()),(rx::Channel::Rxq,other.as_slice()),(rx::Channel::Rxq,foreign.as_slice())]{
+        let record=s.packet().unwrap();assert_eq!(record.metadata().channel,channel);assert_eq!(record.bytes(),bytes);
+        if bytes==data{assert!(record.metadata().packet.crc_error);assert!(record.metadata().packet.hardware_decrypted);}
+        s.consume_packet();
+    }
+    assert!(s.packet().is_none());assert_eq!(s.counts(),Counts{non_c2h:2,other_c2h:1,unrelated_ack:1});
+    assert_eq!(s.failed(),None);assert_eq!(s.queue.pending(),0);
+});}
+#[test]
+fn runtime_inbox_wrap_and_full_size_copy_survive_scratch_and_dma_reuse(){with_runtime(|s|{
+    for n in 0..12u8{
+        let bytes=vec![n;rx::BUFFER_BYTES-20];s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&bytes,0);
+        assert_eq!(s.poll_packets(1000).unwrap(),[true,false]);s.scratch.fill(0x67);
+        assert_eq!(s.pending_packets(),1);assert_eq!(s.packet().unwrap().bytes(),bytes);s.consume_packet();
+    }
+    assert_eq!(s.pending_packets(),0);assert!(s.overflow_packet().is_none());
+});}
+#[test]
+fn runtime_overflow_preserves_bank_and_offending_scratch_and_is_terminal(){with_runtime(|s|{
+    for n in 0..5u8{s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&[n;32],0);}
+    assert_eq!(s.command(command(),&[],both(),1000),Err(Error::InboxOverflow));assert_eq!(s.pending_packets(),inbox::SLOTS);
+    assert_eq!(s.overflow_packet().unwrap().bytes(),[4;32]);let index=s.bus.get(0x1050);let writes=s.bus.writes.len();
+    for n in 0..4u8{assert_eq!(s.packet().unwrap().bytes(),[n;32]);s.consume_packet();}
+    assert_eq!(s.poll_packets(1000),Err(Error::InboxOverflow));assert_eq!(s.command(command(),&[],both(),1000),Err(Error::InboxOverflow));
+    assert_eq!(s.bus.get(0x1050),index);assert_eq!(s.bus.writes.len(),writes);assert_eq!(s.overflow_packet().unwrap().bytes(),[4;32]);
+    assert_eq!(s.bus.packets.len(),1);
+});}
+#[test]
+fn runtime_rpq_c2h_cannot_complete_command_or_enter_valid_inbox(){with_runtime(|s|{
+    s.bus.reply=Reply::WrongChannel;assert_eq!(s.command(command(),&[],both(),1000),Err(Error::Malformed));
+    assert_eq!(s.pending_packets(),0);assert!(s.failed().is_some());
+});}
+#[test]
+fn runtime_matched_acks_use_engine_and_startup_constructor_remains_explicit(){
+    with_runtime(|s|{s.command(command(),&[],both(),1000).unwrap();assert_eq!(s.pending_packets(),0);
+        assert!(!s.inbox.as_mut().unwrap().bind(s.queue.session()));});
+    with_session(|s|{assert!(!s.retains_packets());assert_eq!(s.poll_packets(1000),Err(Error::Request));
+        s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&[1;32],0);s.command(command(),&[],both(),1000).unwrap();
+        assert_eq!(s.counts().non_c2h,1);assert_eq!(s.pending_packets(),0);});
+}
+#[test]
+fn runtime_timeout_keeps_preceding_packets_and_never_republishes_command(){with_runtime(|s|{
+    s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&[0x44;32],0);s.bus.reply=Reply::Missing;s.bus.frozen=true;
+    assert_eq!(s.command(command(),&[],both(),100),Err(Error::Timeout));
+    assert_eq!(s.packet().unwrap().bytes(),[0x44;32]);assert_eq!(s.bus.packets.len(),1);assert!(s.failed().is_some());
+});}
+
+#[test]
+fn runtime_late_release_retains_only_validated_current_copy(){for late in [false,true]{with_runtime(|s|{
+    s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&[0x71;64],0);s.bus.release_us=1000;s.bus.after_release_clock=late;
+    let error=s.poll_packets(1000).unwrap_err();
+    if late{assert_eq!(error,Error::Timeout);}else{assert!(matches!(error,Error::Receive(rx::Error::Io(Fault{kind:FaultKind::Timeout,..}))));}
+    assert!(s.failed().is_some());
+    let record=s.terminal_packet().unwrap();assert_eq!(record.metadata().channel,rx::Channel::Rxq);assert_eq!(record.bytes(),[0x71;64]);
+    assert_eq!(s.bus.get(0x1050)&0xfff,1);assert!(s.overflow_packet().is_none());
+});}}
+#[test]
+fn runtime_error_without_fresh_copy_never_exposes_old_scratch(){with_runtime(|s|{
+    s.bus.inject_packet(0,rxdesc::TYPE_WIFI,&[0x72;64],0);s.poll_packets(1000).unwrap();s.consume_packet();
+    s.bus.set(0x1050,256<<16|1);assert!(s.poll_packets(1000).is_err());assert!(s.terminal_packet().is_none());
+});}

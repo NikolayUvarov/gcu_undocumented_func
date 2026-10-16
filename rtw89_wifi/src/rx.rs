@@ -32,7 +32,7 @@ pub enum Outcome{Empty,Packet(rxdesc::Packet),Dropped(rxdesc::Error)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub struct Stop{pub request:Option<Fault>,pub hci:Option<Fault>,pub idle:Option<Fault>}
 
-pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,_exclusive:PhantomData<&'a mut[u8]>}
+pub struct Rings<'a>{base:NonNull<u8>,physical:u64,session:u64,host:[u16;2],state:State,copied:Option<rxdesc::Packet>,_exclusive:PhantomData<&'a mut[u8]>}
 impl<'a> Rings<'a>{
     /// # Safety
     /// The complete used region is exclusive coherent WB DMA on x86-64, mapped at `physical`, with UC BAR access.
@@ -53,9 +53,12 @@ impl<'a> Rings<'a>{
             base.as_ptr().add(descriptor).cast::<u32>().write_volatile((BUFFER_BYTES as u32).to_le());
             base.as_ptr().add(descriptor+4).cast::<u32>().write_volatile(((physical+buffer as u64)as u32).to_le());
         }}
-        Ok(Self{base,physical,session,host:[0;2],state:State::Allocated,_exclusive:PhantomData})
+        Ok(Self{base,physical,session,host:[0;2],state:State::Allocated,copied:None,_exclusive:PhantomData})
     }
     pub fn state(&self)->State{self.state}
+    /// Only a fully copied and parsed packet from the latest receive call, even if its release later failed.
+    /// Metadata names that call's output buffer; it does not establish successful descriptor release.
+    pub(crate) fn copied_packet(&self)->Option<rxdesc::Packet>{self.copied}
     pub fn physical(&self)->u64{self.physical}
     pub(crate) fn session(&self)->u64{self.session}
     fn poison<T>(&mut self,result:Result<T,Error>)->Result<T,Error>{if result.is_err(){self.state=State::Faulted;}result}
@@ -112,6 +115,7 @@ impl<'a> Rings<'a>{
     /// Process at most one descriptor under the caller's budget; returned packet offsets refer to `output` only.
     /// Malformed or fragmented frames are explicitly dropped. No reference into DMA survives the host-index release.
     pub fn receive(&mut self,bus:&mut impl RegisterIo,channel:Channel,output:&mut[u8],budget_us:u32)->Result<Outcome,Error>{
+        self.copied=None;
         if self.state!=State::Running{return Err(Error::State);}
         if budget_us==0||budget_us>1_000_000{return Err(Error::Budget);}
         if output.len()<BUFFER_BYTES{return Err(Error::Output);}
@@ -133,6 +137,7 @@ impl<'a> Rings<'a>{
                 }
                 match rxdesc::parse(&output[..length]){Ok(packet)=>Outcome::Packet(packet),Err(error)=>Outcome::Dropped(error)}
             };
+            if let Outcome::Packet(packet)=outcome{self.copied=Some(packet);}
             timed.delay_us(0)?;
             unsafe{self.base.as_ptr().add(at).cast::<u32>().write_volatile(0);}
             fence(Ordering::Release);
