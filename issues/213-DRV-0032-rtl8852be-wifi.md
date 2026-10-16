@@ -896,7 +896,10 @@ Add the sealed actual data-mode command adapter and station CAM/filter update,
 including no-pending-TX admission, one deadline, actual done ACK/DMA completion,
 old receive-epoch retirement and final owner/radio/register checks. Preserve
 raw wlanhw address semantics and both primary/selector-restoration failures.
-Ten new cold cases compile; execution follows own build and raw publication.
+All ten new cold cases and the five affected complete harnesses passed on
+own source `96070fbe` after raw `4ea2d9eb` publication; native compilation passed.
+Detailed counts and the unchanged private-firmware ignore are recorded in the
+transition notes.
 Continuous BTC reconciliation, bounded H2C sequence reuse, native endpoint
 binding and hardware traffic remain open; association is not inferred from a
 selected BSSID. See the [transition notes](../hwdocs/rtl8852be-data-mode.md#active-filter-continuation).
