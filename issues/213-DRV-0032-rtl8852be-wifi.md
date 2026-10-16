@@ -833,3 +833,17 @@ modified failure independently disables radio/port and retains DMA. Eleven cold
 continuation fixtures compile; execution follows raw publication. Association,
 receive filtering and native WLAN/TX activation are not established by this
 initial context.
+
+### One retained runtime RX owner
+
+Keep `Session` as the exclusive reader of both receive rings during H2C waits.
+Add an explicitly caller-owned bounded inbox for runtime Wi-Fi packets, RPQ,
+other C2H and unrelated ACKs; keep matched ACK and BTC policy routing intact.
+Retain bytes and descriptor metadata before scratch reuse, expose ordered
+borrowed records, and make overflow terminal with the offending scratch
+record still inspectable. The existing no-inbox constructor remains a
+pre-data startup diagnostic only. Runtime activation must require the inbox.
+Refactor the private TX engine to ingest retained records and advance DMA
+without reading RX rings; keep native TX and receive-only guards unchanged.
+Validate command-wait interleaving, copy ownership, capacity, terminal failure
+and source-preserving TX completion on the owning branch after publication.

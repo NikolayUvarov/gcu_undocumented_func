@@ -1,6 +1,9 @@
-//! Exclusive startup H2C/RX ownership; command completion does not grant coexistence or RF calibration.
+//! Exclusive H2C/RX ownership; command completion does not grant coexistence or RF calibration.
 
 use crate::{c2h,download,fwcmd,h2c,io::{self,Fault,FaultKind,RegisterIo},phy::PhyIo,post_mac,rx,rxdesc};
+
+#[path="rx_inbox.rs"] pub mod inbox;
+pub use inbox::Inbox;
 
 pub const EVENT_BYTES:usize=2048;
 pub const EVENT_SLOTS:usize=4;
@@ -31,7 +34,7 @@ impl<B:RegisterIo> RegisterIo for Window<'_,B>{
 pub trait DeviceIo:fwcmd::Bus { fn pci_id(&mut self)->io::Result<u32>; fn bar_len(&self)->usize; }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,Malformed,Rejected(u8),Coexistence }
+pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,InboxOverflow,Malformed,Rejected(u8),Coexistence }
 impl From<Fault> for Error { fn from(e:Fault)->Self { Self::Register(e) } }
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32 }
@@ -40,10 +43,12 @@ pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32 }
 /// Borrowed coherent DMA objects and their backing storage stay owned after errors or Drop; external shutdown is mandatory.
 pub struct Session<'a,'command,'receive,B> {
     bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,
-    firmware:download::Ready,scratch:&'a mut[u8],engine:h2c::Engine,failed:Option<Error>,counts:Counts,
+    inbox:Option<&'a mut Inbox>,terminal_copy:Option<inbox::Metadata>,firmware:download::Ready,scratch:&'a mut[u8],engine:h2c::Engine,failed:Option<Error>,counts:Counts,
     pub(crate) btc:Option<crate::btc_context::Context>,events:[[u8;EVENT_BYTES];EVENT_SLOTS],lengths:[usize;EVENT_SLOTS],event_head:usize,event_count:usize,last:u64,
 }
 impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
+    /// Startup diagnostic only: packets outside command/BTC handling are counted and discarded before data service exists.
+    /// Runtime RX/TX service must use new_with_inbox and keep this Session as the only ring reader.
     pub fn new(bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,
         firmware:download::Ready,scratch:&'a mut[u8])->Result<Self,Error> {
         if scratch.len()<rx::BUFFER_BYTES || firmware.session()!=queue.session() || firmware.version()!=[0,29,29,15]
@@ -54,7 +59,38 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         receiving.validate(bus,queue,rings,left as u32).map_err(Error::Permit)?;
         let now=bus.now_us(); if now<start { return Err(Error::Clock); } if now-start>=10_000 { return Err(Error::Timeout); }
         Ok(Self { bus,queue,rings,receiving,firmware,scratch,engine:h2c::Engine::new(now),failed:None,counts:Counts::default(),
-            btc:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
+            inbox:None,terminal_copy:None,btc:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
+    }
+    /// The caller owns the storage; no large runtime inbox is placed in the Session or allocated per packet.
+    /// A bank is single-use for a firmware session and remains inspectable after terminal errors.
+    pub fn new_with_inbox(bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,
+        firmware:download::Ready,scratch:&'a mut[u8],inbox:&'a mut Inbox)->Result<Self,Error> {
+        if !inbox.bind(queue.session()){return Err(Error::Session)}
+        let mut session=Self::new(bus,queue,rings,receiving,firmware,scratch)?;session.inbox=Some(inbox);Ok(session)
+    }
+    pub fn retains_packets(&self)->bool { self.inbox.is_some() }
+    pub fn pending_packets(&self)->usize { self.inbox.as_ref().map_or(0,|inbox|inbox.pending()) }
+    /// The record remains borrowed until processed; consume only after its actual owner accepts it.
+    pub fn packet(&self)->Option<inbox::Record<'_>> { self.inbox.as_ref()?.front() }
+    pub fn consume_packet(&mut self) { if let Some(inbox)=self.inbox.as_mut(){inbox.consume();} }
+    /// Overflow is terminal: scratch cannot be reused, so the first record beyond the bank remains inspectable too.
+    pub fn overflow_packet(&self)->Option<inbox::Record<'_>> {
+        if self.failed!=Some(Error::InboxOverflow){return None}self.terminal_packet()
+    }
+    /// A validated full copy survives late release/clock failure; no freshness is inferred from old scratch bytes.
+    /// This diagnostic record may also be in the bank and does not assert successful RX descriptor release.
+    pub fn terminal_packet(&self)->Option<inbox::Record<'_>> {
+        self.failed?;let metadata=self.terminal_copy?;
+        Some(inbox::Record{metadata,buffer:&self.scratch[..metadata.packet.offset+metadata.packet.length]})
+    }
+    /// Read at most one packet per hardware channel; command ACK and BTC routes stay active between commands.
+    pub fn poll_packets(&mut self,timeout_us:u32)->Result<[bool;2],Error> {
+        if self.inbox.is_none()||timeout_us==0||timeout_us>MAX_COMMAND_US{return Err(Error::Request)}
+        if let Some(e)=self.failed{return Err(e)}
+        let deadline=match self.now().and_then(|now|now.checked_add(u64::from(timeout_us)).ok_or(Error::Clock)){
+            Ok(v)=>v,Err(e)=>return self.fail(e),
+        };
+        self.poll_before(deadline)
     }
     pub fn command_session(&self)->u64 { self.queue.session() }
     pub(crate) fn abort_coexistence(&mut self){let _=self.fail::<()>(Error::Coexistence);}
@@ -72,7 +108,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         if let Some(e)=self.failed{return Err(e)}
         let result=(||{let left=self.left(deadline)?;self.live(left.min(10_000))?;
             let received=[self.receive_one(rx::Channel::Rxq,deadline)?,self.receive_one(rx::Channel::Rpq,deadline)?];
-            let now=self.now()?;self.engine.poll(now).map_err(Error::Command)?;Ok(received)})();
+            let now=self.now()?;self.engine.poll(now).map_err(Error::Command)?;self.left(deadline)?;Ok(received)})();
         match result{Ok(v)=>Ok(v),Err(e)=>self.fail(e)}
     }
 
@@ -97,29 +133,44 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         if self.firmware.session()!=self.queue.session(){return Err(Error::Session)}
         self.receiving.validate(self.bus,self.queue,self.rings,budget).map_err(Error::Permit)?;Ok(())
     }
+    fn retain(&mut self,channel:rx::Channel,packet:rxdesc::Packet)->Result<(),Error> {
+        let Some(inbox)=self.inbox.as_mut() else{return Ok(())};
+        let metadata=inbox::Metadata{channel,packet};
+        match inbox.push(metadata,self.scratch){
+            Ok(())=>Ok(()),
+            Err(inbox::Error::Full)=>Err(Error::InboxOverflow),
+            Err(inbox::Error::Packet)=>Err(Error::Malformed),
+        }
+    }
     fn receive_one(&mut self,channel:rx::Channel,deadline:u64)->Result<bool,Error> {
         let left=self.left(deadline)?;
         let mut window=Window{bus:self.bus,deadline,last:self.last,clock_bad:false};
         let received=self.rings.receive(&mut window,channel,self.scratch,left);self.last=window.last;
+        self.terminal_copy=if self.inbox.is_some(){self.rings.copied_packet().map(|packet|inbox::Metadata{channel,packet})}else{None};
         let packet=match received.map_err(Error::Receive)? {
             rx::Outcome::Empty=>return Ok(false),rx::Outcome::Dropped(_)=>return Err(Error::Malformed),rx::Outcome::Packet(p)=>p,
         };
         self.left(deadline)?;
-        if packet.kind!=rxdesc::TYPE_C2H { self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);return Ok(true); }
+        if packet.kind!=rxdesc::TYPE_C2H {
+            self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);self.retain(channel,packet)?;
+            self.left(deadline)?;self.terminal_copy=None;return Ok(true);
+        }
         if channel!=rx::Channel::Rxq||packet.crc_error||packet.icv_error { return Err(Error::Malformed); }
         let bytes=packet.bytes(self.scratch).ok_or(Error::Malformed)?;
         let event=c2h::parse(bytes).map_err(Error::Event)?;
         if let Some(ack)=event.ack().map_err(Error::Event)? {
             let now=self.bus.now_us();if now<self.last{return Err(Error::Clock)}self.last=now;
             match self.engine.acknowledge(now,ack).map_err(Error::Command)? {
-                h2c::Observation::Unrelated|h2c::Observation::Unexpected=>self.counts.unrelated_ack=self.counts.unrelated_ack.saturating_add(1),_=>(),
+                h2c::Observation::Unrelated|h2c::Observation::Unexpected=>{
+                    self.counts.unrelated_ack=self.counts.unrelated_ack.saturating_add(1);self.retain(channel,packet)?;
+                },_=>(),
             }
         } else if event.category==2&&event.class==0x12 {
             if bytes.len()>EVENT_BYTES||self.event_count==EVENT_SLOTS{return Err(Error::EventOverflow)}
             let at=(self.event_head+self.event_count)%EVENT_SLOTS;
             self.events[at][..bytes.len()].copy_from_slice(bytes);self.lengths[at]=bytes.len();self.event_count+=1;
-        } else { self.counts.other_c2h=self.counts.other_c2h.saturating_add(1); }
-        Ok(true)
+        } else { self.counts.other_c2h=self.counts.other_c2h.saturating_add(1);self.retain(channel,packet)?; }
+        self.left(deadline)?;self.terminal_copy=None;Ok(true)
     }
     /// One absolute budget covers ownership checks, publication, RX/ACK processing and command-DMA quiescence.
     /// Only pre-publication Full is retried; uncertain send, malformed RX, queue loss and elapsed budgets poison the session.

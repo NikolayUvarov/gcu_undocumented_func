@@ -35,7 +35,7 @@ pub(crate) enum AttemptCount{Unknown}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Completion{pub status:Status,pub acked:bool,pub attempts:AttemptCount,pub completed_descriptors:u8,pub raw_data_tx_count:u16}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum Receive{Empty,TxReport{final_report:bool},Other(rx::Outcome)}
+pub(crate) enum Receive{Empty,Rpq,TxReport{final_report:bool},Other(rx::Outcome)}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) struct Stop{pub request:Option<Fault>,pub idle:Option<Fault>}
 #[derive(Clone,Copy)]
@@ -104,7 +104,10 @@ impl<'a> Queue<'a>{
         self.observe(result)?;self.state=State::Running;Ok(())
     }
     fn time(&mut self,bus:&mut impl RegisterIo)->Result<u32>{
-        let request=self.request.as_mut().ok_or(Error::State)?;let now=bus.now_us();
+        self.time_at(bus.now_us())
+    }
+    fn time_at(&mut self,now:u64)->Result<u32>{
+        let request=self.request.as_mut().ok_or(Error::State)?;
         if now<request.last{return Err(Fault::new(FaultKind::Clock,0,0).into());}request.last=now;
         let elapsed=now.checked_sub(request.start).ok_or(Error::Count)?;
         u64::from(request.budget).checked_sub(elapsed).filter(|v|*v>0).map(|v|v as u32)
@@ -194,49 +197,62 @@ impl<'a> Queue<'a>{
         if final_report{pending.firmware=Some(report);self.last_firmware=Some(report);}
         Ok(final_report)
     }
-    fn polling(&mut self,bus:&mut impl RegisterIo)->Result<()>{
+    fn polling_at(&mut self,now:u64)->Result<()> {
         let request=self.request.as_mut().ok_or(Error::State)?;
         if request.polls>=request.budget{return Err(Fault::new(FaultKind::Timeout,0,request.polls).into());}
-        request.polls+=1;self.time(bus)?;Ok(())
+        request.polls+=1;self.time_at(now)?;Ok(())
     }
-    /// Own RXQ exclusively while pending; handle returned packet bytes before another call reuses scratch.
-    pub(crate) fn poll_receive(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Receive>{
+    fn ingest_inner(&mut self,channel:rx::Channel,outcome:rx::Outcome,buffer:&[u8])->Result<Receive> {
+        match outcome {
+            rx::Outcome::Empty=>Ok(Receive::Empty),
+            rx::Outcome::Dropped(_) if channel==rx::Channel::Rpq=>Err(Error::Report),
+            rx::Outcome::Packet(packet) if channel==rx::Channel::Rpq=>{
+                if packet.crc_error||packet.icv_error||packet.kind==crate::rxdesc::TYPE_C2H{return Err(Error::Report)}
+                self.reports(packet.bytes(buffer).ok_or(Error::Report)?)?;Ok(Receive::Rpq)
+            },
+            rx::Outcome::Packet(packet) if packet.kind==crate::rxdesc::TYPE_C2H=>{
+                let bytes=packet.bytes(buffer).ok_or(Error::Report)?;
+                match txdesc::firmware_report(bytes).map_err(Error::Input)?{
+                    Some(report)=>{
+                        if packet.crc_error||packet.icv_error{return Err(Error::Report);}
+                        Ok(Receive::TxReport{final_report:self.firmware(report)?})
+                    },
+                    None=>Ok(Receive::Other(outcome)),
+                }
+            },
+            _=>Ok(Receive::Other(outcome)),
+        }
+    }
+    /// The single RX owner supplies its copied record and a fresh clock; this never polls or releases a receive descriptor.
+    /// Retain Other records for their owner. Ingesting a report alone cannot complete or submit an MPDU.
+    pub(crate) fn ingest(&mut self,now:u64,channel:rx::Channel,outcome:rx::Outcome,buffer:&[u8])->Result<Receive> {
+        if self.state!=State::Running||self.request.is_none(){return Err(Error::State)}
+        let result=self.polling_at(now).and_then(|()|self.ingest_inner(channel,outcome,buffer));self.observe(result)
+    }
+    /// Revalidate actual TX registers and advance DMA/status ownership without touching either receive ring.
+    pub(crate) fn advance(&mut self,bus:&mut impl Bus)->Result<Option<Completion>> {
+        if self.state!=State::Running||self.request.is_none(){return Err(Error::State)}
+        let result=(||{self.polling_at(bus.now_us())?;self.live(bus)?;self.progress(bus)})();self.observe(result)
+    }
+    // Host-model adapters own the test rings; production uses the Session dispatcher and retained records.
+    #[cfg(test)]
+    fn poll_receive(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Receive>{
         if self.state!=State::Running||self.request.is_none(){return Err(Error::State);}
         if scratch.len()<rx::BUFFER_BYTES{return Err(Error::Rx(rx::Error::Output));}
         let result=(||{
-            self.polling(bus)?;self.live(bus)?;rings.running(bus)?;
-            let left=self.time(bus)?;
-            let outcome=rings.receive(bus,rx::Channel::Rxq,scratch,left)?;
-            let result=match outcome{
-                rx::Outcome::Empty=>Receive::Empty,
-                rx::Outcome::Packet(packet) if packet.kind==crate::rxdesc::TYPE_C2H=>{
-                    let bytes=packet.bytes(scratch).ok_or(Error::Report)?;
-                    match txdesc::firmware_report(bytes).map_err(Error::Input)?{
-                        Some(report)=>{
-                            if packet.crc_error||packet.icv_error{return Err(Error::Report);}
-                            Receive::TxReport{final_report:self.firmware(report)?}
-                        },
-                        None=>Receive::Other(outcome),
-                    }
-                },
-                _=>Receive::Other(outcome),
-            };
-            self.time(bus)?;Ok(result)
+            self.polling_at(bus.now_us())?;self.live(bus)?;rings.running(bus)?;
+            let left=self.time(bus)?;let outcome=rings.receive(bus,rx::Channel::Rxq,scratch,left)?;
+            let result=self.ingest_inner(rx::Channel::Rxq,outcome,scratch)?;self.time(bus)?;Ok(result)
         })();self.observe(result)
     }
-    /// Poll one RPQ descriptor; final completion also requires a firmware report received through owned RXQ.
-    pub(crate) fn poll(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Option<Completion>>{
+    #[cfg(test)]
+    fn poll(&mut self,bus:&mut impl Bus,rings:&mut rx::Rings<'_>,scratch:&mut[u8])->Result<Option<Completion>>{
         if self.state!=State::Running||self.request.is_none(){return Err(Error::State);}
         if scratch.len()<rx::BUFFER_BYTES{return Err(Error::Rx(rx::Error::Output));}
         let result=(||{
-            self.polling(bus)?;self.live(bus)?;rings.running(bus)?;
-            let left=self.time(bus)?;
-            match rings.receive(bus,rx::Channel::Rpq,scratch,left)?{
-                rx::Outcome::Empty=>{},
-                rx::Outcome::Dropped(_)=>return Err(Error::Report),
-                rx::Outcome::Packet(packet)=>self.reports(packet.bytes(scratch).ok_or(Error::Report)?)?,
-            }
-            self.progress(bus)
+            self.polling_at(bus.now_us())?;self.live(bus)?;rings.running(bus)?;
+            let left=self.time(bus)?;let outcome=rings.receive(bus,rx::Channel::Rpq,scratch,left)?;
+            self.ingest_inner(rx::Channel::Rpq,outcome,scratch)?;self.progress(bus)
         })();self.observe(result)
     }
     /// Stop only owned ordinary queues and WP DMA; never free memory or claim PCI quiescence from this result.
