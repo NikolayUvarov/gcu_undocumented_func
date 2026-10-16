@@ -1,4 +1,4 @@
-//! One diagnostic continuation through actual owned BTC and initial PHY calibration, followed by mandatory shutdown.
+//! Initial PHY continuation retaining the actual owned BTC state; the public diagnostic always ends in shutdown.
 
 use crate::{board::Board, btc_context, btc_session::{self, DeviceIo, Session}, dack, download,
     fwcmd::Queue, io::Fault, phy::{self, Phy}, phycap::Capabilities, post_mac, report_tail, rx, rxdck};
@@ -29,6 +29,14 @@ pub struct Observations {
     pub submitted: u16, pub received: btc_session::Counts, pub encoded_rts: u16,
 }
 
+/// Private continuation state from this live PHY attempt, not channel calibration or transmission authority.
+pub(crate) struct Prepared {
+    pub owner: btc_context::Initialized,
+    pub prefix: phy::dm::Prefix,
+    pub paths: phy::tail::Configured,
+    pub observations: Observations,
+}
+
 fn dm_failure(error: phy::dm::Failure) -> Cause {
     use phy::dm::Stage;
     let stage = match error.stage {
@@ -50,24 +58,28 @@ fn tail_failure(error: phy::tail::Failure) -> Cause {
     Cause::Paths { stage, cause: error.cause, radio_stop: error.radio_stop }
 }
 
-fn initial<B: DeviceIo>(session: &mut Session<'_, '_, '_, B>, board: &Board, caps: &Capabilities) -> Result<Observations, Cause> {
-    let mut phy = Phy::new(session, board.identity);
+pub(crate) fn prepare<B: DeviceIo>(phy: &mut Phy<'_, Session<'_, '_, '_, B>>, board: &Board,
+    caps: &Capabilities) -> Result<Prepared, Cause> {
+    if phy.identity() != board.identity || caps.session() != phy.bus_between_stages().command_session() {
+        return Err(Cause::Capabilities);
+    }
     let _gain = phy.baseband().map_err(Cause::Phy)?;
     phy.radio().map_err(Cause::Phy)?;
-    let coexistence = btc_context::initialize(&mut phy, board).map_err(Cause::Coexistence)?;
-    coexistence.validate(&mut phy, 10_000).map_err(Cause::Validation)?;
-    let prefix = phy::dm::run(&mut phy, dack::Band::Ghz2).map_err(dm_failure)?;
+    let coexistence = btc_context::initialize(phy, board).map_err(Cause::Coexistence)?;
+    coexistence.validate(phy, 10_000).map_err(Cause::Validation)?;
+    let prefix = phy::dm::run(phy, dack::Band::Ghz2).map_err(dm_failure)?;
     phy.nctl().map_err(Cause::Phy)?;
     let rck = phy.rck().map_err(Cause::Phy)?;
     let dack = phy.dack(dack::Band::Ghz2).map_err(Cause::Dack)?;
-    coexistence.validate(&mut phy, 10_000).map_err(Cause::Validation)?;
+    coexistence.validate(phy, 10_000).map_err(Cause::Validation)?;
     let rxdck = phy.rxdck(dack::Band::Ghz2).map_err(Cause::Rxdck)?;
-    coexistence.validate(&mut phy, 10_000).map_err(Cause::Validation)?;
-    let paths = phy::tail::run(&mut phy, board, &prefix, caps, phy::tail::Subband::Ghz2).map_err(tail_failure)?;
-    coexistence.validate(&mut phy, 10_000).map_err(Cause::Validation)?;
+    coexistence.validate(phy, 10_000).map_err(Cause::Validation)?;
+    let paths = phy::tail::run(phy, board, &prefix, caps, phy::tail::Subband::Ghz2).map_err(tail_failure)?;
+    coexistence.validate(phy, 10_000).map_err(Cause::Validation)?;
     let session = phy.bus_between_stages();
-    Ok(Observations { thermal: prefix.thermal, rck, dack, rxdck, rx_path: paths.rx_path, rx_nss: paths.rx_nss,
-        submitted: session.submitted(), received: session.counts(), encoded_rts: 0 })
+    let observations = Observations { thermal: prefix.thermal, rck, dack, rxdck, rx_path: paths.rx_path, rx_nss: paths.rx_nss,
+        submitted: session.submitted(), received: session.counts(), encoded_rts: 0 };
+    Ok(Prepared { owner: coexistence, prefix, paths, observations })
 }
 
 /// Consume this successful firmware startup once; retain command/RX backing memory and shut down after either result.
@@ -80,7 +92,10 @@ pub fn diagnose<B: DeviceIo>(bus: &mut B, queue: &mut Queue<'_>, rings: &mut rx:
     if !caps.belongs_to(&firmware) { return Err(fail(Cause::Capabilities)); }
     let mut observed = {
         let mut session = Session::new(bus, queue, rings, receiving, firmware, scratch).map_err(|e| fail(Cause::Session(e)))?;
-        initial(&mut session, board, caps).map_err(|cause| Failure { cause, coexistence: btc_context::last_rfk_failure(&session) })?
+        let mut phy = Phy::new(&mut session, board.identity);
+        prepare(&mut phy, board, caps).map_err(|cause| Failure {
+            cause, coexistence: btc_context::last_rfk_failure(phy.bus_between_stages()),
+        })?.observations
     };
     // The consumed Ready and ended command engine cannot be recreated; only the final register tail and shutdown follow.
     let reports = report_tail::configure(bus, queue, rings, receiving, None).map_err(|error| {

@@ -75,3 +75,20 @@ composition and cleanup. Two independent source reviews found no additional
 composition defect. The full x86 image build passed in 1 s; no physical-device
 initialization, calibration quality, channel service or network traffic was
 observed, and the overall gate remains open.
+
+
+## Live continuation for the private channel path
+
+The crate-private `initial_phy::prepare` runs the same initial sequence and
+returns its actual BTC owner, DM prefix and configured receive paths while
+retaining the caller's live `Phy<Session>`. It checks board identity and the
+capability query's command session before MMIO. The public diagnostic reuses
+this function, records observations and still ends with mandatory shutdown;
+its behavior does not become a persistent network service.
+
+The channel coordinator's cumulative fixtures now call that same production
+initialization function instead of repeating the earlier stages in test code.
+This preserves the actual initialization owner checks and sequence for later
+channel/station integration. Full x86 build passed in 2 s; both focused
+harnesses compile. Execution awaits source publication. No native transmission,
+new policy authority or hardware evidence is added by this continuation.

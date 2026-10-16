@@ -32,8 +32,10 @@ is retained by disabling hardware sequence substitution. The chip appends FCS.
 RPQ reports contain status, QSEL, MAC ID and WP tag, but no attempt counter.
 The independent MAC C2H diagnostic uses category 1, MISC class 9, function 1;
 its 32-byte payload carries four-bit SW_DEFINE in word 2 and six-bit data TX
-count in word 5. A pure codec preserves it, but the engine does not depend on
-that smaller correlation space or infer a count from DMA consumption.
+count in word 5. The engine requests it with SPE_RPT and SW_DEFINE, preserving its raw
+counter separately from descriptor completion and on-air attempts. Live
+checks require PTCLRPT_FULL_HDL.SPE_RPT_PATH=WLCPU, established by the actual
+runtime-MAC stage; missing forwarding refuses descriptor publication.
 
 Each WD selects DATA_TXCNT_LMT=1, a fixed legacy rate with DISDATAFB, no
 aggregation and no RTS/HW_RTS. The pinned source packs that field directly
@@ -47,13 +49,14 @@ on a different chip, not RTL8852BE hardware evidence.
 Accordingly every `Completion` retains the actual RPQ `Status`, ACK result,
 completed-descriptor count and **`AttemptCount::Unknown`**. It cannot satisfy
 `wlanhw` 1.1's exact on-air attempts contract, and no service adapter or native
-start is exposed. The optional firmware codec also names its value
-`raw_data_tx_count`; it is not silently substituted for a final correlated
-on-air count. Resolving this boundary requires exact-chip primary semantics
+start is exposed. The actual correlated firmware result is named
+`raw_data_tx_count`; it is not silently substituted for an established on-air
+count. Resolving this boundary requires exact-chip primary semantics
 or independent physical observation before the adapter can open.
 
-The engine advances its descriptor count only after both the matching RPQ
-status and PCI read-index consumption. DONE ends the request; a group address
+The engine advances its descriptor count only after matching RPQ status, PCI
+read-index consumption and a consistent final C2H report have all arrived.
+DONE ends the request; a group address
 always returns `acked=false` and is never resubmitted. RETRY_LIMIT permits
 another descriptor up to the caller's explicit submission limit, preserving
 sequence and setting the MPDU Retry bit. This is not yet a promised bound on
@@ -68,26 +71,41 @@ The caller supplies 135,168 disjoint coherent WB bytes below 4 GiB on x86-64,
 with strongly ordered UC MMIO and no aliases. Five 32-entry TXBD rings occupy
 the first page; 32 separate 4 KiB slots hold each WD and payload. Only one
 logical MPDU is outstanding. This is deliberate for the synchronous `send`
-contract; there is no per-packet heap allocation. RXQ routing stays with its
-session owner; each poll consumes at most one RPQ descriptor through the real
-owned RX engine, copying data before the RX ring returns ownership.
+contract; there is no per-packet heap allocation. The future session owner
+must give this engine exclusive RXQ/RPQ polling
+while a request is pending. Separate `poll_receive` and `poll` calls each
+consume at most one descriptor through the actual RX engine. Unrelated C2H,
+Wi-Fi and descriptor-drop observations are returned explicitly; callers must
+handle returned packet bytes before reusing scratch. Nothing silently steals
+BTC/ACK/data traffic, and both methods share the same absolute/call budget.
 
-A payload is immutable until its actual RPQ release and descriptor consumption
-are both observed, following `pci.c::rtw89_pci_release_txwd_skb` and
+A payload is immutable until its actual RPQ release, descriptor consumption
+and final correlated firmware report are all observed. The RPQ and descriptor
+requirements follow `pci.c::rtw89_pci_release_txwd_skb` and
 `rtw89_pci_reclaim_txbd`. The source's extra eight-packet retention applies to
 FWCMD, not these RPQ-released payloads. Release/Acquire fences constrain CPU
 ordering; x86 coherent WB/UC ordering supplies the device-visible ordering.
 The allocation is retained even after errors, stop or object drop; only
 external verified PCI quiescence permits its owner to free it.
 
-WP tags rotate at 15 bits and descriptor indices at 32 only after earlier
-ownership is resolved. This follows the device's release-report protocol,
-which does not provide an unbounded generation ID. A recent exact duplicate
-is harmless; a wrong tag/QSEL/MAC ID, polluted or conflicting report poisons
-the session. A timeout or uncertain doorbell never permits later reuse or
-restart. Thus unresolved late reports cannot be carried across tag rollover;
-an arbitrary device replay from an already completed older generation is not
-a hardware guarantee established by this source or these tests.
+WP tags rotate at 15 bits, firmware tags at four bits and descriptor indices
+at 32 only after earlier ownership is fully resolved. Final firmware report
+selection follows `mac.c::rtw89_mac_c2h_tx_rpt`: DONE or the configured count
+reached; earlier unsuccessful reports do not release ownership. Raw counters
+cannot regress within a descriptor; final RPQ/C2H statuses must agree. The
+raw counts of completed descriptors are accumulated in a checked `u16`.
+Recent exact duplicates are harmless; malformed, contradictory or foreign
+reports poison the session. A timeout or uncertain doorbell never permits
+later reuse or restart, including if a late report subsequently arrives.
+
+The explicit firmware/device TCB contract is that an ordered terminal C2H
+ends that descriptor's report stream and matching RPQ releases its DMA
+payload. The upstream `mac.h::rtw89_tx_rpt_init/rtw89_tx_rpt_skb_add` cycles the
+same four-bit space; this engine is stricter because it never overwrites an
+unresolved tag. It supports ordinary continued operation beyond sixteen
+packets. Arbitrary replay of an already terminal report after a complete tag
+cycle is outside this protocol contract, rather than asserted impossible by
+synthetic tests or used as an artificial sixteen-packet lifetime limit.
 
 Each request has an absolute 1..1,000,000 microsecond caller budget, checked
 before publication and after final completion. Clock regression fails closed.
@@ -115,6 +133,19 @@ does not prove over-the-air transmission, acknowledgements or timing.
 Native integration must first validate the actual completed channel token,
 current policy and PHY/session identity, install this disjoint DMA before
 mastering, configure CMAC and the zero-to-active scheduler transition, and
-give this owner exclusive RPQ status routing. Existing receive-only permits
+give this owner exclusive RXQ/RPQ status routing. Current BTC `Session` owns
+`&mut Rings`; it cannot coexist with an independent TX RXQ poller. A concrete
+central dispatcher or explicit session handoff remains necessary. Existing receive-only permits
 intentionally reject active ordinary TX and must not be bypassed or relaxed
 by raw mask changes. Association, WPA2 and hardware traffic remain open.
+
+### Final-C2H extension (execution pending)
+
+Twenty-four combined TX fixtures compile, including all six orderings of
+DMA/RPQ/final-C2H completion, intermediate reports, raw counter versus
+completed-descriptor count, terminal missing/late reports, contradictory
+statuses/tags, shared frozen-clock bounds and preservation of other RXQ
+traffic. Existing 320-packet and 32,770-packet rotations now use actual modeled
+C2H headers and repeatedly reuse four-bit tags. The model emits reports only
+after reading a published descriptor, and overwrites released RX bytes.
+These additions have not run before their required source publication.

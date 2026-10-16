@@ -1,5 +1,5 @@
-use crate::{btc_context, btc_session::Session, channel_power::Constraints, channel_rfk::{self, Authorities, Cause, Stage},
-    dack::Band, download, fwcmd, model, phy::{self, Phy, State, channel::{self, CalibrationEngine as Engine, CalibrationTransmit}},
+use crate::{btc_session::Session, channel_power::Constraints, channel_rfk::{self, Authorities, Cause, Stage},
+    download, fwcmd, initial_phy, model, phy::{Phy, State, channel::{self, CalibrationEngine as Engine, CalibrationTransmit}},
     phycap, post_mac, runtime_mac, rx};
 #[path="rtw89_initial_phy_device.rs"] mod device;
 use device::{Device, channel::ChannelModel};
@@ -19,9 +19,8 @@ fn run(speed:u8, setup:impl FnOnce(&mut Device), invalid:u8,
         let(result,state)={
             let mut session=Session::new(&mut d,&mut queue,&mut rings,&receiving,ready,&mut scratch).unwrap();
             let mut phy=Phy::new(&mut session,board.identity);
-            phy.baseband().unwrap();phy.radio().unwrap();let owner=btc_context::initialize(&mut phy,&board).unwrap();
-            let prefix=phy::dm::run(&mut phy,Band::Ghz2).unwrap();phy.nctl().unwrap();phy.rck().unwrap();phy.dack(Band::Ghz2).unwrap();phy.rxdck(Band::Ghz2).unwrap();
-            let configured=phy::tail::run(&mut phy,&board,&prefix,&caps,phy::tail::Subband::Ghz2).unwrap();
+            let initial=initial_phy::prepare(&mut phy,&board,&caps).unwrap();
+            let (owner,prefix,configured)=(initial.owner,initial.prefix,initial.paths);
             let policy=channel::Policy::resolve(&board,channel::Rule{country:*b"US",version:1,center_mhz:2437,
                 access:channel::Access::InitiateRadiation,eirp_half_dbm:40,conducted_half_dbm:34},
                 channel::Platform::Resolved(Constraints{per_ntx:[30,24],per_path:[30,30]})).unwrap();

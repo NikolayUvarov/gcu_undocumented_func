@@ -781,3 +781,27 @@ failures. No native caller or IDL/ABI change is part of this library stage;
 activation still requires actual channel/calibration/policy and CMAC setup.
 Register meaningful descriptor, ring, status and cleanup fixtures in the host
 gate; run them only after own commit/build and raw publication.
+
+
+### Shared live initial-PHY continuation
+
+Extract the existing ordered native diagnostic initialization into a private
+`prepare` function retaining actual BTC/DM/path state on the live PHY session.
+The diagnostic still shuts down; channel cumulative tests use the production
+function, including its owner validations, rather than duplicating startup.
+Own full x86 build passes and focused harnesses compile; execution follows raw
+publication. Native channel admission and station/service activation remain
+separate open work.
+
+### Correlated final firmware TX reports
+
+Request actual special C2H reports and retain each TX payload until matching
+RPQ, PCI consumption and final firmware status have all arrived. Follow the
+pinned final-report rule (DONE or configured counter reached), cycle the
+four-bit report identity only after completion, and fail terminally on timeout
+or contradiction. Preserve the raw firmware count without equating it to an
+unverified on-air attempts contract. An owned RXQ polling entry returns other
+C2H/data packets explicitly; it cannot silently steal the session's traffic.
+The firmware's ordered terminal-report behavior is an explicit TCB assumption,
+consistent with the upstream driver's tag reuse; arbitrary firmware replay
+is outside that contract. Native activation remains closed.
