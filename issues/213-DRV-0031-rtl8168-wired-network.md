@@ -48,3 +48,17 @@ Runtime faults and a 5 s TX-completion watchdog stop new work, request platform 
 The startup register baseline is adapted from FreeBSD commit `16a79708d089423ec0c3d32f25e7ca97ae58e97b` under BSD-4-Clause, with original notices, exact source hashes and the required acknowledgement in `LICENSES/`, `THIRD_PARTY.md` and the hardware notes. This product includes software developed by Bill Paul. No Linux GPL implementation or firmware payload is imported. The baseline does not apply Linux's PHY patch or vendor tuning; its adequacy on a cold Ryzen boot remains a concrete hardware-validation question, not a guarantee.
 
 Own-branch release build passes. After own-branch implementation commit `e89fb569` was published through fast-test merge `91059a37`, all sixteen focused host regressions passed: eight new controller regressions and eight existing descriptor/identity regressions. The staged DMA/master-enable delta received an independent read-only review with no blocking defect; its verified-quiesce claim requires KRN-0114's checked PCI readback. Further pinned FreeBSD model decoding identifies PHY `001cc800` as RTL8251, which that driver explicitly excludes from legacy DSP programming; this supports the selected baseline without asserting equivalence to Linux's tuning. The hardware notes contain the first-boot evidence checklist. The task stays open until connected-link, DHCP, authenticated HTTPS, load, unplug/replug and restart criteria are measured on the actual Ryzen. QEMU cannot emulate this RTL8168G variant.
+
+### Deadline audit follow-up (2026-10-16)
+
+The pre-hardware review confirmed that the actual controller wait accepted a
+successful MMIO observation before checking its 50 ms PHYAR / 100 ms reset
+deadline. The separate PHY-reset loop accepted clear BMCR before its 500 ms
+check, and a final read could also cross the global 1500 ms startup limit.
+Keep all limits and finite iteration ceilings; validate monotonic time and
+both local/global budgets before and after the real production read. Add
+`prepare()` regressions for a boundary success, exact/late cutoff, oversleep,
+clock regression and no subsequent DMA/negotiation publication. Record the
+finding in `issues-audit` and actual post-publication host evidence separately.
+This is a deterministic controller bug, not a measured explanation of the
+Ryzen's currently unvalidated Ethernet connectivity or PHY tuning needs.

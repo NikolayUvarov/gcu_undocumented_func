@@ -34,13 +34,13 @@ pub trait Registers {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { WrongDevice, UnknownXid(u16), Mmio, Mac, Phy(u32), Reset, Mdio, PhyReset, Budget, Dma, State, Gone }
+pub enum Error { WrongDevice, UnknownXid(u16), Mmio, Mac, Phy(u32), Reset, Mdio, PhyReset, Budget, Clock, Dma, State, Gone }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Stopped, Prepared, Armed, Running, Failed }
 
 /// Only the observed RTL8168G XID is selected; a timeout never authorizes releasing its DMA region.
-pub struct Controller<R> { io: R, pub identity: Identity, pub mac: u64, pub phy: u32, state: State, started: u64 }
+pub struct Controller<R> { io: R, pub identity: Identity, pub mac: u64, pub phy: u32, state: State, started: u64, last: u64 }
 
 impl<R: Registers> Controller<R> {
     /// Reads identity and station address before any device write.
@@ -53,7 +53,7 @@ impl<R: Registers> Controller<R> {
         for offset in 0..6 { mac = (mac << 8) | io.read8(offset) as u64; }
         if mac == 0 || mac >> 40 & 1 != 0 { return Err(Error::Mac); }
         let started = io.now_ms();
-        Ok(Self { io, identity, mac, phy: 0, state: State::Stopped, started })
+        Ok(Self { io, identity, mac, phy: 0, state: State::Stopped, started, last: started })
     }
 
     pub fn state(&self) -> State { self.state }
@@ -61,16 +61,27 @@ impl<R: Registers> Controller<R> {
     fn change8(&mut self, at: usize, clear: u8, set: u8) { let value = self.io.read8(at); self.io.write8(at, value & !clear | set); }
     fn change32(&mut self, at: usize, clear: u32, set: u32) { let value = self.io.read32(at); self.io.write32(at, value & !clear | set); }
 
-    fn budget(&self) -> Result<(), Error> {
-        if self.io.now_ms().saturating_sub(self.started) >= STARTUP_MS { Err(Error::Budget) } else { Ok(()) }
+    fn clock(&mut self) -> Result<u64, Error> {
+        let now = self.io.now_ms();
+        if now < self.last { return Err(Error::Clock); }
+        self.last = now;
+        if now.checked_sub(self.started).ok_or(Error::Clock)? >= STARTUP_MS { return Err(Error::Budget); }
+        Ok(now)
+    }
+
+    fn budget(&mut self) -> Result<(), Error> { self.clock().map(|_| ()) }
+
+    fn deadline(&mut self, start: u64, timeout: u64, error: Error) -> Result<(), Error> {
+        if self.clock()?.checked_sub(start).ok_or(Error::Clock)? >= timeout { Err(error) } else { Ok(()) }
     }
 
     fn wait(&mut self, timeout: u64, error: Error, mut done: impl FnMut(&mut R) -> Result<bool, Error>) -> Result<(), Error> {
-        let start = self.io.now_ms();
+        let start = self.clock()?;
         for _ in 0..1000 {
-            self.budget()?;
-            if done(&mut self.io)? { return Ok(()); }
-            if self.io.now_ms().saturating_sub(start) >= timeout { return Err(error); }
+            self.deadline(start, timeout, error)?;
+            let complete = done(&mut self.io)?;
+            self.deadline(start, timeout, error)?;
+            if complete { return Ok(()); }
             self.io.sleep_ms(1);
         }
         Err(error)
@@ -106,6 +117,7 @@ impl<R: Registers> Controller<R> {
     pub fn prepare(&mut self) -> Result<(), Error> {
         if self.state != State::Stopped { return Err(Error::State); }
         self.started = self.io.now_ms();
+        self.last = self.started;
         let result = self.prepare_inner();
         self.state = if result.is_ok() { State::Prepared } else { State::Failed };
         result
@@ -126,11 +138,13 @@ impl<R: Registers> Controller<R> {
         self.phy = (self.mdio_read(2)? as u32) << 16 | self.mdio_read(3)? as u32;
         if self.phy != 0x001c_c800 { return Err(Error::Phy(self.phy)); }
         self.mdio_write(0, 0x8000)?;
-        let start = self.io.now_ms();
+        let start = self.clock()?;
         let mut reset = true;
         for _ in 0..100 {
-            if self.mdio_read(0)? & 0x8000 == 0 { reset = false; break; }
-            if self.io.now_ms().saturating_sub(start) >= 500 { break; }
+            self.deadline(start, 500, Error::PhyReset)?;
+            let value = self.mdio_read(0)?;
+            self.deadline(start, 500, Error::PhyReset)?;
+            if value & 0x8000 == 0 { reset = false; break; }
             self.io.sleep_ms(1);
         }
         if reset { return Err(Error::PhyReset); }
