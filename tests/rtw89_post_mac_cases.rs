@@ -199,3 +199,12 @@ fn session_counter_is_unique_and_exhaustion_stays_latched_without_wrap(){
     for _ in 0..3{assert!(io::next_dma_session(&counter).is_err());assert_eq!(counter.load(Ordering::Relaxed),u64::MAX);}
     let zero=AtomicU64::new(0);assert!(io::next_dma_session(&zero).is_err());assert_eq!(zero.load(Ordering::Relaxed),0);
 }
+
+#[test]
+fn active_packet_masks_never_satisfy_original_startup_receive_permit(){
+    let mut d=Device::new();let mut a=Region::new(fwcmd::DMA_BYTES);let mut b=Region::new(rx::DMA_BYTES);let(mut q,mut r)=prepared(&mut d,&mut a,&mut b);
+    let token=activate_inner(&mut d,&mut q,&mut r,&board(),runtime_mac::BAR_BYTES).unwrap();
+    d.put(fwcmd::DMA_STOP,4,0x20000);d.put(0xc348,4,0x010f);d.writes.clear();
+    assert!(token.validate(&mut d,&mut q,&r,1000).is_err());assert!(d.writes.is_empty());
+    stop(&mut d,&mut q,&mut r);
+}
