@@ -431,3 +431,38 @@ evidence separately. DRV-0032 remains blocked on this request for native
 transmit-policy admission; calibration/datapath development can continue
 without enabling transmission.
 
+## Native RTL8852BE radio endpoint after datapath admission
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The existing ASTRA-owned 213-KRN-0114 integration deliberately starts a
+diagnostic: the `rtw89_wifi` init branch lends BAR2, retained DMA and a firmware
+reader but no `SLOT_SERVICE`. `RADIOS` contains only `bcm_wifi` and `wlansim`.
+The new driver-side data owner therefore cannot become a usable station by
+itself. Please number the radio-service extension and coordinate activation
+with DRV-0032 rather than advertising the diagnostic as a working radio.
+
+- Give the selected RTL8852BE instance its `wlanhw` server endpoint and lend
+  its client only to `wlan`, preserving the original MacBook BCM4331 and QEMU
+  selections. Do not alter their authority or replace a running radio merely
+  because a second PCI device exists.
+- Provide an explicit bounded operator country/channel configuration, with
+  provenance separate from the device-bound platform policy requested above.
+  A stored Ubuntu regulatory setting is not operator confirmation, and missing
+  or invalid input must remain visible as unavailable radio service.
+- Preserve retained DMA, verified non-mastering restart and safe-start rules;
+  neither this endpoint nor its configuration grants ambient Platform access.
+  If an interface changes, version it and document the migration.
+- Sequence the change with the actual persistent driver loop and its admitted
+  capabilities. Initial driver support may advertise one explicitly admitted
+  2.4 GHz / 20 MHz channel; other channels must be rejected, never reported as
+  tuned. A running diagnostic process is not an endpoint-readiness signal.
+
+Acceptance: fixtures cover no Realtek device, missing/invalid configuration,
+driver initialization refusal, exact endpoint ownership and preserved BCM4331
+and wlansim routing. The original Intel MacBook and Ryzen must separately
+establish association, DHCP and ping under test load before physical readiness
+is claimed. Driver DMA partitioning, active RX/TX and service dispatch stay in
+DRV-0032; this request does not transfer their implementation to KRN.
+
