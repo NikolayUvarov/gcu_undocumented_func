@@ -900,3 +900,9 @@ count. Preserve group-address ACK semantics and the caller's 1..15 attempt bound
 Add focused impossible-counter/retention regressions and update the real cold
 data-mode fixture. The service IDL remains unchanged; own build, raw publication
 and affected host runs precede evidence updates. Physical traffic remains open.
+
+Source `a332c81c` built on the own branch and, after raw publication `554cbada`,
+passed complete TX 241, DataSession 254 and RX 20 host cases (zero failures;
+the first two retain their existing single private-file ignore). The focused
+29 TX and 13 cold data-mode cases are included. Source, configuration and
+limitations are recorded in the counter notes; no physical result is inferred.
