@@ -66,3 +66,4 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/txdesc.rs"]mod txdesc;
 #[path="../rtw89_wifi/src/tx.rs"]mod tx;
 #[path="../rtw89_wifi/src/frames.rs"]mod frames;
+#[path="rtw89_connection_cases.rs"]mod connection_cases;
