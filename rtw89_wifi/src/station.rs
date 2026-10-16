@@ -22,6 +22,8 @@ pub(crate) enum Stage{Guard,Port,Tables,MacId,Role,Join,Cam,Control,Verify}
 pub(crate) enum Cause{Register(Fault),Session(btc_session::Error),Owner(btc_context::Error)}
 impl From<Fault> for Cause{fn from(value:Fault)->Self{Self::Register(value)}}
 impl From<btc_session::Error> for Cause{fn from(value:btc_session::Error)->Self{Self::Session(value)}}
+#[derive(Clone,Copy,Debug,Eq,PartialEq)]
+pub(crate) struct CheckFailure{pub cause:Fault,pub selector_restore:Option<Fault>}
 #[derive(Debug)]
 pub(crate) struct Failure{pub stage:Stage,pub cause:Cause,pub radio_stop:Option<Fault>,pub port_stop:Option<Fault>,pub selector_restore:Option<Fault>}
 /// One initial client role with MACID/port/CAM zero; this is neither association nor TX permission.
@@ -33,11 +35,46 @@ impl Prepared{
             &&self.policy_version==tuned.policy_version&&self.mac==mac&&self.attempt!=0&&self.session!=0
     }
     pub(crate) fn mac_id(&self)->u8{0}
+    pub(crate) fn mac(&self)->[u8;6]{self.mac}
+    /// Fixed station-register checks only; the caller supplies its time window and actual device/session ownership.
+    /// This neither accepts active DMA ownership nor grants transmission; it preserves unrelated firmware fields.
+    pub(crate) fn check_registers(&self,bus:&mut impl RegisterIo)->Result<(),CheckFailure>{
+        let selector=io::read32(bus,SELECTOR).map_err(|cause|CheckFailure{cause,selector_restore:None})?;
+        let result=verify(bus,&self.cmac);let restore=select(bus,selector).and_then(|()|bus.delay_us(0)).err();
+        match(result,restore){(Ok(()),None)=>Ok(()),(Err(cause),selector_restore)=>Err(CheckFailure{cause,selector_restore}),
+            (Ok(()),Some(cause))=>Err(CheckFailure{cause,selector_restore:Some(cause)})}
+    }
+    /// Revalidate before consuming this context into data activation; the stopped-TX PHY/RX contract remains unchanged.
+    pub(crate) fn validate<B:DeviceIo>(&self,phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board,tuned:&channel::Tuned,
+        owner:&Initialized,timeout_us:u32)->Result<(),Failure>{
+        let bare=|cause|Failure{stage:Stage::Guard,cause,radio_stop:None,port_stop:None,selector_restore:None};
+        let session=phy.bus_between_stages().command_session();
+        if timeout_us==0||timeout_us>10_000||phy.state()!=State::ChannelTuned||phy.identity()!=board.identity
+            ||phy.bus_between_stages().bar_len()<BAR_BYTES||self.attempt!=phy.attempt()||self.session!=session
+            ||!self.matches(tuned,board.identity.mac)||!owner.matches(self.attempt,session){return Err(bare(fault(0,0).into()));}
+        let start=phy.bus_between_stages().now_us();let mut selector_restore=None;let mut stage=Stage::Guard;
+        let result=(||{
+            owner.validate(phy,timeout_us).map_err(Cause::Owner)?;
+            budget(phy.bus_between_stages(),start,u64::from(timeout_us))?;
+            phy::guard(phy.bus_between_stages(),&board.identity,phy::RegisterPhase::AfterDack)?;
+            let left=budget(phy.bus_between_stages(),start,u64::from(timeout_us))?;stage=Stage::Verify;
+            let mut timed=TimedIo::new(phy.bus_between_stages(),u64::from(left));
+            self.check_registers(&mut timed).map_err(|e|{selector_restore=e.selector_restore;Cause::Register(e.cause)})?;
+            budget(phy.bus_between_stages(),start,u64::from(timeout_us))?;Ok(())
+        })();
+        result.map_err(|cause|{
+            let radio_stop=phy::disable_bb_rf(phy.bus_between_stages()).err();phy.mark_failed();
+            let port_stop={let mut timed=TimedIo::new(phy.bus_between_stages(),1_000);
+                field(&mut timed,PORT,4|1<<9|1<<12,0).and_then(|()|timed.delay_us(0)).err()};
+            Failure{stage,cause,radio_stop,port_stop,selector_restore}
+        })
+    }
 }
 fn fault(at:usize,value:u32)->Fault{Fault::new(FaultKind::PowerState,at,value)}
-fn remaining(bus:&mut impl RegisterIo,start:u64)->io::Result<u32>{
+fn remaining(bus:&mut impl RegisterIo,start:u64)->io::Result<u32>{budget(bus,start,TOTAL_US)}
+fn budget(bus:&mut impl RegisterIo,start:u64,limit:u64)->io::Result<u32>{
     let used=bus.now_us().checked_sub(start).ok_or(Fault::new(FaultKind::Clock,0,0))?;
-    TOTAL_US.checked_sub(used).filter(|v|*v>0).map(|v|v as u32).ok_or(Fault::new(FaultKind::Timeout,0,0))
+    limit.checked_sub(used).filter(|v|*v>0).map(|v|v as u32).ok_or(Fault::new(FaultKind::Timeout,0,0))
 }
 fn field(bus:&mut impl RegisterIo,at:usize,mask:u32,bits:u32)->io::Result<()>{
     io::modify32(bus,at,mask,bits)?;let value=io::read32(bus,at)?;
