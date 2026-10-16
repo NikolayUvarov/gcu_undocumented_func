@@ -789,6 +789,8 @@ of wrapping and misidentifying a delayed old ACK. Reconstructing an engine
 against the same live firmware session is outside its contract. Continuous
 operation needs a separate ordered C2H-drain/session-recovery contract; a
 firmware reset every 256 commands is not an implemented networking service.
+The later [serial runtime continuation](rtl8852be-h2c-runtime.md) keeps this
+startup default and permits reuse only through the actual idle packet owner.
 The native firmware diagnostic does not invoke this library or activate RX.
 
 `btc.rs` reads the actual BT-side scoreboard at BAR2 `0xac`, polling RFK RUN

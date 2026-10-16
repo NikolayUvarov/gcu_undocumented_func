@@ -79,9 +79,10 @@ The [owned runtime BTC continuation](rtl8852be-btc-runtime.md) processes known
 BT events during actual command waits and reconciles the current normal/no-link
 policy in finite batches. Associated-role/scan-policy inputs are not inferred
 from a raw address filter; that larger policy boundary remains explicit.
-The normal H2C engine still refuses command 257 instead of wrapping without
-a receive-order contract. This is an initial-session prerequisite, not a complete
-continuous service. Native input/grants, reset/reconnect, service dispatch and
+The [serial runtime H2C continuation](rtl8852be-h2c-runtime.md) preserves the
+startup bound while admitting sustained commands only through the actual idle
+packet owner, with per-command receipt, requested DONE and DMA completion.
+Native input/grants, reset/reconnect, service dispatch and
 physical under-load validation remain open under DRV-0032.
 
 ## Validation

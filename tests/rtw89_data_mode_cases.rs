@@ -43,17 +43,18 @@ fn run(fault:u8,configure:bool,inbox:bool,check:impl FnOnce(&mut DataSession<'_,
                 let prep=prep.unwrap();drop(phy);control.borrow_mut().armed=true;control.borrow_mut().fault=fault;
                 if fault==8{control.borrow_mut().old=3;}
                 match DataSession::activate(session,&mut tx,prep){Ok(mut data)=>{
-                    assert!(!matches!(fault,1..=6|9..=13));check(&mut data,&control);data.shutdown();
+                    assert!(!matches!(fault,1..=6|9..=13|15));check(&mut data,&control);data.shutdown();
                 },Err(mut failed)=>{
-                    assert!(matches!(fault,1..=6|9..=13),"unexpected {:?}",failed.failure);
+                    assert!(matches!(fault,1..=6|9..=13|15),"unexpected {:?}",failed.failure);
+                    if fault==15{assert_eq!(failed.failure.stage,Stage::Verify);}
                     assert!(failed.failure.shutdown.is_some());let before=failed.owner.shutdown();let after=failed.owner.shutdown();
                     assert_eq!(format!("{before:?}"),format!("{after:?}"));
                 }};
 
             }
         }
-        if matches!(fault,1..=6|9..=13){assert_eq!(d.station.base.inner.get(2,1)&3,0);
-            assert_eq!(d.scheduler,usize::from(matches!(fault,3|4|6)));assert_eq!(d.shutdowns,1);assert!(d.published.is_empty());}
+        if matches!(fault,1..=6|9..=13|15){assert_eq!(d.station.base.inner.get(2,1)&3,0);
+            assert_eq!(d.scheduler,usize::from(matches!(fault,3|4|6|15)));assert_eq!(d.shutdowns,1);assert!(d.published.is_empty());}
         assert!(d.published.iter().all(|f|f[10..16]==[2,3,4,5,6,7]));
         rings.stop(&mut d);runtime_mac::disable_radio(&mut d).unwrap();download::stop(&mut d,&mut queue);model::power_off(&mut d.station.base.inner);
     });
@@ -118,3 +119,4 @@ fn control_overflow_stays_terminal_and_retains_fifth_record(){run(0,true,true,|d
 });}
 
 #[path="rtw89_btc_runtime_cases.rs"]mod btc_runtime;
+#[path="rtw89_h2c_data_cases.rs"]mod h2c_runtime;
