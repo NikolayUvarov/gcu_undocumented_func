@@ -4,7 +4,9 @@ use rtw89_wifi::{fwcmd, io::{self, Fault, FaultKind, RegisterIo, TimedIo}};
 
 pub const DMA_GRANT_BYTES: usize = 8 * 1024 * 1024;
 pub const COMMAND_REGION_BYTES: usize = 128 * 1024;
-pub const RECEIVE_REGION_BYTES: usize = DMA_GRANT_BYTES - COMMAND_REGION_BYTES;
+pub const RECEIVE_REGION_BYTES: usize = rtw89_wifi::rx::DMA_BYTES;
+pub const TRANSMIT_REGION_OFFSET: usize = COMMAND_REGION_BYTES + RECEIVE_REGION_BYTES;
+pub const TRANSMIT_REGION_BYTES: usize = DMA_GRANT_BYTES - TRANSMIT_REGION_OFFSET;
 const STOP_ALL: u32 = 0x001f_0f03;
 const STOP_DATA: u32 = 0x000b_0f03;
 const HCI: u32 = 1 << 11 | 1 << 13;
@@ -43,7 +45,7 @@ pub fn power_off_ready(bus: &mut impl RegisterIo) -> io::Result<()> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Stage { Verify, Dma, Power, Mac, Pcie, Install, Finish, InstallReceive, Resume, Start, Download, PhyCap, RuntimeMac, Receive, InitialPhy }
+pub enum Stage { Verify, Dma, Power, Mac, Pcie, Install, Finish, InstallReceive, InstallTransmit, Resume, Start, Download, PhyCap, RuntimeMac, Receive, InitialPhy }
 
 pub trait Diagnostic {
     type Error;
@@ -69,7 +71,7 @@ pub fn run<D: Diagnostic>(device: &mut D) -> Report<D::Error> {
     for stage in [Stage::Verify, Stage::Dma] {
         if let Err(error) = device.step(stage) { report.failure = Some((stage, error)); return report; }
     }
-    for stage in [Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install, Stage::Finish, Stage::InstallReceive,
+    for stage in [Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install, Stage::Finish, Stage::InstallReceive, Stage::InstallTransmit,
         Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive, Stage::InitialPhy] {
         if let Err(error) = device.step(stage) { report.failure = Some((stage, error)); break; }
     }

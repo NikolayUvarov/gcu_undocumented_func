@@ -1,6 +1,6 @@
 # 213-DRV-0032 — Bring up the Ryzen RTL8852BE Wi-Fi adapter
 
-**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
+**Type:** driver · **Owner:** ASTRA auditor-fixer, for `DRV`, with `KRN` and `NET` integration · **Priority:** P1 (the maintainer's first network priority, 2026-10-15) · **Status:** open · **Blocked by:** [213-DRV-0033](213-DRV-0033-rtl8852be-firmware-and-probe.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [device-bound platform policy](requests-KRN.md#device-bound-platform-power-policy-for-the-ryzen-wlan-driver), [native radio endpoint](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission), hardware calibration and radio bring-up · **Main task:** [213](213-amd-ryzen-pc.md), [550](550-network-on-real-hardware.md) · **Roadmap:** tracks H, A, D · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, Appendix B.6
 
 ## Problem
 
@@ -771,10 +771,10 @@ queues for band-zero management and four ordinary access categories. Use a
 fixed legacy rate, no aggregation or hardware sequence replacement, a selected
 hardware limit of one and no RTS. Count actual DONE/RETRY_LIMIT RPQ-completed
 descriptors separately from DMA consumption; bound resubmission to 1..15
-descriptors with the original sequence and Retry bit. The exact-chip
-transmission-versus-retry limit semantics remain unresolved, so preserve raw
-status and explicit `AttemptCount::Unknown`; the exact-attempt `wlanhw` 1.1
-adapter stays closed until that boundary is resolved.
+descriptors with the original sequence and Retry bit. At this baseline the exact-chip transmission-versus-retry limit semantics
+were unresolved, so raw status and `AttemptCount::Unknown` were retained.
+The later [source-defined accounting follow-up](../hwdocs/rtl8852be-tx-attempts.md)
+resolves that semantic prerequisite for the existing `wlanhw` 1.1 interface.
 Lifetime/MACID drops cannot manufacture a transmission count. Preserve
 ownership on uncertain publication, malformed reports, deadlines or stop
 failures. No native caller or IDL/ABI change is part of this library stage;
@@ -869,7 +869,34 @@ and checks scheduler/DMA/radio state before exposing its internal packet API.
 The original startup ReceivePermit remains strict. One RX dispatcher handles
 ACKs, packet completion and software filtering during command waits; ordinary
 Wi-Fi pressure is counted/dropped instead of terminating the connection.
-Thirteen cold continuation cases and an original-permit regression compile;
-test execution follows own build and raw publication. Continuous BTC event
+Thirteen cold continuation cases and all thirteen affected host harnesses
+passed on own corrected source `974088b1` after raw `33fa88bf` publication
+(2026-10-16; counts, unchanged private ignore and first failed fixture run
+recorded in the linked notes). Continuous BTC event
 processing, H2C sequence reuse, native service exposure and physical under-load
 acceptance remain open. This slice does not establish a working Wi-Fi endpoint.
+
+### Native disjoint packet-TX installation (2026-10-16)
+
+The booted service now reserves and constructs the real packet-TX queue inside
+its retained 8 MiB grant, separately from command and RX memory, and installs it
+before requesting mastering. Packet transmission remains stopped: activation
+still requires the actual channel/platform admission and persistent data owner.
+Cleanup preserves every allocation and reports TX stop independently. See
+[the native layout and limits](../hwdocs/rtl8852be-data-mode.md#native-retained-packet-queues).
+Four new cumulative/layout fixtures and the twelve updated startup cases compile;
+execution awaits the required raw publication. Endpoint/configuration grants are
+tracked by the KRN request linked above; physical networking is not established.
+
+### Source-defined transmit attempt accounting
+
+Resolve the raw-TX attempt boundary using the upstream rtw89 author/maintainer
+discussion and the pinned RTL8852B descriptor/C2H implementation, detailed in
+[the attempt-counter source notes](../hwdocs/rtl8852be-tx-attempts.md). The selected
+limit of one means one transmission attempt. Return a checked known count from
+actual final C2H counters only after matching RPQ and DMA consumption; reject
+impossible counters and keep lifetime/drop/timeout failures without an invented
+count. Preserve group-address ACK semantics and the caller's 1..15 attempt bound.
+Add focused impossible-counter/retention regressions and update the real cold
+data-mode fixture. The service IDL remains unchanged; own build, raw publication
+and affected host runs precede evidence updates. Physical traffic remains open.

@@ -158,10 +158,16 @@ initial-PHY diagnostic chain, then shuts the device down. Its initial-PHY
 stage consumes the live firmware/RX owner and runs baseband/RF tables, BTC
 initialization, NCTL, RCK, DACK, RXDCK, DM tail and reporting in order. It does
 not register a WLAN endpoint, associate or provide IP connectivity. The
-channel/IQK/TSSI/DPK coordinator and raw-packet TX queues are private library
-stages; their existence does not activate native transmission. Platform and
-country policy, final station setup, integration and actual hardware checks
+channel/IQK/TSSI/DPK coordinator and station/data owner remain private library
+stages. Native startup now installs stopped packet-TX queues from a third,
+disjoint part of its retained 8 MiB DMA allocation before enabling mastering;
+this does not activate native transmission. Platform and country policy,
+native channel/station activation, integration and actual hardware checks
 remain required. No physical Ryzen traffic or RF performance is established.
+
+The native three-region installation builds with four new host fixtures and
+the updated twelve startup fixtures compiled, with execution pending raw
+publication; [layout and limits](../../hwdocs/rtl8852be-data-mode.md#native-retained-packet-queues).
 
 The latest native-chain evidence is recorded in
 [initial PHY notes](../../hwdocs/rtl8852be-initial-phy.md): five cumulative

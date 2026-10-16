@@ -149,22 +149,22 @@ fn actual_rpq_and_dma_are_both_required_and_group_done_is_not_acknowledged(){
         d.auto_dma=early_report==false;d.auto_rpq=early_report;q.begin(d,&frame(0,None,false),2,3,4,100_000).unwrap();
         assert_eq!(cycle(q,d,r,s).unwrap(),None);
         if early_report{d.complete_dma(4);}else{d.inject_last(Status::Done);}
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));
     });}
     run(|d,q,r,s,_|{q.begin(d,&frame(2,None,true),108,15,0,100_000).unwrap();
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:false,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));assert_eq!(d.published.len(),1);});
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:false,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));assert_eq!(d.published.len(),1);});
     run(|d,q,r,s,_|{let mut f=frame(2,None,false);f.resize(2346,0x6a);q.begin(d,&f,2,1,0,100_000).unwrap();
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));assert_eq!(d.published[0].frame,f);});
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));assert_eq!(d.published[0].frame,f);});
 }
 #[test]
 fn software_retries_only_after_confirmed_limit_keep_sequence_and_set_retry_bit(){
     run(|d,q,r,s,_|{d.statuses=vec![Status::RetryLimit,Status::RetryLimit,Status::Done];let f=frame(2,Some(7),false);
         q.begin(d,&f,48,5,3,100_000).unwrap();assert_eq!(cycle(q,d,r,s).unwrap(),None);assert_eq!(cycle(q,d,r,s).unwrap(),None);
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:3,raw_data_tx_count:3}));assert_eq!(d.published.len(),3);
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(3),completed_descriptors:3,raw_data_tx_count:3}));assert_eq!(d.published.len(),3);
         for(i,p)in d.published.iter().enumerate(){assert_eq!((p.q,p.qsel,p.seq),(3,3,i as u16));let mut expected=f.clone();if i>0{expected[1]|=8;}assert_eq!(p.frame,expected);}
     });
     run(|d,q,r,s,_|{d.statuses=vec![Status::RetryLimit;15];q.begin(d,&frame(0,None,false),22,15,0,100_000).unwrap();
-        for _ in 0..14{assert_eq!(cycle(q,d,r,s).unwrap(),None);}assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::RetryLimit,acked:false,attempts:AttemptCount::Unknown,completed_descriptors:15,raw_data_tx_count:15}));assert_eq!(d.published.len(),15);});
+        for _ in 0..14{assert_eq!(cycle(q,d,r,s).unwrap(),None);}assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::RetryLimit,acked:false,attempts:AttemptCount::Known(15),completed_descriptors:15,raw_data_tx_count:15}));assert_eq!(d.published.len(),15);});
 }
 #[test]
 fn lifetime_and_macid_drops_cannot_invent_actual_attempts_or_retry(){
@@ -177,14 +177,14 @@ fn lifetime_and_macid_drops_cannot_invent_actual_attempts_or_retry(){
 fn normal_ring_rotation_continues_beyond_sixteen_packets_and_reclaims_every_ownership(){
     run(|d,q,r,s,_|{for i in 0..320{
         let f=frame(2,Some((i%8)as u8),false);q.begin(d,&f,12,1,0,100_000).unwrap();
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));
     }assert_eq!(q.serial,320);assert_eq!(q.issued,q.completed);assert!(q.pending.is_none());assert_eq!(d.rx_written,[64;2]);
     assert!(d.published.windows(2).all(|p|p[1].seq==p[0].seq+1));});
 }
 #[test]
 fn wp_tag_wrap_occurs_only_after_prior_status_and_dma_and_host_counter_cannot_overflow(){
     run(|d,q,r,s,_|{for _ in 0..32770{q.begin(d,&frame(2,None,false),12,1,0,100_000).unwrap();
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));}
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));}
         assert_eq!(d.published[32767].seq,32767);assert_eq!(d.published[32768].seq,0);assert_eq!(q.serial,32770);
         assert_eq!(q.issued,q.completed);assert!(q.pending.is_none());
     });
@@ -236,7 +236,7 @@ fn invalid_input_busy_and_short_scratch_do_not_poison_a_valid_pending_frame(){
     run(|d,q,r,s,_|{assert!(q.begin(d,&[0;23],2,1,0,1000).is_err());assert_eq!(q.state(),State::Running);
         q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();assert_eq!(q.begin(d,&frame(0,None,false),2,1,0,1000),Err(Error::Busy));
         assert_eq!(q.poll(d,r,&mut[0;32]),Err(Error::Rx(rx::Error::Output)));assert_eq!(q.state(),State::Running);
-        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));});
+        assert_eq!(cycle(q,d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));});
 }
 #[test]
 fn altered_dma_mapping_count_index_or_inaccessible_pci_is_not_accepted(){
@@ -268,20 +268,48 @@ fn firmware_rpq_and_dma_all_finish_before_release_in_every_completion_order(){
                 1=>d.inject_last(Status::Done),_=>d.complete_dma(4)}
             let completion=q.poll(d,r,s).unwrap();
             if i<2{assert_eq!(completion,None);assert!(q.pending.is_some());assert_eq!(mem.bytes(BUFFERS_AT,STRIDE),held);}
-            else{assert_eq!(completion,Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:1,raw_data_tx_count:1}));}
+            else{assert_eq!(completion,Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(1),completed_descriptors:1,raw_data_tx_count:1}));}
         }
     });}
 }
 #[test]
-fn interim_failure_is_not_final_and_raw_firmware_count_is_not_descriptor_count(){
+fn interim_report_never_counts_and_only_final_firmware_attempts_accumulate(){
     run(|d,q,r,s,_|{d.auto_firmware=false;d.statuses=vec![Status::RetryLimit,Status::Done];
         q.begin(d,&frame(0,None,false),2,2,0,100_000).unwrap();
         d.firmware_last(Status::RetryLimit,0);assert_eq!(q.poll_receive(d,r,s).unwrap(),Receive::TxReport{final_report:false});
         assert_eq!(q.poll(d,r,s).unwrap(),None);assert_eq!(d.published.len(),1);
         d.firmware_last(Status::RetryLimit,1);assert_eq!(q.poll_receive(d,r,s).unwrap(),Receive::TxReport{final_report:true});
         assert_eq!(q.poll(d,r,s).unwrap(),None);assert_eq!(d.published.len(),2);
-        d.firmware_last(Status::Done,2);assert_eq!(q.poll_receive(d,r,s).unwrap(),Receive::TxReport{final_report:true});
-        assert_eq!(q.poll(d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Unknown,completed_descriptors:2,raw_data_tx_count:3}));
+        d.firmware_last(Status::Done,1);assert_eq!(q.poll_receive(d,r,s).unwrap(),Receive::TxReport{final_report:true});
+        assert_eq!(q.poll(d,r,s).unwrap(),Some(Completion{status:Status::Done,acked:true,attempts:AttemptCount::Known(2),completed_descriptors:2,raw_data_tx_count:2}));
+    });
+}
+#[test]
+fn impossible_firmware_attempts_poison_without_releasing_or_retrying(){
+    for (status,count) in [(Status::Done,0),(Status::Done,2),(Status::Done,63),(Status::RetryLimit,2)]{
+        run(|d,q,r,s,mem|{d.auto_firmware=false;
+            q.begin(d,&frame(0,None,false),2,15,0,100_000).unwrap();
+            let held=mem.bytes(BUFFERS_AT,STRIDE).to_vec();
+            assert_eq!(q.poll(d,r,s).unwrap(),None);assert_eq!(q.issued,q.completed);
+            d.firmware_last(status,count);assert_eq!(q.poll_receive(d,r,s),Err(Error::Report));
+            assert_eq!(q.state(),State::Faulted);assert!(q.pending.is_some());
+            assert_eq!(d.published.len(),1);assert_eq!(mem.bytes(BUFFERS_AT,STRIDE),held);
+            assert_eq!(q.begin(d,&frame(0,None,false),2,1,0,1000),Err(Error::State));
+        });
+    }
+}
+#[test]
+fn firmware_count_alone_never_claims_an_attempt_or_releases_payload(){
+    run(|d,q,r,s,mem|{d.auto_rpq=false;d.auto_dma=false;
+        q.begin(d,&frame(0,None,false),2,15,0,100_000).unwrap();
+        let held=mem.bytes(BUFFERS_AT,STRIDE).to_vec();
+        assert_eq!(q.poll_receive(d,r,s).unwrap(),Receive::TxReport{final_report:true});
+        assert_eq!(q.poll(d,r,s).unwrap(),None);assert_eq!(q.request.as_ref().unwrap().raw_count,0);
+        assert_eq!(q.request.as_ref().unwrap().completed,0);assert_eq!(d.published.len(),1);
+        assert_eq!(mem.bytes(BUFFERS_AT,STRIDE),held);
+        d.inject_last(Status::Lifetime);d.complete_dma(4);
+        assert_eq!(q.poll(d,r,s),Err(Error::Dropped{status:Status::Lifetime,completed_descriptors:0}));
+        assert!(q.pending.is_some());assert_eq!(q.request.as_ref().unwrap().raw_count,0);
     });
 }
 #[test]
@@ -299,7 +327,7 @@ fn firmware_wrong_tag_counter_regression_conflict_or_rpq_disagreement_are_termin
     for mode in 0..5{run(|d,q,r,s,_|{d.auto_firmware=false;q.begin(d,&frame(0,None,false),2,1,0,100_000).unwrap();
         match mode{
             0=>d.packet(0,10,&Device::firmware_bytes(1,Status::Done,1)),
-            1=>{d.firmware_last(Status::RetryLimit,2);q.poll_receive(d,r,s).unwrap();d.firmware_last(Status::Done,1);},
+            1=>{d.firmware_last(Status::RetryLimit,1);q.poll_receive(d,r,s).unwrap();d.firmware_last(Status::RetryLimit,0);},
             2=>{d.firmware_last(Status::Done,1);q.poll_receive(d,r,s).unwrap();d.firmware_last(Status::RetryLimit,1);},
             3=>d.firmware_last(Status::RetryLimit,1),
             _=>{let mut p=Device::firmware_bytes(0,Status::Done,1);p[4]=31;d.packet(0,10,&p);},

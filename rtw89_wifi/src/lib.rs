@@ -20,6 +20,7 @@ pub mod firmware;
 pub mod fwcmd;
 pub mod h2c;
 pub mod io;
+pub mod native_dma;
 #[allow(dead_code)]
 pub(crate) mod tx;
 #[allow(dead_code)]

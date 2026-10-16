@@ -105,3 +105,39 @@ completion but failed to reach the requested expiry. The correction advances
 the modeled monotonic clock explicitly beyond the original request deadline
 and retains the timeout/no-later-success assertions. Production code is
 unchanged; the failing log remains `/tmp/rtw89-data-mode-focused-12a98125.log`.
+
+
+Corrected source `974088b104d11671cdcaadff8707a38f3fbf009e` passed all
+13 focused cold cases (0.17 s, no failures/ignores) on its own branch after
+raw `33fa88bff00df750b3265d4dacd9be72716f93a3` publication. All affected
+complete harnesses also passed (2026-10-16; overlapping tests, not a sum of
+independent cases): data mode 252, BTC init 239, BTC Session 239, calibration
+policy 251, channel RFK 246, DPK 239, initial PHY 244, IQK 239, PHY 344,
+pipeline MAC 249, post-MAC 239, station 261 and TX 239. Each complete harness
+retains the same existing ignored private-firmware hash case; no new skip or
+ignore was introduced. Each was recompiled at the tested source; execution
+was 1.20–2.59 seconds per harness. The original ReceivePermit rejection is
+included. The JSON result manifest is
+`/tmp/rtw89-data-mode-validation-974088b1.json`, with per-harness log paths.
+These are host-model results; the issue's physical acceptance remains open.
+
+## Native retained packet queues
+
+`native_dma::Queues` now constructs command, RX and packet-TX owners from one
+retained 8 MiB coherent allocation. Command keeps its first 128 KiB; RX owns
+exactly its 5,902,336 bytes; TX begins at offset 6,033,408 and receives only the
+remaining disjoint bytes. The TX engine uses 135,168 bytes there. All boundaries
+are page aligned and the entire grant must fit below 4 GiB. No alias to the
+allocation is used after these owners are constructed. Partial construction
+failure cannot release the `ManuallyDrop` allocation or enable mastering.
+
+The native sequence installs TX after RX and before kernel mastering. All five
+packet queues and WP remain stopped through command-only activation and the
+initial PHY diagnostic. No calibration policy or working endpoint is fabricated.
+Cleanup independently attempts packet TX, RX, radio and command/WCPU stop,
+then retains the existing checked MEM-only / power-off / quiescence sequence.
+
+Four new fixtures compile for actual cumulative GEN1/GEN2 setup and installed
+ring addresses, untouched command padding/TX tail, invalid and mastering grants,
+and early installation refusal. The twelve orchestration cases now include
+failure at the added sixteenth stage. Execution is recorded after publication.

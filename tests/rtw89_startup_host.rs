@@ -8,8 +8,8 @@ extern crate self as rtw89_wifi;
 
 use startup::{Diagnostic, Stage};
 
-const STEPS: [Stage; 15] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
-    Stage::Finish, Stage::InstallReceive, Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive, Stage::InitialPhy];
+const STEPS: [Stage; 16] = [Stage::Verify, Stage::Dma, Stage::Power, Stage::Mac, Stage::Pcie, Stage::Install,
+    Stage::Finish, Stage::InstallReceive, Stage::InstallTransmit, Stage::Resume, Stage::Start, Stage::Download, Stage::PhyCap, Stage::RuntimeMac, Stage::Receive, Stage::InitialPhy];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Event { Step(Stage), Stop, Registers, PowerOff, Quiesce }
@@ -97,7 +97,8 @@ fn dma_requires_full_retained_aligned_region_below_four_gib() {
     assert!(startup::COMMAND_REGION_BYTES >= fwcmd::DMA_BYTES);
     assert!(startup::RECEIVE_REGION_BYTES >= rx::DMA_BYTES);
     assert_eq!(startup::COMMAND_REGION_BYTES & 4095, 0);
-    assert_eq!(startup::COMMAND_REGION_BYTES + startup::RECEIVE_REGION_BYTES, size);
+    assert_eq!(startup::TRANSMIT_REGION_OFFSET & 4095, 0);
+    assert_eq!(startup::COMMAND_REGION_BYTES + startup::RECEIVE_REGION_BYTES + startup::TRANSMIT_REGION_BYTES, size);
     assert!(startup::valid_dma(0x10000, size, 0x20000));
     assert!(startup::valid_dma(0x10000, size, (1u64 << 32) - size as u64));
     for (address, length, physical) in [(0, size, 0x20000), (0x10001, size, 0x20000), (0x10000, fwcmd::DMA_BYTES - 1, 0x20000),
