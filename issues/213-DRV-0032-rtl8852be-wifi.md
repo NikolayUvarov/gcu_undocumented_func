@@ -805,3 +805,14 @@ C2H/data packets explicitly; it cannot silently steal the session's traffic.
 The firmware's ordered terminal-report behavior is an explicit TCB assumption,
 consistent with the upstream driver's tag reuse; arbitrary firmware replay
 is outside that contract. Native activation remains closed.
+
+## Initial station context continuation (2026-10-16)
+
+The [private station continuation](../hwdocs/rtl8852be-station.md) prepares
+source NO_LINK MACID0/port0/CAM0 after the actual channel calibration result,
+using the same command/RX owner and actual board MAC. Indirect-table access
+requires the full aperture, commands have bounded actual ACK/consumption, and
+modified failure independently disables radio/port and retains DMA. Eleven cold
+continuation fixtures compile; execution follows raw publication. Association,
+receive filtering and native WLAN/TX activation are not established by this
+initial context.
