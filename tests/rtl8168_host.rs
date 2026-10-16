@@ -347,12 +347,14 @@ struct Model {
     bytes: [u8; 256], phy: [u16; 32], writes: Vec<(usize, usize, u32)>,
     clock: u64, tick: u64, sleeps: usize, reads: usize, length: usize,
     reset_stuck: bool, mdio_stuck: bool, phy_reset_stuck: bool,
+    read_jump: Option<(usize, usize, i64)>, reset_ready_at: Option<u64>, sleep_jump: Option<(usize, u64)>, observations: Vec<usize>,
 }
 impl RegisterModel {
     fn new() -> Self {
         let mut model = Model { bytes: [0; 256], phy: [0; 32], writes: Vec::new(),
             clock: 0, tick: 1, sleeps: 0, reads: 0, length: 256,
-            reset_stuck: false, mdio_stuck: false, phy_reset_stuck: false };
+            reset_stuck: false, mdio_stuck: false, phy_reset_stuck: false,
+            read_jump: None, reset_ready_at: None, sleep_jump: None, observations: Vec::new() };
         model.bytes[..6].copy_from_slice(&[0x02, 0x13, 0x24, 0x35, 0x46, 0x57]);
         model.bytes[0x40..0x44].copy_from_slice(&0x4f00_0f80u32.to_le_bytes());
         model.bytes[0x6c] = 2;
@@ -361,8 +363,15 @@ impl RegisterModel {
     }
     fn load(&self, at: usize, width: usize) -> u32 {
         let mut model = self.0.borrow_mut();
-        assert!(at + width <= model.length); model.reads += 1;
-        if at == 0x37 && model.bytes[at] == 0x10 && !model.reset_stuck { model.bytes[at] = 0; }
+        assert!(at + width <= model.length); model.reads += 1; model.observations.push(at);
+        if let Some((address, remaining, delta)) = model.read_jump {
+            if address == at {
+                if remaining == 1 { model.clock = model.clock.checked_add_signed(delta).unwrap(); model.read_jump = None; }
+                else { model.read_jump = Some((address, remaining - 1, delta)); }
+            }
+        }
+        if at == 0x37 && model.bytes[at] == 0x10 && !model.reset_stuck
+            && model.reset_ready_at.is_none_or(|ready| model.clock >= ready) { model.bytes[at] = 0; }
         let mut bytes = [0; 4]; bytes[..width].copy_from_slice(&model.bytes[at..at + width]);
         u32::from_le_bytes(bytes)
     }
@@ -395,7 +404,11 @@ impl controller::Registers for RegisterModel {
     fn write16(&mut self, at: usize, value: u16) { self.store(at, 2, value as u32); }
     fn write32(&mut self, at: usize, value: u32) { self.store(at, 4, value); }
     fn now_ms(&self) -> u64 { self.0.borrow().clock }
-    fn sleep_ms(&mut self, _: u32) { let mut model = self.0.borrow_mut(); model.sleeps += 1; model.clock += model.tick; }
+    fn sleep_ms(&mut self, _: u32) {
+        let mut model = self.0.borrow_mut(); model.sleeps += 1;
+        let jump = model.sleep_jump.filter(|(at, _)| *at == model.sleeps).map_or(model.tick, |(_, delay)| delay);
+        model.clock += jump;
+    }
 }
 
 #[test]
@@ -538,4 +551,68 @@ fn fault_masks_interrupts_and_gates_receive_without_reinitializing_dma() {
     assert_eq!(queues.tx_pending(), 1); assert_eq!(queues.reclaim(), None);
     let before = io.0.borrow().writes.len(); nic.kick();
     assert_eq!(io.0.borrow().writes.len(), before); assert!(!nic.link());
+}
+
+
+#[test]
+fn reset_ready_read_at_or_after_cutoff_is_not_success_or_phy_publication() {
+    for delay in [100, 101] {
+        let io = RegisterModel::new(); let mut nic = io.controller();
+        io.0.borrow_mut().read_jump = Some((0x37, 1, delay));
+        assert_eq!(nic.prepare(), Err(controller::Error::Reset)); assert_eq!(nic.state(), controller::State::Failed);
+        assert!(!io.0.borrow().writes.iter().any(|&(at, _, _)| at == 0x60)); io.assert_unpublished();
+    }
+}
+
+#[test]
+fn phy_write_and_read_ready_at_cutoff_cannot_start_the_next_transaction() {
+    for operation in [1, 3] { for delay in [50, 51] {
+        let io = RegisterModel::new(); let mut nic = io.controller();
+        io.0.borrow_mut().read_jump = Some((0x60, operation, delay));
+        assert_eq!(nic.prepare(), Err(controller::Error::Mdio)); assert_eq!(nic.state(), controller::State::Failed);
+        assert_eq!(io.0.borrow().writes.iter().filter(|&&(at, _, _)| at == 0x60).count(), operation);
+        io.assert_unpublished();
+    }}
+}
+
+#[test]
+fn completion_before_each_local_cutoff_still_reaches_prepared_state() {
+    for (at, operation, delay) in [(0x37, 1, 99), (0x60, 1, 49), (0x60, 3, 49)] {
+        let io = RegisterModel::new(); let mut nic = io.controller();
+        io.0.borrow_mut().read_jump = Some((at, operation, delay));
+        nic.prepare().unwrap(); assert_eq!(nic.state(), controller::State::Prepared); io.assert_unpublished();
+    }
+    let io = RegisterModel::new(); let mut nic = io.controller();
+    io.0.borrow_mut().sleep_jump = Some((6, 499));
+    nic.prepare().unwrap(); assert_eq!(nic.state(), controller::State::Prepared); io.assert_unpublished();
+}
+
+#[test]
+fn oversleep_cannot_perform_a_new_reset_read_after_the_deadline() {
+    let io = RegisterModel::new(); let mut nic = io.controller();
+    { let mut model = io.0.borrow_mut(); model.tick = 100; model.reset_ready_at = Some(100); }
+    assert_eq!(nic.prepare(), Err(controller::Error::Reset));
+    assert_eq!(io.0.borrow().observations.iter().filter(|&&at| at == 0x37).count(), 1);
+    assert!(!io.0.borrow().writes.iter().any(|&(at, _, _)| at == 0x60)); io.assert_unpublished();
+}
+
+#[test]
+fn phy_reset_deadline_includes_completed_mdio_and_its_settling_sleep() {
+    for delay in [500, 501] {
+        let io = RegisterModel::new(); let mut nic = io.controller();
+        io.0.borrow_mut().sleep_jump = Some((6, delay));
+        assert_eq!(nic.prepare(), Err(controller::Error::PhyReset)); assert_eq!(nic.state(), controller::State::Failed);
+        assert_eq!(io.0.borrow().writes.iter().filter(|&&(at, _, _)| at == 0x60).count(), 6);
+        io.assert_unpublished();
+    }
+}
+
+#[test]
+fn completed_read_cannot_cross_global_budget_or_regress_monotonic_time() {
+    for (initial, delta, expected) in [(0, 1500, controller::Error::Budget), (100, -1, controller::Error::Clock)] {
+        let io = RegisterModel::new(); let mut nic = io.controller();
+        { let mut model = io.0.borrow_mut(); model.clock = initial; model.read_jump = Some((0x37, 1, delta)); }
+        assert_eq!(nic.prepare(), Err(expected)); assert_eq!(nic.state(), controller::State::Failed);
+        assert!(!io.0.borrow().writes.iter().any(|&(at, _, _)| at == 0x60)); io.assert_unpublished();
+    }
 }

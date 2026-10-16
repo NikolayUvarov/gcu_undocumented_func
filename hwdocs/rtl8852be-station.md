@@ -45,9 +45,10 @@ required ACKs and final checks. Modified failure independently stops BB/RF,
 marks the PHY failed, disables port/beacon/forced transmission, and restores
 the selector. Cleanup errors are retained separately and DMA remains owned.
 An uncertain command is never retried. A second initial creation over an
-active port is rejected. Association, peer BSSID updates, receive filtering,
-security, live TX queue activation and the WLAN service adapter remain later
-steps; this token alone cannot establish those capabilities.
+active port is rejected. Association, security, live TX queue activation and
+the WLAN service adapter remain later steps; this token alone cannot establish
+those capabilities. The initial filter continuation below adds local/BSSID
+address filtering, without an associated join.
 
 The registered station harness extends the same cold device used by the
 initial PHY and channel coordinator. It performs real production OTP,
@@ -72,6 +73,7 @@ writes, the absolute deadline and selector restoration failure.
 | `fw.h` | `bae6675fc95c3f6edd348aaa78c2bbb5cc7768f1961a91fb95ff49624aa9e345` |
 | `cam.c` | `e8c2f9c30bf48cfa99366cc75cc89f1a9c0beec8d014a466eeadb0951fb1e381` |
 | `cam.h` | `70ba40d1c1de6603162f8ebff009e3b5b28fa54aa8d4bf923282e6f1ee9cd93e` |
+| `mac80211.c` | `c0206be51ff92f4adc9a9192627aa3663d9087cc96fcb608dfd3b16f38865108` |
 
 No proprietary firmware bytes or private hardware identifiers are included.
 
@@ -106,3 +108,56 @@ the actual station token and retain its own policy/queue/receiver identity.
 Four additional cold continuation cases compile, covering current context,
 changed CCTL/report routing, changed policy, and owner/final-selector deadline
 failure. Execution follows this continuation's own raw publication.
+
+After `7eb1117d` was published in `3881b629`, the exact saved validation
+harness passed all 15 station cases (the original eleven and four new cases).
+The complete harness passed 218 cases, failed none and retained one existing
+private-firmware case as ignored, in 0.62 s. The log is
+`/tmp/mind-station-validation-results-7eb1117d.log`.
+
+## Initial receive filter
+
+`Prepared::configure_filter` is an initial, stopped-TX continuation under the
+same 600 ms work limit. It validates the actual station, PHY, channel/policy
+and BTC/RX owner, updates address/BSSID CAM through a real done-acknowledged
+command, writes the receive filter, checks it and the station context, then
+revalidates the live owner. Only that success installs `current_filter()`.
+Ignored, failed or late register writes and uncertain CAM commands stop the
+radio/port and fail the PHY; they do not publish a filter or retry the command.
+The initial MACID role remains NO_LINK; this is not an associated join.
+
+CAM uses the source SMA hash/local address and TMA hash/BSSID fields, including
+the BSSID CAM bytes (`cam.c:764–885`). A zero requested own address resolves to
+the actual radio MAC. The physical `Prepared::mac()` identity remains the
+board MAC; a future frame sender must use the configured filter's `own()`
+when validating an explicit local-address override.
+
+The hardware register uses the source combination ALLMULTI, OTHER_BSS,
+BCN_PRBRESP_PROMISC and PROBE_REQ (`mac80211.c:304–378`), with FCS failures
+disabled and no sniffer mode. The resulting configuration is `0x03004400` at
+`0xce20`, preserving the MPDU-length field exactly as `mac.c:2546` requires.
+`check_registers` checks this configuration once a filter is installed. This
+broad hardware path is narrowed by the immutable software predicate, matching
+the existing `bcm_wifi::radio::wanted` and `wlanhw@1.1`: scan beacons and probe
+responses, own-addressed management/data, and broadcast/multicast from the
+selected BSSID. Group ToDS/WDS, unrelated BSS and control/reserved frames are
+rejected. The predicate receives an already structurally validated MPDU
+without FCS; descriptor errors and variable headers belong to `frames`.
+
+The pure `Filter` value is address policy, not hardware authority. Data-mode
+activation must consume a real `Prepared` whose `current_filter()` is present
+and revalidate its registers. RX already runs during earlier initialization,
+so initial exposure must also drain/drop or accurately tag pre-configuration
+records in both the inbox and hardware rings; the station token does not
+attest that these are empty. A second initial configuration is refused;
+future runtime updates must drain or tag the old receive epoch before changing
+the scan flag/filter, including records retained during firmware ACK waits.
+The single RX owner must dispatch/filter ordinary traffic during those waits;
+the finite inbox does not promise to absorb arbitrary channel traffic.
+
+Seven new cold continuation cases and seven pure policy cases compile; they
+have not run before this slice's raw publication. They cover source CAM bytes,
+preserved MPDU limit, required CAM ACK/DMA completion, changed policy/filter,
+ignored/applied-failed/late writes, forbidden initial reconfiguration, own
+override, group-address direction rules, scan selection and malformed input.
+No hardware RX, association or packet-TX evidence is claimed.

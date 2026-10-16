@@ -36,7 +36,7 @@ fn run_validation(speed:u8,setup:impl FnOnce(&mut Device),tamper:bool,repeat:boo
             let mut result=station::prepare(&mut phy,&board,&tuned,&calibrated,&initial.owner,&caps);
             if let Ok(prepared)=&result{assert!(prepared.matches(&tuned,board.identity.mac));assert_eq!(prepared.mac_id(),0);
                 assert!(!prepared.matches(&tuned,[2,3,4,5,6,8]));}
-            if validation!=0{
+            if (1..10).contains(&validation){
                 let prepared=result.as_ref().unwrap();
                 if validation==2||validation==4{
                     let session=phy.bus_between_stages();let deadline=session.now_us()+10_000;
@@ -48,6 +48,25 @@ fn run_validation(speed:u8,setup:impl FnOnce(&mut Device),tamper:bool,repeat:boo
                 if validation==3{tuned.policy_version+=1;}
                 let checked=prepared.validate(&mut phy,&board,&tuned,&initial.owner,if validation==5{1}else{10_000});
                 if let Err(error)=checked{result=Err(error);}
+            }
+            if validation>=10{
+                let prepared=result.as_mut().unwrap();assert!(prepared.current_filter().is_none());
+                let selected=validation==11;
+                let filter=prepared.filter(!selected,if selected{[2,8,7,6,5,4]}else{[0;6]},
+                    if selected{[2,10,11,12,13,14]}else{[0;6]});
+                if validation==15{tuned.policy_version+=1;}
+                let checked=prepared.configure_filter(&mut phy,&board,&tuned,&initial.owner,filter);
+                if let Err(error)=checked{assert!(prepared.current_filter().is_none());result=Err(error);}
+                else{
+                    assert_eq!(prepared.current_filter(),Some(filter));
+                    if validation==12{let before=phy.bus_between_stages().submitted();
+                        assert_eq!(prepared.configure_filter(&mut phy,&board,&tuned,&initial.owner,filter).unwrap_err().stage,Stage::Guard);
+                        assert_eq!(phy.bus_between_stages().submitted(),before);}
+                    if validation==13{let session=phy.bus_between_stages();let deadline=session.now_us()+10_000;
+                        session.registers(deadline,|bus|io::modify32(bus,0xce20,0,1<<11)).unwrap();}
+                    let checked=prepared.validate(&mut phy,&board,&tuned,&initial.owner,10_000);
+                    if let Err(error)=checked{result=Err(error);}
+                }
             }
             if repeat{assert!(result.is_ok());let before=phy.bus_between_stages().submitted();
                 assert_eq!(station::prepare(&mut phy,&board,&tuned,&calibrated,&initial.owner,&caps).unwrap_err().stage,Stage::Guard);
@@ -148,4 +167,42 @@ fn station_validation_budget_includes_owner_and_final_selector_checks(){for fina
 },false,false,if final_check{6}else{5},|d,result,state|{
     assert_eq!(result.unwrap_err().stage,if final_check{Stage::Verify}else{Stage::Guard});assert_eq!(state,State::Failed);radio_off(d);
     assert_eq!(d.station_packets.len(),5);
+});}}
+
+#[test]
+fn initial_scan_filter_requires_cam_done_and_preserves_mpdu_limit(){run_validation(2,|_|{},false,false,10,|d,result,state|{
+    let ready=result.unwrap();let filter=ready.current_filter().unwrap();assert!(filter.all_beacons());assert_eq!(filter.own(),[2,3,4,5,6,7]);
+    assert_eq!(filter.bssid(),[0;6]);assert_eq!(state,State::ChannelTuned);assert_eq!(d.station_packets.len(),6);
+    assert_eq!(words(&d.station_packets[5]),words(&d.station_packets[3]));
+    assert_eq!(d.base.inner.get(0xce20,4),0x03164400);
+    assert_ne!(u32::from_le_bytes(d.station_packets[5][4..8].try_into().unwrap())&0x8000,0);
+});}
+#[test]
+fn selected_bssid_and_override_mac_pack_source_cam_fields(){run_validation(1,|_|{},false,false,11,|d,result,state|{
+    let filter=result.unwrap().current_filter().unwrap();assert!(!filter.all_beacons());assert_eq!(filter.own(),[2,10,11,12,13,14]);
+    assert_eq!(filter.bssid(),[2,8,7,6,5,4]);assert_eq!(state,State::ChannelTuned);
+    assert_eq!(words(&d.station_packets[5]),[0,0x400000,0x0a0c0001,0,0x0c0b0a02,0x08020e0d,0x04050607,0,0,0x20000,0,0,0x80000,0x080200fd,0x04050607]);
+});}
+#[test]
+fn initial_filter_cannot_be_replaced_without_runtime_epoch_transition(){run_validation(1,|_|{},false,false,12,|d,result,state|{
+    result.unwrap();assert_eq!(state,State::ChannelTuned);assert_eq!(d.station_packets.len(),6);
+});}
+#[test]
+fn changed_hardware_filter_invalidates_prepared_context(){run_validation(1,|_|{},false,false,13,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Verify);assert_eq!(state,State::Failed);radio_off(d);
+});}
+#[test]
+fn missing_cam_ack_or_dma_completion_never_publishes_filter(){for fault in [1,2]{run_validation(1,|d|d.filter_command_fault=fault,false,false,14,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Cam);assert_eq!(state,State::Failed);radio_off(d);
+    assert_eq!(d.station_packets.len(),6);assert_ne!(d.base.inner.get(0xce20,4)&0xffc0ffff,0x03004400);
+});}}
+#[test]
+fn changed_policy_refuses_filter_before_second_cam_command(){run_validation(1,|_|{},false,false,15,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Guard);assert_eq!(state,State::ChannelTuned);assert_eq!(d.station_packets.len(),5);
+});}
+#[test]
+fn ignored_applied_failed_or_late_filter_write_stops_radio(){for fault in 0..3{run_validation(1,|d|{
+    d.ignore_filter=fault==0;d.fail_filter=fault==1;d.late_filter=fault==2;
+},false,false,16,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Filter);assert_eq!(state,State::Failed);radio_off(d);assert_eq!(d.station_packets.len(),6);
 });}}

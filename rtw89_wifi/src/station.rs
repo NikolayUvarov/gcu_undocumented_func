@@ -15,9 +15,15 @@ const CMAC:u32=0x18840000;
 const PORT:usize=0xc400;
 const CONTROL_MASK:[u32;8]=[1<<21,0,0,0,0xe00,0xffff0000,0xf0c0000,0];
 const INITIAL_CMAC:[u32;8]=[4,0x400a0004,0,0,0,0x0e43000b,0,0xb8109];
+const RX_FILTER:usize=0xce20;
+const RX_FILTER_MASK:u32=!0x003f0000;
+const RX_FILTER_HOST:u32=0x03004400;
+
+#[path="station_filter.rs"]mod filter;
+pub(crate) use filter::Filter;
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub(crate) enum Stage{Guard,Port,Tables,MacId,Role,Join,Cam,Control,Verify}
+pub(crate) enum Stage{Guard,Port,Tables,MacId,Role,Join,Cam,Control,Filter,Verify}
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
 pub(crate) enum Cause{Register(Fault),Session(btc_session::Error),Owner(btc_context::Error)}
 impl From<Fault> for Cause{fn from(value:Fault)->Self{Self::Register(value)}}
@@ -28,7 +34,7 @@ pub(crate) struct CheckFailure{pub cause:Fault,pub selector_restore:Option<Fault
 pub(crate) struct Failure{pub stage:Stage,pub cause:Cause,pub radio_stop:Option<Fault>,pub port_stop:Option<Fault>,pub selector_restore:Option<Fault>}
 /// One initial client role with MACID/port/CAM zero; this is neither association nor TX permission.
 #[derive(Debug)]
-pub(crate) struct Prepared{attempt:u64,session:u64,channel:u8,policy_version:u64,mac:[u8;6],cmac:[u32;8]}
+pub(crate) struct Prepared{attempt:u64,session:u64,channel:u8,policy_version:u64,mac:[u8;6],cmac:[u32;8],filter:Option<Filter>}
 impl Prepared{
     pub(crate) fn matches(&self,tuned:&channel::Tuned,mac:[u8;6])->bool{
         self.attempt==tuned.attempt&&self.session==tuned.session&&self.channel==tuned.channel
@@ -36,11 +42,17 @@ impl Prepared{
     }
     pub(crate) fn mac_id(&self)->u8{0}
     pub(crate) fn mac(&self)->[u8;6]{self.mac}
+    /// A software decision only; the runtime owner must establish hardware filtering and a stable receive epoch.
+    pub(crate) fn filter(&self,all_beacons:bool,bssid:[u8;6],own:[u8;6])->Filter{
+        Filter::new(self.mac,all_beacons,bssid,own)
+    }
+    pub(crate) fn current_filter(&self)->Option<Filter>{self.filter}
     /// Fixed station-register checks only; the caller supplies its time window and actual device/session ownership.
     /// This neither accepts active DMA ownership nor grants transmission; it preserves unrelated firmware fields.
     pub(crate) fn check_registers(&self,bus:&mut impl RegisterIo)->Result<(),CheckFailure>{
         let selector=io::read32(bus,SELECTOR).map_err(|cause|CheckFailure{cause,selector_restore:None})?;
-        let result=verify(bus,&self.cmac);let restore=select(bus,selector).and_then(|()|bus.delay_us(0)).err();
+        let result=verify(bus,&self.cmac).and_then(|()|if self.filter.is_some(){verify_filter(bus)}else{Ok(())});
+        let restore=select(bus,selector).and_then(|()|bus.delay_us(0)).err();
         match(result,restore){(Ok(()),None)=>Ok(()),(Err(cause),selector_restore)=>Err(CheckFailure{cause,selector_restore}),
             (Ok(()),Some(cause))=>Err(CheckFailure{cause,selector_restore:Some(cause)})}
     }
@@ -68,6 +80,34 @@ impl Prepared{
                 field(&mut timed,PORT,4|1<<9|1<<12,0).and_then(|()|timed.delay_us(0)).err()};
             Failure{stage,cause,radio_stop,port_stop,selector_restore}
         })
+    }
+    /// Initial configuration only; no client-visible receive epoch exists yet and ordinary TX remains stopped.
+    pub(crate) fn configure_filter<B:DeviceIo>(&mut self,phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Board,
+        tuned:&channel::Tuned,owner:&Initialized,filter:Filter)->Result<(),Failure>{
+        let bare=|cause|Failure{stage:Stage::Guard,cause,radio_stop:None,port_stop:None,selector_restore:None};
+        if self.filter.is_some(){return Err(bare(fault(RX_FILTER,0).into()));}
+        let start=phy.bus_between_stages().now_us();
+        let deadline=start.checked_add(TOTAL_US).ok_or_else(||bare(Fault::new(FaultKind::Clock,0,0).into()))?;
+        self.validate(phy,board,tuned,owner,10_000)?;
+        let mut stage=Stage::Cam;let mut selector_restore=None;
+        let result=(||{
+            remaining(phy.bus_between_stages(),start)?;
+            command(phy.bus_between_stages(),6,0,&cam(filter.own(),filter.bssid()),true,deadline)?;
+            stage=Stage::Filter;
+            phy.bus_between_stages().registers(deadline,|bus|field(bus,RX_FILTER,RX_FILTER_MASK,RX_FILTER_HOST))?;
+            stage=Stage::Verify;
+            phy.bus_between_stages().registers(deadline,|bus|{
+                self.check_registers(bus).map_err(|e|{selector_restore=e.selector_restore;e.cause})?;
+                verify_filter(bus)
+            })?;
+            live(phy,board,owner,start)?;Ok(())
+        })();
+        match result{Ok(())=>{self.filter=Some(filter);Ok(())},Err(cause)=>{
+            let radio_stop=phy::disable_bb_rf(phy.bus_between_stages()).err();phy.mark_failed();
+            let port_stop={let mut timed=TimedIo::new(phy.bus_between_stages(),1_000);
+                field(&mut timed,PORT,4|1<<9|1<<12,0).and_then(|()|timed.delay_us(0)).err()};
+            Err(Failure{stage,cause,radio_stop,port_stop,selector_restore})
+        }}
     }
 }
 fn fault(at:usize,value:u32)->Fault{Fault::new(FaultKind::PowerState,at,value)}
@@ -116,10 +156,16 @@ fn verify_table(bus:&mut impl RegisterIo,address:u32,words:&[u32])->io::Result<(
     bus.delay_us(0)
 }
 fn encode<const N:usize>(words:[u32;N],out:&mut[u8]){for(i,word)in words.into_iter().enumerate(){out[i*4..i*4+4].copy_from_slice(&word.to_le_bytes());}}
-fn cam(mac:[u8;6])->[u8;60]{
-    let hash=mac.into_iter().fold(0u8,|a,b|a^b);let mut out=[0;60];
-    encode([0,0x40<<16,1|u32::from(hash)<<16,0,u32::from_le_bytes([mac[0],mac[1],mac[2],mac[3]]),
-        u32::from(u16::from_le_bytes([mac[4],mac[5]])),0,0,0,2<<16,0,0,8<<16,1|0x3f<<2,0],&mut out);out
+fn cam(mac:[u8;6],bssid:[u8;6])->[u8;60]{
+    let hash=mac.into_iter().fold(0u8,|a,b|a^b);let peer_hash=bssid.into_iter().fold(0u8,|a,b|a^b);let mut out=[0;60];
+    encode([0,0x40<<16,1|u32::from(hash)<<16|u32::from(peer_hash)<<24,0,u32::from_le_bytes([mac[0],mac[1],mac[2],mac[3]]),
+        u32::from_le_bytes([mac[4],mac[5],bssid[0],bssid[1]]),u32::from_le_bytes([bssid[2],bssid[3],bssid[4],bssid[5]]),
+        0,0,2<<16,0,0,8<<16,1|0x3f<<2|u32::from(u16::from_le_bytes([bssid[0],bssid[1]]))<<16,
+        u32::from_le_bytes([bssid[2],bssid[3],bssid[4],bssid[5]])],&mut out);out
+}
+fn verify_filter(bus:&mut impl RegisterIo)->io::Result<()>{
+    let value=io::read32(bus,RX_FILTER)?;
+    if value&RX_FILTER_MASK!=RX_FILTER_HOST{return Err(fault(RX_FILTER,value));}bus.delay_us(0)
 }
 fn control(antenna:u8)->([u8;68],[u32;8]){
     let paths=if antenna==0{3}else{antenna};let mut words=[0u32;17];words[0]=0x80;
@@ -167,11 +213,11 @@ pub(crate) fn prepare<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Bo
         command(phy.bus_between_stages(),9,8,&pause,false,deadline)?;
         stage=Stage::Role;command(phy.bus_between_stages(),8,4,&(1u32<<13).to_le_bytes(),true,deadline)?;
         stage=Stage::Join;command(phy.bus_between_stages(),8,0,&(1u32<<8|1<<26).to_le_bytes(),true,deadline)?;
-        stage=Stage::Cam;command(phy.bus_between_stages(),6,0,&cam(board.identity.mac),true,deadline)?;
+        stage=Stage::Cam;command(phy.bus_between_stages(),6,0,&cam(board.identity.mac,[0;6]),true,deadline)?;
         stage=Stage::Control;command(phy.bus_between_stages(),5,2,&payload,true,deadline)?;
         stage=Stage::Verify;phy.bus_between_stages().registers(deadline,|bus|{verify(bus,&expected)?;select(bus,selector)})?;
         live(phy,board,owner,start)?;
-        Ok(Prepared{attempt,session,channel:tuned.channel,policy_version:tuned.policy_version,mac:board.identity.mac,cmac:expected})
+        Ok(Prepared{attempt,session,channel:tuned.channel,policy_version:tuned.policy_version,mac:board.identity.mac,cmac:expected,filter:None})
     })();
     match result{Ok(value)=>Ok(value),Err(cause)=>{
         let radio_stop=phy::disable_bb_rf(phy.bus_between_stages()).err();phy.mark_failed();
