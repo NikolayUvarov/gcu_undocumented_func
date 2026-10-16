@@ -31,6 +31,7 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-16-astra-x86-targeted.md](../docs/validation/2026-10-16-astra-x86-targeted.md) | Frozen c493 source: nine targeted host/TLC/x86 groups pass; retained failures, exact configurations and full-gate/physical limits |
 | [2026-10-16-hardware-test-readiness.md](2026-10-16-hardware-test-readiness.md) | Intel MacBook/Ryzen implementation boundaries, owner requests and separate physical acceptance |
 | [2026-10-16-rtl8168-deadline-audit.md](2026-10-16-rtl8168-deadline-audit.md) | RTL8168 per-read/global/PHY deadline correction and exact host evidence |
 | [2026-10-16-xtal-cleanup-audit.md](2026-10-16-xtal-cleanup-audit.md) | Shared XTAL helpers could overwrite an unfinished command during board cleanup; bounded preflight correction and regression scope |

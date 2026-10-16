@@ -16,8 +16,10 @@ writing the image, with hash checks. No firmware payload enters Git or the image
 The combined source candidate `c4933c2bca66f0cd0d81bb9a5ca33f8c587a5052`
 built on ASTRA before publication in fast-test
 `3c6eaa5648c240670dc29fd59d6b17954a01da2f`. It incorporates the sustained-H2C
-fixture corrections and the composed connection-to-service test. Its integrated
-checks are separate from the earlier [x86 matrix](2026-10-16-network-validation.md),
+fixture corrections and the composed connection-to-service test. All nine
+selected integration groups passed; the [exact report](../docs/validation/2026-10-16-astra-x86-targeted.md)
+records host/TLC and four QEMU groups, configurations, operation IDs and retained
+failures. This targeted result is separate from the earlier [x86 matrix](2026-10-16-network-validation.md),
 which retains a RAM-above-4-GiB download failure and is not a green gate.
 The superseded `d53d9f45` host run retains the exhausted synthetic-traffic
 assertion; it is not counted as a pass. Neither a model result nor a QEMU run
@@ -52,8 +54,15 @@ verified regulatory database; [NET](../issues/requests-NET.md#wifi-country-selec
 [APP](../issues/requests-APP.md#wifi-country-and-channel-selector) and
 [BCM driver](../issues/requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy)
 requests carry the configuration, UI and original MacBook portions. The new
-RTL catalogue work is separate from candidate c4933c2b. A selected country does
-not replace platform limits: missing policy data is not a checked absence.
+RTL [catalog implementation](../hwdocs/rtl8852be-regulatory.md), source
+`1e2cf1dd`, is separate from tested candidate c4933c2b. It retains every one of
+the 181 country/territory codes and separate world `00`, all 1,016 source rule
+references, source hashes and licence notice. ASTRA merge `4ece2057` built,
+then fast-test `94ab2a0b` was pushed before the focused 9 Rust and 11 Python
+fixtures and exact regeneration passed on the source branch. This catalog
+provides selection and restrictions; persistent configuration, UI and native
+radio application remain pending owner work. A selected country does not
+replace platform limits: missing policy data is not a checked absence.
 The private service supports one explicitly admitted 2.4 GHz 20 MHz channel;
 it must reject an unsupported channel rather than silently retune.
 

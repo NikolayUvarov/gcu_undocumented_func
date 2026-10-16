@@ -879,10 +879,11 @@ is the operator's explicit deployment choice. Selection is a library input;
 UI, persistence, actual channel switching and native policy consumption remain
 integration work, and country selection alone grants no transmission authority.
 
-ABI 11 adds boot entries for RTL8168 Ethernet and the RTL8852BE board-access
-stage. Rebuild and write the bootloader, kernel and services from one build.
+ABI 11 adds boot entries for RTL8168 Ethernet and the RTL8852BE diagnostic.
+Rebuild and write the bootloader, kernel and services from one build.
 Realtek BARs start with memory decoding only; MSI setup does not enable DMA.
 The Ethernet service enables mastering after its rings are ready. The current
-Wi-Fi stage reads board data and powers down; it cannot associate or carry
+Wi-Fi executable runs the board, firmware, MAC, RX and initial-PHY diagnostic
+and powers down. It has no WLAN service endpoint and cannot associate or carry
 network traffic. Hardware acceptance remains separate for Ryzen and the original
 MacBook; see [the integration task](issues/213-KRN-0114-realtek-driver-startup.md).
