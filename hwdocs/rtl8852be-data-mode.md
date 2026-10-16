@@ -48,8 +48,9 @@ original deadline. The finite MMIO model is not a physical timing guarantee.
 Before first delivery, buffered old Wi-Fi frames are counted/discarded and both
 RX rings are drained until an empty observation, with at most 513 poll pairs
 inside the same deadline. Retained non-Wi-Fi records block exposure rather than
-being relabelled or silently removed. The initial filter/channel is immutable;
-runtime filter changes and channel switching need their own epoch transition.
+being relabelled or silently removed. The channel remains fixed; changing it
+requires a separate calibration and ownership transition. The active filter
+continuation below handles scan/BSSID/local-address changes on this channel.
 
 ## One RX reader and pressure
 
@@ -141,3 +142,42 @@ Four new fixtures compile for actual cumulative GEN1/GEN2 setup and installed
 ring addresses, untouched command padding/TX tail, invalid and mastering grants,
 and early installation refusal. The twelve orchestration cases now include
 failure at the added sixteenth stage. Execution is recorded after publication.
+
+Native source `9a2cc7e2` and integration `69b40829` built the complete own x86
+image (2 seconds). After raw publication `554cbada`, four `native_cases::`
+fixtures passed (0.05 seconds, zero failed/ignored, 242 unrelated cases filtered)
+and all twelve startup fixtures passed (0.00 seconds, zero failed/ignored).
+The native fixture was recompiled against the published integration before
+execution; the startup binary was unchanged since compilation of `9a2cc7e2`.
+Configuration: x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571.
+Logs: `/tmp/mind-native-dma-results.log` and
+`/tmp/mind-native-dma-startup-results.log`. No real device was accessed.
+
+## Active filter continuation
+
+`DataSession::set_filter` requires no pending raw TX request and retains the
+existing 1–100000 microsecond absolute runtime budget. Its private-constructor
+`FilterChange` view holds the actual command owner, TX queue and counters;
+station code cannot substitute a successful transport callback. The existing
+raw-six-byte wlanhw address policy and zero-own-address resolution are preserved.
+
+Before CAM mutation, old buffered and queued Wi-Fi is counted/discarded through
+the sole RX owner. Actual CAM H2C completion requires the normal done ACK and
+command DMA consumption. During that wait and the final bounded drain, ordinary
+Wi-Fi is counted as previous-epoch data; matched ACK/BTC and packet reports keep
+their owned routes. Unrelated retained control records block the transition
+without being erased. Source receive-filter writes, station/selector readback,
+live data/radio identity and final deadline checks precede software publication
+of the new filter. Busy and invalid timeouts do not send CAM or stop the current
+TX; uncertain mutations terminate with retained DMA and independent shutdown.
+The empty observation retires already published RX descriptors; no hardware
+airtime boundary is inferred for a frame still inside the receive engine.
+This updates address selection, not association or connected BTC policy.
+
+The station register/CAM source and licence are unchanged from
+[station provenance](rtl8852be-station.md). Ten added cumulative cold cases
+compile: exact CAM payload and ACK, selected BSSID and own-address delivery,
+transmitter identity, banked/queued/in-flight epoch retirement, admission,
+missing ACK or DMA, corrupted/applied-failed/late filter writes, selector restore
+failure, retained control refusal and return to scanning. Execution is pending
+this continuation's own build, commit and raw publication.

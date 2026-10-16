@@ -165,9 +165,10 @@ this does not activate native transmission. Platform and country policy,
 native channel/station activation, integration and actual hardware checks
 remain required. No physical Ryzen traffic or RF performance is established.
 
-The native three-region installation builds with four new host fixtures and
-the updated twelve startup fixtures compiled, with execution pending raw
-publication; [layout and limits](../../hwdocs/rtl8852be-data-mode.md#native-retained-packet-queues).
+The native three-region installation `9a2cc7e2` built and, after raw publication
+`554cbada`, passed four cumulative/layout fixtures and the twelve updated startup
+fixtures (0.05/0.00 seconds, x86-64 WSL2). See
+[layout and limits](../../hwdocs/rtl8852be-data-mode.md#native-retained-packet-queues).
 
 The latest native-chain evidence is recorded in
 [initial PHY notes](../../hwdocs/rtl8852be-initial-phy.md): five cumulative

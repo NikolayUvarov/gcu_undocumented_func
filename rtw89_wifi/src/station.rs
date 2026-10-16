@@ -226,3 +226,6 @@ pub(crate) fn prepare<B:DeviceIo>(phy:&mut Phy<'_,Session<'_,'_,'_,B>>,board:&Bo
         Err(Failure{stage,cause,radio_stop,port_stop,selector_restore})
     }}
 }
+
+#[path="station_update.rs"]mod update;
+pub(crate) use update::FilterFailure;
