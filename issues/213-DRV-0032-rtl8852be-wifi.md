@@ -1008,3 +1008,17 @@ Do not infer hardware WPA2 readiness or a new ABI requirement from host packet
 tests. Record actual association/traffic evidence; request a versioned NET
 notification only if its necessity is established. No code, interface or
 hardware behavior changes in this documentation update.
+
+### Complete country catalog and bounded 2G20 selection (2026-10-16)
+
+The maintainer explicitly selected physical country UZ and requested every
+country from the checked database. The new [catalog slice](../hwdocs/rtl8852be-regulatory.md)
+retains all 182 upstream entries (181 country/territory codes and separate
+world 00), all 1,016 source rules, flags, WMM data and source provenance.
+Exact country selection and complete-width 2G20 coverage expose limits for
+driver intersection; they do not create platform policy or TX authority, infer
+a country, weaken programmed-board equality, or change the native endpoint.
+UZ deployment intent is explicit, with UI/persistence/native consumers in the
+owner requests. Host fixtures are compiled and registered; execution evidence
+follows the raw-publication step. This task remains open for native integration
+and actual radio acceptance.
