@@ -968,3 +968,16 @@ BTC and both startup PPDU cases, plus thirteen complete affected host harnesses
 with zero failures. Their overlapping counts and inherited private-file ignore
 are recorded in the [runtime evidence](../hwdocs/rtl8852be-btc-runtime.md#limits-and-validation).
 The own native build passed in 3.80 s; no hardware or full-gate claim is made.
+
+### Audited association boundary
+
+Document the [NO_LINK association boundary](../hwdocs/rtl8852be-data-mode.md#association-boundary):
+`dot11` already handles authentication, association, EAPOL and CCMP through raw
+wlanhw frames, while this driver's initial station remains disconnected with
+zero AID. Pinned Linux association updates CCTL/JOIN/CAM; the current interface
+does not convey association state or AID. The need for those device updates in
+our fixed-rate software-crypto path is unconfirmed, not a demonstrated blocker.
+Do not infer hardware WPA2 readiness or a new ABI requirement from host packet
+tests. Record actual association/traffic evidence; request a versioned NET
+notification only if its necessity is established. No code, interface or
+hardware behavior changes in this documentation update.
