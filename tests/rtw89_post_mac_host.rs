@@ -44,3 +44,18 @@ extern crate self as mind;
 #[path="../rtw89_wifi/src/btc_init.rs"] mod btc_init;
 
 #[path="../rtw89_wifi/src/btc_reports.rs"] mod btc_reports;
+extern crate self as rtw89_wifi;
+
+#[path="../rtw89_wifi/src/pcie.rs"]mod pcie;
+#[path="../rtw89_wifi/src/startup.rs"]mod startup;
+#[path="../rtw89_wifi/src/initial_phy.rs"]mod initial_phy;
+#[path="../rtw89_wifi/src/station.rs"]mod station;
+#[path="../rtw89_wifi/src/iqk_tables.rs"]mod iqk_tables;
+#[path="../rtw89_wifi/src/iqk.rs"]mod iqk;
+#[path="../rtw89_wifi/src/tssi.rs"]mod tssi;
+#[path="../rtw89_wifi/src/dpk_tables.rs"]mod dpk_tables;
+#[path="../rtw89_wifi/src/dpk.rs"]mod dpk;
+#[path="../rtw89_wifi/src/channel_rfk.rs"]mod channel_rfk;
+#[path="../rtw89_wifi/src/txdesc.rs"]mod txdesc;
+#[path="../rtw89_wifi/src/tx.rs"]mod tx;
+#[path="../rtw89_wifi/src/frames.rs"]mod frames;

@@ -4,6 +4,8 @@ use crate::{c2h,download,fwcmd,h2c,io::{self,Fault,FaultKind,RegisterIo},phy::Ph
 
 #[path="rx_inbox.rs"] pub mod inbox;
 pub use inbox::Inbox;
+#[allow(dead_code)]
+#[path="data_mode.rs"] pub(crate) mod data_mode;
 
 pub const EVENT_BYTES:usize=2048;
 pub const EVENT_SLOTS:usize=4;
@@ -34,15 +36,23 @@ impl<B:RegisterIo> RegisterIo for Window<'_,B>{
 pub trait DeviceIo:fwcmd::Bus { fn pci_id(&mut self)->io::Result<u32>; fn bar_len(&self)->usize; }
 
 #[derive(Clone,Copy,Debug,Eq,PartialEq)]
-pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,InboxOverflow,Malformed,Rejected(u8),Coexistence }
+pub enum Error { Request,Session,Clock,Timeout,Register(Fault),Command(h2c::Error),Dma(fwcmd::Error),Receive(rx::Error),Permit(post_mac::Error),Event(c2h::Error),EventOverflow,InboxOverflow,Malformed,Rejected(u8),Coexistence,PacketHandler }
 impl From<Fault> for Error { fn from(e:Fault)->Self { Self::Register(e) } }
 #[derive(Clone,Copy,Debug,Default,Eq,PartialEq)]
 pub struct Counts { pub non_c2h:u32,pub other_c2h:u32,pub unrelated_ack:u32 }
 
+trait PacketHandler{
+    fn packet(&mut self,now:u64,channel:rx::Channel,packet:rxdesc::Packet,buffer:&[u8],full:bool)->Result<bool,Error>;
+}
+struct RetainAll;
+impl PacketHandler for RetainAll{
+    fn packet(&mut self,_:u64,_:rx::Channel,_:rxdesc::Packet,_:&[u8],_:bool)->Result<bool,Error>{Ok(false)}
+}
+
 /// Consuming Ready prevents recreating sequence zero against the same successful firmware startup.
 /// Borrowed coherent DMA objects and their backing storage stay owned after errors or Drop; external shutdown is mandatory.
 pub struct Session<'a,'command,'receive,B> {
-    bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,
+    bus:&'a mut B,queue:&'a mut fwcmd::Queue<'command>,rings:&'a mut rx::Rings<'receive>,receiving:&'a post_mac::Receiving,mode:data_mode::Mode,
     inbox:Option<&'a mut Inbox>,terminal_copy:Option<inbox::Metadata>,firmware:download::Ready,scratch:&'a mut[u8],engine:h2c::Engine,failed:Option<Error>,counts:Counts,
     pub(crate) btc:Option<crate::btc_context::Context>,events:[[u8;EVENT_BYTES];EVENT_SLOTS],lengths:[usize;EVENT_SLOTS],event_head:usize,event_count:usize,last:u64,
 }
@@ -58,7 +68,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         let left=10_000u64.checked_sub(bus.now_us().checked_sub(start).ok_or(Error::Clock)?).filter(|x|*x>0).ok_or(Error::Timeout)?;
         receiving.validate(bus,queue,rings,left as u32).map_err(Error::Permit)?;
         let now=bus.now_us(); if now<start { return Err(Error::Clock); } if now-start>=10_000 { return Err(Error::Timeout); }
-        Ok(Self { bus,queue,rings,receiving,firmware,scratch,engine:h2c::Engine::new(now),failed:None,counts:Counts::default(),
+        Ok(Self { bus,queue,rings,receiving,mode:data_mode::Mode::Startup,firmware,scratch,engine:h2c::Engine::new(now),failed:None,counts:Counts::default(),
             inbox:None,terminal_copy:None,btc:None,events:[[0;EVENT_BYTES];EVENT_SLOTS],lengths:[0;EVENT_SLOTS],event_head:0,event_count:0,last:now })
     }
     /// The caller owns the storage; no large runtime inbox is placed in the Session or allocated per packet.
@@ -105,9 +115,12 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         result.map_err(Error::Register)
     }
     pub(crate) fn poll_before(&mut self,deadline:u64)->Result<[bool;2],Error>{
+        self.poll_before_with(deadline,&mut RetainAll)
+    }
+    fn poll_before_with(&mut self,deadline:u64,handler:&mut impl PacketHandler)->Result<[bool;2],Error>{
         if let Some(e)=self.failed{return Err(e)}
         let result=(||{let left=self.left(deadline)?;self.live(left.min(10_000))?;
-            let received=[self.receive_one(rx::Channel::Rxq,deadline)?,self.receive_one(rx::Channel::Rpq,deadline)?];
+            let received=[self.receive_one_with(rx::Channel::Rxq,deadline,handler)?,self.receive_one_with(rx::Channel::Rpq,deadline,handler)?];
             let now=self.now()?;self.engine.poll(now).map_err(Error::Command)?;self.left(deadline)?;Ok(received)})();
         match result{Ok(v)=>Ok(v),Err(e)=>self.fail(e)}
     }
@@ -131,7 +144,10 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
     fn left(&mut self,deadline:u64)->Result<u32,Error> { let now=self.now()?;deadline.checked_sub(now).filter(|v|*v>0).map(|v|v.min(u32::MAX as u64)as u32).ok_or(Error::Timeout) }
     fn live(&mut self,budget:u32)->Result<(),Error> {
         if self.firmware.session()!=self.queue.session(){return Err(Error::Session)}
-        self.receiving.validate(self.bus,self.queue,self.rings,budget).map_err(Error::Permit)?;Ok(())
+        match &self.mode{
+            data_mode::Mode::Startup=>{self.receiving.validate(self.bus,self.queue,self.rings,budget).map_err(Error::Permit)?;},
+            data_mode::Mode::Data(layout)=>{self.receiving.validate_data(self.bus,self.queue,self.rings,layout,budget).map_err(Error::Permit)?;},
+        }Ok(())
     }
     fn retain(&mut self,channel:rx::Channel,packet:rxdesc::Packet)->Result<(),Error> {
         let Some(inbox)=self.inbox.as_mut() else{return Ok(())};
@@ -142,7 +158,11 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
             Err(inbox::Error::Packet)=>Err(Error::Malformed),
         }
     }
-    fn receive_one(&mut self,channel:rx::Channel,deadline:u64)->Result<bool,Error> {
+    fn dispatch(&mut self,channel:rx::Channel,packet:rxdesc::Packet,deadline:u64,handler:&mut impl PacketHandler)->Result<(),Error>{
+        let now=self.now()?;let handled=handler.packet(now,channel,packet,self.scratch,self.pending_packets()==inbox::SLOTS)?;
+        self.left(deadline)?;if !handled{self.retain(channel,packet)?;}Ok(())
+    }
+    fn receive_one_with(&mut self,channel:rx::Channel,deadline:u64,handler:&mut impl PacketHandler)->Result<bool,Error> {
         let left=self.left(deadline)?;
         let mut window=Window{bus:self.bus,deadline,last:self.last,clock_bad:false};
         let received=self.rings.receive(&mut window,channel,self.scratch,left);self.last=window.last;
@@ -152,7 +172,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         };
         self.left(deadline)?;
         if packet.kind!=rxdesc::TYPE_C2H {
-            self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);self.retain(channel,packet)?;
+            self.counts.non_c2h=self.counts.non_c2h.saturating_add(1);self.dispatch(channel,packet,deadline,handler)?;
             self.left(deadline)?;self.terminal_copy=None;return Ok(true);
         }
         if channel!=rx::Channel::Rxq||packet.crc_error||packet.icv_error { return Err(Error::Malformed); }
@@ -169,7 +189,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
             if bytes.len()>EVENT_BYTES||self.event_count==EVENT_SLOTS{return Err(Error::EventOverflow)}
             let at=(self.event_head+self.event_count)%EVENT_SLOTS;
             self.events[at][..bytes.len()].copy_from_slice(bytes);self.lengths[at]=bytes.len();self.event_count+=1;
-        } else { self.counts.other_c2h=self.counts.other_c2h.saturating_add(1);self.retain(channel,packet)?; }
+        } else { self.counts.other_c2h=self.counts.other_c2h.saturating_add(1);self.dispatch(channel,packet,deadline,handler)?; }
         self.left(deadline)?;self.terminal_copy=None;Ok(true)
     }
     /// One absolute budget covers ownership checks, publication, RX/ACK processing and command-DMA quiescence.
@@ -191,6 +211,9 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
         match result{Ok(v)=>Ok(v),Err(e)=>self.fail(e)}
     }
     fn command_deadline(&mut self,command:h2c::Command,body:&[u8],acks:h2c::Acks,deadline:u64)->Result<h2c::Outcome,Error> {
+        self.command_deadline_with(command,body,acks,deadline,&mut RetainAll)
+    }
+    fn command_deadline_with(&mut self,command:h2c::Command,body:&[u8],acks:h2c::Acks,deadline:u64,handler:&mut impl PacketHandler)->Result<h2c::Outcome,Error> {
         let timeout_us=self.left(deadline)?;
         let left=self.left(deadline)?;self.live(left.min(10_000))?;
         let mut ticket=None;let mut completed=None;
@@ -203,7 +226,7 @@ impl<'a,'command,'receive,B:DeviceIo> Session<'a,'command,'receive,B> {
                     Ok(sent)=>ticket=Some(sent),Err(h2c::Error::Full)=>(),Err(e)=>return Err(Error::Command(e)),
                 }
             }
-            self.receive_one(rx::Channel::Rxq,deadline)?;self.receive_one(rx::Channel::Rpq,deadline)?;
+            self.receive_one_with(rx::Channel::Rxq,deadline,handler)?;self.receive_one_with(rx::Channel::Rpq,deadline,handler)?;
             let now=self.now()?;self.engine.poll(now).map_err(Error::Command)?;
             if let Some(sent)=ticket { if completed.is_none() { completed=self.engine.take(now,sent).map_err(Error::Command)?; } }
             if let Some(outcome)=completed {
@@ -242,6 +265,7 @@ impl<B:DeviceIo> PhyIo for Session<'_,'_,'_,B> {
     fn bar_len(&self)->usize{self.bus.bar_len()}
     fn receive_permit(&mut self,timeout_us:u32)->io::Result<post_mac::ReceivePermit<'_>> {
         if let Some(error)=self.failed{return Err(fault(error))}
+        if !matches!(self.mode,data_mode::Mode::Startup){return Err(fault(Error::Session))}
         match self.receiving.validate(self.bus,self.queue,self.rings,timeout_us) {
             Ok(permit)=>Ok(permit),
             Err(error)=>{self.failed=Some(Error::Permit(error));self.engine.abort();Err(fault(Error::Permit(error)))},
@@ -256,6 +280,7 @@ impl<B:DeviceIo> PhyIo for Session<'_,'_,'_,B> {
 impl<B:DeviceIo> crate::rxdck::RxdckIo for Session<'_,'_,'_,B> {
     fn scheduler_zero(&mut self,timeout_us:u32)->io::Result<()> {
         if let Some(error)=self.failed{return Err(fault(error))}
+        if !matches!(self.mode,data_mode::Mode::Startup){return Err(fault(Error::Session))}
         if timeout_us==0||timeout_us>1_000_000{return Err(Fault::new(FaultKind::Access,0xc348,timeout_us))}
         let result=(||{
             let deadline=self.now()?.checked_add(u64::from(timeout_us)).ok_or(Error::Clock)?;

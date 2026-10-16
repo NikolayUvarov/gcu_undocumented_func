@@ -51,3 +51,8 @@ extern crate self as rtw89_wifi;
 #[path="../rtw89_wifi/src/dpk_tables.rs"]mod dpk_tables;
 #[path="../rtw89_wifi/src/dpk.rs"]mod dpk;
 #[path="../rtw89_wifi/src/channel_rfk.rs"]mod channel_rfk;
+
+#[path="../rtw89_wifi/src/station.rs"]mod station;
+#[path="../rtw89_wifi/src/txdesc.rs"]mod txdesc;
+#[path="../rtw89_wifi/src/tx.rs"]mod tx;
+#[path="../rtw89_wifi/src/frames.rs"]mod frames;

@@ -81,7 +81,7 @@ impl Device {
         assert!(index < fwcmd::DESCRIPTORS as u32);
         assert!(matches!(self.command & 7, 6 | 7));
         let receiving = self.get(fwcmd::INIT_CONFIG, 4) & 0x2000 != 0;
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, if receiving { 0x000b_0f00 } else { 0x000b_0f03 });
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f_0f03, if receiving { self.receive_stop() } else { 0x000b_0f03 });
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, if receiving { 0x2800 } else { 0x800 });
         assert!(!self.dma.is_null());
         assert_eq!(self.get(fwcmd::BASE_LOW, 4), 0x200000);
@@ -103,7 +103,7 @@ impl Device {
         let packet = unsafe { std::slice::from_raw_parts(self.dma.add(at + fwcmd::TXWD_BYTES), length - fwcmd::TXWD_BYTES) }.to_vec();
         if receiving {
             assert!(!part);assert_eq!(self.get(0x1e0,4)&0xe0,0xe0);
-            assert_eq!(self.get(0xc348,4)&0xffff,0);assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
+            assert_eq!(self.get(0xc348,4)&0xffff,if self.receive_stop()==0x20000{0x010f}else{0});assert_eq!(self.get(0xc6ec,4)&(1<<7),0);
             let hold_header = self.hold_header == Some((packet[0] & 3, packet[0] >> 2, packet[1]));
             self.normal_command(&packet);
             self.normal_packets.push(packet);
@@ -156,15 +156,20 @@ impl Device {
         buffer
     }
 
+    fn receive_stop(&self)->u32{
+        let value=self.get(fwcmd::DMA_STOP,4)&0x001f0f03;
+        assert!(matches!(value,0x000b0f00|0x00020000));value
+    }
     pub fn inject_c2h(&mut self, event: &[u8]) {
         self.inject_c2h_channel(0,event);
     }
 
-    fn inject_c2h_channel(&mut self, channel: usize, event: &[u8]) {
+    fn inject_c2h_channel(&mut self, channel: usize, event: &[u8]) {self.inject_packet(channel,10,event);}
+    pub fn inject_packet(&mut self,channel:usize,kind:u8,event:&[u8]) {
         assert!(channel<2);
         assert!(matches!(self.command & 7, 6 | 7));
         assert_eq!(self.get(fwcmd::INIT_CONFIG, 4) & 0x2800, 0x2800);
-        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, 0x000b0f00);
+        assert_eq!(self.get(fwcmd::DMA_STOP, 4) & 0x001f0f03, self.receive_stop());
         assert!(event.len() + 20 <= rx::BUFFER_BYTES);
         let index_at=[0x1050,0x1054][channel];let index = self.get(index_at, 4);
         let hardware = ((index >> 16) & 0xfff) as usize;
@@ -174,7 +179,7 @@ impl Device {
         let length = 20 + event.len();
         let mut packet = vec![0; length];
         packet[..4].copy_from_slice(&(length as u32 | 0xc000).to_le_bytes());
-        packet[4..8].copy_from_slice(&(event.len() as u32 | 10 << 24).to_le_bytes());
+        packet[4..8].copy_from_slice(&(event.len() as u32 | u32::from(kind) << 24).to_le_bytes());
         packet[20..].copy_from_slice(event);
         unsafe { std::ptr::copy_nonoverlapping(packet.as_ptr(), self.dma.add(buffer), packet.len()); }
         self.put(index_at, 4, (index & 0xffff) | (next as u32) << 16);
@@ -224,6 +229,8 @@ impl Device {
             let reply = match request {
                 [0x103, 0, 0, 0] => self.feature_reply,
                 [0x205, 0xffff, 0, 0] => { self.put(0xc348, 4, 0); Some([0x204, 0, 0, 0]) }
+                [0x010f0205,0xffff,0,0]=>{assert_eq!(self.get(fwcmd::DMA_STOP,4)&0x001f0f03,0x20000);
+                    self.put(0xc348,4,0x010f);Some([0x204,0,0,0])}
                 _ => panic!("unsupported modeled mailbox request: {request:x?}"),
             };
             if let Some(reply) = reply {
