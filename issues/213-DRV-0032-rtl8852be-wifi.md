@@ -941,3 +941,8 @@ unknown controls. Twelve new cumulative cases compile, including a valid 15 ms
 ACK and report bursts; own build/raw publication precede execution. Sustained H2C sequence reuse,
 associated-role policy inputs, native service binding and hardware acceptance
 remain open.
+
+Service/runtime integration source `40f93daf`, published by raw `4f58ad98`,
+subsequently passed all 16 real-wire service cases and the full 294-case
+harness (one inherited private-firmware ignore). The new case exercises an
+actual 15 ms coexistence ACK through service progress, then successful real TX.
