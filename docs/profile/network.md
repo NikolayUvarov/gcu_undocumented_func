@@ -151,6 +151,14 @@ The rates doubled and the stack's and the drivers' CPU time per MiB fell by abou
 
 ## RTL8852BE implementation and evidence (213-DRV-0032)
 
+The private [wlanhw service adapter](../../hwdocs/rtl8852be-service.md) now
+dispatches the existing 1.1 protocol through an actual admitted DataSession,
+with a single channel, bounded frame/waiter state and retained DMA ownership.
+It is not called by the native executable and adds no physical networking
+guarantee. Its fifteen new cold/real-wire host cases compile; execution awaits
+raw publication after the successful own build. Native endpoint/configuration authority and
+hardware association/traffic acceptance remain open.
+
 ### Current scope (2026-10-16)
 
 The native x86 service executes the bounded board, firmware, MAC, receive and

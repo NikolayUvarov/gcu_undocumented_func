@@ -6,6 +6,7 @@ use crate::{btc_session::{self,Session,data_mode::{self,DataSession,Stage,Cause}
 #[path="rtw89_data_mode_device.rs"]mod device;
 use std::{rc::Rc,cell::RefCell};
 use device::{Control,Device,Region};
+#[cfg(rtw89_service)]#[path="rtw89_service_cases.rs"]mod service_cases;
 #[path="rtw89_active_filter_cases.rs"]mod active_filter_cases;
 fn frame()->Vec<u8>{let mut f=vec![0;64];f[0]=8;f[4..10].copy_from_slice(&[2,1,1,1,1,1]);f[10..16].copy_from_slice(&[2,3,4,5,6,7]);f}
 fn command<B:btc_session::DeviceIo>(data:&mut DataSession<'_,'_,'_,'_,'_,'_,B>){

@@ -914,7 +914,31 @@ Add the sealed actual data-mode command adapter and station CAM/filter update,
 including no-pending-TX admission, one deadline, actual done ACK/DMA completion,
 old receive-epoch retirement and final owner/radio/register checks. Preserve
 raw wlanhw address semantics and both primary/selector-restoration failures.
-Ten new cold cases compile; execution follows own build and raw publication.
+All ten new cold cases and the five affected complete harnesses passed on
+own source `96070fbe` after raw `4ea2d9eb` publication; native compilation passed.
+Detailed counts and the unchanged private-firmware ignore are recorded in the
+transition notes.
 Continuous BTC reconciliation, bounded H2C sequence reuse, native endpoint
 binding and hardware traffic remain open; association is not inferred from a
 selected BSSID. See the [transition notes](../hwdocs/rtl8852be-data-mode.md#active-filter-continuation).
+
+### Actual connection-to-service orchestration
+
+Consolidate the real initial PHY/channel/RFK/station/data chain in private
+`connection::run`, consuming the actual Session and resolved policy. Invoke the
+service only after all admissions succeed, then attempt packet shutdown even
+when the callback returns an error value. Preserve initial coexistence and
+activation cleanup details; retain outer RX/WCPU/PCI cleanup obligations.
+Four cold cumulative fixtures compile and the own x86 image builds; execution
+follows raw publication. The native policy consumer and endpoint remain open.
+
+### Private wlanhw service adapter
+
+Add the actual DataSession-to-wlanhw 1.1 adapter for its single admitted 2.4 GHz
+20 MHz channel, real CAM/filter changes, serialized raw frames and checked
+firmware TX attempt counts. Bound IPC/RX work, frame storage, deferred transmit
+and waiter ownership; preserve the retained owner and independent shutdown on
+failure. Fifteen cold/real-wire cases compile and are registered in host CI;
+execution follows own build and raw publication. Native binding, actual policy
+input, remaining runtime coexistence and physical traffic remain separate.
+See [the service ownership contract](../hwdocs/rtl8852be-service.md).

@@ -153,6 +153,7 @@ Configuration: x86-64 Linux 6.6.87.2 WSL2, rustc 1.101.0-nightly c36f14571.
 Logs: `/tmp/mind-native-dma-results.log` and
 `/tmp/mind-native-dma-startup-results.log`. No real device was accessed.
 
+
 ## Active filter continuation
 
 `DataSession::set_filter` requires no pending raw TX request and retains the
@@ -181,3 +182,47 @@ transmitter identity, banked/queued/in-flight epoch retirement, admission,
 missing ACK or DMA, corrupted/applied-failed/late filter writes, selector restore
 failure, retained control refusal and return to scanning. Execution is pending
 this continuation's own build, commit and raw publication.
+
+
+Active-filter source `96070fbe379eea198b13ff72664a68bb0ce64f65` passed all ten
+new cold cases and thirteen existing packet-mode cases as part of the complete
+data-mode harness after raw `4ea2d9eb93cf91c59491fc95de887ee01e081888` publication.
+The own-branch complete runs passed: data mode 264, BTC Session 241, station 263,
+post-MAC 241 and TX 241 (overlapping fixtures, not independent totals), with zero
+failures and the same one inherited private-firmware ignore in each. Execution
+was 1.07–1.21 seconds per harness on 2026-10-16; native compilation passed in
+1.55 seconds. The manifest `/tmp/rtw89-active-filter-validation-96070fbe.json`
+records exact source/publication, commands' results and per-harness log paths.
+These remain host-model observations, not physical radio or native-service evidence.
+
+## Owned connection orchestration
+
+The private `connection::run` joins the production initial-PHY, channel,
+nonclone calibration admission, all channel RFK, station/CAM, initial scan
+filter and data-owner activation stages. It consumes the actual startup Session
+and an explicitly resolved policy; it has no country, power or platform default.
+Only successful completion of all stages invokes the service callback with the
+actual borrowed DataSession. Same-attempt capability, board, firmware, queue
+and calibration checks remain in their respective production entry points.
+
+After the callback returns, including an error value, packet shutdown runs and
+its independent radio/TX results accompany the callback value and initial-PHY
+observations. The callback cannot return borrowed stage state. Activation
+failures retain their recorded shutdown, and initial failures preserve their
+coexistence failure detail. The outer native caller must still stop RX/WCPU,
+verify PCI quiescence and retain every mapping; this helper never frees DMA.
+No native policy consumer or WLAN endpoint is enabled by this private function.
+
+Before data activation the same live Session applies the existing exact report
+tail: PPDU reporting, PHY-status forwarding and RTS thresholds, following
+[pinned core.c:5660-5662](https://github.com/torvalds/linux/blob/05f7e89ab9731565d8a62e3b5d1ec206485eeb0b/drivers/net/wireless/realtek/rtw89/core.c#L5660).
+Its original independent cleanup is preserved and the returned observation
+records the actual encoded RTS value. The single RX owner must consume/count
+ordinary PPDU status separately; report payload interpretation and RSSI are not
+established by this orchestration. Startup and runtime PPDU-pressure handling
+is a separate integration prerequisite before exposing a native endpoint.
+
+Four cumulative cold fixtures compile for real TX after the full chain,
+callback-error shutdown, missing actual initial command completion and rejected
+data activation. Their execution follows own-branch build and raw publication.
+
