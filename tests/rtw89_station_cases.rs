@@ -1,5 +1,5 @@
 use crate::{btc_session::Session,channel_power::Constraints,channel_rfk::{self,Authorities},download,fwcmd,
-    initial_phy,model,phy::{Phy,State,channel::{self,CalibrationEngine as Engine,CalibrationTransmit}},
+    initial_phy,io::{self,RegisterIo},model,phy::{Phy,State,channel::{self,CalibrationEngine as Engine,CalibrationTransmit}},
     phycap,post_mac,runtime_mac,rx,station::{self,Stage}};
 #[path="rtw89_initial_phy_device.rs"]mod initial;
 #[path="rtw89_station_device.rs"]mod device;
@@ -7,6 +7,10 @@ use device::Device;
 use initial::channel::ChannelModel;
 
 fn run(speed:u8,setup:impl FnOnce(&mut Device),tamper:bool,repeat:bool,
+    check:impl FnOnce(&Device,Result<station::Prepared,station::Failure>,State)){
+    run_validation(speed,setup,tamper,repeat,0,check);
+}
+fn run_validation(speed:u8,setup:impl FnOnce(&mut Device),tamper:bool,repeat:bool,validation:u8,
     check:impl FnOnce(&Device,Result<station::Prepared,station::Failure>,State)){
     download::tests::with_synthetic_firmware(|verified|{
         let mut raw=model::Device::new(speed);let board=model::read_board(&mut raw);
@@ -29,9 +33,22 @@ fn run(speed:u8,setup:impl FnOnce(&mut Device),tamper:bool,repeat:bool,
                 tssi:CalibrationTransmit::modeled(&tuned,Engine::Tssi).unwrap(),dpk:CalibrationTransmit::modeled(&tuned,Engine::Dpk).unwrap()};
             let calibrated=channel_rfk::run(&mut phy,&board,&initial.prefix,&tuned,&initial.owner,permissions).unwrap();
             if tamper{tuned.policy_version+=1;}
-            let result=station::prepare(&mut phy,&board,&tuned,&calibrated,&initial.owner,&caps);
+            let mut result=station::prepare(&mut phy,&board,&tuned,&calibrated,&initial.owner,&caps);
             if let Ok(prepared)=&result{assert!(prepared.matches(&tuned,board.identity.mac));assert_eq!(prepared.mac_id(),0);
                 assert!(!prepared.matches(&tuned,[2,3,4,5,6,8]));}
+            if validation!=0{
+                let prepared=result.as_ref().unwrap();
+                if validation==2||validation==4{
+                    let session=phy.bus_between_stages();let deadline=session.now_us()+10_000;
+                    session.registers(deadline,|bus|{
+                        if validation==2{bus.write32(0xc04,0x18840000)?;io::modify32(bus,0x40000,1<<21,0)?;bus.write32(0xc04,0x18888000)?;}
+                        else{io::modify32(bus,0xc660,0x30,0)?;}Ok(())
+                    }).unwrap();
+                }
+                if validation==3{tuned.policy_version+=1;}
+                let checked=prepared.validate(&mut phy,&board,&tuned,&initial.owner,if validation==5{1}else{10_000});
+                if let Err(error)=checked{result=Err(error);}
+            }
             if repeat{assert!(result.is_ok());let before=phy.bus_between_stages().submitted();
                 assert_eq!(station::prepare(&mut phy,&board,&tuned,&calibrated,&initial.owner,&caps).unwrap_err().stage,Stage::Guard);
                 assert_eq!(phy.bus_between_stages().submitted(),before);}
@@ -111,3 +128,24 @@ fn firmware_receipt_without_macid_unpause_is_not_station_ready(){run(1,|d|{
     assert_eq!(result.unwrap_err().stage,Stage::Verify);assert_eq!(state,State::Failed);
     assert_eq!(d.base.inner.get(0x9eb0,4)&1,1);radio_off(d);
 });}
+
+#[test]
+fn current_station_validates_before_consuming_into_data_activation(){run_validation(2,|_|{},false,false,1,|d,result,state|{
+    result.unwrap();assert_eq!(state,State::ChannelTuned);assert_eq!(d.station_packets.len(),5);assert_eq!(d.selector,0x18888000);
+});}
+#[test]
+fn changed_cctl_or_report_path_cannot_reuse_station_readiness(){for fault in [2,4]{run_validation(1,|_|{},false,false,fault,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Verify);assert_eq!(state,State::Failed);radio_off(d);
+    assert_eq!(d.station_packets.len(),5);assert_eq!(d.selector,0x18888000);
+});}}
+#[test]
+fn changed_policy_is_rejected_before_validation_register_checks(){run_validation(1,|_|{},false,false,3,|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,Stage::Guard);assert_eq!(state,State::ChannelTuned);assert_eq!(d.station_packets.len(),5);
+});}
+#[test]
+fn station_validation_budget_includes_owner_and_final_selector_checks(){for final_check in [false,true]{run_validation(1,|d|{
+    if final_check{d.late_restore=2;}
+},false,false,if final_check{6}else{5},|d,result,state|{
+    assert_eq!(result.unwrap_err().stage,if final_check{Stage::Verify}else{Stage::Guard});assert_eq!(state,State::Failed);radio_off(d);
+    assert_eq!(d.station_packets.len(),5);
+});}}

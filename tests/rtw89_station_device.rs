@@ -7,12 +7,12 @@ pub(super) struct Device{
     pub base:initial::Device,pub memory:BTreeMap<u32,u32>,pub bar:usize,pub ignore_control:bool,pub ignore_unpause:bool,
     pub ignore_port:bool,pub fail_port:bool,pub late_control:bool,pub unrelated_firmware_fields:bool,
     pub window_writes:usize,pub station_packets:Vec<Vec<u8>>,pub restore_fail:bool,
-    pub selector:u32,active:bool,
+    pub selector:u32,active:bool,pub late_restore:u8,restores:u8,
 }
 impl Device{
     pub fn new(base:initial::Device)->Self{Self{base,memory:BTreeMap::new(),bar:0x100000,ignore_control:false,ignore_unpause:false,
         ignore_port:false,fail_port:false,late_control:false,unrelated_firmware_fields:false,
-        window_writes:0,station_packets:Vec::new(),restore_fail:false,selector:0x18888000,active:false}}
+        window_writes:0,station_packets:Vec::new(),restore_fail:false,selector:0x18888000,active:false,late_restore:0,restores:0}}
     fn firmware(&mut self,start:usize){
         let packets=self.base.inner.normal_packets[start..].to_vec();
         for p in packets{let h=(p[0]&3,p[0]>>2,p[1]);if ![(1,9,8),(1,8,4),(1,8,0),(1,6,0),(1,5,2)].contains(&h){continue;}
@@ -36,7 +36,7 @@ impl Device{
     fn write(&mut self,at:usize,width:usize,value:u32)->io::Result<()>{
         if at==0xc04{assert_eq!(width,4);self.base.inner.now+=1;
             if self.restore_fail&&self.active&&value==0x18888000{return Err(io::Fault::new(io::FaultKind::Access,at,value));}
-            self.selector=value;return Ok(());}
+            self.selector=value;if value==0x18888000{self.restores+=1;if self.restores==self.late_restore{self.base.inner.now+=10_000;}}return Ok(());}
         if (0x40000..0x40020).contains(&at){assert_eq!(width,4);assert!(self.bar>=at+width);self.base.inner.now+=1;
             self.memory.insert(self.selector+(at-0x40000)as u32,value);self.window_writes+=1;return Ok(());}
         if at==0xc400{self.active=true;}

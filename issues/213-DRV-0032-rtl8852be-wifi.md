@@ -823,7 +823,7 @@ private-firmware ignores unchanged, detailed counts in the provider notes). The 
 input depends on KRN's platform-policy request; physical Wi-Fi acceptance remains
 open. This provider does not start native transmission.
 
-## Initial station context continuation (2026-10-16)
+### Initial station context continuation (2026-10-16)
 
 The [private station continuation](../hwdocs/rtl8852be-station.md) prepares
 source NO_LINK MACID0/port0/CAM0 after the actual channel calibration result,
