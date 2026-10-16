@@ -58,3 +58,28 @@ fn missing_actual_initial_ack_never_invokes_service_or_sends_packets() { run(0,t
 
 #[test]
 fn refused_actual_data_activation_never_invokes_service() { run(1,false,|_|panic!("service before activation")); }
+
+#[cfg(rtw89_service)]
+#[test]
+fn actual_connection_serves_wire_info_filter_and_transmit_before_retained_shutdown(){
+    use crate::{codec::{self,Reader,Wire,Writer},service::Service,service_ipc::ipc,wlanhw,wire};
+    run(0,false,|data|{
+        ipc::reset();let mut service=Service::new(data).unwrap();
+        let info=ipc::buffer(1,&[]);assert!(service.step());let(words,bytes)=ipc::response(info).unwrap();
+        assert_eq!(words[0]&255,wire::STATUS_OK);let mut r=Reader::new(&bytes[..words[0]>>16]);
+        let actual=wlanhw::Info::decode(&mut r).unwrap();assert!(r.done());
+        assert_eq!(actual.mac,0x020304050607);assert_eq!(actual.channels.as_slice(),&[6]);assert_eq!(actual.channel,6);
+        let mut filter=[0;17];let mut w=Writer::new(&mut filter);
+        wlanhw::Filter{all_beacons:false,bssid:0x020101010101,own:0}.encode(&mut w).unwrap();
+        let change=ipc::buffer(3,&filter);assert!(service.step());assert_eq!(ipc::response(change).unwrap().0,[0,0]);
+        let mut body=[0;wlanhw::REQUEST_MAX];let mut w=Writer::new(&mut body);
+        codec::encode_bytes::<2346>(&frame(),&mut w).unwrap();12u8.encode(&mut w).unwrap();1u8.encode(&mut w).unwrap();let length=w.len();
+        let sent=ipc::buffer(4,&body[..length]);assert!(service.step());assert!(ipc::response(sent).is_none());
+        assert!(service.step());let(words,bytes)=ipc::response(sent).unwrap();assert_eq!(words,[2<<16,0]);
+        let mut r=Reader::new(&bytes[..2]);assert_eq!(wlanhw::Sent::decode(&mut r).unwrap(),wlanhw::Sent{acked:true,attempts:1});assert!(r.done());
+        let stopped=service.stop();assert!(stopped.failure.is_none());assert!(!stopped.owner.current_filter().all_beacons());
+        assert!(matches!(stopped.shutdown,Shutdown::Attempted{radio:None,transmit:tx::Stop{request:None,idle:None}}));
+        for id in[info,change,sent]{assert_eq!(ipc::dropped(id),1);}assert_eq!(ipc::outstanding(),0);assert_eq!(ipc::duplicates(),0);
+        Ok(42)
+    });
+}

@@ -113,3 +113,16 @@ checked one-attempt result and no retained capability leak. This checks the
 100 ms progress budget at the service boundary rather than merely calling
 DataSession directly. The case is compile-only until its own build and raw
 publication complete; earlier 15-case evidence above remains unchanged.
+
+## Production coordinator composition
+
+One follow-up cold case calls the production `connection::run`, then creates
+`Service` directly in that coordinator's callback. It sends generated-wire
+Info, a real active filter/CAM change and deferred TX, verifies the checked
+one-attempt reply and exactly-once capability release, and stops the adapter.
+The original coordinator fixture additionally checks report-tail registers,
+`encoded_rts=0x02ff`, mandatory outer shutdown and retained DMA cleanup. There
+is no guard reseeding between those stages. The ordinary four connection
+cases stay unchanged; the composed child is included by the explicitly
+registered service harness. This is a compile-only host fixture until its own
+build and raw publication, not native endpoint or radio evidence.
