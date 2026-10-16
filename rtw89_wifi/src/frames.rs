@@ -47,12 +47,17 @@ fn header_bytes(frame: &[u8]) -> Result<usize, Error> {
 /// AX advertises RX_INCLUDES_FCS; remove exactly four bytes and retain protected MPDUs for the station's software crypto.
 pub(crate) fn decode(bytes: &[u8]) -> Result<Frame<'_>, Error> {
     let packet = rxdesc::parse(bytes).map_err(Error::Descriptor)?;
+    from_packet(packet, bytes)
+}
+
+/// Use the same validated descriptor and retained bytes from the sole RX owner; trailing RXBD padding may be omitted.
+pub(crate) fn from_packet(packet: rxdesc::Packet, bytes: &[u8]) -> Result<Frame<'_>, Error> {
     if packet.kind != rxdesc::TYPE_WIFI { return Err(Error::Kind); }
     if packet.crc_error || packet.icv_error { return Err(Error::Integrity); }
     if packet.hardware_decrypted { return Err(Error::Decrypted); }
-    let flags = u32::from_le_bytes(bytes[16..20].try_into().unwrap());
+    let flags = u32::from_le_bytes(bytes.get(16..20).ok_or(Error::Descriptor(rxdesc::Error::Truncated))?.try_into().unwrap());
     if flags & ((1 << 5) | (1 << 6)) != 0 { return Err(Error::Aggregate); }
-    let info = u32::from_le_bytes(bytes[8..12].try_into().unwrap());
+    let info = u32::from_le_bytes(bytes.get(8..12).ok_or(Error::Descriptor(rxdesc::Error::Truncated))?.try_into().unwrap());
     let rate = *RATES.get(((info >> 16) & 0x1ff) as usize).ok_or(Error::Rate)?;
     let payload = packet.bytes(bytes).ok_or(Error::Frame)?;
     let length = payload.len().checked_sub(4).filter(|n| *n <= FRAME_MAX).ok_or(Error::Frame)?;

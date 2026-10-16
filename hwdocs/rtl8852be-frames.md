@@ -50,3 +50,16 @@ unchanged MPDU, all legacy rates, unsupported/error states, variable header
 bounds, maximum length, descriptor offsets, truncated buffers and unchanged
 output on refusal. Execution follows own-branch build and raw publication.
 No actual Ryzen reception, RF integrity or WLAN connectivity is established.
+
+
+Source `bd46b64f`, built with consolidated ASTRA `ac3fa1f4` and published in
+raw `fast-test` `3881b629`, passed all five focused cases (0.00 s, no failures
+or ignores). Independent review confirmed the pinned fields/FCS contract and
+bounds. A subsequent integration check found that the retained Session inbox
+keeps bytes through the validated packet end, intentionally omitting any
+trailing RXBD padding. Re-running the full-buffer parser on that shortened
+copy would reject a valid padded packet. `from_packet` now accepts the same
+validated descriptor and retained bytes, checks all accessed fields/payload
+bounds and removes only the FCS. Full-buffer `decode` remains strict. A sixth
+fixture covers padded full buffers, the shortened valid copy and missing
+payload bytes; its execution awaits publication of this correction.
