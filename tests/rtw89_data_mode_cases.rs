@@ -86,9 +86,9 @@ fn busy_invalid_timeout_and_wrong_transmitter_are_nonterminal_admission_errors()
     assert_eq!(c.borrow().published,1);assert!(data.advance(100_000).unwrap().unwrap().acked);command(data);
 });}
 #[test]
-fn dma_and_rpq_without_final_c2h_are_never_success(){run(7,true,true,|data,_|{
+fn dma_and_rpq_without_final_c2h_are_never_success(){run(7,true,true,|data,c|{
     data.begin(&frame(),12,1,10_000).unwrap();assert!(data.advance(10_000).unwrap().is_none());
-    let mut failed=false;for _ in 0..40{if data.advance(10_000).is_err(){failed=true;break}}assert!(failed);
+    c.borrow_mut().advance_us=10_001;assert!(data.advance(10_000).is_err());
     assert!(data.advance(10_000).is_err());
 });}
 #[test]
