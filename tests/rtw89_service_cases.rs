@@ -139,3 +139,15 @@ fn service_refuses_occupied_receive_slot_before_serving(){run(0,true,true,|data,
     ipc::reset();ipc::occupy(10);assert!(matches!(Service::new(data),Err(crate::sys::Error::NoSlot)));
     assert!(ipc::receives().is_empty());ipc::drop_cap(10).unwrap();clean();
 });}
+
+#[test]
+fn service_progress_accepts_real_btc_ack_after_fifteen_milliseconds_then_serves_tx(){run(0,true,true,|data,c|{
+    ipc::reset();let mut service=Service::new(data).unwrap();
+    {let mut c=c.borrow_mut();c.bt=Some(2|1<<30);c.delay_next_command=15_000;}
+    let info=ipc::buffer(1,&[]);assert!(service.step());assert_eq!(words(info)[0]&255,wire::STATUS_OK);
+    assert!(c.borrow().delayed_ack);assert!(!c.borrow().coex_packets.is_empty());assert_eq!(ipc::dropped(info),1);
+    let sent=ipc::buffer(4,&body(&frame(),12,1));assert!(service.step());assert!(ipc::response(sent).is_none());
+    assert!(service.step());let(w,b)=ipc::response(sent).unwrap();assert_eq!(w,[2<<16,0]);
+    let mut r=Reader::new(&b[..2]);assert_eq!(wlanhw::Sent::decode(&mut r).unwrap(),wlanhw::Sent{acked:true,attempts:1});
+    let stopped=service.stop();assert!(stopped.failure.is_none());assert_eq!(ipc::dropped(sent),1);clean();
+});}

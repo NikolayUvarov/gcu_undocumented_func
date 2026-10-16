@@ -102,3 +102,14 @@ native crate-directory build above is the build evidence.
 This slice does not establish a native endpoint, RF reception/transmission on Ryzen,
 association, DHCP, ping or sustained traffic. The existing hardware acceptance
 criteria remain open.
+
+## Runtime coexistence integration regression
+
+The follow-up merges source `f7f808b6` and exercises the actual `Service::step`
+through a BT enable transition whose real H2C acknowledgment arrives after
+15 ms. The Info reply must succeed, the modeled hardware must have delayed
+that actual acknowledgment, and a subsequent real Send must finish with the
+checked one-attempt result and no retained capability leak. This checks the
+100 ms progress budget at the service boundary rather than merely calling
+DataSession directly. The case is compile-only until its own build and raw
+publication complete; earlier 15-case evidence above remains unchanged.
