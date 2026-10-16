@@ -74,3 +74,18 @@ fn non_wifi_and_truncated_buffers_fail_without_touching_output() {
     raw[7] |= rxdesc::TYPE_C2H;
     assert_eq!(frames::decode(&raw).unwrap_err(), frames::Error::Kind);
 }
+
+#[test]
+fn validated_inbox_copy_can_omit_rxbd_padding_but_never_packet_bytes() {
+    let mpdu = frame(25, 0x80);
+    let mut raw = packet(&mpdu, 4, true, 2, 8);
+    raw.extend_from_slice(&[0xa5; 13]);
+    let total = raw.len(); raw[..4].copy_from_slice(&(total as u32 | 0xc000).to_le_bytes());
+    let descriptor = rxdesc::parse(&raw).unwrap();
+    assert_eq!(frames::decode(&raw).unwrap().mpdu(), mpdu);
+    let retained = &raw[..descriptor.offset + descriptor.length];
+    assert!(frames::decode(retained).is_err());
+    assert_eq!(frames::from_packet(descriptor, retained).unwrap().mpdu(), mpdu);
+    assert_eq!(frames::from_packet(descriptor, &retained[..retained.len() - 1]).unwrap_err(), frames::Error::Frame);
+    assert!(frames::from_packet(descriptor, &retained[..18]).is_err());
+}
