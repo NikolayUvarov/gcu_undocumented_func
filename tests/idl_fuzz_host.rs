@@ -93,6 +93,7 @@ mod idl {
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
     #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
+    #[path = "../../libmind/src/idl/ssh.rs"] pub mod ssh;
     #[path = "../../libmind/src/idl/sysinfo.rs"] pub mod sysinfo;
     #[path = "../../libmind/src/idl/tls.rs"] pub mod tls;
     #[path = "../../libmind/src/idl/tpm.rs"] pub mod tpm;
@@ -104,6 +105,7 @@ mod idl {
     #[path = "../../libmind/src/idl/voice.rs"] pub mod voice;
     #[path = "../../libmind/src/idl/wifi.rs"] pub mod wifi;
     #[path = "../../libmind/src/idl/window.rs"] pub mod window;
+    #[path = "../../libmind/src/idl/wlanhw.rs"] pub mod wlanhw;
 }
 
 use abi::*;
@@ -351,8 +353,8 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        owned!(shell), borrowed!(socket), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
-        owned!(video), owned!(voice), owned!(wifi), owned!(window),
+        owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
+        owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
     let mut modules = generated_modules(); modules.sort();
@@ -420,17 +422,18 @@ types! {
     gpio: Kind Pull Error Controller Pin;
     init: Error Service;
     keyboard: Layout SwitchKey State;
-    keystore: Error Purpose Usage;
+    keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead Channel File Manifest ManifestRef Model ModelFile;
+    parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
     shell: Error;
-    socket: Error Protocol Rule Interface Usage Config Datagram;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
+    ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
-    tls: Error Peer;
+    tls: Error Peer PinKind Pin;
     tpm: Error Info;
     update: Error Offer State;
     vfs: Error Entry Volume Report;
@@ -438,6 +441,7 @@ types! {
     voice: Action Order;
     wifi: Security Error State Reason Network Status;
     window: Error Kind Placement Info;
+    wlanhw: Error Info Filter Sent;
 }
 
 /// libmind/src/idl, from the repository root where the host tests run.

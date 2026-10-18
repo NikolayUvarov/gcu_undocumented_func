@@ -6,6 +6,30 @@ The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-g
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. The drivers track turns each into a task and removes it from this file, and the file goes when it is empty.
 
+## BCM4331 transmit status must check its deadline on every path
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, for the maintainer's original
+MacBook network-stability report. **Priority:** P1. **Roadmap:** D / 550.
+**Constitution:** MC-6.1, MC-12.1, MC-12.3. Related owner task:
+[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
+
+At owner branch `5623c9ba`, now integrated into ASTRA `ac1854f2`,
+`bcm_wifi/src/radio.rs::Radio::status` continues after every available
+intermediate or wrong-cookie TX status before reaching its 100 ms deadline
+check or RX poll. Continuously available statuses can bypass that bound;
+a final matching status is accepted even if the clock has passed the end.
+The radio service is synchronous, so its caller's IPC timeout does not stop
+this loop. [Audit and evidence boundary](../issues-audit/2026-10-16-bcm-tx-wait-audit.md).
+
+Please number and implement a bounded production wait on every path,
+preserving the existing status format and 100 ms budget. Exercise continuous
+unrelated/intermediate statuses, no status, success before the deadline and
+a matching status observed after it. Verify the transmit-slot ownership on
+timeout before allowing reuse; a missing TX result is not completion.
+Publish the built owner commit to fast-test before tests, and record the
+original MacBook's ping-under-load/recovery run separately. This finding
+does not yet establish the hardware cause of the reported packet loss.
+
 ## The MacBook Pro's speakers: more of 551's step 2 if the GPIO is not enough (551)
 
 **Recorded by:** the kernel track (KRN), 2026-10-09, for [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md). That task stays with the kernel session until done (TRACKS 1.5).
@@ -51,22 +75,41 @@ The kernel session has set the Cirrus codec's amplifier GPIOs for Apple's machin
 - Its MAC address matches the one macOS shows for Wi-Fi.
 - Chip control reads back as it was before.
 
-## A volume in `audio.wit`, for `wm`'s Settings (000-APP-0048)
+## The output volume and the microphone's sensitivity in `audio.wit` (000-APP-0076, 000-APP-0077)
 
-**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0048](000-APP-0048-wm-settings.md) (the maintainer's request: one place for settings, the sound among them).
+**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0048](000-APP-0048-wm-settings.md), and widened on 2026-10-14 at the maintainer's request: "the output volume and the microphone's sensitivity need settings". The tools track's parts are [000-APP-0076](000-APP-0076-output-volume.md) (the volume) and [000-APP-0077](000-APP-0077-microphone-sensitivity.md) (the microphone).
 
 ### Problem
 
-`audio.wit` plays, records and makes tones, but has no volume: a program can only scale its own samples. Settings has nothing to set for the sound.
+`audio.wit` 1.1 plays, records and makes tones, but has no level:
+
+- **Output.** `audio_gw` leaves AC'97's master volume at 0 dB and its PCM output at the default, and unmutes HDA's output amplifiers at 0 dB. A program can only scale its own samples.
+- **Capture.** It fixes the gain at start: AC'97's microphone at 0 dB without its +20 dB boost and the record gain at 0 dB (`audio_gw/src/main.rs`:64), HDA's input amplifiers at 0 dB.
+- **So** neither the shell nor `wm`'s Settings can set how loud the sound is or how sensitive the microphone is.
 
 ### Plan (a proposal; the drivers track decides)
 
-- `audio.wit` 1.x: `volume: func() -> u8` and `set-volume: func(percent: u8)`, on the codec's mixer where it has one (AC'97 master volume, the HDA output amplifier) and by scaling in `audio_gw` otherwise; setting it only with a badge the shell holds.
-- The shell sets it for Settings (the tools track's part).
+- **`audio.wit` 1.2:**
+  - `levels: func() -> levels`: the output's level in per cent and muted or not, the capture's gain in per cent and the boost on or off, each with its range in dB where the device has one (none: scaled in `audio_gw`, or absent);
+  - `set-volume: func(percent: u8, muted: bool) -> result<_, error-code>`;
+  - `set-gain: func(percent: u8, boost: bool) -> result<_, error-code>`.
+- **On the device:**
+  - AC'97: the master volume (0x02) and the PCM output (0x18); the record gain (0x1C), and the microphone's boost (0x0E bit 6);
+  - HDA: the output path's amplifier gain and mute; the input path's amplifier, the ADC's gain and the pin's boost where the codec has them; the digital microphone's gain on Apple's Cirrus codecs, if their coefficients have one;
+  - where the device has no amplifier, `audio_gw` scales the samples, and `levels` says so.
+- **Authority** (MC-3.11, MC-11.5):
+  - `set-volume` and `set-gain` take a client with a badge that `init` gives the shell alone (requests-KRN.md, "The shell's audio client that may change the levels");
+  - any other client gets `rights`;
+  - `levels` answers every client.
+- **Not kept by `audio_gw`.** The shell keeps the levels in `data/sound.conf` and sets them again when it starts (000-APP-0076).
 
 ### Acceptance criteria
 
-The `audio` suite sets the volume to 50 % and the recorded tone's level falls by about 6 dB; a client without the badge is refused.
+- **The `audio` suite** (AC'97 and HDA):
+  - `set-volume(50)` lowers the level QEMU's audio backend records for the same tone, by about 6 dB, or by what the codec's step allows;
+  - `set-gain` reads back through `levels`, and raises the captured level where QEMU's capture has an input;
+  - a client without the badge gets `rights`.
+- **On the MacBook Pro:** the speaker's volume follows `set-volume`, and the internal microphone's level follows `set-gain`.
 
 ## `usb_storage` reports a device that came back, rather than running the command on it (000-KRN-0079, 000-KRN-0085)
 
@@ -200,3 +243,69 @@ This is the Ryzen machine's request above, with one addition:
 
 - On this PC a tone plays through its analog output.
 - Its Ethernet card gets an address by DHCP.
+
+## `ata` and `ahci`: waits with a deadline, and checks that do not lean on the caller (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §2.1–2.2, checked against `main` dfc42ee.
+
+### Problem
+
+- **`ata/src/main.rs`:**
+  - `command` (:46) and `flush` (:89) wait `while self.io.in8(COMMAND) & BSY != 0 {}` with no bound. A drive stuck busy hangs the driver, and every request of `vfs_server` with it (MC-6.1). The likeliest trigger is the next command after `wait_data` gave up part way through a transfer.
+  - `probe` (:26), `wait_ready` (:38) and `wait_data` (:55) count port reads instead of time. Each read is a system call, so how long they wait depends on the machine (MC-5.6). `mind::time::monotonic_ns` is there, and `nvme`'s `wait_ms` and `usb_host`'s xHCI already wait to a deadline.
+  - `count as u8` (:48) and `chunks_exact(512).take(count)` (:71, :81) would go wrong for a `count` of 0 (which ATA reads as 256 sectors), above 256, or longer than the buffer. Today `block_protocol::span` holds every request to 1–128 sectors and a buffer of exactly that size, so nothing reaches it. The comment at :67 ("up to 256 sectors") is stale.
+- **`ahci/src/main.rs`:**
+  - The BIOS/OS handoff (:32) ignores what `wait` returns, and does not wait for BOHC.BB (BIOS busy) to clear, as the AHCI specification's handoff procedure asks. Where the firmware keeps the controller, the driver programs it anyway after about 10 s (MC-1.5, MC-6.3).
+  - `read` and `write` (:87–90) slice the DMA region at `DATA` (64 KiB) plus `count × 512` with no check. That holds only because `BLOCK_MAX_SECTORS` (128) and `init`'s `AHCI_DMA_BYTES` (128 KiB) happen to fit together. A change to either makes the driver panic (MC-2.4).
+  - `wait` (:21) spins 1000 times, then sleeps in 10 ms steps. On x86 the tick is 1 ms since 000-KRN-0083, so a slow completion costs up to 10 ms more than it needs.
+- **`usb_host/src/xhci.rs:53`**: its comment says "a sleep is a 10 ms tick". On x86 it is 1 ms now.
+
+### Plan (a proposal; the drivers track decides)
+
+- One deadline helper in each driver, on `monotonic_ns`, for every wait. `command` and `flush` return an error on timeout, and `read` and `write` pass it on as `ERR_IO`.
+- Each `read` and `write` checks `count` against the DMA region and the buffer itself, and refuses rather than panics.
+- `ahci`: log the handoff's result; wait for BB; if the firmware keeps the controller, leave it and say so.
+- `ahci`'s `wait` sleeps in 1 ms steps to its deadline, as `nvme` does.
+
+### Acceptance criteria
+
+- The `vfs`, `disk` and `block` suites pass on IDE and AHCI disks.
+- A request on a drive that never leaves BSY ends with `ERR_IO` within the stated time. A host test with a stand-in for the ports, or a QEMU disk made to stall, shows it.
+- No path in either driver indexes the DMA region or the buffer without a check of its own.
+
+## `bcm_wifi` names OFDM in `wlanhw.wit` 1.1 once it hears it (550-NET-0028)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, answering the request "The station offers only the rates the radio can receive" (550-DRV-0028's findings).
+
+### Problem
+
+`idl/wlanhw.wit` 1.1 (550-NET-0028) gives `info`'s `bands` a bit 2, `mind::network::BAND_2GHZ_OFDM`: the radio receives and sends OFDM on 2.4 GHz. Without it, the station `wlan` offers and sends at 1, 2, 5.5 and 11 Mb/s alone there (802.11b). The wire is unchanged, and `bcm_wifi`'s `bands: 1` already reads as "no OFDM", so nothing in `bcm_wifi` has to change now.
+
+### Plan (a proposal; the drivers track decides)
+
+Once `bcm_wifi` receives OFDM, it sets `bands` to `BAND_2GHZ | BAND_2GHZ_OFDM`, and the station offers 802.11g's rates again. The drivers track's ffcf2b5 (in `fast-test`) reports OFDM received with core 2's front end off, so the bit may follow that commit. A radio that sends at a rate it cannot use answers `send` with `invalid`, as the interface says.
+
+### Acceptance criteria
+
+On the MacBook Pro, with the bit set, `wlan` logs `2.4 GHZ 802.11G`, joins a WPA2 network and sends at OFDM rates.
+
+## BCM4331 applies the selected country and channel policy
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
+country-switching request; roadmap D / 550; MC-2.3, MC-6.1, MC-12.1, MC-12.3.
+
+The original Intel MacBook and Ryzen are physically in Uzbekistan (`UZ`). The
+maintainer wants switching among all countries in the verified regulatory
+catalogue. Please coordinate BCM4331's part with the
+[NET policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP selector](requests-APP.md#wifi-country-and-channel-selector); ASTRA
+implements the RTL8852BE catalogue portion in its existing DRV-0032 task.
+
+Intersect the selected country's frequency/EIRP restrictions with the actual
+BCM/SPROM/platform limits; do not treat a chip country table as the whole
+regulatory decision. Keep unsupported constraints visible and ensure old
+channel/TX decisions cannot survive a country-policy change. Coordinate the
+versioned radio interface or restart boundary rather than silently changing an
+existing wire contract. Preserve normal association, software WPA2 and the
+original MacBook path; validate actual hardware separately from policy fixtures.
+This request does not replace the preceding H12 deadline correction.

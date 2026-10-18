@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073), and redirection and pipes in the shell and `msh` (000-APP-0074, its pipes waiting for 000-KRN-0094). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -168,46 +168,73 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **`record -s 2 -t 3`** writes an AVI whose frames are half the screen's size.
 - **On the MacBook Pro**, the maintainer takes a picture and a 30 s recording without the shell in them.
 
-## Redirection and pipes in the shell and in `msh` (the maintainer's request, 2026-10-12)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12. The kernel's part, a text input for programs, is [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md).
-
-### Problem
-
-The maintainer: "redirection and pipes have to be added to the shell". `dmesg -s battery > file.txt` fails, as does `dmesg | grep BATTERY`.
-
-### Plan (a proposal; the tools track decides)
-
-- **`cmd > file` and `cmd >> file`:**
-  - a command of the shell's own writes what it would print;
-  - a program's output is read from its console queue (`SYSCALL_CONSOLE_READ`), as the shell reads it for the screen, and written to the file;
-  - the file is written through the shell's file client: `ram:`, `data/`, `log:`.
-  - This needs nothing from the kernel and can come first.
-- **`cmd < file` and `a | b`**, on [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md):
-  - the shell starts `b` with an input queue;
-  - it copies `a`'s output (or the file) into it, waiting when it is full, and closes it when `a` ends;
-  - `b`'s output goes to the screen, a file or the next `|`;
-  - Esc stops the whole line;
-  - the line's result is the last command's.
-- **Tools read their input when no file is named:** `grep`, `sha256`, `cat`, `find`, `view`.
-- **`msh`:** the same `>`, `>>`, `<` and `|` in a command's words, and a command's output as a value (`let text = output(dmesg -s battery)`).
-- **The help screen, `docs/msh.md` and `docs/tools`** (EN, RU).
-
-### Acceptance criteria
-
-- **In the `tools` suite:**
-  - `ls data > ram:l.txt`, then `cat ram:l.txt` shows the listing, and `>>` adds to it;
-  - `dmesg | grep SHELL` prints only matching lines;
-  - `cat log:boot0001.log | sha256` equals `sha256 log:boot0001.log`;
-  - 100 KiB through `|` arrive whole.
-- **On the MacBook Pro**, `dmesg -s battery > data/battery.txt` leaves the file on the stick.
-
 ## Display output over several monitors (177; the maintainer's request, 2026-10-12)
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, for main task [177](177-display-output.md).
 
 The maintainer asked for several monitors, their positions, and the GPU for the picture. 177 plans it in steps; this track's part is step 2's `wm` side: each output's rectangle, windows placed per output, a `displays` tool and `wm`'s Settings writing `data/displays.txt`. The kernel track does steps 0–1 (every output and its EDID, every screen the firmware lit, in `BootInfo`) first, and the interface versions the later steps need. Nothing here waits yet: number it when you start.
 
+
+## `wifi` follows `idl/wifi.wit` 1.0 as agreed (550-APP-0033)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's proposal in requests-NET.md ("`idl/wifi.wit`: what `wifi` needs of the station").
+
+### Problem
+
+The network track agreed the interface in [`idl/wifi.wit`](../idl/wifi.wit) 1.0 (550-NET-0018), with these changes to the proposal:
+
+- **An SSID is `list<u8, 32>`, not `string<32>`.** An access point sends up to 32 bytes, and some send names that are not UTF-8 (GBK, Latin-1). As bytes, a network is listed and joined by its exact name; `wifi` shows it as it can (for example, with U+FFFD for bytes that are not UTF-8).
+- **`status` has no `address`, and `reason` no `no-address`.** The station does no DHCP: the address is the network stack's (`ip`, which the network page of `wm`'s Settings already opens). `status` gains the BSSID, the channel and the data rate.
+- **New cases:**
+  - `security.other`: TKIP, management frame protection required, or another AKM. Like WEP, WPA3 and enterprise, the station does not join it.
+  - `error.not-found` and `reason.not-found`: no network of that name in the last scan.
+  - `reason.unsupported`.
+  - `state.scanning`.
+- **`scan` answers when the scan ends** (about 2 s), with the list. While joining or joined, it answers the list as it stands and does not leave the channel.
+- **The badges.** The station's one endpoint also serves `idl/net.wit` to the network stack. A client with `BADGE_WIFI` (`mind::network`) speaks `wifi.wit` and only reads. With `BADGE_WIFI_CHANGE`, it may also join, leave and forget.
+
+### Plan (a proposal; the tools track decides)
+
+`wifi`'s `Station` and `Demo` follow 1.0 in a step of 550-APP-0033: the stand-in serves the agreed interface, and the passphrase rules stay as the program has them (the station checks them again).
+
+### Acceptance criteria
+
+The tools suite checks `wifi` against a stand-in station of `idl/wifi.wit` 1.0.
+
+## The shell lends a TLS client that cannot present the device certificate (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, answering the tools track's request "A TLS client without the device certificate".
+
+### Problem
+
+`tls` refuses `client-certificate` to a client badged `BADGE_TLS_NO_DEVICE` (`mind::network`, `idl/tls.wit` 1.2). The shell lends its own unbadged client today, so a program can still sign in as the device.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell the right to badge its `SLOT_TLS` copy (requests-KRN.md, "The right to badge the shell's TLS client"), the shell does two things:
+- for `REQUEST_TLS`, it lends a copy minted with `BADGE_TLS_NO_DEVICE`;
+- it keeps the unbadged one for its own `https -c`.
+
+### Acceptance criteria
+
+In the `tls` suite, a program with the lent client gets `denied` for `client-certificate`, and the shell's `https -c` still sends the certificate.
+
+## `ip` shows each card's kind and the default card (550-NET-0025)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for the request "Several network interfaces" in requests-NET.md ("`ip` shows the default and the kind of each card").
+
+### Problem
+
+`netstack` now states which card is the default: the card the policy's `default card N` line prefers while its link is up and configured, else the first configured card, wired before the Wi-Fi station. `idl/socket.wit` 2.5 `cards` tells each card's kind (wired or wireless), whether it is there, up and configured, and which one is preferred and which is the default. The shell's `ip` shows none of this yet.
+
+### Plan (a proposal; the tools track decides)
+
+- `ip` adds to each card's line its kind and the words `DEFAULT` and `PREFERRED` where they apply, from `cards`, and lists the station's card even when it is not there yet.
+- A live choice that does not outlast a restart, `ip prefer N|none`, through the operator's `prefer`, if the tools track wants one. The lasting choice stays the policy line, which `netpolicy add` asks the user for.
+
+### Acceptance criteria
+
+In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.
 
 ## The shell logs its first frame (213-KRN-0098)
 
@@ -216,3 +243,72 @@ The maintainer asked for several monitors, their positions, and the GPU for the 
 **Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
 
 **Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.
+
+## `app`, `app2` and `dzen-clock`: libmind's drawing, no `static mut`, the right words on exit (the critique of 2026-10-14)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, from the critique [issues-critica-done/02](../issues-critica-done/02_code_and_comliance_analysis.md), §3, checked against `main` dfc42ee. TRACKS.md names no track for the demo programs. They are user programs, so they come here. If the tools track does not take them, say so here and the kernel track will.
+
+### Problem
+
+- **`app/src/main.rs`:**
+  - `MAIN_SP`, `THREAD_SP`, `WORK_COUNTER` and `THREAD_STACK` are `static mut` (:12–18). Every access goes through `addr_of_mut!` with volatile reads and writes, so nothing goes wrong today. It is still the pattern Rust is retiring.
+  - `background_task` (:36) never returns but is not `-> !`. Were it to return, it would jump to address 0. The critique's claim that the first thread's stack is misaligned is wrong: :47–48 leave the slot of a return address, and the stack is 16-aligned as SysV asks.
+  - It draws with its own `draw_char`, `draw_string` and `usize_to_str` (:63–80), with no bounds check, straight into `fb_ptr`. libmind has `mind::gfx::Screen` and `mind::util::Decimal` for this.
+- **`app2/src/main.rs`:**
+  - It has its own `fill_rect` and `draw_text` (:14–40).
+  - On Esc it logs `[APP2] ESC PRESSED. RETURNING TO KERNEL.` (:88), but it returns to the shell.
+  - It reads the sprite through `as_mut_slice()` (:118) where `as_slice()` does.
+- **`dzen-clock/src/main.rs:79, 183`** has the same "returning to kernel" wording. tests/qemu_smoke.py:2829 checks it, so the test changes with it.
+
+### Plan (a proposal; the tools track decides)
+
+- `app`: atomics for the three counters and pointers, and an `UnsafeCell` wrapper for the stack; `fn background_task() -> !`; `Screen` and `Decimal` for its drawing. Keep the pixel colours the `normal` suite checks (qemu_smoke.py:7461–7470: cyan, and red after Space).
+- `app2`: `Screen` for its rectangles and text; "RETURNING TO THE SHELL"; `as_slice()`.
+- `dzen-clock`: the same words, with its check in qemu_smoke.py.
+
+### Acceptance criteria
+
+- The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
+- `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## The shell lends a client of the SSH service (351-NET-0027)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
+
+### Problem
+
+The service `ssh` (351-NET-0027) reads files over SFTP for programs, logged in as the device with a key that only `keystore` holds. A program reaches it as it reaches `tls`: through a client the shell lends.
+
+### Plan (a proposal; the tools track decides)
+
+Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST_SSH` exists (requests-KRN.md, "The SSH service in the boot services"), the shell lends a copy of its client in the program's same slot for `REQUEST_SSH`, together with the program's flow grant, as it does for `REQUEST_TLS`. `download` (the network track's) then reads `sftp://` addresses through it.
+
+### Acceptance criteria
+
+In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
+
+## Wi-Fi country and channel selector
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's request;
+roadmap G / 550 and H / 213; MC-2.3, MC-12.3, MC-12.4.
+
+Add a country selector to the existing Wi-Fi/settings flow, backed by the
+[NET-owned versioned country contract](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog).
+The user chose **all countries from the verified regulatory database**, with
+Uzbekistan (`UZ`) as the initial explicit selection for their two machines.
+Please number this APP task; the current radio catalogue work remains DRV-0032.
+
+Show readable country names/codes and the effective supported channels. Do
+not maintain a separate hand-written permissions table in the UI. Distinguish
+a requested setting from the one applied to the radio; if application needs a
+disconnect/restart, make that behavior clear and report a failure without
+pretending the new setting is active. Keep the selected country visible while
+scanning/joining, preserve it across restarts through the scoped owner and
+handle missing/unknown configuration explicitly. All countries should remain
+browsable even where the current radio cannot use any eligible channel.
+
+Acceptance: country selection and restoration, bounded paging/search over the
+complete catalogue, read-only denial, no-device/unsupported-channel behavior,
+failed application and preservation of ordinary scan/join/leave are checked
+against the agreed NET interface. Do not turn the existing demo mode into a
+claim that the live radio applied a country.

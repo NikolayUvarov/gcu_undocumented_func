@@ -68,7 +68,8 @@ impl Wire for State {
 
 /// Why joining failed or the link was lost: `wrong-passphrase` (the handshake was answered and never completed),
 /// `no-answer`, `refused` (authentication, association, or an RSN element in the handshake other than the advertised
-/// one), `not-found`, `unsupported`, `lost` (deauthenticated or silent; the station joins again by itself).
+/// one), `not-found`, `unsupported` (a protection the station does not join, or an access point that refused it for
+/// lacking one of its basic rates), `lost` (deauthenticated or silent; the station joins again by itself).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Reason { #[default] None = 0, WrongPassphrase = 1, NoAnswer = 2, Refused = 3, NotFound = 4, Unsupported = 5, Lost = 6 }
@@ -118,8 +119,9 @@ pub fn scan(endpoint: Endpoint) -> Result<core::result::Result<List<Network, 32>
 }
 
 /// Starts joining the strongest access point of `ssid` from the last scan (`status` follows). `passphrase` empty for
-/// an open network or one the station remembers. `remember` keeps the network's key through `keystore`, never in a
-/// file (MC-11.9). The passphrase is never answered back. Change badge only.
+/// an open network or one the station remembers. `remember` has `keystore` keep the network's key (550-NET-0024): it
+/// alone holds it, and the station gets each handshake's keys from it (MC-11.9); `unsupported` when it cannot. The
+/// passphrase is never answered back. Change badge only.
 pub fn join(endpoint: Endpoint, ssid: &[u8], passphrase: &str, remember: bool) -> Result<core::result::Result<(), Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {

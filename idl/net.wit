@@ -15,11 +15,16 @@
 /// wrapping; from 4096, `ring-slots` transmit slots and then as many receive slots of 2048 bytes: a u16 length, a u16
 /// checksum start and a u16 checksum offset (both 0: no checksum to complete; transmit only), then the frame from byte
 /// 8. Each side checks every index and length it reads from the shared region.
-package mind:net@1.2.0;
+///
+/// 1.3 (000-NET-0015): a client with bit 0 of its badge set (`BADGE_COUNTERS` in `mind::network`) only reads the card:
+/// it may call `info`, `counters` and `offloads`. Its other calls are refused: those with a result answer `denied`,
+/// `wait` is rejected, and a ring it lends is dropped unused. A client that may badge copies of the driver's endpoint
+/// mints it for a program that shows the traffic (`wm`'s background, 000-APP-0049) and must not touch the frames.
+package mind:net@1.3.0;
 
 interface net {
-    /// Why a request failed.
-    enum error { no-device, busy, empty, invalid }
+    /// Why a request failed; `denied` (1.3): the client only reads the card.
+    enum error { no-device, busy, empty, invalid, denied }
 
     /// The device: MAC address (low 48 bits, first byte in bits 40-47), largest frame without the Ethernet header,
     /// link state as the device reports it.

@@ -124,6 +124,7 @@ cd "${TREE:-$ROOT}" || exit 2
 missing=()
 for tool in cargo rustup python3 mcopy mkfs.fat qemu-img swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 want host && { command -v java >/dev/null || missing+=(java); } # the models (TLC) only
+want host && { [[ -x /usr/sbin/sshd ]] || missing+=("sshd (openssh-server)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then

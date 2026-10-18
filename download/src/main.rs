@@ -9,10 +9,10 @@ extern crate alloc;
 // neither; download checks what it says against what it asked for. https runs a session of the TLS service over the
 // same flow grant (REQUEST_TLS); the server is verified against the system's roots, or by its pinned key (--pin).
 use alloc::vec::Vec;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, ERR_TIMEOUT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
-use mind::http::{self, Sink, Transport, Url};
-use mind::idl::{socket, tls};
+use mind::http::{self, Head, Parser, Sink, Transport, Url};
+use mind::idl::{socket, tls, wire};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::ipc::Endpoint;
 
@@ -22,10 +22,15 @@ const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
 const IDLE_MS: usize = 15_000; // no progress for this long: the connection counts as cut
 const STAGE: usize = 64 * 1024; // the body is written to the file in pieces of this size
+// No call to the stack, the TLS service, a parser or the loader waits longer, so a stalled connection ends in another
+// try or an error rather than a hang (requests-NET.md, the resume that hung on i9). Above the services' own 10 s.
+const CALL_MS: u32 = 60_000;
 // The endpoint of this download's own parser, ended on every way out (109-NET-0010); 0: the shared service.
 static OWN_PARSER: AtomicUsize = AtomicUsize::new(0);
 
 fn now() -> usize { mind::time::uptime_ms() }
+
+fn timed_out<T>(result: &mind::sys::Result<T>) -> bool { matches!(result, Err(mind::sys::Error::Other(ERR_TIMEOUT))) }
 
 // A TCP connection of the flow grant.
 struct Tcp { socket: u32 }
@@ -106,14 +111,18 @@ enum Connected { Link(Link), Retry, Fatal(tls::Error) }
 
 fn connect(url: &Url, address: u32, pin: Option<&[u8; 32]>) -> Connected {
     if !url.https {
-        return match socket::tcp_connect(STACK, address, url.port, 10_000) {
+        let connected = socket::tcp_connect(STACK, address, url.port, 10_000);
+        if timed_out(&connected) { mind::println!("DOWNLOAD: CONNECT: NO ANSWER FROM THE STACK IN {} S", CALL_MS / 1000); return Connected::Retry; }
+        return match connected {
             Ok(Ok(socket)) => Connected::Link(Link::Tcp(Tcp { socket })),
             Ok(Err(error)) => { mind::println!("DOWNLOAD: CONNECT: {:?}", error); Connected::Retry }
             Err(_) => fail(format_args!("NO NETWORK GRANT")),
         };
     }
     // The TLS service gets a child of the flow grant: the policy that applies to download applies to the session.
-    let session = match tls::attach(TLS, SLOT_NETWORK) {
+    let attached = tls::attach(TLS, SLOT_NETWORK);
+    if timed_out(&attached) { mind::println!("DOWNLOAD: CONNECT: NO ANSWER FROM THE TLS SERVICE IN {} S", CALL_MS / 1000); return Connected::Retry; }
+    let session = match attached {
         Ok(Ok(session)) => session,
         Ok(Err(error)) => return Connected::Fatal(error),
         Err(_) => fail(format_args!("NO TLS SERVICE")),
@@ -123,6 +132,7 @@ fn connect(url: &Url, address: u32, pin: Option<&[u8; 32]>) -> Connected {
         Some(pin) => tls::connect_pinned(TLS, session, url.host, address, url.port, pin, 10_000),
         None => tls::connect(TLS, session, url.host, address, url.port, false, 10_000),
     };
+    if timed_out(&connected) { mind::println!("DOWNLOAD: CONNECT: NO ANSWER FROM THE TLS SERVICE IN {} S", CALL_MS / 1000); return Connected::Retry; }
     match connected {
         Ok(Ok(_)) => Connected::Link(Link::Tls(link)),
         Ok(Err(error @ (tls::Error::Refused | tls::Error::Timeout | tls::Error::Closed | tls::Error::NoNetwork))) => { mind::println!("DOWNLOAD: CONNECT: {:?}", error); Connected::Retry }
@@ -137,7 +147,8 @@ struct Output { file: File, stage: Vec<u8>, staged: usize, at: u64, failed: bool
 impl Output {
     fn flush(&mut self) -> Result<(), http::Error> {
         if self.staged > 0 {
-            let written = self.file.write_at(self.at as usize, &self.stage[..self.staged]);
+            // The file's writes keep no limit: CALL_MS is for the network's side.
+            let written = wire::with_timeout(0, || self.file.write_at(self.at as usize, &self.stage[..self.staged]));
             if written != Ok(self.staged) { self.failed = true; return Err(http::Error::Sink); }
             self.at += self.staged as u64;
             self.staged = 0;
@@ -165,6 +176,28 @@ impl Sink for Output {
             if self.staged == STAGE { self.flush()?; }
         }
         Ok(())
+    }
+}
+
+// A resume's request and its head in the log, so that a stall shows the step it stopped at.
+struct Traced<'a, T> { inner: &'a mut T, offset: u64, on: bool }
+
+impl<T: Transport> Transport for Traced<'_, T> {
+    fn send(&mut self, data: &[u8]) -> Result<(), http::Error> {
+        let sent = self.inner.send(data);
+        if core::mem::take(&mut self.on) { mind::println!("DOWNLOAD: ASKED FOR THE REST FROM BYTE {}{}", self.offset, if sent.is_ok() { "" } else { ": NOT SENT" }); }
+        sent
+    }
+    fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, http::Error> { self.inner.receive(buffer) }
+}
+
+impl<T: Parser> Parser for Traced<'_, T> {
+    fn head(&mut self, head: &[u8]) -> Result<Head, http::Error> {
+        let parsed = self.inner.head(head);
+        if self.on {
+            match &parsed { Ok(h) => mind::println!("DOWNLOAD: ITS HEAD PARSED: STATUS {}", h.status), Err(e) => mind::println!("DOWNLOAD: ITS HEAD NOT PARSED: {:?}", e) }
+        }
+        parsed
     }
 }
 
@@ -259,15 +292,21 @@ fn main(_info: &'static BootInfo) {
         if connections == tries { fail(format_args!("GAVE UP AFTER {} CONNECTIONS AT {} BYTES", connections, output.at)); }
         connections += 1;
         let offset = output.at;
-        let mut link = match connect(&url, address, pin.as_ref()) {
-            Connected::Link(link) => link,
-            Connected::Retry => { mind::time::sleep(1000); continue; }
-            // A server that is not the one trusted, or a TLS service that cannot serve: asking again changes nothing.
-            Connected::Fatal(error) => fail(format_args!("TLS: {:?}", error)),
-        };
         let restarts = parser.restarts();
-        let result = http::get(&mut link, &url, offset, &mut output, &mut parser);
-        drop(link);
+        // Every call of this attempt is bounded (CALL_MS), the closing of its connection too.
+        let result = wire::with_timeout(CALL_MS, || {
+            let mut link = match connect(&url, address, pin.as_ref()) {
+                Connected::Link(link) => link,
+                Connected::Retry => return None,
+                // A server that is not the one trusted, or a TLS service that cannot serve: asking again changes nothing.
+                Connected::Fatal(error) => fail(format_args!("TLS: {:?}", error)),
+            };
+            let resuming = offset > 0 || connections > 1;
+            let mut transport = Traced { inner: &mut link, offset, on: resuming };
+            let mut parsing = Traced { inner: &mut parser, offset, on: resuming };
+            Some(http::get(&mut transport, &url, offset, &mut output, &mut parsing))
+        });
+        let Some(result) = result else { mind::time::sleep(1000); continue };
         // Its parser had ended meanwhile and another was started: the endpoint to end on the way out changed.
         if parser.restarts() != restarts {
             mind::println!("DOWNLOAD: ITS PARSER HAD ENDED, ANOTHER ONE PARSES");

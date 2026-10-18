@@ -1,6 +1,6 @@
 # Downloads: `mind::http` and `download`
 
-**Version:** 0.3 (2026-10-09) · **Track:** `NET`, tasks [351-NET-0001](../../issues-done/351-NET-0001-http-downloads.done) and [351-NET-0002](../../issues-done/351-NET-0002-https-for-programs.done) (HTTPS) for main task [351](../../issues/351-self-update.md), and [109-NET-0009](../../issues-done/109-NET-0009-download-through-the-parser.done) (the head parsed in `parse`) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.4 (2026-10-14): calls with a deadline, a resume in the log (351-NET-0029); 0.3 (2026-10-09) · **Track:** `NET`, tasks [351-NET-0001](../../issues-done/351-NET-0001-http-downloads.done) and [351-NET-0002](../../issues-done/351-NET-0002-https-for-programs.done) (HTTPS) for main task [351](../../issues/351-self-update.md), and [109-NET-0009](../../issues-done/109-NET-0009-download-through-the-parser.done) (the head parsed in `parse`) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program fetches a file over HTTP/1.1 with the network its launcher lent it and writes it into a file it may write. A download cut midway, or one a program gave up on, goes on from where it stopped instead of starting again. This page describes what is built. The updater (351-UPD-0007) will use the same library for releases.
 
@@ -41,6 +41,8 @@ download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]
 - **What it does:**
   - It opens `FILE` without emptying it. If the file already has bytes, it asks from there (`DOWNLOAD: RESUMING`).
   - After a connection cut midway (`DOWNLOAD: CONNECTION CUT AT n OF total, RESUMING`), or a connection that did not answer, it connects again, up to `--tries` connections in all (5 by default).
+  - A resume logs its request (`DOWNLOAD: ASKED FOR THE REST FROM BYTE n`) and its head (`DOWNLOAD: ITS HEAD PARSED: STATUS s`), so that a stall shows the step it stopped at (351-NET-0029).
+  - No call to the stack, the TLS service, its parser or the loader waits more than 60 s. A connection whose call gets no answer counts as one that did not answer, and a parser that does not answer ends the run with `HTTP: Parser` rather than hang it. The file's own writes keep no limit.
   - It writes the body in pieces of 64 KiB, and gives up with the bytes it has (`GAVE UP AFTER n CONNECTIONS AT m BYTES`). The next run goes on from there.
   - It stops at once on what asking again would not change: a status, a malformed answer, a file it cannot write.
 - **At the end** it reads the file back and prints its SHA-256. With `--sha256` it says whether that matches, and exits with status 1 if not.
@@ -92,6 +94,6 @@ These tests run in the `net` suite, on x86 and aarch64, in QEMU with user networ
 
 - **Roots shipped with a release** and covered by its signature: the roots are whatever `tlsroots.pem` holds, which nothing authenticates; a pin is the way to trust the update server for now.
 - **HTTPS by name with a pin from the channel:** the updater's (351-UPD-0007).
-- **Chunked bodies, redirects, keep-alive, several connections at once, IPv6.**
+- **In `get` and `download`:** chunked bodies, redirects, keep-alive, several connections at once, IPv6. A service has chunked bodies and keep-alive through `mind::http::Connection` ([services.md](services.md), 750-NET-0019).
 - **Fast writes of a large file.** `vfs_server` writes a file one 512-byte sector per block request, and walks the file's cluster chain from its start on every write. So writing slows down as the file grows. That is `vfs_server`'s, not this task's.
-- **A parser instance per session.** One `parse` process serves every program, one request at a time, and keeps nothing between requests; a fresh process per session needs a kernel and loader change ([109](../../issues-done/109-session-parsers.done)).
+- **A parser instance per session** is the kernel track's 109-NET-0010, on its branch (requests-NET.md, the notice).

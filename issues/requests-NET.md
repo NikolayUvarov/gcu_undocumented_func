@@ -1,12 +1,12 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
 ## Several network interfaces (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request.
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](550-NET-0018-the-station-service.md), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
 
 ### Problem
 
@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request.
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](550-NET-0018-the-station-service.md), and remembered networks kept by `keystore` [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (2026-10-12).
 
 ### Problem
 
@@ -60,198 +60,6 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
 
-## A TLS client without the device certificate (351)
-
-**Recorded by:** the tools track (APP), 2026-10-09, while doing the same work as [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done).
-
-### Problem
-
-The shell now lends its client of `tls` to a program that asks for `REQUEST_TLS` and gets a flow grant. With that client, the program may call `connect` with `client-certificate`, and so present the device certificate to a server its grant reaches. Signing in as the device is more than a program needs to fetch a file over HTTPS.
-
-### Plan (a proposal; the network track decides)
-
-- A badge on the TLS client, for example `BADGE_DEVICE_CERTIFICATE`, without which `connect` refuses `client-certificate` (`denied`).
-- The shell keeps the badged client for its own `https -c` and lends one without the badge.
-- `init`'s grant to `updater` (351-KRN-0022) carries the badge only if the update server asks for the device's certificate.
-
-### Acceptance criteria
-
-The `tls` suite: a program with the lent client gets `denied` for `client-certificate`, while the shell's `https -c` still sends it.
-
-## A list of the stack's sockets, for `netstat` (000-APP-0031)
-
-**Recorded by:** the tools track (APP), 2026-10-09, for [000-APP-0031](000-APP-0031-netstat.md) (the tools plan's phase T4: `netstat`, after track D).
-
-### Problem
-
-`socket.wit` can name the interfaces (`interfaces`) and a grant's totals (`policy-usage`), and `netpolicy.wit` the live grants (`list`). Nothing names the stack's sockets. A `netstat` cannot show which connections are open, in what state, to where, or for which program.
-
-### Plan (a proposal; the network track decides)
-
-- `sockets: func(start: u32) -> list<socket-info, 32>` in `socket.wit` (a new minor version), page by page.
-- `record socket-info { id: u32, protocol: protocol, local-port: u16, remote-address: u32, remote-port: u16, state: u8, badge: u16, sent: u64, received: u64 }`, where `state` is the TCP state (listen, syn-sent, established, fin-wait, close-wait, time-wait, closed) and `badge` the grant the socket belongs to.
-- Who may call it is the network track's choice. One way: only an unbadged client, such as the shell's, may call it. A program would then never see other programs' flows. `netstat` then runs in the shell, which maps each badge to its program through `netpolicy.list`.
-
-### Acceptance criteria
-
-In QEMU, while `download` fetches from the test server, the list shows its TCP connection as established, with the server's address and port and the badge of `download`'s grant; after it ends, the socket is gone or closed.
-
-## The aarch64 boot-slot check finds a dirty volume since the device key is stored at boot (351-NET-0005)
-
-**Recorded by:** the tools track (APP), 2026-10-09, while gating its branch locally.
-
-### Problem
-
-`tests/aarch64_smoke.py` fails at `boot_slots_check.fsck` (351-UPD-0006) on `origin/main` (ae80444) run on this session's machine (QEMU 8.2, 4 CPUs). It passed on GitHub's runners for the tools branch merged with the same main (run 37909196366), so it depends on timing. Its four boot checks pass, then:
-
-```
-Reclaimed 2 unused clusters (4096 bytes).
-Dirty bit is set. Fs was not properly unmounted and some data may be corrupt.
-```
-
-On aarch64 the processor has RNDR, so at every boot of a fresh image `keystore` makes the device key and stores it in `system/keystore/`. The check closes the machine soon after `MIND CORE KERNEL: INIT STARTED`, in the middle of that write. vfs_server has marked the volume dirty and allocated clusters it has not linked yet. On x86 the default processor has no RDRAND, nothing is written, and the same check passes.
-
-On a vvfat boot disk, the same write once made QEMU itself stop: `block/vvfat.c:2760: handle_renames_and_mkdirs: Assertion 'j < s->mapping.next' failed` (the aarch64 general boot, same run).
-
-### Plan (a proposal; the owning tracks decide)
-
-The check could wait for `[INIT] READY` and for keystore's line before closing the machine, or boot without RNDR. Alternatively, keystore's first write could happen where a test that kills the machine early does not meet it.
-
-### Acceptance criteria
-
-`python3 tests/aarch64_smoke.py` passes on main.
-
-## A read-only client of a card's counters, for `wm`'s background (000-APP-0049)
-
-**Recorded by:** the tools track (APP), 2026-10-10, for [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md), split from 000-APP-0047 (the maintainer's request: the network traffic on `wm`'s desktop background).
-
-### Problem
-
-`wm` can show the network traffic on its desktop, but a card's counters (`net.wit` `counters`: sent, received, dropped) are reached only through a full client of the driver, which can also send and receive frames. The shell holds that client for `net`; lending it to `wm` would give `wm` the card itself.
-
-### Plan (a proposal; the network track decides)
-
-- A badge of the driver's endpoint that answers `info` and `counters` and refuses the rest (`net.wit` 1.x, with its version and transition), minted by whoever holds the full client.
-- The shell lends it to a program that asks for it (a request flag for it comes with the tools track's change; a fixed slot, if one is needed, from the kernel track).
-
-### Acceptance criteria
-
-A program holding the read-only client reads the counters and is refused `send`, `receive` and `attach`.
-
-## HTTP for a service, a certificate pin and long-lived sessions (501, 750)
-
-**Recorded by:** the maintainer's session for main task [501](501-effector.md), and the Effector agent track (EFF) for main task [750](750-effector-agent.md), both on 2026-10-09 at the maintainer's request; merged into one request the same day.
-
-### Problem
-
-The agent of 750, which 501's tests also use, talks to Effector, a server that already exists.
-
-**What Effector's protocol needs:**
-- it posts JSON with `Authorization: Bearer` (a heartbeat every second, acknowledgements, operation results);
-- it polls with GET and holds a wake-up stream open for up to 55 s;
-- it uploads files of up to 1 GiB with an exact `Content-Length`;
-- it downloads with `Range`.
-
-**What `libmind::http` lacks.** It (351-NET-0001; its head parsed by `parse` since 109) makes one GET per connection with fixed headers and `Connection: close`. It has no POST and refuses a chunked body. A Go server sends a response without `Content-Length` as chunked once the response outgrows its buffer. A new TLS handshake every second would also be costly on the target.
-
-**The pin.** Effector's agents pin the server by the SHA-256 of its leaf certificate (DER), with a second pin for rotation, and still check the certificate's SAN against the host name or address. [351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done) pins the server's public key (SPKI): a different value. `tls.wit` 1.1 `connect-pinned` takes one SPKI pin and checks no name, root or validity period. Effector is asked (its task 75) to publish SPKI pins too, so the agent can start with `connect-pinned` as it is; the second pin is still needed for a key change. The `tls` service also allows 8 sessions in the system and a 5-second idle timeout inside `send` and `close`, while the agent keeps two sessions open for hours.
-
-### Plan (a proposal; the network track decides)
-
-- **`libmind::http` requests:**
-  - methods `GET`, `POST` and `PUT`;
-  - caller headers within a bound, with `Host`, `Content-Length` and `Connection` kept by the library;
-  - a request body streamed from a caller source.
-- **`libmind::http` responses:**
-  - `Content-Length` or chunked, with chunk-size and trailer bounds;
-  - close-delimited bodies when the caller allows them;
-  - a response body read in pieces with an idle timeout chosen by the caller (the stream);
-  - heads still through `parse`;
-  - no redirects.
-- **Kept-alive connections:** several requests over one transport.
-- **The size limits** are stated.
-- **`tls`:** a `connect` that accepts the server by one or two pins, so a pin can rotate.
-  - **Two kinds of pin:**
-    - the SHA-256 of the leaf certificate, as Effector's agents use;
-    - 351-NET-0002's SPKI pin.
-  - **One minor version** of `idl/tls.wit` (1.2) adds both to 1.1's `connect-pinned`.
-  - **Checks kept** with a pin: the SAN, the validity, the server-authentication purpose and `CA:false`.
-  - **TLS 1.3 only, as now.** Effector accepts TLS 1.2 and later.
-- **Long-lived sessions:** a session that stays open between requests, and reads that wait without closing it.
-
-### Acceptance criteria
-
-- **Over one TLS session** to the 750-EFF-0002 test server, in QEMU, a service:
-  - posts a JSON body and reads a chunked response, then 100 more requests;
-  - holds a 55-second stream to its end.
-- **Pins:** a server that matches neither pin is refused; one that matches the next pin is accepted.
-- **Names and dates:** a wrong name and an expired certificate are refused.
-- **An idle session:** a session left without traffic for ten minutes is then used.
-
-## JSON in the parser service (750, 501)
-
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
-
-### Problem
-
-Effector's commands and replies are JSON. Under MC-11.11 and the authority map ([docs/network/airlock.md](../docs/network/airlock.md)), the process that holds the server's token, the flow and the TLS client must not parse them itself. 109's `parse` service parses HTTP heads only. The updater's channel metadata is also JSON, and the map already plans to parse it in `parse`.
-
-### Plan (a proposal; the network track decides)
-
-- **A `json` call in `idl/parse.wit`** (a new minor version): bounded bytes in, a bounded typed tree out (objects, arrays, strings, integers, booleans, null), with stated limits on depth, members and string length.
-- **The parser itself:** the `mind::json` library of [750-EFF-0004](750-EFF-0004-json.md), so the service and host tests share one implementation.
-- **The client** still checks the typed tree against what it asked for (MC-11.5).
-
-### Acceptance criteria
-
-- `parse` turns a valid Effector command into its typed tree.
-- It refuses malformed, too deep and too large input, and logs the refusal with the client's PID.
-- The authority map gains the row for the agent's stage when 750-EFF-0006 lands.
-
-## A flow for a long-running service (750)
-
-**Recorded by:** the Effector agent track (EFF), 2026-10-09, for main task [750](750-effector-agent.md) at the maintainer's request.
-
-### Problem
-
-`init` gives a boot service its flow once, and a grant keeps its term and volume until it ends: by default 3600 s and 16 MiB. The policy line can name longer ones (108). The Effector agent talks to one server for as long as the machine runs. Its heartbeats alone come to several megabytes an hour, and packages and files can reach 1 GiB.
-
-### Plan (a proposal; the network track decides)
-
-- **Bounds.** State the largest term and volume a policy line may give. The owner then sets the agent's line with `netpolicy add` (108), and nothing new is needed for a first version.
-- **Later, if the track agrees:**
-  - a flow the policy marks renewable, renewed by `netpolicy` before its term ends without closing sockets, while the policy still allows it;
-  - a volume counted per period;
-  - a host name resolved again when the service reconnects.
-- **Init's part.** Any change to how `init` hands out the flow is a kernel task.
-
-### Acceptance criteria
-
-The policy guide states the bounds. In the `net` suite, a service whose line gives a long term keeps a connection past the default term. A renewable flow, if added, keeps a connection across its renewal.
-
-## The raw-frame interface between `bcm_wifi` and the station (550-DRV-0027)
-
-**Recorded by:** the drivers track (`DRV`), 2026-10-12, for the station of "An 802.11 station and WPA2-PSK" above.
-
-### Problem
-
-On the MacBook Pro, `bcm_wifi` now receives 802.11 frames by DMA: a scan listed five networks around with their SSID, BSSID, channel, signal and security ([550-DRV-0025](../issues-done/550-DRV-0025-bcm4331-receives-frames.done)). Transmitting is next ([550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done)). The station needs an interface to the driver, which 550-DRV-0006 says the two tracks agree on.
-
-### Plan (a proposal; the network track decides)
-
-`idl/wlanhw.wit` 1.0, served by `bcm_wifi`, used by `wlan` only:
-- `info` → MAC address, supported channels;
-- `set-channel(channel)`; `set-filter(all-beacons, bssid, own-address)`;
-- `send(frame, rate)` → transmit status (acknowledged or not, retries);
-- `receive` → frames from a shared buffer, each with signal (dBm), channel, rate and the FCS already checked;
-- later, `set-key`/`clear-key` for the chip's CCMP, only if the station wants it.
-
-The driver keeps no 802.11 state beyond the filter and the channel: authentication, association, scanning policy, keys and rates are the station's.
-
-### Acceptance criteria
-
-`NET` agrees the interface (or changes it) before `DRV` builds it; the driver serves it on the MacBook Pro (550-DRV-0027).
-
 ## A notice: 109-NET-0010 is done by the kernel track (109)
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
@@ -268,68 +76,77 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
 
-## `idl/wifi.wit`: what `wifi` needs of the station (550-APP-0033)
+## Download complete-file recheck stalls in the 6G Intel gate
 
-**Recorded by:** the tools track (APP), 2026-10-12, at the maintainer's word ("do the tools track's part of the network and Wi-Fi configuration"), for the Wi-Fi configuration interface that "An 802.11 station and WPA2-PSK" above proposes.
+**Requested by:** ASTRA auditor-fixer, 2026-10-16 · **Priority:** P1 ·
+**Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3.
 
-### Problem
+Please turn [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md)
+into a NET task. Exact candidate `ac1854f2`/main `bd7b5493`, Intel endpoint
+`i9_4e6882212251`, operation `20261015221739.924407850_000152`: the standard
+6 GiB group fails after the second `download` reports that its 30 MiB file
+is already complete. HTTP 416 is parsed; neither the expected SHA-256 line
+nor prompt arrives within the existing 300-second limit. The first resumed
+transfer and digest passed, as did the preceding memory checks.
 
-`wifi` (550-APP-0033) is built against a stand-in station (`wifi/src/station.rs`, `wifi --demo`), since the station does not exist. Its calls are what the tools track asks the station's configuration interface for. The network track decides the interface; the program follows it.
+Instrument or otherwise identify the actual boundary (flush, each VFS read,
+hash progress, scheduling). Do not assume a RAM/NIC fault or quadratic FAT
+walk. `download` currently ignores the flush result before its disk rehash;
+handle that error explicitly. Route any required VFS/block changes to KRN.
+Keep the exact failed run, add a production regression for the established
+cause, and require the original complete-file/digest behavior to pass under
+its existing timeout. A later pass alone must not erase this failure or
+substitute for the physical network acceptance on the two laptops.
 
-### Plan (a proposal; the network track decides)
+## Wi-Fi country selection from the complete verified regulatory catalog
 
-```wit
-/// The 802.11 station's configuration (`wlan`): the access points around, joining one, the link, the networks it
-/// remembers. The setup program and the shell hold the badge that changes settings; others may only read.
-package mind:wifi@1.0.0;
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
+request; for 213-DRV-0032 and roadmap D / 550; MC-2.3, MC-3.3, MC-6.1,
+MC-12.1, MC-12.3, MC-12.4, MC-12.7.
 
-interface wifi {
-    enum security { open, wep, wpa2, wpa3, enterprise }
-    enum error { no-device, busy, invalid, denied, unsupported }
-    enum state { off, joining, joined, failed }
-    enum reason { none, wrong-passphrase, no-answer, refused, no-address, lost }
-    /// An access point the last scan heard: its network's name (empty: hidden), BSSID in the low 48 bits, channel,
-    /// signal as minus dBm (48: -48 dBm; the IDL has no signed integers), protection, and whether a passphrase for
-    /// the name is kept.
-    record network { ssid: string<32>, bssid: u64, channel: u8, weakness: u8, security: security, remembered: bool }
-    /// The link: its state, the network's name, the IPv4 address once DHCP answered (0 before), the signal, and why
-    /// joining failed.
-    record status { state: state, ssid: string<32>, address: u32, weakness: u8, reason: reason }
-    /// The access points of the last scan; a new scan starts.
-    scan: func() -> result<list<network, 32>, error>;
-    /// Starts joining `ssid` (`status` follows): `passphrase` empty for an open or a remembered network; `remember`
-    /// keeps it through `keystore`, never in a file (MC-11.9). Change badge only.
-    join: func(ssid: string<32>, passphrase: string<64>, remember: bool) -> result<_, error>;
-    status: func() -> status;
-    /// Leaves the network (change badge only).
-    leave: func() -> result<_, error>;
-    /// Forgets a remembered network; false when none had the name (change badge only).
-    forget: func(ssid: string<32>) -> result<bool, error>;
-}
-```
+The maintainer confirmed Uzbekistan (`UZ`) for both the original Intel MacBook
+and Ryzen and requested switching among **all countries in the verified
+regulatory database**, not a fixed shortlist. The current `wifi` 1.0 interface
+has scan/join/status/leave/forget but no country selection. Please number the
+station/interface task; ASTRA supplies the RTL8852BE catalogue/driver portion
+under DRV-0032, without editing NET's interface or station in passing.
 
-- `wifi` checks a passphrase before it sends it (WPA2-PSK: 8 to 63 printable characters or 64 hexadecimal digits); the station checks it again.
-- The passphrase crosses the interface once, to the station, which hands it to `keystore`; it is never answered back.
-- A slot and a request bit for the client are asked of `KRN` (requests-KRN.md, "A slot for the Wi-Fi station's configuration client").
+Available implementation: ASTRA source
+[`1e2cf1dd`](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/1e2cf1dd3996ca3ed2a475e7ded4aff4fde6d8ae/hwdocs/rtl8852be-regulatory.md)
+provides all 181 source country/territory codes plus separate world `00`,
+1,016 rule references, source/license hashes and exact integer units. It is
+already in fast-test `94ab2a0b`; 9 Rust and 11 Python fixtures and deterministic
+regeneration passed after that publication. `regulatory::countries()` and
+`select()` are pure catalog operations, not a live configuration interface.
+The database supplies codes rather than translated country names. Preserve
+these boundaries when making the shared station contract and the APP list.
 
-### Acceptance criteria
+- Use the pinned upstream wireless-regdb catalogue as frequency/EIRP evidence;
+  chip power-table groups are not regulatory permission. Preserve restrictions
+  and unsupported states. Catalogue all country entries, with bounded paging
+  if needed; treat world/unknown `00` distinctly from a selected country.
+- Add explicit current/pending/applied country state and authorized selection
+  through a new interface version and migration. Reuse the existing Wi-Fi
+  change badge or document a narrower right; read-only callers cannot change it.
+  Persist a two-letter code, not a row index that changes with database updates.
+- UZ is this deployment's operator-provided initial choice. Missing/invalid
+  state or a missing database country must not silently become DE/US/world or
+  permission to transmit. Database presence is not itself operator authority.
+- Derive scan/join channels from the intersection of country restrictions and
+  actual driver capability. Retain NO-IR, DFS, indoor/outdoor and modulation
+  constraints. Do not label all database bands as implemented hardware support.
+- Coordinate with KRN's scoped configuration and native endpoint work, APP's
+  selector and both radio owners. Changing country must invalidate old scan/
+  join decisions and avoid TX under an obsolete admission. Stop/restart and
+  re-admit when live reconfiguration is unavailable; expose applied versus
+  requested state and a bounded error if application fails.
+- Country selection must not replace board-locked restrictions, verified
+  platform/SAR limits or the EIRP-to-conducted-power/antenna relationship.
 
-The network track agrees or changes the interface; `wifi` follows it in a new step of 550-APP-0033, and its QEMU check runs against a stand-in service of the agreed interface.
-
-## The stack's third card in slot 4 (550-KRN-0097, for 550-NET-0018)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, answering "The Wi-Fi station in the boot services" (requests-KRN.md on the network branch).
-
-### What the kernel track prepared
-
-550-KRN-0097, built and passing the `net` suite on the network branch's 40ba302 merged with the kernel branch; it reaches `main` once 550-NET-0017 and 550-NET-0018 are there:
-
-- `init` starts `wlansim` (where a test puts it) and `wlan` when a radio runs, and lends the radio's client to `wlan` alone, in slot 2;
-- `netstack` gets `wlan`'s client without a badge in **slot 4**;
-- the shell gets `wlan`'s client with `BADGE_WIFI_CHANGE` in `SLOT_WIFI`: 33, a launch slot, so `SLOT_DYNAMIC` moves to 34 (ABI 9), with `REQUEST_WIFI` = `1 << 22`;
-- the `net` suite puts the `wlansim` fixture on its disk as `wlansim.elf` (`--wlansim-elf`, or where `scripts/x86_fixtures.sh` and `build_aarch64.sh --fixtures` build it) and checks these grants with `stat caps`.
-
-### What is asked of the network track
-
-- **`netstack`:** read slot 4 as its third card (`CARDS` = 3). Slot 4 is empty without the station, as slot 3 is without a second card.
-- **The `net` suite:** with the station up, `netstack` finds three cards, and a join to `MIND-TEST` gets 10.0.3.15.
+Acceptance: every catalogued country is selectable as configuration; unknown
+codes, read-only mutation, stale scan/join state and failed application are
+covered. Radio limits and effective channels are honest on both MacBook and
+Ryzen; a configuration round trip is not evidence of physical networking.
+Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
+[KRN](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission),
+[DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).

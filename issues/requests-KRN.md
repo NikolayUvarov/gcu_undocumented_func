@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (10 requests waiting, 2026-10-12, three of them for 750, one for 550-APP-0033; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (13 requests waiting, 2026-10-14, three of them for 750, one for 550-APP-0033, one for 000-NET-0015 and 000-APP-0049, one for 550-NET-0018 and 550-NET-0024, one for 351-NET-0022; a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -256,3 +256,238 @@ No cause found yet. What was ruled out, and what is left:
 ### Acceptance criteria
 
 With the station (or a stand-in service of the agreed interface in QEMU), `wifi` started from the shell and from `wm` holds the client in `SLOT_WIFI`, and `caps` shows it there.
+
+## A read-only client of a network card for a program, for `wm`'s background (000-NET-0015, 000-APP-0049)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [000-NET-0015](000-NET-0015-a-card-read-only-client.md) and the tools track's [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md).
+
+### Problem
+
+`idl/net.wit` 1.3 gives a card's driver a client that only reads the card: with `BADGE_COUNTERS` (`mind::network`) it may call `info`, `counters` and `offloads`, and nothing that sends, receives or lends a ring. Only a holder of a client with `CAP_BADGE` can mint it, and nobody that would lend it to a program has one: `init` lends the shell's `SLOT_NET` copy of `virtio_net` with `CLIENT` rights, and no program can ask for such a client.
+
+### Plan (a proposal; the kernel track decides)
+
+- **The client for the shell to lend.** Either:
+  - `init` gives the shell's `SLOT_NET` copy `CAP_BADGE` too, as it gives `netstack` its own endpoint, so the shell mints the read-only copy itself; or
+  - `init` mints the read-only client for the shell in a slot the kernel track chooses.
+- **A request flag,** for example `REQUEST_NET_COUNTERS`, for which the shell lends the read-only client to a program in `SLOT_NET` (programs do not hold `SLOT_NET` otherwise). The shell's part is the tools track's, in 000-APP-0049.
+- `wm` would hold one more lent client: the launch session's limit of 5 grants ("A launch session holds as many grants as there are launch slots" above) may come first.
+
+### Acceptance criteria
+
+A program that asks for the flag holds the read-only client in `SLOT_NET`: it reads the counters, and `send`, `receive` and `attach` answer `denied`.
+
+## The Wi-Fi station in the boot services (550-NET-0018)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [550-NET-0018](550-NET-0018-the-station-service.md).
+
+### Problem
+
+The station service `wlan` (550-NET-0018) sits between a radio that serves `idl/wlanhw.wit` and the network stack. The radio is `bcm_wifi` on the MacBook Pro (550-DRV-0027), and a stand-in, `wlansim`, in QEMU. Only `init` can start it and hand out its clients, and the stack has slots for two cards only (`SLOT_DEV0`, `SLOT_DEV1`).
+
+### Plan (a proposal; the kernel track decides)
+
+- **Starting it.** `init` starts `wlan` when a radio service runs. On the MacBook Pro the radio is `bcm_wifi` as a frame service. In the `net` suite's image it is `wlansim`, which the test puts on the boot disk; a boot entry or a file could name it.
+- **The radio's client.** `init` lends the radio's endpoint, the `idl/wlanhw.wit` endpoint of `bcm_wifi` (or of `wlansim`), to `wlan` alone, in slot 2 for example (MC-2.3; the drivers track asks the same, 550-DRV-0027). Nothing else gets a client of it.
+- **The station's clients:**
+  - an unbadged client to `netstack` as its third card, in a slot the kernel track chooses: the network track then raises `netstack`'s `CARDS`;
+  - one with `BADGE_WIFI_CHANGE` (`mind::network`) to the shell. That is the client the tools track asked to lend to `wifi` ("A slot for the Wi-Fi station's configuration client" above).
+- **`keystore`'s client for the station** (added 2026-10-12, for [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md)): a client of `keystore` with `BADGE_KEY_STATION` (`mind::network`, value 2) to `wlan` alone, in slot 3. With it the station has `keystore` keep a remembered network's PMK and asks it for each handshake's keys (`idl/keystore.wit` 1.1). Without it, `remember` and `forget` answer `unsupported`.
+- **Restarts.** `wlan` restarts like the other services. The stack sees its card come back as it sees `virtio_net`'s.
+
+### Acceptance criteria
+
+In the `net` suite with `wlansim` on the disk, `wlan` runs, holds the radio's client and `keystore`'s, and `netstack` finds three cards. `stat caps` shows the station's clients where the plan puts them.
+
+### Progress (2026-10-12)
+
+**The drivers track, 2026-10-14 (550-DRV-0027):** `bcm_wifi`'s side is written: it serves `idl/wlanhw.wit` 1.0 on `SLOT_SERVICE` when it is given one, bringing the radio up at boot, and without it the core stays in reset as before. It is on `claude/ASR-DRV` and `fast-test` (3353c57d) and reaches `main` after its gate. So `init` needs only to give `bcm_wifi` a server endpoint, as it does for the other drivers, and lend its client to `wlan` alone.
+
+The kernel track prepared 550-KRN-0097 (requests-NET.md on `main`). On the network branch, `netstack` now reads slot 4 as its third card (`CARDS` = 3), and `wlansim`'s network moved to 10.0.4.0/24 (the station's lease 10.0.4.15, its gateway 10.0.4.1), apart from the second card's 10.0.3.0/24 in the same suite. The join check of the `net` suite comes from the network track once 550-KRN-0097 is on `main`.
+
+**On `main` since aedea68 (2026-10-14):** the code of 550-NET-0017 and 550-NET-0018 (`wpa`, `dot11`, `wlan`, `tests/wlansim`, `idl/wifi.wit`), `netstack`'s slot 4, and `keystore.wit` 1.1 for the station's client (550-NET-0024), gated on x86 and aarch64. 550-KRN-0097 can follow.
+
+## The right to badge the shell's TLS client (351-NET-0022)
+
+**Recorded by:** the network track (`NET`), 2026-10-12, for [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md).
+
+### Problem
+
+`tls` now refuses the device certificate to a client badged `BADGE_TLS_NO_DEVICE` (`idl/tls.wit` 1.2). The shell lends its own unbadged copy to programs (351-APP-0017), and it cannot make a badged one: `init` lends `SLOT_TLS` without `CAP_BADGE` (000-KRN-0073).
+
+### Plan (a proposal; the kernel track decides)
+
+- **The shell's copy.** `init` gives the shell's `SLOT_TLS` copy `CAP_BADGE` too. The shell then mints a `BADGE_TLS_NO_DEVICE` copy for each program it lends to (the tools track's part, requests-APP.md).
+- **Or init mints it.** Alternatively, `init` mints the badged client for the shell in a slot of the kernel track's choosing.
+- **The updater.** `init`'s client for `updater` may be the badged kind, unless the update server asks for the device's certificate.
+
+### Acceptance criteria
+
+`stat caps` shows the shell's TLS client with the right to badge (or the second client). The `tls` suite's check comes with the tools track's lending.
+
+## The SSH service in the boot services (351-NET-0027)
+
+**Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
+
+### Problem
+
+The service `ssh` (351-NET-0027) reads release files over SFTP for programs, as `tls` runs HTTPS for them (351-NET-0002). Its logins are signed by `keystore`, so the device key never leaves it (MC-11.9). Only `init` can start the service and hand out its clients, and no slot or request flag names it yet.
+
+### Plan (a proposal; the kernel track decides)
+
+- **Starting it.** `init` starts `ssh` (`ssh.elf`, built from `ssh_service/` since 2026-10-14) after `keystore` and the network stack, as it starts `tls`.
+- **`keystore`'s client.** `init` mints a client of `keystore` with `BADGE_KEY_SSH` (`mind::network`, value 3) and lends it to `ssh` alone, in slot 4 as `tls` holds `BADGE_KEY_SIGNER`. With it, `ssh` may ask for `ssh-login` signatures only (`idl/keystore.wit` 1.2, 351-NET-0027); nothing else gets that badge.
+- **The log.** `ssh` gets the log client, for its record of sessions, refusals and pin mismatches.
+- **Its clients:**
+  - the shell's, in a new fixed slot (`SLOT_SSH`), for the `download` command and for lending;
+  - for programs, a request flag (`REQUEST_SSH`) that lends the launcher's client in the program's same slot, for a program that also gets a flow grant, as `REQUEST_TLS` does. A new slot in `LAUNCH_SLOTS` is an ABI change, so it is the kernel track's.
+- **Restarts.** `ssh` restarts like `tls`.
+
+### Acceptance criteria
+
+In the `net` suite, `ssh` runs and holds `keystore`'s client with `BADGE_KEY_SSH`, and `stat caps` shows the shell's client in `SLOT_SSH`. The SFTP check of the `net` suite comes from the network track.
+
+## A loader client for the updater's parsers (109-UPD-0017, for 109-NET-0010)
+
+**Recorded by:** the update track (`UPD`), 2026-10-14, for [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), from the kernel track's request in requests-UPD.md.
+
+### Problem
+
+The updater now parses each check's channel, manifest and heads in a `parse` helper of the check's own, as `download` does (109-NET-0010), when it holds a loader client in `SLOT_LOADER`. `init` gives it none, and no endpoint quota, so it uses the shared service.
+
+### Plan (a proposal; the kernel track decides)
+
+- **A loader client that only starts helpers.** For example a badge on `loader`'s clients (`loader.wit` minor) with which only `helper` is served, and nothing that starts a program.
+- **`init` lends it to the updater** in `SLOT_LOADER`, with an endpoint quota of 1: the session's endpoint, which the helper serves.
+
+### Acceptance criteria
+
+In the `update` suite, the updater's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends. A `program` call with the updater's loader client is refused.
+
+## The shell's audio client that may change the levels (000-APP-0076, 000-APP-0077)
+
+**Recorded by:** the tools track (APP), 2026-10-14, at the maintainer's request: "the output volume and the microphone's sensitivity need settings".
+
+### Problem
+
+`audio.wit` is asked for the output volume and the microphone's gain, and for setting them only with a badge (requests-DRV.md, "The output volume and the microphone's sensitivity in `audio.wit`").
+
+- Today `init` lends the shell a plain client of `audio_gw` in `SLOT_AUDIO` (`init/src/main.rs`, the shell's grants), as it lends `tts` one.
+- Programs get their own plain client from the loader's standard grants (`loader/src/main.rs`:108).
+
+### Plan (a proposal; the kernel track decides)
+
+- **A badge that changes the levels,** for example `BADGE_AUDIO_LEVELS` in `mind::audio`, as the clock's `BADGE_SET` (211-KRN-0051):
+  - `init` mints it on the shell's client in `SLOT_AUDIO` only;
+  - `tts` and the loader's grants keep the plain client, so no program the shell starts gets the badge.
+
+### Acceptance criteria
+
+`caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it. With `audio.wit` 1.2, `say` cannot change the volume and the shell can.
+
+## Device-bound platform power policy for the Ryzen WLAN driver
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The RTL8852BE channel path requires explicit platform SAR and antenna-gain
+constraints, separately from firmware default tables and operator country.
+The current native driver has neither a device-bound platform-policy result
+nor a complete checked ACPI snapshot from which such a result could be derived.
+`PLATFORM_ACPI_TABLE` already copies individual tables read-only during init;
+`init/src/hardware.rs` writes their diagnostic copies to `log:acpi/`. That
+diagnostic loop does not establish complete namespace evaluation, absence of
+device-specific policy or a durable scoped authority after Platform is dropped.
+
+Please number the smallest suitable KRN dependency and choose its interface:
+
+- Supply a complete, bounded, validated snapshot of applicable AML tables and
+  PCI identity/topology to a scoped consumer, or a typed device-bound result
+  `KnownLimits / KnownAbsent / UnsupportedOrUnknown`. Do not restore general
+  Platform privilege to the radio service.
+- Distinguish an actually absent supported policy from inaccessible, truncated,
+  malformed or unsupported input. Known absence may use a justified bounded
+  analysis; this request does not demand a general AML interpreter. Unknown
+  input must not silently become unlimited transmit power.
+- Retain actual limits/antenna offsets, their source and policy version for
+  the DRV consumer. Version changed ABI/IDL explicitly; document capability
+  ownership, bounds and restart behavior. Intel/x86 is the priority; ARM
+  execution remains deferred by the maintainer.
+
+Pinned RTL8852B source looks up `WRDS`, `RWRD`, `RWSI`, `RWGS` and `RTAG` relative
+to its WLAN ACPI device. A matching string in an unrelated scope is not a
+policy. Read-only Ubuntu Ryzen operation `20261015233912.417877721_000172`
+read DSDT and nine SSDTs: none contained those five names; PCI `03:00.0` had
+no `firmware_node` entry. It did not evaluate AML or change the NIC. These
+observations narrow the expected profile but are not a MIND runtime result.
+Raw hashes and source details are recorded on ASTRA in
+`hwdocs/rtl8852be-channel-stage.md`.
+
+Acceptance: supported valid/absent fixtures have explicit device identity and
+provenance; invalid, partial or unsupported snapshots remain distinguishable;
+the driver cannot substitute an unrelated snapshot or infer permission from
+an error; no ambient Platform capability is retained. Record actual Ryzen
+evidence separately. DRV-0032 remains blocked on this request for native
+transmit-policy admission; calibration/datapath development can continue
+without enabling transmission.
+
+## Native RTL8852BE radio endpoint after datapath admission
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The existing ASTRA-owned 213-KRN-0114 integration deliberately starts a
+diagnostic: the `rtw89_wifi` init branch lends BAR2, retained DMA and a firmware
+reader but no `SLOT_SERVICE`. `RADIOS` contains only `bcm_wifi` and `wlansim`.
+The new driver-side data owner therefore cannot become a usable station by
+itself. Please number the radio-service extension and coordinate activation
+with DRV-0032 rather than advertising the diagnostic as a working radio.
+
+The maintainer confirmed on 2026-10-16 that both target machines are physically
+in Uzbekistan (`UZ`), and then requested switching among every country in the
+verified regulatory database. Use UZ as this deployment's explicit initial
+selection; do not turn it into an implicit worldwide default for other installs.
+
+- Reserve the current private service's receive-capability slots 9 and 10 as
+  empty, or coordinate an explicit driver-contract change. Its constructor
+  checks both slots; the endpoint/configuration grants must not collide with
+  deferred request ownership. Preserve the current log, BAR, DMA and VFS grants.
+- Give the selected RTL8852BE instance its `wlanhw` server endpoint and lend
+  its client only to `wlan`, preserving the original MacBook BCM4331 and QEMU
+  selections. Do not alter their authority or replace a running radio merely
+  because a second PCI device exists.
+- Provide an explicit bounded operator country/channel configuration, with
+  provenance separate from the device-bound platform policy requested above.
+  A stored Ubuntu regulatory setting is not operator confirmation, and missing
+  or invalid input must remain visible as unavailable radio service.
+- Preserve retained DMA, verified non-mastering restart and safe-start rules;
+  neither this endpoint nor its configuration grants ambient Platform access.
+  Support a persisted, owner-scoped selection for all catalogued countries,
+  coordinated with the NET/APP requests below; configuration data alone must
+  not grant transmission. If an interface changes, version it and document
+  the migration.
+- Sequence the change with the actual persistent driver loop and its admitted
+  capabilities. Initial driver support may advertise one explicitly admitted
+  2.4 GHz / 20 MHz channel; other channels must be rejected, never reported as
+  tuned. A running diagnostic process is not an endpoint-readiness signal.
+
+Acceptance: fixtures cover no Realtek device, missing/invalid configuration,
+driver initialization refusal, exact endpoint ownership and preserved BCM4331
+and wlansim routing. The original Intel MacBook and Ryzen must separately
+establish association, DHCP and ping under test load before physical readiness
+is claimed. Driver DMA partitioning, active RX/TX and service dispatch stay in
+DRV-0032; this request does not transfer their implementation to KRN.
+
+
+### Country-selection integration requests (2026-10-16)
+
+See [NET's policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP's selector request](requests-APP.md#wifi-country-and-channel-selector).
+The pure catalog is now implemented in ASTRA `1e2cf1dd` and published in
+fast-test `94ab2a0b`; NET's request above links its exact source and validation.
+It grants no device authority and does not activate the native diagnostic.
+The current driver is limited to a single admitted 2.4 GHz/20 MHz channel; a
+country selection must intersect radio capabilities and existing board/platform
+constraints. A configuration change must never reuse an active admission made
+under a different policy. Coordinate stop/restart/re-admission and bounded
+failure reporting with the driver and station owners.

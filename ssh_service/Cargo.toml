@@ -1,0 +1,19 @@
+[package]
+name = "ssh_service"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+# The SSH service `ssh` (351-NET-0027): the protocol is the `ssh` crate (351-NET-0026); logins signed by the key service.
+[[bin]]
+name = "ssh"
+path = "src/main.rs"
+
+[dependencies]
+libmind = { path = "../libmind", features = ["alloc"] }
+ssh = { path = "../ssh" }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

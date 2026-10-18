@@ -74,13 +74,13 @@ impl Sink for MemSink {
 }
 
 struct Mem { files: Vec<(String, Data, u32, u8)>, dirs: Vec<String>, runs: Vec<String>, args: Vec<String>, lists: usize, flushes: usize, space: Rc<Counter<u64>>, broken: Vec<String>,
-             log: Vec<String>, fail_flushes: usize, pass_flushes: usize } // removals and flushes in order; flushes that fail after those that pass
+             log: Vec<String>, fail_flushes: usize, pass_flushes: usize, scripts: Vec<String>, shell: bool } // removals and flushes in order; flushes that fail after those that pass; scripts run, the shell's commands held
 
 const RAM: u64 = 64 * 1024;
 
 impl Mem {
     fn sample() -> Self {
-        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0 };
+        let mut disk = Mem { files: Vec::new(), dirs: Vec::new(), runs: Vec::new(), args: Vec::new(), lists: 0, flushes: 0, space: Rc::new(Counter::new(RAM)), broken: Vec::new(), log: Vec::new(), fail_flushes: 0, pass_flushes: 0, scripts: Vec::new(), shell: true };
         disk.dirs = vec!["EFI".into(), "EFI/BOOT".into(), "docs".into(), "docs/old".into()];
         for (path, bytes, time) in [("kernel.elf", vec![0x7F, b'E', b'L', b'F'], STAMP), ("top.elf", vec![1; 3000], STAMP - 1), ("readme.txt", "Hello\nПривет, мир\n".as_bytes().to_vec(), STAMP + 1),
                                     ("EFI/BOOT/BOOTX64.EFI", vec![b'M', b'Z'], 0), ("docs/notes.txt", b"notes".to_vec(), 0), ("docs/old/notes.md", b"old".to_vec(), 0),
@@ -108,6 +108,12 @@ impl Disk for Mem {
     fn open(&mut self, path: &str) -> Option<Box<dyn Source>> {
         let broken = self.broken.iter().any(|b| b.eq_ignore_ascii_case(path));
         self.file(path).map(|bytes| { let good = if broken { bytes.len() / 2 } else { bytes.len() }; Box::new(MemFile { data: bytes, good }) as Box<dyn Source> })
+    }
+    fn script(&mut self, path: &str) -> Result<String, String> {
+        // As the shell's window answers: what the script printed, or how to run it without the shell's commands.
+        if !self.shell { return Err(format!("Type msh /{} in the shell", path)); }
+        self.scripts.push(path.into());
+        Ok("hi\n".into())
     }
     fn run(&mut self, path: &str, args: &str) -> Result<Started, String> {
         if path.eq_ignore_ascii_case("nothing") { return Err("NotFound".into()); }
@@ -289,6 +295,7 @@ fn marking() {
 #[test]
 fn navigation_open_run_and_view() {
     let mut disk = Mem::sample();
+    disk.add_file("quick.msh", b"#!msh\nprint(\"hi\")\n");
     let mut window = vec![0u8; 4096];
     let mut fm = Fm::new(&mut window, &mut disk);
     let _ = draw(&mut fm, 100, 30);
@@ -314,6 +321,16 @@ fn navigation_open_run_and_view() {
     assert!(fm.notice.as_deref().unwrap().contains("PID 42"));
     let screen = draw(&mut fm, 100, 30);
     assert!(screen_has(&screen, "Started top.elf as PID 42"));
+    // A script (000-APP-0067): the shell runs it in its window, not the viewer; without the shell's commands Enter says
+    // how to run it.
+    fm.panels[0].arrange(Some("quick.msh"));
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(!fm.viewing() && disk.scripts == ["quick.msh"], "{:?}", disk.scripts);
+    assert_eq!(fm.notice.as_deref(), Some("quick.msh ran in the shell's window: hi"));
+    disk.shell = false;
+    fm.key(code(KEY_ENTER), &mut disk);
+    assert!(!fm.viewing() && fm.notice.as_deref() == Some("Type msh /quick.msh in the shell"), "{:?}", fm.notice);
+    disk.shell = true;
     fm.panels[0].arrange(Some("readme.txt"));
     fm.key(code(KEY_ENTER), &mut disk);
     assert!(fm.viewing());

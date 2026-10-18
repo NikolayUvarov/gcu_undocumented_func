@@ -62,6 +62,9 @@ if [[ "${1:-}" == --fixtures ]]; then
     # The updater's stand-in for the updater suite (351-KRN-0022).
     (cd "$ROOT/tests/updater_stub" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/updater_stub/target/$TARGET/release/updater_stub" "$OUT/fixture-updater.elf"
+    # The stand-in radio for the station (550-NET-0018).
+    (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
+    cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"
 fi
 # The bootloader signed for Secure Boot if $MIND_SECURE_BOOT_KEYS names the keys (351-UPD-0012), then the boot
 # manifest and its signature over everything staged (350-UPD-0002).

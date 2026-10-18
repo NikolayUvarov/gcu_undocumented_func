@@ -1,9 +1,12 @@
 //! Host tests of the shell console's lines (shell/src/ring.rs): wrapping, the input line's positions, truncation, the
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
-//! commands (shell/src/clients.rs, 211-APP-0044).
+//! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074).
 #![allow(dead_code)]
+extern crate alloc;
 #[path = "../shell/src/ring.rs"]
 mod ring;
+#[path = "../shell/src/redirect.rs"]
+mod redirect;
 #[path = "../shell/src/clients.rs"]
 mod clients;
 use ring::{Position, Ring, LINES};
@@ -88,9 +91,60 @@ fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
     for line in ["ps", " QUOTAS ", "free", "ip", "netgrants", "date", "netpolicy", "sync", "endpoints"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
     // What a command or program does (000-APP-0054): text only.
     for line in ["help kill", "help", "HELP fm"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
-    // In the shell's window once the user agrees there: what changes the machine or reaches beyond it.
+    // In the shell's window once the user agrees there: what changes the machine or reaches beyond it, and a script by its
+    // file (fm's Enter, 000-APP-0067).
     for line in ["kill 7", "reboot", "reboot -f", "poweroff", "shutdown -f", "stop", "budget 7 5 10", "netrevoke fetch", "netpolicy add allow x", "date set 2026-10-10 12:00",
-                 "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
-    // The screen's own commands, scripts, programs and statements are refused.
-    for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh x.msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
+                 "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru",
+                 "msh /diag/quick.msh", "msh ram:x.msh"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
+    // The screen's own commands, code typed for msh, programs and statements are refused.
+    for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh -c \"print(1)\"", "msh --check x.msh", "msh x.msh a", "msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
+}
+
+#[test]
+fn a_line_splits_at_its_redirection() {
+    // 000-APP-0074: `>` and `>>` after a command, one file at the end; `>` inside double quotes is text.
+    use redirect::{split, Split};
+    assert_eq!(split("ls data > ram:l.txt"), Ok(Some(Split { command: "ls data", append: false, file: "ram:l.txt" })));
+    assert_eq!(split("dmesg -s battery >>data/battery.txt"), Ok(Some(Split { command: "dmesg -s battery", append: true, file: "data/battery.txt" })));
+    assert_eq!(split("ls>x"), Ok(Some(Split { command: "ls", append: false, file: "x" })));
+    assert_eq!(split("ls data"), Ok(None));
+    assert_eq!(split(r#"msh -c "print(2 > 1)""#), Ok(None));
+    assert_eq!(split(r#"msh -c "print(2 > 1)" > ram:out.txt"#), Ok(Some(Split { command: r#"msh -c "print(2 > 1)""#, append: false, file: "ram:out.txt" })));
+    assert!(split("> ram:x").is_err(), "no command");
+    assert!(split("ls >").is_err(), "no file");
+    assert!(split("ls > a b").is_err(), "two words after >");
+    assert!(split("ls > a > b").is_err(), "two redirections");
+    assert!(split("ls >>> a").is_err());
+    assert!(split("run app & > ram:x").is_err(), "a background command");
+    assert!(split("run app > ram:x &").is_err(), "& after the file");
+}
+
+#[test]
+fn output_lines_go_to_the_file_and_errors_to_the_screen() {
+    use redirect::{Lines, LONG};
+    let (mut lines, mut file, mut shown) = (Lines::default(), Vec::new(), Vec::new());
+    // A line comes whole even when its bytes come in pieces; one that starts `ERROR: ` is shown.
+    lines.feed(b"one\ntw", &mut file, &mut shown);
+    assert_eq!((file.as_slice(), shown.as_slice()), (&b"one\n"[..], &b""[..]));
+    lines.feed(b"o\nERROR: CAT: NOT FOUND\nthree", &mut file, &mut shown);
+    assert_eq!((file.as_slice(), shown.as_slice()), (&b"one\ntwo\n"[..], &b"ERROR: CAT: NOT FOUND\n"[..]));
+    lines.finish(&mut file, &mut shown);
+    assert_eq!(file.as_slice(), &b"one\ntwo\nthree"[..], "the last line without its end");
+    // A long line without an end goes into the file in pieces.
+    let (mut lines, mut file, mut shown) = (Lines::default(), Vec::new(), Vec::new());
+    lines.feed(&vec![b'x'; LONG + 10], &mut file, &mut shown);
+    assert_eq!(file.len(), LONG);
+    lines.finish(&mut file, &mut shown);
+    assert_eq!((file.len(), shown.len()), (LONG + 10, 0));
+}
+
+#[test]
+fn a_client_is_asked_before_its_output_goes_into_a_file() {
+    // 000-APP-0074: `>` writes a file in the shell's name, so a command taken at once is asked; a refused one stays so.
+    use clients::{taken, Taken};
+    assert_eq!(taken("ps"), Taken::Now);
+    assert_eq!(taken("ps > data/ps.txt"), Taken::Asked);
+    assert_eq!(taken("logs 7 >> ram:logs.txt"), Taken::Asked);
+    assert_eq!(taken("ls > ram:x"), Taken::Refused, "ls is console's own");
+    assert_eq!(taken("ps > a b"), Taken::Refused, "a line that is wrong");
 }

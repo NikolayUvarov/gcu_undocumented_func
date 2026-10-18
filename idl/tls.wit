@@ -4,8 +4,11 @@
 /// store `tlsroots.pem` on the boot disk. With `client-certificate`, the device certificate is offered when a server
 /// asks for one and the key service signs the handshake: the TLS service never sees the private key. A session belongs
 /// to the process that attached it; the service runs one handshake at a time. 1.1 adds `connect-pinned`: a server known
-/// by its key alone, such as the update server (351-NET-0002).
-package mind:tls@1.1.0;
+/// by its key alone, such as the update server (351-NET-0002). 1.2 adds `connect-pins` (750-NET-0020): a server known by
+/// one of two pins, so that a pin can rotate, with its name, validity and purpose still checked; and a client badged
+/// `BADGE_TLS_NO_DEVICE` (`mind::network`, 351-NET-0022) is refused `client-certificate` (`denied`): a launcher lends
+/// such a client to a program, so that it cannot sign in as the device.
+package mind:tls@1.2.0;
 
 interface tls {
     /// Why a request failed. `certificate`: the server certificate is not valid for the name or not trusted;
@@ -34,4 +37,14 @@ interface tls {
     /// must be `pin` (32 bytes), or the connection is refused (`certificate`). No root, name or validity period is
     /// checked; the handshake's signature by that key is. `name` is sent as the server name.
     connect-pinned: func(session: u32, name: string<253>, address: u32, port: u16, pin: bytes<32>, timeout-ms: u32) -> result<peer, error>;
+
+    /// What a pin is the SHA-256 of (1.2): the server's certificate (its DER), or its SubjectPublicKeyInfo.
+    enum pin-kind { leaf, spki }
+    record pin { kind: pin-kind, digest: list<u8, 32> }
+    /// As `connect`, the server trusted by one of `pins` (one or two; the second is the next one, for rotation) instead
+    /// of the root store (1.2). Still checked: the certificate's name against `name` (a DNS name or an IPv4 address),
+    /// its validity period by the system clock, the server-authentication purpose when it names purposes, `CA:false`,
+    /// and the handshake's signature by its key. Its issuer is not looked for: a server may send its leaf alone. A
+    /// server that matches no pin, or fails a check, is refused (`certificate`).
+    connect-pins: func(session: u32, name: string<253>, address: u32, port: u16, pins: list<pin, 2>, timeout-ms: u32) -> result<peer, error>;
 }

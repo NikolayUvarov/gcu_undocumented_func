@@ -1,0 +1,56 @@
+/// A Wi-Fi radio's raw 802.11 frames (`bcm_wifi`, 550-DRV-0027), for the station service `wlan` alone (550-NET-0012,
+/// MC-2.3): the driver moves frames and keeps nothing of 802.11 but its channel and its receive filter. Scanning
+/// policy, authentication, association, keys, encryption and rates are the station's, so the driver needs no say over
+/// what a frame means (Appendix B.6). Frames are MPDUs without their FCS: the driver drops a received frame whose FCS
+/// is wrong, and the hardware appends it to a frame it sends.
+///
+/// Received frames come one by one (`receive`) or through a ring the client lends (`attach`), each led by the same
+/// 8 bytes, little-endian: a u16 frame length; the signal as minus dBm (a u8: 60 is -60 dBm, 0 not measured); the
+/// channel; the rate in 500 kb/s units (2 is 1 Mb/s, 12 is 6 Mb/s); flags (bit 0: received during a scan's filter,
+/// that is with `all-beacons` set); two reserved bytes, zero. The ring: bytes 0-3 the receive head (frames the driver
+/// queued), 64-67 the receive tail (frames the client took), both counting up and wrapping; from 4096, `slots` slots
+/// of 4096 bytes, each the 8-byte header and then the frame. Each side checks every index and length it reads from
+/// the shared region. Without a `kick` for a second, received frames go back to `receive`.
+///
+/// 1.1 (550-NET-0028): `info`'s `bands` bit 2 says the radio receives and sends OFDM on 2.4 GHz. A 1.0 radio leaves it
+/// clear, so the station keeps to 802.11b's rates there, which every 2.4 GHz radio has; the wire is unchanged.
+package mind:wlanhw@1.1.0;
+
+interface wlanhw {
+    /// Why a request failed. `no-device`: the radio is not up; `busy`: the transmit queue is full; `empty`: no
+    /// received frame is waiting; `invalid`: a frame too short or too long, or a channel or rate the radio does not
+    /// support; `failed`: the hardware did not do it.
+    enum error { no-device, busy, empty, invalid, failed }
+
+    /// The radio: its MAC address (low 48 bits, first byte in bits 40-47), its bands (bit 0: 2.4 GHz, bit 1: 5 GHz, which
+    /// is OFDM alone; bit 2: OFDM on 2.4 GHz too, 6 to 54 Mb/s, and without it DSSS and CCK alone there, 1 to 11 Mb/s),
+    /// the channels it can use (20 MHz each), the longest frame it sends or receives, the channel now set (0: none).
+    record info { mac: u64, bands: u8, channels: list<u8, 64>, frame-max: u16, channel: u8 }
+
+    /// What passes the receive filter: with `all-beacons`, every beacon and probe response on the channel (a scan);
+    /// the frames of the network `bssid` (0: none), and those addressed to `own` (0: the radio's MAC), broadcast or
+    /// multicast. Nothing else.
+    record filter { all-beacons: bool, bssid: u64, own: u64 }
+
+    /// What became of a frame sent: whether it was acknowledged (always false for a group address, which nobody
+    /// acknowledges) and how many times it went out.
+    record sent { acked: bool, attempts: u8 }
+
+    info: func() -> result<info, error>;
+    /// Tunes the radio to `channel`. The station decides which channels are allowed where it is; the driver refuses
+    /// those it cannot use (`invalid`).
+    set-channel: func(channel: u8) -> result<_, error>;
+    set-filter: func(filter: filter) -> result<_, error>;
+    /// Sends one frame on the current channel at `rate` (500 kb/s units), tried at most `attempts` times (1 to 15)
+    /// until acknowledged, and answers when the hardware has its status.
+    send: func(frame: bytes<2346>, rate: u8, attempts: u8) -> result<sent, error>;
+    /// The oldest received frame, led by its 8-byte header (above). Error empty: none is waiting.
+    receive: func() -> result<bytes<2354>, error>;
+    /// Answers once a received frame is waiting; returns how many are.
+    wait: func() -> u32;
+    /// Uses `ring` as the shared receive ring (at least 4096 + 4096 bytes); returns its slots. A new ring replaces the
+    /// old one.
+    attach: func(ring: borrow<memory>) -> result<u32, error>;
+    /// The client took frames from the ring or still uses it. Error invalid: no ring is attached (attach again).
+    kick: func() -> result<_, error>;
+}

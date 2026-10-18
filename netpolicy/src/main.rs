@@ -6,8 +6,10 @@
 // grant, refusal, expiry and revocation goes to the system log, and so does the address a host name of the policy
 // resolved to when a grant was made (351-NET-0003). The policy can be changed while the system runs (108): the changed
 // policy is kept in the broker's private directory of the boot disk, which only its VFS client opens (`system/
-// netpolicy`), and read in place of the shipped file; the shell asks the user before it asks for a change. Holds: a stack client to mint from (slot 2), a VFS
-// client with the broker's own badge (slot 3), the stack's policy client (slot 4).
+// netpolicy`), and read in place of the shipped file; the shell asks the user before it asks for a change. The policy's
+// `default card N` line names the stack's preferred card (550-NET-0025), told to the stack at start, after each change
+// and every 10 s (a restarted stack learns it again). Holds: a stack client to mint from (slot 2), a VFS client with the
+// broker's own badge (slot 3), the stack's policy client (slot 4).
 extern crate alloc;
 
 use alloc::string::String;
@@ -27,6 +29,9 @@ const EDITED_DIR: &str = "system/netpolicy";
 const EDITED: &str = "system/netpolicy/netpolicy.txt"; // the policy as changed (108)
 const EDITED_NEW: &str = "system/netpolicy/netpolicy.new"; // a change on its way to EDITED
 const RECEIVED: usize = 9;
+const NO_CARD: u8 = 255; // socket.wit 2.5 `prefer`: no preferred card
+const CARDS: u8 = 3; // the stack's cards: two wired, the Wi-Fi station
+const PREFER_MS: u64 = 10_000; // how often the preferred card is told to the stack again
 const GRANTS: usize = 32;
 const SECONDS: u32 = 3600; // a line without a term
 const BYTES: u64 = 16 * 1024 * 1024; // a line without a volume
@@ -49,6 +54,20 @@ fn resolver(text: &str) -> (u32, u16) {
         }
     }
     (0, 0)
+}
+
+// The card the policy prefers as the default (`default card N`, 550-NET-0025): its last such line; NO_CARD without one.
+fn default_card(text: &str) -> u8 {
+    let mut card = NO_CARD;
+    for line in text.lines() {
+        let words: Vec<&str> = line.split('#').next().unwrap_or("").split_whitespace().collect();
+        if let [word, kind, number] = words.as_slice() {
+            if word.eq_ignore_ascii_case("default") && kind.eq_ignore_ascii_case("card") {
+                if let Some(n) = number.parse::<u8>().ok().filter(|&n| n < CARDS) { card = n; }
+            }
+        }
+    }
+    card
 }
 
 // A host name as DNS has it: dot-separated labels of letters, digits and hyphens, at least one letter.
@@ -76,7 +95,7 @@ fn lookup(program: &str, name: &str, (server, port): (u32, u16)) -> Option<u32> 
 // that does not resolve gives no rule. The grant gets the shortest term and the smallest volume any of its lines names
 // (the defaults where none does).
 fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
-    let (mut rules, mut seconds, mut bytes) = (Vec::new(), u32::MAX, u64::MAX);
+    let (mut rules, mut seconds, mut bytes) = (Vec::new(), None::<u32>, None::<u64>);
     let Some(text) = policy_text() else { return (rules, 0, 0) };
     let text = text.as_str();
     let resolver = resolver(text);
@@ -93,10 +112,10 @@ fn policy_for(program: &str, dns: u32) -> (Vec<Rule>, u32, u64) {
         };
         let Some(rule) = rule else { continue };
         if rules.len() < 16 { rules.push(rule); }
-        if let Some(s) = words.get(4).and_then(|s| s.parse().ok()) { seconds = seconds.min(s); }
-        if let Some(b) = words.get(5).and_then(|b| b.parse().ok()) { bytes = bytes.min(b); }
+        if let Some(s) = words.get(4).and_then(|s| s.parse::<u32>().ok()) { seconds = Some(seconds.map_or(s, |t| t.min(s))); }
+        if let Some(b) = words.get(5).and_then(|b| b.parse::<u64>().ok()) { bytes = Some(bytes.map_or(b, |v| v.min(b))); }
     }
-    (rules, if seconds == u32::MAX { SECONDS } else { seconds }, if bytes == u64::MAX { BYTES } else { bytes })
+    (rules, seconds.unwrap_or(SECONDS), bytes.unwrap_or(BYTES))
 }
 
 // The policy in force (108): the changed one, a change cut short before it replaced it, or the shipped one.
@@ -115,11 +134,13 @@ fn normal(line: &str) -> String {
     line.split('#').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-// Whether `line` is a line the broker understands: a rule, `program dns`, or `resolver A.B.C.D[:PORT]` (108).
+// Whether `line` is a line the broker understands: a rule, `program dns`, `resolver A.B.C.D[:PORT]` (108), or
+// `default card N` (550-NET-0025).
 fn valid(line: &str) -> bool {
     let words: Vec<&str> = line.split_whitespace().collect();
     if line.contains('#') { return false; }
     match words.as_slice() {
+        [word, kind, number] if word.eq_ignore_ascii_case("default") && kind.eq_ignore_ascii_case("card") => number.parse::<u8>().is_ok_and(|n| n < CARDS),
         [word, server] if word.eq_ignore_ascii_case("resolver") => {
             let (address, port) = server.split_once(':').unwrap_or((server, "53"));
             parse_ip(address).is_some_and(|a| a != 0) && port.parse::<u16>().is_ok()
@@ -146,7 +167,7 @@ fn store(text: &str) -> Result<(), Error> {
     mind::fs::rename(EDITED_NEW, EDITED).map_err(|error| { mind::println!("[NETPOLICY] CHANGE NOT STORED: {:?}", error); Error::Unwritable })
 }
 
-struct Broker { grants: Vec<Grant>, next: u16 }
+struct Broker { grants: Vec<Grant>, next: u16, preferred: Option<u8>, told: u64, read: bool }
 
 impl Broker {
     fn badge(&mut self) -> u16 {
@@ -236,6 +257,22 @@ impl Broker {
         Ok(removed)
     }
 
+    // Tells the stack the policy's preferred card: read from the policy when `read` or when the last reading failed (the
+    // boot disk not mounted yet), else the one known.
+    fn prefer(&mut self, read: bool, now: u64) {
+        let card = match self.preferred {
+            Some(card) if !read && self.read => card,
+            _ => { let text = policy_text(); self.read = text.is_some(); default_card(&text.unwrap_or_default()) }
+        };
+        // Said when the policy names a card, or stops naming one.
+        if self.preferred != Some(card) && (card != NO_CARD || self.preferred.is_some()) {
+            if card == NO_CARD { mind::println!("[NETPOLICY] NO DEFAULT CARD IN THE POLICY") } else { mind::println!("[NETPOLICY] DEFAULT CARD {} FROM THE POLICY", card) }
+        }
+        self.preferred = Some(card);
+        self.told = now;
+        let _ = socket::prefer(CONTROL, card);
+    }
+
     fn list(&self) -> List<netpolicy::Grant, 32> {
         let mut list = List::default();
         for g in &self.grants {
@@ -248,12 +285,14 @@ impl Broker {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    let mut broker = Broker { grants: Vec::new(), next: 0 };
+    let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, told: 0, read: false };
     mind::println!("[NETPOLICY] READY: POLICY FROM {}", POLICY_FILE);
+    broker.prefer(true, mind::time::uptime_ms() as u64);
     let mut checked = 0u64;
     loop {
         let now = mind::time::uptime_ms() as u64;
         if now - checked >= 1000 { checked = now; broker.expire(); }
+        if now - broker.told >= PREFER_MS { broker.prefer(false, now); }
         let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, 1000) else { continue };
         if !request.is_call { continue; }
         let _ = match netpolicy::decode(&request, RECEIVED) {
@@ -271,8 +310,16 @@ fn main(_info: &'static BootInfo) {
             Ok((netpolicy::Request::Revoke { program }, call)) => netpolicy::reply_revoke(call, Ok(broker.revoke(program.as_str()))),
             Ok((netpolicy::Request::List, call)) => netpolicy::reply_list(call, broker.list().as_slice()),
             Ok((netpolicy::Request::Lines { start }, call)) => netpolicy::reply_lines(call, Broker::lines(start).as_slice()),
-            Ok((netpolicy::Request::Add { line }, call)) => netpolicy::reply_add(call, Broker::add(request.sender, line.as_str())),
-            Ok((netpolicy::Request::Remove { line }, call)) => netpolicy::reply_remove(call, Broker::remove(request.sender, line.as_str())),
+            Ok((netpolicy::Request::Add { line }, call)) => {
+                let added = Broker::add(request.sender, line.as_str());
+                if added.is_ok() { broker.prefer(true, now); }
+                netpolicy::reply_add(call, added)
+            }
+            Ok((netpolicy::Request::Remove { line }, call)) => {
+                let removed = Broker::remove(request.sender, line.as_str());
+                if removed.is_ok_and(|n| n > 0) { broker.prefer(true, now); }
+                netpolicy::reply_remove(call, removed)
+            }
         };
     }
 }

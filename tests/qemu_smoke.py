@@ -1165,6 +1165,30 @@ def shell_suite(vm):
     keys(b"\r", "requires: files")
     print("PASS: cd and pwd: the prompt names the directory, a script runs by its name and ls lists it, a missing one is "
           "refused; Tab completed a path", flush=True)
+    # > and >> (000-APP-0074): what a command prints goes into a file, from the current directory; >> adds to it. A console
+    # program runs to its end into it (dmesg); a line that starts ERROR: stays on the screen; a script writes a file so
+    # only with `requires: files`.
+    require(vm.command("ls data > ram:l.txt"), "BYTES WRITTEN TO ram:l.txt")
+    listing = vm.command("cat ram:l.txt")
+    assert re.search(r"(?im)^sum\.msh ", listing) and listing.count("ENTRIES, ") == 1, listing
+    require(vm.command("ls data >> ram:l.txt"), "BYTES ADDED TO ram:l.txt")
+    assert vm.command("cat ram:l.txt").count("ENTRIES, ") == 2
+    at("cd ram:", "MIND ram:> ")
+    require(at("dmesg -s init > d.txt", "MIND ram:> "), "BYTES WRITTEN TO ram:d.txt")
+    at("cd", "MIND> ")
+    require(vm.command("cat ram:d.txt"), "[INIT] STARTED ")
+    out = vm.command("cat ram:missing.txt > ram:e.txt")
+    require(out, "ERROR: CAT: NOT FOUND")
+    require(out, "0 BYTES WRITTEN TO ram:e.txt")
+    require(vm.command("ls > data/no/such.txt"), "ERROR: > /data/no/such.txt: NOT FOUND")
+    require(vm.command("ls > a b"), "ERROR: ONE FILE AFTER > OR >>, AT THE END OF THE LINE")
+    out = vm.command("msh data/redirect0.msh")
+    require(out, "SCRIPT FAILED: > needs `requires: files` in the script (LINE 2)")
+    assert "not reached" not in out, out
+    require(vm.command("msh data/redirect1.msh"), "redirected")
+    require(vm.command("cat ram:script.txt"), "ENTRIES, ")
+    print("PASS: > and >>: a command's output into a file and added to it, a program's (dmesg) run to its end, an "
+          "error line kept on the screen, a script writes one only with requires: files", flush=True)
     # poweroff and shutdown (000-APP-0065): reboot --off by the names people look for. -f writes the caches and turns the
     # machine off without stopping the services: QEMU ends. The suite's last step.
     for name in ("poweroff", "shutdown"):
@@ -1246,6 +1270,15 @@ for task in ps()? {
 }
 if !contains(running, "logd") { fail("logd is not running") }
 print("vfs_server runs; {len(running)} services; ps printed {len(lines(out))} lines")
+""",
+    "redirect0.msh": """#!msh
+ls data > ram:script.txt
+print("not reached")
+""",
+    "redirect1.msh": """#!msh
+requires: files
+ls data > ram:script.txt
+print("redirected")
 """,
     "net0.msh": """#!msh
 ping 10.0.2.2
@@ -2015,9 +2048,26 @@ def fm_check(vm):
             break
         time.sleep(.1)
     assert heap_used(vm) == baseline
+    # A script (000-APP-0067): `fm <file>` opens its directory on it; on the shell's screen fm holds no shell's commands,
+    # so Enter says how to run it, and views nothing.
+    require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")
+    vm.send("fm ram:fmrun.msh\n")
+    vm.expect("CURRENT=fmrun.msh", after="[FM] READY")
+    vm.send_bytes(b"\r")
+    for _ in range(20):
+        time.sleep(.3)
+        screen = screen_text(vm)
+        vm.serial(enter=False)
+        if any(canon("Type msh ram:fmrun.msh in the shell") in row for row in screen):
+            break
+    assert any(canon("Type msh ram:fmrun.msh in the shell") in row for row in screen), screen
+    vm.send_bytes(b"\x1b[21~")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
+    time.sleep(.1); vm.collect(); vm.output = ""
+    require(vm.command("rm ram:fmrun.msh"), "OK")  # the RAM disk empty again for vfs_check
     print("PASS: fm: two panels with sizes and dates, the built-in viewer, EFI/BOOT and back, a program started from the panel in front and fm back after it, "
           "Ctrl+Z from it to the shell, the command line, Ctrl+O, Ctrl+F1 and Ctrl+P, "
-          "the mouse (click, double click, wheel, the cell under it inverted)", flush=True)
+          "the mouse (click, double click, wheel, the cell under it inverted); Enter on a script says to run it in the shell", flush=True)
     vfs_check(vm)
     console_check(vm)
 
@@ -2926,6 +2976,12 @@ def cid_raw(data):
     return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(data).digest()).decode().lower().rstrip("=")
 
 
+def guest_seconds(vm):
+    """The guest's uptime in whole seconds, from `uptime`'s "up H:MM:SS"."""
+    hours, minutes, seconds = re.search(r"^up (\d+):(\d\d):(\d\d)", vm.command("uptime"), re.M).groups()
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+
+
 def store_suite(vm):
     """Main tasks 300-302 (storage track): the block store through the `blocks` tool and the shell's client (badge
     get, put and publish). An object of 4 MiB + 1 byte (the pattern of tests/dag_host.rs) gets the root an independent
@@ -2935,6 +2991,13 @@ def store_suite(vm):
     def blocks(args, timeout=240):
         vm.send(f"blocks {args}\n")
         return vm.expect("MIND> ", timeout=timeout, after=f"blocks {args}\n")
+
+    def whole(args, expected):
+        # The 4 MiB object goes through SHA-256 in the guest: under TCG on the slowest machine listed for the group
+        # (DESKTOP-i7-930-wsl-u24, aarch64) a check took longer than 240 s (requests-STO.md). Its time is printed.
+        started = time.monotonic()
+        require(blocks(args, timeout=900), expected)
+        print(f"TIME: blocks {args.split()[0]} of the 4 MiB object took {time.monotonic() - started:.0f} s by the host's clock", flush=True)
     ready = "[BLOCKSTORE] READY BLOCKS=0 NAMES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0"
     logs = vm.service_logs("blockstore", ready)
     require(logs, ready)
@@ -2943,8 +3006,8 @@ def store_suite(vm):
     require(blocks("stat"), "BLOCKS=0 NAMES=0 BYTES=0 SECTORS=1/16384 CORRUPT=0 DAMAGED=0 CAPACITY=4096")
     # Height 2: a root over two nodes of height 1 (256 chunks and 1 chunk).
     root = "bafyreiczboab4oohlzcsoyt6wuxoz3r5m2z5blyi5pj46ah6q2pyc3d5ai"
-    require(blocks("pattern 4194305"), f"PUT {root} SIZE 4194305")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole("pattern 4194305", f"PUT {root} SIZE 4194305")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     # A file: its CID is the raw CID of its bytes, and it comes back the same.
     require(vm.command("write ram:note.txt hello store"), "WROTE 12 BYTES")
     note = cid_raw(b"hello store\n")
@@ -2986,7 +3049,7 @@ def store_suite(vm):
     first = blocks("collect")
     assert re.search(r"COLLECTED 0 BLOCKS [0-2] NAMES [0-2] SECTORS", first), first
     require(blocks("resolve obj"), f"obj VERSION 3 ROOT {root}")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store: a 4 MiB object gets the reference root and reads back; a file round trip; a client that may only "
           "read is refused put and publish; names by compare-and-swap, only complete roots; a full medium refused; a restarted "
           "store finds blocks and names again", flush=True)
@@ -2995,7 +3058,11 @@ def store_suite(vm):
     require(vm.command("write ram:loose.txt never named"), "WROTE 12 BYTES")
     loose = cid_raw(b"never named\n")
     require(blocks("put ram:loose.txt"), f"PUT {loose} SIZE 12")
-    time.sleep(61)
+    # The lease runs by the guest's clock, which falls behind the host's on a busy machine (303-STO-0017): wait until
+    # 62 s have passed there since just after the put (uptime counts whole seconds).
+    since = guest_seconds(vm)
+    time.sleep(55)
+    while guest_seconds(vm) < since + 62: time.sleep(2)
     # The medium is full of blocks whose leases have ended: new ones get room from the collection the first put starts.
     require(blocks("fill 120", timeout=600), "FILLED 120 BLOCKS")
     # The new blocks' leases run: an explicit collection right after frees no block (before the long check below).
@@ -3036,7 +3103,7 @@ def store_suite(vm):
     require(blocks("history obj"), "obj VERSION 4 REMOVED")
     require(blocks("resolve copy"), f"copy VERSION 1 ROOT {root}")
     require(blocks("pins"), "0 PINS")
-    require(blocks(f"check {root} pattern"), "CHECKED 4194305 BYTES = PATTERN")
+    whole(f"check {root} pattern", "CHECKED 4194305 BYTES = PATTERN")
     print("PASS: block store retention: a name keeps its versions, an owner its quota, a pin its object until unpinned; "
           "a removed name retains nothing and mounts again as removed", flush=True)
     # 304-STO-0007: several names at once, all or none, read at one point between commits.
@@ -5158,6 +5225,26 @@ def policy_edit_check(vm, web_port):
           "a line that is not policy refused, a line removed; the changed policy in the broker's private directory, which the shell cannot open", flush=True)
 
 
+def flow_bounds_check(vm, web_port):
+    """750-NET-0014: a policy line may give the largest term and volume its numbers hold, and a grant's own term, not a
+    default, ends a connection it holds while a lasting grant's connection goes on (brief and lasting copy netcheck)."""
+    lasting = int(re.search(r"PID=(\d+) NAME=lasting", vm.command(f"run lasting hold:10.0.2.2:{web_port}:40 &"))[1])
+    vm.program_logs(lasting, "NETCHECK HOLDING", 40)
+    require(vm.command("netgrants"), f"lasting RULES=1 LEFT={(2**32 - 1) // 1000} S")
+    require(vm.command("dmesg -s netpolicy"), f"TO lasting: 1 RULES, {2**32 - 1} S, {2**64 - 1} BYTES")
+    brief = int(re.search(r"PID=(\d+) NAME=brief", vm.command(f"run brief hold:10.0.2.2:{web_port}:60 &"))[1])
+    text = vm.program_logs(brief, "NETCHECK HOLDING", 40)
+    held = time.monotonic()
+    text += vm.program_logs(brief, f"NETCHECK hold:10.0.2.2:{web_port}:60 ", 120)
+    assert re.search(fr"NETCHECK hold:10.0.2.2:{web_port}:60 (NO GRANT|Denied|NoSocket|Closed)", text) and time.monotonic() - held < 30, text
+    badge = re.search(r"GRANT (\d+) TO brief: 1 RULES, 10 S", vm.command("dmesg -s netpolicy"))
+    assert badge, vm.command("dmesg -s netpolicy")
+    require(vm.command("dmesg -s netstack"), f"[NETSTACK] GRANT {badge[1]} ENDED, 1 SOCKETS CLOSED")
+    require(vm.program_logs(lasting, f"NETCHECK hold:10.0.2.2:{web_port}:40 ", 160), f"NETCHECK hold:10.0.2.2:{web_port}:40 OK")
+    print("PASS: flow bounds: a policy line gives the largest term and volume its numbers hold (4294967295 s, 2^64-1 bytes); "
+          "a 10 s term ends the connection its grant holds, while a lasting grant holds its connection for 40 s", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -5182,9 +5269,14 @@ def download_check(args, disk):
     tls_port, rogue_port = secure.server_address[1], rogue.server_address[1]
     held = hold_server(small)  # answers only when the test lets it: downloads that overlap (109-NET-0010)
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
+    service = _service_server(certificates)
+    _expired_certificate(certificates)
+    expired, _ = _https_server(certificates, "expired")
+    service_port, expired_port = service.server_address[1], expired.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1])))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1]))
+                                        + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
     (disk / "notls.msh").write_text(f"#!msh\nrequires: console network file parse\ndownload data/n.bin https://10.0.2.2:{tls_port}/small.bin\n")
@@ -5203,15 +5295,70 @@ def download_check(args, disk):
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
+        service_runs(vm, service_port)
+        pinned_runs(vm, certificates, service_port, rogue_port, expired_port)
     finally:
         vm.close()
         held.go.set()
         stall.go.set()
-        for server in (release, secure, rogue, held, stall):
+        for server in (release, secure, rogue, held, stall, service, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
         shutil.rmtree(certificates, ignore_errors=True)
         (Path(tempfile.gettempdir()) / f"mind-core-download-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def service_runs(vm, port):
+    """750-NET-0019: HTTP for services over one TLS session of the TLS service: a JSON POST with its chunked answer,
+    100 more requests on the same connection, and a stream the server holds for 55 s before its body."""
+    _Service.served, _Service.stream_seconds, _Service.held = 0, 55, 0.0
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/heartbeat --post {{\"agent\":\"mind\"}} --repeat 100 --stream --idle 75 --json\n")
+    out = vm.expect("MIND> ", timeout=600, after="WEBCHECK DONE")
+    require(out, 'WEBCHECK POST 200 20 BYTES {"ok":true,"got":16}')
+    # The answer's JSON as the parser service reads it (750-NET-0021).
+    for line in ('WEBCHECK JSON 0 Object IN -1 KEY "" TEXT ""', 'WEBCHECK JSON 1 True IN 0 KEY "ok" TEXT ""', 'WEBCHECK JSON 2 Number IN 0 KEY "got" TEXT "16"',
+                 "WEBCHECK JSON 3 VALUES"):
+        require(out, line)
+    require(out, "WEBCHECK 101 REQUESTS ON ONE CONNECTION")
+    # The hold is the host's to measure: the guest's clock under TCG may run a little slow (54 s for 55).
+    stream = re.search(r"WEBCHECK STREAM 5 BYTES IN (\d+) S woken", out)
+    assert stream and _Service.held >= 55 and int(stream[1]) >= 50, (_Service.held, out)
+    assert _Service.served == 101, _Service.served
+    print("PASS: HTTP for services: over one TLS session, a JSON POST answered chunked, 100 more requests on the same "
+          f"connection, and a stream held {_Service.held:.0f} s ({stream[1]} s by the guest's clock) to its end", flush=True)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/command --json\n")
+    out = vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE")
+    for line in ('WEBCHECK JSON 1 Number IN 0 KEY "id" TEXT "7"', 'WEBCHECK JSON 3 Array IN 0 KEY "argv" TEXT ""', 'WEBCHECK JSON 5 String IN 3 KEY "" TEXT "-a"',
+                 'WEBCHECK JSON 8 String IN 7 KEY "LANG" TEXT "C"', "WEBCHECK JSON 9 VALUES"):
+        require(out, line)
+    vm.send(f"webcheck https://10.0.2.2:{port}/api/deep --json\n")
+    require(vm.expect("MIND> ", timeout=60, after="WEBCHECK DONE"), "WEBCHECK JSON REFUSED: Malformed")
+    require(vm.command("dmesg -s parse"), "[PARSE] REFUSED JSON FOR PID")
+    print("PASS: JSON in the parser service: a command read into its values with parents, keys and texts; 20 levels of "
+          "nesting refused and logged with the client's PID", flush=True)
+
+
+def pinned_runs(vm, certificates, port, rogue_port, expired_port):
+    """750-NET-0020: a server trusted by one of two pins (its leaf or its SPKI, tls.wit 1.2), its certificate's name,
+    validity and purpose still checked; a server that matches neither pin, a wrong name and an expired certificate refused."""
+    leaf, spki = _leaf_pin(certificates / "server.pem"), _spki_pin(certificates / "server.pem")
+    url = f"https://10.0.2.2:{port}/pinned"
+
+    def run(arguments, until):
+        vm.send(f"webcheck {arguments}\n")
+        return vm.expect("MIND> ", timeout=60, after=until)
+    require(run(f"{url} --pin leaf:{leaf}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    # The next pin second: a stale first pin does not matter while the second matches (rotation).
+    require(run(f"{url} --pin leaf:{'00' * 32} --pin spki:{spki}", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    require(run(f"{url} --pin spki:{spki} --name mind.test", "WEBCHECK DONE"), "WEBCHECK GET 200")
+    for arguments in (f"https://10.0.2.2:{rogue_port}/small.bin --pin leaf:{leaf} --pin spki:{spki}", f"{url} --pin leaf:{leaf} --name other.test",
+                      f"https://10.0.2.2:{expired_port}/x --pin leaf:{_leaf_pin(certificates / 'expired.pem')}"):
+        require(run(arguments, "WEBCHECK: TLS CONNECT"), "Certificate")
+    log = vm.command("dmesg -s tls")
+    for line in ("VERIFIED BY ITS PIN", "REFUSED: NOT A PINNED KEY OR CERTIFICATE", "REFUSED: CERTIFICATE NotValidForName", "REFUSED: CERTIFICATE Expired"):
+        require(log, line)
+    print("PASS: pinned servers: trusted by a leaf or an SPKI pin, the second pin of two accepted (rotation); a server matching "
+          "neither, a wrong name and an expired certificate refused", flush=True)
 
 
 def download_runs(vm, release, port, big, small, cut):
@@ -5224,7 +5371,9 @@ def download_runs(vm, release, port, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=900)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    # The resume's request and its head are logged (351-NET-0029), so a stall shows the step it stopped at.
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
@@ -5264,7 +5413,8 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
         return vm.expect("MIND> ", timeout=timeout, after=until)
     digest = hashlib.sha256(big).hexdigest()
     out = run(f"download data/tls.bin {url}/big.bin --pin {pins['server']} --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=1200)
-    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: DONE {size} BYTES IN"):
+    for line in (f"DOWNLOAD: CONNECTION CUT AT {cut} OF {size}, RESUMING", f"DOWNLOAD: ASKED FOR THE REST FROM BYTE {cut}",
+                 "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert secure.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], secure.requests
     log = vm.command("dmesg -s tls")
@@ -5459,9 +5609,10 @@ def net_suite(args, disk):
     # The policy broker's file: netcheck may reach the host's web server and ping the gateway; rogue (a copy) nothing;
     # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
-                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n")
-    shutil.copyfile(disk / "netcheck.elf", disk / "rogue.elf")
-    shutil.copyfile(disk / "netcheck.elf", disk / "named.elf")
+                                        f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
+                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
+    for copy in ("rogue", "named", "brief", "lasting"):
+        shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5517,6 +5668,14 @@ def net_suite(args, disk):
         for line in ("[NETPOLICY] named: www.mind.test IS 10.0.2.2", "[NETPOLICY] named: missing.example NOT RESOLVED (NotFound)", "TO named: 1 RULES, 3600 S"):
             require(log, line)
         policy_edit_check(vm, web_port)
+        # The stack's sockets (000-NET-0013, socket.wit 2.4): a grant lists its own open connection, established, with
+        # the address, port, badge and the bytes it moved; a program without a grant lists nothing.
+        listed = vm.command(f"netcheck open:10.0.2.2:{web_port} sockets")
+        require(listed, f"NETCHECK open:10.0.2.2:{web_port} OK")
+        assert re.search(fr"NETCHECK SOCKET \d+ Tcp LOCAL \d+ REMOTE 10\.0\.2\.2:{web_port} Established BADGE \d+ SENT 16 RECEIVED \d+ CARD 0\n", listed.replace("\r", "")), listed
+        require(listed, "NETCHECK 1 SOCKETS")
+        require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
+        flow_bounds_check(vm, web_port)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
@@ -5571,7 +5730,10 @@ def net_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-net-{args.cpus}cpu.log").write_text(vm.log)
     download_check(args, disk)
     # Two cards on two user-mode networks (issue 105): a driver instance and an interface each, flows routed by network,
-    # and one driver's restart leaves the other card working and gives the new instance its own card back.
+    # and one driver's restart leaves the other card working and gives the new instance its own card back. netcheck
+    # sends datagrams to a TEST-NET address, on neither card's network, to show which card is the default (550-NET-0025).
+    with open(disk / "netpolicy.txt", "a") as policy:
+        policy.write("netcheck 192.0.2.1 udp 9\n")
     web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
     web.daemon_threads = True
     threading.Thread(target=web.serve_forever, daemon=True).start()
@@ -5597,6 +5759,45 @@ def net_suite(args, disk):
         assert after[1][0] - before[1][0] >= 6 and after[0][0] - before[0][0] < 3, (before, after)  # the second network's card
         require(vm.command(f"fetch 10.0.2.2:{web_port} /first"), "hello from the host: /first")
         assert frames()[0][0] - after[0][0] >= 3, (after, frames())
+        # A card's link down and up again (550-NET-0023): its address and its connections go, the default route moves
+        # to the other card; back up, it gets a lease again and the default route returns.
+        vm.hmp("set_link n0 off")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 0 LINK DOWN: ADDRESS DROPPED")
+        require(vm.command(f"fetch 10.0.3.2:{web_port} /while-down"), "hello from the host: /while-down")
+        vm.hmp("set_link n0 on")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] CARD 0 LINK UP, WAITING FOR DHCP")
+        require(vm.command(f"fetch 10.0.2.2:{web_port} /back"), "hello from the host: /back")
+        # The default card (550-NET-0025): wired cards before the station, the first with a gateway; the policy's
+        # `default card 1` makes card 1 the default while its link is up, and the rule takes over while it is down.
+        def default_sends(card):
+            before = frames()
+            require(vm.command("netcheck " + " ".join(["udp:192.0.2.1:9"] * 6)), "NETCHECK udp:192.0.2.1:9 OK")
+            after = frames()
+            other = 1 - card
+            assert after[card][0] - before[card][0] >= 6 and after[other][0] - before[other][0] < 3, (card, before, after)
+        cards = vm.command("netcheck cards")
+        for line in ("NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT", "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED", "NETCHECK CARD 2 Wireless"):
+            require(cards, line)
+        assert "PREFERRED" not in cards, cards
+        default_sends(0)
+        require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
+        require(log, "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
+        require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] DEFAULT CARD 1 FROM THE POLICY")
+        require(vm.command("netcheck cards"), "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED PREFERRED DEFAULT")
+        default_sends(1)
+        vm.hmp("set_link n1 off")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
+        default_sends(0)
+        vm.hmp("set_link n1 on")
+        require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1"), "DEFAULT ROUTE: CARD 1")
+        require(policy_answer(vm, "netpolicy add default card 3", "y"), "NETPOLICY: Invalid")
+        require(policy_answer(vm, "netpolicy remove default card 1", "y"), "NETPOLICY: REMOVED 1 LINE(S)")
+        log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0")
+        require(log, "[NETSTACK] NO CARD PREFERRED")
+        default_sends(0)
         # The second driver dies: the first card keeps working, the restarted instance drives the second card again.
         require(vm.command(f"kill {vm.services()['virtio_net#1']}", raw=True), "KILLED PID=")
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
@@ -5662,12 +5863,84 @@ def _certificates(directory):
         run("x509", "-req", "-in", f"{server}.csr", "-CA", f"{ca}.pem", "-CAkey", f"{ca}.key", "-CAcreateserial", "-out", f"{server}.pem", "-days", "2", "-extfile", "names.cnf")
 
 
+def _expired_certificate(directory):
+    # A server certificate from the test CA for the same names, valid only in January 2020 (750-NET-0020): `openssl ca`
+    # takes explicit dates, which `openssl x509 -req` of OpenSSL 3.0 does not.
+    def run(*command):
+        subprocess.run(["openssl", *command], cwd=directory, check=True, capture_output=True)
+    (directory / "index.txt").write_text("")
+    (directory / "serial.txt").write_text("1000\n")
+    (directory / "ca.cnf").write_text("[ca]\ndefault_ca = test\n[test]\ndatabase = index.txt\nnew_certs_dir = .\nserial = serial.txt\n"
+                                      "default_md = sha256\npolicy = any\nunique_subject = no\n[any]\ncommonName = supplied\n")
+    run("req", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "expired.key", "-out", "expired.csr", "-subj", "/CN=mind.test")
+    run("ca", "-batch", "-config", "ca.cnf", "-cert", "ca.pem", "-keyfile", "ca.key", "-in", "expired.csr", "-out", "expired.pem", "-notext",
+        "-startdate", "20200101000000Z", "-enddate", "20200102000000Z", "-extfile", "names.cnf")
+
+
+def _leaf_pin(pem):
+    # The SHA-256 of a certificate's DER (a leaf pin, tls.wit 1.2).
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem.read_text())).hexdigest()
+
+
 class _Https(_Http):
     def do_GET(self):
         peer = self.request.getpeercert()
         client = dict(item[0] for item in peer["subject"])["commonName"] if peer else "nobody"
         body = f"hello from the host: {self.path} to {client}\n".encode()
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+
+
+class _Service(http.server.BaseHTTPRequestHandler):
+    """An HTTP/1.1 service for webcheck (750-NET-0019): keeps the connection, answers chunked, holds a stream."""
+    protocol_version = "HTTP/1.1"
+    stream_seconds = 55
+    held = 0.0  # how long the last stream was silent, by the host's clock
+    served = 0
+
+    def _chunked(self, body):
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        for piece in (body[:7], body[7:]):
+            if piece:
+                self.wfile.write(b"%x;piece=1\r\n%s\r\n" % (len(piece), piece))
+        self.wfile.write(b"0\r\nX-Served: %d\r\n\r\n" % type(self).served)
+        type(self).served += 1
+
+    def do_POST(self):
+        data = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        ok = self.headers.get("Authorization") == "Bearer webcheck" and json.loads(data) == {"agent": "mind"}
+        self._chunked(json.dumps({"ok": ok, "got": len(data)}, separators=(",", ":")).encode())
+
+    def do_GET(self):
+        if self.headers.get("X-Stream"):
+            # A wake-up stream: the head at once, the body only after stream_seconds of silence.
+            self.send_response(200); self.send_header("Transfer-Encoding", "chunked"); self.end_headers(); self.wfile.flush()
+            started = time.monotonic()
+            time.sleep(type(self).stream_seconds)
+            self.wfile.write(b"5\r\nwoken\r\n0\r\n\r\n"); self.wfile.flush()
+            type(self).held = time.monotonic() - started
+            return
+        if self.path.endswith("/command"):
+            # A command as the Effector agent would get one (750-NET-0021).
+            self._chunked(b'{"id":7,"kind":"exec","argv":["uname","-a"],"timeout":30,"env":{"LANG":"C"}}')
+            return
+        if self.path.endswith("/deep"):
+            self._chunked(b"[" * 20 + b"]" * 20)
+            return
+        self._chunked(b"request %d" % type(self).served)
+
+    def log_message(self, *args):
+        pass
+
+
+def _service_server(directory):
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / "server.pem", directory / "server.key")
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Service)
+    server.daemon_threads = True
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
 
 
 def _https_server(directory, certificate):
@@ -6084,16 +6357,18 @@ def wm_suite(vm):
         x, y, w, h = state()[2][window]
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
-    shell_re = re.compile(r'\[WM\] WINDOW (\d+) PID \d+ TEXT \d+X\d+ "shell"')
+    # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
         # Ctrl+Alt+F5: the shell opens its window (it takes the key; wm never sees it); in front, as a new window is.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         vm.hmp("sendkey ctrl-alt-f5")
         vm.serial(enter=False)
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        window = int((set(shell_re.findall("".join(seen))) - before).pop())
+        window = int((shells("".join(seen)) - before).pop())
         while window not in state()[2] or state()[1] != window:
             wait()
         return window
@@ -6174,13 +6449,13 @@ def wm_suite(vm):
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
         # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
-        before = set(shell_re.findall("".join(seen)))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
         keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
-        while not set(shell_re.findall("".join(seen))) - before:
+        while not shells("".join(seen)) - before:
             wait('"shell"', lines=0)
-        menu_shell = int((set(shell_re.findall("".join(seen))) - before).pop())
+        menu_shell = int((shells("".join(seen)) - before).pop())
         until(f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
@@ -6315,6 +6590,7 @@ def wm_suite(vm):
     moved = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for py in range(48, 400, 8) for px in range(0, 1280, 8))
     assert moved > 16, moved
     require(vm.command("rm data/wm.conf"), "OK")
+    require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
           "desktop; the aurora pattern at speed 20 moves fast", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
@@ -6326,7 +6602,7 @@ def wm_suite(vm):
         out = wait("[WM] WINDOW", lines=0)
     out = "".join(seen)
     # wm starts without the shell's window: it opens only when asked (211-APP-0045).
-    assert not shell_re.findall(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
+    assert not shells(out) and "THE SHELL'S WINDOW OPENED" not in vm.log, out[-1500:]
     started = dict(re.findall(r"\[WM\] STARTED (\w+) PID (\d+) WITH", out))
     wm_pid = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
     windows = {int(m[0]): m for m in windows_re.findall(out)}
@@ -6334,7 +6610,7 @@ def wm_suite(vm):
     fm, clock, top = by_name["fm"], by_name["clock"], by_name["top"]
     # Programs get what wm holds and they ask for: fm the user's files, top system information; not top's
     # lifecycle client, which wm does not hold.
-    require(out, f"STARTED fm PID {started['fm']} WITH window,files")
+    require(out, f"STARTED fm PID {started['fm']} WITH window,files,sysinfo,shell")
     require(out, f"STARTED top PID {started['top']} WITH window,sysinfo WITHOUT lifecycle")
     assert windows[clock][2:5] == ("PIXELS", "320", "176") and windows[fm][2] == "TEXT", windows
     time.sleep(1.5)  # the text programs drew at the size of their frames
@@ -6580,19 +6856,22 @@ def wm_suite(vm):
         # at that cell, and data/wm.conf keeps it; then back to 100% and auto.
         require("".join(seen), "[WM] SCALE 100% (AUTO): CELLS OF 8X16 PIXELS ON 1280X800")
         before = state()[2]
-        # With a window in front, its title leaves the top bar no room for Settings: they are in more ▼'s menu, which a
-        # click opens; a click on their entry opens them, as Alt+S does.
+        # With a window in front, its title leaves the top bar no room for every item: those before Settings go into
+        # more ▼'s menu, which a click opens; Settings stay on the bar, right of more ▼ (the maintainer's word), and a click
+        # on them opens them, as Alt+S does.
         bar = screen_has("more ▼")[0]
+        assert bar.index(canon("more ▼")) < bar.index(canon("Alt+S settings")), bar
         point(bar.index(canon("more ▼")) + 1, 0)
         mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
         assert mode == "MORE", mode
-        rows = screen_has("Alt+S settings")
-        y = next(i for i, row in enumerate(rows) if i > 0 and canon("Alt+S settings") in row)
-        point(rows[y].index(canon("Alt+S settings")) + 2, y)
+        rows = screen_has("Alt+0 fit")
+        assert any(canon("Alt+0 fit") in row for row in rows[1:]) and not any(canon("Alt+S settings") in row for row in rows[1:]), rows[:12]
+        keys("esc", text="MODE=NORMAL")
+        point(bar.index(canon("Alt+S settings")) + 2, 0)
         mode, _, _ = mouse("mouse_button 1", "mouse_button 0", lines=2)
         assert mode == "SETTINGS", mode
-        print("PASS: wm top bar: with a window in front, Settings are in more ▼'s menu, opened by a click, and a click on "
-              "their entry opens them", flush=True)
+        print("PASS: wm top bar: with a window in front, the items before Settings are in more ▼'s menu, opened by a click; "
+              "Settings stay on the bar right of it, and a click opens them", flush=True)
         keys(*["down"] * 5, text="SETTINGS=Screen")
         keys("ret", text="SETTINGS=Screen:Scale")
         screen_has("Scale       < auto (100%) >")
@@ -6781,29 +7060,39 @@ def wm_suite(vm):
                 if index + (level == 0):
                     keys(*["down"] * (index + (level == 0)))
             assert at() == name, (at(), name)
-            keys("ret")
-            found = reaction_re.findall(seen[-1])
-            assert found, (name, seen[-1][-1500:])
+            mark = len("".join(seen))
+            if name.split(">")[-1] in POWER:
+                # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
+                # window, in front as a new window is; meanwhile it passes wm's lines on no more, so Enter waits for no
+                # state line (the race of requests-APP, 2026-10-14). No: nothing happens, and wm's lines come again.
+                vm.hmp("sendkey ret")
+                vm.serial(enter=False)
+                command, question = POWER[name.split(">")[-1]]
+                screen = []
+                for _ in range(40):
+                    time.sleep(.3)
+                    screen = screen_text(vm)
+                    vm.serial(enter=False)
+                    if any(canon(question) in row for row in screen):
+                        break
+                else:
+                    raise AssertionError((name, screen))
+                assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
+                vm.hmp("sendkey n")
+                vm.serial(enter=False)
+                until(f'THE SHELL RAN "{command}"')
+                for _ in range(100):
+                    if reaction_re.findall("".join(seen)[mark:]):
+                        break
+                    time.sleep(.1)
+                    wait(lines=0)
+            else:
+                keys("ret")
+            found = reaction_re.findall("".join(seen)[mark:])
+            assert found, (name, "".join(seen)[mark:][-1500:])
             line, program, pid = found[-1]
             if program:
                 started.append(name.split(">")[-1])
-                if name.split(">")[-1] in POWER:
-                    # Restart and Turn off (000-APP-0065): console passes the command to the shell, which asks in its
-                    # window, in front as a new window is; meanwhile it passes wm's lines on no more. No: nothing happens.
-                    command, question = POWER[name.split(">")[-1]]
-                    screen = []
-                    for _ in range(40):
-                        time.sleep(.3)
-                        screen = screen_text(vm)
-                        vm.serial(enter=False)
-                        if any(canon(question) in row for row in screen):
-                            break
-                    else:
-                        raise AssertionError((name, screen))
-                    assert any(canon(f"{command}    (ASKED BY PID") in row for row in screen), screen
-                    vm.hmp("sendkey n")
-                    vm.serial(enter=False)
-                    until(f'THE SHELL RAN "{command}"')
                 # Its window (console's for a console program) comes: a program that runs unseen is no reaction.
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -6854,8 +7143,20 @@ def wm_suite(vm):
             if index:
                 keys("down", text=f"SETTINGS=Background:{row}")
             if row == "Image file":
-                keys("ret")
-                screen_has("Type the image's file here (BMP, PNG or JPEG), then Enter")
+                # Enter with nothing typed browses data/ for the picture (000-APP-0072); Esc goes back, Enter on a
+                # picture sets it; the picture row puts none back.
+                keys("ret", text="BROWSE=data:..")
+                screen_has("Choose the picture (BMP, PNG, JPEG): data")
+                keys("esc", text="SETTINGS=Background:Image file")
+                keys("f3", text="BROWSE=data:..")
+                keys("down", text="BROWSE=data:sky.bmp")
+                keys("down", text="BROWSE=data:sky.jpg")
+                keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
+                assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
+                keys("up", text="SETTINGS=Background:Picture")
+                keys("right", text="[WM] SETTINGS ")
+                assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
+                keys("down", text="SETTINGS=Background:Image file")
                 continue
             keys("ret", text="[WM] SETTINGS ")
             assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] != kept, (row, seen[-1])
@@ -6964,7 +7265,7 @@ def wm_suite(vm):
         front(console)
 
         # The shell's PID, from its windows so far: a window of its opened now may be logged before its title is set.
-        shell_ids = set(shell_re.findall("".join(seen)))
+        shell_ids = shells("".join(seen))
         shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shell_ids)
         for answer, logged_text in (("n", f'THE SHELL DECLINED "kill {target + BASE}"'), ("y", f'THE SHELL RAN "kill {target + BASE}"')):
             known = {m[0] for m in windows_re.findall("".join(seen))}
@@ -7001,7 +7302,7 @@ def wm_suite(vm):
         console_has("KILLED PID=")
 
     def run_line(command, text):
-        names = [{" ": "spc", "-": "minus"}.get(c, c) for c in command]
+        names = [{" ": "spc", "-": "minus", ":": "shift-semicolon", ".": "dot"}.get(c, c) for c in command]
         return keys("alt-r", *names, "ret", text=text)
 
     camera_window(lambda: run_line("camera", "STARTED camera"))
@@ -7017,6 +7318,64 @@ def wm_suite(vm):
     camera_window(lambda: (vm.send_bytes(b"camera\r"), wait(lines=7)))
     assert state()[1] == console, state()
     console_joined(console)
+
+    def fm_runs_a_script():
+        # 000-APP-0067: Enter on a script in fm asks in the shell's window; yes runs it there and fm shows its last line;
+        # no leaves it.
+        run_line("fm ram:fmrun.msh", "STARTED fm")
+        started_fm = re.findall(r"\[WM\] STARTED fm PID (\d+) WITH ([^\n]*)", "".join(seen))[-1]
+        assert "shell" in started_fm[1].split(","), started_fm
+        while not any(m[1] == started_fm[0] for m in windows_re.findall("".join(seen))):
+            wait("[WM] WINDOW", lines=0)
+        files = next(int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == started_fm[0])
+        while state()[1] != files:
+            wait()
+        time.sleep(1)  # fm drew its panels, the cursor on the script
+        shell_pid = next(m[1] for m in windows_re.findall("".join(seen)) if m[0] in shells("".join(seen)))
+        for answer, logged_text, shown in (("n", 'THE SHELL DECLINED "msh ram:fmrun.msh"', "not run: the answer in the shell's window was no"),
+                                           ("y", 'THE SHELL RAN "msh ram:fmrun.msh"', "fmrun.msh ran in the shell's window: FM RAN IT")):
+            known = {m[0] for m in windows_re.findall("".join(seen))}
+            vm.hmp("sendkey ret")
+            screen = []
+            for _ in range(40):
+                time.sleep(.3)
+                screen = screen_text(vm)
+                vm.serial(enter=False)
+                if any(canon("RUN IT? (Y/N)") in row for row in screen):
+                    break
+            else:
+                raise AssertionError(screen)
+            assert any(canon("msh ram:fmrun.msh    (ASKED BY PID") in row for row in screen), screen
+            vm.hmp(f"sendkey {answer}")
+            vm.serial(enter=False)
+            until(logged_text)
+            opened = []
+            for _ in range(100):
+                wait(lines=0)
+                opened = [int(m[0]) for m in windows_re.findall("".join(seen)) if m[1] == shell_pid and m[0] not in known]
+                if opened:
+                    break
+                time.sleep(.1)
+            asking = opened[-1]
+            while state()[1] != asking:
+                wait()
+            if answer == "y":
+                assert any(canon("FM RAN IT") in row for row in inside(asking)), inside(asking)
+            close_shell(asking)
+            front(files)
+            for _ in range(30):
+                time.sleep(.3)
+                rows = inside(files)
+                if any(canon(shown) in row for row in rows):
+                    break
+            else:
+                raise AssertionError((shown, rows))
+        keys("alt-w", text=f"CLOSE {files}")
+        until(f"GONE {files}")
+        print("PASS: wm: Enter on a script in fm asks in the shell's window; no leaves it, yes runs it there and fm shows "
+              "what it printed last", flush=True)
+
+    fm_runs_a_script()
     keys("alt-w", text=f"CLOSE {console}")
     until(f"GONE {console}")
     while console in state()[2]:

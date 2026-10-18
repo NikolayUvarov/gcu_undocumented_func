@@ -13,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:parse";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed: `malformed`, the bytes are not of the form asked for.
@@ -100,6 +100,52 @@ impl Wire for Model {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { models: Wire::decode(r)?, id: Wire::decode(r)?, entry_start: Wire::decode(r)?, entry_length: Wire::decode(r)?, files: Wire::decode(r)?, page: Wire::decode(r)? }) }
 }
 
+/// 1.3 (750-NET-0019): an HTTP/1.x response head as `http-head` says it, and `close`: whether the connection ends
+/// after the response (`Connection: close`, or HTTP/1.0 without `keep-alive`), for a client that keeps one
+/// connection for several requests. `http-head` stays for the clients of 1.2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HttpResponse { pub status: u16, pub has_length: bool, pub length: u64, pub has_range: bool, pub range_unsatisfied: bool, pub range_start: u64, pub range_end: u64, pub range_total: u64, pub chunked: bool, pub close: bool }
+impl Wire for HttpResponse {
+    const MAX: usize = <u16 as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.status.encode(w)?; self.has_length.encode(w)?; self.length.encode(w)?; self.has_range.encode(w)?; self.range_unsatisfied.encode(w)?; self.range_start.encode(w)?; self.range_end.encode(w)?; self.range_total.encode(w)?; self.chunked.encode(w)?; self.close.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { status: Wire::decode(r)?, has_length: Wire::decode(r)?, length: Wire::decode(r)?, has_range: Wire::decode(r)?, range_unsatisfied: Wire::decode(r)?, range_start: Wire::decode(r)?, range_end: Wire::decode(r)?, range_total: Wire::decode(r)?, chunked: Wire::decode(r)?, close: Wire::decode(r)? }) }
+}
+
+/// 1.4 (750-NET-0021): a JSON text (RFC 8259, UTF-8) read whole with `mind::json`, within its bounds: at most 1024
+/// values, nesting 16 deep, a key 64 bytes and a string 512 bytes once decoded; anything else is malformed. Its values
+/// in document order, 16 from `start` (a page fits a program's stack beside its own buffers): each with its kind, the index of the object or array it is in (65535 for the
+/// outermost), its member's key (empty in an array), and for a string its text, for a number its lexeme as written.
+/// The client still checks the tree against what it expects (MC-11.5); a key that comes twice is the client's to
+/// refuse.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum JsonKind { #[default] Object = 0, Array = 1, String = 2, Number = 3, True = 4, False = 5, Null = 6 }
+impl JsonKind {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Object), 1 => Some(Self::Array), 2 => Some(Self::String), 3 => Some(Self::Number), 4 => Some(Self::True), 5 => Some(Self::False), 6 => Some(Self::Null), _ => None } }
+}
+impl Wire for JsonKind {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsonValue { pub kind: JsonKind, pub parent: u16, pub key: Text<64>, pub text: Text<512> }
+impl Wire for JsonValue {
+    const MAX: usize = <JsonKind as Wire>::MAX + <u16 as Wire>::MAX + <Text<64> as Wire>::MAX + <Text<512> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.kind.encode(w)?; self.parent.encode(w)?; self.key.encode(w)?; self.text.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { kind: Wire::decode(r)?, parent: Wire::decode(r)?, key: Wire::decode(r)?, text: Wire::decode(r)? }) }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsonPage { pub values: u32, pub page: List<JsonValue, 16> }
+impl Wire for JsonPage {
+    const MAX: usize = <u32 as Wire>::MAX + <List<JsonValue, 16> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.values.encode(w)?; self.page.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { values: Wire::decode(r)?, page: Wire::decode(r)? }) }
+}
+
 /// The head of an HTTP response: its status line and header lines, without the blank line that ends them.
 pub fn http_head(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpHead, Error>> {
     let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
@@ -163,6 +209,35 @@ pub fn model(endpoint: Endpoint, text: &[u8], index: u32, start: u32) -> Result<
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Model as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+pub fn http_response(endpoint: Endpoint, head: &[u8]) -> Result<core::result::Result<HttpResponse, Error>> {
+    let mut buffer = Pages::new(12288).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<8192>(head, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 39, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <HttpResponse as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+pub fn json(endpoint: Endpoint, text: &[u8], start: u32) -> Result<core::result::Result<JsonPage, Error>> {
+    let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_bytes::<16384>(text, &mut w).ok_or(SysError::Invalid)?;
+        start.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 9334, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <JsonPage as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 60010;
 
@@ -173,6 +248,8 @@ pub enum Request<'a> {
     Channel { file: &'a [u8] },
     Manifest { text: &'a [u8], start: u32 },
     Model { text: &'a [u8], index: u32, start: u32 },
+    HttpResponse { head: &'a [u8] },
+    Json { text: &'a [u8], start: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -218,6 +295,23 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Model { text, index, start }, call))
         }
+        5 => {
+            let (call, length) = wire::take_buffer(request, cap, 39, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let head = codec::decode_bytes::<8192>(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::HttpResponse { head }, call))
+        }
+        6 => {
+            let (call, length) = wire::take_buffer(request, cap, 9334, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let text = codec::decode_bytes::<16384>(&mut r).ok_or(Reject::Invalid)?;
+            let start = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Json { text, start }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -235,6 +329,14 @@ pub fn reply_manifest(call: Call, value: core::result::Result<&Manifest, Error>)
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_model(call: Call, value: core::result::Result<&Model, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_http_response(call: Call, value: core::result::Result<&HttpResponse, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_json(call: Call, value: core::result::Result<&JsonPage, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

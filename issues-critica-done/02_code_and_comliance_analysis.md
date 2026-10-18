@@ -77,3 +77,28 @@
 3. **Поправки к следующей редакции Конституции (v1.7) и RFC 001 (v0.5):**
    * Добавить префикс `MC-` непосредственно в заголовки всех пунктов статей 1–12 и убрать битые гиперссылки на `../const_discusstion_1.3/`[cite: 3].
    * Уточнить протокол вытесняемого отзыва (`MC-3.6` + `MC-5.4`) и механизм административного освобождения квоты `Uncertain`-операций при безвозвратной гибели внешнего узла (RFC 001 §7.5)[cite: 3].
+
+---
+
+## Review (2026-10-14, the kernel session)
+
+Every claim was checked against `main` dfc42ee, including who calls the code. A crash scenario is real only if a caller can reach it, and here one layer decides several of them: `block_protocol::span` (`libmind/src/block_protocol.rs`) holds every block request to 1–128 sectors (`BLOCK_MAX_SECTORS`) and a buffer of exactly that size, and `block::serve` is the drivers' only caller.
+
+| § | Claim | Verdict | What the code shows | Where it went |
+|---|---|---|---|---|
+| 1 | The summary of what follows the Constitution | true | — | — |
+| 2.1.1 | `ata`: BSY waits without a bound | true | `command` :46, `flush` :89 | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.1.2 | `ata`: waits counted in port reads, not time | true | :26, :38, :55; `monotonic_ns` is available, and `nvme` and `usb_host` already wait to a deadline | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.1.3 | `ata`: `count as u8` and a short transfer | partly true | The pattern is there, but `span` keeps `count` in 1–128 with a matching buffer, so no request reaches it. Worth a check of its own anyway; the comment "up to 256 sectors" is stale | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.2.1 | `ahci`: a panic past the DMA buffer | partly true | It cannot happen today: 128 sectors fill the 64 KiB after `DATA` exactly. It is a hidden coupling between `BLOCK_MAX_SECTORS` and `init`'s `AHCI_DMA_BYTES`; changing either would panic | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.2.2 | `ahci`: the handoff's result ignored | true | :32; the wait for BOHC.BB is missing too | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.2.3 | `ahci`: 10 ms steps where x86 has a 1 ms tick | true | It costs time, not correctness | [requests-DRV.md](../issues/requests-DRV.md) |
+| 2.3.1 | `hda.rs`: Apple's and Cirrus's IDs and coefficients inline | true; the remedy no | `hwdocs/` holds facts the hardware cannot report, and these are keyed by IDs it does report. A const table in the driver fits | [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) |
+| 2.3.2 | `hda.rs`: CORB overflow | partly true | `verb` waits for its response, so one verb is in flight; overflow needs 255 stalled verbs in a row. The real fault is near it: a response arriving after a timeout is taken for the next verb's, and every later answer is shifted | [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) |
+| 2.3.3 | `hda.rs`: `unwrap()` in `configure` | false as a crash | The path holds only nodes found in the list, so it cannot be None. It can still go, by keeping the index | [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) |
+| 3.1 | `app`: `static mut` | true | Accessed only through raw pointers with volatile reads and writes, so no fault today | [requests-APP.md](../issues/requests-APP.md) |
+| 3.1 | `app`: `background_task` not `-> !`; the stack without a return slot | partly true | `-> !` is missing. The stack claim is false: :47–48 leave the slot, and alignment is as SysV asks | [requests-APP.md](../issues/requests-APP.md) |
+| 3.2 | `app`, `app2`: their own drawing in place of `mind::gfx::Screen` and `Decimal` | true | `app2` already uses `Decimal` | [requests-APP.md](../issues/requests-APP.md) |
+| 3.2 | `app2`: "RETURNING TO KERNEL"; `as_mut_slice` | true | `dzen-clock` has the same words, and a test checks them | [requests-APP.md](../issues/requests-APP.md) |
+| 4.1 | `02_build.sh`: `virtio_input` twice | true | :69 and :92; the staging loops copy it twice | [000-KRN-0107](../issues/000-KRN-0107-a-build-entry-and-comments-that-went-stale.md) |
+| 4.2 | The run scripts give QEMU an AC97 only; aarch64 has no audio device | true for x86; the aarch64 part no | `audio_gw` is built for x86 only, so a device on aarch64 would do nothing | [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) |

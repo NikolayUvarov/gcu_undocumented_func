@@ -164,20 +164,22 @@ fn main(_info: &'static BootInfo) {
         (Some("check"), Some(text), compare, None) => {
             let Some(root) = cid(text) else { return };
             let against = match compare { None => false, Some("pattern") => true, Some(other) => { mind::println!("blocks: check <cid> [pattern], not {}", other); return } };
-            let size = match dag::complete(&mut remote, &root, buffer) { Ok(size) => size, Err(e) => return report("check", e, &remote) };
-            let mut at = 0;
-            while at < size {
-                let n = match dag::read_at(&mut remote, &root, at, data, buffer) { Ok(n) => n, Err(e) => return report("check", e, &remote) };
-                if against {
-                    let mut expected = [0u8; 256];
-                    for (k, part) in data[..n].chunks(256).enumerate() {
-                        pattern(at + (k * 256) as u64, &mut expected[..part.len()]);
-                        if part != &expected[..part.len()] { mind::println!("blocks: check: differs from the pattern near byte {}", at + (k * 256) as u64); return; }
-                    }
+            // Each node once and each chunk in one get, in order (300-STO-0016); the first byte unlike the pattern stops it.
+            let mut differs = None;
+            let checked = dag::each_chunk(&mut remote, &root, buffer, data, |at, chunk| {
+                if !against { return Ok(()); }
+                let mut expected = [0u8; 256];
+                for (k, part) in chunk.chunks(256).enumerate() {
+                    pattern(at + (k * 256) as u64, &mut expected[..part.len()]);
+                    if part != &expected[..part.len()] { differs = Some(at + (k * 256) as u64); return Err(dag::Error::Shape); }
                 }
-                at += n as u64;
+                Ok(())
+            });
+            match (checked, differs) {
+                (_, Some(at)) => mind::println!("blocks: check: differs from the pattern near byte {}", at),
+                (Ok(size), None) => mind::println!("CHECKED {} BYTES{}", size, if against { " = PATTERN" } else { "" }),
+                (Err(e), None) => report("check", e, &remote),
             }
-            mind::println!("CHECKED {} BYTES{}", size, if against { " = PATTERN" } else { "" });
         }
         (Some("publish"), Some(name), Some(text), expected) => {
             let Some(root) = cid(text) else { return };
