@@ -55,6 +55,7 @@ const WIFI_CARD: usize = 4;
 const RADIOS: [&str; 2] = ["bcm_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
+const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
@@ -102,7 +103,7 @@ const ARGS_KEPT: usize = 24;
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               boot: idl_init::Boot }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
@@ -203,7 +204,8 @@ impl Init {
             mind::println!("[INIT] {} STILL RUNNING: DMA RETAINED, NO RESTART", unit_name(index));
             return Err(Error::Other(ERR_BUSY));
         }
-        if let Some(device) = self.devices[index] {
+        // The driver's second device too (virtio_input's keyboard, audio_gw's second HD Audio function): one DMA region.
+        for device in [self.devices[index], self.others[index]].into_iter().flatten() {
             if let Err(error) = platform::quiesce(device) {
                 self.quarantined[index] = true;
                 mind::println!("[INIT] {} QUIESCE FAILED: {:?}; DMA RETAINED, NO RESTART", unit_name(index), error);
@@ -263,6 +265,7 @@ impl Init {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
+            if let Some(device) = self.others[index] { platform::resume(device)?; }
             return self.spawn(index, plan);
         }
         let mut minted = Minted::new();
@@ -292,6 +295,7 @@ impl Init {
                     let Some(bar) = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()) else { continue };
                     grants.add(bar_slot, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
                     grants.add(irq_slot, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                    if nth == 1 { self.others[index] = Some(device); }
                     found += 1;
                 }
                 if found == 0 { return Err(Error::NotFound); }
@@ -445,6 +449,15 @@ impl Init {
                         grants.add(SLOT_DEV0, bar, 0);
                         if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                         grants.copy(SLOT_MEM, self.dma(index, HDA_DMA_BYTES)?, 0);
+                        // A second HD Audio function (the Ryzen's analog one beside its GPU's HDMI audio): BAR0 and its
+                        // line; the gateway drives the first with an output path (213-KRN-0127).
+                        if let Ok(second) = platform::find_device(0x04_03_00, 0xFF_FF_00, 1) {
+                            if let Ok(bar) = Self::bar(&mut minted, second, 0, CAP_KIND_MMIO) {
+                                grants.add(SLOT_DEV1, bar, 0);
+                                if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, second, 0) { grants.add(SLOT_AUDIO_IRQ1, irq, 0); }
+                                self.others[index] = Some(second);
+                            }
+                        }
                     }
                 }
                 // LEGACY: AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
@@ -831,7 +844,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false } };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).

@@ -61,7 +61,7 @@ The initial distribution ends when `init` logs `[INIT] PLATFORM PRIVILEGE DROPPE
 
 ## Kernel-side validation
 
-Whatever `init` asks for, the kernel only mints: port ranges inside 0x60, 0x64, 0x70–0x71, 0x1F0–0x1F7, 0x3F6, 0x3F8–0x3FF; IRQ lines 1–15 except 2; BARs and IRQ lines of enumerated PCI functions; the GOP framebuffer; DMA regions up to 8 MiB in total. PIC, PIT and PCI configuration ports are never handed out.
+Whatever `init` asks for, the kernel only mints: port ranges inside 0x60, 0x64, 0x70–0x71, 0x1F0–0x1F7, 0x3F6, 0x3F8–0x3FF; IRQ lines 1–15 except 2; BARs and IRQ lines of enumerated PCI functions; the GOP framebuffer; DMA regions up to 16 MiB in total. PIC, PIT and PCI configuration ports are never handed out.
 
 ## Realtek staged device control (213-KRN-0114)
 
