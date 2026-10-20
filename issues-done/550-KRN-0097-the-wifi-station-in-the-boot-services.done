@@ -1,6 +1,6 @@
-# 550-KRN-0097 — The Wi-Fi station in the boot services: `wlan`, its radio, `keystore`'s client, the stack's third card and `SLOT_WIFI`
+# 550-KRN-0097 — The Wi-Fi station in the boot services: `wlan`, its radio, `keystore`'s client, the stack's third card and `SLOT_WIFI` — done
 
-**Type:** `init`, ABI (`common/abi.rs`, ABI 10), tests · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made on the branch; the `net` suite, the gate and the MacBook Pro's run left) · **Blocked by:** — (on the MacBook Pro, `bcm_wifi` answers as a radio once 550-DRV-0027 is in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-2.3, MC-3.11, MC-12.4
+**Type:** `init`, ABI (`common/abi.rs`, ABI 10), tests · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — (on the MacBook Pro, `bcm_wifi` answers as a radio once 550-DRV-0027 is in `main`) · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-2.3, MC-3.11, MC-12.4
 
 ## Problem
 
@@ -37,14 +37,22 @@ A first version waited for the network track's code (8b102ac, prepared 2026-10-1
 
 ## Acceptance criteria
 
-- [ ] In the `net` suite with `wlansim` on the disk (x86 and aarch64):
+- [x] In the `net` suite with `wlansim` on the disk (x86 and aarch64):
   - `wlan` runs and holds the radio's client in slot 2, and `keystore`'s with badge 2 in slot 3;
   - no task but `init` (its keeper) and `wlansim` itself holds an endpoint `wlansim` serves.
-- [ ] `stat caps` shows `netstack`'s slot 4, and the shell's `SLOT_WIFI` with badge `0x300`, as clients of `wlan`.
-- [ ] Without `wlansim`, `wlan` is not started, and every other suite runs as before.
-- [ ] On the MacBook Pro with 550-DRV-0027: `wlan` holds `bcm_wifi`'s client, and `[WLAN] RADIO …` names its address.
+- [x] `stat caps` shows `netstack`'s slot 4, and the shell's `SLOT_WIFI` with badge `0x300`, as clients of `wlan`.
+- [x] Without `wlansim`, `wlan` is not started, and every other suite runs as before.
+- [x] On the MacBook Pro with 550-DRV-0027: `wlan` holds `bcm_wifi`'s client, and `[WLAN] RADIO …` names its address.
 - `netstack` finding three cards, and the join, are the network track's half (550-NET-0018). The shell's lending for `REQUEST_WIFI` is the tools track's (550-APP-0033).
+
+## Resolution
+
+In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, passed every group: the host groups and the timing-sensitive x86 groups on un-rizen-service, the other x86 groups on i9, aarch64 half on i9 and half on un-rizen-service. Two x86 groups timed out while other tracks' gates loaded both machines (load average 27 and 32 on 16 threads) and passed when run again on the same tree.
+
+- **QEMU.** `wifi_boot_check` passed in x86: "boot, display, network, TLS, shell, memory, clock" (`net` suite, un-rizen-service); aarch64: "files, network and TLS" (`net` suite, i9): `wlan` over `wlansim`'s client in slot 2 with `keystore`'s in slot 3, `netstack`'s slot 4 and the shell's `SLOT_WIFI` with badge `0x300`. Every other suite passed with `wlan` not started where `wlansim` is absent.
+- **The MacBook Pro.** The maintainer's boot of `fast-test` f1f30f6 on 2026-10-14 (`log:boot0001.log`, reported by the drivers track on `internal-dev-messages`): `wlan` started over `bcm_wifi` and logged `[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`; `bcm_wifi` then served `idl/wlanhw.wit` 1.1.
+- **ABI 10** carries `SLOT_WIFI`, `REQUEST_WIFI` and the boot images; ABI 11 (213-KRN-0114) keeps ABI 10's prefix.
 
 ## Related
 
-[550-NET-0018](550-NET-0018-the-station-service.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md), [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.md) (in the same change), 550-DRV-0027 (`bcm_wifi` as a radio), 550-APP-0033 (`wifi`), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).
+[550-NET-0018](../issues/550-NET-0018-the-station-service.md), [550-NET-0024](../issues/550-NET-0024-remembered-wi-fi-networks.md), [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.done) (in the same change), 550-DRV-0027 (`bcm_wifi` as a radio), 550-APP-0033 (`wifi`), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).

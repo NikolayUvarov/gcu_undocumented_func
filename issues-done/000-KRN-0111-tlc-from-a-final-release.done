@@ -1,6 +1,6 @@
-# 000-KRN-0111 — The models' TLC from a final release: v1.8.0's `tla2tools.jar` is rebuilt in place
+# 000-KRN-0111 — The models' TLC from a final release: v1.8.0's `tla2tools.jar` is rebuilt in place — done
 
-**Type:** script, third-party tool · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made on the branch; the gate left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9
+**Type:** script, third-party tool · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9
 
 ## Problem
 
@@ -24,7 +24,13 @@ The gate of b8a7b3d on un-rizen-service, 2026-10-14: `models (TLC)` failed with 
   - `CapRevokeMove`: no error, 6,263,047 distinct states;
   - `RevokeFlush` for x86 and for aarch64: no error;
   - the model before 167: `OneWriter` violated, as expected.
-- [ ] `models (TLC)` passes in the gate on a machine without the jar in its cache.
+- [x] `models (TLC)` passes in the gate on a machine without the jar in its cache.
+
+## Resolution
+
+In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, passed every group: the host groups and the timing-sensitive x86 groups on un-rizen-service, the other x86 groups on i9, aarch64 half on i9 and half on un-rizen-service. Two x86 groups timed out while other tracks' gates loaded both machines (load average 27 and 32 on 16 threads) and passed when run again on the same tree.
+
+- `models (TLC)` with TLC 1.7.4 passed on un-rizen-service, which fetched the 1.7.4 jar on 2026-10-14 (its cache held only the rebuilt 1.8.0 file), and again in this gate.
 
 ## Related
 

@@ -27,4 +27,4 @@ The network track's `ssh` service ([351-NET-0027](351-NET-0027-the-ssh-service.m
 
 ## Related
 
-[351-NET-0027](351-NET-0027-the-ssh-service.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.md), [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md), the APP request "the shell lending the SSH service's client" in [requests-APP.md](requests-APP.md).
+[351-NET-0027](351-NET-0027-the-ssh-service.md), [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done), [000-KRN-0109](../issues-done/000-KRN-0109-the-shells-clients-may-badge-for-programs.done), [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md), the APP request "the shell lending the SSH service's client" in [requests-APP.md](requests-APP.md).

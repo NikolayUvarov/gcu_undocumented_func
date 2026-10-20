@@ -1,10 +1,10 @@
 # 213-KRN-0123 — The RTL8852BE as a radio of `wlan`: its `wlanhw` endpoint after the driver's datapath is admitted
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the drivers track's 213-DRV-0032 (a persistent driver loop and admitted datapath); 213-KRN-0114 (the Realtek drivers started with DMA off, on `ASTRA`, not in `main`); [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) before transmission · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the drivers track's 213-DRV-0032 (a persistent driver loop and admitted datapath); [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) (the Realtek drivers started with DMA off, in `main` since 289e84b); [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) before transmission · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3
 
 ## Problem
 
-On the `ASTRA` branch, 213-KRN-0114 starts `rtw89_wifi` as a diagnostic: `init` lends it BAR2, retained DMA and a firmware reader, but no `SLOT_SERVICE`, and `init`'s list of radios holds only `bcm_wifi` and `wlansim` ([550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.md)). So the driver cannot become a station's radio. The request of 2026-10-16 is in [requests-KRN.md](requests-KRN.md); both target machines are in Uzbekistan, and `UZ` is this deployment's explicit first choice, not a default for other installations.
+213-KRN-0114 (from the `ASTRA` branch, in `main` since 289e84b) starts `rtw89_wifi` as a diagnostic: `init` lends it BAR2, retained DMA and a firmware reader, but no `SLOT_SERVICE`, and `init`'s list of radios holds only `bcm_wifi` and `wlansim` ([550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done)). So the driver cannot become a station's radio. The request of 2026-10-16 is in [requests-KRN.md](requests-KRN.md); both target machines are in Uzbekistan, and `UZ` is this deployment's explicit first choice, not a default for other installations.
 
 ## Plan
 
@@ -21,4 +21,4 @@ On the `ASTRA` branch, 213-KRN-0114 starts `rtw89_wifi` as a diagnostic: `init` 
 
 ## Related
 
-The drivers track's 213-DRV-0032 (on `ASTRA`), 213-KRN-0114 (on `ASTRA`), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.md), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).
+[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md), [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md), [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), [requests-NET.md](requests-NET.md), [requests-APP.md](requests-APP.md).
