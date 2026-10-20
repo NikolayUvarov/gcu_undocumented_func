@@ -1,6 +1,6 @@
 # 351-NET-0027 — The SSH service, and logins signed by the key service
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (`download sftp://` and its QEMU check built; the gate waits for the shell's part in `main`) · **Blocked by:** `APP`'s [351-APP-0084](351-APP-0084-the-shell-lends-the-ssh-client.md), the shell lending the SSH client (on the tools branch and `fast-test`, not yet in `main`); `KRN`'s part is in `main` (351-KRN-0115) · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (`download sftp://` gated on x86 and aarch64; one sub-criterion host-tested only) · **Blocked by:** the maintainer: whether `keystore`'s refusal of another form, host-tested only, closes it · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.4, Appendix B.6
 
 The second part of [351-NET-0004](351-NET-0004-ssh-client.md): the protocol of [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done) inside the system.
 
@@ -54,6 +54,18 @@ Built, for x86_64 and aarch64:
   - `KRN`: `init` starts `ssh` with `keystore`'s client badged `BADGE_KEY_SSH` in slot 4, and `SLOT_SSH` and `REQUEST_SSH` for the shell and programs (requests-KRN.md);
   - `APP`: the shell lends it (requests-APP.md);
   - this track: `download`'s `sftp://` through `SLOT_SSH`, and the `net` suite's check against OpenSSH's server on the host.
+
+## Progress (2026-10-20): gate 24
+
+- **Gate 24** (`627aab32`, with `main` abe3d70, where 351-APP-0084 is) passed `sftp_runs`:
+  - x86, "x86: boot, display, network…" on un-rizen;
+  - aarch64, "aarch64: files, network and TLS" on un-rizen.
+- **i7-930 has no OpenSSH server,** so its run of the x86 group skipped the check (`SKIP: download over SFTP needs OpenSSH's server …`) and passed the rest.
+- **Met:**
+  - the file read over SFTP with the device key, the host key matching its pin;
+  - a wrong pin and a server that does not know the key, refused;
+  - `keystore` logging each `ssh-login` signature.
+- **Left of the criteria:** `keystore` refusing data of another form in QEMU. Only the SSH service holds the badge that asks for `ssh-login`, and it sends only `ssh::login::signed_data`, so no program in the system can send another form. The refusal is checked by the host tests (`ssh/tests/login.rs`, `fits`) and read in the code (`keystore/src/main.rs`). Whether that is enough to close is the maintainer's to say.
 
 ## Progress (2026-10-20): `download sftp://`
 

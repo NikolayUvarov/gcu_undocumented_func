@@ -1,6 +1,6 @@
-# 351-NET-0022 — A TLS client that cannot present the device certificate
+# 351-NET-0022 — A TLS client that cannot present the device certificate — done
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the service's part and the QEMU check built) · **Blocked by:** `APP`'s [351-APP-0083](351-APP-0083-tls-without-the-device-certificate.md) in `main` (the shell lending the badged copy; on the tools branch and `fast-test`) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.9
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.9
 
 From the tools track's request in requests-NET.md ("A TLS client without the device certificate", 2026-10-09).
 
@@ -28,6 +28,13 @@ The shell lends its client of `tls` to a program that asks for `REQUEST_TLS` and
 - **The `tls` suite** (after the shell's `https -c`, which still sends the certificate): `webcheck` with `--client-cert` to the server that asks for one gets `Denied`, and `tls` logs `THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT`.
 - **Run locally** (x86, QEMU 8.2, TCG) on a merge with the tools branch: the `tls` suite passed, with `WEBCHECK: TLS CONNECT: Ok(Err(Denied))` and `tls`'s line for the program's PID. The gate waits for 351-APP-0083 in `main`.
 
+## Resolution
+
+- **The service** (in `main` since 2026-10-12): `tls` refuses `client-certificate` to a client badged `BADGE_TLS_NO_DEVICE` and logs it (`[TLS] PID n: THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT`); an unbadged client still gets it.
+- **The shell's part** is 351-APP-0083 (in `main` at 835c31c8): it lends programs a badged copy for `REQUEST_TLS`.
+- **The check** (`af75ed95`): `webcheck --client-cert`, run in the `tls` suite after the shell's `https -c`, which still sends the certificate. The program gets `Denied`, and `tls` logs the refusal.
+- **Gate 24 (`627aab32`, with `main` abe3d70)** passed the `tls` suite on x86 (i7-930 and un-rizen, "x86: boot, display, network, TLS…") and aarch64 (un-rizen, "aarch64: files, network and TLS").
+
 ## Related
 
-[351-NET-0002](../issues-done/351-NET-0002-https-for-programs.done), [351-APP-0017](../issues-done/351-APP-0017-shell-lends-the-tls-client.done), [docs/network/services.md](../docs/network/services.md).
+[351-NET-0002](351-NET-0002-https-for-programs.done), [351-APP-0017](351-APP-0017-shell-lends-the-tls-client.done), [docs/network/services.md](../docs/network/services.md).
