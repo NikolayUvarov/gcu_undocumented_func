@@ -1,6 +1,7 @@
 //! The requests above the frames, little-endian: hello; files put and got by offset and checked by SHA-256 at the end,
-//! an interrupted put resumed; a directory's listing; the log from a cursor; console bytes. `Client` is the master's
-//! side, `Files` and `FileService` the slave's. docs/link/protocol.md describes each payload.
+//! an interrupted put resumed; directories made, listed, moved and removed; the log from a cursor; console bytes;
+//! programs started, their output read from a cursor, stopped. `Client` is the master's side, `Files` and
+//! `FileService` the slave's. docs/link/protocol.md describes each payload.
 use crate::endpoint::{channel, code, kind, Error, Line, Master, Service};
 use crate::frame::MAX_PAYLOAD;
 use crate::sha256::Sha256;
@@ -10,6 +11,19 @@ pub const NAME_MAX: usize = 255;
 pub const MIN_PAYLOAD: usize = 64;
 /// The bytes a data request or answer carries besides the data: an offset.
 const DATA_HEAD: usize = 8;
+
+/// A run's state in an OUTPUT answer, and its exit code when the slave cannot learn it.
+pub const RUN_RUNNING: u8 = 0;
+pub const RUN_ENDED: u8 = 1;
+pub const RUN_STOPPED: u8 = 2;
+pub const EXIT_UNKNOWN: u32 = u32::MAX;
+/// The bytes an OUTPUT answer carries before the output: state, exit code, the output's offset.
+const OUTPUT_HEAD: usize = 13;
+
+/// A run's output from a cursor: its state, its exit code (EXIT_UNKNOWN until known), the offset of the first byte
+/// given (above the cursor when older bytes were dropped) and how many bytes were given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RunOutput { pub state: u8, pub exit: u32, pub from: u64, pub len: usize }
 
 /// What an end says of itself in its hello.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +153,88 @@ impl<L: Line> Client<L> {
         Ok((text.len(), next))
     }
 
+    /// Makes directory `path` and its missing parents; one that exists is no error.
+    pub fn mkdir(&mut self, path: &str) -> Result<(), Error> {
+        self.master.call(channel::FILES, kind::MKDIR, path.as_bytes(), &mut [0u8; 8]).map(|_| ())
+    }
+
+    /// Moves or renames `from` to `to`; an existing `to` (a file) is replaced only with `replace`.
+    pub fn rename(&mut self, from: &str, to: &str, replace: bool) -> Result<(), Error> {
+        if from.is_empty() || from.len() > NAME_MAX || to.len() > NAME_MAX { return Err(Error::TooBig); }
+        let mut p = [0u8; 2 + 2 * NAME_MAX];
+        p[0] = replace as u8;
+        p[1] = from.len() as u8;
+        p[2..2 + from.len()].copy_from_slice(from.as_bytes());
+        p[2 + from.len()..2 + from.len() + to.len()].copy_from_slice(to.as_bytes());
+        self.master.call(channel::FILES, kind::MOVE, &p[..2 + from.len() + to.len()], &mut [0u8; 8]).map(|_| ())
+    }
+
+    /// Removes directory `path`: an empty one, or with `recursive` everything in it.
+    pub fn rmdir(&mut self, path: &str, recursive: bool) -> Result<(), Error> {
+        let mut p = [0u8; 1 + NAME_MAX];
+        let n = path.len().min(NAME_MAX);
+        p[0] = recursive as u8;
+        p[1..1 + n].copy_from_slice(&path.as_bytes()[..n]);
+        self.master.call(channel::FILES, kind::RMDIR, &p[..1 + n], &mut [0u8; 8]).map(|_| ())
+    }
+
+    /// One page of directory `path`'s listing ("" the root) from `cursor`: "name\tsize\n" lines, a directory's
+    /// name ending in `/`; the next cursor, None at the end.
+    pub fn list_dir(&mut self, path: &str, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), Error> {
+        let mut p = [0u8; 4 + NAME_MAX];
+        let n = path.len().min(NAME_MAX);
+        p[..4].copy_from_slice(&cursor.to_le_bytes());
+        p[4..4 + n].copy_from_slice(&path.as_bytes()[..n]);
+        let mut r = [0u8; MAX_PAYLOAD];
+        let len = self.master.call(channel::FILES, kind::LIST_DIR, &p[..4 + n], &mut r)?;
+        let next = u32_at(&r[..len], 0).ok_or(Error::Protocol)?;
+        let text = &r[4..len];
+        out.get_mut(..text.len()).ok_or(Error::TooBig)?.copy_from_slice(text);
+        Ok((text.len(), (next != u32::MAX).then_some(next)))
+    }
+
+    /// Starts program `path` with `args` on the other end: the run's number and the program's PID.
+    pub fn run(&mut self, path: &str, args: &str) -> Result<(u32, u64), Error> {
+        if path.is_empty() || path.len() > NAME_MAX || 1 + path.len() + args.len() > self.chunk + DATA_HEAD { return Err(Error::TooBig); }
+        let mut p = [0u8; MAX_PAYLOAD];
+        p[0] = path.len() as u8;
+        p[1..1 + path.len()].copy_from_slice(path.as_bytes());
+        p[1 + path.len()..1 + path.len() + args.len()].copy_from_slice(args.as_bytes());
+        let mut r = [0u8; 64];
+        let n = self.master.call(channel::PROGRAMS, kind::RUN, &p[..1 + path.len() + args.len()], &mut r)?;
+        Ok((u32_at(&r[..n], 0).ok_or(Error::Protocol)?, u64_at(&r[..n], 4).ok_or(Error::Protocol)?))
+    }
+
+    /// Run `run`'s output from `cursor` into `out`, and its state.
+    pub fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, Error> {
+        let mut p = [0u8; 12];
+        p[..4].copy_from_slice(&run.to_le_bytes());
+        p[4..].copy_from_slice(&cursor.to_le_bytes());
+        let mut r = [0u8; MAX_PAYLOAD];
+        let n = self.master.call(channel::PROGRAMS, kind::OUTPUT, &p, &mut r)?;
+        if n < OUTPUT_HEAD { return Err(Error::Protocol); }
+        let from = u64_at(&r, 5).ok_or(Error::Protocol)?;
+        if from < cursor { return Err(Error::Protocol); }
+        let text = &r[OUTPUT_HEAD..n];
+        out.get_mut(..text.len()).ok_or(Error::TooBig)?.copy_from_slice(text);
+        Ok(RunOutput { state: r[0], exit: u32_at(&r, 1).ok_or(Error::Protocol)?, from, len: text.len() })
+    }
+
+    /// Stops run `run`'s program.
+    pub fn stop(&mut self, run: u32) -> Result<(), Error> {
+        self.master.call(channel::PROGRAMS, kind::STOP, &run.to_le_bytes(), &mut [0u8; 8]).map(|_| ())
+    }
+
+    /// One page of the runs the other end knows from `cursor`: "run\tpid\tstate\tname\n" lines; the next cursor.
+    pub fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), Error> {
+        let mut r = [0u8; MAX_PAYLOAD];
+        let n = self.master.call(channel::PROGRAMS, kind::RUNS, &cursor.to_le_bytes(), &mut r)?;
+        let next = u32_at(&r[..n], 0).ok_or(Error::Protocol)?;
+        let text = &r[4..n];
+        out.get_mut(..text.len()).ok_or(Error::TooBig)?.copy_from_slice(text);
+        Ok((text.len(), (next != u32::MAX).then_some(next)))
+    }
+
     /// Console bytes to the other end, its console's output since the last call back into `out`.
     pub fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut r = [0u8; MAX_PAYLOAD];
@@ -163,6 +259,21 @@ pub trait Files {
     fn delete(&mut self, _name: &str) -> Result<(), u8> { Err(code::UNSUPPORTED) }
     fn log(&mut self, _cursor: u64, _out: &mut [u8]) -> Result<(usize, u64), u8> { Err(code::UNSUPPORTED) }
     fn console(&mut self, _input: &[u8], _out: &mut [u8]) -> Result<usize, u8> { Err(code::UNSUPPORTED) }
+    /// Makes `path` and its missing parents; an existing directory is no error.
+    fn mkdir(&mut self, _path: &str) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// Moves `from` to `to`; an existing file `to` is replaced only with `replace` (EXISTS otherwise).
+    fn rename(&mut self, _from: &str, _to: &str, _replace: bool) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// Removes directory `path`, empty (NOT_EMPTY otherwise) or with `recursive` whole.
+    fn rmdir(&mut self, _path: &str, _recursive: bool) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// As `list` for directory `path` ("" the root), a directory's name ending in `/`.
+    fn list_dir(&mut self, _path: &str, _cursor: u32, _out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { Err(code::UNSUPPORTED) }
+    /// Starts program `path` with `args`: the run's number and the program's PID.
+    fn run(&mut self, _path: &str, _args: &str) -> Result<(u32, u64), u8> { Err(code::UNSUPPORTED) }
+    /// Run `run`'s output from `cursor` into `out`, and its state.
+    fn output(&mut self, _run: u32, _cursor: u64, _out: &mut [u8]) -> Result<RunOutput, u8> { Err(code::UNSUPPORTED) }
+    fn stop(&mut self, _run: u32) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// "run\tpid\tstate\tname\n" lines from entry `cursor`; the next cursor, None at the end.
+    fn runs(&mut self, _cursor: u32, _out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { Err(code::UNSUPPORTED) }
 }
 
 /// A store kept elsewhere (a static, so a large buffer is off the stack).
@@ -177,6 +288,14 @@ impl<F: Files + ?Sized> Files for &mut F {
     fn delete(&mut self, name: &str) -> Result<(), u8> { (**self).delete(name) }
     fn log(&mut self, cursor: u64, out: &mut [u8]) -> Result<(usize, u64), u8> { (**self).log(cursor, out) }
     fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, u8> { (**self).console(input, out) }
+    fn mkdir(&mut self, path: &str) -> Result<(), u8> { (**self).mkdir(path) }
+    fn rename(&mut self, from: &str, to: &str, replace: bool) -> Result<(), u8> { (**self).rename(from, to, replace) }
+    fn rmdir(&mut self, path: &str, recursive: bool) -> Result<(), u8> { (**self).rmdir(path, recursive) }
+    fn list_dir(&mut self, path: &str, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { (**self).list_dir(path, cursor, out) }
+    fn run(&mut self, path: &str, args: &str) -> Result<(u32, u64), u8> { (**self).run(path, args) }
+    fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { (**self).output(run, cursor, out) }
+    fn stop(&mut self, run: u32) -> Result<(), u8> { (**self).stop(run) }
+    fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { (**self).runs(cursor, out) }
 }
 
 /// A file's name as the slave takes it: one component, printable, none of `/ \ :` and not `.` or `..`.
@@ -184,6 +303,13 @@ pub fn plain_name(raw: &[u8]) -> Option<&str> {
     let name = core::str::from_utf8(raw).ok()?;
     let bad = |c: char| c.is_control() || matches!(c, '/' | '\\' | ':' | '\0');
     (!name.is_empty() && name.len() <= NAME_MAX && name != "." && name != ".." && !name.chars().any(bad)).then_some(name)
+}
+
+/// A path as the slave takes it (800-LNK-0010): plain names joined by single `/`, at most NAME_MAX bytes; no empty,
+/// `.` or `..` component, so it stays below the slave's directory.
+pub fn path_name(raw: &[u8]) -> Option<&str> {
+    let path = core::str::from_utf8(raw).ok()?;
+    (!path.is_empty() && path.len() <= NAME_MAX && path.split('/').all(|c| plain_name(c.as_bytes()).is_some())).then_some(path)
 }
 
 /// A put in progress: its name, size, the bytes written and their hash.
@@ -226,7 +352,7 @@ impl<F: Files> Service for FileService<F> {
             }
             (channel::FILES, kind::PUT_OPEN) => {
                 let size = u64_at(p, 0).ok_or(code::BAD_REQUEST)?;
-                let name = plain_name(&p[8..]).ok_or(code::DENIED)?;
+                let name = path_name(&p[8..]).ok_or(code::DENIED)?;
                 let same = |w: &Put| w.size == size && &w.name[..w.name_len] == name.as_bytes();
                 let resume = match &self.writing {
                     Some(w) if same(w) => w.done,
@@ -260,7 +386,7 @@ impl<F: Files> Service for FileService<F> {
                 if matches { Ok(0) } else { Err(code::MISMATCH) }
             }
             (channel::FILES, kind::GET_OPEN) => {
-                let name = plain_name(p).ok_or(code::DENIED)?;
+                let name = path_name(p).ok_or(code::DENIED)?;
                 let size = self.files.open(name)?;
                 self.reading = Some((size, 0, Sha256::new()));
                 reply[..8].copy_from_slice(&size.to_le_bytes());
@@ -282,12 +408,30 @@ impl<F: Files> Service for FileService<F> {
                 Ok(32)
             }
             (channel::FILES, kind::STAT) => {
-                let (size, digest) = self.files.stat(plain_name(p).ok_or(code::DENIED)?)?;
+                let (size, digest) = self.files.stat(path_name(p).ok_or(code::DENIED)?)?;
                 reply[..8].copy_from_slice(&size.to_le_bytes());
                 reply[8..40].copy_from_slice(&digest);
                 Ok(40)
             }
-            (channel::FILES, kind::DELETE) => self.files.delete(plain_name(p).ok_or(code::DENIED)?).map(|_| 0),
+            (channel::FILES, kind::DELETE) => self.files.delete(path_name(p).ok_or(code::DENIED)?).map(|_| 0),
+            (channel::FILES, kind::MKDIR) => self.files.mkdir(path_name(p).ok_or(code::DENIED)?).map(|_| 0),
+            (channel::FILES, kind::MOVE) => {
+                let (flags, len) = (*p.first().ok_or(code::BAD_REQUEST)?, *p.get(1).ok_or(code::BAD_REQUEST)? as usize);
+                let from = path_name(p.get(2..2 + len).ok_or(code::BAD_REQUEST)?).ok_or(code::DENIED)?;
+                let to = path_name(&p[2 + len..]).ok_or(code::DENIED)?;
+                self.files.rename(from, to, flags & 1 != 0).map(|_| 0)
+            }
+            (channel::FILES, kind::RMDIR) => {
+                let flags = *p.first().ok_or(code::BAD_REQUEST)?;
+                self.files.rmdir(path_name(&p[1..]).ok_or(code::DENIED)?, flags & 1 != 0).map(|_| 0)
+            }
+            (channel::FILES, kind::LIST_DIR) => {
+                let cursor = u32_at(p, 0).ok_or(code::BAD_REQUEST)?;
+                let path = if p.len() == 4 { "" } else { path_name(&p[4..]).ok_or(code::DENIED)? };
+                let (n, next) = self.files.list_dir(path, cursor, &mut reply[4..])?;
+                reply[..4].copy_from_slice(&next.unwrap_or(u32::MAX).to_le_bytes());
+                Ok(4 + n)
+            }
             (channel::FILES, kind::LIST) => {
                 let cursor = u32_at(p, 0).ok_or(code::BAD_REQUEST)?;
                 let (n, next) = self.files.list(cursor, &mut reply[4..])?;
@@ -301,6 +445,31 @@ impl<F: Files> Service for FileService<F> {
                 Ok(8 + n)
             }
             (channel::CONSOLE, kind::CONSOLE) => self.files.console(p, reply),
+            (channel::PROGRAMS, kind::RUN) => {
+                let len = *p.first().ok_or(code::BAD_REQUEST)? as usize;
+                let path = path_name(p.get(1..1 + len).ok_or(code::BAD_REQUEST)?).ok_or(code::DENIED)?;
+                let args = core::str::from_utf8(&p[1 + len..]).map_err(|_| code::BAD_REQUEST)?;
+                let (run, pid) = self.files.run(path, args)?;
+                reply[..4].copy_from_slice(&run.to_le_bytes());
+                reply[4..12].copy_from_slice(&pid.to_le_bytes());
+                Ok(12)
+            }
+            (channel::PROGRAMS, kind::OUTPUT) => {
+                let (run, cursor) = (u32_at(p, 0).ok_or(code::BAD_REQUEST)?, u64_at(p, 4).ok_or(code::BAD_REQUEST)?);
+                let o = self.files.output(run, cursor, &mut reply[OUTPUT_HEAD..])?;
+                if o.from < cursor { return Err(code::IO); }
+                reply[0] = o.state;
+                reply[1..5].copy_from_slice(&o.exit.to_le_bytes());
+                reply[5..13].copy_from_slice(&o.from.to_le_bytes());
+                Ok(OUTPUT_HEAD + o.len)
+            }
+            (channel::PROGRAMS, kind::STOP) => self.files.stop(u32_at(p, 0).ok_or(code::BAD_REQUEST)?).map(|_| 0),
+            (channel::PROGRAMS, kind::RUNS) => {
+                let cursor = u32_at(p, 0).ok_or(code::BAD_REQUEST)?;
+                let (n, next) = self.files.runs(cursor, &mut reply[4..])?;
+                reply[..4].copy_from_slice(&next.unwrap_or(u32::MAX).to_le_bytes());
+                Ok(4 + n)
+            }
             _ => Err(code::UNSUPPORTED),
         }
     }

@@ -14,7 +14,7 @@ The maintainer asked on 2026-10-20 that the agent on the other end of the RS-485
 1. **`init` lends `link` a loader client in `SLOT_LOADER` (5).** It is the client an application holds: no badge, so none of the loader's privileged requests.
    - A program `link` starts gets an application's standard grants and what `link` itself grants it in a launch session, which can only be what `link` holds.
    - So the cable gains no authority beyond what it has with `data/link/`: it may start a program, as any application may.
-2. **The link track's part** ([requests-LNK.md](requests-LNK.md), "Starting a program for the master"): a request in `link` and `mindlink` that starts a program from `data/link/` through a launch session, and returns its output over the console channel.
+2. **The link track's part** ([800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), "Starting a program for the master"): a request in `link` and `mindlink` that starts a program from `data/link/` through a launch session, and returns its output over the console channel.
 3. **Stopping a program** that does not end is not part of this task. It needs a grant to end the tasks `link` started, which is still to be decided (with [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md)).
 
 ## Acceptance criteria
@@ -28,4 +28,4 @@ The maintainer asked on 2026-10-20 that the agent on the other end of the RS-485
 
 ## Related
 
-[800-KRN-0128](800-KRN-0128-init-starts-usb-serial-and-link.md) (`link`'s other grants), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [requests-LNK.md](requests-LNK.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md).
+[800-KRN-0128](800-KRN-0128-init-starts-usb-serial-and-link.md) (`link`'s other grants), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md).
