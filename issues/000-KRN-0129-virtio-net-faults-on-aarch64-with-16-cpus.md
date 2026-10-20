@@ -1,6 +1,6 @@
 # 000-KRN-0129 — `virtio_net` faults at boot on aarch64 with 16 CPUs (a data abort), and the "16 CPUs" group fails
 
-**Type:** the network track's `netstack` (found) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the cause found; the fix is the network track's) · **Blocked by:** the request "The stack revokes a frame ring the driver may already map" in [requests-NET.md](requests-NET.md) · **Main task:** — · **Constitution:** MC-6.1, MC-12.1
+**Type:** the network track's `netstack` (found) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the cause found; the fix is the network track's) · **Blocked by:** [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md) (the request "The stack revokes a frame ring the driver may already map", numbered by the network track) · **Main task:** — · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 

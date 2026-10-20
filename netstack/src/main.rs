@@ -62,12 +62,15 @@ static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS
 // with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
 // without one, every frame is a call.
 struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64, deadline: Deadline }
-struct Shared { _pages: Pages, cap: usize, ring: Ring }
+// `answered`: the driver said it has the ring (its `attach` or a later kick answered `Ok`).
+struct Shared { _pages: Pages, cap: usize, ring: Ring, answered: bool }
 struct Rx<'a>(&'a [u8]);
 struct Tx<'a> { endpoint: Endpoint, index: usize, offload: bool, ring: Option<Ring>, queued: Option<&'a mut bool>, deadline: Deadline }
 
 impl Card {
-    // Lends the driver a fresh frame ring (at start, and after a driver restart lost the old one).
+    // Lends the driver a fresh frame ring (at start, and after the driver said it holds none: a restart lost the old
+    // one). A ring is revoked only when the driver said it does not hold it: it may map one whose `attach` had no answer
+    // in time, and its next access to a revoked ring faults (000-KRN-0129).
     fn attach(&mut self) {
         if let Some(old) = self.ring.take() { let _ = ipc::revoke(old.cap); let _ = ipc::drop_cap(old.cap); }
         let Some(pages) = Pages::new(netring::BYTES) else { return };
@@ -75,18 +78,22 @@ impl Card {
         ring.reset();
         let Ok(cap) = pages.share() else { return };
         match self.deadline.call(|| net::attach(self.endpoint, cap)) {
-            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = now_ms(); }
-            _ => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
+            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring, answered: true }); self.kicked = now_ms(); }
+            // Refused: the driver holds no mapping of it.
+            Ok(Err(_)) => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
+            // No answer in time: it stays lent, and the next kick (at once) says whether the driver has it.
+            Err(_) => { self.ring = Some(Shared { _pages: pages, cap, ring, answered: false }); self.kicked = 0; }
         }
     }
 
     // Wakes the driver for queued frames, and at least every 300 ms so it keeps serving the ring.
     fn kick(&mut self) {
-        let Some(shared) = self.ring.as_ref() else { return };
+        let Some(shared) = self.ring.as_mut() else { return };
         let now = now_ms();
         if !self.queued && !shared.ring.sending() && now - self.kicked < 300 { return; }
         self.queued = false; self.kicked = now;
         match self.deadline.call(|| net::kick(self.endpoint)) {
+            Ok(Ok(())) if !shared.answered => { shared.answered = true; mind::println!("[NETSTACK] CARD {}: THE DRIVER HAS OUR RING (A LATE ANSWER)", self.index); }
             Ok(Ok(())) => {}
             Ok(Err(_)) => { mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
             Err(_) => {} // the driver is restarting
@@ -234,7 +241,8 @@ impl Link {
                                          icmp::PacketBuffer::new(vec![icmp::PacketMetadata::EMPTY; 8], vec![0; 4096]));
         let _ = echo.bind(icmp::Endpoint::Ident(ICMP_IDENT));
         let icmp = sockets.add(echo);
-        mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, if card.ring.is_some() { " (FRAME RING)" } else { "" }, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
+        let ring = match card.ring.as_ref() { Some(shared) if shared.answered => " (FRAME RING)", Some(_) => " (FRAME RING LENT, NO ANSWER YET)", None => "" };
+        mind::println!("[NETSTACK] CARD {} READY{}{}, WAITING FOR DHCP", index, ring, if offers { " (CHECKSUM OFFLOAD AVAILABLE)" } else { "" });
         Some(Self { card, iface, sockets, dhcp, icmp, mac: info.mac, address: None, gateway: None, dns: None, leased: false, started: now_ms(),
                     up: info.link, checked: now_ms() })
     }
