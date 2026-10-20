@@ -5924,6 +5924,34 @@ def wifi_boot_check(vm):
 
 
 
+def ping_options_check(vm):
+    """ping's options (000-APP-0095): -c and -i, -f with no line for each reply, -w and a dot for each request lost,
+    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) goes out through QEMU's gateway to the host's network, which may answer
+    (some sandboxes answer every address) or not: the dots must be the requests lost either way."""
+    began = time.monotonic()
+    out = vm.command("ping -c 3 -i 0.5 10.0.2.2", timeout=20)
+    took = time.monotonic() - began
+    require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
+    assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
+    require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
+    assert "REPLY FROM" not in out, out[-1500:]
+    began = time.monotonic()
+    out = vm.command("ping -f -c 4 -w 0.2 192.0.2.1", timeout=30)
+    took = time.monotonic() - began
+    tally = re.search(r"(?:\n(\.+))?\nPING: 4 SENT, (\d) RECEIVED, (\d+)% LOST", out)
+    assert tally and len(tally[1] or "") == 4 - int(tally[2]) and int(tally[3]) == (4 - int(tally[2])) * 25, out[-1500:]
+    assert "REPLY FROM" not in out and took < 10, (took, out[-1500:])
+    require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
+    require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
+    vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.send_bytes(b"\x03")
+    out = vm.expect("MIND> ", timeout=10)
+    assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -5981,6 +6009,15 @@ def wifi_join_check(vm):
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
+    # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
+    # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
+    vm.send("wm\n")
+    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
@@ -6099,10 +6136,14 @@ def net_suite(args, disk):
         else:
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
-        # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
-        # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
+        ping_options_check(vm)
+        # wm's `show = net` line gives the frames a second (000-APP-0049): every card's as the stack counts them, the
+        # Wi-Fi station's too, from the shell (shell.wit 1.7, 000-APP-0096); the card client badged BADGE_COUNTERS the
+        # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
         vm.send("wm\n")
-        require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        rate = vm.expect(", THE FIRST RATE)", timeout=90)
+        # The station is a card of the stack only once joined: wifi_join_check counts it over Wi-Fi alone.
+        assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, [1-4] CARDS, 0 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)

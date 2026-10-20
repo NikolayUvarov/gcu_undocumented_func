@@ -75,3 +75,46 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
+
+## An echo request's size and payload, for `ping -s` and `-p` (000-APP-0095)
+
+**Recorded by:** the tools track (APP), 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode").
+
+### Problem
+
+- `socket.wit` `ping(address, timeout-ms)` sends 8 bytes of data, `MINDCORE` (`netstack`, `Stack::ping`). The caller cannot choose the size or the payload.
+- The reply is matched by its sequence alone. Its data is not compared with what was sent, and its size and TTL are not told.
+- So the shell's `ping` has `-c`, `-i`, `-w` and `-f` (000-APP-0095), but `-s size` and `-p pattern` say they wait for the stack.
+
+### Plan (a proposal; the network track decides)
+
+- **A new call in `socket.wit` 2.6**, for example `ping-with(address, timeout-ms, size, pattern)`:
+  - `size` is the data's bytes, 0 to 1472 (one frame on a 1500-byte MTU), or more if the stack fragments;
+  - `pattern` is up to 16 bytes, repeated over the data;
+  - the old `ping` stays, as `ping-with` with 8 bytes of `MINDCORE`.
+- **The answer:**
+  - the time;
+  - the reply's data size and TTL;
+  - whether its data matched what was sent.
+- **The budget:** a grant's `icmp` rule counts the bytes as a UDP rule does, so that a large size does not escape `bytes` in the policy.
+
+### What the tools track does then
+
+- `ping -s <size> -p <hex>` through it, and the reply's line with its size and TTL, `BAD DATA` when it did not match.
+- The `net` suite's check with a 1000-byte request to the gateway.
+
+## An echo request to a neighbour that never answers may hold the card's ICMP queue (000-APP-0095)
+
+**Recorded by:** the tools track (APP), 2026-10-20, while writing `ping`'s checks. **Found by reading the code; not reproduced.**
+
+### Problem
+
+- `Stack::ping` queues each echo request on the card's ICMP socket (`send_slice`).
+- smoltcp 0.14 (`storage/packet_buffer.rs`, `dequeue_with`) leaves a packet in the queue when its dispatch fails. A destination whose neighbour is not found fails with `NeighborPending` on every poll.
+- So a request to an address on the card's own network that no host has would stay at the head of the queue, ARP asked again once a second. The requests after it, to any address, would wait behind it. Once the 8 places are taken, `ping` would answer `Again`.
+- No suite sends one: the shell's `ping` checks use the gateway and an address beyond it.
+
+### Plan (a proposal; the network track decides)
+
+- **A check first:** in the `net` suite, `ping 10.0.2.200` (slirp answers ARP only for its own addresses), then `ping 10.0.2.2`, which should still answer.
+- **If it holds the queue:** drop a request whose neighbour is not found by its deadline, for example by giving each request its own ICMP socket, or by closing and opening the card's socket when a request ends in `Timeout`.

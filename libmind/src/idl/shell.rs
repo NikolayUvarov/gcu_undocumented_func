@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 6, 0);
+pub const VERSION: (u8, u8, u8) = (1, 7, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -30,6 +30,16 @@ impl Wire for Error {
     const MAX: usize = 1;
     fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// One card as the network stack counts its frames (1.7, 000-APP-0096): its index, whether it is the Wi-Fi station
+/// and the default card, and its frames sent and received since the stack started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CardCounters { pub card: u8, pub wireless: bool, pub default: bool, pub sent: u64, pub received: u64 }
+impl Wire for CardCounters {
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.card.encode(w)?; self.wireless.encode(w)?; self.default.encode(w)?; self.sent.encode(w)?; self.received.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { card: Wire::decode(r)?, wireless: Wire::decode(r)?, default: Wire::decode(r)?, sent: Wire::decode(r)?, received: Wire::decode(r)? }) }
 }
 
 /// Opens the shell's own window, as Ctrl+Alt+F5 does, unless it is open; answers its id in the window broker, for
@@ -113,6 +123,22 @@ pub fn boot_notice(endpoint: Endpoint) -> Result<core::result::Result<Text<240>,
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<240> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Every card's frames, the Wi-Fi station's too (1.7, 000-APP-0096): for the window manager the shell started, whose
+/// `show = net` line gives the frames a second. It reads only and reaches nothing on the network. `refused` for any
+/// other client; `unavailable`: no network stack.
+pub fn net_counters(endpoint: Endpoint) -> Result<core::result::Result<List<CardCounters, 4>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 78, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<CardCounters, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -122,6 +148,7 @@ pub enum Request {
     Battery,
     Wifi,
     BootNotice,
+    NetCounters,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -162,6 +189,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::BootNotice, call))
         }
+        7 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 78, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::NetCounters, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -191,4 +225,8 @@ pub fn reply_wifi(call: Call, value: core::result::Result<usize, Error>) -> Resu
 pub fn reply_boot_notice(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_str::<240>(value, w))
+}
+pub fn reply_net_counters(call: Call, value: core::result::Result<&[CardCounters], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<CardCounters, 4>(value, w))
 }

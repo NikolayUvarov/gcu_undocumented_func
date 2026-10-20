@@ -13,8 +13,9 @@ use mind::voice::russian::Dictionary;
 use mind::voice::synthesis::{self, Settings, Voice};
 use mind::voice::Resampler;
 
-// The voice (146 MB), its dictionary (13 MB) and the network's values for a sentence.
-mind::request!(REQUEST_CONSOLE, memory: 384);
+// The voice (146 MB), its dictionary (13 MB) and the network's values for a sentence, within the frame pool of a 512 MiB
+// machine (383 MiB since ABI 13): the loader refuses a request larger than its own quota.
+mind::request!(REQUEST_CONSOLE, memory: 320);
 
 const USAGE: &str = "Usage: speak [--speaker N] [--wav FILE] [--model FILE] [--dictionary FILE] [--ids] (text... | --file FILE)";
 const MODEL: &str = "models:tts-ru-vosk-0.7/voice.bin";
