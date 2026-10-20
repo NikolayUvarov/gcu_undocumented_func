@@ -1,6 +1,6 @@
 # 351-APP-0084 — The shell lends a client of the SSH service
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** — (`SLOT_SSH` and `REQUEST_SSH` are in `main`, 351-KRN-0115) · **Main task:** [351](351-update-and-provenance.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** — (`SLOT_SSH` and `REQUEST_SSH` are in `main`, 351-KRN-0115) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.4
 
 **Recorded by:** the network track (`NET`), 2026-10-14, in `requests-APP.md`, for [351-NET-0027](351-NET-0027-the-ssh-service.md). Numbered by the tools track on 2026-10-20, at the maintainer's word.
 

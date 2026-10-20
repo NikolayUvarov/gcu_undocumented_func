@@ -1,6 +1,6 @@
 # 351-APP-0088 — `files` reads the kernel from the slot that booted
 
-**Type:** tools (`files`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** — · **Main task:** [351](351-update-and-provenance.md) · **Roadmap:** track E · **Constitution:** MC-12.1
+**Type:** tools (`files`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track E · **Constitution:** MC-12.1
 
 **Recorded by:** the update track (`UPD`), 2026-10-11, in `requests-APP.md`, for [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done). Numbered by the tools track on 2026-10-20, at the maintainer's word.
 

@@ -1,6 +1,6 @@
 # 351-APP-0083 — The shell lends a TLS client that cannot present the device certificate
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** — (the right to badge `SLOT_TLS` is in `main` since ABI 10, 000-KRN-0109) · **Main task:** [351](351-update-and-provenance.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.4
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** — (the right to badge `SLOT_TLS` is in `main` since ABI 10, 000-KRN-0109) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.4
 
 **Recorded by:** the network track (`NET`), 2026-10-12, in `requests-APP.md`, for 351-NET-0022. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -23,4 +23,4 @@
 
 ## Related
 
-351-NET-0022 (`BADGE_TLS_NO_DEVICE`), [000-KRN-0109](../issues-done/000-KRN-0109-badged-clients-for-the-shell-to-lend.done) (`SLOT_TLS` with `CAP_BADGE`).
+351-NET-0022 (`BADGE_TLS_NO_DEVICE`), [000-KRN-0109](../issues-done/000-KRN-0109-the-shells-clients-may-badge-for-programs.done) (`SLOT_TLS` with `CAP_BADGE`).
