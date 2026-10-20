@@ -238,7 +238,7 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 ## A note: a launch session now holds every launch slot (000-KRN-0101)
 
-**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](../issues-done/000-KRN-0101-a-launch-session-holds-every-launch-slot.done), the tools track's request for 211-APP-0044.
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md), the tools track's request for 211-APP-0044.
 
 **What changed:** `loader`'s launch session keeps a grant for every launch slot and `SLOT_FIRMWARE` (18), not 5. `check`'s `launch: every slot` lends all 17 launch slots in one session.
 
@@ -246,7 +246,7 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 ## A note: `check`, `bench` and `kbench` stop when their console is gone (176-KRN-0103)
 
-**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done), the tools track's request for 000-APP-0056.
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md), the tools track's request for 000-APP-0056.
 
 **What changed:** libmind's `mind::output::gone()` says that the launcher lent an endpoint for the output and it is gone. The three tools look at it after each line they show: they write their log, saying they stopped because their console closed, and end with exit status 3. `check`'s `a tool's console closes` drops kbench's console after four pieces of output and sees it end.
 
@@ -287,6 +287,15 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 - The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
 - `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
 
+## Note: the station's client in `SLOT_WIFI`, a read-only card client and a badged TLS client for the shell to lend (550-KRN-0097, 000-KRN-0109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14. The kernel's side is on its branch and reaches `main` with its next gate (ABI 10).
+
+- **`SLOT_WIFI` (33)** holds `wlan`'s client with `BADGE_WIFI_CHANGE` while the station runs. The shell lends it in the same slot to a program that asks for `REQUEST_WIFI` (`wifi`, 550-APP-0033).
+- **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
+- **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
+- ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
+
 ## The shell lends a client of the SSH service (351-NET-0027)
 
 **Recorded by:** the network track (`NET`), 2026-10-14, for [351-NET-0027](351-NET-0027-the-ssh-service.md).
@@ -302,14 +311,3 @@ Once `init` gives the shell its client in `SLOT_SSH` and a request flag `REQUEST
 ### Acceptance criteria
 
 In the `net` suite, `download sftp://…` started from the shell reads a file from the host's OpenSSH server through the lent client.
-
-
-## Note: the station's client in `SLOT_WIFI`, a read-only card client and a badged TLS client for the shell to lend (550-KRN-0097, 000-KRN-0109)
-
-**Recorded by:** the kernel track (KRN), 2026-10-14. The kernel's side is on its branch and reaches `main` with its next gate (ABI 10).
-
-- **`SLOT_WIFI` (33)** holds `wlan`'s client with `BADGE_WIFI_CHANGE` while the station runs. The shell lends it in the same slot to a program that asks for `REQUEST_WIFI` (`wifi`, 550-APP-0033).
-- **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
-- **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
-- ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
-
