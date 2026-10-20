@@ -2753,12 +2753,13 @@ def dzen_suite(vm):
             assert other_color not in orbit.values(), "switching modes must restore the correct orbit brightness"
             reference = {point for point, color in orbit.items() if color == b"\x60\x60\x60"}
             assert len(reference) >= 6, "start reference tick must remain"
-            assert all(px > 0 and py > 0 and abs(px - py) <= 1 for px, py in reference), "cycle starts toward bottom right"
+            # 000-APP-0080: zero seconds point at the active hour's corner, the top right (yellow) at 19:35, in grey.
+            assert all(px > 0 and py < 0 and abs(px + py) <= 1 for px, py in reference), "cycle starts toward the hour's corner"
             small_ticks = sum(p == b"\x40\x40\x40" for p in orbit.values())
             if mode == "ticks":
                 assert small_ticks >= 35, "nine short 10-second ticks must be visible"
                 for index in range(1, 10):
-                    angle = 3 * math.pi / 4 + index * math.tau / 10
+                    angle = math.pi / 4 + index * math.tau / 10  # from the hour's corner, the top right
                     tx, ty = int(math.sin(angle) * half * 3 / 4), -int(math.cos(angle) * half * 3 / 4)
                     assert any(orbit.get((tx + dx, ty + dy)) in (b"\x40\x40\x40", b"\x80\x80\x80")
                                for dy in range(-2, 3) for dx in range(-2, 3)), index

@@ -69,6 +69,7 @@ fn pixel_face(info: &'static BootInfo) -> Next {
     let mut show_hints = true;
     let mut orbit_mode = OrbitMode::Off;
     let mut previous_mode = OrbitMode::Off;
+    let mut previous_corner = Face::DARK.hour;
     let mut cycle = Cycle::new();
     let mut previous_dot = None;
     let mut waiting = false;
@@ -153,17 +154,20 @@ fn pixel_face(info: &'static BootInfo) -> Next {
             print(b"[DZEN-CLOCK] WAITING FOR RTC...\r\n");
             waiting = true;
         }
+        // Zero seconds point at the active hour's corner, the face shown (000-APP-0080).
+        let corner = previous_face.hour;
         let dot = if orbit_mode != OrbitMode::Off {
             cycle
                 .phase(now)
-                .map(|phase| point_at(phase, view.half() * 3 / 4))
+                .map(|phase| point_at(phase, view.half() * 3 / 4, corner))
         } else {
             None
         };
-        if dot != previous_dot || orbit_mode != previous_mode {
-            view.cycle(previous_dot, dot, previous_mode, orbit_mode);
+        if dot != previous_dot || orbit_mode != previous_mode || corner != previous_corner {
+            view.cycle(previous_dot, dot, (previous_mode, previous_corner), (orbit_mode, corner));
             previous_dot = dot;
             previous_mode = orbit_mode;
+            previous_corner = corner;
         }
         // Sleep instead of polling continuously, including when digits are hidden.
         mind::time::sleep(100);
