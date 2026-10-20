@@ -40,6 +40,8 @@ Nothing runs at boot on the maintainer's request: the `diag/` scripts run only w
   - logs `[SHELL] AUTORUN ENDED OK`, or the failure as the script's own line shows it.
 - **Script runs report their end.** `msh`'s file runs and `execute` now return how they ended.
 - **`shell/src/main.rs`** runs it once, after the first frame's line (213-APP-0075), or at once on a shell with no screen, then prompts again.
+- **A busy file service never holds the shell.** Each try gives `vfs_server` 200 ms (`with_timeout`) and comes again a second later, for a minute; then `[SHELL] AUTORUN /autorun.msh NOT RUN: VFS NOT AVAILABLE`. A first version waited without a limit. On i9 a boot's first command then went unanswered for 8 s ("x86: RAM above 4 GiB", c09578e), though the load on i9 may have caused it.
+- **Keys typed while it runs** go to its Esc check, as for any script. The test boots without typing `ps` at the first prompt, and waits for the script's output and the prompt after it.
 - **The `display` suite's `autorun_check`** (x86) boots twice:
   - a script with `requires: files` writes `ram:autorun.txt`;
   - one without it fails at `>`;
