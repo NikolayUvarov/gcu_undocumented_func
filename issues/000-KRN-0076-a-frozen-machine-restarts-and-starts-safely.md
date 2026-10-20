@@ -1,6 +1,6 @@
 # 000-KRN-0076 — A frozen machine restarts on its own, and the next start leaves out what froze it
 
-**Type:** kernel, bootloader, `init` · **Owner:** kernel session (`KRN`, with `PRT` for the watchdog and the bootloader's lines) · **Priority:** P1 · **Status:** in progress (steps 1–3 on x86 made; the gate, the MacBook Pro run and aarch64's watchdog left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.3
+**Type:** kernel, bootloader, `init` · **Owner:** kernel session (`KRN`, with `PRT` for the watchdog and the bootloader's lines) · **Priority:** P1 · **Status:** in progress (steps 1–3 on x86 in `main` at 289e84b; the MacBook Pro's run and aarch64's watchdog left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.1, MC-6.3, MC-12.3
 
 ## Problem
 
@@ -64,6 +64,11 @@ Today a frozen machine stays frozen until the user holds the power button. The n
   - that boot was a safe start without the four services, ran past a minute and cleared its mark;
   - after `reboot` the boot was a normal one, `audio_gw` started.
 - **Left of steps 2 and 3:** the last line of the stopped run's log in the safe start's line, and the shell showing it (the tools track's part, a note in [requests-APP.md](requests-APP.md)); 173-KRN-0036's safe start on a key, which can use the same start.
+
+## Progress (2026-10-20)
+
+- Steps 1–3 on x86 are in `main` at 289e84b: "x86: the watchdog" passed on i9 in the gate of 10d3ec3, with every other group.
+- Left: the MacBook Pro's run, and a watchdog for aarch64.
 
 ## Related
 

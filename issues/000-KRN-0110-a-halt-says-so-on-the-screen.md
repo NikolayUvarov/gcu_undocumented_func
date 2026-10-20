@@ -1,6 +1,6 @@
 # 000-KRN-0110 — A halt says so on the screen: `MIND CORE: STOPPING THE SYSTEM...`
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made on the branch; the gate and the MacBook Pro's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.8, MC-12.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 289e84b; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.8, MC-12.3
 
 ## Problem
 
@@ -30,6 +30,11 @@ The maintainer, 2026-10-14: on the MacBook Pro, the shell's `stop` halts with no
 
 - [ ] The `normal` suite's `stop` check passes on x86 and aarch64.
 - [ ] On the MacBook Pro, `stop` leaves both lines on the screen, and the next boot is not a safe start.
+
+## Progress (2026-10-20)
+
+- [x] The `stop` check passed on x86 ("boot, display, network, TLS, shell, memory, clock", un-rizen-service) and on aarch64 ("programs, shell and four CPUs", i9) in the gate of 10d3ec3, now in `main` at 289e84b.
+- The MacBook Pro's run is left: both lines on the screen after `stop`, and the next boot not a safe start.
 
 ## Related
 

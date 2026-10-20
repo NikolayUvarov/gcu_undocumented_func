@@ -1,6 +1,6 @@
-# 000-KRN-0102 — `init` says how the boot went
+# 000-KRN-0102 — `init` says how the boot went — done
 
-**Type:** `init`, `init.wit` 1.4 · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made; the `bench` suite passes on x86; the gate left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-9.5, MC-12.3
+**Type:** `init`, `init.wit` 1.4 · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-9.5, MC-12.3
 
 ## Problem
 
@@ -15,8 +15,15 @@ The update track (requests-KRN.md, 2026-10-10, for [351-UPD-0007](../issues-done
 
 ## Acceptance criteria
 
-- [ ] **`check`'s services group (`bench` suite, x86 and aarch64):** `the boot` matches the `BootInfo` the program was given, on the suites' boot from the volume's root (not on trial).
+- [x] **`check`'s services group (`bench` suite, x86 and aarch64):** `the boot` matches the `BootInfo` the program was given, on the suites' boot from the volume's root (not on trial).
 - [ ] **A trial boot:** the update track's `update` check writes the confirmed record within seconds of `[INIT] TRIAL BOOT CONFIRMED` once the updater asks `boot` (351-UPD-0007's criterion). Until then the trial path is not tested here.
+
+## Resolution
+
+In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, passed every group: the host groups and the timing-sensitive x86 groups on un-rizen-service, the other x86 groups on i9, aarch64 half on i9 and half on un-rizen-service. Two x86 groups timed out while other tracks' gates loaded both machines (load average 27 and 32 on 16 threads) and passed when run again on the same tree.
+
+- `the boot` passed in x86: "keys, shell, tools" (`bench` suite, un-rizen-service); aarch64: "programs, shell and four CPUs" (`bench` suite, i9): every `check` row named here passes, as `check_tool_check` requires.
+- **Left to the update track:** the trial path, once the updater asks `boot` (351-UPD-0007's criterion). The note went to `UPD/` on `internal-dev-messages` on 2026-10-20, since its requests file was gone.
 
 ## Related
 

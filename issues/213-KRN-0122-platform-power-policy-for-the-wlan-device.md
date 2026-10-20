@@ -30,4 +30,4 @@ A read-only Ubuntu run on the Ryzen (Effector operation `20261015233912.41787772
 
 ## Related
 
-The drivers track's 213-DRV-0032 (on `ASTRA`), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).
+[213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md), [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md), 174-KRN-0038 (the hardware report), [213](213-amd-ryzen-pc.md).

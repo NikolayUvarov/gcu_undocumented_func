@@ -100,5 +100,5 @@ Every claim was checked against `main` dfc42ee, including who calls the code. A 
 | 3.1 | `app`: `background_task` not `-> !`; the stack without a return slot | partly true | `-> !` is missing. The stack claim is false: :47–48 leave the slot, and alignment is as SysV asks | [requests-APP.md](../issues/requests-APP.md) |
 | 3.2 | `app`, `app2`: their own drawing in place of `mind::gfx::Screen` and `Decimal` | true | `app2` already uses `Decimal` | [requests-APP.md](../issues/requests-APP.md) |
 | 3.2 | `app2`: "RETURNING TO KERNEL"; `as_mut_slice` | true | `dzen-clock` has the same words, and a test checks them | [requests-APP.md](../issues/requests-APP.md) |
-| 4.1 | `02_build.sh`: `virtio_input` twice | true | :69 and :92; the staging loops copy it twice | [000-KRN-0107](../issues/000-KRN-0107-a-build-entry-and-comments-that-went-stale.md) |
+| 4.1 | `02_build.sh`: `virtio_input` twice | true | :69 and :92; the staging loops copy it twice | [000-KRN-0107](../issues-done/000-KRN-0107-a-build-entry-and-comments-that-went-stale.done) |
 | 4.2 | The run scripts give QEMU an AC97 only; aarch64 has no audio device | true for x86; the aarch64 part no | `audio_gw` is built for x86 only, so a device on aarch64 would do nothing | [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md) |

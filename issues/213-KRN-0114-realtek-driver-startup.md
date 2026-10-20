@@ -118,7 +118,7 @@ passing case in the normal host gate. No production guard or API was changed.
 
 [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md),
 [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md),
-[550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.md),
+[550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done),
 [213-KRN-0113](213-KRN-0113-realtek-boot-identification.md),
 [hardware audit](../issues-audit/2026-10-15-hardware-audit.md).
 
