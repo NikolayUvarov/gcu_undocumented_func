@@ -148,8 +148,15 @@ fn read_image(file: &File) -> Result<(Pages, usize), Error> {
 
 // Starts helper `name` (1.8, 109-KRN-0096) with the endpoint in RECEIVED_CAP moved into its SLOT_INIT and nothing else:
 // no standard clients, no screen, no log even in debug mode, no tasks or endpoints of its own. `--session` tells it so.
+// A helper is a boot service: on a disk with boot slots its file is the booted slot's, the copy the bootloader verified
+// against the manifest (109-KRN-0133).
 fn spawn_helper(name: &str) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
+    match BOOT_SLOT.load(core::sync::atomic::Ordering::Relaxed) {
+        BOOT_SLOT_A => { let _ = write!(path, "MIND/A/"); }
+        BOOT_SLOT_B => { let _ = write!(path, "MIND/B/"); }
+        _ => {}
+    }
     path_for(name.as_bytes(), &mut path)?;
     let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?;
     let (image, size) = read_image(&file)?;
@@ -292,7 +299,11 @@ fn programs() -> List<loader::Program, 128> {
 }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+// The slot this boot runs from (BootInfo.boot_slot), for the helpers' files.
+static BOOT_SLOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(BOOT_SLOT_ROOT);
+
+fn main(info: &'static BootInfo) {
+    BOOT_SLOT.store(info.boot_slot.slot, core::sync::atomic::Ordering::Relaxed);
     let _ = fs::prepare();
     mind::println!("[LOADER] READY");
     let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS] };
