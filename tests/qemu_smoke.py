@@ -5905,6 +5905,15 @@ def wifi_join_check(vm):
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
+    # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
+    # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
+    vm.send("wm\n")
+    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
@@ -6024,8 +6033,8 @@ def net_suite(args, disk):
         # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
         vm.send("wm\n")
         rate = vm.expect(", THE FIRST RATE)", timeout=90)
-        wireless = 1 if args.wlansim_elf else 0
-        assert re.search(rf"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, [1-4] CARDS, {wireless} WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+        # The station is a card of the stack only once joined: wifi_join_check counts it over Wi-Fi alone.
+        assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, [1-4] CARDS, 0 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)
