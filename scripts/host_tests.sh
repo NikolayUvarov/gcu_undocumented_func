@@ -8,7 +8,7 @@ rustc --edition=2021 --test tests/runtime.rs -o "$OUT/runtime-tests"
 "$OUT/runtime-tests"
 rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
-for test in heap keys tui viewer idl rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io; do
+for test in heap keys tui viewer idl record rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io bcm_txwait serial; do
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
@@ -17,6 +17,11 @@ cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
 cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target"
+cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
+cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end, over a pty and TCP (800-LNK-0004)
+# The multi-device firmware's logic: frames between the boards, credits, control commands, the LED (800-LNK-0005).
+cc -std=c11 -Wall -Wextra -Werror -O1 -o "$OUT/rp2-link-tests" devices/rp2-link/tests/host_test.c devices/rp2-link/src/bridge.c devices/rp2-link/src/control.c devices/rp2-link/src/led.c
+"$OUT/rp2-link-tests"
 # The SSH client against OpenSSH's server, which its tests start on 127.0.0.1 (351-NET-0026): needs openssh-server.
 cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.

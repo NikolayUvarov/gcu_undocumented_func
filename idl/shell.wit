@@ -2,7 +2,7 @@
 /// authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 /// (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
 /// asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3).
-package mind:shell@1.5.0;
+package mind:shell@1.6.0;
 
 interface shell {
     /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -33,4 +33,7 @@ interface shell {
     /// Settings start `wifi`; starting it there is the user's request to choose a network. `refused` for any other
     /// client; `unavailable`: the shell holds none (no radio, so no station). A word call, so it can carry the capability.
     wifi: func() -> result<borrow<endpoint>, error>;
+    /// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
+    /// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
+    boot-notice: func() -> result<string<240>, error>;
 }

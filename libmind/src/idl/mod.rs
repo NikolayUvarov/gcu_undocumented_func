@@ -17,6 +17,7 @@ pub mod net;
 pub mod netpolicy;
 pub mod parse;
 pub mod rtc;
+pub mod serial;
 pub mod shell;
 pub mod socket;
 pub mod ssh;

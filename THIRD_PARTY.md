@@ -66,6 +66,18 @@ The [RTL8852BE serial H2C notes](hwdocs/rtl8852be-h2c-runtime.md) also compare p
 
 MPL-2.0 is a file-level copyleft: it applies to those crates' own files, not to MIND Core. The exact versions are pinned in each `Cargo.lock`.
 
+## The MIND Link multi-device's firmware (built from fetched SDKs; on its own boards, in no system image)
+
+`devices/rp2-link/build.sh` builds UF2 files for RP2040 and RP2350 boards ([800-LNK-0005](issues/800-LNK-0005-the-rp2-multi-device-firmware.md)). The SDKs are not stored here: the maintainer's toolchain holds them. A UF2 file contains code from them, so one given to others must carry their notices.
+
+| Part | Version | Licence |
+|---|---|---|
+| [Raspberry Pi Pico SDK](https://github.com/raspberrypi/pico-sdk) (startup, clocks, PIO, multicore, the status LED's WS2812 driver), Copyright (c) 2020 Raspberry Pi (Trading) Ltd. | 2.2.0 | BSD-3-Clause |
+| [TinyUSB](https://github.com/hathach/tinyusb), as the SDK carries it, Copyright (c) 2019 Ha Thach (tinyusb.org) | 0.18 | MIT |
+
+- **The PIO serial programs** in `devices/rp2-link/src/line.pio` are written here, after the common pattern of a PIO UART shown in the RP2040 datasheet's PIO chapter.
+- **The USB identity:** the board uses [pid.codes](https://pid.codes)' test vendor and product ID (1209:0001), which is for development only. A product ID of its own is needed before the board is given to others.
+
 ## Speech models (fetched, not in this repository)
 
 The recognition and synthesis models of main tasks 250, 251 and 252 are not committed. `scripts/models.py` fetches them into a model cache and writes them to a model disk. [`models/manifest.toml`](models/manifest.toml) pins each one to a revision and records every file's SHA-256 with the model's source, licence and terms. The cache and the disk carry the same record in `MANIFEST.json`.

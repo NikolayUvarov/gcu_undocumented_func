@@ -129,15 +129,15 @@ after an error**:
   declaration is its first line after `#!msh` and comments: `requires: files network`, in the words of
   `mind::request!`:
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, and `>` or `>>` after a command (000-APP-0074);
-  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`;
+  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
   - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
 
   Without its word a command fails: `ping needs requires: network in the script`.
 - **Programs a script starts** get, of what they ask for, only what the script declared (`sysinfo`, `file`, `files`,
   `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`,
-  `parse`, `tls`, `battery`); they run without the rest. `tls` goes with `network`: a program gets the TLS client only with a flow
-  grant. A program asking for `camera` or `firmware` still gets it only if the user says yes when the shell asks.
+  `parse`, `tls`, `battery`, `wifi`, `ssh`); they run without the rest. `tls` and `ssh` go with `network`: a program gets the
+  TLS client or the SSH service's only with a flow grant, and its TLS client cannot offer the device certificate (351-APP-0083). A program asking for `camera` or `firmware` still gets it only if the user says yes when the shell asks.
 - **A script from outside the boot disk** (`ram:`, a USB disk) asks once before it runs:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.
 - **What the user types** at the prompt (and `msh -c`) has the session's authority.

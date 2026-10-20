@@ -37,7 +37,10 @@ struct Done { slot: u8, dci: u8, code: u32, residue: u32 }
 
 const QUEUE: usize = 8;
 /// An interrupt IN endpoint being polled and the reports it gave since they were last taken.
-pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool }
+// `lossless` (a bulk IN endpoint, 800-DRV-0034): a transfer goes back on the ring only while the queue has room for its
+// packet, so the device holds what does not fit (NAK) instead of the oldest report being dropped; `in_flight` counts the
+// transfers on the ring.
+pub struct Interrupt { pub slot: u8, pub dci: u8, ring: Ring, length: u32, queue: [[u8; REPORT_BYTES]; QUEUE], lengths: [u8; QUEUE], head: usize, count: usize, pub failed: bool, reported: bool, lossless: bool, in_flight: usize }
 
 const MAX_INTERRUPTS: usize = 8; const MAX_DONE: usize = 8;
 
@@ -293,11 +296,14 @@ impl Xhci {
         let _ = self.command(dequeue, TYPE_SET_DEQUEUE << 10 | (dci as u32) << 16 | (slot as u32) << 24);
     }
 
-    /// Starts polling interrupt IN endpoint `dci` on its ring with `ARMED` transfers of up to a packet each.
-    pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16) -> bool {
+    /// Starts polling IN endpoint `dci` (interrupt, or with `lossless` bulk) on its ring with `ARMED` transfers of up to a
+    /// packet each.
+    pub fn arm(&mut self, slot: u8, dci: u8, ring: Ring, packet: u16, lossless: bool) -> bool {
+        // Only a ring made for polling leaves room for the report buffers after its transfers.
+        if ring.trbs != INTERRUPT_TRBS { return false; }
         let Some(index) = self.interrupts.iter().position(Option::is_none) else { return false };
         let length = (packet as u32).min(REPORT_BYTES as u32).max(1);
-        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false });
+        self.interrupts[index] = Some(Interrupt { slot, dci, ring, length, queue: [[0; REPORT_BYTES]; QUEUE], lengths: [0; QUEUE], head: 0, count: 0, failed: false, reported: false, lossless, in_flight: ARMED });
         for _ in 0..ARMED { self.queue_report(index); }
         self.doorbell(slot, dci as u32);
         true
@@ -318,6 +324,7 @@ impl Xhci {
     // a transfer in its place; an error stops the endpoint (the device went away or stalled it).
     fn report(&mut self, index: usize, pointer: u64, status: u32) {
         let Some(interrupt) = self.interrupts[index].as_mut() else { return };
+        interrupt.in_flight = interrupt.in_flight.saturating_sub(1);
         let code = status >> 24;
         // The first report and a failure are logged: a keyboard that sends nothing shows which (211-DRV-0003).
         if !matches!(code, SUCCESS | SHORT_PACKET) { interrupt.failed = true; mind::println!("[USB] SLOT {} ENDPOINT {}: INTERRUPT TRANSFER FAILED (COMPLETION {})", interrupt.slot, interrupt.dci, code); return; }
@@ -337,6 +344,8 @@ impl Xhci {
         let bytes = self.dma.bytes(buffer, length);
         interrupt.queue[slot][..length].copy_from_slice(bytes);
         interrupt.lengths[slot] = length as u8;
+        if interrupt.lossless && interrupt.in_flight + interrupt.count >= QUEUE { return; }
+        interrupt.in_flight += 1;
         let (slot, dci) = (interrupt.slot, interrupt.dci);
         self.queue_report(index);
         self.doorbell(slot, dci as u32);
@@ -349,6 +358,13 @@ impl Xhci {
         for n in 0..count { let at = (interrupt.head + n) % QUEUE; each(&interrupt.queue[at][..interrupt.lengths[at] as usize]); }
         interrupt.head = (interrupt.head + count) % QUEUE; interrupt.count = 0;
         if interrupt.failed && count == 0 { return Err(()); }
+        // A lossless endpoint's transfers held back for want of room go on the ring again.
+        let (lossless, slot, dci, held) = (interrupt.lossless, interrupt.slot, interrupt.dci, ARMED.saturating_sub(interrupt.in_flight));
+        if lossless && held > 0 && !interrupt.failed {
+            for _ in 0..held { self.queue_report(index); }
+            if let Some(interrupt) = self.interrupts[index].as_mut() { interrupt.in_flight += held; }
+            self.doorbell(slot, dci as u32);
+        }
         Ok(count)
     }
 }

@@ -16,7 +16,7 @@ It must work in any direction: Linux or WSL to MIND Core, Linux to Windows, MIND
 Two transports, one protocol:
 
 1. **First, a serial line through the maintainer's two USB–RS-485 converters** (a WCH CH340, 1A86:7523, and an FTDI FT232R, 0403:6001). It is half-duplex and about 0.2–0.3 MB/s, for consoles, logs and files.
-   - [800-LNK-0001](800-LNK-0001-the-link-protocol.md) the protocol;
+   - [800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done) the protocol;
    - [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md) MIND Core's driver for the converters;
    - [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md) MIND Core's end;
    - [800-LNK-0004](800-LNK-0004-mindlink-the-host-tool.md) the Linux and WSL end.
@@ -26,6 +26,7 @@ Two transports, one protocol:
    - [800-LNK-0005](800-LNK-0005-the-rp2-multi-device-firmware.md) the firmware;
    - [800-LNK-0006](800-LNK-0006-mind-core-hosts-the-multi-device.md) MIND Core's side;
    - [800-LNK-0007](800-LNK-0007-the-windows-end.md) Windows.
+3. **MIND Core as the master,** so it reaches Linux, Windows or another MIND Core too: [800-LNK-0008](800-LNK-0008-mind-core-as-the-master.md).
 
 The protocol runs between the two machines' ends. The converters and the boards only carry its bytes.
 

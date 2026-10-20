@@ -1,6 +1,6 @@
 # 000-NET-0013 — The stack's sockets, listed for `netstat` — done
 
-**Type:** network (`netstack`, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** — (for the tools track's [000-APP-0031](../issues/000-APP-0031-netstat.md)) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.3, MC-12.4
+**Type:** network (`netstack`, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-12) · **Blocked by:** — · **Main task:** — (for the tools track's [000-APP-0031](000-APP-0031-netstat.done)) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.3, MC-12.4
 
 From the tools track's request in requests-NET.md ("A list of the stack's sockets, for `netstat`", 2026-10-09).
 
@@ -43,5 +43,5 @@ From the tools track's request in requests-NET.md ("A list of the stack's socket
   - `netcheck open:… sockets` lists its own connection as `Tcp … REMOTE 10.0.2.2:PORT Established`, with its badge and `SENT 16`, and counts 1 socket;
   - a program without a grant gets `NO GRANT`.
 - **Not tested here:**
-  - the operator's whole list, which is the tools track's `netstat` ([000-APP-0031](../issues/000-APP-0031-netstat.md), now unblocked);
+  - the operator's whole list, which is the tools track's `netstat` ([000-APP-0031](000-APP-0031-netstat.done), now unblocked);
   - a socket's disappearance after its program ends.

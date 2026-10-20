@@ -3,7 +3,13 @@
 /// `video_gw` (a camera's, 158) are its clients. A client's badge names the device class it may claim
 /// (`mind::usb::BADGE_HID`, `BADGE_STORAGE`, `BADGE_VIDEO`), so a class driver reaches only its own interfaces (MC-3.3).
 /// Data travel through the client's buffer, lent with `attach`.
-package mind:usb@1.2.0;
+///
+/// 1.3 (800-LNK-0002): `mind::usb::BADGE_SERIAL` names `usb_serial`, which claims the vendor-specific interface of a
+/// USB-serial converter by its vendor and product ID (`mind::usb::SERIAL_DEVICES`), and may send vendor requests to
+/// that device as a whole: such a converter has no other interface. `reports` and `reports-up-to` also take a bulk IN
+/// endpoint of up to 64-byte packets (on xHCI), which is then polled a packet at a time, as an interrupt one is: a
+/// converter's received bytes wait in `usb_host` for the client. The wire is unchanged.
+package mind:usb@1.3.0;
 
 interface usb {
     /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -25,7 +31,8 @@ interface usb {
     /// stall the endpoint is reset on both sides, so the next transfer can run.
     bulk: func(handle: u32, address: u8, offset: u32, length: u32) -> result<u32, error-code>;
     /// The reports received on the interrupt IN endpoint with address `address` since the last call, written at the buffer's start as
-    /// a length byte and the report each; returns their count. The first call starts polling the endpoint.
+    /// a length byte and the report each; returns their count. The first call starts polling the endpoint. 1.3: or the
+    /// packets received on a bulk IN endpoint of up to 64-byte packets, each as a report (xHCI only).
     reports: func(handle: u32, address: u8) -> result<u16, error-code>;
     /// 1.1 (211-DRV-0018): as `reports`, for an endpoint whose reports span several packets and end with a short one
     /// (a MacBook trackpad's finger data), up to `longest` bytes each (at most 512; 64 on xHCI for now). Each is written

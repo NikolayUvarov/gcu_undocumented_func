@@ -24,7 +24,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "restart and process control", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input",
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
-    "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
+    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
     "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
@@ -61,6 +61,7 @@ const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 sl
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
+const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -98,12 +99,13 @@ impl Grants {
 // How a service was started: its grants (over capabilities init keeps), spawn flags, quota and arguments.
 #[derive(Clone, Copy)]
 struct Plan { grants: Grants, flags: usize, quota: Quota, args: ([u8; ARGS_KEPT], usize) }
-const ARGS_KEPT: usize = 24;
+const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0128)
 
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
+              link: Option<[u8; LINK_WORDS_MAX]>,
               boot: idl_init::Boot }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
@@ -289,6 +291,28 @@ impl Init {
     // Prepared by a safe start and not started since.
     fn prepared(&self, index: usize) -> bool { self.plans[index].is_some() && self.pids[index] == 0 }
 
+    // A writable client confined to data/link/ on the boot volume, made if missing (750-KRN-0120, for 800-KRN-0128),
+    // asked of vfs_server through a client with the user's rights that init drops at once.
+    fn link_scope(&mut self) -> Result<usize> {
+        let keeper = self.keeper("vfs_server")?;
+        let client = ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?;
+        let files = Endpoint(client);
+        let scoped = (|| -> Result<usize> {
+            let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
+            let dir = vfs::open_dir(files, root, LINK_DIR, true);
+            let _ = vfs::close(files, root);
+            let dir = dir?.map_err(|_| Error::NotFound)?;
+            let made = vfs::scope(files, dir, true, RECEIVED);
+            let _ = vfs::close(files, dir);
+            made?.map_err(|_| Error::Rights)?;
+            let slot = ipc::mint(RECEIVED, u8::MAX, 0, 0);
+            let _ = ipc::drop_cap(RECEIVED);
+            Ok(slot?)
+        })();
+        let _ = ipc::drop_cap(client);
+        scoped
+    }
+
     // The capabilities boot service `index` starts with, and what was minted for them; Err(NotFound) if its hardware is
     // absent.
     fn plan(&mut self, index: usize) -> Result<(Plan, Minted)> {
@@ -365,6 +389,24 @@ impl Init {
                 grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", badge)?, CLIENT);
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 if name == "usb_hid" { grants.add(SLOT_PRIV, minted.privilege(CAP_KIND_INPUT)?, 0); }
+            }
+            // The link to another machine (800-KRN-0128), started only with link.conf at the boot volume's root: the
+            // serial converters' driver holds usb_host's client badged for them, and its endpoint.
+            "usb_serial" => {
+                if !self.running(service_index("usb_host")) { return Err(Error::NotFound); }
+                grants.add(SLOT_DEV0, self.badged(&mut minted, "usb_host", mind::usb::BADGE_SERIAL)?, CLIENT);
+                grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
+            }
+            // The link itself: the converter's client, which it alone holds (MC-2.3), a reader of the log (below) and
+            // link.conf's words; its files, a client confined to data/link/, come with each start (`spawn`).
+            "link" => {
+                if !self.running(service_index("usb_serial")) { return Err(Error::NotFound); }
+                self.lend(&mut grants, SLOT_DEV0, "usb_serial")?;
+                // An application's loader client: link starts programs from data/link/ for the master (800-KRN-0132).
+                self.lend(&mut grants, SLOT_LOADER, "loader")?;
+                let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
+                let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
+                let _ = core::fmt::Write::write_str(&mut args, core::str::from_utf8(&words[..length]).unwrap_or(""));
             }
             "virtio_blk" => {
                 // The instance's VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001), in PCI order:
@@ -672,7 +714,7 @@ impl Init {
         }
         // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg), and
         // vfs_server's, which saves it on the boot disk's log partition (211-KRN-0019).
-        if name == "shell" || name == "vfs_server" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
+        if name == "shell" || name == "vfs_server" || name == "link" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader gets all of init's root quota but what the services need (issue 171: no
         // fixed count of applications; memory limits them); the shell serves voice control on one endpoint (issue 079).
@@ -706,14 +748,22 @@ impl Init {
                 let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, rights); receiver = Some(slot);
             }
         }
+        // link's files: a scope ends with the task that took it up, so each start gets a new one (750-KRN-0120).
+        let mut scope = None;
+        if name == "link" && grants.count < SPAWN_GRANTS_MAX {
+            match self.link_scope() {
+                Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_VFS, slot, CLIENT); grants.count += 1; scope = Some(slot); }
+                Err(error) => mind::println!("[INIT] link: NO FILES ({:?}): THE LOG ONLY", error),
+            }
+        }
         // `name\0arguments` where the plan has arguments.
         let (args, count) = plan.args;
-        let mut text = [0u8; 64];
+        let mut text = [0u8; NAME_MAX + 1 + ARGS_KEPT];
         let length = if count == 0 { name.len() } else { name.len() + 1 + count };
         text[..name.len()].copy_from_slice(name.as_bytes());
         if count > 0 { text[name.len() + 1..length].copy_from_slice(&args[..count]); }
         let pid = mind::process::spawn_raw(&text[..length], Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
-            .inspect_err(|_| { if let Some(slot) = receiver { let _ = ipc::drop_cap(slot); } })?;
+            .inspect_err(|_| { for slot in [receiver, scope].into_iter().flatten() { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         self.starts[index] += 1;
         self.stopped[index] = false;
@@ -851,6 +901,22 @@ impl Init {
     }
 }
 
+// The kernel's own lines (its ring, at the end of the platform report) into the system log, not the screen, which shows
+// them already: a reader of the log, the link to another machine above all, sees the boot from its first line.
+fn kernel_lines() {
+    let Ok(slot) = platform::cap(PLATFORM_REPORT, 0, 0) else { return };
+    if let Ok(map) = mind::mem::Mapping::new(slot) {
+        let bytes = map.as_slice();
+        let bytes = &bytes[..bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len())];
+        let text = core::str::from_utf8(bytes).unwrap_or("");
+        let lines = text.find("\nKernel lines").and_then(|at| text[at + 1..].find('\n').map(|end| &text[at + 1 + end + 1..])).unwrap_or("");
+        let mut count = 0;
+        for line in lines.lines().map(str::trim_end).filter(|l| !l.is_empty()) { let _ = mind::log::write(mind::log::INFO, line); count += 1; }
+        mind::println!("[INIT] {} KERNEL LINES COPIED INTO THE SYSTEM LOG", count);
+    }
+    let _ = ipc::drop_cap(slot);
+}
+
 fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
     let mut end = text.len().min(N);
     while !text.is_char_boundary(end) { end -= 1; }
@@ -885,6 +951,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
+                         link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false } };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
@@ -920,8 +987,10 @@ fn boot(info: &'static BootInfo) {
         }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
-        // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
         let name = unit_name(index);
+        // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
+        if matches!(name, "usb_serial" | "link") && init.link.is_none() { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name); continue; }
+        // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
         if safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| init.running(service_index(r))))) {
             match init.prepare(index) {
                 Ok(()) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
@@ -935,6 +1004,7 @@ fn boot(info: &'static BootInfo) {
             Ok(_) if unit_name(index) == "logd" => {
                 // The keeper may send: init needs no client of its own.
                 if let Ok(keeper) = init.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
+                kernel_lines();
             }
             Ok(_) => {}
             Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", unit_name(index)); }

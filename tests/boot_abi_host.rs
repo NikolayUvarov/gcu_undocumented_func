@@ -5,7 +5,7 @@ mod cpu { pub unsafe fn write_back(_: usize, _: usize) {} }
 mod mmu { pub unsafe fn reach_device(_: usize, _: usize) -> bool { panic!("early framebuffer must not change mappings") } }
 
 use abi::*;
-use core::mem::{offset_of, size_of};
+use core::mem::{align_of, offset_of, size_of};
 
 // Independent ABI 10 wire record: never replace its fixed array size with the current image count.
 #[repr(C)]
@@ -27,7 +27,9 @@ fn abi10_prefix_offsets_survive_additional_images() {
         memory_map, memory_map_len, pixel_format, pixel_masks, acpi_rsdp, cpu_features, abi_version,
         boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s);
     assert_eq!(offset_of!(BootInfo, extra_programs), size_of::<Abi10BootInfo>());
-    assert_eq!(size_of::<BootInfo>(), size_of::<Abi10BootInfo>() + (BOOT_IMAGES - 36) * size_of::<ProgramImage>());
+    // ABI 13: the link's words follow the images (800-KRN-0128).
+    assert_eq!(offset_of!(BootInfo, link_present), size_of::<Abi10BootInfo>() + (BOOT_IMAGES - 36) * size_of::<ProgramImage>());
+    assert_eq!(size_of::<BootInfo>(), (offset_of!(BootInfo, link_words) + LINK_WORDS_MAX).next_multiple_of(align_of::<BootInfo>()));
     assert!(size_of::<BootInfo>() <= 4096, "the scheduler grants one page for task boot information");
 }
 

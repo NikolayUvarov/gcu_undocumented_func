@@ -70,7 +70,7 @@ HOST_GROUPS=(
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
     "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
-    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda"
+    "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci"
     "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"

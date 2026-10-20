@@ -2,33 +2,9 @@
 
 **Owner:** drivers track (the assessing session, `claude/ASR-DRV`, TRACKS 1.5) · **Status:** open · **Recorded by:** the kernel track (KRN), 2026-10-09
 
-The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09). The network track's request that `bcm_wifi` names OFDM in `idl/wlanhw.wit` 1.1 became plan item 2 of [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) (2026-10-14).
+The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-gone-device-fails-at-once.md) (2026-10-09). The network track's request that `bcm_wifi` names OFDM in `idl/wlanhw.wit` 1.1 became plan item 2 of [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) (2026-10-14). ASTRA's request that BCM4331's transmit status checks its deadline on every path (the audit's H12) is taken in [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md) (2026-10-20).
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. The drivers track turns each into a task and removes it from this file, and the file goes when it is empty.
-
-## BCM4331 transmit status must check its deadline on every path
-
-**Recorded by:** ASTRA auditor-fixer, 2026-10-16, for the maintainer's original
-MacBook network-stability report. **Priority:** P1. **Roadmap:** D / 550.
-**Constitution:** MC-6.1, MC-12.1, MC-12.3. Related owner task:
-[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
-
-At owner branch `5623c9ba`, now integrated into ASTRA `ac1854f2`,
-`bcm_wifi/src/radio.rs::Radio::status` continues after every available
-intermediate or wrong-cookie TX status before reaching its 100 ms deadline
-check or RX poll. Continuously available statuses can bypass that bound;
-a final matching status is accepted even if the clock has passed the end.
-The radio service is synchronous, so its caller's IPC timeout does not stop
-this loop. [Audit and evidence boundary](../issues-audit/2026-10-16-bcm-tx-wait-audit.md).
-
-Please number and implement a bounded production wait on every path,
-preserving the existing status format and 100 ms budget. Exercise continuous
-unrelated/intermediate statuses, no status, success before the deadline and
-a matching status observed after it. Verify the transmit-slot ownership on
-timeout before allowing reuse; a missing TX result is not completion.
-Publish the built owner commit to fast-test before tests, and record the
-original MacBook's ping-under-load/recovery run separately. This finding
-does not yet establish the hardware cause of the reported packet loss.
 
 ## The MacBook Pro's speakers: more of 551's step 2 if the GPIO is not enough (551)
 
@@ -357,3 +333,35 @@ This request does not replace the preceding H12 deadline correction.
 
 - The `net` suite's `TIME: download's … check` lines on aarch64 show reads well under a tick each.
 - The `vfs` and `store` suites pass.
+
+## `usb_host`: devices behind a SuperSpeed hub (a two-bay SATA dock on the MacBook Pro)
+
+**Recorded by:** the kernel track (KRN), 2026-10-20, from the maintainer's MacBook Pro run of 2026-10-20 (photos of the shell's `logs 7` and `logs 8`).
+
+### Problem
+
+The boot disk, in a two-bay SATA–USB dock plugged into a USB 3 port, is not found: `vfs_server` logs `THE BOOT VOLUME (MBR DISK BE1AFDFA, PARTITION 1 AT LBA 63) IS ON NO BLOCK DEVICE: NONE MOUNTED`, and no program starts. The same disk on the same port through a single-bay adapter works. The Mac's firmware boots from the dock.
+
+`logs` of `usb_host` and `usb_storage`:
+- `[USB] PORT 1: CONNECTED (PORTSC 000006E1)`; `05E3:0610 ON PORT 1 (HIGH SPEED) HUB`;
+- `05E3:0626 ON PORT 5 (SUPER SPEED) HUB`: the dock is a Genesys Logic USB 3 hub, its USB 2 half on port 1 and its SuperSpeed half on port 5;
+- nothing behind either hub; `usb_storage`: `[USB] NO MASS STORAGE DEVICE`.
+
+**The cause.** `usb_host` walks only USB 2 hubs: `enumerate` skips a hub at speed 4 ("a SuperSpeed hub's USB 2 side is used instead", `usb_host/src/main.rs:169`). A USB 3 device behind a USB 3 hub links at SuperSpeed and never shows on the hub's USB 2 side, so the dock's SATA bridges are never set up. Nothing in the log says a hub was skipped.
+
+### Plan (a proposal; the drivers track decides)
+
+- A SuperSpeed hub's ports are walked:
+  - its descriptor is type `0x2A` (12 bytes); `SET_HUB_DEPTH` (request 12, the hub's depth) before its ports are used;
+  - the slot context marks it a hub with its port count (no TT);
+  - its port status: power is bit 9, the link state bits 5–8; a reset is `PORT_RESET`, or `BH_PORT_RESET` (28) for a port stuck in a link error; the changes to clear include `C_BH_PORT_RESET` (29), `C_PORT_LINK_STATE` (25) and `C_PORT_CONFIG_ERROR` (26);
+  - a device on its port is at SuperSpeed; its route string as for USB 2 hubs.
+- Until then, the log says so: `SUPERSPEED HUB: ITS PORTS ARE NOT WALKED` with the hub's ID.
+- QEMU has no SuperSpeed hub, so the check is on hardware: the dock on the MacBook Pro (both bays), and the Ryzen's ports.
+
+### Acceptance criteria
+
+- On the MacBook Pro the disk in the dock is found (`[USB] MASS STORAGE: … SECTORS`), the boot volume mounts and programs start; the same with the dock behind its USB 2 side (a USB 2 cable).
+- The QEMU USB suites pass as before.
+
+**A workaround meanwhile:** the single-bay adapter, or the dock on a USB 2 cable or behind a USB 2 hub, so that the bridges link at high speed behind the hub's USB 2 side, which `usb_host` walks.

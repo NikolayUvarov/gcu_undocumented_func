@@ -15,6 +15,7 @@ mod serve;
 mod stage3;
 mod stage4;
 mod tables;
+mod txwait;
 
 // PCI configuration: the backplane addresses BAR0's first two 4 KiB windows show.
 const CFG_WINDOW: usize = 0x80; const CFG_WINDOW2: usize = 0xAC;
