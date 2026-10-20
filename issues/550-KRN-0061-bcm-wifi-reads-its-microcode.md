@@ -26,6 +26,13 @@ This is the drivers track's request in `requests-KRN.md` (2026-10-10), for [550-
    - it cannot write anywhere or open a private directory.
 2. **On QEMU** (no such chip): `bcm_wifi NOT STARTED: NO DEVICE` as before. The gate's suites pass.
 
+## Progress (2026-10-20)
+
+- **QEMU.** The `normal` suite on x86 now requires `[INIT] bcm_wifi NOT STARTED: NO DEVICE` (from `dmesg -s init`) and no `bcm_wifi` among the services.
+- **The MacBook Pro.** Its runs since 2026-10-12 log `[BCM] MICROCODE data/firmware/b43/ucode29_mimo.fw: 43224 BYTES, SHA-256 df16911e9ec2ae21...`, then the microcode running (fast-test 7281472, 29fee23).
+
+Left: a run without the file, which should say so and go on.
+
 ## Related
 
 [550-DRV-0023](../issues-done/550-DRV-0023-bcm4331-microcode-runs.done), [550-KRN-0059](../issues-done/550-KRN-0059-bcm-wifi-at-boot.done).

@@ -25,6 +25,7 @@ aarch64_root-kernel/
 dist/
 scripts/__pycache__/
 scripts/voice_dictate/__pycache__/
+scripts/hardware/__pycache__/
 NvVars
 
 # --- Generated dumps and exports ---

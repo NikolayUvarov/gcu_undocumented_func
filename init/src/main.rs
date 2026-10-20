@@ -25,15 +25,15 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege", "AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
-    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
+    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
+    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -55,6 +55,7 @@ const WIFI_CARD: usize = 4;
 const RADIOS: [&str; 2] = ["bcm_wifi", "wlansim"];
 const INPUT_DMA_BYTES: usize = 24 * 1024; // per device 12 KiB: the event queue (two pages), then up to 64 events of 8 bytes
 const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
+const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
@@ -102,7 +103,7 @@ const ARGS_KEPT: usize = 24;
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
-struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
+struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               boot: idl_init::Boot }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
@@ -203,7 +204,8 @@ impl Init {
             mind::println!("[INIT] {} STILL RUNNING: DMA RETAINED, NO RESTART", unit_name(index));
             return Err(Error::Other(ERR_BUSY));
         }
-        if let Some(device) = self.devices[index] {
+        // The driver's second device too (virtio_input's keyboard, audio_gw's second HD Audio function): one DMA region.
+        for device in [self.devices[index], self.others[index]].into_iter().flatten() {
             if let Err(error) = platform::quiesce(device) {
                 self.quarantined[index] = true;
                 mind::println!("[INIT] {} QUIESCE FAILED: {:?}; DMA RETAINED, NO RESTART", unit_name(index), error);
@@ -254,17 +256,44 @@ impl Init {
     // Starts boot service `index` with its capabilities; Err(NotFound) if its hardware is absent.
     fn start(&mut self, index: usize) -> Result<u64> {
         let name = unit_name(index);
-        let (image, instance) = unit_image(index);
         if index == 0 || self.running(index) { return Err(Error::Other(ERR_BUSY)); }
         if let Some(plan) = self.plans[index] {
-            // A restart: the device was stopped when its driver ended; the same capabilities are granted again.
+            // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
             if let Some(device) = self.devices[index] {
                 if matches!(name, "rtl8168" | "rtw89_wifi") {
                     platform::registers_only(device)?;
                 } else { platform::resume(device)?; }
             }
+            if let Some(device) = self.others[index] { platform::resume(device)?; }
             return self.spawn(index, plan);
         }
+        let (plan, mut minted) = self.plan(index)?;
+        let pid = self.spawn(index, plan)?;
+        minted.count = 0; // kept for restarts
+        self.plans[index] = Some(plan);
+        Ok(pid)
+    }
+
+    // A service a safe start leaves out (000-KRN-0131): its capabilities are minted while init holds the platform
+    // privilege and kept, its devices stopped, so that `svc start` can start it once the privilege is dropped.
+    fn prepare(&mut self, index: usize) -> Result<()> {
+        let (plan, mut minted) = self.plan(index)?;
+        minted.count = 0;
+        self.plans[index] = Some(plan);
+        self.stopped[index] = true;
+        for device in [self.devices[index], self.others[index]].into_iter().flatten() {
+            if let Err(error) = platform::quiesce(device) { mind::println!("[INIT] {} QUIESCE FAILED: {:?}", unit_name(index), error); }
+        }
+        Ok(())
+    }
+    // Prepared by a safe start and not started since.
+    fn prepared(&self, index: usize) -> bool { self.plans[index].is_some() && self.pids[index] == 0 }
+
+    // The capabilities boot service `index` starts with, and what was minted for them; Err(NotFound) if its hardware is
+    // absent.
+    fn plan(&mut self, index: usize) -> Result<(Plan, Minted)> {
+        let name = unit_name(index);
+        let (image, instance) = unit_image(index);
         let mut minted = Minted::new();
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
@@ -292,6 +321,7 @@ impl Init {
                     let Some(bar) = probe.and_then(|slot| { let layout = mind::virtio::Layout::read(slot); let _ = ipc::drop_cap(slot); layout }).and_then(|l| l.single_bar()) else { continue };
                     grants.add(bar_slot, Self::bar(&mut minted, device, bar as usize, CAP_KIND_MMIO)?, 0);
                     grants.add(irq_slot, minted.mint(PLATFORM_DEVICE_MSIX, device, 0).or_else(|_| minted.mint(PLATFORM_DEVICE_IRQ, device, 0))?, 0);
+                    if nth == 1 { self.others[index] = Some(device); }
                     found += 1;
                 }
                 if found == 0 { return Err(Error::NotFound); }
@@ -445,6 +475,15 @@ impl Init {
                         grants.add(SLOT_DEV0, bar, 0);
                         if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, device, 0) { grants.add(SLOT_IRQ, irq, 0); }
                         grants.copy(SLOT_MEM, self.dma(index, HDA_DMA_BYTES)?, 0);
+                        // A second HD Audio function (the Ryzen's analog one beside its GPU's HDMI audio): BAR0 and its
+                        // line; the gateway drives the first with an output path (213-KRN-0127).
+                        if let Ok(second) = platform::find_device(0x04_03_00, 0xFF_FF_00, 1) {
+                            if let Ok(bar) = Self::bar(&mut minted, second, 0, CAP_KIND_MMIO) {
+                                grants.add(SLOT_DEV1, bar, 0);
+                                if let Ok(irq) = minted.mint(PLATFORM_DEVICE_IRQ, second, 0) { grants.add(SLOT_AUDIO_IRQ1, irq, 0); }
+                                self.others[index] = Some(second);
+                            }
+                        }
                     }
                 }
                 // LEGACY: AC97 (class 04:01): mixer and bus master port ranges and an IRQ line; without it the gateway reports no device.
@@ -472,14 +511,17 @@ impl Init {
                     if let Some(driver) = driver { self.lend(&mut grants, slot, driver)?; }
                 }
                 // The Wi-Fi station as its third card: a client without BADGE_WIFI, which serves idl/net.wit (550-KRN-0097).
-                if self.running(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
+                // A prepared station's client answers ERR_PEER until it is started (000-KRN-0131).
+                if self.running(service_index("wlan")) || self.prepared(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
             }
             // QEMU's stand-in radio (550-NET-0018): only the tests' images carry it, and it holds nothing but its endpoint.
             "wlansim" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
             // The 802.11 station (550-NET-0018) over the radio that runs: its client in slot 2, the station's alone (MC-2.3);
             // keystore's client for remembered networks in slot 3 (550-NET-0024). No radio, no station.
             "wlan" => {
-                let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r))).ok_or(Error::NotFound)?;
+                // A radio a safe start prepared serves the station once `svc start` starts it (000-KRN-0131).
+                let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r)))
+                    .or_else(|| RADIOS.into_iter().find(|&r| self.prepared(service_index(r)))).ok_or(Error::NotFound)?;
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 self.lend(&mut grants, WIFI_RADIO, radio)?;
                 if self.running(service_index("keystore")) { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
@@ -536,12 +578,20 @@ impl Init {
                 }
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
+                // A loader client that only starts helpers: each check parses in a parser of its own (109-KRN-0117).
+                grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
+            }
+            // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
+            // service to sign an SSH login.
+            "ssh" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "ssh")?, ALL);
+                grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SSH)?, CLIENT);
             }
             "virtio_net" => {
                 // The instance's VirtIO network card (vendor 1AF4, class 02:00, modern-only 1041 or transitional 1000), in
@@ -601,6 +651,10 @@ impl Init {
                 if self.running(service_index("wlan")) { grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT); }
                 // With the right to mint the BADGE_TLS_NO_DEVICE copy it lends to programs (351-NET-0022): tls's badge only narrows.
                 grants.copy(SLOT_TLS, self.keeper("tls")?, CLIENT | CAP_BADGE);
+                // The SSH service's, with the right to badge, lent on for REQUEST_SSH (351-KRN-0115); the updater's, for the
+                // shell's own `update` command and no program (351-KRN-0116).
+                if self.running(service_index("ssh")) { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
+                if self.running(service_index("updater")) { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.running(service_index("blockstore")) {
@@ -611,7 +665,8 @@ impl Init {
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
                 if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
-                if self.running(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; } // lent on with the user's consent
+                // Lent on with the user's consent; a prepared gateway's client answers ERR_PEER until it is started.
+                if self.running(service_index("video_gw")) || self.prepared(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; }
             }
             _ => return Err(Error::NotFound),
         }
@@ -625,6 +680,8 @@ impl Init {
             // The applications' memory is charged to loader too: it may use all of init's (issue 150).
             "loader" => Quota { tasks: QUOTA_MAX as u16 - SERVICE_QUOTA, endpoints: QUOTA_MAX as u16 - SERVICE_QUOTA, memory_mib: SPAWN_MEMORY_ALL as u16 },
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
+            // The endpoint a check's parser serves (109-KRN-0117).
+            "updater" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
@@ -637,11 +694,7 @@ impl Init {
         };
         let mut kept = ([0u8; ARGS_KEPT], args.as_str().len());
         kept.0[..kept.1].copy_from_slice(args.as_str().as_bytes());
-        let plan = Plan { grants, flags, quota, args: kept };
-        let pid = self.spawn(index, plan)?;
-        minted.count = 0; // kept for restarts
-        self.plans[index] = Some(plan);
-        Ok(pid)
+        Ok((Plan { grants, flags, quota, args: kept }, minted))
     }
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
@@ -814,7 +867,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
-// run was most likely in; absent saved plans cannot be started after Platform is dropped.
+// run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
 const SAFE_LEFT_OUT: [&str; 5] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
@@ -831,7 +884,7 @@ fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(inf
 
 fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
-    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
+    let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false } };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
@@ -859,7 +912,6 @@ fn boot(info: &'static BootInfo) {
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
     let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
-        if safe && SAFE_LEFT_OUT.contains(&unit_name(index)) { init.stopped[index] = true; continue; }
         // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
         // before the compositor takes the screen (211-PRT-0004).
         if unit_name(index) == "compositor" && info.photo_pause_s > 0 {
@@ -868,6 +920,16 @@ fn boot(info: &'static BootInfo) {
         }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
+        // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
+        let name = unit_name(index);
+        if safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| init.running(service_index(r))))) {
+            match init.prepare(index) {
+                Ok(()) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
+                Err(Error::NotFound) => { init.missing[index] = true; init.stopped[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
+                Err(error) => { init.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
+            }
+            continue;
+        }
         match init.start(index) {
             // From now on init's own lines (and those printed so far) go to the system log too.
             Ok(_) if unit_name(index) == "logd" => {

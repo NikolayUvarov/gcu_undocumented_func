@@ -1,6 +1,6 @@
 # Writing MIND Core to a disk and booting a PC
 
-**Version:** 1.3 (2026-10-08): the log partition · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
+**Version:** 1.4 (2026-10-20): one boot of MIND Core from Linux (section 10) · **Issues:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (an Intel PC from a SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (the writer), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (the first run), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) and [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the log partition), [000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md) (one boot from Linux) · **Russian version:** [write-disk_RU.md](write-disk_RU.md)
 
 > **No physical x86 machine has run MIND Core as part of the evidence yet.** Everything below follows from the scripts and from QEMU, where the same image boots from USB, SATA (AHCI) and NVMe. The first real run is task [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md); section 8 lists what is known to be risky on a real PC and what to send back.
 
@@ -172,3 +172,50 @@ For [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), whether 
 - the serial output, if you had a COM1 cable.
 
 The profile records the machine as a configuration of its own: what was run on it, with which firmware settings (MC-12.1).
+
+## 10. One boot of MIND Core from Linux, and back
+
+On a PC that runs Linux from its own disk, MIND Core can be started once from the stick without the firmware's boot menu ([000-KRN-0124](../issues/000-KRN-0124-switching-between-linux-and-mind-core.md)). Every restart after that boot comes back to Linux. On the Ryzen, which runs Ubuntu, a run looks like this:
+
+```bash
+./05_write_usb_linux.sh --device /dev/disk/by-id/…   # section 5
+sudo scripts/boot_switch.py status                   # the boot entries, Linux's first, and the MIND Core disk
+sudo scripts/boot_switch.py once --reboot            # the next boot starts the stick, once
+# … the run in MIND Core; its reboot, a panic, the watchdog or a power cut brings Linux back …
+sudo scripts/boot_switch.py logs ~/mind-runs         # the MIND LOG volume copied, read-only
+```
+
+**How it works.** The firmware has two variables:
+- **`BootNext`** names the entry the next boot starts, and the firmware deletes it as that boot begins;
+- **`BootOrder`** names every boot after that.
+
+`once` sets `BootNext` to the stick's entry. If the stick has no entry, `once` makes one first with `efibootmgr --create-only`, labelled `MIND Core`. Nothing in the image or the bootloader changes.
+
+**What the script refuses**, saying why:
+- Linux's entry (`BootCurrent`) is not first in `BootOrder`: a restart would not come back. Put it first in the firmware's setup.
+- Linux was not started by UEFI.
+- No MIND Core disk is attached, or several are (name one with `--disk`).
+- The MIND Core disk is mounted.
+
+The script never writes `BootOrder`.
+
+**`logs`** copies the whole `MIND LOG` volume into a new directory, then says one of:
+- MIND Core booted since `once`, which new `BOOTNNNN.LOG` files it wrote, and whether `autorun.msh` ended;
+- it did not boot. The firmware may skip USB disks with Fast Boot on, or ignore `BootNext`; Secure Boot with Microsoft's keys refuses the bootloader (section 6).
+
+**An unattended run.** Put an `autorun.msh` at the stick's root after writing it. The shell runs it once at start ([docs/msh.md](msh.md)), and it can end with `reboot`. For example, `check` writes its full log to `log:`:
+
+```
+#!msh
+requires: files sysinfo log lifecycle
+check
+reboot
+```
+
+`diag/full.msh` copied as `autorun.msh`, with `reboot` added as its last line, does the full hardware run. A step that asks the user (the camera, the firmware's variables) waits for an answer, so leave such steps out of a run with no one at the machine.
+
+**A freeze.**
+- On an Intel PC, the chipset's watchdog restarts the machine within 30 s, and that restart is a boot into Linux.
+- On the Ryzen the AMD FCH's watchdog does the same ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). It is checked against a model of its registers only, so the first runs show whether it holds: the boot line says `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` when it is armed. If it says `WATCHDOG: NONE`, a freeze waits for the power button.
+
+**Effector's machines.** On a machine Effector works on (the Ryzen is one), only the maintainer runs `once --reboot`, after checking that no operation is active ([docs/effector.md](effector.md)).

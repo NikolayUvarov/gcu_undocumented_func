@@ -1,6 +1,6 @@
 # 211-KRN-0053 — Debug mode: what programs print goes to the boot log on the log volume
 
-**Type:** kernel (`loader`, `libmind`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made; the QEMU check and the Mac's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1, MC-3.11
+**Type:** kernel (`loader`, `libmind`) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (QEMU done; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.1, MC-3.11
 
 ## Problem
 
@@ -19,6 +19,12 @@ On the MacBook Pro (2026-10-09) the camera and every program that listens failed
 
 - **QEMU:** with `log:debug.txt`, a program's printed line is in this boot's log file; without it, it is not. A program that asked for the log keeps the shell's client.
 - **The MacBook Pro:** with the file on the log partition, the camera and listening programs' lines are in `LOG:bootNNNN.log`.
+
+## Progress (2026-10-20)
+
+The QEMU check exists: `debug_mode()` in `tests/usb_image_smoke.py`, "x86: USB image", since caf110a. It now also runs `dmesg -s loader` while debug mode is on and requires `[LOADER] DEBUG MODE ON`. That shows a program asking for the log keeps the shell's client, which reads (second criterion).
+
+Left: the MacBook Pro's run with `log:debug.txt`.
 
 ## Related
 
