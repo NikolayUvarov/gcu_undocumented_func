@@ -5655,7 +5655,13 @@ def parser_restart_check(vm, stall, body):
     assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
     # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
     require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
-    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
+    for _ in range(40):  # killed; the kernel frees an ended task on its next idle pass, later on a loaded machine
+        listed = vm.command("ps", raw=True)
+        if not re.search(fr"^{parsers[0]} ", listed, re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the killed parser is still listed", listed))
     stall.go.set()
     for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
         if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
