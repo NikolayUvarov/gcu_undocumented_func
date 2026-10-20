@@ -86,8 +86,10 @@ def slots_check(args, work):
                 break
             time.sleep(.2)
         size = len(payloads["kernel.elf"])
-        require(output, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
-        require(output, "(THE SLOT THAT BOOTED)")
+        # The shell's console wraps the long line: its words are read with the line breaks taken out.
+        whole = output.replace("\r", "").replace("\n", "")
+        require(whole, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
+        require(whole, "(THE SLOT THAT BOOTED)")
         vm.command(f"kill {pid}")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
