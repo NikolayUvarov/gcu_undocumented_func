@@ -29,6 +29,7 @@ use wm::menu::{self, Kind as ProgramKind};
 // REQUEST_CAMERA: the video gateway's client, passed on to camera (158-APP-0043; the shell lends it without a question).
 // REQUEST_SHELL: the shell's commands, for the menu's Shell item, the shell's own window (211-APP-0044).
 // REQUEST_BATTERY: the battery service's client, for the top bar's item and the background's line, passed on (211-APP-0070).
+// SLOT_WIFI: a copy of the shell's client of the Wi-Fi station (shell.wit 1.5), passed on to wifi from Settings (550-APP-0033).
 // 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
 // file of up to 32 MiB as it is decoded, beside the rest.
 mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY, memory: 64);
@@ -178,6 +179,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
+    if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -479,6 +481,12 @@ fn main(info: &'static BootInfo) {
     if !holds(SLOT_BATTERY) && holds(SLOT_SHELL) {
         let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::battery(Endpoint(SLOT_SHELL), SLOT_BATTERY));
         mind::println!("[WM] BATTERY CLIENT FROM THE SHELL: {}", match asked { Ok(Ok(())) => "LENT", Ok(Err(_)) => "NONE (NO BATTERY SERVICE)", Err(_) => "NO ANSWER" });
+    }
+    // The Wi-Fi station's client, a copy of the shell's for its Settings' `wifi` (shell.wit 1.5, 550-APP-0033).
+    if !holds(SLOT_WIFI) && holds(SLOT_SHELL) {
+        let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::wifi(Endpoint(SLOT_SHELL), SLOT_WIFI));
+        mind::println!("[WM] WI-FI CLIENT FROM THE SHELL: {}", match asked {
+            Ok(Ok(())) => "LENT", Ok(Err(mind::idl::shell::Error::Unavailable)) => "NONE (NO STATION)", Ok(Err(_)) => "REFUSED", Err(_) => "NO ANSWER" });
     }
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.

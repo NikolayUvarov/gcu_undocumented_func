@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -38,6 +38,17 @@ impl Wire for Service {
     const MAX: usize = <Text<16> as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<48> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.pid.encode(w)?; self.starts.encode(w)?; self.running.encode(w)?; self.quarantined.encode(w)?; self.holds.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, pid: Wire::decode(r)?, starts: Wire::decode(r)?, running: Wire::decode(r)?, quarantined: Wire::decode(r)?, holds: Wire::decode(r)? }) }
+}
+
+/// How this boot went (1.4, 000-KRN-0102): the slot it came from (`BOOT_SLOT_*`: 0 the volume's root, 1 A, 2 B),
+/// whether it was on trial, and whether init confirmed it (`BOOT_CONFIRM`). init answers once it has decided, so a
+/// trial boot not confirmed is one it refused: the kernel restarts the machine at the deadline. Any client may ask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Boot { pub slot: u8, pub trial: bool, pub confirmed: bool }
+impl Wire for Boot {
+    const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.confirmed.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, confirmed: Wire::decode(r)? }) }
 }
 
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
@@ -121,6 +132,19 @@ pub fn reboot(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
     Ok(Ok(()))
 }
 
+pub fn boot(endpoint: Endpoint) -> Result<core::result::Result<Boot, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 3, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Boot as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -130,6 +154,7 @@ pub enum Request {
     Restart { name: Text<16> },
     StopTask { pid: u64 },
     Reboot,
+    Boot,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -178,6 +203,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Reboot, Call::words(request, cap)))
         }
+        7 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 3, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Boot, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -205,4 +237,8 @@ pub fn reply_stop_task(call: Call, value: core::result::Result<(), Error>) -> Re
 pub fn reply_reboot(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [0, 0])
+}
+pub fn reply_boot(call: Call, value: core::result::Result<&Boot, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }

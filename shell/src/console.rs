@@ -121,18 +121,21 @@ impl Console {
     pub fn scroll(&mut self, up: bool) { self.text.scroll(up); self.dirty = true; }
     pub fn unscroll(&mut self) { if self.text.unscroll() { self.dirty = true; } }
 
-    /// Draws the visible lines; `cursor` is where the input cursor is.
-    pub fn render(&mut self, cursor: Option<Position>) {
+    /// Whether this console holds a screen to draw on.
+    pub fn has_screen(&self) -> bool { self.term.is_some() }
+
+    /// Draws the visible lines; `cursor` is where the input cursor is. True when a frame went to the screen.
+    pub fn render(&mut self, cursor: Option<Position>) -> bool {
         if self.follows {
             let size = self.term.as_mut().map(|term| { let grid = term.grid(); (grid.cols, grid.rows) });
             if let Some((cols, rows)) = size.filter(|&size| size != self.seen) { self.seen = (cols, rows); self.text.resize(cols, rows); self.dirty = true; }
         }
-        if !self.dirty { return; }
+        if !self.dirty { return false; }
         self.dirty = false;
         let (cols, back) = (self.text.cols, self.text.back());
         let (top, bottom) = self.text.view();
         let style = Style::new(FOREGROUND, BACKGROUND);
-        let Some(mut term) = self.term.take() else { return };
+        let Some(mut term) = self.term.take() else { return false };
         {
             let mut grid = term.grid();
             grid.clear(style);
@@ -151,6 +154,7 @@ impl Console {
         term.set_cursor(shown);
         term.present();
         self.term = Some(term);
+        true
     }
 }
 
