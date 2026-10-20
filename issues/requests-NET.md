@@ -158,5 +158,5 @@ codes, read-only mutation, stale scan/join state and failed application are
 covered. Radio limits and effective channels are honest on both MacBook and
 Ryzen; a configuration round trip is not evidence of physical networking.
 Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
-[KRN](requests-KRN.md#native-rtl8852be-radio-endpoint-after-datapath-admission),
+[KRN](213-KRN-0123-the-rtl8852be-radio-endpoint.md),
 [DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).
