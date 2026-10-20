@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -75,50 +75,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
 - **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## The stack revokes a frame ring the driver may already map (000-KRN-0129)
-
-**Recorded by:** the kernel track (KRN), 2026-10-20, for [000-KRN-0129](000-KRN-0129-virtio-net-faults-on-aarch64-with-16-cpus.md), the network track's message of 2026-10-20 (`KRN/2026-10-20T1217Z-NET-aarch64-16-cpus-idle-fails-on-main.md`).
-
-### Problem
-
-"aarch64: 16 CPUs" fails now and then because `virtio_net` faults at boot (vector 36 on aarch64, a data abort from EL0). The cause is in `netstack`'s `Card::attach` (`netstack/src/main.rs`):
-- it lends a fresh ring with `net::attach` under the card's deadline, at most a 250 ms turn (550-NET-0032);
-- when the call has no answer in time, it revokes the ring (the `_` arm);
-- but the driver may have taken the call already, or take it later from its queue. `virtio_net` maps the ring and pumps it at once and in every pass of its loop;
-- the kernel unmaps a revoked lease in its holder (the `isolation` suite's case `b`), so the driver's next access to the ring faults, and `init` restarts it.
-
-**The record**, from gate g0127 on PCU (`43e39c8`, the QEMU log of the failed run):
-- `[VIRTIO_NET] FRAME RING ATTACHED: 32 SLOTS EACH WAY`;
-- then `[NETSTACK] CARD 0 READY, WAITING FOR DHCP`, without `(FRAME RING)`: the stack's `attach` ended without `Ok`;
-- after `[INIT] READY`: `virtio_net PID=14 FAULT VECTOR 36`, `RESTARTED PID=25`. The restart takes a PID, so the suite's `run clock &` answers `PID=2`.
-
-Twelve more boots on PCU without load all passed: the race needs a slow turn.
-
-**Made to happen every time** on x86 (4 CPUs, local QEMU, the branch at 90ab5a2), with `mind::time::sleep(400)` in `virtio_net` after it maps the ring and before it answers:
-- `[    1.005] FRAME RING ATTACHED`; `[    1.255] CARD 0 READY, WAITING FOR DHCP` (the 250 ms deadline);
-- `[    1.420] virtio_net PID=15 FAULT VECTOR 14`;
-- `faults`: `FAULT PID=15 CPU=2 VECTOR=14 ERROR=0x4 RIP=0x8000002e21 ADDR=0x8006036040`, a user read of a page no longer mapped.
-
-### Plan (a proposal; the network track decides)
-
-Revoke a ring only when the driver said it does not hold it. An `attach` without an answer keeps the ring lent, and the next kick says whether the driver has it (`Ok`, or `invalid`, which leads to a new `attach` that revokes the old ring then):
-
-```rust
-        match self.deadline.call(|| net::attach(self.endpoint, cap)) {
-            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = now_ms(); }
-            // Refused: the driver holds no mapping of it.
-            Ok(Err(_)) => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
-            // No answer in time: the driver may map it yet, so it stays lent; the next kick says whether the driver has it.
-            Err(_) => { self.ring = Some(Shared { _pages: pages, cap, ring }); self.kicked = 0; }
-        }
-```
-
-With it and the same 400 ms delay, the boot above has no fault: `CARD 0 READY (FRAME RING)`, and `virtio_net` keeps its first PID. Only that boot was tried; the other suites were not run with it.
-
-The same holds for any other revoke of memory a driver may have mapped, and for the other drivers that take a ring (`rtl8168`, the station).
-
-### Acceptance criteria
-
-- "aarch64: 16 CPUs" passes 5 times in a row on PCU.
-- A check makes the driver answer `attach` late, and no driver faults.

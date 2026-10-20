@@ -6004,11 +6004,38 @@ def net_suite(args, disk):
             wifi_join_check(vm)
     finally:
         vm.close()
+    late_attach_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def late_attach_check(args):
+    """000-NET-0036 (000-KRN-0129): virtio_net answers the stack's `attach` after the stack's deadline, the ring already
+    mapped. The stack keeps the ring lent until a kick says the driver has it: the driver does not fault, is not
+    restarted, maps one ring, and the network works through it."""
+    if not args.late_attach_elf or not raw_tools():
+        print("SKIP: the late answer to attach needs the late-attach driver (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-late-attach-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"virtio_net.elf": args.late_attach_elf}, extra={"netpolicy.txt": b"console 10.0.2.2 icmp\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            first = vm.services()["virtio_net"]
+            log = vm.service_logs("netstack", "[NETSTACK] DHCP")
+            require(log, "[NETSTACK] CARD 0 READY (FRAME RING LENT, NO ANSWER YET)")
+            require(log, "[NETSTACK] CARD 0: THE DRIVER HAS OUR RING (A LATE ANSWER)")
+            require(log, "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+            assert vm.services()["virtio_net"] == first, "virtio_net was restarted"
+            assert vm.log.count("[VIRTIO_NET] FRAME RING ATTACHED") == 1, vm.log[-3000:]
+            assert "FAULT PID=" not in vm.command("faults")
+            assert "FAULT VECTOR" not in vm.log and "DRIVER WITHOUT OUR RING" not in vm.log, vm.log[-3000:]
+        finally:
+            vm.close()
+    print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
 
 
 def _certificates(directory):
@@ -8529,6 +8556,7 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
+    parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8556,6 +8584,8 @@ def main():
     radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
     args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
+    late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
+    args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
