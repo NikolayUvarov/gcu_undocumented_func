@@ -5761,6 +5761,32 @@ def wifi_boot_check(vm):
 
 
 
+def ping_options_check(vm):
+    """ping's options (000-APP-0095): -c and -i, -f with no line for each reply, -w and a dot for each request lost,
+    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) answers no one: its requests go out through the gateway and are lost."""
+    began = time.monotonic()
+    out = vm.command("ping -c 3 -i 0.5 10.0.2.2", timeout=20)
+    took = time.monotonic() - began
+    require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
+    assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
+    require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
+    assert "REPLY FROM" not in out, out[-1500:]
+    began = time.monotonic()
+    out = vm.command("ping -f -c 4 -w 0.2 192.0.2.1", timeout=30)
+    took = time.monotonic() - began
+    require(out, "....\nPING: 4 SENT, 0 RECEIVED, 100% LOST\n")
+    assert took < 10, (took, out[-1500:])
+    require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
+    require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
+    vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.send_bytes(b"\x03")
+    out = vm.expect("MIND> ", timeout=10)
+    assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -5931,6 +5957,7 @@ def net_suite(args, disk):
         else:
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+        ping_options_check(vm)
         # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
         # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
         vm.send("wm\n")

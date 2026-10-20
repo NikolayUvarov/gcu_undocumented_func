@@ -275,6 +275,17 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 
 **A safe start** (000-APP-0086): after a run that did not end as asked (a freeze the watchdog reset, a cut power), `init` starts safely and leaves the radios, the camera, sound and speech stopped (000-KRN-0076). The shell finds init's lines in the boot's log and says so above its first prompt, `SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts, video_gw (svc start audio_gw, svc start tts, svc start video_gw)`, and logs the same line. `wm` shows it on its status line (`shell.wit` 1.6 `boot-notice`), where a click opens the shell's window. After a normal boot nothing is shown.
 
+**The network's commands**, on the stack's operator client the shell holds:
+
+- `ping [-c count] [-i seconds] [-w seconds] [-f] host` (000-APP-0095): echo requests, 3 by default, a second apart from one start to the next, each waiting 1 s for its reply.
+  - `-c 0` sends them until Esc or Ctrl+C, which stop any run.
+  - `-i` and `-w` take decimals (`-i 0.2`).
+  - `-f` sends the next at once, prints a dot for each one lost and no line for each reply, 100 by default.
+  - It ends with `PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST)`.
+  - A request's size and payload (`-s`, `-p`) wait for the stack to send them: its requests carry 8 bytes (requests-NET.md).
+- `ip` (550-APP-0085): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED` and `DEFAULT`.
+- `netstat [-i]` (000-APP-0031): every socket of the stack with its protocol, ports, remote end, TCP state, bytes each way and program, then the cards; `-i` the cards alone.
+
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
 - Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.
