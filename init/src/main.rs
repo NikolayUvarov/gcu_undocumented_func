@@ -33,7 +33,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
+    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -549,6 +549,8 @@ impl Init {
                 }
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
+                // A loader client that only starts helpers: each check parses in a parser of its own (109-KRN-0117).
+                grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
@@ -648,6 +650,8 @@ impl Init {
             // The applications' memory is charged to loader too: it may use all of init's (issue 150).
             "loader" => Quota { tasks: QUOTA_MAX as u16 - SERVICE_QUOTA, endpoints: QUOTA_MAX as u16 - SERVICE_QUOTA, memory_mib: SPAWN_MEMORY_ALL as u16 },
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
+            // The endpoint a check's parser serves (109-KRN-0117).
+            "updater" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },

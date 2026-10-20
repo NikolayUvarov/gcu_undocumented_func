@@ -299,8 +299,20 @@ fn main(_info: &'static BootInfo) {
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         let owner = request.sender;
+        // A helpers-only client (the updater's, 109-KRN-0117) may list, inspect and start helpers, and start no program.
+        let refuse = request.badge == mind::process::BADGE_HELPERS_ONLY;
+        let denied = loader::Error::Rights;
         // Requests in idl/loader.wit; a message that is not a call is dropped with its capability.
         let _ = match loader::decode(&request, RECEIVED_CAP) {
+            Ok((loader::Request::Run { .. }, call)) if refuse => loader::reply_run(call, Err(Error::Rights)),
+            Ok((loader::Request::Begin { .. }, call)) if refuse => loader::reply_begin(call, Err(denied)),
+            Ok((loader::Request::Grant { .. }, call)) if refuse => { let _ = ipc::drop_cap(RECEIVED_CAP); loader::reply_grant(call, Err(denied)) }
+            Ok((loader::Request::GrantMemory { .. }, call)) if refuse => { let _ = ipc::drop_cap(RECEIVED_CAP); loader::reply_grant_memory(call, Err(denied)) }
+            Ok((loader::Request::GrantFirmware { .. }, call)) if refuse => { let _ = ipc::drop_cap(RECEIVED_CAP); loader::reply_grant_firmware(call, Err(denied)) }
+            Ok((loader::Request::Commit { .. }, call)) if refuse => loader::reply_commit(call, Err(denied)),
+            Ok((loader::Request::CommitInFront { .. }, call)) if refuse => loader::reply_commit_in_front(call, Err(denied)),
+            Ok((loader::Request::CommitWithInput { .. }, call)) if refuse => loader::reply_commit_with_input(call, Err(denied)),
+            Ok((loader::Request::Abort { .. }, call)) if refuse => loader::reply_abort(call, Err(denied)),
             Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
             Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[], None, false).map(|(pid, _)| pid)),
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
