@@ -3173,6 +3173,28 @@ def store_suite(vm):
         require(snap, line)
     print("PASS: block store commits: two names change at once or not at all (a stale version, a missing root), a "
           "snapshot reads them at one point, a commit with a removal is found whole after a restart", flush=True)
+    # 300-STO-0018: the current names by prefix, 16 at a time. 18 names published 3 to a commit (a shell line holds 256
+    # bytes), the last first.
+    listed = [f"list/n{k:02}" for k in range(18)]
+    for start in range(15, -1, -3):
+        chunk = listed[start:start + 3]
+        require(blocks("commit " + " ".join(f"{name} 0 {left}" for name in chunk)), f"COMMITTED {chunk[-1]} VERSION 1")
+    def named(out):
+        return re.findall(r"^(\S+) VERSION (\d+) ROOT (\S+)\r?$", out, re.M)
+    out = blocks("names list/")
+    require(out, "18 NAMES IN 2 PAGES")
+    assert named(out) == [(name, "1", left) for name in listed], out
+    # Every name: the removed ones (obj, pair) are not listed.
+    out = blocks("names")
+    require(out, "19 NAMES IN 2 PAGES")
+    assert [n for n, _, _ in named(out)] == ["copy"] + listed and named(out)[0] == ("copy", "3", root), out
+    # Listing is reading: the client badged get alone may (blocksro).
+    out = vm.command("blocksro names list/n1", timeout=60)
+    require(out, "8 NAMES IN 1 PAGES")
+    assert [n for n, _, _ in named(out)] == listed[10:], out
+    require(blocks("names a:b"), "blocks: names: Invalid")
+    print("PASS: block store names: the current names by prefix in byte order, 16 a page, removed ones left out; a client "
+          "that may only read lists them", flush=True)
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
