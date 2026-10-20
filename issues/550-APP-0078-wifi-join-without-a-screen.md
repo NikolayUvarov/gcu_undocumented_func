@@ -1,6 +1,6 @@
 # 550-APP-0078 — `wifi join` and `wifi status` without a screen
 
-**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: done on 550-APP-0033's task branch and in `fast-test`, checked in QEMU; `main` waits for ABI 10 · **Blocked by:** — (it builds on 550-APP-0033's task branch, which waits for the kernel track's ABI 10 in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.4, MC-11.5, MC-12.1
+**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 92781301 (2026-10-20), checked in QEMU; `ip`'s address after the join and the MacBook Pro's run left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.4, MC-11.5, MC-12.1
 
 **Recorded by:** the tools track (APP), 2026-10-14, from the assurance track's request on `internal-dev-messages` (`APP/2026-10-14T1621Z-ASR-wifi-join-without-a-screen-and-a-start-script.md`), for [550-ASR-0007](550-ASR-0007-wifi-join-tests.md): the maintainer asked for Wi-Fi joins to be tested without typing.
 
@@ -52,8 +52,8 @@
   - `wifi status` and `wifi leave` work, and `wifi join` alone prints the usage;
   - no passphrase is on the serial line.
 - **This is QEMU's stand-in radio, not the MacBook Pro's** (MC-12.1).
+- **In `main`** since 92781301 (2026-10-20): the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally).
 - **Left:**
-  - `main`, after the kernel track's ABI 10;
   - `ip`'s address after the join, which waits for the network track's half of 550-ASR-0007;
   - the MacBook Pro's run.
 

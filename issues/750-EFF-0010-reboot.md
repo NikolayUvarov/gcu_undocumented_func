@@ -1,12 +1,12 @@
 # 750-EFF-0010 — Reboot on the server's request, through the gateway
 
-**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-KRN.md](requests-KRN.md) (the reboot badge for the gateway); the Effector server's reboot action (its tasks 74.12 and 75, part B) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.7, MC-6.9, MC-7.1, MC-3.7
+**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-KRN.md](requests-KRN.md) (the reboot badge for the gateway); the unverified server reboot-action/return-to-online contract retained as an open requirement in this issue · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.7, MC-6.9, MC-7.1, MC-3.7
 
 ## Problem
 
 - **Why it is needed.** Remote management needs a controlled restart.
 - **On MIND Core.** `init` reboots only for a client with `BADGE_REBOOT`, which today only `updater` holds.
-- **On the server.** Effector is adding a reboot operation with a guard and a check that the machine came back.
+- **On the server.** A typed reboot operation needs an authorization guard and a check that the machine came back. This audit has not established its current server contract or replacement external task number; historical task 75 is unrelated console work. Neither the prepared platform boundary of external task 81 nor its 81-01 agent/live follow-up implements or verifies this reboot feature. The requirement remains open here; no remote machine is rebooted to investigate it.
 
 ## Plan
 

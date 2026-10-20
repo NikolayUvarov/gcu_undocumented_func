@@ -1,0 +1,36 @@
+# 176-KRN-0103 — `check`, `bench` and `kbench` stop when their console is gone — done
+
+**Type:** `libmind`, the test and performance tools · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [176](../issues/176-test-and-performance-utilities.md) · **Constitution:** MC-6.5
+
+## Problem
+
+The tools track (requests-KRN.md, 2026-10-10, from the walk through wm's menu in [000-APP-0056](../issues-done/000-APP-0056-every-entry-of-wms-menu-reacts.done)): `check`, `bench` and `kbench` run from wm's menu in a `console` window. Closing the window ends `console`, but not the program it ran:
+
+- `mind::output::send` stops sending when the launcher's endpoint answers `Peer`, and the program goes on.
+- A full `kbench` or `bench` then measures for minutes with nobody watching it, and takes processor time from whatever the user does next.
+- `console` cannot end its programs: ending another program is the shell's, which asks the user first.
+
+The `wm` suite waits for the three to end before it closes their window (`RUN_TO_END`).
+
+## Plan
+
+The second of the request's two proposals: the tools stop themselves; libmind changes no program's behaviour.
+
+- **`mind::output::gone()`:** the launcher lent an endpoint for the output (`SLOT_CONSOLE`) and it is gone. It is known at the first output after it went, when the send answers `Peer`.
+- **The three tools** look at it after each line they show (`bench::out::Log::both`): they write their log with a line saying they stopped because their console is gone, print it to the kernel's log, and end with exit status 3.
+
+## Acceptance criteria
+
+- [x] **`check`'s kernel group (`bench` suite, x86 and aarch64):** `kbench` started with an endpoint of `check`'s as its console sends four pieces of output; `check` drops the endpoint, and `kbench` ends within 30 s (`a tool's console closes`).
+- [ ] **The `wm` suite** closes the three tools' windows without waiting, with `RUN_TO_END` empty: the tools track's part ([requests-APP.md](../issues/requests-APP.md) gets a note).
+
+## Resolution
+
+In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, passed every group: the host groups and the timing-sensitive x86 groups on un-rizen-service, the other x86 groups on i9, aarch64 half on i9 and half on un-rizen-service. Two x86 groups timed out while other tracks' gates loaded both machines (load average 27 and 32 on 16 threads) and passed when run again on the same tree.
+
+- `a tool's console closes` passed in x86: "keys, shell, tools" (`bench` suite, un-rizen-service); aarch64: "programs, shell and four CPUs" (`bench` suite, i9): every `check` row named here passes, as `check_tool_check` requires.
+- **Left to the tools track:** the `wm` suite closing the three tools' windows with `RUN_TO_END` empty (the note in [requests-APP.md](../issues/requests-APP.md)).
+
+## Related
+
+[requests-APP.md](../issues/requests-APP.md) (the note), `libmind/src/output.rs` (issue 162), `bench/src/out.rs`.

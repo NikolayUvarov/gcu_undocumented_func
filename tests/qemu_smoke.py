@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -236,10 +236,10 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text, raw=False):
+    def command(self, text, raw=False, timeout=8):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
+        return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
         # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
@@ -457,6 +457,14 @@ def center_pixel(vm):
     return pixels[at:at + 3]
 
 
+def center_pixel_soon(vm, want, seconds=5):
+    # The centre pixel once it is `want` or the time is up: a loaded host shows a program's first frame late.
+    deadline = time.monotonic() + seconds
+    while (seen := center_pixel(vm)) != want and time.monotonic() < deadline:
+        time.sleep(.1)
+    return seen
+
+
 # aarch64 idle check (issue 208): an idle virt with 4 CPUs uses about 0.45-0.6 s of host processor time a second
 # under TCG, one vCPU that spins instead of waiting in WFI about 1 s on its own. The lowest of a few samples is
 # compared, so one sample that meets a busy host or a burst of wakeups does not fail the check.
@@ -491,7 +499,8 @@ def applications_until_memory_ends(vm, others=0):
     def clocks(most):
         pids = []
         while len(pids) < most:
-            output = vm.command("run clock &")
+            # Each start loads the program while every clock before it draws: a loaded host makes that slow.
+            output = vm.command("run clock &", timeout=60)
             started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
             if not started:
                 require(output, "OUT OF MEMORY")
@@ -834,6 +843,13 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
+    vm.send("stop\n")
+    vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
+    screen = "\n".join(screen_text(vm))
+    for line in ("MIND CORE: STOPPING THE SYSTEM...", "MIND CORE: THE SYSTEM IS STOPPED. IT IS SAFE TO TURN THE MACHINE OFF."):
+        assert line in screen, screen
+    print("PASS: stop: the kernel stops the other CPUs, then says on COM1 and on the screen that the system stopped", flush=True)
 
 
 def keys_suite(vm):
@@ -1100,8 +1116,21 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
-    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
-    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    # wifi (550-APP-0033): this suite's disk has no radio, so no station runs and the shell has no client of it to lend
+    # (the net suite joins wlansim's network); the screen says so. With --demo, against a stand-in of idl/wifi.wit 1.0
+    # and no radio, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    dots = lambda screen, n: any(canon("•" * n) in row or canon("◘" * n) in row for row in screen)  # • or its inverse ◘
+
+    def typed_as_dots(text):
+        vm.send_bytes(text.encode())
+        for _ in range(30):
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if dots(screen, len(text)):
+                break
+        assert dots(screen, len(text)) and not any(canon(text) in row for row in screen), screen
+
     vm.send("wifi\n")
     vm.expect("NO STATION", after="[WIFI] READY")
     time.sleep(.3)
@@ -1115,16 +1144,7 @@ def shell_suite(vm):
     vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
     vm.send_bytes(b"\r")
     vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
-    vm.send_bytes(b"correct horse")
-    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
-    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
-    for _ in range(30):
-        time.sleep(.3)
-        screen = screen_text(vm)
-        vm.serial(enter=False)
-        if dots(screen):
-            break
-    assert dots(screen) and not any("horse" in row for row in screen), screen
+    typed_as_dots("correct horse")
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
@@ -1559,9 +1579,11 @@ def kbench_check(vm):
 # The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
 # a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
-               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "text input: none",
+               "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
+               "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -1585,6 +1607,8 @@ def check_tool_check(vm):
     skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
     print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
           f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    texts = [name for name in rows if name.startswith("text input: ")]
+    print(f"PASS: check: text input (000-KRN-0094): {'; '.join(f'{n[12:]}: {rows[n][1]}' for n in texts)}", flush=True)
     output = vm.command("check kernel")
     assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
     require(vm.command("check nosuch"), "check: no group nosuch")
@@ -2753,12 +2777,13 @@ def dzen_suite(vm):
             assert other_color not in orbit.values(), "switching modes must restore the correct orbit brightness"
             reference = {point for point, color in orbit.items() if color == b"\x60\x60\x60"}
             assert len(reference) >= 6, "start reference tick must remain"
-            assert all(px > 0 and py > 0 and abs(px - py) <= 1 for px, py in reference), "cycle starts toward bottom right"
+            # 000-APP-0080: zero seconds point at the active hour's corner, the top right (yellow) at 19:35, in grey.
+            assert all(px > 0 and py < 0 and abs(px + py) <= 1 for px, py in reference), "cycle starts toward the hour's corner"
             small_ticks = sum(p == b"\x40\x40\x40" for p in orbit.values())
             if mode == "ticks":
                 assert small_ticks >= 35, "nine short 10-second ticks must be visible"
                 for index in range(1, 10):
-                    angle = 3 * math.pi / 4 + index * math.tau / 10
+                    angle = math.pi / 4 + index * math.tau / 10  # from the hour's corner, the top right
                     tx, ty = int(math.sin(angle) * half * 3 / 4), -int(math.cos(angle) * half * 3 / 4)
                     assert any(orbit.get((tx + dx, ty + dy)) in (b"\x40\x40\x40", b"\x80\x80\x80")
                                for dy in range(-2, 3) for dx in range(-2, 3)), index
@@ -2891,7 +2916,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; the grey zero tick and 10s ticks from the hour's top-right corner; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -5602,6 +5627,76 @@ def release_metadata_check(vm):
           f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
+def wifi_boot_check(vm):
+    """550-KRN-0097: with QEMU's stand-in radio on the disk, init starts wlansim and the station wlan. wlan holds the
+    radio's client in slot 2, and nobody else does (MC-2.3), and keystore's with BADGE_KEY_STATION in slot 3; netstack
+    holds the station's client without a badge in slot 4, its third card; the shell holds the configuration client with
+    BADGE_WIFI_CHANGE (0x300) in SLOT_WIFI (33)."""
+    real = vm.services()
+    assert "wlansim" in real and "wlan" in real, real
+    started = vm.command("dmesg -s init")
+    require(started, "[INIT] STARTED wlansim PID"); require(started, "[INIT] STARTED wlan PID")
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+
+    def clients(name):
+        # (slot, rights, badge, the endpoint's server) of each endpoint client `name` holds.
+        caps = vm.command(f"stat caps {real[name]}", raw=True)
+        return [(int(s), int(r), int(b), servers.get(int(e))) for s, r, b, e in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) SIZE=0 BADGE=(\d+) EP=(\d+)", caps, re.M)]
+    assert (2, 6, 0, real["wlansim"]) in clients("wlan"), clients("wlan")
+    assert (3, 6, 2, real["keystore"]) in clients("wlan"), clients("wlan")
+    assert (4, 6, 0, real["wlan"]) in clients("netstack"), clients("netstack")
+    assert (33, 6, 0x300, real["wlan"]) in clients("shell"), clients("shell")
+    holders = [name for name in real if name not in ("init", "wlansim", "wlan") and any(c[3] == real["wlansim"] for c in clients(name))]
+    assert not holders, holders
+    print("PASS: the Wi-Fi station in the boot services: wlan over wlansim's client in slot 2 (nobody else's) with keystore's "
+          "in slot 3, netstack's third card in slot 4, the shell's configuration client with BADGE_WIFI_CHANGE in SLOT_WIFI", flush=True)
+
+
+
+def wifi_join_check(vm):
+    """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
+    MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
+    through the WPA2 handshake; d leaves it, q ends wifi."""
+    vm.send("wifi\n")
+    vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-TEST REMEMBER=")
+    vm.send_bytes(b"mind test passphrase")
+    time.sleep(1)
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-TEST 02:00:00:57:4C:A0", timeout=60)
+    assert "mind test passphrase" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"d")
+    vm.expect("LINK=OFF", timeout=20)
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
+          "with wlansim's access point, and left", flush=True)
+    # 550-APP-0078: the same without a screen, the passphrase read from a file whose first line names the network.
+    def run(text, timeout):  # as vm.command, with a join's wait (60 s at most in wifi)
+        vm.send(text + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30), "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    require(run("wifi status", 30), "[WIFI] STATUS OFF")
+    require(run("wifi join", 30), "usage: wifi")
+    assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
+    print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
+          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+
+def shell_badge_rights_check(vm):
+    """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
+    CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
+    caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+    rights = {int(slot): int(r) for slot, r in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) ", caps, re.M)}
+    assert (rights.get(16), rights.get(20)) == (22, 22), rights
+    print("PASS: the shell's network card and TLS clients carry the right to badge, for the read-only and no-device copies", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -5617,6 +5712,14 @@ def net_suite(args, disk):
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
+    if args.wlansim_elf:
+        # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
+        shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
+        # 550-APP-0078: passphrase files for `wifi join` without a screen: the right one, a wrong one, another network's.
+        (disk / "data").mkdir(exist_ok=True)
+        for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
+            (disk / "data" / f"{name}.txt").write_text(text)
+        sign_manifest.sign_volume(disk)
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5630,12 +5733,20 @@ def net_suite(args, disk):
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
+        shell_badge_rights_check(vm)
+        if args.wlansim_elf:
+            wifi_boot_check(vm)
+        else:
+            print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
         require(page, "HTTP/1.0 200 OK"); require(page, "hello from the host: /mind")
-        require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
+        # Keep a non-listening port reserved: fixed low ports can be filtered by the host.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"fetch 10.0.2.2:{refused.getsockname()[1]} /"), "FETCH: Refused")
         # Flow grants (issue 102): what the policy names and nothing else; a program without policy gets no grant.
         checks = vm.command(f"netcheck tcp:10.0.2.2:{web_port} tcp:10.0.2.2:{web_port + 1} udp:10.0.2.2:9 ping:10.0.2.2 ping:10.0.2.3")
         for line in (f"NETCHECK tcp:10.0.2.2:{web_port} OK", f"NETCHECK tcp:10.0.2.2:{web_port + 1} Denied", "NETCHECK udp:10.0.2.2:9 Denied",
@@ -5837,12 +5948,17 @@ def net_suite(args, disk):
             vm.close()
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else ())
+    # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
+    rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
         require(vm.command("net"), "NET: NO NETWORK CARD")
         require(vm.command("ip"), "IP: NoNetwork")
+        # The station needs no wired card: the suite's last VM, so the join changes nothing after it (550-APP-0033).
+        if args.wlansim_elf:
+            wifi_join_check(vm)
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
@@ -6011,7 +6127,10 @@ def tls_suite(args, disk):
                 server.kill(); server.wait()
         require(vm.command(f"https 10.0.2.2:{ports['good']} / other.test"), "HTTPS: Certificate")
         require(vm.command(f"https 10.0.2.2:{ports['rogue']} / mind.test"), "HTTPS: Certificate")
-        require(vm.command("https 10.0.2.2:1 / mind.test"), "HTTPS: Refused")
+        # Reserve the non-listening endpoint until TLS reports the underlying TCP refusal.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"https 10.0.2.2:{refused.getsockname()[1]} / mind.test"), "HTTPS: Refused")
         log = vm.command("dmesg -s tls")
         for line in ("mind.test VERIFIED, SUITE", "other.test REFUSED: CERTIFICATE NotValidForName", "mind.test REFUSED: CERTIFICATE UnknownIssuer"):
             require(log, line)
@@ -6640,6 +6759,7 @@ def wm_suite(vm):
     require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
     # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
     require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    require(out, "[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)")  # no radio on this disk (550-APP-0033)
     assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
@@ -7821,21 +7941,58 @@ def display_suite(args, disk):
             log = vm.command("dmesg -s compositor", raw=True)
             assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
             assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            # 213-APP-0075: the shell names its first frame; with no start script, no AUTORUN line (000-APP-0079).
+            log = vm.command("dmesg -s shell", raw=True)
+            assert re.search(r"\[SHELL\] FIRST FRAME \d+X\d+ AT \d+\.\d S", log), (name, log)
+            assert "AUTORUN" not in log, (name, log)
             started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
             vm.expect(f"FOREGROUND PID={started[1]}")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\x00\xff\xff")
+            assert seen == b"\x00\xff\xff", (name, seen)
             vm.serial()  # the screenshot switched the console to the QEMU monitor
             vm.send(" \n")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\xff\x00\x00")
+            assert seen == b"\xff\x00\x00", (name, seen)
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front, the shell its first frame", flush=True)
     if args.arch == "x86_64":
         no_serial_check(args, disk)
+    autorun_check(args, disk)
+
+
+def autorun_check(args, disk):
+    """000-APP-0079: `autorun.msh` at the boot volume's root runs once at the shell's start, after its first frame, under
+    its own `requires:` line; the system log has its SHA-256 and its end. The shell's file client cannot write there."""
+    scripts = {
+        "ran": ("#!msh\nrequires: files\nwrite ram:autorun.txt \"autorun wrote this\"\nprint(\"autorun ran\")\n", "autorun ran", "OK"),
+        "limited": ("#!msh\nls data > ram:autorun.txt\nprint(\"not reached\")\n", "SCRIPT FAILED", "FAILED: > needs `requires: files` in the script (LINE 2)"),
+    }
+    try:
+        for name, (script, shown, ended) in scripts.items():
+            (disk / "autorun.msh").write_text(script)
+            sign_manifest.sign_volume(disk)
+            # No `ps` at the first prompt, as VM() types: keys typed while a script runs go to its Esc check.
+            vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+            try:
+                vm.expect("MIND> ", timeout=90, after=shown)  # one wait: a match drops what came with it
+                log = vm.command("dmesg -s shell", raw=True)
+                digest = hashlib.sha256(script.encode()).hexdigest()
+                require(log, f"[SHELL] AUTORUN /autorun.msh SHA256 {digest}")
+                require(log, f"[SHELL] AUTORUN ENDED {ended}")
+                assert log.count("AUTORUN ENDED") == 1, log
+                if name == "ran":
+                    require(vm.command("cat ram:autorun.txt"), "autorun wrote this")
+                    require(vm.command("write /autorun.msh print(1)"), "ERROR")
+            finally:
+                vm.close()
+    finally:
+        (disk / "autorun.msh").unlink(missing_ok=True)
+        sign_manifest.sign_volume(disk)
+    print("PASS: autorun.msh at the boot volume's root runs once after the shell's first frame, its hash and end in the "
+          "log; a word its requires: lacks fails it; the shell cannot write the root", flush=True)
 
 
 def clock_suite(args, disk):
@@ -7848,9 +8005,10 @@ def clock_suite(args, disk):
         time.sleep(10)  # past the measures at 1 s and 8 s
 
         def clocks():
-            before = time.time()
+            # Compare elapsed clocks; host realtime can jump independently of both monotonic clocks.
+            before = time.monotonic_ns()
             line = vm.command("time", raw=True)
-            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+            return (before + time.monotonic_ns()) / 2e9, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
         host0, guest0, measured = clocks()
         # Measured again below the first: 9% less where the first window was right, more or less where the host
         # stretched it too (i9: 4043 -> 3639 MHz).
@@ -7863,6 +8021,45 @@ def clock_suite(args, disk):
         vm.close()
     print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
+
+def watchdog_suite(args, disk):
+    """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
+    boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
+    machine at its second expiry, 30 s on, and the next boot says so. init finds the mark the stopped run left in a
+    firmware variable and starts safely, without radios, cameras and sound; it clears the mark a minute after READY, and
+    the boot after a reboot is a normal one."""
+    armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
+    safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
+    try:
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        frozen = time.monotonic()
+        vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
+        took = time.monotonic() - frozen
+        vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
+        assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
+        deadline = time.monotonic() + 150
+        while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
+            assert time.monotonic() < deadline, log[-2000:]
+            time.sleep(5)
+            log = vm.command("dmesg -s init", raw=True)
+        uptime = int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) / 1e9
+        assert uptime > 25, uptime
+        vm.send("reboot\n")
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        assert safe not in log and "STARTED audio_gw" in log, log[-2000:]
+    finally:
+        vm.close()
+    # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
+    assert took > 25, took
+    print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
+          f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
+          f"sound or speech), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
@@ -8288,6 +8485,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8311,6 +8509,10 @@ def main():
         fixture = ROOT / IMAGE / "fixture-updater.elf"
         args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
+    # The stand-in radio where the fixture scripts build it (550-KRN-0097): aarch64 beside the image, x86 in MIND_TEST_OUT.
+    radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
+        Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
+    args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
@@ -8447,6 +8649,9 @@ def main():
                 continue
             if suite == "clock":
                 clock_suite(args, disk)
+                continue
+            if suite == "watchdog":
+                watchdog_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)

@@ -97,8 +97,9 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
 // child's slots). A program that asked to be a console program gets no screen, nor one its launcher starts in a window
 // (a broker client in SLOT_WINDOW, issue 088): it draws into the window's surface; a window manager keeps its screen.
-// With `front`, a program with a screen starts in front for that task, which must have the focus (issue 160).
-fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> Result<u64, Error> {
+// With `front`, a program with a screen starts in front for that task, which must have the focus (issue 160). With `fed`,
+// it gets a text input whose writer's handle comes back beside its PID (1.9, 000-KRN-0094), else 0.
+fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed: bool) -> Result<(u64, usize), Error> {
     let (file, task) = open(name)?;
     let (image, size) = read_image(&file)?;
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
@@ -127,9 +128,10 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>) -> 
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
     let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
     let image = Image::Memory { cap, len: size };
-    let result = match front.filter(|_| screen != 0) {
-        Some(owner) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner),
-        None => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota),
+    let result = match (front.filter(|_| screen != 0), fed) {
+        (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
+        (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
+        (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
     };
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
@@ -163,7 +165,11 @@ fn spawn_helper(name: &str) -> Result<u64, Error> {
 }
 
 // A launch in progress (idl/loader.wit): who started it, what to run, the capabilities lent for the program's slots.
-struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); 5], count: usize }
+struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); SESSION_GRANTS], count: usize }
+
+// Every launch slot and SLOT_FIRMWARE at once (000-KRN-0101): with the standard five and the debug log, 24 of SPAWN's 32.
+const SESSION_GRANTS: usize = LAUNCH_SLOTS.len() + 1;
+const _: () = assert!(5 + SESSION_GRANTS + 1 <= SPAWN_GRANTS_MAX);
 
 impl Session {
     fn drop_grants(&mut self) { for &(_, handle) in &self.grants[..self.count] { let _ = ipc::drop_cap(handle); } self.count = 0; }
@@ -184,7 +190,7 @@ impl Launcher {
         }
         let index = self.sessions.iter().position(Option::is_none).ok_or(loader::Error::Sessions)?;
         self.next = self.next.wrapping_add(1).max(1);
-        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); 5], count: 0 };
+        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); SESSION_GRANTS], count: 0 };
         session.name[..name.len()].copy_from_slice(name.as_bytes()); session.args[..args.len()].copy_from_slice(args.as_bytes());
         self.sessions[index] = Some(session);
         Ok(self.next)
@@ -224,10 +230,11 @@ impl Launcher {
     fn grant_firmware(&mut self, owner: u64, id: u32) -> Result<(), loader::Error> { self.keep(owner, id, SLOT_FIRMWARE as u8) }
 
     // `front`: in front for the owner (commit-in-front); refused while the owner is not in front, the session kept.
-    fn commit(&mut self, owner: u64, id: u32, front: bool) -> Result<u64, loader::Error> {
+    // `fed`: with a text input (commit-with-input); the PID and the writer's handle.
+    fn commit(&mut self, owner: u64, id: u32, front: bool, fed: bool) -> Result<(u64, usize), loader::Error> {
         let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
         let mut session = self.sessions[index].take().unwrap();
-        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count], front.then_some(owner));
+        let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count], front.then_some(owner), fed);
         if let Err(Error::Other(ERR_FOCUS)) = result { self.sessions[index] = Some(session); return Err(loader::Error::Rights); }
         if result.is_err() { session.drop_grants(); }
         result.map_err(|error| match error {
@@ -295,13 +302,20 @@ fn main(_info: &'static BootInfo) {
         // Requests in idl/loader.wit; a message that is not a call is dropped with its capability.
         let _ = match loader::decode(&request, RECEIVED_CAP) {
             Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
-            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[], None)),
+            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[], None, false).map(|(pid, _)| pid)),
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
             Ok((loader::Request::GrantMemory { session, slot, .. }, call)) => loader::reply_grant_memory(call, launcher.grant_memory(owner, session, slot)),
             Ok((loader::Request::GrantFirmware { session, .. }, call)) => loader::reply_grant_firmware(call, launcher.grant_firmware(owner, session)),
-            Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session, false)),
-            Ok((loader::Request::CommitInFront { session }, call)) => loader::reply_commit_in_front(call, launcher.commit(owner, session, true)),
+            Ok((loader::Request::Commit { session }, call)) => loader::reply_commit(call, launcher.commit(owner, session, false, false).map(|(pid, _)| pid)),
+            Ok((loader::Request::CommitInFront { session }, call)) => loader::reply_commit_in_front(call, launcher.commit(owner, session, true, false).map(|(pid, _)| pid)),
+            Ok((loader::Request::CommitWithInput { session, front }, call)) => {
+                let started = launcher.commit(owner, session, front, true);
+                let sent = loader::reply_commit_with_input(call, started.map(|(_, writer)| writer));
+                // Moved with the reply; one the caller did not take is dropped, so the program's input ends.
+                if let Ok((_, writer)) = started { let _ = ipc::drop_cap(writer); }
+                sent
+            }
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
             Ok((loader::Request::InspectRequests { name }, call)) => loader::reply_inspect_requests(call, requests(name.as_str())),

@@ -18,7 +18,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 21 | 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -32,12 +32,19 @@ const SOF: u32 = 1 << 31; const EOF: u32 = 1 << 30; const IOC: u32 = 1 << 29; co
 const TXC_ACK: u32 = 0x01; const TXC_START: u32 = 0x08;
 // The receive-match slots of the station's own address and of the network's BSSID; the template copy of both.
 const MATCH_CONTROL: usize = 0x420; const MATCH_DATA: usize = 0x422; const TEMPLATE_CONTROL: usize = 0x130; const TEMPLATE_DATA: usize = 0x134;
-// The gain table entry for transmitting (b43 uses 40; a higher entry is a lower gain), until 550-DRV-0028.
-pub const TX_GAIN: u16 = 80;
+// The gain table entry for transmitting, b43's: at entry 80 no access point acknowledged a frame (2026-10-13). A higher
+// entry is a lower gain; 550-DRV-0028 replaces the fixed entry.
+pub const TX_GAIN: u16 = 40;
 // The longest frame without FCS (idl/wlanhw.wit), the header that leads a received one, the frames kept for the station.
 pub const FRAME_MAX: usize = 2346; pub const RADIO_HEADER: usize = 8;
 const QUEUE: usize = 32; const QUEUE_STRIDE: usize = 2368;
 const STATUS_MS: usize = 100;
+// The cores a frame leaves through (PHY control bits 6 up, core 0 at bit 6): b43's cores 0 and 1, in SISO mode. Single
+// cores and CDD on three did no better on 2026-10-14.
+const TX_CORES: u16 = 0x00C0;
+// The cores whose front ends stay off: with core 2's on, OFDM frames from access points at -43 dBm were not received;
+// with it off they were, every one (2026-10-14, 550-DRV-0028). Its transmitter is not among TX_CORES.
+pub const CORES_OFF: u8 = 0b100;
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,9 +59,14 @@ pub struct Filter { pub all_beacons: bool, pub bssid: [u8; 6], pub own: [u8; 6] 
 #[derive(Clone, Copy)]
 pub struct Sent { pub acked: bool, pub attempts: u8 }
 
-// What the receive side did since the radio came up.
+// What the receive side did since the radio came up. `frames`: by modulation (CCK, OFDM, HT) and outcome (good, bad
+// FCS, bad PLCP; bad ones reach the host only when kept, `keep`). The acknowledgements to us among the good frames
+// (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames.
 #[derive(Clone, Copy, Default)]
-pub struct Counts { pub queued: u32, pub filtered: u32, pub bad: u32, pub overflow: u32, pub dma_errors: u32 }
+pub struct Counts {
+    pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
+    pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
+}
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
@@ -64,6 +76,10 @@ pub struct Radio<'a> {
     filter: Filter,
     queue: Pages, head: usize, count: usize,
     retry: u16,
+    // MAC control bits a test adds: control frames, bad frames kept for the host.
+    mac_extra: u32,
+    // The cores' front-end words before a test switched one off.
+    afe_saved: Option<[(u16, u16); 3]>,
     staging: [u8; STRIDE],
     pub counts: Counts,
 }
@@ -119,7 +135,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -146,11 +162,15 @@ impl<'a> Radio<'a> {
         let mut stale = 0;
         while c.r32(TX_STATUS0) & 1 != 0 && stale < 64 { let _ = c.r32(TX_STATUS1); stale += 1; }
         r.addresses(&mac, &[0; 6]);
-        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        c.w32(MAC_CONTROL, (c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | r.mac_extra);
         c.enable();
         mind::println!("[BCM] RADIO UP: RX RING AT {:#X} ({} SLOTS), TX RING AT {:#X} ({} SLOTS); GAIN ENTRY {} ({:08X}); {} STALE TRANSMIT STATUSES; RX STATUS {:08X}, ERROR {:08X}",
                        rx_address, SLOTS, tx_address, TX_SLOTS, TX_GAIN, entry, stale, c.r32(RX_STATUS), c.r32(RX_ERROR));
         if r.set_channel(1).is_err() { mind::println!("[BCM] CHANNEL 1 NOT SET"); }
+        match r.cores_off(CORES_OFF) {
+            Ok(()) => mind::println!("[BCM] CORE 2'S FRONT END OFF: WITH IT ON, OFDM IS RECEIVED ONLY FROM STRONG SENDERS"),
+            Err(_) => mind::println!("[BCM] CORE 2'S FRONT END NOT SWITCHED OFF"),
+        }
         Some(r)
     }
 
@@ -179,12 +199,16 @@ impl<'a> Radio<'a> {
         }
     }
 
+    // The channel set (0: none yet) and how many received frames wait.
+    pub fn channel(&self) -> u8 { self.channel }
+    pub fn waiting(&self) -> usize { self.count }
+
     // Tunes to a 2.4 GHz channel at 20 MHz with the MAC suspended meanwhile.
     pub fn set_channel(&mut self, ch: u8) -> Result<(), Error> {
         if !(1..=13).contains(&ch) { return Err(Error::Invalid); }
         if !self.c.suspend() { return Err(Error::Failed); }
         self.c.channel(ch as usize);
-        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET);
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
         self.c.enable();
         self.channel = ch;
         Ok(())
@@ -209,6 +233,28 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
+    // Control frames, and frames with a bad FCS or PLCP, passed to the host as well, for a test.
+    pub fn keep(&mut self, control: bool, bad: bool) {
+        self.mac_extra = if control { MAC_KEEP_CONTROL } else { 0 } | if bad { MAC_KEEP_BAD } else { 0 };
+        self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
+    }
+
+    // The cores whose analog front ends are off (a bitmap, core 0 first): every core's words as they were, then those
+    // in `mask` switched off as b43 switches the analog part off.
+    pub fn cores_off(&mut self, mask: u8) -> Result<(), Error> {
+        if mask == 0 && self.afe_saved.is_none() { return Ok(()); }
+        if !self.c.suspend() { return Err(Error::Failed); }
+        let saved = *self.afe_saved.get_or_insert_with(|| [0, 1, 2].map(|i| self.c.afe(i)));
+        for (i, words) in saved.into_iter().enumerate() { self.c.afe_restore(i as u16, words); }
+        for i in (0..3u16).filter(|&i| mask & 1 << i != 0) { self.c.afe_off(i); }
+        self.c.enable();
+        Ok(())
+    }
+
+    // What the MAC shows when it does not suspend: its control word, the interrupt reason, the microcode's status.
+    pub fn state(&self) -> (u32, u32, u16) { (self.c.r32(MAC_CONTROL), self.c.r32(IRQ_REASON), self.c.shm16(0x0040)) }
+
+
     // Whether the filter lets `f` (an MPDU without FCS) through: control frames never do.
     fn wanted(&self, f: &[u8]) -> bool {
         if f.len() < 10 { return false; }
@@ -222,18 +268,19 @@ impl<'a> Radio<'a> {
         bss == self.filter.bssid
     }
 
-    // Received frames moved from the ring into the queue, filtered; the engine's index set one short of its current slot.
+    // Received frames moved from the ring into the queue, filtered, while the queue has room: the rest wait in the ring.
+    // The engine's index is set one short of the first slot not yet taken.
     pub fn poll(&mut self) {
         fence(Ordering::SeqCst);
         let current = ((self.c.r32(RX_STATUS) & 0x1FFF) as usize / 16) % SLOTS;
-        while self.next != current {
+        while self.next != current && self.count < QUEUE {
             let slot = self.next;
             self.take_slot(slot);
             self.poison(slot);
             self.next = (slot + 1) % SLOTS;
         }
         fence(Ordering::SeqCst);
-        self.c.w32(RX_INDEX, (((current + SLOTS - 1) % SLOTS) * 16) as u32);
+        self.c.w32(RX_INDEX, (((self.next + SLOTS - 1) % SLOTS) * 16) as u32);
         let reason = self.c.r32(DMA0_REASON);
         if reason != 0 { self.c.w32(DMA0_REASON, reason); if reason & 0xDC00 != 0 { self.counts.dma_errors += 1; } }
     }
@@ -246,14 +293,23 @@ impl<'a> Radio<'a> {
         for w in 0..(OFFSET + length).div_ceil(4) { self.staging[4 * w..4 * w + 4].copy_from_slice(&self.dma.read32(b + 4 * w).to_le_bytes()); }
         let s = &self.staging;
         let (phy0, status) = (u16::from_le_bytes([s[4], s[5]]), u32::from_le_bytes([s[16], s[17], s[18], s[19]]));
-        // FCS error, decryption error, PLCP violation or header check failure: dropped.
-        if status & (1 | 1 << 4) != 0 || phy0 & 0x0300 != 0 { self.counts.bad += 1; return; }
+        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
+        // Counted by modulation and outcome first; FCS error, decryption error, PLCP violation or header check failure: dropped.
+        let kind = match phy0 & 3 { 0 => 0, 1 => 1, _ => 2 };
+        let outcome = if status & 1 != 0 { 1 } else if phy0 & 0x0300 != 0 { 2 } else { 0 };
+        self.counts.frames[kind][outcome] += 1;
+        if outcome != 0 || status & 1 << 4 != 0 { self.counts.bad += 1; return; }
         let pad = if status & 4 != 0 { 2 } else { 0 };
         if length < pad + 6 + 4 + 10 { self.counts.bad += 1; return; }
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
-        if s[OFFSET..OFFSET + 8].iter().all(|&b| b == 0xFF) { self.counts.bad += 1; return; }
+        let ofdm = kind == 1;
+        if ofdm {
+            for i in 0..3 { self.counts.ofdm_power[i] += s[9 + i] as i8 as i32; }
+            if phy0 & 0x000C != 0 { self.counts.ofdm_clipped += 1; }
+        }
+        let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
+        if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
         if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
-        if self.count == QUEUE { self.counts.overflow += 1; return; }
         let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
         let weakness = if signal < 0 && signal > -128 { signal.unsigned_abs() } else { 0 };
         let channel = match (u16::from_le_bytes([s[22], s[23]]) >> 3) as u8 { 0 => self.channel, ch => ch };
@@ -299,7 +355,7 @@ impl<'a> Radio<'a> {
         let mut header = [0u8; HEADER];
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
         header[0x04..0x06].copy_from_slice(&frame[0..2]);
-        header[0x08..0x0A].copy_from_slice(&(0x00C0u16 | ofdm as u16).to_le_bytes()); // antennas 0/1 automatic, no per-frame power
+        header[0x08..0x0A].copy_from_slice(&(TX_CORES | ofdm as u16).to_le_bytes()); // no per-frame power
         header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&control1.to_le_bytes());
         header[0x12] = code; header[0x14] = ofdm as u8; header[0x15] = self.channel;
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);

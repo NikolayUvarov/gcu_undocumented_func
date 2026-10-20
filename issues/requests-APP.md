@@ -4,7 +4,7 @@
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file, and the file goes when it is empty.
 
-Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073), and redirection and pipes in the shell and `msh` (000-APP-0074, its pipes waiting for 000-KRN-0094). The requests below wait.
+Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `log:` and `efivar` in the tools (211-APP-0013), full screen and the list of windows in `wm` (211-APP-0014), `update` (351-APP-0029), `wifi` (550-APP-0033), the audit's A07 and A08 (175-APP-0035, 175-APP-0036), the marked window (211-APP-0037), the message a program that ends at once leaves in its window (211-APP-0039), the shell's commands in `wm` (211-APP-0040), Russian speech on the MacBook Pro with the kernel track's measured note on its hiss and clicks (252-APP-0041) and `date set` (211-APP-0042). Numbered on 2026-10-10: the camera from `wm` and the shell in a window, as the camera from `wm` and `console` (158-APP-0043), the shell's own window (211-APP-0040) and `console` joined to the shell (211-APP-0044, waiting for `SLOT_SHELL` from `KRN`); the shell's window only when asked (211-APP-0045) and a window back to its content's size (211-APP-0046); later that day the menu's tests category (176-APP-0051), voice control as a service (000-APP-0052), what `hear` heard (000-APP-0053), the help keys in the shell's commands (000-APP-0054), the date and time from `wm`'s Settings (000-APP-0055), every menu entry reacting (000-APP-0056) and the machine's memory in `top` and `free` (211-APP-0057); then `cpus` naming AVX-512 and AMX (174-APP-0058); on 2026-10-12 the battery in `wm` and the shell (211-APP-0070); on 2026-10-14 the two races in the `wm` suite, a title written after adoption and Turn off's Enter (000-APP-0073), redirection and pipes in the shell and `msh` (000-APP-0074, its pipes waiting for 000-KRN-0094), and the shell's first frame in the system log (213-APP-0075). The requests below wait.
 
 ## `svc boot`, `enable`, `disable`, `after`, `reset`: which services start at boot (173)
 
@@ -236,13 +236,29 @@ In the `tls` suite, a program with the lent client gets `denied` for `client-cer
 
 In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 as `PREFERRED DEFAULT` after `netpolicy add default card 1`.
 
-## The shell logs its first frame (213-KRN-0098)
+## A note: a launch session now holds every launch slot (000-KRN-0101)
 
-**Recorded by:** the kernel track (KRN), 2026-10-13, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md): on the maintainer's Ryzen machine the screen went black when the shell took it, and the system log cannot tell a shell that never drew from a screen that never showed it.
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](../issues-done/000-KRN-0101-a-launch-session-holds-every-launch-slot.done), the tools track's request for 211-APP-0044.
 
-**Asked:** one line in the system log when the shell has rendered its first frame, for example `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S`, and one if a call made before it takes over 5 s, naming the service.
+**What changed:** `loader`'s launch session keeps a grant for every launch slot and `SLOT_FIRMWARE` (18), not 5. `check`'s `launch: every slot` lends all 17 launch slots in one session.
 
-**Acceptance criteria:** the line is in the boot log of every suite's machine and of a real one.
+**Asked:** nothing is required. `wm` and the shell may lend `SLOT_SHELL` and the battery without putting them last, and the `wm` suite can check `console` holding the shell's commands beside `record -w`'s window lease.
+
+## A note: `check`, `bench` and `kbench` stop when their console is gone (176-KRN-0103)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done), the tools track's request for 000-APP-0056.
+
+**What changed:** libmind's `mind::output::gone()` says that the launcher lent an endpoint for the output and it is gone. The three tools look at it after each line they show: they write their log, saying they stopped because their console closed, and end with exit status 3. `check`'s `a tool's console closes` drops kbench's console after four pieces of output and sees it end.
+
+**Asked:** the `wm` suite's walk may close their windows without waiting: `RUN_TO_END` can be empty. Other programs keep running when their console goes, as before; one that should stop can look at `gone()` too.
+
+## A note: the safe start after a run that stopped early (000-KRN-0076)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).
+
+**What changed:** a run that did not end as a task asked (a freeze the chipset's watchdog reset, a cut power) leaves a mark in a firmware variable, and the next boot is a safe start: `init` logs `[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts` and leaves those stopped; `svc start` starts each.
+
+**Asked:** the shell (and `wm`) show that line to the user at the start, with how to start what was left out. Nothing waits on it.
 
 ## `app`, `app2` and `dzen-clock`: libmind's drawing, no `static mut`, the right words on exit (the critique of 2026-10-14)
 
@@ -270,6 +286,15 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 - The `normal`, `busy`, `smp` and `isolation` suites pass on x86 and aarch64. They use `app` and `app2` as workloads, and `boot` runs `app`.
 - `grep -rn "static mut" app app2` and `grep -rn "RETURNING TO KERNEL"` find nothing.
+
+## Note: the station's client in `SLOT_WIFI`, a read-only card client and a badged TLS client for the shell to lend (550-KRN-0097, 000-KRN-0109)
+
+**Recorded by:** the kernel track (KRN), 2026-10-14. The kernel's side is on its branch and reaches `main` with its next gate (ABI 10).
+
+- **`SLOT_WIFI` (33)** holds `wlan`'s client with `BADGE_WIFI_CHANGE` while the station runs. The shell lends it in the same slot to a program that asks for `REQUEST_WIFI` (`wifi`, 550-APP-0033).
+- **`SLOT_NET` (16)** now carries `CAP_BADGE`. The shell mints `BADGE_COUNTERS` from it and lends the copy in the program's `SLOT_NET` for `REQUEST_NET_COUNTERS` (000-APP-0049). `SLOT_NET` is a launch slot now.
+- **`SLOT_TLS` (20)** now carries `CAP_BADGE`. The shell mints `BADGE_TLS_NO_DEVICE` for each program it lends TLS to (351-NET-0022), unless the program needs the device's certificate.
+- ABI 10 moves `SLOT_DYNAMIC` to 34. `tpm` and `keystore` now start before `netstack`, so services after `virtio_net` get other PIDs than before.
 
 ## The shell lends a client of the SSH service (351-NET-0027)
 

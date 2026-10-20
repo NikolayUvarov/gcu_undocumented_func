@@ -32,6 +32,17 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
 - **MacBook Pro.** With `--wifijoin` and no typing, one boot logs a WPA2 join, the address DHCP gave, and a gateway that answers `ping`.
 - **The passphrase** appears in no log line, commit or message. A test only reads it from `data/wifijoin.txt`, a file on the maintainer's own disk, kept in plain text as the proprietary files are kept (AGENTS.md, section 3).
 
+## Progress
+
+- **2026-10-14: the tools track's two parts are planned** as 550-APP-0078 (`wifi join`, `wifi status`) and 000-APP-0079 (the start script). It proposed the boot volume's root for `autorun.msh` instead of `data/`: a script under `data/`, where programs may write, would run at every boot with the shell's authority (MC-3.11). Taken: `build-and-write.sh --wifijoin` writes the root's `autorun.msh`.
+- **`tests/hardware/wifijoin.msh`** (on `claude/ASR-DRV` and `fast-test` until its gate):
+  - it reads the network's name from `data/wifijoin.txt`;
+  - it waits up to 60 s for the station, then runs `wifi join "<name>" --passphrase-file data/wifijoin.txt`;
+  - after a join it waits up to 30 s for a card's address and pings its gateway;
+  - it notes each step on the screen and in the system log, and ends with `*** WIFI JOIN Complete. Data collected ***`.
+  
+  Its `requires:` is `file wifi network log`. It is written against 550-APP-0078's planned lines: until that is in an image, `wifi join` fails and the script logs why.
+
 ## Related
 
 [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), the requests to `APP` and `NET` on `internal-dev-messages` (2026-10-14), `tests/wlansim/`.

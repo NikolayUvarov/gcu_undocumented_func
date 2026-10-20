@@ -12,12 +12,13 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
 /// take from a client; the user said no in the shell's window, or did not answer; its window's session is busy
-/// with a program; (1.2) a time the clock does not take.
+/// with a program; (1.2) a time the clock does not take; (1.5) `refused` too for the station's client asked by any
+/// client but the window manager the shell started.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Error { #[default] Unavailable = 0, NoMemory = 1, Refused = 2, Declined = 3, Busy = 4, Invalid = 5 }
@@ -84,6 +85,19 @@ pub fn battery(endpoint: Endpoint, receive: usize) -> Result<core::result::Resul
     }
 }
 
+/// A copy of the shell's client of the Wi-Fi station (`idl/wifi.wit`, with the change badge: it scans, joins, leaves
+/// and forgets networks) (1.5, 550-APP-0033): for the window manager the shell started with its commands, whose
+/// Settings start `wifi`; starting it there is the user's request to choose a network. `refused` for any other
+/// client; `unavailable`: the shell holds none (no radio, so no station). A word call, so it can carry the capability.
+pub fn wifi(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [5 | MAJOR << 8, 0];
+    let (reply, received) = wire::call_receiving(endpoint, words, None, receive)?;
+    match wire::check_cap_reply(&reply, received, receive)? {
+        None => Ok(Ok(())),
+        Some(code) => Ok(Err(Error::from_code(wire::enum_code(code)?).ok_or(SysError::Invalid)?)),
+    }
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -91,6 +105,7 @@ pub enum Request {
     Run { line: Text<240> },
     SetClock { date: u32, seconds: u32 },
     Battery,
+    Wifi,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -120,6 +135,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Battery, Call::words(request, cap)))
         }
+        5 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Wifi, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -138,6 +157,11 @@ pub fn reply_set_clock(call: Call, value: core::result::Result<(), Error>) -> Re
 }
 /// `value` is the handle of the capability to send (copied).
 pub fn reply_battery(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish_cap(call, value, false)
+}
+/// `value` is the handle of the capability to send (copied).
+pub fn reply_wifi(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, false)
 }

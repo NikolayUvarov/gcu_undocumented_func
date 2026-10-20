@@ -99,6 +99,16 @@ fn dzen_indicators_orbit_and_keys() {
     assert!(screen[0].trim().is_empty() && screen[23].trim().is_empty() && screen[24].trim().is_empty());
     dzen::draw(&mut grid, face, Some(SECONDS), Some(5_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
     assert_eq!(rows(&grid).iter().map(|r| r.matches('•').count()).sum::<usize>(), 9, "nine 10-second ticks");
+    // 000-APP-0080: the zero tick points at the active hour's corner, and the dot at zero seconds is on it.
+    let find = |grid: &Grid, ch: char| (0..25).flat_map(|y| (0..80).map(move |x| (x, y))).find(|&(x, y)| grid.get(x, y).ch == ch);
+    let (tx, ty) = find(&grid, '■').unwrap();
+    assert!(tx as isize > l.x && (ty as isize) < l.y / 2, "19:35: the zero tick toward the top right, ({}, {})", tx, ty);
+    dzen::draw(&mut grid, face, Some(SECONDS), Some(0), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
+    assert_eq!(find(&grid, '●'), Some((tx, ty)), "zero seconds: the dot on the zero tick");
+    let morning = Face::at(6 * 3600).unwrap();
+    dzen::draw(&mut grid, morning, Some(6 * 3600), Some(50_000), dzen::Show { digits: true, hints: true, mode: OrbitMode::Ticks, switch: false });
+    let (mx, my) = find(&grid, '■').unwrap();
+    assert!((mx as isize) < l.x && my as isize > l.y / 2, "06:00: toward the bottom left, ({}, {})", mx, my);
     // The dot moves along the orbit: a quarter turn later it is elsewhere.
     let dot = |grid: &Grid| (0..25).flat_map(|y| (0..80).map(move |x| (x, y))).find(|&(x, y)| grid.get(x, y).ch == '●');
     let first = dot(&grid);

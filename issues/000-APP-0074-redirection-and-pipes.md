@@ -29,7 +29,9 @@
 
 **Stage 2, `<` and `|`.** This needs [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md).
 
-- The shell starts `b` with an input queue and copies `a`'s output, or the file, into it. It waits when the queue is full and closes it when `a` ends.
+- The shell starts `b` with a text input: `loader.wit` 1.9 `commit-with-input` (or with `front`, as `commit-in-front`) returns the input's end for the shell (the kernel track's plan, on its branch).
+- The shell copies `a`'s output, or the file, into it with `write_all`, which waits while the kernel's 4 KiB queue is full, and closes it when `a` ends.
+- `b` reads it with `mind::io::read` or `Lines`, to 0 at its end. A program started without an input gets `Error::NotFound` (`has_input`).
 - Esc stops the whole line, and the line's result is the last command's.
 - The tools read their input when no file is named: `grep`, `sha256`, `cat`, `find`, `view`.
 - `msh`: `<` and `|` in a command's words. A command's output as a value is `capture("…")` already.

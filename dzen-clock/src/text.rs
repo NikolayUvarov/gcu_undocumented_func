@@ -98,11 +98,11 @@ pub fn draw(grid: &mut Grid, face: Face, seconds: Option<usize>, phase: Option<u
             }
         }
         for index in 0..if show.mode == OrbitMode::Ticks { 10 } else { 1 } {
-            if let Some((x, y)) = cell(&l, point_at(index * 10_000, orbit as usize), cols, rows) {
+            if let Some((x, y)) = cell(&l, point_at(index * 10_000, orbit as usize, face.hour), cols, rows) {
                 grid.put(x, y, if index == 0 { '■' } else { '•' }, Style::new(if index == 0 { START_TICK } else { SMALL_TICK }, OFF));
             }
         }
-        if let Some((x, y)) = phase.and_then(|p| cell(&l, point_at(p, orbit as usize), cols, rows)) { grid.put(x, y, '●', Style::new(CYCLE, OFF)); }
+        if let Some((x, y)) = phase.and_then(|p| cell(&l, point_at(p, orbit as usize, face.hour), cols, rows)) { grid.put(x, y, '●', Style::new(CYCLE, OFF)); }
     }
     if show.digits && rows >= 2 {
         let text = time_text(seconds.unwrap_or(0));

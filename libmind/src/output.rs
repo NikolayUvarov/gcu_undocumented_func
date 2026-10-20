@@ -31,9 +31,18 @@ mod system {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     static OPEN: AtomicBool = AtomicBool::new(false);
+    static LENT: AtomicBool = AtomicBool::new(false);
 
     /// Before `main` (`mind::entry!`): whether the launcher lent an endpoint for the output.
-    pub fn prepare() { OPEN.store(crate::dev::cap_info(SLOT_CONSOLE).0 == CAP_KIND_ENDPOINT, Ordering::Relaxed); }
+    pub fn prepare() {
+        let lent = crate::dev::cap_info(SLOT_CONSOLE).0 == CAP_KIND_ENDPOINT;
+        OPEN.store(lent, Ordering::Relaxed);
+        LENT.store(lent, Ordering::Relaxed);
+    }
+
+    /// Whether the launcher lent an endpoint for the output and it is gone: its console ended, so nobody sees what the
+    /// program prints (176-KRN-0103). Known at the first output after it went.
+    pub fn gone() -> bool { LENT.load(Ordering::Relaxed) && !OPEN.load(Ordering::Relaxed) }
 
     /// Sends `bytes` to the launcher's endpoint, if there is one. A launcher that does not take a message within half
     /// a second loses the rest of this piece; one that ended gets no more.
@@ -50,4 +59,4 @@ mod system {
     }
 }
 #[cfg(target_os = "none")]
-pub use system::{prepare, send};
+pub use system::{gone, prepare, send};

@@ -38,6 +38,14 @@ On the MacBook Pro, `wlan` (or, until it exists, a test client) sets a channel, 
   - the dispatch of `wlanhw` requests on the service endpoint, once `idl/wlanhw.wit` and its generated code are on `main`;
   - the radio brought up at boot without the test's waits;
   - from `KRN`, an endpoint for `bcm_wifi` and its loan to `wlan`.
+- **2026-10-14: the dispatch, now that `idl/wlanhw.wit` and `wlan` are on `main`** (`bcm_wifi/src/serve.rs`):
+  - **When it serves.** When init gives `bcm_wifi` its service endpoint, the radio comes up at boot, without the test's step waits, and `wlanhw` 1.0 is served on it.
+  - **The calls.** `info`, `set-channel`, `set-filter`, `send` (the transmit status as `sent`), `receive`. `wait` is answered when a frame is queued, the ring being polled every 2 ms. `attach` and `kick` answer `invalid`: frames go by `receive`, as `wlan` takes them.
+  - **With the test flag** the stages run first, and their radio is then served.
+  - **If the radio does not come up,** every request is answered `no-device`, so the station is not left waiting.
+  - **Without the endpoint** nothing changes: the core stays in reset unless the test is asked for.
+- **Still needed: `init`'s part** (requests-KRN.md, "The Wi-Fi station in the boot services", 550-KRN-0097): `bcm_wifi`'s service endpoint, lent to `wlan` alone.
+- **On the MacBook Pro the station can join only at CCK rates for now:** OFDM reception is weak ([550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md)).
 
 ## Related
 
