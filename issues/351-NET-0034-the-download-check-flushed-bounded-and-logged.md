@@ -1,6 +1,6 @@
 # 351-NET-0034 — `download`'s check at the end: flushed, bounded and in the log
 
-**Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (built; i9 and un-rizen runs below) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 From the request "Download complete-file recheck stalls in the 6G Intel gate" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16), for [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md).
 
@@ -57,6 +57,30 @@ None of these steps was logged, and no call in them had a deadline (outside `wit
 - If a step is shown to be the cause, a regression for it is added, and the part outside `download` is routed to its owner.
 
 What this does not show: the cause of H13's stall, until a run shows the step. Physical network acceptance on the two laptops stays separate.
+
+## Progress (2026-10-20)
+
+These runs are of `claude/relaxed-meitner-5bmhpz` 6f4de98a merged with `main` 1753bf46. They show this configuration only, and do not replace H13's failed run (MC-12.1).
+
+- **i9 (`i9_4e6882212251`, WSL2), x86, the 30 MiB file.** The checks took:
+
+  | Run | Flush | Read back | Of it in reads | Longest read |
+  | --- | --- | --- | --- | --- |
+  | `x86: RAM above 4 GiB`, first check | 16 ms | 6,180 ms | 5,551 ms | 18 ms |
+  | `x86: RAM above 4 GiB`, second check | 8 ms | 5,807 ms | 5,180 ms | 11 ms |
+  | `x86: boot, display, network, …`, first check | 7 ms | 4,928 ms | 4,380 ms | 10 ms |
+  | `x86: boot, display, network, …`, second check | 1 ms | 4,926 ms | 4,328 ms | 9 ms |
+
+  - Both groups passed, and the second check stayed within its 300 s.
+  - H13's 300 s of silence is 50 times what a whole check takes here: a stall, not a slow check.
+  - If it comes back, the new lines name the step.
+- **The run before those failed elsewhere.** The first run of `x86: RAM above 4 GiB` failed before `download`, while i9 also ran another track's gate: in `policy_edit_check`, `rogue` printed `NETWORK FOR rogue: NoPolicy` and the shell's prompt did not come in time. The group was run once more on its own, and passed.
+- **un-rizen, aarch64, the 8 MiB file.** Both checks: flush 80 ms and 20 ms, read back 5,080 ms, all of it in reads, the longest 10 to 20 ms. That is 512 reads of 16 KiB, about 10 ms each:
+  - `virtio_blk` spins 1,000 times, then sleeps 1 ms, which is a whole 10 ms tick on aarch64;
+  - so each request costs a tick, and a file is read back at about 1.6 MB/s.
+
+  This is a driver's cost, not a stall. It is passed to `DRV` (requests-DRV.md, "`virtio_blk`: a request waits a whole tick").
+- **Not yet shown.** The cause of H13: no stall has come back with the new lines.
 
 ## Related
 
