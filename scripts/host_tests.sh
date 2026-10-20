@@ -15,6 +15,7 @@ done
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
+cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
 # The SSH client against OpenSSH's server, which its tests start on 127.0.0.1 (351-NET-0026): needs openssh-server.
 cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 # The voice tests synthesize and recognize ~1000 phrases and time recognition: optimized, as the system is.
@@ -24,6 +25,7 @@ python3 tests/idl_test.py
 python3 tests/font_test.py
 python3 tests/manifest_test.py
 python3 tests/release_test.py
+python3 tests/app_package_test.py
 python3 tests/test_usb_writer.py
 python3 tests/gate_test.py
 python3 tests/mirror_test.py
