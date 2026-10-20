@@ -5958,10 +5958,13 @@ def net_suite(args, disk):
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         ping_options_check(vm)
-        # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
-        # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
+        # wm's `show = net` line gives the frames a second (000-APP-0049): every card's as the stack counts them, the
+        # Wi-Fi station's too, from the shell (shell.wit 1.7, 000-APP-0096); the card client badged BADGE_COUNTERS the
+        # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
         vm.send("wm\n")
-        require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        rate = vm.expect(", THE FIRST RATE)", timeout=90)
+        wireless = 1 if args.wlansim_elf else 0
+        assert re.search(rf"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, [1-4] CARDS, {wireless} WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)

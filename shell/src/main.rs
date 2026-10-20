@@ -280,6 +280,13 @@ impl Shell {
                     while !notice.is_char_boundary(end) { end -= 1; }
                     let _ = commands::reply_boot_notice(call, Ok(&notice[..end]));
                 }
+                commands::Request::NetCounters => {
+                    // Every card's frames as the stack counts them (shell.wit 1.7, 000-APP-0096), the Wi-Fi station's
+                    // too, which the card client wm may be lent does not reach: for the window manager the shell started.
+                    let manager = self.managers.contains(&message.sender);
+                    let counters = if manager { net::card_counters() } else { Err(commands::Error::Refused) };
+                    let _ = commands::reply_net_counters(call, counters.as_ref().map(|list| list.as_slice()).map_err(|e| *e));
+                }
                 commands::Request::Run { line } => {
                     let result = self.client_line(line.as_str(), message.sender);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };

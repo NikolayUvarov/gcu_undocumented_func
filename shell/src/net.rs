@@ -121,6 +121,20 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
     }
 }
 
+/// Every card's frames as the stack counts them, the Wi-Fi station's too, the default card marked (shell.wit 1.7,
+/// 000-APP-0096).
+pub fn card_counters() -> Result<mind::idl::codec::List<mind::idl::shell::CardCounters, 4>, mind::idl::shell::Error> {
+    let Ok(Ok(interfaces)) = socket::interfaces(STACK) else { return Err(mind::idl::shell::Error::Unavailable) };
+    let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    let mut list = mind::idl::codec::List::default();
+    for i in interfaces.as_slice() {
+        let card = cards.as_slice().iter().find(|c| c.card == i.card);
+        list.push(mind::idl::shell::CardCounters { card: i.card, wireless: card.is_some_and(|c| c.kind == socket::CardKind::Wireless),
+                                                    default: card.is_some_and(|c| c.default), sent: i.sent, received: i.received });
+    }
+    Ok(list)
+}
+
 // A card's kind, then DOWN, PREFERRED and DEFAULT where they apply.
 fn state(out: &mut impl Write, card: &socket::Card) {
     let _ = write!(out, " {}", match card.kind { socket::CardKind::Wired => "WIRED", socket::CardKind::Wireless => "WI-FI" });
