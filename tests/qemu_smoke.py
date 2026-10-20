@@ -4725,8 +4725,9 @@ def update_suite(args):
             require(out, line)
         blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
-        # Past the kernel's deadline (120 s) the trial outlived it: the updater confirms B, then finds nothing newer.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK", 240)
+        # init confirms the trial within seconds (000-KRN-0102); the updater asks it every second and records it at once,
+        # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
+        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
@@ -4744,7 +4745,7 @@ def update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater past the kernel's deadline; the file system is consistent", flush=True)
+          "restart and confirmed on the disk by the updater as soon as init confirmed it; the file system is consistent", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
