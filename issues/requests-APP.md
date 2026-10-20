@@ -246,7 +246,7 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 ## A note: a launch session now holds every launch slot (000-KRN-0101)
 
-**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](000-KRN-0101-a-launch-session-holds-every-launch-slot.md), the tools track's request for 211-APP-0044.
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [000-KRN-0101](../issues-done/000-KRN-0101-a-launch-session-holds-every-launch-slot.done), the tools track's request for 211-APP-0044.
 
 **What changed:** `loader`'s launch session keeps a grant for every launch slot and `SLOT_FIRMWARE` (18), not 5. `check`'s `launch: every slot` lends all 17 launch slots in one session.
 
@@ -254,7 +254,7 @@ In the `net` suite's two-card check, `ip` shows card 0 as `DEFAULT`, and card 1 
 
 ## A note: `check`, `bench` and `kbench` stop when their console is gone (176-KRN-0103)
 
-**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md), the tools track's request for 000-APP-0056.
+**Recorded by:** the kernel track (KRN), 2026-10-14, for [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done), the tools track's request for 000-APP-0056.
 
 **What changed:** libmind's `mind::output::gone()` says that the launcher lent an endpoint for the output and it is gone. The three tools look at it after each line they show: they write their log, saying they stopped because their console closed, and end with exit status 3. `check`'s `a tool's console closes` drops kbench's console after four pieces of output and sees it end.
 

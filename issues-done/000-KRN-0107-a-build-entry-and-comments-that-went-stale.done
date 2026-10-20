@@ -1,6 +1,6 @@
-# 000-KRN-0107 — `02_build.sh` stages `virtio_input` twice; comments that went stale with the 1 ms tick
+# 000-KRN-0107 — `02_build.sh` stages `virtio_input` twice; comments that went stale with the 1 ms tick — done
 
-**Type:** build script and comments (code: through the gate) · **Owner:** kernel session · **Priority:** P3 · **Status:** in progress (made on the branch; the gate left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.3
+**Type:** build script and comments (code: through the gate) · **Owner:** kernel session · **Priority:** P3 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.3
 
 ## Problem
 
@@ -16,7 +16,7 @@ From the critique of 2026-10-14 ([issues-critica-done/02](../issues-critica-done
   - `common/abi.rs:516`: "Budgets are enforced at the 10 ms tick", where it should say the 10 ms slice.
   - `bench/src/bin/check.rs:156`: "the 10 ms tick only".
   - README:76 and ROADMAP's K3 and C7 lines are text: README's line goes with 000-KRN-0105, and the roadmap's with 000-KRN-0106.
-  - `usb_host/src/xhci.rs:53` is the drivers track's ([requests-DRV.md](requests-DRV.md)).
+  - `usb_host/src/xhci.rs:53` is the drivers track's ([requests-DRV.md](../issues/requests-DRV.md)).
 
 ## Plan
 
@@ -25,9 +25,16 @@ From the critique of 2026-10-14 ([issues-critica-done/02](../issues-critica-done
 
 ## Acceptance criteria
 
-- [ ] `02_build.sh` and `scripts/build_aarch64.sh` stage each program once, and both builds pass.
-- [ ] No comment names a 10 ms tick as x86's.
+- [x] `02_build.sh` and `scripts/build_aarch64.sh` stage each program once, and both builds pass.
+- [x] No comment names a 10 ms tick as x86's.
+
+## Resolution
+
+In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, passed every group: the host groups and the timing-sensitive x86 groups on un-rizen-service, the other x86 groups on i9, aarch64 half on i9 and half on un-rizen-service. Two x86 groups timed out while other tracks' gates loaded both machines (load average 27 and 32 on 16 threads) and passed when run again on the same tree.
+
+- `build (x86)` and `build (aarch64)` passed on both machines; `virtio_input` is staged once.
+- The comments name each architecture's tick.
 
 ## Related
 
-000-KRN-0083 (the 1 ms tick). The stale comment in `03_run_qemu.sh`:39 ("audio_gw drives an AC97") goes with [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md). `ata`'s "up to 256 sectors" goes to the drivers track ([requests-DRV.md](requests-DRV.md)).
+000-KRN-0083 (the 1 ms tick). The stale comment in `03_run_qemu.sh`:39 ("audio_gw drives an AC97") goes with [551-DRV-0010](../issues/551-DRV-0010-hda-controller-and-codecs.md). `ata`'s "up to 256 sectors" goes to the drivers track ([requests-DRV.md](../issues/requests-DRV.md)).

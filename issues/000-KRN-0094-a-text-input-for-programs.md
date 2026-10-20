@@ -1,6 +1,6 @@
 # 000-KRN-0094 — A text input for programs, for the shell's pipes and `<`
 
-**Type:** kernel ABI (system calls, ABI 9), `loader.wit` 1.9, `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made; the `bench` suite passes on x86; the gate left) · **Blocked by:** — (the tools track's redirection and pipes wait for it: [requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.4, MC-2.6, MC-3.3
+**Type:** kernel ABI (system calls, ABI 9), `loader.wit` 1.9, `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 289e84b; the tools track's `|` and `<` left) · **Blocked by:** — (the tools track's redirection and pipes wait for it: [requests-APP.md](requests-APP.md)) · **Main task:** — · **Constitution:** MC-12.4, MC-2.6, MC-3.3
 
 ## Problem
 
@@ -34,6 +34,11 @@ The first plan let the holder of the control capability write any task's input. 
   - [ ] a writer dropped without a close still brings the reader to its end, after the bytes queued (`text input: writer gone`).
 - [x] **`Lines`** cuts lines across any reads, with `\r\n`, a last line without its end, and a line longer than `LINE_MAX` in pieces (tests/io_host.rs).
 - [ ] **The tools track's `|` and `<`** run on it ([requests-APP.md](requests-APP.md)).
+
+## Progress (2026-10-20)
+
+- The `bench` suite's `check` passed every text-input row (`none`, `to its end`, `rights`, `writer gone`) on x86 (un-rizen-service) and aarch64 (i9) in the gate of 10d3ec3, now in `main` at 289e84b.
+- Left: the tools track's `|` and `<` on top of it ([requests-APP.md](requests-APP.md)).
 
 ## Related
 

@@ -33,7 +33,7 @@ One crate, `bench/`, with three console programs that share their tables, statis
   - hashing;
   - the camera's frame rate.
 - [176-KRN-0087](../issues-done/176-KRN-0087-runs-on-real-hardware.done) — **`diag/quick.msh` and `diag/full.msh`**, the runs on real hardware (the maintainer, 2026-10-11): each collects what debugging needs into a directory of its own on the log volume; the quick one runs this stage's steps, the full one everything.
-- [176-KRN-0103](176-KRN-0103-the-tools-stop-when-their-console-is-gone.md) — **the three stop when their console is gone** (the tools track's request for 000-APP-0056): run from `wm`'s menu, a closed window no longer leaves them measuring unseen.
+- [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done) — **the three stop when their console is gone** (the tools track's request for 000-APP-0056): run from `wm`'s menu, a closed window no longer leaves them measuring unseen.
 
 What they have in common:
 
