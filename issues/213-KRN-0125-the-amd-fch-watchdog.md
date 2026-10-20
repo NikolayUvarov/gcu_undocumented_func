@@ -1,6 +1,6 @@
 # 213-KRN-0125 — The AMD FCH's watchdog: a frozen Ryzen restarts by itself
 
-**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and host-tested; the Ryzen's run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -42,7 +42,7 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
   - one the firmware disabled;
   - a revision this code does not know, left alone;
   - the stop before a reboot.
-- [ ] The QEMU suites pass as before; QEMU has no AMD FCH, so the code finds none.
+- [x] The QEMU suites pass as before; QEMU has no AMD FCH, so the code finds none.
 - [ ] On the Ryzen, with the maintainer:
   - the boot line names the AMD FCH watchdog;
   - the `watchdog-test` kernel's freeze is followed by a restart within the timeout;
@@ -69,6 +69,8 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
 
   Where the PPR's text was not at hand, the register facts follow Linux's `sp5100_tco` driver's behaviour on these chips; no code was copied from it.
 - **Left:** the gate (QEMU has no FCH, so its suites see no change) and the Ryzen's run.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. On QEMU the boot line is `WATCHDOG: NONE (NO INTEL LPC BRIDGE AT 00:1F.0, NO AMD FCH AT 00:14.0)`; q35's Intel TCO watchdog still arms (`watchdog` suite).
 
 ## Related
 

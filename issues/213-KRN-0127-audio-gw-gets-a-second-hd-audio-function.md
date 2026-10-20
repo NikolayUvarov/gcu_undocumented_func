@@ -1,6 +1,6 @@
 # 213-KRN-0127 — `audio_gw` gets a second HD Audio function, and `init` stops both of a driver's devices before a restart
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (`init`'s part made; the drivers track's `audio_gw` and the Ryzen's run left) · **Blocked by:** the drivers track's `audio_gw` change (it probes the second function) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-1.5, MC-6.3, MC-12.1
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (`init`'s part in `main` at 1b1436a; the drivers track's `audio_gw` and the Ryzen's run left) · **Blocked by:** the drivers track's `audio_gw` change (it probes the second function) · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-1.5, MC-6.3, MC-12.1
 
 ## Problem
 
@@ -23,8 +23,10 @@ The Ryzen has two HD Audio functions:
 ## Acceptance criteria
 
 - [ ] The QEMU suites pass as before: one HD Audio function, or AC97, and nothing in `SLOT_DEV1` for HD Audio.
-- [ ] A QEMU case with two `intel-hda` controllers: `stat caps` of `audio_gw` shows the second one's registers in slot 3 and its line in slot 7.
+- [x] A QEMU case with two `intel-hda` controllers: `stat caps` of `audio_gw` shows the second one's registers in slot 3 and its line in slot 7.
 - [ ] On the Ryzen, with the drivers track's change, `audio_gw` drives `05:00.6`, and `beep` and `say` are heard.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The suites with one HD Audio function or AC97 pass as before; that `SLOT_DEV1` stays empty with one function is not asserted by a test yet.
 
 ## Related
 

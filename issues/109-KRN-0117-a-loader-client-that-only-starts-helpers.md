@@ -1,6 +1,6 @@
 # 109-KRN-0117 — A loader client that only starts helpers, for the updater's parsers
 
-**Type:** `loader` (`loader.wit` 1.10), `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made; the gate left) · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-3.4, MC-3.7, MC-8.5
+**Type:** `loader` (`loader.wit` 1.10), `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 1b1436a; a refused `run` with the badge not yet tested) · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-3.4, MC-3.7, MC-8.5
 
 ## Problem
 
@@ -31,6 +31,8 @@ Test. `usb_image_smoke.py`'s slots check ("x86: USB image") requires:
 It passes locally on x86.
 
 Not tested yet: a refused `run` with that badge. No program can hold such a client, and `check` has no way to get one.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The updater suite now expects the loader's client in slot 5, and "x86: USB image" checked its badge and the check's parser ending.
 
 ## Related
 
