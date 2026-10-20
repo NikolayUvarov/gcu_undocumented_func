@@ -843,6 +843,11 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    if vm.arch != "aarch64":
+        # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
+        for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
+            assert name not in services, services
+            require(log, f"[INIT] {name} NOT STARTED: NO DEVICE")
     # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
     vm.send("stop\n")
     vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)

@@ -1,12 +1,12 @@
-# 211-KRN-0089 — The pauses for a photo of the boot screen only when `data/pause.txt` asks
+# 211-KRN-0089 — The pauses for a photo of the boot screen only when `data/pause.txt` asks — done
 
-**Type:** bootloader, kernel ABI (`BootInfo`), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made, tested in QEMU; the MacBook Pro's boot left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.4
+**Type:** bootloader, kernel ABI (`BootInfo`), `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-12.4
 
 ## Problem
 
 The maintainer (2026-10-12): "to speed up the boot, make a pause flag. If it is absent or zero, do not use the 5-second delays that were needed for photos of the screen."
 
-Since [211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), every boot on a machine without a hypervisor waited three times for a photo:
+Since [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), every boot on a machine without a hypervisor waited three times for a photo:
 
 - the bootloader, 5 s after the firmware's lines;
 - the bootloader again, 5 s after its own lines;
@@ -41,6 +41,17 @@ That is 15 s of every boot, now that no photo is needed.
 - `tests/runtime.rs` checks ABI 7.
 - The aarch64 image builds.
 
+## Resolution
+
+Every criterion is met.
+
+- **QEMU.** The `vfs` suite boots with and without `data/pause.txt` ("x86: files and block writes"). The `boot` suite passes and the aarch64 image builds (the gate of 10d3ec3).
+- **The MacBook Pro.**
+  - Its boots of 2026-10-12 (fast-test 7281472) and 2026-10-13 (fast-test 29fee23, three boots) carry no `A PAUSE OF` line. Both builds hold d239825, this task's change.
+  - Its earlier boots with `data/pause.txt` (fast-test 8223d24, c548a85, 3ab50c0) log `A PAUSE OF 5 S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT`.
+
+Evidence for that machine and those builds (MC-12.1).
+
 ## Related
 
-[211-PRT-0004](211-PRT-0004-first-run-on-an-intel-pc.md), [docs/write-disk.md](../docs/write-disk.md) §8, [docs/api/README.md](../docs/api/README.md) (ABI 7).
+[211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md), [docs/write-disk.md](../docs/write-disk.md) §8, [docs/api/README.md](../docs/api/README.md) (ABI 7).

@@ -1,6 +1,6 @@
-# 211-KRN-0044 — The boot log names the branch and commit it was built from
+# 211-KRN-0044 — The boot log names the branch and commit it was built from — done
 
-**Type:** kernel (init and the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (made; the MacBook Pro's run left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-9.5, MC-12.1
+**Type:** kernel (init and the build) · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-9.5, MC-12.1
 
 ## Problem
 
@@ -22,6 +22,19 @@ The maintainer tests builds of `fast-test` on the MacBook Pro one after another,
 - The `normal` suite finds `[INIT] BUILD: BRANCH …, COMMIT …` with a 12-digit commit in init's log.
 - The MacBook Pro's `LOG:bootNNNN.log` shows the line with `fast-test` and the commit built.
 
+## Resolution
+
+Both criteria are met.
+
+- **QEMU.** The `normal` suite requires `[INIT] BUILD: BRANCH …, COMMIT …` with 12 hex digits, on x86 and aarch64 (the gate of 10d3ec3).
+- **The MacBook Pro** (Core i7-3615QM). Its boot logs show:
+  - `[INIT] BUILD: BRANCH fast-test, COMMIT 728147231f4c` (2026-10-12);
+  - `… COMMIT 29fee2383046` (2026-10-13, three boots);
+  - with `3ab50c0415d0`, `8223d24e6b93` and `c548a85b7aca` in earlier runs.
+- **The Ryzen's runs** of 2026-10-20 show `COMMIT d0c2dea90865`.
+
+Evidence for those machines and builds (MC-12.1).
+
 ## Related
 
-[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot logs), [350-UPD-0004](350-UPD-0004-launch-record.md) (the launch record).
+[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done) (the boot logs), [350-UPD-0004](../issues/350-UPD-0004-launch-record.md) (the launch record).

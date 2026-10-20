@@ -1,10 +1,10 @@
-# 351-KRN-0052 — The TPM's registers from the firmware's tables (`PLATFORM_TPM`)
+# 351-KRN-0052 — The TPM's registers from the firmware's tables (`PLATFORM_TPM`) — done
 
-**Type:** kernel and porting (`kernel/src/arch/`) · **Owner:** `KRN` (the kernel session holds `PRT` too) · **Priority:** P1 · **Status:** in progress (made and host-tested; the `tls` suite's TPM check on x86 and aarch64 left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.6, MC-11.4
+**Type:** kernel and porting (`kernel/src/arch/`) · **Owner:** `KRN` (the kernel session holds `PRT` too) · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.6, MC-11.4
 
-Turned from the request in [requests-KRN.md](requests-KRN.md) (the storage session, 2026-10-09). It blocks [351-DRV-0015](351-DRV-0015-tpm-driver.md) and [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md). The request as recorded:
+Turned from the request in [requests-KRN.md](../issues/requests-KRN.md) (the storage session, 2026-10-09). It blocks [351-DRV-0015](../issues/351-DRV-0015-tpm-driver.md) and [351-NET-0006](../issues/351-NET-0006-device-key-sealed-by-a-tpm.md). The request as recorded:
 
-**Recorded by:** the network and drivers tracks (the storage session), 2026-10-09, for [351-DRV-0015](351-DRV-0015-tpm-driver.md) and [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md).
+**Recorded by:** the network and drivers tracks (the storage session), 2026-10-09, for [351-DRV-0015](../issues/351-DRV-0015-tpm-driver.md) and [351-NET-0006](../issues/351-NET-0006-device-key-sealed-by-a-tpm.md).
 
 ### Problem
 
