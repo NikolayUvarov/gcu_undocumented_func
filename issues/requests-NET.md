@@ -4,6 +4,25 @@
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
+## A parser session ends before its helper does (109-KRN-0133)
+
+**Recorded by:** the kernel track (KRN), 2026-10-20, for [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md). The same race is recorded for the update track in [requests-UPD.md](requests-UPD.md); either fix ends it.
+
+### Problem
+
+- **Where.** `libmind/src/parse.rs`: `Session`'s drop calls `end_session`, which sends the helper a stop message (100 ms) and drops this program's endpoint capability. It does not wait for the helper to end.
+- **Why it matters.** The helper's receiving copy keeps the endpoint alive until the helper's task is gone, and the endpoint counts against the creator's endpoint quota. The updater has a quota of one endpoint.
+- **What happens.** A session opened right after another fails with `Endpoint(Other(ERR_LIMIT))`, and the program falls back to the shared parser.
+- **Seen.** In gate g0134 (i9), the updater booted from slot B read the channels of both slots one after the other and logged `[UPDATER] PARSER: THE SHARED SERVICE (Endpoint(Other(18446744073709551608)))`. Before 109-KRN-0133 no helper started on a slot disk, so the race could not happen.
+
+### Plan (a proposal; the network track decides)
+
+`Session`'s drop waits, for a bounded time, until the helper has ended (`mind::process::alive(pid)` false), so that its endpoint is gone before the next session is opened.
+
+### Acceptance criteria
+
+A program with an endpoint quota of one opens and drops ten parser sessions in a row, each with a helper of its own.
+
 ## Several network interfaces (550)
 
 **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](550-NET-0018-the-station-service.md), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
