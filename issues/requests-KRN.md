@@ -227,3 +227,109 @@ In the `update` suite, the updater's check runs its parsing in a helper that hol
 
 `caps` shows the shell's audio client with the badge, and the client of a program the shell starts (`say`) without it. With `audio.wit` 1.2, `say` cannot change the volume and the shell can.
 
+## Device-bound platform power policy for the Ryzen WLAN driver
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The RTL8852BE channel path requires explicit platform SAR and antenna-gain
+constraints, separately from firmware default tables and operator country.
+The current native driver has neither a device-bound platform-policy result
+nor a complete checked ACPI snapshot from which such a result could be derived.
+`PLATFORM_ACPI_TABLE` already copies individual tables read-only during init;
+`init/src/hardware.rs` writes their diagnostic copies to `log:acpi/`. That
+diagnostic loop does not establish complete namespace evaluation, absence of
+device-specific policy or a durable scoped authority after Platform is dropped.
+
+Please number the smallest suitable KRN dependency and choose its interface:
+
+- Supply a complete, bounded, validated snapshot of applicable AML tables and
+  PCI identity/topology to a scoped consumer, or a typed device-bound result
+  `KnownLimits / KnownAbsent / UnsupportedOrUnknown`. Do not restore general
+  Platform privilege to the radio service.
+- Distinguish an actually absent supported policy from inaccessible, truncated,
+  malformed or unsupported input. Known absence may use a justified bounded
+  analysis; this request does not demand a general AML interpreter. Unknown
+  input must not silently become unlimited transmit power.
+- Retain actual limits/antenna offsets, their source and policy version for
+  the DRV consumer. Version changed ABI/IDL explicitly; document capability
+  ownership, bounds and restart behavior. Intel/x86 is the priority; ARM
+  execution remains deferred by the maintainer.
+
+Pinned RTL8852B source looks up `WRDS`, `RWRD`, `RWSI`, `RWGS` and `RTAG` relative
+to its WLAN ACPI device. A matching string in an unrelated scope is not a
+policy. Read-only Ubuntu Ryzen operation `20261015233912.417877721_000172`
+read DSDT and nine SSDTs: none contained those five names; PCI `03:00.0` had
+no `firmware_node` entry. It did not evaluate AML or change the NIC. These
+observations narrow the expected profile but are not a MIND runtime result.
+Raw hashes and source details are recorded on ASTRA in
+`hwdocs/rtl8852be-channel-stage.md`.
+
+Acceptance: supported valid/absent fixtures have explicit device identity and
+provenance; invalid, partial or unsupported snapshots remain distinguishable;
+the driver cannot substitute an unrelated snapshot or infer permission from
+an error; no ambient Platform capability is retained. Record actual Ryzen
+evidence separately. DRV-0032 remains blocked on this request for native
+transmit-policy admission; calibration/datapath development can continue
+without enabling transmission.
+
+## Native RTL8852BE radio endpoint after datapath admission
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16; dependency of 213-DRV-0032,
+roadmap H / 213 and D / 550; MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3.
+
+The existing ASTRA-owned 213-KRN-0114 integration deliberately starts a
+diagnostic: the `rtw89_wifi` init branch lends BAR2, retained DMA and a firmware
+reader but no `SLOT_SERVICE`. `RADIOS` contains only `bcm_wifi` and `wlansim`.
+The new driver-side data owner therefore cannot become a usable station by
+itself. Please number the radio-service extension and coordinate activation
+with DRV-0032 rather than advertising the diagnostic as a working radio.
+
+The maintainer confirmed on 2026-10-16 that both target machines are physically
+in Uzbekistan (`UZ`), and then requested switching among every country in the
+verified regulatory database. Use UZ as this deployment's explicit initial
+selection; do not turn it into an implicit worldwide default for other installs.
+
+- Reserve the current private service's receive-capability slots 9 and 10 as
+  empty, or coordinate an explicit driver-contract change. Its constructor
+  checks both slots; the endpoint/configuration grants must not collide with
+  deferred request ownership. Preserve the current log, BAR, DMA and VFS grants.
+- Give the selected RTL8852BE instance its `wlanhw` server endpoint and lend
+  its client only to `wlan`, preserving the original MacBook BCM4331 and QEMU
+  selections. Do not alter their authority or replace a running radio merely
+  because a second PCI device exists.
+- Provide an explicit bounded operator country/channel configuration, with
+  provenance separate from the device-bound platform policy requested above.
+  A stored Ubuntu regulatory setting is not operator confirmation, and missing
+  or invalid input must remain visible as unavailable radio service.
+- Preserve retained DMA, verified non-mastering restart and safe-start rules;
+  neither this endpoint nor its configuration grants ambient Platform access.
+  Support a persisted, owner-scoped selection for all catalogued countries,
+  coordinated with the NET/APP requests below; configuration data alone must
+  not grant transmission. If an interface changes, version it and document
+  the migration.
+- Sequence the change with the actual persistent driver loop and its admitted
+  capabilities. Initial driver support may advertise one explicitly admitted
+  2.4 GHz / 20 MHz channel; other channels must be rejected, never reported as
+  tuned. A running diagnostic process is not an endpoint-readiness signal.
+
+Acceptance: fixtures cover no Realtek device, missing/invalid configuration,
+driver initialization refusal, exact endpoint ownership and preserved BCM4331
+and wlansim routing. The original Intel MacBook and Ryzen must separately
+establish association, DHCP and ping under test load before physical readiness
+is claimed. Driver DMA partitioning, active RX/TX and service dispatch stay in
+DRV-0032; this request does not transfer their implementation to KRN.
+
+
+### Country-selection integration requests (2026-10-16)
+
+See [NET's policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP's selector request](requests-APP.md#wifi-country-and-channel-selector).
+The pure catalog is now implemented in ASTRA `1e2cf1dd` and published in
+fast-test `94ab2a0b`; NET's request above links its exact source and validation.
+It grants no device authority and does not activate the native diagnostic.
+The current driver is limited to a single admitted 2.4 GHz/20 MHz channel; a
+country selection must intersect radio capabilities and existing board/platform
+constraints. A configuration change must never reuse an active admission made
+under a different policy. Coordinate stop/restart/re-admission and bounded
+failure reporting with the driver and station owners.
