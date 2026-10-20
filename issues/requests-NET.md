@@ -102,3 +102,19 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - `ping -s <size> -p <hex>` through it, and the reply's line with its size and TTL, `BAD DATA` when it did not match.
 - The `net` suite's check with a 1000-byte request to the gateway.
+
+## An echo request to a neighbour that never answers may hold the card's ICMP queue (000-APP-0095)
+
+**Recorded by:** the tools track (APP), 2026-10-20, while writing `ping`'s checks. **Found by reading the code; not reproduced.**
+
+### Problem
+
+- `Stack::ping` queues each echo request on the card's ICMP socket (`send_slice`).
+- smoltcp 0.14 (`storage/packet_buffer.rs`, `dequeue_with`) leaves a packet in the queue when its dispatch fails. A destination whose neighbour is not found fails with `NeighborPending` on every poll.
+- So a request to an address on the card's own network that no host has would stay at the head of the queue, ARP asked again once a second. The requests after it, to any address, would wait behind it. Once the 8 places are taken, `ping` would answer `Again`.
+- No suite sends one: the shell's `ping` checks use the gateway and an address beyond it.
+
+### Plan (a proposal; the network track decides)
+
+- **A check first:** in the `net` suite, `ping 10.0.2.200` (slirp answers ARP only for its own addresses), then `ping 10.0.2.2`, which should still answer.
+- **If it holds the queue:** drop a request whose neighbour is not found by its deadline, for example by giving each request its own ICMP socket, or by closing and opening the card's socket when a request ends in `Timeout`.

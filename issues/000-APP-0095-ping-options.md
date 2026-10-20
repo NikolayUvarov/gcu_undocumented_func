@@ -36,7 +36,7 @@ Its last line gives no loss or times, and nothing stops a run.
 - **The `net` suite** (x86, aarch64):
   - `ping -c 3 -i 0.5 10.0.2.2`: three replies, a second or more in all;
   - `ping -f -c 50 10.0.2.2`: 50 received and no reply lines;
-  - `ping -f -c 4 -w 0.2 192.0.2.1` (TEST-NET-1, which answers no one): four dots and `100% LOST`;
+  - `ping -f -c 4 -w 0.2 192.0.2.1` (TEST-NET-1, sent out through QEMU's gateway to the host's network): a dot for each request lost and the loss to match, whether the host's network answers or not (the gate's first local run met a sandbox that answers every address, 2026-10-20);
   - `-s`, and a wrong `-c`, refused with their lines;
   - `ping -c 0` stopped by Ctrl+C: `^C`, then the tally with `, STOPPED`.
 - **Later, with the network track's call:** `-s 1000` and `-p` to the gateway.
@@ -46,6 +46,7 @@ Its last line gives no loss or times, and nothing stops a run.
 - `shell/src/ping.rs` (`parse`, `Tally`) and `shell/src/net.rs` (`ping`, which renders the screen and watches Esc and Ctrl+C between requests through `msh::interrupted`).
 - The help line; `docs/tools` §4.8 (EN, RU), with `ip` and `netstat`.
 - Host tests pass (`tests/shell_host.rs`, 13). The `net` suite's `ping_options_check` is written.
+- **An address on the card's own network that no one has** is not a lost request the suite can use: by smoltcp 0.14's code, the stack's echo request to it stays at the head of the card's ICMP queue while its neighbour is not found, so later requests on that card could not go out. Recorded for the network track (requests-NET.md); not reproduced.
 - **Left:** the gate; `-s` and `-p` once the stack sends them.
 
 ## Related

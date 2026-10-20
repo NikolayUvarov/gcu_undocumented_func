@@ -5822,7 +5822,8 @@ def wifi_boot_check(vm):
 
 def ping_options_check(vm):
     """ping's options (000-APP-0095): -c and -i, -f with no line for each reply, -w and a dot for each request lost,
-    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) answers no one: its requests go out through the gateway and are lost."""
+    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) goes out through QEMU's gateway to the host's network, which may answer
+    (some sandboxes answer every address) or not: the dots must be the requests lost either way."""
     began = time.monotonic()
     out = vm.command("ping -c 3 -i 0.5 10.0.2.2", timeout=20)
     took = time.monotonic() - began
@@ -5834,8 +5835,9 @@ def ping_options_check(vm):
     began = time.monotonic()
     out = vm.command("ping -f -c 4 -w 0.2 192.0.2.1", timeout=30)
     took = time.monotonic() - began
-    require(out, "....\nPING: 4 SENT, 0 RECEIVED, 100% LOST\n")
-    assert took < 10, (took, out[-1500:])
+    tally = re.search(r"(?:\n(\.+))?\nPING: 4 SENT, (\d) RECEIVED, (\d+)% LOST", out)
+    assert tally and len(tally[1] or "") == 4 - int(tally[2]) and int(tally[3]) == (4 - int(tally[2])) * 25, out[-1500:]
+    assert "REPLY FROM" not in out and took < 10, (took, out[-1500:])
     require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
     require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
     vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
