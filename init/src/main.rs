@@ -24,7 +24,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "restart and process control", "observe privilege", "ports 0x70-0x71", "ports 0x60, 0x64; IRQ 1 and 12; input",
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
-    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
+    "8 MiB of memory", "write clients of the block devices", "a USB client for serial converters", "the serial converter's client; a VFS client confined to data/link/; a log reader; an application's loader client", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
     "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
@@ -402,6 +402,8 @@ impl Init {
             "link" => {
                 if !self.running(service_index("usb_serial")) { return Err(Error::NotFound); }
                 self.lend(&mut grants, SLOT_DEV0, "usb_serial")?;
+                // An application's loader client: link starts programs from data/link/ for the master (800-KRN-0132).
+                self.lend(&mut grants, SLOT_LOADER, "loader")?;
                 let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
                 let _ = core::fmt::Write::write_str(&mut args, core::str::from_utf8(&words[..length]).unwrap_or(""));
