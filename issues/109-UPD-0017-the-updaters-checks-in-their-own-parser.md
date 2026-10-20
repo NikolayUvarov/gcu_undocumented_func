@@ -1,6 +1,6 @@
 # 109-UPD-0017 — The updater's checks in a parser of their own
 
-**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (built; its check waits for `init`'s loader client) · **Blocked by:** `KRN` for a loader client that only starts helpers ([requests-KRN.md](requests-KRN.md), "A loader client for the updater's parsers") · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-NET-0010](109-NET-0010-a-parser-per-session.md) · **Roadmap:** track C, D · **Constitution:** MC-11.11, Appendix B.6
+**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (built; the check written, 2026-10-20) · **Blocked by:** — (`init`'s helpers-only loader client is [109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md), in `main` at 1b1436a) · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-NET-0010](109-NET-0010-a-parser-per-session.md) · **Roadmap:** track C, D · **Constitution:** MC-11.11, Appendix B.6
 
 From the request "The updater's checks in a parser of their own" in requests-UPD.md (recorded by the kernel track, 2026-10-12).
 
@@ -24,6 +24,11 @@ The `update` suite's check runs its parsing in a helper that holds only its endp
 ## Progress (2026-10-14)
 
 Built for x86_64 and aarch64 (`updater/src/main.rs`, `updater/src/source.rs`). The QEMU check waits for `init`'s loader client.
+
+## Progress (2026-10-20)
+
+- `init` lends the updater the helpers-only loader client in `SLOT_LOADER` since `main` 1b1436a ([109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md)).
+- **The check** (`updater_parser_check` in the `update` suite): the test release server holds the next check's request for the channel (`scripts/serve_release.py` `holds`, at most 10 s, under the updater's 15 s without progress). Meanwhile exactly one `parse` beside the shared service runs, and `stat caps` shows it holds one capability, an endpoint in slot 1. After the answer, the check ends and the helper is gone.
 
 ## Related
 

@@ -18,9 +18,11 @@ import threading
 class RangeHandler(http.server.SimpleHTTPRequestHandler):
     """Static files with single byte ranges. A server's subclass holds `cuts`, path to a byte count (a test hook: the
     next response for that path is cut after that many body bytes), `raw`, path to the bytes sent as the whole response
-    (a test hook: a malformed head), and `requests`, (path, Range header) per GET."""
+    (a test hook: a malformed head), `holds`, path to an event the next response for that path waits for, at most 10 s (a
+    test hook: a request in flight), and `requests`, (path, Range header) per GET."""
     cuts = {}
     raw = {}
+    holds = {}
     requests = []
 
     def log_message(self, *args):
@@ -29,6 +31,9 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
     def send_head(self):
         self.remaining = None
         self.requests.append((self.path, self.headers.get("Range")))
+        hold = self.holds.pop(self.path, None)
+        if hold is not None:
+            hold.wait(10)
         if self.path in self.raw:
             self.wfile.write(self.raw[self.path])
             self.close_connection = True
@@ -73,11 +78,11 @@ class RangeHandler(http.server.SimpleHTTPRequestHandler):
 
 def serve(directory, cert=None, key=None, host="127.0.0.1", port=0, cuts=None, raw=None):
     """Starts the server in a thread, over HTTPS with `cert` and `key` or plain HTTP without; returns it (its port is
-    server.server_address[1]; server.cuts and server.requests are its handler's)."""
-    handler = type("Handler", (RangeHandler,), {"cuts": dict(cuts or {}), "raw": dict(raw or {}), "requests": []})
+    server.server_address[1]; server.cuts, server.holds and server.requests are its handler's)."""
+    handler = type("Handler", (RangeHandler,), {"cuts": dict(cuts or {}), "raw": dict(raw or {}), "holds": {}, "requests": []})
     server = http.server.ThreadingHTTPServer((host, port), functools.partial(handler, directory=str(directory)))
     server.daemon_threads = True
-    server.cuts, server.requests = handler.cuts, handler.requests
+    server.cuts, server.holds, server.requests = handler.cuts, handler.holds, handler.requests
     if cert:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
