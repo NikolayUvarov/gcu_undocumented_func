@@ -1,6 +1,6 @@
 # 550-APP-0033 — `wifi`: choosing a Wi-Fi network and typing its passphrase
 
-**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (the station's client is lent to `wifi`, from the shell and from `wm`'s Settings, on the task branch `claude/550-APP-0033-wifi-station-client` and in `fast-test`, 2026-10-14) · **Blocked by:** the kernel track's ABI 10 in `main` (550-KRN-0097); the MacBook Pro's check · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
+**Type:** tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: the station's client is lent to `wifi`, from the shell and from `wm`'s Settings, in `main` since 92781301 (2026-10-20); the MacBook Pro's check left · **Blocked by:** the MacBook Pro's check · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.9, MC-3.11
 
 _Numbered 550-APP-0017 in the tools branch's commits until main's own 351-APP-0017 (2026-10-09); renumbered at the merge._
 
@@ -71,6 +71,7 @@ The network track agreed the interface (550-NET-0018) with changes it asked of t
   - **On 2683f51** the net group passed on `un-rizen-service` (`x86: boot, display, network, TLS, shell, memory, clock`, 864 s). `wifi` listed `MIND-TEST`, joined it through `wlan`'s WPA2 handshake with `wlansim`'s access point, and left it.
   - This is QEMU's stand-in radio, not the MacBook Pro's (MC-12.1). The MacBook Pro 10,1's Ivy Bridge CPU has RDRAND; a run without it would log `[WLAN] NO RDRAND: WPA2 REFUSED`.
 - **Where:** the task branch `claude/550-APP-0033-wifi-station-client` (the tools branch with the kernel track's ABI 10 merged) and `fast-test`. It reaches `main` after the kernel track's ABI 10 does, through this track's gate.
+- **In `main`** since 92781301 (2026-10-20), after the kernel track's ABI 10 (now 11) reached it: the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally).
 - **Left:** the maintainer's check on the MacBook Pro (`wifi` lists the networks around, and joins one).
 
 ## Related

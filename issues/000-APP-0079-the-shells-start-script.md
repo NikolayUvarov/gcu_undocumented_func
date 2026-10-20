@@ -1,6 +1,6 @@
 # 000-APP-0079 — The shell's start script, from the boot volume's root
 
-**Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: done on the tools branch and in `fast-test`; the gate and the MacBook Pro's run left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.1
+**Type:** tools (`shell`, `msh`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 92781301 (2026-10-20); the assurance track's answer on the root's place and the MacBook Pro's run left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-10.2, MC-12.1
 
 **Recorded by:** the tools track (APP), 2026-10-14, from the assurance track's request on `internal-dev-messages` (`APP/2026-10-14T1621Z-ASR-wifi-join-without-a-screen-and-a-start-script.md`), for [550-ASR-0007](550-ASR-0007-wifi-join-tests.md): a test on the MacBook Pro that runs at boot, without typing.
 
@@ -48,7 +48,8 @@ Nothing runs at boot on the maintainer's request: the `diag/` scripts run only w
   - each checks the hash and the one end line in the log, and that `write /autorun.msh …` is refused;
   - the suite's own boots, without the file, have no `AUTORUN` line.
 - **Docs:** the help line, `docs/msh.md` and `docs/tools` (EN, RU).
-- **Left:** the gate; the assurance track's answer on the root's place; `build-and-write.sh --wifijoin` writing the script at the root; the MacBook Pro's run.
+- **In `main`** since 92781301: the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally). The `display` suite's `autorun_check` passed there.
+- **Left:** the assurance track's answer on the root's place; `build-and-write.sh --wifijoin` writing the script at the root; the MacBook Pro's run.
 
 ## Related
 
