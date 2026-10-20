@@ -11,6 +11,7 @@
 #include "hardware/clocks.h"
 #include "pico/status_led.h"
 #include "pico/stdlib.h"
+#include "pico/rand.h"
 #include "pico/unique_id.h"
 #include "tusb.h"
 #include <stdio.h>
@@ -27,7 +28,7 @@ static uint32_t credited[2], credit_ms, refused;
 static bridge_rx parser;
 static led_state led;
 static control_state ctl;
-static uint32_t peer_ms;
+static uint32_t peer_ms, peer_boot, our_boot;
 static char peer_name[40] = "none";
 
 // HID reports waiting for their interface: keyboard (modifiers and six keys), mouse, and the last tablet position.
@@ -148,9 +149,16 @@ static void control_task(void) {
 
 static void received(const bridge_msg *m, uint32_t now) {
     peer_ms = now;
-    if (m->type == FT_HELLO) {
-        size_t n = m->len < sizeof peer_name - 1 ? m->len : sizeof peer_name - 1;
-        memcpy(peer_name, m->payload, n); peer_name[n] = 0;
+    if (m->type == FT_HELLO && m->len >= 4) {
+        // The other board started again (or for the first time): both directions begin at offset 0 again.
+        uint32_t boot = (uint32_t)m->payload[0] | (uint32_t)m->payload[1] << 8 | (uint32_t)m->payload[2] << 16 | (uint32_t)m->payload[3] << 24;
+        if (bridge_peer_restarted(&peer_boot, boot)) {
+            memset(tx, 0, sizeof tx); memset(rx, 0, sizeof rx);
+            memset(inbox_len, 0, sizeof inbox_len); memset(credited, 0, sizeof credited);
+        }
+        size_t n = (size_t)m->len - 4;
+        if (n > sizeof peer_name - 1) n = sizeof peer_name - 1;
+        memcpy(peer_name, m->payload + 4, n); peer_name[n] = 0;
         return;
     }
     if (m->type == FT_CREDIT && m->len == 8) {
@@ -216,9 +224,10 @@ static void bridge_task(uint32_t now) {
         if (send(FT_CREDIT, 0, 0, p, sizeof p)) { credited[0] = consumed[0]; credited[1] = consumed[1]; credit_ms = now; }
     }
     if (now - hello_ms >= HELLO_MS) {
-        char serial[2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
-        pico_get_unique_board_id_string(serial, sizeof serial);
-        if (send(FT_HELLO, 0, 0, (const uint8_t *)serial, strlen(serial))) hello_ms = now;
+        uint8_t hello[4 + 2 * PICO_UNIQUE_BOARD_ID_SIZE_BYTES + 1];
+        for (int i = 0; i < 4; i++) hello[i] = (uint8_t)(our_boot >> (8 * i));
+        pico_get_unique_board_id_string((char *)hello + 4, sizeof hello - 4);
+        if (send(FT_HELLO, 0, 0, hello, 4 + strlen((char *)hello + 4))) hello_ms = now;
     }
 }
 
@@ -244,6 +253,8 @@ int main(void) {
     status_led_init();
     line_start(LINK_BAUD);
     bridge_rx_init(&parser);
+    // Never 0, which stands for no hello seen yet.
+    do our_boot = get_rand_32(); while (our_boot == 0);
     tud_init(0);
     for (;;) {
         uint32_t now = now_ms();

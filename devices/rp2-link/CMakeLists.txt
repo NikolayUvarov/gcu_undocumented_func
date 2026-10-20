@@ -43,6 +43,6 @@ target_compile_definitions(rp2_link PRIVATE
 if(DEFINED LINK_WS2812_PIN)
     target_compile_definitions(rp2_link PRIVATE PICO_DEFAULT_WS2812_PIN=${LINK_WS2812_PIN})
 endif()
-target_link_libraries(rp2_link PRIVATE pico_stdlib pico_multicore pico_unique_id pico_status_led hardware_pio
+target_link_libraries(rp2_link PRIVATE pico_stdlib pico_multicore pico_unique_id pico_rand pico_status_led hardware_pio
     hardware_clocks tinyusb_device tinyusb_board)
 pico_add_extra_outputs(rp2_link)

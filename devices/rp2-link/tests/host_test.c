@@ -165,7 +165,17 @@ static void led_table(void) {
     CHECK(!led_line(&s, "hello", 6000));
 }
 
+// A board started again: the other one sees its new boot number once.
+static void restarts(void) {
+    uint32_t known = 0;
+    CHECK(bridge_peer_restarted(&known, 0x1234));    // the first hello
+    CHECK(!bridge_peer_restarted(&known, 0x1234));
+    CHECK(bridge_peer_restarted(&known, 0x9999));    // a new start
+    CHECK(!bridge_peer_restarted(&known, 0x9999) && known == 0x9999);
+}
+
 int main(void) {
+    restarts();
     crc_and_cobs();
     frames_round_trip_and_damage();
     credits();

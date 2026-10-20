@@ -74,6 +74,12 @@ void bridge_credit(bridge_tx_stream *s, uint32_t consumed) {
     if (ahead <= outstanding) s->consumed = consumed;
 }
 
+bool bridge_peer_restarted(uint32_t *known, uint32_t boot) {
+    bool changed = *known != boot;
+    *known = boot;
+    return changed;
+}
+
 size_t bridge_accept(bridge_rx_stream *s, uint32_t offset, size_t n, size_t *skip) {
     int32_t gap = (int32_t)(offset - s->next);
     *skip = 0;

@@ -45,4 +45,8 @@ typedef struct { uint32_t next; uint32_t lost; } bridge_rx_stream;
 // dropped (a repeat), one from the future means the bytes between were lost.
 size_t bridge_accept(bridge_rx_stream *s, uint32_t offset, size_t n, size_t *skip);
 
+// The other board's boot number from its hello (a random number drawn at its start): true when it changed, so this
+// board must start both directions of every channel afresh; `*known` keeps the last one (0: none yet).
+bool bridge_peer_restarted(uint32_t *known, uint32_t boot);
+
 #endif

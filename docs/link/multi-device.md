@@ -126,6 +126,7 @@ Once its machine sends `@STATE`, the board shows that machine's boot instead:
   - the stream offset of its first byte, and up to 256 bytes;
   - CRC-16/CCITT.
 - **Credits:** a board sends at most 4 KiB beyond what the other board's machine has taken. Credits carry absolute offsets, so a lost credit is made good by the next.
+- **A restart:** each hello carries a number drawn at the board's start. When a board sees the other's number change, it starts both directions of every channel at offset 0 again, so a board unplugged and plugged back finds its pair at once.
 - **A damaged frame** is dropped and counted. Its bytes are lost, and the receiver skips past them rather than waiting. The protocol on the data port (`linkproto`) sends its request again; the serial port's bytes are simply lost, and the LED shows it.
 - **The cores:** core 1 serves the line's two PIO state machines. Core 0 serves USB, the frames and the HID interfaces.
 
