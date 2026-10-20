@@ -3858,6 +3858,55 @@ def raw_fat_image(temp, replace=None, extra=None):
     return image, start, fs_sectors
 
 
+def link_suite(args):
+    """800-LNK-0003, 800-KRN-0128: MIND Core's end of MIND Link through QEMU's emulated FT232 (`-device usb-serial` on a
+    pseudo-terminal), with `link.conf` at the root, against the host's `mindlink`: a file each way checked by SHA-256,
+    the system log read, a name outside data/link/ refused. 256-byte frames: the emulated chip keeps 384 bytes and is
+    filled again from the pseudo-terminal only when QEMU's main loop wakes (docs/link/mindlink.md). Skipped until init
+    starts `link` (it is in BOOT_SERVICES)."""
+    services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
+    if '"link"' not in services:
+        print("SKIP: link: not a boot service yet (800-KRN-0128)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: link suite needs mkfs.fat and mtools", flush=True)
+        return
+    target = Path(tempfile.gettempdir()) / "mind-mindlink-target"
+    subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", str(ROOT / "tools/mindlink/Cargo.toml"),
+                    "--target-dir", str(target)], check=True)
+    mindlink = target / "release/mindlink"
+
+    def link(port, *command, ok=True, timeout=120):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
+                           capture_output=True, text=True, timeout=timeout)
+        out = r.stdout + r.stderr
+        assert (r.returncode == 0) == ok, (command, r.returncode, out)
+        return out
+
+    with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
+            require(link(port, "hello"), '"MIND Core link"')
+            sent = Path(temp) / "sent.bin"
+            sent.write_bytes(os.urandom(64 * 1024))
+            require(link(port, "put", str(sent)), "put ")
+            back = Path(temp) / "back.bin"
+            require(link(port, "get", "sent.bin", str(back)), "got sent.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the file came back changed"
+            require(link(port, "ls"), "65536  sent.bin")
+            require(link(port, "log"), "[LINK] HELLO FROM")
+            require(link(port, "put", str(sent), "../escape.bin", ok=False), "not allowed")
+            require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED sent.bin")
+        finally:
+            vm.close()
+    print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
+          "the system log, and was refused a name outside data/link/", flush=True)
+
+
 def fsck_volume(image, start, fs_sectors):
     volume = image.parent / "volume.img"
     with image.open("rb") as f:
@@ -8793,6 +8842,9 @@ def main():
             continue
         if suite == "hda":
             hda_suite(args)
+            continue
+        if suite == "link":
+            link_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)

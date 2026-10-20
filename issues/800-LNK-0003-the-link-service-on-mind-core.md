@@ -42,7 +42,13 @@ A MIND Core machine needs an end of the link that the other machine can reach. T
 - **Found in the run, and fixed:**
   - each put's data written straight to the volume took about 140 ms a frame;
   - `stat` of a large file hashed it for longer than the master waited (`mindlink` now waits at least 15 s for `stat`).
-- **Left: from KRN,**
+- **2026-10-20, the MacBook Pro over RS-485** (`fast-test` 832c9080, with KRN's 800-KRN-0128):
+  - `init` started `usb_serial` and `link` from `link.conf`;
+  - `[LINK] SERVING data/link/ AND THE LOG AT 460800 BIT/S`;
+  - from the maintainer's PC (`mindlink.exe` on COM22): the system log, 275 lines with the kernel's own, read whole; 200 KB put into `data/link/` and got back with matching SHA-256.
+
+  An earlier trial boot, with `init` patched locally, did the same before KRN's part was in.
+- **Left (was: from KRN; done in 800-KRN-0128):**
   - `init` starting `link` when `link.conf` is at the root, with its words as arguments;
   - a writable vfs client confined to `data/link/`;
   - a reading log client;
