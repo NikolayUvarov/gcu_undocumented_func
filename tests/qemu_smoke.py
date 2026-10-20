@@ -6481,7 +6481,7 @@ def tls_suite(args, disk):
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072 | 16777216).to_bytes(4, "little")
     for name in ("tlsclock", "tlsnone"):
         (disk / f"{name}.elf").write_bytes(elf)
-    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
+    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\nwebcheck 10.0.2.2 tcp {ports['asking']} 600 100000\n")
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
     (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
@@ -6536,6 +6536,11 @@ def tls_suite(args, disk):
         page = vm.command(f"https -c 10.0.2.2:{ports['asking']} /device mind.test")
         require(page, "CLIENT CERTIFICATE SENT"); require(page, f"hello from the host: /device to {name}")
         require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsClient FOR PID")
+        # 351-NET-0022: the TLS client the shell lends a program carries no right to the device certificate: asked for
+        # it, the TLS service refuses and logs it, while the shell's own `https -c` above still sent it.
+        out = vm.command(f"webcheck https://10.0.2.2:{ports['asking']}/program --name mind.test --client-cert", timeout=60)
+        assert "Denied" in out and "CERTIFICATE SENT" not in out, out
+        require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys.
