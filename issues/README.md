@@ -19,6 +19,7 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [213-KRN-0112](213-KRN-0112-firmware-ram-cache-types.md) | Firmware RAM above 3 GiB stays cached; regressions cover the Ryzen arena and mixed RAM/MMIO pages | `KRN` / ASTRA auditor-fixer | P1 | Full gate and Ryzen rerun | H / 213 |
 | [175](175-audit-2026-10-09.md) | The 2026-10-09 audit's eight findings, fixed in their tracks (main task; routing: `vfs_server` joins `KRN`) | `KRN` | P1 | — | S0 |
 | [158](158-video-capture.md) | Video capture devices: the video gateway with consent, the camera mark and `camera` are done on a synthetic source; UVC cameras over `usb_host` (isochronous transfers) open; next: the MacBook Pro's FaceTime HD camera (EHCI, isochronous, UVC) | kernel + services | P1 | — | tracks A, G |
 | [250](250-voice-dictation.md) | Voice V3, dictation: a Zipformer2 transducer, Russian first with `vosk-model-ru` 0.54 (5.2 % WER on FLEURS, 65M parameters), then English; a quality variant with GigaAM v3 (3.0 %) and Parakeet; models compared by measurement | main task, `APP` | P2 | — | track G |
