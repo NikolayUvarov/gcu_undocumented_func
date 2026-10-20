@@ -216,6 +216,6 @@ reboot
 
 **A freeze.**
 - On an Intel PC, the chipset's watchdog restarts the machine within 30 s, and that restart is a boot into Linux.
-- On the Ryzen there is no watchdog in MIND Core yet ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)), so a freeze waits for the power button.
+- On the Ryzen the AMD FCH's watchdog does the same ([213-KRN-0125](../issues/213-KRN-0125-the-amd-fch-watchdog.md)). It is checked against a model of its registers only, so the first runs show whether it holds: the boot line says `WATCHDOG: AMD FCH, A RESET AFTER 30 S ...` when it is armed. If it says `WATCHDOG: NONE`, a freeze waits for the power button.
 
 **Effector's machines.** On a machine Effector works on (the Ryzen is one), only the maintainer runs `once --reboot`, after checking that no operation is active ([docs/effector.md](effector.md)).
