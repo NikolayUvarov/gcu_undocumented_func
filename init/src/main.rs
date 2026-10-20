@@ -25,15 +25,15 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "VirtIO input BARs and MSI-X vectors (or IRQs), up to two devices; 24 KiB DMA; input", "framebuffer; display", "ports 0x1F0-0x1F7, 0x3F6", "AHCI registers; 128 KiB DMA",
     "xHCI registers; 512 KiB DMA", "a USB client for mass storage interfaces", "a USB client for HID interfaces; input", "VirtIO block BAR; 128 KiB DMA", "NVMe registers; 128 KiB DMA",
     "8 MiB of memory", "write clients of the block devices", "a write client of its own RAM disk (ramdisk#1)", "pin controller registers; a VFS client", "the embedded controller's two ports (ECDT)",
-    "spawn privilege", "AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
+    "spawn privilege", "HD Audio registers and line, a second function's too; or AC97 ports and IRQ; DMA", "an audio client", "a VFS client (video/synthetic) and a display client (the camera mark)",
     "network card BAR and MSI-X vector (or ports and IRQ); 160 KiB DMA",
     "RTL8168 BAR2 initially non-mastering; 2 MiB DMA; MSI if available; net endpoint",
     "RTL8852BE BAR2 initially non-mastering; retained 8 MiB disjoint command/RX DMA; read-only VFS; MAC/RX diagnostic, no radio endpoint",
     "Broadcom Wi-Fi BAR0; 512 KiB DMA; its MSI (or INTx line); a read-only VFS client (its microcode); a server endpoint for idl/wlanhw.wit", "the TPM's registers (if the firmware names a TPM)",
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
-    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables", "screen; process control; input; the serial line"];
+    "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
+    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only", "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -549,12 +549,20 @@ impl Init {
                 }
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
+                // A loader client that only starts helpers: each check parses in a parser of its own (109-KRN-0117).
+                grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
                 self.lend(&mut grants, 2, "rtc")?; grants.add(3, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SIGNER)?, CLIENT);
+            }
+            // The SSH service (351-KRN-0115) has no network either: clients lend their flows. It alone may ask the key
+            // service to sign an SSH login.
+            "ssh" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "ssh")?, ALL);
+                grants.add(4, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_SSH)?, CLIENT);
             }
             "virtio_net" => {
                 // The instance's VirtIO network card (vendor 1AF4, class 02:00, modern-only 1041 or transitional 1000), in
@@ -614,6 +622,10 @@ impl Init {
                 if self.running(service_index("wlan")) { grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT); }
                 // With the right to mint the BADGE_TLS_NO_DEVICE copy it lends to programs (351-NET-0022): tls's badge only narrows.
                 grants.copy(SLOT_TLS, self.keeper("tls")?, CLIENT | CAP_BADGE);
+                // The SSH service's, with the right to badge, lent on for REQUEST_SSH (351-KRN-0115); the updater's, for the
+                // shell's own `update` command and no program (351-KRN-0116).
+                if self.running(service_index("ssh")) { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
+                if self.running(service_index("updater")) { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.running(service_index("blockstore")) {
@@ -638,6 +650,8 @@ impl Init {
             // The applications' memory is charged to loader too: it may use all of init's (issue 150).
             "loader" => Quota { tasks: QUOTA_MAX as u16 - SERVICE_QUOTA, endpoints: QUOTA_MAX as u16 - SERVICE_QUOTA, memory_mib: SPAWN_MEMORY_ALL as u16 },
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
+            // The endpoint a check's parser serves (109-KRN-0117).
+            "updater" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },

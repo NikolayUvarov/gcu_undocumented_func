@@ -65,6 +65,18 @@ def slots_check(args, work):
         require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
         require(vm.service_logs("vfs_server", "UPDATE ZONE"), "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE")
         require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 1; THE NEWER RECORD: SLOT A CONFIRMED")
+        # 109-KRN-0117: the updater read the channel through a parser of its own, started with its loader client, which
+        # carries BADGE_HELPERS_ONLY (1); the parser ended with the check, so the shared parse service runs alone.
+        real = vm.services()
+        servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+        held = re.search(r"^SLOT=5 GEN=\d+ KIND=1 .*BADGE=1 EP=(\d+)", vm.command(f"stat caps {real['updater']}", raw=True), re.M)
+        assert held and servers.get(int(held[1])) == real["loader"], held
+        for _ in range(20):
+            parsers = len(re.findall(r"^\d+ parse ", vm.command("ps", raw=True), re.M))
+            if parsers == 1:
+                break
+            time.sleep(.25)
+        assert parsers == 1, parsers
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
