@@ -54,6 +54,10 @@ A network's PMK opens all its traffic, other stations' too, for anyone who recor
 
 [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), [550-NET-0018](550-NET-0018-the-station-service.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
 
+## Progress (2026-10-20): the MacBook Pro
+
+From the maintainer's run of 2026-10-20 on the MacBook Pro (`fast-test` 832c9080, recorded in 550-ASR-0007 and 550-DRV-0027 by `f750a8af`): the join of `CoolNet2` from `wm` was kept by `keystore` (the network remembered). **Left:** the join again after a reboot, with no passphrase, which the run did not do.
+
 ## Progress (2026-10-20, later): a restart and `forget`
 
 The end of the `net` suite's `wifi_join_check` (x86 and aarch64) now also checks:

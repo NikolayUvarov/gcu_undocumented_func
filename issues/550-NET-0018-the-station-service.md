@@ -1,6 +1,6 @@
 # 550-NET-0018 — The station service `wlan` and its configuration interface
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — for the interface and the service; 550-KRN-0097 for starting it and lending its clients (prepared by the kernel track from [requests-KRN.md](requests-KRN.md), "The Wi-Fi station in the boot services") · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open (the QEMU checks pass; the MacBook Pro joined WPA2 and leased) · **Blocked by:** the maintainer's run of `https` over the Mac's Wi-Fi; a client with `BADGE_WIFI` alone, which no program holds yet · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
 
 The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done).
 
@@ -42,6 +42,15 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
 ## Related
 
 [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (remembered networks).
+
+## Progress (2026-10-20): the MacBook Pro
+
+From the maintainer's run of 2026-10-20 on the MacBook Pro (`fast-test` 832c9080, recorded in 550-ASR-0007 and 550-DRV-0027 by `f750a8af`):
+- `wlan` joined `CoolNet2` (WPA2-PSK) on channel 8 through `bcm_wifi`, joined by hand from `wm`'s Settings, Wi-Fi: `[WLAN] JOINING CoolNet2 ON CHANNEL 8` at 256.782 s, `Joined` at 256.823 s;
+- the stack leased 192.168.2.236/24 on the station's card 3.6 s later, and the default route went to it;
+- `bcm_wifi` logged no transmit fault, and the passphrase is nowhere in the log.
+
+So the station joins a WPA2-PSK network on the Mac. **Left of this criterion:** the shell's `https` fetching a page over that link, which the run did not do. The scripted run (`tests/hardware/wifijoin.msh`, 550-ASR-0007) pings the gateway; an `https` line there would cover it.
 
 ## Progress (2026-10-20)
 
