@@ -99,11 +99,11 @@ fn verified(key: &[u8; 32], message: &[u8], signature: &[u8]) -> bool {
 fn refused(why: Refused) -> Error { match why { Refused::Service => Error::NoParser, Refused::Malformed | Refused::Lied => Error::Malformed } }
 
 /// A parser of the check's own, which the loader starts as a helper holding nothing but its endpoint, and which ends
-/// when the check does (109-NET-0010). Only with a loader client in SLOT_LOADER (asked of `init`, requests-KRN.md);
-/// the shared service without one, or where the loader starts none.
+/// when the check does (109-NET-0010). Only with a loader client in SLOT_LOADER (`init`'s, 109-KRN-0117); the shared
+/// service without one, or where the loader starts none (logged with the reason).
 fn parser() -> Session {
     if mind::dev::cap_info(SLOT_LOADER).0 != CAP_KIND_ENDPOINT { return Session::shared(PARSE); }
-    Session::start(Endpoint::LOADER, PARSE)
+    Session::own(Endpoint::LOADER).unwrap_or_else(|why| { mind::println!("[UPDATER] PARSER: THE SHARED SERVICE ({:?})", why); Session::shared(PARSE) })
 }
 
 /// A channel file whose fields `parser` read and whose signature is the release key's.

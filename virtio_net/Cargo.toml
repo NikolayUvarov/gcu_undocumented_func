@@ -12,6 +12,8 @@ libmind = { path = "../libmind" }
 # LEGACY: the legacy VirtIO interface for cards without the modern one (docs/legacy.md).
 default = ["legacy"]
 legacy = []
+# Test only (000-NET-0036): answers `attach` 400 ms late, after mapping the ring; never in an image.
+late-attach = []
 
 [profile.release]
 panic = "abort"

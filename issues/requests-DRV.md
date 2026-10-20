@@ -315,7 +315,7 @@ This request does not replace the preceding H12 deadline correction.
 
 ## `virtio_blk`: a request waits a whole tick (351-NET-0034)
 
-**Recorded by:** the network track (NET), 2026-10-20, from the timings [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md) added to `download`.
+**Recorded by:** the network track (NET), 2026-10-20, from the timings [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done) added to `download`.
 
 ### Problem
 

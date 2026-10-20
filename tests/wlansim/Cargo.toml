@@ -10,6 +10,10 @@ libmind = { path = "../../libmind", features = ["alloc"] }
 dot11 = { path = "../../dot11" }
 wpa = { path = "../../wpa" }
 
+[features]
+# Test only (550-NET-0030): a radio that answers late, and goes silent when asked; never in a release image.
+slow = []
+
 [profile.release]
 panic = "abort"
 opt-level = 3

@@ -4721,11 +4721,27 @@ def update_suite(args):
         cut = (newer / largest[0]).stat().st_size // 2
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
-        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", out)
+        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged; a read the
+        # restart cuts short ends the reading, and the restart's lines stay in the output.
+        log = ""
+        for _ in range(900):
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                break
+            if "[UPDATER] FETCH: VERSION 6 STAGED" in log or "[UPDATER] APPLY:" in log:
+                break
+            time.sleep(1)
+        attempt = log.rpartition("[UPDATER] FETCH: VERSION 6 INTO SLOT")[2]
+        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
+        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
         print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
+        for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
+            print(f"TIME: the resume: {line}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
@@ -5586,7 +5602,13 @@ def parser_restart_check(vm, stall, body):
     assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
     # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
     require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
-    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
+    for _ in range(40):  # killed; the kernel frees an ended task on its next idle pass, later on a loaded machine
+        listed = vm.command("ps", raw=True)
+        if not re.search(fr"^{parsers[0]} ", listed, re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the killed parser is still listed", listed))
     stall.go.set()
     for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
         if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
@@ -5713,7 +5735,12 @@ def wifi_join_check(vm):
             break
         time.sleep(1)
     require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
-    require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
+    # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
+    for _ in range(3):
+        pinged = vm.command("wifiping ping:10.0.4.1")
+        if "NETCHECK ping:10.0.4.1 OK" in pinged:
+            break
+    require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
     require(run("wifi leave", 30), "[WIFI] LEFT")
@@ -5736,6 +5763,44 @@ def wifi_join_check(vm):
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     require(run("wifi leave", 30), "[WIFI] LEFT")
     print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
+
+    def scanned():  # wifi's first look scans: a restarted station has heard nothing yet
+        vm.send("wifi\n")
+        vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+
+    def quit_wifi():
+        vm.send_bytes(b"q")
+        vm.expect("SHELL RESUMED.")
+        time.sleep(.2); vm.collect(); vm.output = ""
+
+    # 550-NET-0024: the remembered network outlives a restart of keystore and of wlan; the link carries traffic.
+    for name in ("keystore", "wlan"):
+        pid = vm.services()[name]
+        require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+        for _ in range(50):
+            if vm.services().get(name, pid) != pid:
+                break
+            time.sleep(.2)
+        else:
+            raise AssertionError(f"{name} PID={pid} was not restarted")
+    scanned(); quit_wifi()
+    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
+    for _ in range(3):
+        pinged = vm.command("wifiping ping:10.0.4.1")
+        if "NETCHECK ping:10.0.4.1 OK" in pinged:
+            break
+    require(pinged, "NETCHECK ping:10.0.4.1 OK")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    # Forgotten through wifi's screen (f): keystore drops it, and a join with no passphrase is refused.
+    scanned()
+    vm.send_bytes(b"f")
+    vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
+    quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
+    require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
+    require(run("wifi join MIND-TEST", 90), "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
+          "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -6014,11 +6079,111 @@ def net_suite(args, disk):
             wifi_join_check(vm)
     finally:
         vm.close()
+    late_attach_check(args)
+    slow_radio_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def late_attach_check(args):
+    """000-NET-0036 (000-KRN-0129): virtio_net answers the stack's `attach` after the stack's deadline, the ring already
+    mapped. The stack keeps the ring lent until a kick says the driver has it: the driver does not fault, is not
+    restarted, maps one ring, and the network works through it."""
+    if not args.late_attach_elf or not raw_tools():
+        print("SKIP: the late answer to attach needs the late-attach driver (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+    with tempfile.TemporaryDirectory(prefix="smoke-late-attach-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"virtio_net.elf": args.late_attach_elf}, extra={"netpolicy.txt": b"console 10.0.2.2 icmp\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            first = vm.services()["virtio_net"]
+            log = vm.service_logs("netstack", "[NETSTACK] DHCP")
+            require(log, "[NETSTACK] CARD 0 READY (FRAME RING LENT, NO ANSWER YET)")
+            require(log, "[NETSTACK] CARD 0: THE DRIVER HAS OUR RING (A LATE ANSWER)")
+            require(log, "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
+            require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+            assert vm.services()["virtio_net"] == first, "virtio_net was restarted"
+            # The services' lines are read with `logs`, not on the serial line.
+            driver = vm.command(f"logs {first}", raw=True)
+            assert driver.count("[VIRTIO_NET] FRAME RING ATTACHED") == 1, driver
+            assert "FAULT PID=" not in vm.command("faults")
+            log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+            assert "DRIVER WITHOUT OUR RING" not in log, log
+        finally:
+            vm.close()
+    print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
+
+
+def slow_radio_check(args):
+    """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
+    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once: each ping answered within 2 s,
+    and a page fetched over TCP; the station joins once the radio answers; when the station's radio goes silent after the
+    join, the wired card keeps working the same way."""
+    if not args.slow_radio_elf or not raw_tools():
+        print("SKIP: the slow radio needs wlansim built with `slow` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+
+    def pings(text):
+        times = [int(t) for t in re.findall(r"REPLY FROM 10\.0\.2\.2: TIME=(\d+) US", text)]
+        require(text, "PING: 3 SENT, 3 RECEIVED")
+        assert len(times) == 3 and max(times) < 2_000_000, text
+        return max(times) // 1000
+
+    web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
+    web.daemon_threads = True
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+
+    def fetched(path):  # a TCP socket through the wired card
+        page = vm.command(f"fetch 10.0.2.2:{web.server_address[1]} {path}")
+        require(page, "HTTP/1.0 200 OK"); require(page, f"hello from the host: {path}")
+
+    policy = b"console 10.0.2.2 icmp\nconsole 10.0.4.99 icmp\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-slow-radio-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.slow_radio_elf},
+                                    extra={"netpolicy.txt": policy, "data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=["-cpu", "qemu64,+rdrand", "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            radio = vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 60 S")
+            require(radio, "[WLANSIM] SILENT FOR 60 S: A RADIO THAT ANSWERS LATE")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
+            silent = pings(vm.command("ping 10.0.2.2"))
+            fetched("/radio-silent")
+            radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
+            assert "ANSWERING AGAIN" not in radio, "the radio answered before the wired card's check"
+            require(vm.service_logs("wlan", "THE RADIO HAS NOT ANSWERED"), "[WLAN] THE RADIO HAS NOT ANSWERED IN 2 S: SERVING WITHOUT IT, ASKING AGAIN")
+            for _ in range(120):  # the radio's 60 s, from its start
+                radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
+                if "[WLANSIM] ANSWERING AGAIN" in radio:
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(("the radio never answered", radio))
+            require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
+            # The station's last scan was made while the radio was silent: wifi scans again, as a user's first look does.
+            vm.send("wifi\n")
+            vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+            vm.send_bytes(b"q")
+            vm.expect("SHELL RESUMED.")
+            time.sleep(.2); vm.collect(); vm.output = ""
+            join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
+            vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
+            require(vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n"), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
+            # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
+            vm.command("ping 10.0.4.99")
+            require(vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 20 S"), "[WLANSIM] SILENT FOR 20 S")
+            stalled = pings(vm.command("ping 10.0.2.2"))
+            fetched("/station-silent")
+            assert "FAULT PID=" not in vm.command("faults")
+        finally:
+            vm.close()
+            web.shutdown()
+    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
+          f"silent, the station joined once it answered; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _certificates(directory):
@@ -8557,6 +8722,8 @@ def main():
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
+    parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
+    parser.add_argument("--slow-radio-elf", help="test-only wlansim built with --features slow (550-NET-0030, x86); found where scripts/x86_fixtures.sh puts it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8584,6 +8751,10 @@ def main():
     radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
     args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
+    late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
+    args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
+    slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
+    args.slow_radio_elf = args.slow_radio_elf or (str(slow) if args.arch == "x86_64" and slow.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:

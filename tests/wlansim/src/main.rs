@@ -7,7 +7,8 @@
 // 2.4 GHz (550-NET-0028): it refuses a frame at an OFDM rate, and the access point logs the rates the station offers.
 // It takes a country's limits (wlanhw.wit 1.2, 550-NET-0035): then it tunes only to their channels and refuses a probe
 // request where the station may only listen. Until limits are first set it keeps 1.1's ways, as the station of stage A
-// sets none. A test service: in no image but the tests'.
+// sets none. With the test-only feature `slow` (550-NET-0030) it answers nothing for its first LATE_MS, and for
+// SILENT_MS after the station asks (ARP) for SILENT_ADDRESS. A test service: in no image but the tests'.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA, TYPE_MANAGEMENT};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
@@ -38,6 +39,12 @@ const BEACON_MS: u64 = 100;
 const FRAME_MAX: usize = 2346;
 // The rates the radio sends at, in 500 kb/s units: DSSS and CCK alone.
 const RATES: [u8; 4] = [2, 4, 11, 22];
+#[cfg(feature = "slow")]
+const LATE_MS: u64 = 60_000;
+#[cfg(feature = "slow")]
+const SILENT_MS: u64 = 20_000;
+#[cfg(feature = "slow")]
+const SILENT_ADDRESS: [u8; 4] = [10, 0, 4, 99];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Expect { Nothing, Message2, Message4 }
@@ -62,6 +69,8 @@ struct Sim {
     refused: bool,
     // The country's limits (1.2): each channel and whether the station may only listen there; None before any.
     limits: Option<Vec<(u8, bool)>>,
+    // Until when (uptime, ms) the radio answers nothing: set only with the feature `slow`.
+    silent_until: Option<u64>,
 }
 
 fn mac64(m: &Mac) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -236,6 +245,12 @@ impl Sim {
 
     // The network behind the access point: DHCP, ARP for the gateway, ICMP echo to it.
     fn network(&mut self, source: &Mac, ethertype: u16, p: &[u8]) {
+        #[cfg(feature = "slow")]
+        if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == SILENT_ADDRESS {
+            mind::println!("[WLANSIM] SILENT FOR {} S", SILENT_MS / 1000);
+            self.silent_until = Some(mind::time::uptime_ms() as u64 + SILENT_MS);
+            return;
+        }
         if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == GATEWAY {
             let mut r = Vec::with_capacity(28);
             r.extend_from_slice(&[0, 1, 0x08, 0x00, 6, 4, 0, 2]);
@@ -354,11 +369,22 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, silent_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
+    #[cfg(feature = "slow")]
+    {
+        mind::println!("[WLANSIM] SILENT FOR {} S: A RADIO THAT ANSWERS LATE", LATE_MS / 1000);
+        sim.silent_until = Some(mind::time::uptime_ms() as u64 + LATE_MS);
+    }
     let mut scratch = [0u8; wlanhw::REQUEST_MAX];
     let mut out = [0u8; FRAME_MAX + RADIO_HEADER];
     loop {
+        // Silent: requests wait in the queue, unanswered.
+        if let Some(until) = sim.silent_until {
+            if (mind::time::uptime_ms() as u64) < until { mind::time::sleep(POLL_MS as usize); continue; }
+            sim.silent_until = None;
+            mind::println!("[WLANSIM] ANSWERING AGAIN");
+        }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         sim.tick(mind::time::uptime_ms() as u64);
         if !sim.queue.is_empty() { for call in sim.waiters.drain(..) { let _ = wlanhw::reply_wait(call, sim.queue.len() as u32); } }
