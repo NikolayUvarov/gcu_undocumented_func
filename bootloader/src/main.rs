@@ -66,6 +66,24 @@ fn photo_pause_s(services: &BootServices, image: Handle) -> u32 {
     digits.fold(0u32, |n, &d| n.saturating_mul(10).saturating_add((d - b'0') as u32)).min(PHOTO_PAUSE_MAX_S)
 }
 
+// link.conf at the loader's own volume's root (800-KRN-0128): whether it is there, and its words joined by one space
+// (at most LINK_WORDS_MAX bytes, whole words), for init to start the link to another machine.
+fn link_conf(services: &BootServices, image: Handle) -> (u32, [u8; abi::LINK_WORDS_MAX]) {
+    let mut words = [0u8; abi::LINK_WORDS_MAX];
+    let Ok(mut sfs) = services.get_image_file_system(image) else { return (0, words) };
+    let Ok(mut root) = sfs.open_volume() else { return (0, words) };
+    let mut buffer = [0u8; 512];
+    let Ok(text) = read_file(&mut root, "", "LINK.CONF", &mut buffer) else { return (0, words) };
+    let mut used = 0;
+    for word in text.split(|b| b.is_ascii_whitespace()).filter(|w| !w.is_empty()) {
+        let need = word.len() + (used != 0) as usize;
+        if used + need > words.len() { break; }
+        if used != 0 { words[used] = b' '; used += 1; }
+        words[used..used + word.len()].copy_from_slice(word); used += word.len();
+    }
+    (1, words)
+}
+
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
     let mut console = unsafe { system_table.unsafe_clone() };
     let _ = writeln!(console.stdout(), "MIND CORE BOOT: {}", args);
@@ -385,6 +403,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // When asked, time to read what the firmware printed above this line before the loader's own lines push it out of
     // the small text console (the MacBook Pro, 2026-10-09).
     let pause_s = photo_pause_s(system_table.boot_services(), image);
+    let (link_present, link_words) = link_conf(system_table.boot_services(), image);
     if pause_s > 0 {
         say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", pause_s));
         system_table.boot_services().stall(pause_s as usize * 1_000_000);
@@ -439,7 +458,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
     if pause_s > 0 {

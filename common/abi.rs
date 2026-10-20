@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 39;
+pub const BOOT_IMAGES: usize = 41;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -41,14 +41,16 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // the Wi-Fi station wlan and its stand-in radio wlansim are boot images, tpm and keystore before them (550-KRN-0097).
 // ABI 11 adds the two Realtek boot images and a non-mastering MMIO grant (213-KRN-0114). ABI 12 adds the SSH service
 // `ssh` after `tls` and moves SLOT_DYNAMIC to 36 for SLOT_SSH and SLOT_UPDATE (351-KRN-0115, 351-KRN-0116).
+// ABI 13 adds the link to another machine: `usb_serial` and `link` right after `vfs_server` (800-KRN-0128).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 12;
+pub const ABI_VERSION: u32 = 13;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
-    pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES] }
+    pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
+    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX] }
 impl BootInfo {
     pub fn image(&self, index: usize) -> Option<&ProgramImage> {
         if index < BOOT_PREFIX_IMAGES { self.programs.get(index) } else { self.extra_programs.get(index - BOOT_PREFIX_IMAGES) }
@@ -66,6 +68,10 @@ const _: () = assert!(core::mem::offset_of!(BootInfo, abi_version) == 720);
 // BootInfo.photo_pause_s: seconds to wait for a photo of the screen, from data/pause.txt on the boot volume (at most
 // 60); 0, the default, waits for nothing (ABI 7, 211-KRN-0089).
 pub const PHOTO_PAUSE_MAX_S: u32 = 60;
+// BootInfo.link_present and link_words: whether the boot volume's root holds link.conf, and its words (NUL-padded), as
+// the bootloader read them through the firmware, so that a link to another machine starts even when MIND Core cannot
+// read its boot disk; init starts `usb_serial` and `link` only with the file (ABI 13, 800-KRN-0128).
+pub const LINK_WORDS_MAX: usize = 64;
 // BootInfo.efi_runtime: the address of the firmware's EFI_RUNTIME_SERVICES table, 0 without one; the kernel calls its
 // variable services in the identity map (no SetVirtualAddressMap) and gives tasks 0 (ABI 4, 351-KRN-0027).
 // BootInfo.device_tree: the flattened device tree in the firmware's configuration table (a board without ACPI: U-Boot on

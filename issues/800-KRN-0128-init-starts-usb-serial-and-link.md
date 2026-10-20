@@ -1,6 +1,6 @@
 # 800-KRN-0128 — `init` starts `usb_serial` and `link` when the boot volume holds `link.conf`
 
-**Type:** `init`, ABI (`common/abi.rs`: two boot images) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the link track's `usb_serial` and `link` in `main` (`claude/LNK-link`); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md) (a writable client confined to `data/link/`) · **Main task:** 800 (the link track's) · **Constitution:** MC-2.3, MC-3.4, MC-3.7
+**Type:** `init`, ABI (`common/abi.rs`: two boot images) · **Owner:** kernel session · **Priority:** P2 · **Status:** made on the kernel branch with `claude/LNK-link` merged, in `fast-test` (2026-10-20); the gate is left · **Blocked by:** the link track's `usb_serial` and `link` in `main` (`claude/LNK-link`) · **Main task:** 800 (the link track's) · **Constitution:** MC-2.3, MC-3.4, MC-3.7
 
 ## Problem
 
@@ -20,6 +20,17 @@ The link track's requests of 2026-10-20 (`internal-dev-messages`, `KRN/2026-10-2
    - A log reader (`BADGE_READ`) in `SLOT_LOG`.
    - Its arguments are `link.conf`'s words.
 5. **No console, network or other files.** The console comes later, with the tools track.
+
+## Progress (2026-10-20)
+
+The link track asked for this part at once, on its branch and into `fast-test`, so that the link carries a machine's log from the start of the boot. Made on the kernel branch with `claude/LNK-link` (c658337) merged:
+
+- **ABI 13.** `usb_serial` and `link` are boot images right after `vfs_server` (`BOOT_IMAGES` 41), so the link starts before the drivers and services that most need debugging. Both are built for x86 and aarch64 (`02_build.sh`, `scripts/build_aarch64.sh`).
+- **`link.conf` is read by the bootloader,** through the firmware, from the root of the volume it was loaded from. `BootInfo.link_present` and `link_words` (at most 64 bytes, the file's words joined by single spaces) follow the images, so ABI 10's prefix and the version's offset stay. So the link starts even when MIND Core cannot read its own boot disk. Without the file `init` logs `usb_serial NOT STARTED: NO LINK.CONF` and the same for `link`.
+- **Grants** as in the plan:
+  - `usb_serial`: `usb_host`'s client badged `BADGE_SERIAL` in `SLOT_DEV0`, its server endpoint in `SLOT_SERVICE`;
+  - `link`: `usb_serial`'s client in `SLOT_DEV0`, a log reader in `SLOT_LOG`, `link.conf`'s words as arguments, and in `SLOT_VFS` a writable client confined to `data/link/` that `init` asks `vfs_server` for at each start (750-KRN-0120's `scope`, the directory made if missing). Without the boot volume `link` gets no file client and `init` logs `link: NO FILES (…): THE LOG ONLY`.
+- **The log from the kernel's first line.** Right after `logd` starts, `init` copies the kernel's lines (the hardware report's `Kernel lines`) into the system log. `logd`'s ring grows from 256 to 2048 records, and `init` is not rate-limited, so a whole boot fits. `mindlink log` reads it all.
 
 ## Acceptance criteria
 

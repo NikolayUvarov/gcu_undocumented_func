@@ -1,9 +1,9 @@
 #![no_std]
 #![no_main]
-// logd: the system log (idl/log.wit, MC-10.6). Records go into a ring of 256 (ring.rs) stamped with the time of
+// logd: the system log (idl/log.wit, MC-10.6). Records go into a ring of 2048 (ring.rs) stamped with the time of
 // arrival and with the sender's PID from IPC and its task name from the kernel's task records (the observe
 // privilege): a message cannot name its own source. Every client may write; reading needs the read badge
-// (`mind::log::BADGE_READ`), which init gives to the shell's client only.
+// (`mind::log::BADGE_READ`), which init gives to the shell's, vfs_server's and link's clients.
 mod ring;
 
 use mind::abi::*;
@@ -44,7 +44,7 @@ fn main(_info: &'static BootInfo) {
     let observe = names.scratch.as_mut().is_some_and(|s| stat::read(STAT_TASKS, 0, s.as_mut_slice()).is_ok());
     let own = names.scratch.as_mut().and_then(|s| stat::read(STAT_TASKS, 0, s.as_mut_slice()).ok().and_then(|r| r.iter::<StatTask>().find(|t| text(&t.name[..NAME].try_into().unwrap()) == "logd").map(|t| t.pid))).unwrap_or(0);
     let now = || mind::time::uptime_ms() as u64;
-    ring.push(now(), own, "logd", 1, if observe { "[LOGD] READY: 256 RECORDS OF 200 BYTES" } else { "[LOGD] NO OBSERVE PRIVILEGE: SOURCES ARE PIDS ONLY" });
+    ring.push(now(), own, "logd", 1, if observe { "[LOGD] READY: 2048 RECORDS OF 200 BYTES" } else { "[LOGD] NO OBSERVE PRIVILEGE: SOURCES ARE PIDS ONLY" });
     mind::println!("[LOGD] READY");
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
