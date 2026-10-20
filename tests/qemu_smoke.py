@@ -6020,6 +6020,7 @@ def net_suite(args, disk):
     finally:
         vm.close()
     late_attach_check(args)
+    slow_radio_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
@@ -6054,6 +6055,64 @@ def late_attach_check(args):
         finally:
             vm.close()
     print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
+
+
+def slow_radio_check(args):
+    """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
+    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once, each ping answered within 2 s;
+    the station joins once the radio answers; when the station's radio goes silent after the join, the wired card keeps
+    working the same way."""
+    if not args.slow_radio_elf or not raw_tools():
+        print("SKIP: the slow radio needs wlansim built with `slow` (scripts/x86_fixtures.sh) and mtools", flush=True)
+        return
+
+    def pings(text):
+        times = [int(t) for t in re.findall(r"REPLY FROM 10\.0\.2\.2: TIME=(\d+) US", text)]
+        require(text, "PING: 3 SENT, 3 RECEIVED")
+        assert len(times) == 3 and max(times) < 2_000_000, text
+        return max(times) // 1000
+
+    policy = b"console 10.0.2.2 icmp\nconsole 10.0.4.99 icmp\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-slow-radio-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), {"wlansim.elf": args.slow_radio_elf},
+                                    extra={"netpolicy.txt": policy, "data/wifijoin.txt": b"MIND-TEST\nmind test passphrase\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=["-cpu", "qemu64,+rdrand", "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            radio = vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 60 S")
+            require(radio, "[WLANSIM] SILENT FOR 60 S: A RADIO THAT ANSWERS LATE")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
+            silent = pings(vm.command("ping 10.0.2.2"))
+            radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
+            assert "ANSWERING AGAIN" not in radio, "the radio answered before the wired card's check"
+            require(vm.service_logs("wlan", "THE RADIO HAS NOT ANSWERED"), "[WLAN] THE RADIO HAS NOT ANSWERED IN 2 S: SERVING WITHOUT IT, ASKING AGAIN")
+            for _ in range(120):  # the radio's 60 s, from its start
+                radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
+                if "[WLANSIM] ANSWERING AGAIN" in radio:
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(("the radio never answered", radio))
+            require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
+            # The station's last scan was made while the radio was silent: wifi scans again, as a user's first look does.
+            vm.send("wifi\n")
+            vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+            vm.send_bytes(b"q")
+            vm.expect("SHELL RESUMED.")
+            time.sleep(.2); vm.collect(); vm.output = ""
+            join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
+            vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
+            require(vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n"), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
+            # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
+            vm.command("ping 10.0.4.99")
+            require(vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 20 S"), "[WLANSIM] SILENT FOR 20 S")
+            stalled = pings(vm.command("ping 10.0.2.2"))
+            assert "FAULT PID=" not in vm.command("faults")
+        finally:
+            vm.close()
+    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms while it was silent, the station "
+          f"joined once it answered; with the joined station's radio silent, within {stalled} ms", flush=True)
 
 
 def _certificates(directory):
@@ -8593,6 +8652,7 @@ def main():
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
+    parser.add_argument("--slow-radio-elf", help="test-only wlansim built with --features slow (550-NET-0030, x86); found where scripts/x86_fixtures.sh puts it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8622,6 +8682,8 @@ def main():
     args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
+    slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
+    args.slow_radio_elf = args.slow_radio_elf or (str(slow) if args.arch == "x86_64" and slow.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
