@@ -65,7 +65,7 @@ state follows from that wait.
 
 ## Related
 
-[550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md),
+[550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done),
 [750-EFF-0006](750-EFF-0006-session-service.md),
 [network profile](../docs/profile/network.md).
 

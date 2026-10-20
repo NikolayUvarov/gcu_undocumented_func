@@ -60,7 +60,7 @@ The end of the `net` suite's `wifi_join_check` (x86 and aarch64) now also checks
 - **a restart:** after `keystore` and then `wlan` are killed and restarted by `init`, `wifi` scans, and `wifi join MIND-TEST` with no passphrase joins; `keystore` logs the handshake's keys for the new station's PID, and `wifiping` reaches the gateway 10.0.4.1 through the link;
 - **`forget`** through `wifi`'s screen (`f`): `wifi` shows `MIND-TEST forgotten: its key is gone from the station`, `keystore` logs `WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID`, and a join with no passphrase is then refused (`the station does not take that passphrase`, the station's `invalid`).
 
-Run locally (x86, QEMU 8.2, TCG, 4 CPUs): it passed. The gate is to come.
+Run locally (x86, QEMU 8.2, TCG, 4 CPUs): it passed. Gate 23 (`main` ad446a18) passed it on x86 (i9, "x86: boot, display, network…" and i7, "x86: RAM above 4 GiB") and aarch64 (un-rizen, "aarch64: files, network and TLS" and "GICv2 with GICv2m"; PCU, "aarch64: RAM, ACPI and PCI above 4 GiB").
 
 Left:
 - **a client of `keystore` without the badge `denied`:** the programs `init` lends a `keystore` client are `wlan` (the station's badge), `tls` and `ssh` (their own badges), all services; no program a test controls holds one. The check needs a test fixture holding such a client, which `init` would have to lend (the kernel track's).

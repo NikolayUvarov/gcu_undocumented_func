@@ -4,7 +4,7 @@
 
 ## Problem
 
-The audit of `main` 94ec83a0 and the maintainer's tested build e6730d7a found gaps in [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md):
+The audit of `main` 94ec83a0 and the maintainer's tested build e6730d7a found gaps in [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done):
 
 - `netstack` bounds its first `Stack::poll` call, but calls it again after handling a client without the timeout scope.
 - `wlan` bounds its periodic pump, but sends to the radio from client `send`, `scan`, `join` and `leave` handlers outside that scope.
@@ -31,7 +31,7 @@ The MacBook log from the tested build establishes a successful join and DHCP lea
 
 ## Related
 
-[550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), [550](550-network-on-real-hardware.md), [213](213-amd-ryzen-pc.md).
+[550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), [550](550-network-on-real-hardware.md), [213](213-amd-ryzen-pc.md).
 
 ## Progress (2026-10-15)
 

@@ -1,6 +1,6 @@
-# 550-NET-0030 — The stack and the station do not wait for ever on a card or a radio
+# 550-NET-0030 — The stack and the station do not wait for ever on a card or a radio — done
 
-**Type:** network (services) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** in progress (built; the QEMU check written, 2026-10-20) · **Blocked by:** — (550-KRN-0097, `init` starting `wlan`, is on `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, Appendix B.6
+**Type:** network (services) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — (550-KRN-0097, `init` starting `wlan`, is on `main`) · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1, Appendix B.6
 
 From the request "The stack waits for the station, and the station for its radio, with no deadline" in requests-NET.md (recorded by the kernel track, 2026-10-14, from reading `fast-test` fee095e).
 
@@ -49,6 +49,17 @@ Built for x86_64 and aarch64 (`wlan/src/main.rs`, `netstack/src/main.rs`). The Q
 - **A TCP connection added** (2026-10-20, after gate 22): the criterion speaks of sockets, so the check fetches a page from the host's web server in both phases. Run locally: it passed, pings within 28 and 24 ms.
 - **What it does not measure.** The stack's own bound, at most 2 s of waiting every 5 s for a card that does not answer, is the budget code of 550-NET-0032, which its host tests exercise (`tests/network_budget`). This check shows the effect on the other card, not the bound.
 
+## Resolution
+
+- **Built** (in `main` since 2026-10-14): `wlan` serves its clients while its radio has not answered, asking it again every 2 s; `netstack` gives each card a deadline, and the stack's turn a budget (550-NET-0031 and 550-NET-0032, ASTRA's work for this track).
+- **The first criterion, in QEMU:** gate 23 (i9, x86, `net` suite, `main` ad446a18; the check at `b7effb01`), `slow_radio_check`:
+  - while the radio answered nothing, the wired card had its lease, pings were answered within 25 ms, and a page came over TCP;
+  - once the radio answered, the station joined and leased 10.0.4.15.
+- **The second criterion:**
+  - **the other cards keep working.** In the same run, with the joined station's radio silent, the wired card's pings were answered within 30 ms and a page came over TCP;
+  - **the bound, at most 2 s of waiting every 5 s,** is the stack's budget code of 550-NET-0032, which `tests/network_budget` exercises in the host tests (gate 22, "host tests" on un-rizen). Those are tests of that code on a host, not a proof, and not a measurement in QEMU.
+- **Not covered:** aarch64 (the slow radio is an x86 fixture), and real radios: the MacBook Pro's `bcm_wifi` and the Ryzen's `rtw89_wifi`.
+
 ## Related
 
-[550-NET-0018](550-NET-0018-the-station-service.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done) (the same bound for `download`).
+[550-NET-0018](../issues/550-NET-0018-the-station-service.md), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), [351-NET-0029](351-NET-0029-download-calls-with-a-deadline.done) (the same bound for `download`).
