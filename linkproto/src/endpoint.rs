@@ -16,9 +16,19 @@ pub mod kind {
     pub const LIST: u8 = 16;
     pub const STAT: u8 = 17;
     pub const DELETE: u8 = 18;
+    /// Files in directories (800-LNK-0010).
+    pub const MKDIR: u8 = 19;
+    pub const MOVE: u8 = 21;
+    pub const RMDIR: u8 = 22;
+    pub const LIST_DIR: u8 = 23;
     pub const CONSOLE: u8 = 20;
     pub const LOG: u8 = 30;
     pub const INPUT: u8 = 40;
+    /// Programs the slave starts for the master (800-LNK-0009).
+    pub const RUN: u8 = 50;
+    pub const OUTPUT: u8 = 51;
+    pub const STOP: u8 = 52;
+    pub const RUNS: u8 = 53;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0xFF;
 }
@@ -30,6 +40,7 @@ pub mod channel {
     pub const FILES: u8 = 2;
     pub const LOG: u8 = 3;
     pub const INPUT: u8 = 4;
+    pub const PROGRAMS: u8 = 5;
 }
 
 /// Why an exchange failed; `Refused` carries the other end's code (`code`).
@@ -45,6 +56,8 @@ pub mod code {
     pub const BAD_REQUEST: u8 = 5;
     pub const BUSY: u8 = 6;
     pub const UNSUPPORTED: u8 = 7;
+    pub const NOT_EMPTY: u8 = 8;
+    pub const EXISTS: u8 = 9;
 }
 
 /// A byte stream to the other end, and a clock.

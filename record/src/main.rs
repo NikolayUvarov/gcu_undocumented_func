@@ -6,7 +6,10 @@
 // (`run record -t 10 &`), it records the program then brought to the front.
 // Started from wm's run line (`record -w`, issue u014), it gets a read-only lease of the window in front instead and
 // records that window alone, at its size; wm shows "● REC" on the window's frame.
+// `-s 2` makes each frame half the size in each direction and `-q` sets the JPEG quality, for a Retina screen; without
+// a file it writes the first free data/media/record-NNN.avi, or ram: when data/ cannot be written (000-APP-0089).
 extern crate alloc;
+mod shrink;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -25,12 +28,12 @@ const DISPLAY: Endpoint = Endpoint(SLOT_DISPLAY);
 // Each capture's memory arrives here (21 is the shell's broker client; no application without a window uses it).
 const RECEIVE: usize = 21;
 const QUALITY: u8 = 75;
-const USAGE: &str = "record [-w] [-r frames per second, 1-30] [-t seconds, 1-3600] [file]   (default: 10 per second, 10 s, ram:record-NNN.avi)";
+const USAGE: &str = "record [-w] [-r frames per second, 1-30] [-t seconds, 1-3600] [-s smaller by, 1-4] [-q JPEG quality, 1-100] [file]   (default: 10 per second, 10 s, full size, quality 75, data/media/record-NNN.avi)";
 
-struct Options { fps: u32, seconds: u32, path: String, window: bool }
+struct Options { fps: u32, seconds: u32, path: String, window: bool, scale: u32, quality: u8 }
 
 fn options(args: &str) -> Result<Options, String> {
-    let mut options = Options { fps: 10, seconds: 10, path: String::new(), window: false };
+    let mut options = Options { fps: 10, seconds: 10, path: String::new(), window: false, scale: 1, quality: QUALITY };
     let mut words = args.split_whitespace();
     while let Some(word) = words.next() {
         let number = |value: Option<&str>, low: u32, high: u32| value.and_then(|v| v.parse::<u32>().ok()).filter(|n| (low..=high).contains(n));
@@ -38,13 +41,16 @@ fn options(args: &str) -> Result<Options, String> {
             "-r" => options.fps = number(words.next(), 1, 30).ok_or_else(|| String::from(USAGE))?,
             "-t" => options.seconds = number(words.next(), 1, 3600).ok_or_else(|| String::from(USAGE))?,
             "-w" => options.window = true,
+            "-s" => options.scale = number(words.next(), 1, 4).ok_or_else(|| String::from(USAGE))?,
+            "-q" => options.quality = number(words.next(), 1, 100).ok_or_else(|| String::from(USAGE))? as u8,
             _ if word.starts_with('-') || !options.path.is_empty() => return Err(String::from(USAGE)),
             _ => options.path = String::from(word),
         }
     }
     if options.path.is_empty() {
-        let free = (1..1000).map(|n| format!("ram:record-{:03}.avi", n)).find(|name| mind::fs::metadata(name).is_err());
-        options.path = free.ok_or_else(|| String::from("no free name on ram:"))?;
+        let directory = if mind::fs::mkdir("data/media").is_ok() { "data/media/" } else { "ram:" };
+        let free = (1..1000).map(|n| format!("{}record-{:03}.avi", directory, n)).find(|name| mind::fs::metadata(name).is_err());
+        options.path = free.ok_or_else(|| format!("no free name in {}", directory))?;
     }
     Ok(options)
 }
@@ -140,7 +146,7 @@ impl Recording {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
-    mind::about!("record — records the screen in front as an AVI file (Motion JPEG); a red dot in the corner shows it is recording.\nUsage: record [-w] [-r fps] [-t seconds] [file]   (default: 10 per second, 10 s, ram:record-NNN.avi)\nStart it in the background (run record -t 10 &), then bring the program to record to the front.\nIn wm, record -w from the run line (Alt+R) records the window in front alone; \"● REC\" on its frame shows it.");
+    mind::about!("record — records the screen in front as an AVI file (Motion JPEG); a red dot in the corner shows it is recording.\nUsage: record [-w] [-r fps] [-t seconds] [-s 2] [-q quality] [file]   (default: 10 per second, 10 s, data/media/record-NNN.avi)\n-s 2: frames half the size in each direction; -q: the JPEG quality (75), for a large screen.\nStart it in the background (run record -t 10 &), then bring the program to record to the front.\nIn wm, record -w from the run line (Alt+R) records the window in front alone; \"● REC\" on its frame shows it.");
     // The user's files the shell lends for REQUEST_FILES (ram: and data/ writable); else the read-only client.
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     let options = match options(mind::process::args_str()) { Ok(o) => o, Err(e) => { mind::println!("record: {}", e); return; } };
@@ -161,11 +167,16 @@ fn main(_info: &'static mind::BootInfo) {
             (w, h, w, format!("WINDOW \"{}\"", window.title()))
         }
     };
+    // The frames as they are written: the source's, or `-s` times smaller, rows packed.
+    let scale = options.scale as usize;
+    let (out_width, out_height, out_stride) = if scale > 1 { (width / scale, height / scale, width / scale) } else { (width, height, stride) };
+    if out_width == 0 || out_height == 0 { mind::println!("record: -s {} leaves no picture of {}x{}", scale, width, height); return; }
     let file = match File::create(&options.path) { Ok(f) => f, Err(e) => { mind::println!("record: {}: {:?}", options.path, e); return; } };
-    let mut recording = Recording { file, index: Index::default(), width: width as u32, height: height as u32, fps: options.fps, encoded: 0, bytes: avi::HEADER, encoding_ms: 0, rows: 0 };
+    let mut recording = Recording { file, index: Index::default(), width: out_width as u32, height: out_height as u32, fps: options.fps, encoded: 0, bytes: avi::HEADER, encoding_ms: 0, rows: 0 };
     if let Err(e) = recording.header(false) { mind::println!("record: {}: {:?}", options.path, e); return; }
-    mind::println!("[RECORD] {} {} {}X{} AT {}/S FOR {} S", options.path, what, width, height, options.fps, options.seconds);
-    let encoder = Encoder::new(QUALITY);
+    mind::println!("[RECORD] {} {} {}X{} AT {}/S FOR {} S{}{}", options.path, what, out_width, out_height, options.fps, options.seconds,
+                   if scale > 1 { format!(", {} TIMES SMALLER", scale) } else { String::new() }, if options.quality != QUALITY { format!(", QUALITY {}", options.quality) } else { String::new() });
+    let encoder = Encoder::new(options.quality);
     let total = options.fps * options.seconds;
     let period = 1000.0 / options.fps as f32;
     let start = mind::time::uptime_ms();
@@ -175,13 +186,17 @@ fn main(_info: &'static mind::BootInfo) {
     let mut jpeg = Vec::new();
     let mut rows = Rows::default();
     let mut problem = None;
-    let count = stride * height;
+    let count = out_stride * out_height;
     while recording.index.frames.len() < total as usize {
         // Frame k is due at start + k periods: the screen (or window) as it is then.
         let due = start + (recording.index.frames.len() as f32 * period) as usize;
         let now = mind::time::uptime_ms();
         if now < due { mind::time::sleep(due - now); }
         let picture = match &mut source {
+            Source::Screen if scale > 1 => match capture() {
+                Ok(screen) => { let mut buffer = core::mem::take(&mut spare); shrink::shrink(pixels(&screen, stride * height), width, height, stride, scale, &mut buffer); Some(Picture::Window(buffer)) }
+                Err(e) => { problem = Some(e); break; }
+            },
             Source::Screen => match capture() { Ok(s) => Some(Picture::Screen(s)), Err(e) => { problem = Some(e); break; } },
             Source::Window(window) => {
                 if !window.open() { problem = Some("the window closed"); break; }
@@ -189,7 +204,7 @@ fn main(_info: &'static mind::BootInfo) {
                 if !window.changed() && previous.is_some() { None } else {
                     let mut buffer = core::mem::take(&mut spare);
                     if let Err(e) = window.draw(&mut buffer, width, height) { problem = Some(e); break; }
-                    Some(Picture::Window(buffer))
+                    if scale > 1 { let mut small = Vec::new(); shrink::shrink(&buffer, width, height, width, scale, &mut small); Some(Picture::Window(small)) } else { Some(Picture::Window(buffer)) }
                 }
             }
         };
@@ -198,7 +213,7 @@ fn main(_info: &'static mind::BootInfo) {
         // An unchanged picture repeats the last frame; a changed one codes again only the rows of blocks that changed.
         if let Some(fresh) = picture.as_ref().map(|p| p.pixels(count)).filter(|&fresh| before != Some(fresh)) {
             let began = mind::time::uptime_ms();
-            recording.rows += encoder.encode_again(fresh, before, width, height, stride, &mut rows, &mut jpeg);
+            recording.rows += encoder.encode_again(fresh, before, out_width, out_height, out_stride, &mut rows, &mut jpeg);
             recording.encoding_ms += mind::time::uptime_ms() - began;
         }
         if recording.frame(&jpeg).is_err() { problem = Some("the disk is full"); break; }
@@ -217,6 +232,6 @@ fn main(_info: &'static mind::BootInfo) {
     if let Err(e) = recording.finish() { mind::println!("record: {}: {:?}", options.path, e); return; }
     let frames = recording.index.frames.len();
     mind::println!("[RECORD] {}: {} FRAMES ({} ENCODED, {} ROWS OF BLOCKS CODED, {} MS EACH), {}X{} AT {}/S, {} BYTES{}", options.path, frames,
-                   recording.encoded, recording.rows, recording.encoding_ms / recording.encoded.max(1) as usize, width, height, options.fps, recording.bytes,
+                   recording.encoded, recording.rows, recording.encoding_ms / recording.encoded.max(1) as usize, out_width, out_height, options.fps, recording.bytes,
                    problem.map_or(String::new(), |p| format!(" (STOPPED: {})", p)));
 }

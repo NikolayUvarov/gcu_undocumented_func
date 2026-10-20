@@ -2,6 +2,13 @@
 
 Russian: [protocol_RU.md](protocol_RU.md).
 
+**Additions of 2026-10-20** within version 1:
+- paths below the slave's directory, and requests for directories (800-LNK-0010);
+- the programs channel (800-LNK-0009);
+- two refusal codes.
+
+A slave from before them refuses the new requests with UNSUPPORTED, and a name with `/` with DENIED, so a master can tell. The frame and its version are unchanged.
+
 MIND Link connects a development machine to a machine under test over any byte stream (task [800](../../issues/800-mind-link.md)):
 - a serial line through USB–RS-485 converters;
 - a CDC-ACM port;
@@ -84,14 +91,17 @@ Each request is answered before the next is sent: stop and wait. A transfer's sp
 | 2 | files | put, get, list, stat, delete |
 | 3 | log | the slave's system log |
 | 4 | input | keyboard and mouse events (reserved for the multi-device) |
+| 5 | programs | programs the slave starts for the master, and their output |
 
 ## 5. Requests
 
-Numbers are little-endian. A name is UTF-8, 1 to 255 bytes:
-- one path component: no `/`, `\`, `:` and no control characters;
-- not `.` or `..`.
+Numbers are little-endian. A name is a path below the slave's directory: UTF-8, 1 to 255 bytes in all.
+- **Its parts** are joined by single `/`. Each part:
+  - holds no `\`, `:` or control character;
+  - is neither empty, nor `.`, nor `..`.
+- **So it never leaves the directory:** no leading `/`, no `..`, no drive or volume.
 
-The slave refuses any other name with DENIED.
+The slave refuses any other name with DENIED. Before the additions of 2026-10-20, a name was one part.
 
 ### Control (channel 0)
 
@@ -143,9 +153,20 @@ The slave refuses any other name with DENIED.
 
 | Request | Payload | Answer |
 |---|---|---|
-| LIST (16) | `cursor u32`, 0 for the first page | `next u32` (0xFFFFFFFF at the end), then lines `name<TAB>size<LF>` |
+| LIST (16) | `cursor u32`, 0 for the first page | `next u32` (0xFFFFFFFF at the end), then lines `name<TAB>size<LF>`: the files at the directory's top |
 | STAT (17) | the name | `size u64`, then its SHA-256 (32 bytes); the master skips a put of the same bytes |
-| DELETE (18) | the name | empty |
+| DELETE (18) | the name of a file | empty |
+
+**A put into a directory that is missing** is refused at PUT_OPEN with NOT_FOUND. A put whose name is a directory is refused with EXISTS.
+
+**Directories** (800-LNK-0010):
+
+| Request | Payload | Answer |
+|---|---|---|
+| MKDIR (19) | the name | empty. Missing parents are made too; a directory that exists is no error; a file of that name is EXISTS |
+| MOVE (21) | `flags u8` (bit 0: replace), `from_len u8`, the name moved, then its new name | empty. A file or a whole directory. A file at the new name is replaced only with bit 0, a directory never (EXISTS). A missing parent of the new name is NOT_FOUND; a directory moved into itself, DENIED |
+| RMDIR (22) | `flags u8` (bit 0: recursive), the name | empty. Without bit 0, only an empty directory (NOT_EMPTY otherwise); with it, the directory and everything in it. A file is DENIED |
+| LIST_DIR (23) | `cursor u32`, then the directory's name, none for the top | as LIST, for that directory: its files, and its directories, whose names end in `/` and whose size is 0 |
 
 ### Console (channel 1)
 
@@ -162,6 +183,31 @@ The slave refuses any other name with DENIED.
 - What the cursor counts is the slave's: `mindlink serve` counts bytes of its log file, MIND Core's `link` the system log's sequence numbers. The master only hands it back.
 - The master asks again from `next`. An answer with no text means nothing new yet.
 
+### Programs (channel 5)
+
+The slave starts a program from its directory for the master, keeps its output and tells its end (800-LNK-0009).
+- **On MIND Core** only when `link.conf` holds the word `run`, through the loader as an application starts one (800-KRN-0132).
+- **`mindlink serve`** only with `--run`.
+- **Without it,** RUN is refused with DENIED.
+
+| Request | Payload | Answer |
+|---|---|---|
+| RUN (50) | `name_len u8`, the program's name, then its arguments (UTF-8, the rest) | `run u32`, `pid u64`: the run's number, and the program's process |
+| OUTPUT (51) | `run u32`, `cursor u64` | `state u8`, `exit u32`, `from u64`, then output from offset `from` |
+| STOP (52) | `run u32` | empty: the program is ended |
+| RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped` |
+
+- **Output** is counted from the program's start.
+  - The slave keeps the last part of it: at least 16 KiB on MIND Core, 64 KiB in `mindlink serve`.
+  - `from` is the cursor, or more when the bytes from the cursor are no longer kept.
+  - The master asks again from `from` plus the bytes it got.
+- **`state`:** 0 running, 1 ended, 2 stopped.
+  - Once the state is not 0, an answer with no bytes means there is no more output.
+- **`exit`:** the program's exit code, or 0xFFFFFFFF while unknown.
+  - MIND Core's `link` does not learn it yet (800-KRN-0132).
+- **A run's number** is the slave's, and a restarted slave starts new numbers. A run it does not know is NOT_FOUND.
+- **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` cannot yet: init gives it no such grant (800-KRN-0132, point 3).
+
 ### Input (channel 4)
 
 **INPUT (40).** Reserved for keyboard and mouse events. Its payload is defined with the multi-device ([800-LNK-0005](../../issues/800-LNK-0005-the-rp2-multi-device-firmware.md)). Version 1's slaves refuse it with UNSUPPORTED.
@@ -177,12 +223,15 @@ The slave refuses any other name with DENIED.
 | 5 | BAD_REQUEST | a payload too short, an offset out of order, no put or get open |
 | 6 | BUSY | the slave cannot do it now |
 | 7 | UNSUPPORTED | an unknown channel or kind, or a request this slave does not serve |
+| 8 | NOT_EMPTY | a directory to remove without `recursive` holds something |
+| 9 | EXISTS | something of that name is in the way |
 
 ## 7. What the protocol does not do
 
 The protocol makes no claims beyond these:
 - **No security:** no authentication and no encryption. It is for a cable between the maintainer's machines.
-  - A slave serves files only in its own directory: names are single components.
-  - On MIND Core, the link service decides what a master may do (800-LNK-0003).
+  - A slave serves files only in its own directory: no name leaves it.
+  - On MIND Core, the link service decides what a master may do (800-LNK-0003). `vfs_server` keeps its files inside `data/link/` whatever it checks.
+  - Starting programs is a power the slave's owner gives: `run` in `link.conf`, or `--run` for `mindlink serve`. Whoever holds the cable then runs programs as that end allows: on MIND Core with an application's grants, under `mindlink serve` as the user who serves.
 - **No integrity against an attacker:** the CRC and SHA-256 catch noise on the line, not an end that lies.
 - **No guarantees from tests:** the host tests exercise a simulated line that loses, damages, repeats and echoes bytes. They are evidence for that line, not for a real one. A real line's evidence is recorded in the task that tests it.

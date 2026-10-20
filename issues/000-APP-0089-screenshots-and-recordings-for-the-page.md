@@ -1,6 +1,6 @@
 # 000-APP-0089 — Screenshots and recordings for the project's page
 
-**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open (planned) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
+**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); PrintScreen (the kernel track's key code) and the MacBook Pro's run left · **Blocked by:** PrintScreen: a key code from `KRN` ([requests-KRN.md](requests-KRN.md), "A key code for PrintScreen") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, for [000-KRN-0093](000-KRN-0093-pictures-and-video-for-the-showcase.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -30,6 +30,20 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
   - `screenshot -d 1` writes after a second;
   - `record -s 2 -t 3` writes an AVI whose frames are half the screen's size.
 - **On the MacBook Pro**, the maintainer takes a picture and a 30 s recording without the shell in them.
+
+## Progress (2026-10-20)
+
+- **The key is Ctrl+Alt+F6, not Ctrl+Alt+S.** `INPUT_LISTEN` matches a key code and modifiers, and every character is `KEY_CHAR`: listening for Ctrl+Alt+S would take every Ctrl+Alt+letter from the program in front, with no way to give the others back. F6 is a key code of its own, beside the consoles' Ctrl+Alt+F1…F5, and the MacBook Pro's keyboard has it. PrintScreen has no key code (`libmind/src/keys.rs` drops `E0 37`): asked of the kernel track in requests-KRN.md.
+- **`shell/src/screenshot.rs`, `shell/src/main.rs`:**
+  - Ctrl+Alt+F6 takes the screen in front at once; the line `[SHELL] SCREENSHOT <file>: WxH, N BYTES (CTRL+ALT+F6)` goes to the system log, and to the shell's screen when the shell is in front. A program in front keeps its screen as it is: no note is drawn over it.
+  - `screenshot -d <1-600>` takes it that many seconds later; the shell goes on meanwhile, so another program can be brought to the front (`fg`).
+  - Without a file: the first free `data/media/screen-NNN.bmp` (the directory made if need be), or `ram:` when `data/` cannot be written.
+- **`record`:** `-s <1-4>` writes frames that many times smaller in each direction (`record/src/shrink.rs`: each block averaged per colour), `-q <1-100>` the JPEG quality (75); without a file `data/media/record-NNN.avi`.
+- **Host tests:** `tests/record_host.rs` (a block averaged, the pixels that make no whole block left out, rows packed).
+- **The `vfs` suite** (raw FAT disk): `screenshot` writes `data/media/screen-001.bmp`; `screenshot -d 1` writes `screen-002.bmp` later; Ctrl+Alt+F6 with clock in front writes `screen-003.bmp`, which matches QEMU's picture of clock's screen (at least 90% of the sampled pixels; no shell in it); `record -s 2` writes an AVI of half the screen's width and height; `record` alone writes `data/media/record-001.avi`.
+- **Docs:** the help line, `docs/tools` (EN, RU).
+- **In `main`** since 835c31c8 (2026-10-20). The gate: every x86 group on i9 and every aarch64 group on un-rizen-service (Effector); the host tests, TLC and the x86 groups boot, services, scheduling, files and keys locally. The batch's later commits changed only the suites, and each group ran on a commit that has the suites it runs. The `vfs` suite's checks ran in the files group locally.
+- **Left:** PrintScreen (the kernel track's key code); the MacBook Pro's picture and 30 s recording.
 
 ## Related
 

@@ -9,8 +9,10 @@ struct Server { child: Child, port: String }
 impl Drop for Server { fn drop(&mut self) { self.child.kill().ok(); self.child.wait().ok(); } }
 
 /// `serve` on `spec`, and the port its first line names.
-fn serve(spec: &str, dir: &Path, log: &Path) -> Server {
-    let mut child = Command::new(BIN).args([spec, "serve"]).arg(dir).arg("--log").arg(log).args(["--console", "sh"])
+fn serve(spec: &str, dir: &Path, log: &Path) -> Server { serve_with(spec, dir, log, &[]) }
+
+fn serve_with(spec: &str, dir: &Path, log: &Path, extra: &[&str]) -> Server {
+    let mut child = Command::new(BIN).args([spec, "serve"]).arg(dir).arg("--log").arg(log).args(["--console", "sh"]).args(extra)
         .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
     let mut line = String::new();
     BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
@@ -79,6 +81,58 @@ fn session(spec: &str, tag: &str) {
 
 #[test]
 fn over_a_pseudo_terminal() { session("pty", "pty"); }
+
+/// 800-LNK-0010 and 0009 between two mindlinks: a tree made, filled, moved and removed, `ls` showing each step; programs
+/// started with `serve --run`, their output and exit code, a stop; none started without `--run`.
+#[test]
+fn directories_and_programs() {
+    let d = scratch("dirs");
+    std::fs::write(d.join("cli/f.txt"), b"in a tree\n").unwrap();
+    std::fs::write(d.join("cli/hello.sh"), b"#!/bin/sh\necho hello \"$@\"\necho to stderr >&2\nexit 3\n").unwrap();
+    std::fs::write(d.join("cli/slow.sh"), b"#!/bin/sh\nwhile true; do echo tick; sleep 0.2; done\n").unwrap();
+    std::fs::write(d.join("srv.log"), "").unwrap();
+    let s = serve_with("pty", &d.join("srv"), &d.join("srv.log"), &["--run"]);
+    let p = s.port.as_str();
+    let ok = |args: &[&str]| { let (ok, out) = run(p, args, b""); assert!(ok, "{args:?}: {out}"); out };
+    let fails = |args: &[&str], why: &str| { let (ok, out) = run(p, args, b""); assert!(!ok && out.contains(why), "{args:?}: {out}"); };
+    let f = d.join("cli/f.txt");
+    fails(&["put", f.to_str().unwrap(), "a/b/f.txt"], "no such file or directory");
+    ok(&["mkdir", "a/b"]);
+    assert!(ok(&["ls"]).contains("-  a/"));
+    ok(&["put", f.to_str().unwrap(), "a/b/f.txt"]);
+    assert!(ok(&["ls", "a/b"]).contains("10  f.txt"));
+    fails(&["mv", "a/b/f.txt", "c/f.txt"], "no such file");
+    ok(&["mkdir", "c"]);
+    ok(&["mv", "a/b/f.txt", "c/f.txt"]);
+    assert!(!ok(&["ls", "a/b"]).contains("f.txt"));
+    assert_eq!(std::fs::read(d.join("srv/c/f.txt")).unwrap(), b"in a tree\n");
+    fails(&["rmdir", "a"], "not empty");
+    ok(&["rmdir", "a", "-r"]);
+    let root = ok(&["ls"]);
+    assert!(root.contains("c/") && !root.contains("a/"), "{root}");
+    for bad in ["../x", "a/../../x", "/x"] { fails(&["mkdir", bad], "not allowed"); }
+
+    ok(&["mkdir", "apps"]);
+    ok(&["put", d.join("cli/hello.sh").to_str().unwrap(), "apps/hello.sh"]);
+    ok(&["put", d.join("cli/slow.sh").to_str().unwrap(), "apps/slow.sh"]);
+    let (done, out) = run(p, &["run", "apps/hello.sh", "--payload", "x"], b"");
+    assert!(!done && out.contains("hello --payload x") && out.contains("to stderr") && out.contains("exit code 3"), "{out}");
+    let started = ok(&["start", "apps/slow.sh"]);
+    let id = started.split('\t').next().unwrap().to_string();
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    assert!(ok(&["runs"]).contains(&format!("{id}\t")), "the run is listed");
+    assert!(ok(&["out", &id]).contains("tick\ntick\n"));
+    ok(&["stop", &id]);
+    assert!(ok(&["runs"]).contains("stopped\tapps/slow.sh"));
+    fails(&["out", "12345"], "no such file");
+    drop(s);
+
+    let s = serve("pty", &d.join("srv"), &d.join("srv.log"));
+    let (done, out) = run(&s.port, &["run", "apps/hello.sh"], b"");
+    assert!(!done && out.contains("not allowed"), "{out}");
+    drop(s);
+    std::fs::remove_dir_all(&d).ok();
+}
 
 /// TCP serves one connection, so this one runs its commands against a fresh server each time it is needed.
 #[test]

@@ -1,11 +1,11 @@
 //! The link protocol over a simulated line that loses, corrupts, echoes and repeats bytes (800-LNK-0001).
-use linkproto::app::{plain_name, Client, FileService, Files};
+use linkproto::app::{path_name, plain_name, Client, FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::frame::{self, Decoder, Header, MAX_PAYLOAD, MAX_WIRE};
 use linkproto::sha256::Sha256;
 use linkproto::{cobs, crc, Error, Line, Service, Slave};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 /// xorshift64*: the same faults on every run.
@@ -77,10 +77,27 @@ fn take(q: &mut VecDeque<u8>, out: &mut [u8]) -> usize {
 
 /// Files in memory, counting writes: a repeated request must not write twice.
 #[derive(Default)]
-struct Disk { files: BTreeMap<String, Vec<u8>>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>, console: Vec<u8> }
+struct Disk { files: BTreeMap<String, Vec<u8>>, dirs: BTreeSet<String>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>,
+              console: Vec<u8>, runs: Vec<Run>, starts: u32 }
+
+/// A program of the simulated end: `echo.elf` prints its arguments and ends; `loop.elf` prints a line a poll until stopped.
+struct Run { name: String, output: Vec<u8>, dropped: u64, state: u8 }
+const KEPT: usize = 100;
+
+impl Disk {
+    fn parent_exists(&self, path: &str) -> bool { path.rsplit_once('/').map_or(true, |(dir, _)| self.dirs.contains(dir)) }
+    fn print(run: &mut Run, text: &[u8]) {
+        run.output.extend_from_slice(text);
+        // Only the last KEPT bytes are kept, as a slave with a small buffer would.
+        let over = run.output.len().saturating_sub(KEPT);
+        run.output.drain(..over);
+        run.dropped += over as u64;
+    }
+}
 impl Files for Disk {
     fn create(&mut self, name: &str, size: u64) -> Result<(), u8> {
         if size > 64 << 20 { return Err(code::IO); }
+        if !self.parent_exists(name) { return Err(code::NOT_FOUND); }
         self.open = Some((name.into(), Vec::new()));
         Ok(())
     }
@@ -132,6 +149,89 @@ impl Files for Disk {
         let echo = input.iter().map(|b| b.to_ascii_uppercase()).collect::<Vec<_>>();
         out[..echo.len()].copy_from_slice(&echo);
         Ok(echo.len())
+    }
+    fn mkdir(&mut self, path: &str) -> Result<(), u8> {
+        if self.files.contains_key(path) { return Err(code::EXISTS); }
+        let mut at = String::new();
+        for part in path.split('/') {
+            if !at.is_empty() { at.push('/'); }
+            at.push_str(part);
+            self.dirs.insert(at.clone());
+        }
+        Ok(())
+    }
+    fn rename(&mut self, from: &str, to: &str, replace: bool) -> Result<(), u8> {
+        if !self.parent_exists(to) { return Err(code::NOT_FOUND); }
+        if self.files.contains_key(to) && !replace || self.dirs.contains(to) { return Err(code::EXISTS); }
+        if let Some(data) = self.files.remove(from) { self.files.insert(to.into(), data); return Ok(()); }
+        if !self.dirs.contains(from) { return Err(code::NOT_FOUND); }
+        let under = |p: &str| p == from || p.starts_with(&format!("{from}/"));
+        let moved = |p: &str| format!("{to}{}", &p[from.len()..]);
+        let dirs: Vec<String> = self.dirs.iter().filter(|d| under(d)).cloned().collect();
+        for d in dirs { self.dirs.remove(&d); self.dirs.insert(moved(&d)); }
+        let files: Vec<String> = self.files.keys().filter(|f| under(f)).cloned().collect();
+        for f in files { let data = self.files.remove(&f).unwrap(); self.files.insert(moved(&f), data); }
+        Ok(())
+    }
+    fn rmdir(&mut self, path: &str, recursive: bool) -> Result<(), u8> {
+        if !self.dirs.contains(path) { return Err(if self.files.contains_key(path) { code::DENIED } else { code::NOT_FOUND }); }
+        let inside = format!("{path}/");
+        let full = self.dirs.iter().any(|d| d.starts_with(&inside)) || self.files.keys().any(|f| f.starts_with(&inside));
+        if full && !recursive { return Err(code::NOT_EMPTY); }
+        self.dirs.retain(|d| d != path && !d.starts_with(&inside));
+        self.files.retain(|f, _| !f.starts_with(&inside));
+        Ok(())
+    }
+    fn list_dir(&mut self, path: &str, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
+        if !path.is_empty() && !self.dirs.contains(path) { return Err(code::NOT_FOUND); }
+        let prefix = if path.is_empty() { String::new() } else { format!("{path}/") };
+        let direct = |p: &str| p.strip_prefix(&prefix).filter(|rest| !rest.is_empty() && !rest.contains('/')).map(str::to_string);
+        let mut lines: Vec<String> = self.dirs.iter().filter_map(|d| direct(d)).map(|d| format!("{d}/\t0\n")).collect();
+        lines.extend(self.files.iter().filter_map(|(f, data)| direct(f).map(|n| format!("{n}\t{}\n", data.len()))));
+        let mut used = 0;
+        for (i, line) in lines.iter().enumerate().skip(cursor as usize) {
+            if used + line.len() > out.len() { return Ok((used, Some(i as u32))); }
+            out[used..used + line.len()].copy_from_slice(line.as_bytes());
+            used += line.len();
+        }
+        Ok((used, None))
+    }
+    fn run(&mut self, path: &str, args: &str) -> Result<(u32, u64), u8> {
+        if !self.files.contains_key(path) { return Err(code::NOT_FOUND); }
+        self.starts += 1;
+        let mut run = Run { name: path.into(), output: Vec::new(), dropped: 0, state: RUN_RUNNING };
+        match path.rsplit('/').next().unwrap() {
+            "echo.elf" => { Disk::print(&mut run, format!("{args}\n").as_bytes()); run.state = RUN_ENDED; }
+            "loop.elf" => {}
+            _ => return Err(code::DENIED),
+        }
+        self.runs.push(run);
+        Ok((self.runs.len() as u32, 100 + self.runs.len() as u64))
+    }
+    fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> {
+        let r = self.runs.get_mut((run as usize).wrapping_sub(1)).ok_or(code::NOT_FOUND)?;
+        if r.state == RUN_RUNNING { let line = format!("tick {}\n", r.dropped + r.output.len() as u64); Disk::print(r, line.as_bytes()); }
+        let end = r.dropped + r.output.len() as u64;
+        let from = cursor.clamp(r.dropped, end);
+        let rest = &r.output[(from - r.dropped) as usize..];
+        let n = rest.len().min(out.len());
+        out[..n].copy_from_slice(&rest[..n]);
+        Ok(RunOutput { state: r.state, exit: if r.state == RUN_ENDED { 0 } else { EXIT_UNKNOWN }, from, len: n })
+    }
+    fn stop(&mut self, run: u32) -> Result<(), u8> {
+        let r = self.runs.get_mut((run as usize).wrapping_sub(1)).ok_or(code::NOT_FOUND)?;
+        if r.state == RUN_RUNNING { r.state = RUN_STOPPED; }
+        Ok(())
+    }
+    fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
+        let mut used = 0;
+        for (i, r) in self.runs.iter().enumerate().skip(cursor as usize) {
+            let line = format!("{}\t{}\t{}\t{}\n", i + 1, 101 + i, ["running", "ended", "stopped"][r.state as usize], r.name);
+            if used + line.len() > out.len() { return Ok((used, Some(i as u32))); }
+            out[used..used + line.len()].copy_from_slice(line.as_bytes());
+            used += line.len();
+        }
+        Ok((used, None))
     }
 }
 
@@ -250,7 +350,7 @@ fn clean_line_hello_put_get_list() {
 fn refusals() {
     let (mut c, _) = pair(Faults::default(), 2, 0);
     assert_eq!(get(&mut c, "missing"), Err(Error::Refused(code::NOT_FOUND)));
-    for bad in ["..", ".", "a/b", "..\\x", "c:x", "tab\there"] {
+    for bad in ["..", ".", "..\\x", "c:x", "tab\there", "../x", "a/../../x", "/abs", "a//b", "a/./b", "a/", "x/.."] {
         assert_eq!(put(&mut c, bad, b"x"), Err(Error::Refused(code::DENIED)), "{bad}");
     }
     assert_eq!(put(&mut c, &"n".repeat(256), b"x"), Err(Error::TooBig));
@@ -271,6 +371,94 @@ fn refusals() {
     assert_eq!(c.master.call(channel::FILES, kind::PUT_DATA, &late, &mut r), Err(Error::Refused(code::BAD_REQUEST)));
     assert_eq!(c.master.call(9, 99, &[], &mut r), Err(Error::Refused(code::UNSUPPORTED)));
     assert_eq!(plain_name(b"report.txt"), Some("report.txt"));
+    assert_eq!(plain_name(b"a/b"), None);
+    assert_eq!(path_name(b"apps/test/x.elf"), Some("apps/test/x.elf"));
+    assert_eq!(path_name(&[b'a'; 256]), None);
+}
+
+/// 800-LNK-0010's acceptance in the protocol: make a/b/, put a file there, move it to c/, delete a/; ls shows each step.
+#[test]
+fn directories_over_a_lossy_line() {
+    let faults = Faults { lose_write: 20_000, lose_byte: 20, flip_byte: 20, repeat_write: 20_000, echo: true };
+    let (mut c, _) = pair(faults, 21, 0);
+    c.master.tries = 12;
+    let ls = |c: &mut Client<MasterEnd>, dir: &str| -> String {
+        let (mut text, mut cursor, mut out) = (String::new(), 0, [0u8; MAX_PAYLOAD]);
+        loop {
+            let (n, next) = c.list_dir(dir, cursor, &mut out).unwrap();
+            text.push_str(std::str::from_utf8(&out[..n]).unwrap());
+            match next { Some(n) => cursor = n, None => return text }
+        }
+    };
+    let bytes = data(3000, 22);
+    assert_eq!(put(&mut c, "a/b/x.bin", &bytes), Err(Error::Refused(code::NOT_FOUND)));
+    c.mkdir("a/b").unwrap();
+    c.mkdir("a/b").unwrap();
+    assert_eq!(ls(&mut c, ""), "a/\t0\n");
+    put(&mut c, "a/b/x.bin", &bytes).unwrap();
+    assert_eq!(ls(&mut c, "a/b"), "x.bin\t3000\n");
+    c.mkdir("c").unwrap();
+    c.rename("a/b/x.bin", "c/x.bin", false).unwrap();
+    assert_eq!(ls(&mut c, "a/b"), "");
+    assert_eq!(ls(&mut c, "c"), "x.bin\t3000\n");
+    assert_eq!(get(&mut c, "c/x.bin").unwrap(), bytes);
+    assert_eq!(c.rmdir("c", false), Err(Error::Refused(code::NOT_EMPTY)));
+    c.rmdir("a", true).unwrap();
+    assert_eq!(ls(&mut c, ""), "c/\t0\n");
+    // A file in the way of a move is replaced only when asked; a directory moves whole.
+    put(&mut c, "y", b"y").unwrap();
+    assert_eq!(c.rename("y", "c/x.bin", false), Err(Error::Refused(code::EXISTS)));
+    c.rename("y", "c/x.bin", true).unwrap();
+    assert_eq!(get(&mut c, "c/x.bin").unwrap(), b"y");
+    c.rename("c", "d", false).unwrap();
+    assert_eq!(ls(&mut c, "d"), "x.bin\t1\n");
+    for bad in ["../x", "a/../../x", "/x", ""] {
+        assert_eq!(c.mkdir(bad), Err(Error::Refused(code::DENIED)), "{bad}");
+        assert_eq!(c.rename("d", bad, false), Err(Error::Refused(code::DENIED)), "{bad}");
+    }
+    assert_eq!(c.rmdir("../d", true), Err(Error::Refused(code::DENIED)));
+    assert_eq!(c.list_dir("..", 0, &mut [0; MAX_PAYLOAD]), Err(Error::Refused(code::DENIED)));
+    assert_eq!(c.master.line.service.files.dirs.len(), 1);
+}
+
+/// 800-LNK-0009 in the protocol: a run started once although its request is repeated, its output read from a cursor
+/// past what the slave dropped, its end, a stop.
+#[test]
+fn programs_over_a_lossy_line() {
+    let faults = Faults { lose_write: 30_000, repeat_write: 30_000, echo: true, ..Faults::default() };
+    let (mut c, _) = pair(faults, 23, 0);
+    c.master.tries = 12;
+    put(&mut c, "apps/echo.elf", b"").unwrap_err();
+    c.mkdir("apps").unwrap();
+    put(&mut c, "apps/echo.elf", b"\x7fELF").unwrap();
+    put(&mut c, "loop.elf", b"\x7fELF").unwrap();
+    assert_eq!(c.run("missing.elf", ""), Err(Error::Refused(code::NOT_FOUND)));
+    assert_eq!(c.run("../echo.elf", ""), Err(Error::Refused(code::DENIED)));
+    let mut out = [0u8; MAX_PAYLOAD];
+    for i in 0..20 {
+        let (run, pid) = c.run("apps/echo.elf", &format!("hello {i}")).unwrap();
+        let o = c.output(run, 0, &mut out).unwrap();
+        assert_eq!((o.state, o.exit, o.from, &out[..o.len]), (RUN_ENDED, 0, 0, format!("hello {i}\n").as_bytes()), "pid {pid}");
+    }
+    assert_eq!(c.master.line.service.files.starts, 20, "a repeated RUN started a program twice");
+    let (run, _) = c.run("loop.elf", "").unwrap();
+    let (mut cursor, mut text) = (0u64, String::new());
+    for _ in 0..5 {
+        let o = c.output(run, cursor, &mut out).unwrap();
+        assert_eq!((o.state, o.exit, o.from), (RUN_RUNNING, EXIT_UNKNOWN, cursor));
+        text.push_str(std::str::from_utf8(&out[..o.len]).unwrap());
+        cursor = o.from + o.len as u64;
+    }
+    assert!(text.starts_with("tick 0\ntick 7\n"), "{text}");
+    // Output the slave no longer holds is skipped: the answer starts where its bytes do.
+    for _ in 0..40 { c.output(run, cursor, &mut out).unwrap(); }
+    let o = c.output(run, cursor, &mut out).unwrap();
+    assert!(o.from > cursor);
+    c.stop(run).unwrap();
+    assert_eq!(c.output(run, 0, &mut out).unwrap().state, RUN_STOPPED);
+    assert_eq!(c.stop(99), Err(Error::Refused(code::NOT_FOUND)));
+    let (n, next) = c.runs(19, &mut out).unwrap();
+    assert_eq!((std::str::from_utf8(&out[..n]).unwrap(), next), ("20\t120\tended\tapps/echo.elf\n21\t121\tstopped\tloop.elf\n", None));
 }
 
 #[test]
@@ -425,11 +613,12 @@ fn fuzz_decoder_and_service() {
 
     let mut service = FileService::new(Disk::default());
     let kinds = [kind::HELLO, kind::POLL, kind::PUT_OPEN, kind::PUT_DATA, kind::PUT_CLOSE, kind::GET_OPEN, kind::GET_DATA,
-                 kind::GET_CLOSE, kind::LIST, kind::STAT, kind::DELETE, kind::CONSOLE, kind::LOG, kind::INPUT, 0x55];
+                 kind::GET_CLOSE, kind::LIST, kind::STAT, kind::DELETE, kind::CONSOLE, kind::LOG, kind::INPUT, kind::MKDIR, kind::MOVE,
+                 kind::RMDIR, kind::LIST_DIR, kind::RUN, kind::OUTPUT, kind::STOP, kind::RUNS, 0x55];
     let mut reply = [0u8; MAX_PAYLOAD];
     for _ in 0..100_000 {
         let k = kinds[(rng.next() as usize) % kinds.len()];
-        let ch = if rng.chance(900_000) { [channel::CONTROL, channel::FILES, channel::FILES, channel::LOG, channel::CONSOLE][(rng.next() % 5) as usize] } else { rng.next() as u8 };
+        let ch = if rng.chance(900_000) { [channel::CONTROL, channel::FILES, channel::FILES, channel::LOG, channel::CONSOLE, channel::PROGRAMS][(rng.next() % 6) as usize] } else { rng.next() as u8 };
         let len = (rng.next() % 64) as usize;
         let mut p: Vec<u8> = (0..len).map(|_| if rng.chance(500_000) { b'a' + (rng.next() % 3) as u8 } else { rng.next() as u8 }).collect();
         // Small offsets and sizes, so data requests sometimes fit.

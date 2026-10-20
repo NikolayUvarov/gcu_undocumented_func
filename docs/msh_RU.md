@@ -128,14 +128,14 @@ print("done: {total}")
 - Сценарий выполняется с полномочиями сеанса оболочки, который его запустил, **но не больше, чем объявил**.
   Объявление — его первая строка после `#!msh` и комментариев: `requires: files network`, словами `mind::request!`:
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, а также `>` или `>>` после команды (000-APP-0074);
-  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`;
+  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
   - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
 
   Без своего слова команда не выполняется: `ping needs requires: network in the script`.
 - **Программы, запущенные сценарием,** получают из того, что просят, только объявленное сценарием (`sysinfo`, `file`,
   `files`, `log`, `lifecycle`, `network`, `authority`, `display`, `window-manager`, `gpio`, `camera`, `blockstore`, `firmware`,
-  `parse`, `tls`, `battery`); без остального они работают так. `tls` даёт TLS-клиент оболочки только вместе с разрешением на поток (`network`). Программа, которая просит `camera` или `firmware`, получает их, только если
+  `parse`, `tls`, `battery`, `wifi`, `ssh`); без остального они работают так. `tls` и `ssh` дают клиента TLS или сервиса SSH только вместе с разрешением на поток (`network`), а такой клиент TLS не может предъявить сертификат устройства (351-APP-0083). Программа, которая просит `camera` или `firmware`, получает их, только если
   пользователь ответит «да» на вопрос оболочки.
 - **Сценарий не с загрузочного диска** (`ram:`, USB-диск) один раз спрашивает перед запуском:
   `SCRIPT ram:w.msh REQUIRES files. ALLOW? (Y/N)`.

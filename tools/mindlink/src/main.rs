@@ -1,5 +1,6 @@
-//! mindlink: MIND Link's end on Linux and WSL (800-LNK-0004). As master it moves files, follows the log and types at
-//! the other end's console; `serve` plays the slave over a directory. docs/link/mindlink.md says how to use it.
+//! mindlink: MIND Link's end on Linux, WSL and Windows (800-LNK-0004, 0007). As master it moves files and directories,
+//! starts programs and reads their output, follows the log and types at the other end's console; `serve` plays the
+//! slave over a directory. docs/link/mindlink.md says how to use it.
 mod dir;
 #[cfg(unix)]
 #[path = "port_unix.rs"]
@@ -24,17 +25,28 @@ port:     a serial port (/dev/ttyUSB0 on Linux, COM10 on Windows), tcp:HOST:PORT
 commands: hello                       the other end's name and version
           put <file> [<name>] [--force]  send a file; skipped when the other end has the same bytes, unless --force
           get <name> [<file>]         fetch a file
-          ls                          the other end's files
+          ls [<dir>]                  the other end's files; a directory's name ends in /
           stat <name>                 a file's size and SHA-256
           rm <name>                   delete a file
+          mkdir <dir>                 make a directory and its missing parents
+          mv <from> <to> [--force]    move or rename a file or directory; --force replaces a file at <to>
+          rmdir <dir> [-r]            remove an empty directory; -r: and everything in it
+          run <program> [<argument>...]  start a program on the other end, show its output until it ends; exits with
+                                      its code where the other end knows it (MIND Core: link.conf must hold the word run)
+          start <program> [<argument>...]  the same, printing only the run's number
+          out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
+          runs                        the runs the other end knows
+          stop <run>                  stop a run's program
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
           board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
                                       key <chord>, move <dx> <dy>, click, abs <x> <y>; docs/link/multi-device.md)
-          serve <dir> [--log <file>] [--console <command>]
-                                      be the slave: files in <dir>, the log from <file>, a console running <command>
-options:  --baud <rate>               serial rate (default 115200)
+          serve <dir> [--log <file>] [--console <command>] [--run]
+                                      be the slave: files in <dir>, the log from <file>, a console running <command>;
+                                      --run lets the master start programs in <dir>, as this user
+names:    a path below the other end's directory, its parts joined by / (a/b/c.txt); no part . or ..
+options:  (before the command) --baud <rate>  serial rate (default 115200)
           --timeout <ms>              how long one try waits for an answer (default from the rate)
           --tries <n>                 tries for each request (default 8)
           --turnaround <us>           serve: pause before each answer, for RS-485 converters (default 500)
@@ -45,13 +57,15 @@ pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).co
 
 fn refusal(c: u8) -> &'static str {
     match c {
-        code::NOT_FOUND => "no such file",
-        code::DENIED => "not allowed (a file's name is one component, without / \\ :)",
+        code::NOT_FOUND => "no such file or directory",
+        code::DENIED => "not allowed (a name's parts are joined by /, none is . or .., none holds \\ or :; on MIND Core a program needs \"run\" in link.conf)",
         code::IO => "the other end's storage failed",
         code::MISMATCH => "SHA-256 does not match: the file was not kept",
         code::BAD_REQUEST => "the other end did not take the request",
         code::BUSY => "the other end is busy",
         code::UNSUPPORTED => "the other end does not serve this",
+        code::NOT_EMPTY => "the directory is not empty (rmdir -r removes it whole)",
+        code::EXISTS => "something of that name is there already (mv --force replaces a file)",
         _ => "refused",
     }
 }
@@ -89,8 +103,9 @@ fn main() {
         args.drain(i..i + 2);
         v
     };
-    let mut i = 0;
-    while i < args.len() {
+    // Options come before the command: what follows it is the command's own, a program's arguments too.
+    let (mut i, mut words) = (0, 0);
+    while i < args.len() && words < 2 {
         match args[i].as_str() {
             "--baud" => o.baud = num(&mut args, i) as u32,
             "--timeout" => o.timeout = Some(num(&mut args, i) as u32),
@@ -98,7 +113,7 @@ fn main() {
             "--turnaround" => o.turnaround_us = num(&mut args, i),
             "--payload" => o.payload = num(&mut args, i) as usize,
             "-h" | "--help" => { println!("{USAGE}"); return; }
-            _ => i += 1,
+            _ => { i += 1; words += 1; }
         }
     }
     if args.len() < 2 { eprintln!("{USAGE}"); std::process::exit(2); }
@@ -136,9 +151,21 @@ fn main() {
         }
         ("get", [name]) => get(&mut c, name, Path::new(name)),
         ("get", [name, file]) => get(&mut c, name, Path::new(file)),
-        ("ls", []) => ls(&mut c),
+        ("ls", []) => ls(&mut c, ""),
+        ("ls", [dir]) => ls(&mut c, dir.trim_end_matches('/')),
         ("stat", [name]) => stat(&mut c, name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
         ("rm", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
+        ("mkdir", [dir]) => c.mkdir(dir.trim_end_matches('/')).map(|_| println!("made {dir}")),
+        ("mv", [from, to]) => c.rename(from, to, false).map(|_| println!("moved {from} to {to}")),
+        ("mv", [from, to, "--force"]) | ("mv", ["--force", from, to]) => c.rename(from, to, true).map(|_| println!("moved {from} to {to}")),
+        ("rmdir", [dir]) => c.rmdir(dir.trim_end_matches('/'), false).map(|_| println!("removed {dir}")),
+        ("rmdir", [dir, "-r"]) | ("rmdir", ["-r", dir]) => c.rmdir(dir.trim_end_matches('/'), true).map(|_| println!("removed {dir} and everything in it")),
+        ("run", [program, rest @ ..]) => run(&mut c, program, &rest.join(" ")),
+        ("start", [program, rest @ ..]) => c.run(program, &rest.join(" ")).map(|(run, pid)| println!("{run}\t{pid}")),
+        ("out", [run]) => out(&mut c, number(run), false).map(drop),
+        ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
+        ("runs", []) => runs(&mut c),
+        ("stop", [run]) => c.stop(number(run)).map(|_| println!("stopped run {run}")),
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
         ("console", []) => console(&mut c),
@@ -215,15 +242,63 @@ fn get(c: &mut Client<port::Port>, name: &str, path: &Path) -> Result<(), Error>
     Ok(())
 }
 
-fn ls(c: &mut Client<port::Port>) -> Result<(), Error> {
+fn number(text: &str) -> u32 { text.parse().unwrap_or_else(|_| die(format!("{text}: a run's number"))) }
+
+/// A directory's files and directories; an end that knows only LIST (version 1 before 800-LNK-0010) its root's files.
+fn ls(c: &mut Client<port::Port>, dir: &str) -> Result<(), Error> {
     let mut out = vec![0u8; linkproto::frame::MAX_PAYLOAD];
     let mut cursor = 0;
+    let mut old = false;
     loop {
-        let (n, next) = c.list(cursor, &mut out)?;
+        let (n, next) = match if old { c.list(cursor, &mut out) } else { c.list_dir(dir, cursor, &mut out) } {
+            Err(Error::Refused(code::UNSUPPORTED)) if !old && dir.is_empty() => { old = true; continue; }
+            r => r?,
+        };
         for line in String::from_utf8_lossy(&out[..n]).lines() {
             let (name, size) = line.split_once('\t').unwrap_or((line, ""));
-            println!("{size:>12}  {name}");
+            if name.ends_with('/') { println!("{:>12}  {name}", "-"); } else { println!("{size:>12}  {name}"); }
         }
+        match next { Some(n) => cursor = n, None => return Ok(()) }
+    }
+}
+
+/// Starts a program and shows its output until it ends; exits with its code when the other end knows it.
+fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Error> {
+    let (run, pid) = c.run(program, args)?;
+    eprintln!("run {run}: {program} started as PID {pid}");
+    let (state, exit) = out(c, run, true)?;
+    let code = (exit != linkproto::app::EXIT_UNKNOWN).then_some(exit as i32);
+    eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
+              code.map_or(String::new(), |c| format!(", exit code {c}")));
+    if let Some(c) = code.filter(|&c| c != 0) { std::process::exit(c.clamp(1, 255)); }
+    Ok(())
+}
+
+/// A run's output from its start; with `follow`, until the run ends. Its last state and exit code.
+fn out(c: &mut Client<port::Port>, run: u32, follow: bool) -> Result<(u8, u32), Error> {
+    let mut buf = vec![0u8; linkproto::frame::MAX_PAYLOAD];
+    let mut stdout = std::io::stdout();
+    let mut cursor = 0u64;
+    loop {
+        let o = c.output(run, cursor, &mut buf)?;
+        if o.from > cursor { eprintln!("[{} bytes of output were no longer held]", o.from - cursor); }
+        stdout.write_all(&buf[..o.len]).ok();
+        stdout.flush().ok();
+        cursor = o.from + o.len as u64;
+        if o.len == 0 {
+            if !follow || o.state != linkproto::app::RUN_RUNNING { return Ok((o.state, o.exit)); }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    }
+}
+
+fn runs(c: &mut Client<port::Port>) -> Result<(), Error> {
+    let mut out = vec![0u8; linkproto::frame::MAX_PAYLOAD];
+    let mut cursor = 0;
+    println!("run\tpid\tstate\tprogram");
+    loop {
+        let (n, next) = c.runs(cursor, &mut out)?;
+        print!("{}", String::from_utf8_lossy(&out[..n]));
         match next { Some(n) => cursor = n, None => return Ok(()) }
     }
 }
@@ -316,10 +391,11 @@ fn board(mut port: port::Port, line: &str) {
 
 fn serve(mut port: port::Port, args: &[String], o: &Options) {
     let mut dir = None;
-    let (mut log, mut cmd) = (None, None);
+    let (mut log, mut cmd, mut runs) = (None, None, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "--run" => runs = true,
             "--log" => log = Some(PathBuf::from(it.next().unwrap_or_else(|| die("--log takes a file")))),
             "--console" => cmd = Some(it.next().unwrap_or_else(|| die("--console takes a command")).clone()),
             d if dir.is_none() => dir = Some(PathBuf::from(d)),
@@ -327,7 +403,8 @@ fn serve(mut port: port::Port, args: &[String], o: &Options) {
         }
     }
     let dir = dir.unwrap_or_else(|| { eprintln!("{USAGE}"); std::process::exit(2) });
-    let files = dir::Dir::new(dir.clone(), log, cmd.as_deref()).unwrap_or_else(|e| die(e));
+    let mut files = dir::Dir::new(dir.clone(), log, cmd.as_deref()).unwrap_or_else(|e| die(e));
+    if runs { files.allow_runs(); eprintln!("the master may start programs in {}", dir.display()); }
     port.turnaround = Duration::from_micros(o.turnaround_us);
     let name = port.name.clone();
     let mut service = FileService::new(files);

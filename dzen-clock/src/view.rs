@@ -58,6 +58,8 @@ mod tests {
             efi_runtime: 0,
             device_tree: 0,
             photo_pause_s: 0,
+            link_present: 0,
+            link_words: [0; crate::abi::LINK_WORDS_MAX],
             extra_programs: [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
         }
     }
