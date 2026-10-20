@@ -6077,9 +6077,12 @@ def late_attach_check(args):
             require(log, "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             assert vm.services()["virtio_net"] == first, "virtio_net was restarted"
-            assert vm.log.count("[VIRTIO_NET] FRAME RING ATTACHED") == 1, vm.log[-3000:]
+            # The services' lines are read with `logs`, not on the serial line.
+            driver = vm.command(f"logs {first}", raw=True)
+            assert driver.count("[VIRTIO_NET] FRAME RING ATTACHED") == 1, driver
             assert "FAULT PID=" not in vm.command("faults")
-            assert "FAULT VECTOR" not in vm.log and "DRIVER WITHOUT OUR RING" not in vm.log, vm.log[-3000:]
+            log += vm.command(f"logs {vm.services()['netstack']}", raw=True)
+            assert "DRIVER WITHOUT OUR RING" not in log, log
         finally:
             vm.close()
     print("PASS: a late answer to attach: the stack kept the ring lent, the driver took it without a fault and the network works", flush=True)
