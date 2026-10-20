@@ -263,6 +263,17 @@ class VM:
             self.collect()
             self.output = ""
 
+    def logged(self, text, since, timeout=30):
+        # `text` in the log after position `since`, whatever expect() or serial() dropped meanwhile.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            self.collect()
+            if text in to_ordinal(ANSI.sub("", self.log[since:]).replace("\r", "")):
+                self.output = ""
+                return
+            time.sleep(.02)
+        raise AssertionError(f"Timeout waiting for {text!r} in the log: {self.log[since:][-3000:]}")
+
     def background(self, pid):
         self.send("\x1a\n")
         self.expect(f"PID={pid} BACKGROUND. SHELL RESUMED.")
@@ -6004,8 +6015,9 @@ def net_suite(args, disk):
         # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
         vm.send("wm\n")
         require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-        vm.expect("RESUMED.", timeout=30)
+        vm.logged("SHELL RESUMED.", since)
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
@@ -8453,8 +8465,9 @@ def watchdog_suite(args, disk):
         # wm shows it on its status line, a click there opening the shell's window (shell.wit 1.6 boot-notice).
         vm.send("wm\n")
         require(vm.expect("[WM] READY", timeout=90), "[WM] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
+        since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
-        vm.expect("RESUMED.", timeout=30)
+        vm.logged("SHELL RESUMED.", since)
         log = vm.command("dmesg -s init", raw=True)
         require(log, "[INIT] STARTED audio_gw PID=")
         require(log, "[INIT] STARTED tts PID=")
