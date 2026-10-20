@@ -5737,8 +5737,7 @@ def net_suite(args, disk):
     # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
                                         f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
-                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n"
-                                        "wifiping 10.0.4.1 icmp\n")  # the station's gateway, over wlansim (550-NET-0018)
+                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting", "wifiping"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     if args.wlansim_elf:
@@ -5979,6 +5978,10 @@ def net_suite(args, disk):
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
     rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
+    if args.wlansim_elf:
+        # wifi_join_check pings the station's gateway: a rule beside the policy the download checks left (550-NET-0018).
+        with open(disk / "netpolicy.txt", "a") as policy:
+            policy.write("wifiping 10.0.4.1 icmp\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()
