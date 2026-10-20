@@ -625,6 +625,14 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
     }
 }
 
+/// A card's traffic between two samples of its counters (frames sent, frames received, ms) as the background's line
+/// (000-APP-0049): `NET IN 30/S OUT 12/S`, thousands as `K` from 10 000 a second.
+pub fn net_line(before: (u64, u64, u64), after: (u64, u64, u64)) -> String {
+    let ms = after.2.saturating_sub(before.2).max(1);
+    let rate = |was: u64, now: u64| { let r = now.saturating_sub(was) * 1000 / ms; if r >= 10_000 { format!("{}K", r / 1000) } else { format!("{}", r) } };
+    format!("NET IN {}/S OUT {}/S", rate(before.1, after.1), rate(before.0, after.0))
+}
+
 /// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
 /// (000-APP-0064).
 #[allow(clippy::too_many_arguments)]
@@ -751,7 +759,35 @@ impl Backdrop {
     /// The colour of the screen's pixel (x, y).
     pub fn pixel(&self, x: usize, y: usize) -> u32 {
         let (fx, fy) = (x / self.unit, y / self.unit);
-        if fx < self.width && fy < self.height { self.frame[fy * self.width + fx] } else { DARK }
+        if fx < self.width && fy < self.height { self.frame.get(fy * self.width + fx).copied().unwrap_or(DARK) } else { DARK }
+    }
+
+    /// The screen's rectangle (x, y, width, height) as `fill(x, y, width, height, colour)` calls: one for each run of
+    /// frame pixels of one colour in a band of rows, two divisions a band and none a pixel (000-APP-0091). It gives the
+    /// pixels `pixel` gives.
+    pub fn blocks(&self, x: usize, y: usize, width: usize, height: usize, fill: &mut dyn FnMut(usize, usize, usize, usize, u32)) {
+        let unit = self.unit.max(1);
+        let (right, bottom) = (x + width, y + height);
+        let mut top = y;
+        while top < bottom {
+            let fy = top / unit;
+            let below = ((fy + 1) * unit).min(bottom);
+            let row = (fy < self.height).then(|| self.frame.get(fy * self.width..(fy + 1) * self.width)).flatten();
+            let (mut fx, mut left) = (x / unit, x);
+            let mut run: Option<(usize, u32)> = None; // where the run of one colour started, and its colour
+            while left < right {
+                let colour = row.and_then(|r| r.get(fx)).copied().unwrap_or(DARK);
+                match run {
+                    Some((_, c)) if c == colour => {}
+                    Some((start, c)) => { fill(start, top, left - start, below - top, c); run = Some((left, colour)); }
+                    None => run = Some((left, colour)),
+                }
+                left = ((fx + 1) * unit).min(right);
+                fx += 1;
+            }
+            if let Some((start, c)) = run { fill(start, top, right - start, below - top, c); }
+            top = below;
+        }
     }
 
     /// The pattern moves (a picture does not): `abstract`, or a picture that could not be read.

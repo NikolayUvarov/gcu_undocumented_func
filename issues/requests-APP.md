@@ -10,10 +10,10 @@ Numbered on 2026-10-20:
 
 - the shell lending a TLS client without the device certificate, for 351-NET-0022: [351-APP-0083](351-APP-0083-tls-without-the-device-certificate.md);
 - the shell lending the SSH service's client, for 351-NET-0027: [351-APP-0084](351-APP-0084-the-shell-lends-the-ssh-client.md);
-- `ip` showing each card's kind and the default card, for 550-NET-0025: [550-APP-0085](550-APP-0085-ip-shows-each-cards-kind.md);
-- the safe start shown by the shell and `wm`, for 000-KRN-0076: [000-APP-0086](000-APP-0086-the-safe-start-shown.md);
-- `app`, `app2` and `dzen-clock` cleaned, from the critique of 2026-10-14: [000-APP-0087](000-APP-0087-app-app2-and-dzen-cleaned.md);
-- `files` reading the kernel from the slot that booted, for 351-UPD-0016: [351-APP-0088](351-APP-0088-files-reads-the-booted-slots-kernel.md);
+- `ip` showing each card's kind and the default card, for 550-NET-0025: [550-APP-0085](../issues-done/550-APP-0085-ip-shows-each-cards-kind.done);
+- the safe start shown by the shell and `wm`, for 000-KRN-0076: [000-APP-0086](../issues-done/000-APP-0086-the-safe-start-shown.done);
+- `app`, `app2` and `dzen-clock` cleaned, from the critique of 2026-10-14: [000-APP-0087](../issues-done/000-APP-0087-app-app2-and-dzen-cleaned.done);
+- `files` reading the kernel from the slot that booted, for 351-UPD-0016: [351-APP-0088](../issues-done/351-APP-0088-files-reads-the-booted-slots-kernel.done);
 - screenshots and recordings for the project's page, for 000-KRN-0093: [000-APP-0089](000-APP-0089-screenshots-and-recordings-for-the-page.md);
 - horizontal scrolling from a trackpad, for 211-DRV-0018: [211-APP-0090](211-APP-0090-horizontal-scrolling.md), waiting for an across field in absolute pointer events ([requests-KRN.md](requests-KRN.md));
 - `wm`'s moving background drawn by rows, with 000-KRN-0081: [000-APP-0091](000-APP-0091-wms-background-by-rows.md);

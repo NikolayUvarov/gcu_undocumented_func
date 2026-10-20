@@ -533,6 +533,9 @@ pub struct Wm {
     pub desk: Desk,
     pub mode: Mode,
     pub notice: Option<String>,
+    /// A notice that offers a command, and the command: a click on the status line runs it while the notice shows
+    /// (000-APP-0086: the safe start's opens the shell's window).
+    pub offer: Option<(String, String)>,
     drag: Option<Drag>,
     /// The mouse in cells, once it moved.
     pub pointer: Option<(usize, usize)>,
@@ -563,7 +566,7 @@ pub struct Wm {
 pub const DOUBLE_MS: usize = 400;
 
 impl Wm {
-    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
+    pub fn new(cols: usize, rows: usize) -> Self { Self { desk: Desk::new(cols, rows), mode: Mode::Normal, notice: None, offer: None, drag: None, pointer: None, buttons: 0, grab: None, programs: Vec::new(), background: Config::default(), shell: false, lister: crate::settings::no_files, battery: None, battery_minutes: false, now: 0, pixels: (cols * 8, rows * 16), scale: 100, title_press: None } }
 
     /// wm's scale became `scale`, its grid `cols` × `rows` (000-APP-0061): the frames follow, an open Settings
     /// window too; the pointer is placed again by the next mouse event.
@@ -733,6 +736,10 @@ impl Wm {
             // The battery's item: a click shows the minutes, or the charge again (211-APP-0070).
             if self.chip().is_some_and(|chip| x + chip.chars().count() >= self.desk.cols) { self.battery_minutes = !self.battery_minutes; return Action::Redraw; }
             if let Some(&(at, _, item)) = self.top_bar().0.iter().find(|&&(at, width, _)| x >= at && x < at + width) { return self.bar(item, at); }
+        }
+        // The status line's notice offers a command: a click on it runs that.
+        if pressed && y + 1 == self.desk.rows && matches!(self.mode, Mode::Normal) {
+            if let Some((_, command)) = self.offer.take_if(|(text, _)| self.notice.as_deref() == Some(text.as_str())) { self.notice = None; return Action::Run(command); }
         }
         // `more ▼`'s menu: a click on an item does it, elsewhere closes the menu; the mouse over one chooses it.
         if let (Some(area), Mode::More { items, row, at }) = (self.more_area(), &mut self.mode) {

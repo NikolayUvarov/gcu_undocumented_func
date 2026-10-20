@@ -53,9 +53,9 @@
   - no passphrase is on the serial line.
 - **This is QEMU's stand-in radio, not the MacBook Pro's** (MC-12.1).
 - **In `main`** since 92781301 (2026-10-20): the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally).
-- **Left:**
-  - `ip`'s address after the join, which waits for the network track's half of 550-ASR-0007;
-  - the MacBook Pro's run.
+- **The check of `wifi join`'s usage failed twice in others' gates** (ASR's local gate on aarch64; NET's gate 22 on x86, i9 quiet): the prompt came back before the usage line. `wifi` prints its line through the system log and ends at once, so on the serial line the shell's prompt can come first. The `net` suite now takes each of wifi's lines from the serial line or, when it is not there yet, from `dmesg -s wifi`, where it must come once more than before the command (2026-10-20).
+- **`ip`'s address after the join** is checked now: the network track's half of 550-ASR-0007 is in `main`, and the `net` suite reads `IP 10.0.4.15/24` and the station's card (550-APP-0085).
+- **Left:** the MacBook Pro's run.
 
 ## Related
 

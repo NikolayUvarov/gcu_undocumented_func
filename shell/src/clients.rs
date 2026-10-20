@@ -8,8 +8,8 @@
 /// Taken at once.
 pub const NOW: [&str; 16] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery"];
 /// Taken after the user agrees in the shell's window (`date` with `set`, `netpolicy` with a change, `caps` with a PID).
-pub const ASKED: [&str; 19] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
-    "ping", "nslookup", "fetch", "https", "tpm"];
+pub const ASKED: [&str; 20] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
+    "ping", "nslookup", "fetch", "https", "tpm", "netstat"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken { Refused, Now, Asked }
