@@ -4778,11 +4778,27 @@ def update_suite(args):
         cut = (newer / largest[0]).stat().st_size // 2
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
-        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", vm.log)  # before the restart, so not in `out`
+        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged; a read the
+        # restart cuts short ends the reading, and the restart's lines stay in the output.
+        log = ""
+        for _ in range(900):
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                break
+            if "[UPDATER] FETCH: VERSION 6 STAGED" in log or "[UPDATER] APPLY:" in log:
+                break
+            time.sleep(1)
+        attempt = log.rpartition("[UPDATER] FETCH: VERSION 6 INTO SLOT")[2]
+        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
+        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
         print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
+        for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
+            print(f"TIME: the resume: {line}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
@@ -5650,7 +5666,13 @@ def parser_restart_check(vm, stall, body):
     assert len(parsers) == 1, (parsers, vm.command("ps", raw=True))
     # Real PIDs both ways (the harness numbers its own rows otherwise): the parser is gone before the cut.
     require(vm.command(f"kill {parsers[0]}", raw=True), "KILLED PID=")
-    assert not re.search(fr"^{parsers[0]} ", vm.command("ps", raw=True), re.M), vm.output
+    for _ in range(40):  # killed; the kernel frees an ended task on its next idle pass, later on a loaded machine
+        listed = vm.command("ps", raw=True)
+        if not re.search(fr"^{parsers[0]} ", listed, re.M):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the killed parser is still listed", listed))
     stall.go.set()
     for _ in range(120):  # the cut, the resumed request, its head parsed by another parser, the rest of the file
         if not re.search(r"^\d+ download ", vm.command("ps", raw=True), re.M):
@@ -5815,6 +5837,44 @@ def wifi_join_check(vm):
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     run("wifi leave", 30, "[WIFI] LEFT")
     print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
+
+    def scanned():  # wifi's first look scans: a restarted station has heard nothing yet
+        vm.send("wifi\n")
+        vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+
+    def quit_wifi():
+        vm.send_bytes(b"q")
+        vm.expect("SHELL RESUMED.")
+        time.sleep(.2); vm.collect(); vm.output = ""
+
+    # 550-NET-0024: the remembered network outlives a restart of keystore and of wlan; the link carries traffic.
+    for name in ("keystore", "wlan"):
+        pid = vm.services()[name]
+        require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+        for _ in range(50):
+            if vm.services().get(name, pid) != pid:
+                break
+            time.sleep(.2)
+        else:
+            raise AssertionError(f"{name} PID={pid} was not restarted")
+    scanned(); quit_wifi()
+    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
+    for _ in range(3):
+        pinged = vm.command("wifiping ping:10.0.4.1")
+        if "NETCHECK ping:10.0.4.1 OK" in pinged:
+            break
+    require(pinged, "NETCHECK ping:10.0.4.1 OK")
+    run("wifi leave", 30, "[WIFI] LEFT")
+    # Forgotten through wifi's screen (f): keystore drops it, and a join with no passphrase is refused.
+    scanned()
+    vm.send_bytes(b"f")
+    vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
+    quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
+    require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
+    run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
+          "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -6148,9 +6208,9 @@ def late_attach_check(args):
 
 def slow_radio_check(args):
     """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
-    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once, each ping answered within 2 s;
-    the station joins once the radio answers; when the station's radio goes silent after the join, the wired card keeps
-    working the same way."""
+    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once: each ping answered within 2 s,
+    and a page fetched over TCP; the station joins once the radio answers; when the station's radio goes silent after the
+    join, the wired card keeps working the same way."""
     if not args.slow_radio_elf or not raw_tools():
         print("SKIP: the slow radio needs wlansim built with `slow` (scripts/x86_fixtures.sh) and mtools", flush=True)
         return
@@ -6160,6 +6220,14 @@ def slow_radio_check(args):
         require(text, "PING: 3 SENT, 3 RECEIVED")
         assert len(times) == 3 and max(times) < 2_000_000, text
         return max(times) // 1000
+
+    web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
+    web.daemon_threads = True
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+
+    def fetched(path):  # a TCP socket through the wired card
+        page = vm.command(f"fetch 10.0.2.2:{web.server_address[1]} {path}")
+        require(page, "HTTP/1.0 200 OK"); require(page, f"hello from the host: {path}")
 
     policy = b"console 10.0.2.2 icmp\nconsole 10.0.4.99 icmp\n"
     with tempfile.TemporaryDirectory(prefix="smoke-slow-radio-", dir=ROOT / IMAGE) as temp:
@@ -6172,6 +6240,7 @@ def slow_radio_check(args):
             require(radio, "[WLANSIM] SILENT FOR 60 S: A RADIO THAT ANSWERS LATE")
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
             silent = pings(vm.command("ping 10.0.2.2"))
+            fetched("/radio-silent")
             radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
             assert "ANSWERING AGAIN" not in radio, "the radio answered before the wired card's check"
             require(vm.service_logs("wlan", "THE RADIO HAS NOT ANSWERED"), "[WLAN] THE RADIO HAS NOT ANSWERED IN 2 S: SERVING WITHOUT IT, ASKING AGAIN")
@@ -6197,11 +6266,13 @@ def slow_radio_check(args):
             vm.command("ping 10.0.4.99")
             require(vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 20 S"), "[WLANSIM] SILENT FOR 20 S")
             stalled = pings(vm.command("ping 10.0.2.2"))
+            fetched("/station-silent")
             assert "FAULT PID=" not in vm.command("faults")
         finally:
             vm.close()
-    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms while it was silent, the station "
-          f"joined once it answered; with the joined station's radio silent, within {stalled} ms", flush=True)
+            web.shutdown()
+    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
+          f"silent, the station joined once it answered; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _certificates(directory):
