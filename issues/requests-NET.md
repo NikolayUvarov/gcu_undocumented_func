@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0031](351-NET-0031-the-download-check-flushed-bounded-and-logged.md), 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -85,28 +85,6 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 - the shell's `SLOT_NET` and `SLOT_TLS` copies carry `CAP_BADGE`.
 
 The network track's QEMU checks of the station, the remembered networks, the read-only card client and TLS without the device certificate can follow.
-
-## Download complete-file recheck stalls in the 6G Intel gate
-
-**Requested by:** ASTRA auditor-fixer, 2026-10-16 · **Priority:** P1 ·
-**Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3.
-
-Please turn [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md)
-into a NET task. Exact candidate `ac1854f2`/main `bd7b5493`, Intel endpoint
-`i9_4e6882212251`, operation `20261015221739.924407850_000152`: the standard
-6 GiB group fails after the second `download` reports that its 30 MiB file
-is already complete. HTTP 416 is parsed; neither the expected SHA-256 line
-nor prompt arrives within the existing 300-second limit. The first resumed
-transfer and digest passed, as did the preceding memory checks.
-
-Instrument or otherwise identify the actual boundary (flush, each VFS read,
-hash progress, scheduling). Do not assume a RAM/NIC fault or quadratic FAT
-walk. `download` currently ignores the flush result before its disk rehash;
-handle that error explicitly. Route any required VFS/block changes to KRN.
-Keep the exact failed run, add a production regression for the established
-cause, and require the original complete-file/digest behavior to pass under
-its existing timeout. A later pass alone must not erase this failure or
-substitute for the physical network acceptance on the two laptops.
 
 ## Wi-Fi country selection from the complete verified regulatory catalog
 

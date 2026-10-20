@@ -25,6 +25,9 @@ const STAGE: usize = 64 * 1024; // the body is written to the file in pieces of 
 // No call to the stack, the TLS service, a parser or the loader waits longer, so a stalled connection ends in another
 // try or an error rather than a hang (requests-NET.md, the resume that hung on i9). Above the services' own 10 s.
 const CALL_MS: u32 = 60_000;
+// No flush or read of the file's check waits longer: one 16 KiB read, or a flush of a 64-sector cache (audit H13).
+const FILE_MS: u32 = 60_000;
+const PROGRESS: usize = 8 << 20; // the check logs its progress after each this many bytes read back
 // The endpoint of this download's own parser, ended on every way out (109-NET-0010); 0: the shared service.
 static OWN_PARSER: AtomicUsize = AtomicUsize::new(0);
 
@@ -213,18 +216,43 @@ fn hex(digest: &[u8; 32]) -> [u8; 64] {
     out
 }
 
-// The SHA-256 of the file as it is on the disk.
-fn sha256(file: &File) -> Option<[u8; 32]> {
+// A file call that failed after FILE_MS got no answer: fs::Error tells a timeout from a missing service no further.
+fn unanswered(took: usize) -> bool { took >= FILE_MS as usize }
+
+// The SHA-256 of the file as it is on the disk: flushed, then read back. Each step's time is logged, the reads' share
+// apart from the hashing's, and a call to the file service that does not come back in FILE_MS ends the program with
+// the step named (audit H13: a recheck that printed nothing for 300 s).
+fn sha256(path: &str, file: &File) -> [u8; 32] {
+    let started = now();
+    let flushed = wire::with_timeout(FILE_MS, || file.flush());
+    let took = now() - started;
+    match flushed {
+        Ok(()) => mind::println!("DOWNLOAD: FLUSHED IN {} MS", took),
+        Err(_) if unanswered(took) => fail(format_args!("THE FILE SERVICE DID NOT FLUSH {} IN {} S", path, FILE_MS / 1000)),
+        Err(error) => fail(format_args!("CANNOT FLUSH {}: {:?}", path, error)),
+    }
     let mut hash = mind::sha256::Sha256::new();
     let mut buffer = [0u8; fs::CHUNK];
-    let mut offset = 0;
-    while offset < file.size() {
-        let got = file.read_at(offset, &mut buffer).ok()?;
-        if got == 0 { return None; }
+    let (size, started) = (file.size(), now());
+    let (mut offset, mut next, mut reading, mut longest) = (0, PROGRESS, 0, 0);
+    let report = |offset, reading, longest| mind::println!("DOWNLOAD: READ BACK {} OF {} BYTES IN {} MS ({} MS IN READS, THE LONGEST {} MS)", offset, size, now() - started, reading, longest);
+    while offset < size {
+        let asked = now();
+        let read = wire::with_timeout(FILE_MS, || file.read_at(offset, &mut buffer));
+        let took = now() - asked;
+        let got = match read {
+            Ok(0) => fail(format_args!("CANNOT READ {} BACK: IT ENDS AT {} OF {} BYTES", path, offset, size)),
+            Ok(got) => got,
+            Err(_) if unanswered(took) => fail(format_args!("THE FILE SERVICE DID NOT ANSWER A READ OF {} AT {} IN {} S", path, offset, FILE_MS / 1000)),
+            Err(error) => fail(format_args!("CANNOT READ {} BACK AT {}: {:?}", path, offset, error)),
+        };
+        (reading, longest) = (reading + took, longest.max(took));
         hash.update(&buffer[..got]);
         offset += got;
+        if offset >= next && offset < size { report(offset, reading, longest); next = offset + PROGRESS; }
     }
-    Some(hash.finish())
+    report(offset, reading, longest);
+    hash.finish()
 }
 
 fn fail(what: core::fmt::Arguments) -> ! {
@@ -327,9 +355,7 @@ fn main(_info: &'static BootInfo) {
     } else {
         mind::println!("DOWNLOAD: DONE {} BYTES IN {} MS, {} CONNECTIONS", got.total, now() - started, connections);
     }
-    let _ = output.file.flush();
-    let Some(digest) = sha256(&output.file) else { fail(format_args!("CANNOT READ {} BACK", path)) };
-    let digest = hex(&digest);
+    let digest = hex(&sha256(path, &output.file));
     let digest = core::str::from_utf8(&digest).unwrap_or("");
     match expected {
         None => mind::println!("DOWNLOAD: SHA256 {}", digest),
