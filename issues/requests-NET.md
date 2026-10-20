@@ -160,31 +160,3 @@ Ryzen; a configuration round trip is not evidence of physical networking.
 Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
 [KRN](213-KRN-0123-the-rtl8852be-radio-endpoint.md),
 [DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).
-
-## The SSH client's OpenSSH host tests fail on an interrupted read (`EINTR`), about one run in forty
-
-**Recorded by:** the kernel track (KRN), 2026-10-20, from its gate of 07624cd on un-rizen-service and runs in its own session · **Concerns:** `ssh/tests/openssh.rs` (351-NET-0026)
-
-### Problem
-
-- **In the gate.** `host tests` failed once on un-rizen-service (07624cd, 2026-10-20 04:59 UTC): `refuses_another_host_key_and_another_login_key` got `Some(Io)` where `Some(HostKey)` was expected. The same commit passed the group when it ran again, and eight runs of the test alone.
-- **Measured in the kernel track's session** (Ubuntu 24.04, OpenSSH 9.6p1, the tree of ac953dd): 8 of 300 runs of the test binary failed, and 6 of 300 in a second series. Any of the three tests can fail, always on its first connection, with `Io`.
-- **The cause.** A copy of the test that prints the socket's error shows `read` returning `Interrupted system call (os error 4)`. `Read::read` does not retry on `EINTR` (`read_exact` and `write_all` do), and `Tcp::receive` turns every error into `Error::Io`. Which signal interrupts it was not traced; sshd's own log shows only the probe connections closing.
-- **The fix, tested.** With `receive` retrying on `ErrorKind::Interrupted`, 0 of 600 runs failed:
-
-  ```rust
-  fn receive(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
-      loop {
-          match self.0.read(buffer) {
-              Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue, // a signal, not the connection
-              other => return other.map_err(|_| Error::Io),
-          }
-      }
-  }
-  ```
-
-  The client itself is not at fault: MIND's own `Io` has no `EINTR`.
-
-### Acceptance criteria
-
-The three tests pass in 600 runs in a row on a machine with `openssh-server`, and `host tests` passes in the gate without a rerun.
