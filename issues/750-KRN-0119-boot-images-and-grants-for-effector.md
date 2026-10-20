@@ -1,6 +1,6 @@
 # 750-KRN-0119 — Boot images and `init`'s grants for `effector` and `effector_gw`
 
-**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md) (off unless enabled); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the client of `updater` for the gateway ([requests-UPD.md](requests-UPD.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
+**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md) (off unless enabled); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the gateway's client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
 
 ## Problem
 
@@ -23,7 +23,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
    - the log read badge and `sysinfo`;
    - the writable scopes of 750-KRN-0120 on `data/effector/` and `data/apps/`;
    - read-only clients for `log:` and the file roots;
-   - a client of `updater` (the update track's request);
+   - a client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md));
    - an `init` client badged `BADGE_REBOOT`;
    - its own private directory `system/effector_gw` for the command journal;
    - screen capture, for the policy's `screenshot`.
