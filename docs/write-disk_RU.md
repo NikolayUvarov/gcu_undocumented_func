@@ -1,6 +1,6 @@
 # Запись MIND Core на диск и загрузка ПК
 
-**Версия:** 1.3 (2026-10-08): раздел журналов · **Задачи:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (ПК с Intel с SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (скрипт записи), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (первый запуск), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) и [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (раздел журналов) · **English version:** [write-disk.md](write-disk.md) (основной текст; этот перевод держится в согласии с ним)
+**Версия:** 1.3 (2026-10-08): раздел журналов · **Задачи:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) (ПК с Intel с SATA SSD), [211-PRT-0001](../issues/211-PRT-0001-writer-for-an-internal-disk.md) (скрипт записи), [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md) (первый запуск), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) и [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (раздел журналов) · **English version:** [write-disk.md](write-disk.md) (основной текст; этот перевод держится в согласии с ним)
 
 > **Ни одна физическая машина x86 пока не входит в доказательства работы MIND Core.** Всё ниже следует из скриптов и из QEMU, где тот же образ загружается с USB, SATA (AHCI) и NVMe. Первый настоящий запуск — задача [211-PRT-0004](../issues/211-PRT-0004-first-run-on-an-intel-pc.md). В разделе 8 — что известно как рискованное на реальном ПК, в разделе 9 — что прислать.
 

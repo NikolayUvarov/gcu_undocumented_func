@@ -56,4 +56,4 @@ The MacBook Pro's tables, as `log:acpi/` holds them:
 
 ## Related
 
-[211-KRN-0090](211-KRN-0090-a-slot-for-the-battery.md), [requests-APP.md](requests-APP.md) (the indicator), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).
+[211-KRN-0090](../issues-done/211-KRN-0090-a-slot-for-the-battery.done), [requests-APP.md](requests-APP.md) (the indicator), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).
