@@ -119,6 +119,8 @@ Once its machine sends `@STATE`, the board shows that machine's boot instead:
 - magenta blinking when the beats stop for 3 s;
 - white flashes on `REBOOT` or `OFF`.
 
+**To see each state:** `devices/rp2-link/tests/led-states.sh <control port>` sends the indicator's lines in turn, a few seconds each, and names the colour to expect.
+
 ## Between the boards
 
 - **Frames:** COBS-encoded and ended by a zero byte. Each carries:

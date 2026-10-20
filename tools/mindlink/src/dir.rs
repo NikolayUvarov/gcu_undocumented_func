@@ -31,7 +31,8 @@ impl Dir {
         let console = match console {
             None => None,
             Some(cmd) => {
-                let mut child = Command::new("/bin/sh").arg("-c").arg(cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+                let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("/bin/sh", "-c") };
+                let mut child = Command::new(shell).arg(flag).arg(cmd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
                     .spawn().map_err(|e| format!("{cmd}: {e}"))?;
                 let output = Arc::new(Mutex::new(Vec::new()));
                 for mut from in [Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>, Box::new(child.stderr.take().unwrap())] {

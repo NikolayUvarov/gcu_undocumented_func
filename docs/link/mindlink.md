@@ -9,11 +9,15 @@ Russian: [mindlink_RU.md](mindlink_RU.md).
 ## Build
 
 ```bash
-cargo build --release --manifest-path tools/mindlink/Cargo.toml
-# the program: tools/mindlink/target/release/mindlink
+tools/mindlink/build.sh
+# Linux and WSL:  tools/mindlink/target/release/mindlink
+# Windows:        tools/mindlink/target/x86_64-pc-windows-gnu/release/mindlink.exe
 ```
 
-It uses the standard library and `linkproto` only. The serial port is set through glibc's termios, so it builds on Linux and WSL, not on Windows (that end is 800-LNK-0007).
+- **It uses the standard library and `linkproto` only.**
+- **On Linux** the serial port is set through glibc's termios.
+- **On Windows** a COM port is set through the Win32 communications calls. The program needs no DLL beyond Windows' own.
+- **The Windows build** is cross-compiled. It needs `rustup target add x86_64-pc-windows-gnu` and MinGW-w64's linker.
 
 ## Commands
 
@@ -25,10 +29,10 @@ mindlink [options] <port> <command> [arguments]
 
 | Port | What it is |
 |---|---|
-| `/dev/ttyUSB0` | a serial port, set raw (8 bits, no parity, no flow control) at `--baud` |
+| `/dev/ttyUSB0`, `COM10` | a serial port on Linux or Windows, set raw (8 bits, no parity, no flow control) at `--baud` |
 | `tcp:HOST:PORT` | a TCP connection, for example to QEMU's serial chardev |
 | `listen:PORT` | waits for one TCP connection; `listen:0` picks a port and prints it |
-| `pty` | `serve` only: a pseudo-terminal for tests; prints its path |
+| `pty` | `serve` only, Linux: a pseudo-terminal for tests; prints its path |
 
 **Commands:**
 
@@ -42,6 +46,7 @@ mindlink [options] <port> <command> [arguments]
 | `rm <name>` | deletes a file |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
+| `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |
 | `board <line>` | one line to a [multi-device](multi-device.md) board's control port (`type …`, `key …`, `move …`, `status`), and its answer |
 | `serve <dir> [--log <file>] [--console <command>]` | the slave: files in `<dir>`, the log read from `<file>`, a console running `<command>` through `/bin/sh -c`. Without `--console` there is no console |
 
@@ -56,6 +61,19 @@ mindlink [options] <port> <command> [arguments]
 | `--payload <bytes>` | 1024: the largest frame's payload, from 64. Less for a noisy line, and 256 for QEMU's emulated converter (below) |
 
 Each file moved is reported with its size, time, rate and SHA-256. A refusal or a missing answer is reported with its reason, and the exit status is 1.
+
+## The converters on Windows
+
+`mindlink.exe` drives a converter as Windows names it, with no usbipd:
+
+```text
+mindlink.exe --baud 921600 COM10 hello
+mindlink.exe --baud 921600 COM10 put build.img
+```
+
+- **Device Manager** shows each converter's COM number.
+- **An FTDI port's latency timer** is the port's Advanced property, 16 ms by default; 1 ms speeds up every answer.
+- **A port in WSL is not in Windows.** A converter attached to WSL through usbipd is gone from Windows until it is detached.
 
 ## The converters on WSL
 

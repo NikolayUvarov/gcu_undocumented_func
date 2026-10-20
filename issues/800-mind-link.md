@@ -26,6 +26,7 @@ Two transports, one protocol:
    - [800-LNK-0005](800-LNK-0005-the-rp2-multi-device-firmware.md) the firmware;
    - [800-LNK-0006](800-LNK-0006-mind-core-hosts-the-multi-device.md) MIND Core's side;
    - [800-LNK-0007](800-LNK-0007-the-windows-end.md) Windows.
+3. **MIND Core as the master,** so it reaches Linux, Windows or another MIND Core too: [800-LNK-0008](800-LNK-0008-mind-core-as-the-master.md).
 
 The protocol runs between the two machines' ends. The converters and the boards only carry its bytes.
 

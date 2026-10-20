@@ -1,6 +1,11 @@
 //! mindlink: MIND Link's end on Linux and WSL (800-LNK-0004). As master it moves files, follows the log and types at
 //! the other end's console; `serve` plays the slave over a directory. docs/link/mindlink.md says how to use it.
 mod dir;
+#[cfg(unix)]
+#[path = "port_unix.rs"]
+mod port;
+#[cfg(windows)]
+#[path = "port_windows.rs"]
 mod port;
 
 use linkproto::app::{Client, FileService};
@@ -14,8 +19,8 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: mindlink [options] <port> <command> [arguments]
 
-port:     a serial port (/dev/ttyUSB0), tcp:HOST:PORT, listen:PORT (one connection; 0 picks a port),
-          or pty (serve only: a pseudo-terminal for tests)
+port:     a serial port (/dev/ttyUSB0 on Linux, COM10 on Windows), tcp:HOST:PORT, listen:PORT (one connection;
+          0 picks a port), or pty (serve only, Linux: a pseudo-terminal for tests)
 commands: hello                       the other end's name and version
           put <file> [<name>] [--force]  send a file; skipped when the other end has the same bytes, unless --force
           get <name> [<file>]         fetch a file
@@ -24,6 +29,7 @@ commands: hello                       the other end's name and version
           rm <name>                   delete a file
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
+          sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
           board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
                                       key <chord>, move <dx> <dy>, click, abs <x> <y>; docs/link/multi-device.md)
           serve <dir> [--log <file>] [--console <command>]
@@ -65,10 +71,8 @@ fn die(msg: impl std::fmt::Display) -> ! {
     std::process::exit(1)
 }
 
-extern "C" { fn isatty(fd: i32) -> i32; }
-
 /// Progress goes to standard error only when a person watches it.
-fn progress(text: String) { if unsafe { isatty(2) } == 1 { eprint!("\r{text}   "); } }
+fn progress(text: String) { if std::io::IsTerminal::is_terminal(&std::io::stderr()) { eprint!("\r{text}   "); } }
 
 fn rate(bytes: u64, t: Duration) -> String {
     let s = t.as_secs_f64().max(0.001);
@@ -103,6 +107,7 @@ fn main() {
     let mut port = port::Port::open(&spec, o.baud).unwrap_or_else(|e| die(e));
     if cmd == "serve" { return serve(port, &args, &o); }
     if cmd == "board" { return board(port, &args.join(" ")); }
+    if cmd == "sniff" { return sniff(port, args.first().map(|s| s.parse().unwrap_or_else(|_| die("sniff takes seconds"))).unwrap_or(10)); }
 
     // One try waits for a request and an answer of the largest size at the line's rate, and a margin.
     let serial = !spec.contains(':');
@@ -270,6 +275,24 @@ fn console(c: &mut Client<port::Port>) -> Result<(), Error> {
     }
 }
 
+/// Whatever the line brings for `seconds`, in hex, 32 bytes a row with their time: on an RS-485 pair, listen on one
+/// converter while the other sends (`mindlink <port> hello`) to see whether bytes cross at all.
+fn sniff(mut port: port::Port, seconds: u64) {
+    use linkproto::Line;
+    let start = Instant::now();
+    let mut buf = [0u8; 32];
+    let mut total = 0usize;
+    eprintln!("listening on {} for {seconds} s", port.name);
+    while start.elapsed() < Duration::from_secs(seconds) && !port.failed() {
+        let n = port.read(&mut buf, 200);
+        if n == 0 { continue; }
+        total += n;
+        let hex: Vec<String> = buf[..n].iter().map(|b| format!("{b:02x}")).collect();
+        println!("{:7.3} s  {}", start.elapsed().as_secs_f64(), hex.join(" "));
+    }
+    println!("{total} bytes in {seconds} s");
+}
+
 /// One line to a multi-device's control port, and its answer (800-LNK-0005); the indicator's `@` lines have none.
 fn board(mut port: port::Port, line: &str) {
     use linkproto::Line;
@@ -308,7 +331,7 @@ fn serve(mut port: port::Port, args: &[String], o: &Options) {
     port.turnaround = Duration::from_micros(o.turnaround_us);
     let name = port.name.clone();
     let mut service = FileService::new(files);
-    let host = fs::read_to_string("/proc/sys/kernel/hostname").unwrap_or_default();
+    let host = std::env::var("COMPUTERNAME").or_else(|_| fs::read_to_string("/proc/sys/kernel/hostname")).unwrap_or_default();
     service.set_name(&format!("mindlink serve on {}", host.trim()));
     let mut slave = Slave::new(port);
     eprintln!("serving {} on {name}", dir.display());
