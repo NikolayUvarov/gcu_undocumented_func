@@ -7983,8 +7983,7 @@ def autorun_check(args, disk):
             # No `ps` at the first prompt, as VM() types: keys typed while a script runs go to its Esc check.
             vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
             try:
-                vm.expect(shown, timeout=90)
-                vm.expect("MIND> ", timeout=30)
+                vm.expect("MIND> ", timeout=90, after=shown)  # one wait: a match drops what came with it
                 log = vm.command("dmesg -s shell", raw=True)
                 digest = hashlib.sha256(script.encode()).hexdigest()
                 require(log, f"[SHELL] AUTORUN /autorun.msh SHA256 {digest}")
