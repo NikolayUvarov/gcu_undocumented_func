@@ -79,7 +79,7 @@ Commands: `cargo test --manifest-path tests/network_budget/Cargo.toml
 
 ## Related
 
-[550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md),
+[550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done),
 [550-NET-0031](550-NET-0031-bounded-driver-calls-and-ingress.md),
 [550-NET-0032](550-NET-0032-whole-stack-turn-budget.md),
 [network profile](../docs/profile/network.md).

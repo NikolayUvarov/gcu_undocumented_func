@@ -1,6 +1,6 @@
-# 351-UPD-0018 — The updater's fetch: calls with a deadline, each file in the log
+# 351-UPD-0018 — The updater's fetch: calls with a deadline, each file in the log — done
 
-**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-5.2, MC-6.1, MC-6.6, MC-12.2
+**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-5.2, MC-6.1, MC-6.6, MC-12.2
 
 From the kernel track's message to UPD (`internal-dev-messages`, `UPD/2026-10-14T1633Z-KRN-the-updaters-fetch-after-the-cut-stalled.md`).
 
@@ -36,6 +36,16 @@ From the kernel track's message to UPD (`internal-dev-messages`, `UPD/2026-10-14
 
 Gate 22's runs printed `TIME: the updater fetched 0 boot files`: the updater's lines go to its log, not to the serial line, and the restart after the fetch loses that log. The update suite now reads `dmesg -s updater` every second while the fetch runs, until the version is staged, and prints each file's time and the resume's line from that attempt. Run locally (x86, QEMU 8.2, TCG, 4 CPUs): 39 boot files, the slowest `tls.elf`, 1379760 bytes in 3354 ms; the resume `ASKED FOR THE REST FROM BYTE 689880`. The suite passed.
 
+## Resolution
+
+- **The deadline** (in `main` since gate 17b): each attempt of the updater's fetch runs under `wire::with_timeout(CALL_MS)`, 60 s (`updater/src/source.rs`); a call that times out counts as a connection that did not answer, and the slot's writes keep no limit. Read from the code, as the criterion says: the suite has no service that stops answering.
+- **The log:** the resume (`ASKED FOR THE REST FROM BYTE n`, `ITS HEAD PARSED: STATUS s`) and each file (`FETCH: i OF n: <name>, <size> BYTES IN <ms> MS`).
+- **The suite shows them** (`f0f765cb`): it reads the updater's log while the fetch runs, as the restart after it loses that log.
+- **Gate 23** (`main` ad446a18) passed the `update` suite with those lines:
+  - x86, "x86: files and block writes" on i9;
+  - aarch64, "aarch64: files, network and TLS" on un-rizen: 33 boot files, the slowest `tls.elf`, 1312752 bytes in 10510 ms, and the resume from byte 656376.
+- The stall the kernel track saw on i9 (1,500 s with nothing on the serial line) has not been seen again; with the deadline it cannot last more than 60 s a call. The times above are evidence for a slow machine, not a bound.
+
 ## Related
 
-[351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done) (the same for `download`), [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
+[351-NET-0029](351-NET-0029-download-calls-with-a-deadline.done) (the same for `download`), [109-UPD-0017](../issues/109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [351-UPD-0007](351-UPD-0007-updater-service.done).
