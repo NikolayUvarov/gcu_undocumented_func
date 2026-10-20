@@ -45,7 +45,8 @@ MIND Core has no driver for either, so neither can carry the link (800-LNK-0001)
   - 8N1 in `0x2518`;
   - its bulk data have no status bytes.
 
-  `tests/serial_host.rs` checks the rate registers against the rate they decode to: every 1013 bit/s from 50 to 3 Mbit/s, and the common rates. **Not yet run on a CH340 under MIND Core**: that waits for `init`'s part (800-KRN-0128).
+  `tests/serial_host.rs` checks the rate registers against the rate they decode to: every 1013 bit/s from 50 to 3 Mbit/s, and the common rates.
+- **2026-10-20, the MacBook Pro** (`fast-test` 832c9080, KRN's `init` part in): `[SERIAL] CH340 1A86:7523 (VERSION 0x31)` set up, then 460800 bit/s at `link`'s request (the chip makes 461538). Through it and a second CH340 on the maintainer's PC (COM22, `mindlink.exe`), over RS-485: the whole system log read, and 200 KB put and got back with matching SHA-256 at 36 and 32 KB/s. The acceptance's hardware criterion holds for the CH340; the FTDI's is still to be run.
 - **Left:**
   - **`init` starting the service** (KRN);
   - **the run on the maintainer's converters.**
