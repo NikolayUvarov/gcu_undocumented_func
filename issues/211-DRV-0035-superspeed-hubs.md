@@ -41,7 +41,11 @@ From USB 3.2 chapter 10:
   - a Genesys Logic SuperSpeed hub's descriptor and its USB 2 side's;
   - a SuperSpeed port's powered bit not read as low speed;
   - the change bits of each kind of hub.
-- **Not yet run** on the dock.
+- **2026-10-20, the MacBook Pro, the first run (a trial image with `fast-test` 3e282a5c, read over MIND Link).**
+  - **The SuperSpeed hub was walked:** `05E3:0626 ON PORT 5 (SUPER SPEED) HUB`, then `05E3:0749 ON PORT 5.3` and `152D:0562 ON PORT 5.4`, both at SuperSpeed. The second is the JMicron SATA bridge holding the boot disk.
+  - **But `usb_storage` gave up on the first mass storage device,** `05E3:0749`, the dock's card reader without a card, and never reached the disk. So `vfs_server` found the boot volume on no block device.
+  - **Fixed:** a device with no medium, or not ready, stays claimed, and the next one is tried. The log names the device taken. In QEMU, an empty removable USB drive on port 1 was skipped, and the boot disk on port 2 mounted with its log volume.
+  - **Left:** the Mac's run with the fix.
 
 ## Related
 
