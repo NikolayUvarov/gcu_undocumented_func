@@ -1,0 +1,14 @@
+[package]
+name = "link"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
+
+[dependencies]
+libmind = { path = "../libmind" }
+linkproto = { path = "../linkproto" }
+
+[profile.release]
+panic = "abort"
+opt-level = 3

@@ -73,6 +73,8 @@ USER_CRATES=(
     "usb_host:usb_host:usb_host.elf"
     "usb_storage:usb_storage:usb_storage.elf"
     "usb_hid:usb_hid:usb_hid.elf"
+    "usb_serial:usb_serial:usb_serial.elf"
+    "link:link:link.elf"
     "virtio_blk:virtio_blk:virtio_blk.elf"
     "nvme:nvme:nvme.elf"
     "logd:logd:logd.elf"

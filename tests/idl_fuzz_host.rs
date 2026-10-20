@@ -91,6 +91,7 @@ mod idl {
     #[path = "../../libmind/src/idl/netpolicy.rs"] pub mod netpolicy;
     #[path = "../../libmind/src/idl/parse.rs"] pub mod parse;
     #[path = "../../libmind/src/idl/rtc.rs"] pub mod rtc;
+    #[path = "../../libmind/src/idl/serial.rs"] pub mod serial;
     #[path = "../../libmind/src/idl/shell.rs"] pub mod shell;
     #[path = "../../libmind/src/idl/socket.rs"] pub mod socket;
     #[path = "../../libmind/src/idl/ssh.rs"] pub mod ssh;
@@ -353,7 +354,7 @@ fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
         owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
-        owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
+        borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
     ];
     let mut names: Vec<String> = receivers.iter().map(|r| r.0.to_string()).collect(); names.sort();
@@ -429,6 +430,7 @@ types! {
     netpolicy: Error Grant;
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
+    serial: Error Info;
     shell: Error;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
     ssh: Error;

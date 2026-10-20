@@ -1,0 +1,25 @@
+/// A serial line on a USB converter (`usb_serial`, 800-LNK-0002): the FTDI FT232R and the WCH CH340, which the
+/// maintainer's RS-485 converters carry. `init` lends it to one client, the link service (800-LNK-0003, MC-2.3).
+/// Bytes go as they are, 8 data bits, no parity, one stop bit, no flow control: the protocol above keeps a half-duplex
+/// line to one sender. The driver reads the converter all the time and keeps what came until the client takes it.
+package mind:serial@1.0.0;
+
+interface serial {
+    /// `no-device`: no converter is attached, or it went; `invalid`: a rate the chip cannot make within 3 %, or an
+    /// empty write; `failed`: the converter refused a request or did not answer.
+    enum error { no-device, invalid, failed }
+
+    /// The converter: its chip (1 FTDI FT232R, 2 WCH CH340), its vendor and product IDs, the rate asked for and the
+    /// rate the chip makes of it (bits/s), and the bytes lost because the client did not take them in time.
+    record info { chip: u8, vendor: u16, product: u16, baud: u32, actual: u32, lost: u32 }
+
+    info: func() -> result<info, error>;
+    /// Sets the rate; answers the rate the chip makes of it.
+    configure: func(baud: u32) -> result<u32, error>;
+    /// Sends `data`, answering when the converter has taken all of it.
+    write: func(data: bytes<4096>) -> result<_, error>;
+    /// The bytes received since the last call, oldest first, up to 4096; none when nothing came.
+    read: func() -> result<bytes<4096>, error>;
+    /// Answers when bytes are waiting, or after `timeout-ms` (at most 1000) with none; returns how many are.
+    wait: func(timeout-ms: u32) -> u32;
+}
