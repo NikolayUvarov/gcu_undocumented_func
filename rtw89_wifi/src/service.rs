@@ -154,6 +154,8 @@ impl<'s,'q,'memory,'p,'a,'command,'receive,B:DeviceIo> Service<'s,'q,'memory,'p,
             },
             wlanhw::Request::Attach{..}=>{let _=wlanhw::reply_attach(call,Err(wlanhw::Error::Invalid));},
             wlanhw::Request::Kick=>{let _=wlanhw::reply_kick(call,Err(wlanhw::Error::Invalid));},
+            // wlanhw 1.2 (550-NET-0035): no country's limits applied yet, so none taken.
+            wlanhw::Request::SetCountry{..}=>{let _=wlanhw::reply_set_country(call,Err(wlanhw::Error::Failed));},
         }
     }
     pub(crate) fn stop(mut self)->Stopped<'s,'q,'memory,'p,'a,'command,'receive,B>{
@@ -176,5 +178,6 @@ fn absent(request:wlanhw::Request<'_>,call:wire::Call){
         wlanhw::Request::Wait=>wlanhw::reply_wait(call,0),
         wlanhw::Request::Attach{..}=>wlanhw::reply_attach(call,Err(no)),
         wlanhw::Request::Kick=>wlanhw::reply_kick(call,Err(no)),
+        wlanhw::Request::SetCountry{..}=>wlanhw::reply_set_country(call,Err(no)),
     };
 }
