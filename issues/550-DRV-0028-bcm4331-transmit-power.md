@@ -18,6 +18,8 @@ On the MacBook Pro, one boot on request logs the SPROM's power data, the idle TS
 
 ## Progress
 
+- **2026-10-20: a country's EIRP limits wait for this task.** `bcm_wifi` takes `wlanhw` 1.2's `set-country` and keeps to its channels and listen-only channels (550-DRV-0027). It does not apply the EIRP figures: its gain is fixed and its output in dBm is unknown. When power control works, the target power per channel becomes the least of the SPROM's maximum and the country's EIRP, less the antenna gain the SPROM gives.
+
 The work on receiving OFDM moved to [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) on 2026-10-14. It is not part of this task's plan, and its record stays here up to then. This task keeps the transmit power: nothing of the SPROM's power data or of power control is done yet, and the runs used the fixed gain entry 40 with power control off.
 
 The code these runs tested is on `claude/ASR-DRV` and `fast-test`, and reaches `main` after its gate: gain entry 40, the directed-probe tests, core 2's front end off, and the radio's calls of 550-DRV-0027. Until then `main`'s `bcm_wifi` has 550-DRV-0026's stage 5.
