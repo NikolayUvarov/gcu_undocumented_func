@@ -1,10 +1,10 @@
-# 351-NET-0034 — `download`'s check at the end: flushed, bounded and in the log
+# 351-NET-0034 — `download`'s check at the end: flushed, bounded and in the log — done
 
-**Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (built; i9 and un-rizen runs below) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+**Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 From the request "Download complete-file recheck stalls in the 6G Intel gate" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16), for [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md).
 
-Numbered 0034, before [550-NET-0035](550-NET-0035-the-stations-country.md): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
+Numbered 0034, before [550-NET-0035](../issues/550-NET-0035-the-stations-country.md): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
 
 ## Problem
 
@@ -84,5 +84,18 @@ These runs are of `claude/relaxed-meitner-5bmhpz` 6f4de98a merged with `main` 17
 
 ## Related
 
-- [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done): the same for the transfer's calls.
+- [351-NET-0029](351-NET-0029-download-calls-with-a-deadline.done): the same for the transfer's calls.
 - [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md).
+
+## Resolution
+
+- **Built** (`download/src/main.rs`):
+  - a flush that fails ends the run;
+  - the flush and the reads back are logged with their times, the reads' share apart from the hashing's;
+  - no call of the check waits more than 60 s.
+- **The `net` suite** requires the lines in both runs of the big file and prints their times. The 300 s limit and the SHA-256 check are unchanged.
+- **docs/network/downloads.md** 0.5.
+- **The suite passed** on x86 and aarch64 in the network track's gate 20 (5fbbf1ae, 473b1816, 929d1fa5, with `main` d793ac5a).
+- **On i9 (H13's machine)** the 30 MiB check took 5 to 6 s, its longest read at most 18 ms (Progress above).
+- **H13's cause is not established:** no stall came back. If it does, the log names the step, and a call that gets no answer ends the run in 60 s. The audit's record of the failed run stays as it is (`issues-audit/2026-10-16-download-recheck-stall.md`).
+- **`virtio_blk`'s tick per request on aarch64** went to `DRV` (requests-DRV.md).

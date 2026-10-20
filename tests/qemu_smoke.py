@@ -4722,7 +4722,7 @@ def update_suite(args):
         vm.collect(); vm.output = ""
         out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", out)
+        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", vm.log)  # before the restart, so not in `out`
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
         print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
@@ -5712,7 +5712,12 @@ def wifi_join_check(vm):
             break
         time.sleep(1)
     require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
-    require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
+    # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
+    for _ in range(3):
+        pinged = vm.command("wifiping ping:10.0.4.1")
+        if "NETCHECK ping:10.0.4.1 OK" in pinged:
+            break
+    require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
     require(run("wifi leave", 30), "[WIFI] LEFT")
