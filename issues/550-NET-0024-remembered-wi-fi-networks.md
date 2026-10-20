@@ -54,6 +54,18 @@ A network's PMK opens all its traffic, other stations' too, for anyone who recor
 
 [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), [550-NET-0018](550-NET-0018-the-station-service.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
 
+## Progress (2026-10-20)
+
+The `net` suite (x86 and aarch64, gate 20) checks:
+- a join with `--remember`, which `keystore` keeps (`WI-FI NETWORK MIND-TEST KEPT FOR PID`);
+- a join with no passphrase after `wifi leave`, whose handshake keys come from `keystore` (`WI-FI KEYS FOR MIND-TEST FOR PID`).
+
+Left:
+- the join after a restart of `wlan` and `keystore`, or a reboot;
+- `forget` (no `wifi forget` without a screen yet);
+- a client without the badge `denied`;
+- the MacBook Pro.
+
 ## Progress (2026-10-12)
 
 - **Built,** as planned: `wpa` (`Pairwise`, `kept`), `dot11` (`Secret`), `idl/keystore.wit` 1.1, `keystore`'s [`wifi.rs`](../keystore/src/wifi.rs) and `wlan`. All build for `x86_64-unknown-none` and `aarch64-unknown-none-softfloat`.

@@ -1,6 +1,6 @@
 # 109-NET-0010 — A parser process per session
 
-**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** in progress (made for downloads; the updater's part built as [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), waiting for `init`'s loader client) · **Blocked by:** — (the loader's part: [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
+**Type:** network (service) · **Owner:** `NET` track · **Priority:** P3 · **Status:** in progress (made for downloads; the updater's part built as [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), waiting for `init`'s loader client) · **Blocked by:** — (the loader's part: [109-KRN-0096](../issues-done/109-KRN-0096-the-loader-starts-a-helper.done)) · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-11.11, Appendix B.6
 
 Split from 109, whose own criteria are met with one parser process for the system.
 
@@ -21,7 +21,7 @@ Two downloads at once have their heads parsed in two processes, each holding onl
 
 **2026-10-12, the kernel session at the maintainer's word** (the network track's task, done for it).
 
-- **The loader** starts `parse` as a helper with nothing but the caller's endpoint ([109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md)).
+- **The loader** starts `parse` as a helper with nothing but the caller's endpoint ([109-KRN-0096](../issues-done/109-KRN-0096-the-loader-starts-a-helper.done)).
 - **`parse` with `--session`** serves that endpoint alone. It ends on a message that is not a call, or after 30 s without a request. It writes nothing at all: it holds no log client, and a line in its own console made the kernel keep its output instead of the download's when it ended right after it (the kernel keeps the unread output of one ended console program), so a failed download's message was lost.
 - **`mind::parse::Session`** creates the endpoint, asks the loader for the helper and ends it when dropped. Where the loader starts none, it uses the shared service.
 - **`download`** parses its heads in a `Session` of its own while it holds `SLOT_PARSE`; a script without `parse` still gets "NO PARSER SERVICE". Its parser ends on every way out, a failure too.

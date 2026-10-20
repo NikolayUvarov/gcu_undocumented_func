@@ -47,4 +47,4 @@ Reads are as before (39–54 MiB/s). Writes to the USB stick are three times fas
 
 ## Related
 
-[176-KRN-0064](../issues-done/176-KRN-0064-bench.done) (the measurement), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md), [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done).
+[176-KRN-0064](../issues-done/176-KRN-0064-bench.done) (the measurement), [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done), [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done).

@@ -1,6 +1,6 @@
-# 000-KRN-0039 — The kernel kept out of programs' pages: SMEP, SMAP and UMIP on x86, PAN on aarch64
+# 000-KRN-0039 — The kernel kept out of programs' pages: SMEP, SMAP and UMIP on x86, PAN on aarch64 — done
 
-**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** in progress (done in QEMU and on the MacBook Pro; a PC with SMAP left) · **Blocked by:** — · **Main task:** none · **Roadmap:** track K (kernel hardening) · **Constitution:** MC-1.2, MC-1.5, MC-12.1
+**Type:** kernel · **Owner:** `KRN` · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** none · **Roadmap:** track K (kernel hardening) · **Constitution:** MC-1.2, MC-1.5, MC-12.1
 
 ## Problem
 
@@ -54,6 +54,23 @@ The kernel reaches program memory through physical frames (`paging.rs` `readable
 **2026-10-09, the MacBook Pro (i7-3615QM, Ivy Bridge):** `PROTECTION: SMEP` on the boot line and in LOG:hw0001.txt. Ivy Bridge has SMEP; SMAP (Broadwell) and UMIP (Cannon Lake and Zen 2) came later, and the report lists neither in CPUID leaf 7. The system ran as before.
 
 **Left:** a PC with SMAP and UMIP (Broadwell or later, or a Zen), its report line recorded.
+
+## Resolution
+
+Every criterion is met.
+
+- **QEMU.**
+  - The isolation suite's case U and `protection_check` cover `-cpu max` and `qemu64` ("x86: x2APIC", "x86: padded vector area", "x86: protection probes", "x86: scheduling, isolation, heap", "x86: one CPU").
+  - On aarch64 `smp_suite` requires `PXN PAN` ("aarch64: programs, shell and four CPUs").
+  - All of them passed in the gate of 10d3ec3.
+- **The MacBook Pro** (Ivy Bridge: SMEP, no SMAP) is in the Progress above.
+- **A PC with SMAP.** The Ryzen 9 5900HX's runs of 2026-10-20 (fast-test d0c2dea, `log:hw0001.txt` and `hw0002.txt`) print:
+  - `protection SMEP SMAP UMIP (CR4)` in the kernel section;
+  - `MIND CORE KERNEL: PROTECTION: SMEP SMAP UMIP` on the boot line.
+
+  The full hardware script ran there twice, with no kernel fault.
+
+Evidence for those machines and builds only (MC-12.1).
 
 ## Related
 

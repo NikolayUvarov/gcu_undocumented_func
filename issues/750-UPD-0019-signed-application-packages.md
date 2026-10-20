@@ -1,6 +1,6 @@
 # 750-UPD-0019 — Signed application packages: the contract, the key role and one check for the gateway and the loader
 
-**Type:** format and library · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open (contract draft 0.1 below, not agreed yet) · **Blocked by:** — for the contract, the routine and the tool; the loader's part waits for `KRN`, the install for 750-EFF-0008 · **Main task:** [750](750-effector-agent.md) · **Roadmap:** stage V · **Constitution:** MC-3.11, MC-9.2, MC-9.4, MC-9.8, MC-12.4, MC-12.7
+**Type:** format and library · **Owner:** `UPD` track · **Priority:** P1 · **Status:** open (contract draft 0.1 below, not agreed yet; the check and the tool built to it) · **Blocked by:** — for the contract, the routine and the tool; the loader's part waits for `KRN`, the install for 750-EFF-0008 · **Main task:** [750](750-effector-agent.md) · **Roadmap:** stage V · **Constitution:** MC-3.11, MC-9.2, MC-9.4, MC-9.8, MC-12.4, MC-12.7
 
 From the request "Signed application packages: format, key role, verification (750)" in requests-UPD.md (recorded by the Effector agent track, 2026-10-09), and point 2 of [requests-EFF.md](requests-EFF.md) (the maintainer's handoff, 2026-10-15).
 
@@ -76,6 +76,22 @@ Any mismatch: it does not run, and the log says why.
   - a wrong key, a key not trusted for the name;
   - another architecture, a lower version;
   - each bound, and a boot or channel signature presented as an application's.
+
+## Progress (2026-10-20)
+
+Built to draft 0.1 while it waits for agreement. If the draft changes, these change with it.
+
+- **`apppkg/`** (`no_std`; `ed25519-dalek` and `sha2`, as the updater uses). It has:
+  - `parse`, which demands the one encoding within the draft's bounds;
+  - `verify`, which checks the trusted key for the name, the signature over the prefix and the bytes, the architecture, the release and the version;
+  - `File::matches`, for each file's size and SHA-256.
+
+  It builds for `x86_64-unknown-none`.
+- **`scripts/app_package.py`**: `build`, `check`, `--public`. Its test key is derived from public text, and the key in use comes from `$MIND_APP_KEY`.
+- **Host tests:**
+  - `apppkg/tests/package.rs`, 6 tests. The tool's package (`apppkg/tests/fixture`, signed with the test key) passes `verify`, so the two implementations agree. Each refusal of the draft is met: a changed file or manifest; a signature without the prefix; an untrusted key, or a key trusted for another name; another architecture; a release too old; a lower version, or the same version with other bytes; each bound and each encoding rule.
+  - `tests/app_package_test.py`, 3 tests: the tool builds the fixture again byte for byte, and its checker refuses what the device refuses.
+- **Not done:** the agreement; the contract as `docs/update/application-packages.md` 1.0; the loader's part (`KRN`); the install (750-EFF-0008).
 
 ## Acceptance criteria
 

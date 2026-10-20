@@ -15,6 +15,7 @@ done
 # The WPA2-PSK library uses RustCrypto crates, so Cargo builds its tests and the station's (550-NET-0016, 0017).
 cargo test --quiet --manifest-path wpa/Cargo.toml --target-dir "$OUT/wpa-target"
 cargo test --quiet --manifest-path dot11/Cargo.toml --target-dir "$OUT/wpa-target" # the station (550-NET-0017)
+cargo test --quiet --manifest-path apppkg/Cargo.toml --target-dir "$OUT/wpa-target" # signed application packages (750-UPD-0019)
 cargo test --quiet --manifest-path tests/network_budget/Cargo.toml --target-dir "$OUT/network-budget-target"
 cargo test --quiet --manifest-path linkproto/Cargo.toml --target-dir "$OUT/linkproto-target" # the link protocol (800-LNK-0001)
 cargo test --quiet --manifest-path tools/mindlink/Cargo.toml --target-dir "$OUT/linkproto-target" # its Linux end, over a pty and TCP (800-LNK-0004)
@@ -30,6 +31,7 @@ python3 tests/idl_test.py
 python3 tests/font_test.py
 python3 tests/manifest_test.py
 python3 tests/release_test.py
+python3 tests/app_package_test.py
 python3 tests/test_usb_writer.py
 python3 tests/gate_test.py
 python3 tests/mirror_test.py

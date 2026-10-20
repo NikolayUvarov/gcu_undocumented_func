@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -38,7 +38,12 @@ The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_
 
 The other slot is not written while the running slot is on trial and not yet confirmed on the disk: it is then the fallback. A request runs to its end before the next one is read.
 
-**Confirming a trial.** On a trial boot the kernel restarts the machine at its deadline unless `init` confirmed the boot (351-KRN-0014). The updater waits until 5 s past that deadline, on the same clock. If the machine is still running then, the boot was confirmed. It then writes the record that confirms the running slot: the same slot and fallback, confirmed. Until then it does nothing automatic.
+**Confirming a trial.** On a trial boot the kernel restarts the machine at its deadline unless `init` confirmed the boot (351-KRN-0014).
+- **It asks `init`.** Every second the updater asks `init` how the boot went (`init.wit` 1.4 `boot`, 000-KRN-0102; 351-UPD-0021). `init` answers once it has confirmed or refused the boot.
+  - Confirmed: the updater writes the record that confirms the running slot at once, the same slot and fallback, confirmed (`[UPDATER] SLOT … CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT`).
+  - Refused: it writes nothing and does nothing automatic. The kernel restarts the machine into the other slot, which stays untouched.
+- **When `init` cannot say** (an `init` before 1.4), the updater waits until 5 s past the kernel's deadline, on the same clock. If the machine is still running then, the boot was confirmed, and it writes the same record.
+- Until the trial is settled it does nothing automatic.
 
 **Records.** Each record goes into the file that does not hold the newer valid record, one past its sequence ([slots.md](slots.md)). It is written whole and in place, then read back. A sequence that could not count two further (a trial and its failure) is not written. `updater/src/plan.rs` chooses the record; its host tests run the bootloader's own encoding (`tests/updater_host.rs`).
 
@@ -70,7 +75,7 @@ tries 3                                   # tries of a trial boot for an automat
     - version 6 with one boot file changed on the server.
   - Then version 6 as published is fetched into slot B. Its largest boot file is cut midway and resumed with `Range`.
   - It is checked and booted on trial through `init`'s restart. The bootloader loads release 6's manifest.
-  - Past the kernel's deadline the updater confirms slot B on the disk, then finds nothing newer.
+  - As soon as `init` confirmed the trial, the updater confirms slot B on the disk, well before the kernel's deadline, then finds nothing newer.
   - The records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation. `fsck.fat` finds the volume consistent.
 - **Host tests** (`tests/updater_host.rs`) cover each record the updater writes, followed through the bootloader's choice:
   - an update's trial;
@@ -85,7 +90,6 @@ tries 3                                   # tries of a trial boot for an automat
 - **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback` and `status` run only through the automatic policy in the tests, and `rollback` and `status` have not run on the platform.
 - **A directory source** is built but not tested in QEMU.
 - **SSH** (351-NET-0004).
-- **A knowing confirmation.** The updater infers the kernel's confirmation from the deadline. Asking `init` would take seconds instead of the 2 minutes the deadline takes ([requests-KRN.md](../../issues/requests-KRN.md)).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).
 - **Applications in the slots** ([slots.md](slots.md)).

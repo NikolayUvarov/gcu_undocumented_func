@@ -43,6 +43,17 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
 
 [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (remembered networks).
 
+## Progress (2026-10-20)
+
+The `net` suite's QEMU checks run with `wlansim`, since `init` starts `wlan` (550-KRN-0097) and `wifi` joins without a screen (550-APP-0078). They passed on x86 and aarch64 in the network track's gate 20 (473b1816, 929d1fa5):
+- **Scan and join:** `wifi` lists `MIND-TEST`, and the station joins it with the passphrase (APP's checks).
+- **A wrong passphrase** is refused with the station's reason.
+- **The lease and the ping:** the stack leases 10.0.4.15 on the station's card, `ip` shows it, and `wifiping` reaches the gateway 10.0.4.1 through the WPA2 link.
+
+Left:
+- the check that a client with `BADGE_WIFI` alone is `denied` a join: no program holds such a client yet;
+- the MacBook Pro's run, with `bcm_wifi`.
+
 ## Progress (2026-10-12)
 
 - **Done:**

@@ -4725,8 +4725,9 @@ def update_suite(args):
             require(out, line)
         blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
-        # Past the kernel's deadline (120 s) the trial outlived it: the updater confirms B, then finds nothing newer.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK", 240)
+        # init confirms the trial within seconds (000-KRN-0102); the updater asks it every second and records it at once,
+        # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
+        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
@@ -4744,7 +4745,7 @@ def update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater past the kernel's deadline; the file system is consistent", flush=True)
+          "restart and confirmed on the disk by the updater as soon as init confirmed it; the file system is consistent", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -5405,8 +5406,14 @@ def download_runs(vm, release, port, big, small, cut):
                  "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
+    first = out
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
     require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
+    # Each check's flush and its reads back are logged with their times (audit H13: a recheck silent for 300 s on i9).
+    for name, check in (("first", first), ("second", out)):
+        require(check, "DOWNLOAD: FLUSHED IN"); require(check, f"DOWNLOAD: READ BACK {size} OF {size} BYTES IN")
+        lines = [line.strip() for line in check.splitlines() if "DOWNLOAD: FLUSHED IN" in line or f"DOWNLOAD: READ BACK {size} OF" in line]
+        print(f"TIME: download's {name} check of {size >> 20} MiB: {'; '.join(lines)}", flush=True)
     print(f"PASS: download: {size >> 20} MiB over HTTP through its own grant, the connection cut at {cut >> 20} MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
     out = run(f"download data/small.bin {url}/small.bin --tries 1", "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 50000 BYTES")
     require(out, "DOWNLOAD: CONNECTION CUT AT 50000 OF 200000, RESUMING")
@@ -5681,12 +5688,39 @@ def wifi_join_check(vm):
     require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
+    # network, and its gateway answers a ping through the WPA2 link.
+    require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
+    # The log holds the first join's lease too: ip is asked until this join's lease is there (DHCP is slow under TCG).
+    for _ in range(60):
+        shown = vm.command("ip")
+        if "IP 10.0.4.15/24" in shown:
+            break
+        time.sleep(1)
+    require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+    require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
+    print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
+          "answers a ping through the WPA2 link", flush=True)
     require(run("wifi leave", 30), "[WIFI] LEFT")
     require(run("wifi status", 30), "[WIFI] STATUS OFF")
     require(run("wifi join", 30), "usage: wifi")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
           "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+    # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
+    sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
+    offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
+    assert offers == {" 1 2 5.5 11"}, (offers, sim[-2000:])
+    assert "[WLANSIM] REFUSED A FRAME" not in sim, sim[-2000:]
+    print("PASS: the station offered 802.11b's rates alone to a radio without OFDM, and the radio refused none of its frames", flush=True)
+    # 550-NET-0024: a network remembered by keystore is joined again with no passphrase; its keys come from keystore.
+    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90), "[WIFI] JOINED MIND-TEST")
+    require(vm.service_logs("keystore", "WI-FI NETWORK MIND-TEST KEPT FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST KEPT FOR PID")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -5710,7 +5744,7 @@ def net_suite(args, disk):
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
                                         f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
-    for copy in ("rogue", "named", "brief", "lasting"):
+    for copy in ("rogue", "named", "brief", "lasting", "wifiping"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
@@ -5950,6 +5984,10 @@ def net_suite(args, disk):
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
     rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
+    if args.wlansim_elf:
+        # wifi_join_check pings the station's gateway: a rule beside the policy the download checks left (550-NET-0018).
+        with open(disk / "netpolicy.txt", "a") as policy:
+            policy.write("wifiping 10.0.4.1 icmp\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()

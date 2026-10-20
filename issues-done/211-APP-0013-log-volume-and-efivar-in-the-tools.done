@@ -6,7 +6,7 @@
 
 Two requests of the kernel track ([requests-APP.md](../issues/requests-APP.md), 2026-10-08).
 
-- **`log:`** ([211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md)).
+- **`log:`** ([211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done)).
   - Disk images now have a log partition, mounted as `log:`, with each boot's system log, and the shell may write there.
   - The shell's help named only `ram:` and `data/`.
   - `fm` offered only the boot disk and `ram:`, and `df` and `fsck` did not list `log:`.
@@ -54,4 +54,4 @@ Two more gaps came up while doing this:
 
 ## Related
 
-[211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done), [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.done), [094](094-shell-script-language.done).
+[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md), [351-KRN-0027](351-KRN-0027-uefi-variables.done), [351-KRN-0028](351-KRN-0028-uefi-variables-aarch64-and-dbx.done), [094](094-shell-script-language.done).

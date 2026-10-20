@@ -4,7 +4,9 @@
 // endpoint, idl/net.wit to the network stack (a client without BADGE_WIFI) and idl/wifi.wit to clients with BADGE_WIFI.
 // It holds the radio and nothing else that can act (MC-2.3); a passphrase becomes a PMK at once and is not kept. A
 // network to remember goes to `keystore` (slot 3, BADGE_KEY_STATION, 550-NET-0024), which keeps its PMK and answers
-// each handshake's keys: the station holds no PMK of a remembered network (MC-11.9).
+// each handshake's keys: the station holds no PMK of a remembered network (MC-11.9). The country (wifi.wit 1.1,
+// 550-NET-0035) needs the regulatory catalogue, not in this build yet (stage A): its calls answer `unsupported`, no
+// country is applied, and the station keeps to the rules that hold before one is known (probes on 1 to 11 alone).
 use dot11::scan::{Bss, Security};
 use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
@@ -239,11 +241,17 @@ impl Wlan {
                 }
             }
             wifi::Request::Status => wifi::reply_status(call, &self.status()),
+            // No catalogue yet (stage A): no country to list, show or apply.
+            wifi::Request::Countries { .. } => wifi::reply_countries(call, Err(wifi::Error::Unsupported)),
+            wifi::Request::Channels { .. } => wifi::reply_channels(call, Err(wifi::Error::Unsupported)),
+            wifi::Request::Country => wifi::reply_country(call, &wifi::CountryStatus::default()),
             _ if !may_change => match request {
                 wifi::Request::Forget { .. } => wifi::reply_forget(call, Err(wifi::Error::Denied)),
                 wifi::Request::Leave => wifi::reply_leave(call, Err(wifi::Error::Denied)),
+                wifi::Request::SetCountry { .. } => wifi::reply_set_country(call, Err(wifi::Error::Denied)),
                 _ => wifi::reply_join(call, Err(wifi::Error::Denied)),
             },
+            wifi::Request::SetCountry { .. } => wifi::reply_set_country(call, Err(wifi::Error::Unsupported)),
             wifi::Request::Join { ssid, passphrase, remember } => wifi::reply_join(call, self.join(ssid.as_slice(), passphrase.as_str(), remember, now)),
             wifi::Request::Leave => {
                 let mut out = Out::default();
