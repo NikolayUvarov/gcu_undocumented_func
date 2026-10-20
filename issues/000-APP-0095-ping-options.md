@@ -1,6 +1,6 @@
 # 000-APP-0095 — `ping`: the number of requests, their interval and wait, a fast mode; the size and the payload next
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (on the tools branch, 2026-10-20; the gate left) · **Blocked by:** — for `-c`, `-i`, `-w` and `-f`; the network track for `-s` and `-p` ([requests-NET.md](requests-NET.md), "An echo request's size and payload") · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20); `-s` and `-p` wait for the network track · **Blocked by:** — for `-c`, `-i`, `-w` and `-f`; the network track for `-s` and `-p` ([requests-NET.md](requests-NET.md), "An echo request's size and payload") · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
 
 **Recorded by:** the tools track, 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode. Add them.").
 
@@ -47,7 +47,12 @@ Its last line gives no loss or times, and nothing stops a run.
 - The help line; `docs/tools` §4.8 (EN, RU), with `ip` and `netstat`.
 - Host tests pass (`tests/shell_host.rs`, 13). The `net` suite's `ping_options_check` is written.
 - **An address on the card's own network that no one has** is not a lost request the suite can use: by smoltcp 0.14's code, the stack's echo request to it stays at the head of the card's ICMP queue while its neighbour is not found, so later requests on that card could not go out. Recorded for the network track (requests-NET.md); not reproduced.
-- **Left:** the gate; `-s` and `-p` once the stack sends them.
+- **In `main`** since 2a33a71b (2026-10-20). The gate, on the branch with `main` abe3d70b:
+  - i9 (x86): every group on a3ebd34c but RAM above 4 GiB and the padded vector area, which passed on 2a33a71b;
+  - un-rizen-service (aarch64): build, boot and fault containment, programs, shell and four CPUs, NVMe and 16 CPUs on a3ebd34c; files, network and TLS, RAM, ACPI and PCI above 4 GiB, and GICv2 on 2a33a71b;
+  - locally: the network driver without legacy, TLC, services, scheduling and files on a3ebd34c; the build, the host tests, boot and keys on 2a33a71b.
+  The commits after a3ebd34c changed the suites, the IDL fuzzer's list and `dictate`'s and `speak`'s memory request; the groups that run them ran on 2a33a71b.
+- **Left:** `-s` and `-p` once the stack sends them (requests-NET.md).
 
 ## Related
 

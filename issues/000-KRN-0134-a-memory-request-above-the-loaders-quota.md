@@ -13,6 +13,8 @@ Gate g0132 on `main` abe3d70 (ABI 13), the "x86: keys, shell, tools" group, run 
   - On QEMU's 512 MB machine the pool was 384 MiB under ABI 12 and is 383 MiB under ABI 13: the two new boot images cost it a MiB. So a request at the pool's size broke on a change elsewhere.
 - **Not the design.** `loader` says a program's memory is "up to `APP_MEMORY_MAX` MiB; the frame pool limits it further". A quota is an upper bound, which the pool limits anyway: other tasks hold some of it.
 
+The tools track recorded the same failure as a request on 2026-10-20, from its gate of 000-APP-0095 and 0096 on `main` abe3d70, and lowered both programs to 320 MiB (2a33a71). The loader's change still matters: any program can ask for more than a machine has.
+
 ## Plan
 
 - **`loader` retries once.** When SPAWN answers `ERR_LIMIT` for a request above the default 16 MiB, `loader` starts the program with `SPAWN_MEMORY_ALL`: all of `loader`'s own quota, which is less than was asked.
