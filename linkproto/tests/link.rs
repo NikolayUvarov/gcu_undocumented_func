@@ -286,6 +286,18 @@ fn log_and_console() {
     assert_eq!(c.master.line.service.files.console, b"ls\n");
 }
 
+/// A master set to small frames sends and gets no larger ones.
+#[test]
+fn small_frames_set_by_the_master() {
+    let (mut c, _) = pair(Faults::default(), 11, 0);
+    c.max_payload = 256;
+    c.hello("small", &mut [0; 64]).unwrap();
+    assert_eq!(c.chunk, 256 - 8);
+    let bytes = data(5000, 14);
+    put(&mut c, "s", &bytes).unwrap();
+    assert_eq!(get(&mut c, "s").unwrap(), bytes);
+}
+
 /// A master that takes small payloads gets no larger answer.
 #[test]
 fn small_master_payload() {

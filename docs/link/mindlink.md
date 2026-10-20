@@ -52,6 +52,7 @@ mindlink [options] <port> <command> [arguments]
 | `--timeout <ms>` | how long one try waits: from the rate on a serial port, 2 s on TCP |
 | `--tries <n>` | 8 tries for each request |
 | `--turnaround <us>` | `serve`: 500 µs before each answer, for an RS-485 converter to turn the line round |
+| `--payload <bytes>` | 1024: the largest frame's payload, from 64. Less for a noisy line, and 256 for QEMU's emulated converter (below) |
 
 Each file moved is reported with its size, time, rate and SHA-256. A refusal or a missing answer is reported with its reason, and the exit status is 1.
 
@@ -108,6 +109,19 @@ cmp /tmp/10M.bin /tmp/10M.back
 ```
 
 **What to expect,** an estimate rather than a measurement: a frame takes about 10 bits per byte on the line, so 921 600 baud carries at most about 90 KB/s. Each 1 KiB request waits for its answer, so the result is lower. The rates a real pair reaches are recorded in 800-LNK-0004 when measured.
+
+## MIND Core in QEMU
+
+QEMU's `-device usb-serial` emulates an FTDI FT232, which MIND Core's `usb_serial` drives. With its line on a pseudo-terminal, `mindlink` reaches the `link` service as it would through a converter:
+
+```bash
+qemu-system-x86_64 ... -device qemu-xhci,id=xhci -chardev pty,id=link -device usb-serial,bus=xhci.0,chardev=link
+# QEMU prints: char device redirected to /dev/pts/N (label link)
+mindlink --payload 256 /dev/pts/N hello
+```
+
+- **Use `--payload 256` there.** The emulated chip keeps 384 bytes, and QEMU fills it again from the pseudo-terminal only when its main loop wakes for something else. A larger frame then waits half a second or more for its tail.
+- **The device is attached only while its chardev is open.** With `-chardev socket,...,server=on`, QEMU attaches the device when a client connects and detaches it when the client leaves. A pseudo-terminal stays open.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 # 800-LNK-0002 — `usb_serial`: the FTDI FT232R and WCH CH340 USB-serial converters on MIND Core
 
-**Type:** driver · **Owner:** `LNK` (with `DRV` for `usb_host`) · **Priority:** P1 · **Status:** open · **Blocked by:** `KRN`: `init` starting `usb_serial` with a badged `usb_host` client (asked on `internal-dev-messages`) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-2.4, MC-6.1
+**Type:** driver · **Owner:** `LNK` (with `DRV` for `usb_host`) · **Priority:** P1 · **Status:** in progress · **Blocked by:** `KRN`: `init` starting `usb_serial` with a badged `usb_host` client (asked on `internal-dev-messages`) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-2.4, MC-6.1
 
 ## Problem
 
@@ -25,6 +25,24 @@ MIND Core has no driver for either, so neither can carry the link (800-LNK-0001)
 
 - **In QEMU,** `usb_serial` drives the emulated FT232, and 1 MiB goes each way intact through the host socket.
 - **On the maintainer's machine,** each converter carries bytes to the other over RS-485: one plugged into a MIND Core machine, the other into WSL.
+
+## Progress
+
+**2026-10-20, on `claude/LNK-link`.**
+- **`usb_serial` and `idl/serial.wit` 1.0** are written, and the FTDI FT232R is driven. Its setup comes from FTDI's application notes AN232B-04 and AN232B-05:
+  - reset and both purges; 8N1, no flow control, DTR and RTS on; a 2 ms latency timer;
+  - the rate's divisor: the nearer of the two around the exact one, refused beyond 3 %.
+- **Host tests, `tests/serial_host.rs`:** the divisor against the nearest rate the chip can make, every 997 bit/s from 300 to 3.1 Mbit/s; and the two status bytes stripped. `serial.wit` is in the IDL fuzz.
+- **The QEMU run** used the emulated FT232 with `init` patched locally to start `usb_serial` and `link` (KRN's part, not committed). Through `link` and `mindlink`, 1 MiB went each way intact, at 57 KB/s in and 127 KB/s out with 256-byte frames.
+  - This is the acceptance's QEMU criterion met by hand, not yet a suite: the suite needs `init` to start the two services.
+- **Found in the run, and fixed:**
+  - a converter plugged in again was set to 115200 bit/s rather than the client's rate;
+  - lost bytes and line errors were not logged. Both are now, and so is the reason a converter is taken as gone.
+- **QEMU's limit:** the emulated chip keeps 384 bytes and is refilled only when QEMU's main loop wakes for something else, so larger frames wait for their tail. The run therefore used 256-byte frames (`mindlink --payload 256`, docs/link/mindlink.md).
+- **Left:**
+  - **the CH340:** it answers nothing while it has no data, so it is read the way the FTDI chip now is (800-DRV-0034). Its requests are still to be written;
+  - **`init` starting the service** (KRN);
+  - **the run on the maintainer's converters.**
 
 ## Related
 
