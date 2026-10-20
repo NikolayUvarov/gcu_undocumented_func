@@ -1,6 +1,6 @@
 # 550-APP-0078 — `wifi join` and `wifi status` without a screen
 
-**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open (planned) · **Blocked by:** — (it builds on 550-APP-0033's task branch, which waits for the kernel track's ABI 10 in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.4, MC-11.5, MC-12.1
+**Type:** tools (`wifi`) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: done on 550-APP-0033's task branch and in `fast-test`, checked in QEMU; `main` waits for ABI 10 · **Blocked by:** — (it builds on 550-APP-0033's task branch, which waits for the kernel track's ABI 10 in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track G · **Constitution:** MC-11.4, MC-11.5, MC-12.1
 
 **Recorded by:** the tools track (APP), 2026-10-14, from the assurance track's request on `internal-dev-messages` (`APP/2026-10-14T1621Z-ASR-wifi-join-without-a-screen-and-a-start-script.md`), for [550-ASR-0007](550-ASR-0007-wifi-join-tests.md): the maintainer asked for Wi-Fi joins to be tested without typing.
 
@@ -34,6 +34,28 @@
   - the passphrase is nowhere in the serial log.
 - **`wifi status` and `wifi leave`** after the join.
 - **The MacBook Pro** (550-ASR-0007): the script's join of the maintainer's network is in the boot log.
+
+## Progress (2026-10-14)
+
+- **Where:** `wifi/src/headless.rs` and `wifi/src/main.rs`, on the task branch `claude/550-APP-0033-wifi-station-client` (822f44e, 1887276) and in `fast-test`.
+  - `wifi join`, `status` and `leave` open no screen.
+  - The passphrase file's buffer and the passphrase are cleared after the join.
+  - A station that keeps no networks is asked again without `--remember`, as on the screen.
+- **Host tests:** `tests/wifi_host.rs`, 12 in all.
+  - The command line and the passphrase file.
+  - A join against the stand-in: joined, a wrong passphrase, an unknown network, no station, a station that does not remember.
+  - A join that never ends gives `NO ANSWER` after 60 s.
+- **The `net` suite** (x86, `wlansim`), passed on PCU on 1887276:
+  - a file naming another network is refused;
+  - a wrong passphrase is refused with the station's reason (`the passphrase is wrong`);
+  - `MIND-TEST` is joined (`JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6 …`);
+  - `wifi status` and `wifi leave` work, and `wifi join` alone prints the usage;
+  - no passphrase is on the serial line.
+- **This is QEMU's stand-in radio, not the MacBook Pro's** (MC-12.1).
+- **Left:**
+  - `main`, after the kernel track's ABI 10;
+  - `ip`'s address after the join, which waits for the network track's half of 550-ASR-0007;
+  - the MacBook Pro's run.
 
 ## Related
 

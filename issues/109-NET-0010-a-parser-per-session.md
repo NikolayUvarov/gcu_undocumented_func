@@ -26,7 +26,7 @@ Two downloads at once have their heads parsed in two processes, each holding onl
 - **`mind::parse::Session`** creates the endpoint, asks the loader for the helper and ends it when dropped. Where the loader starts none, it uses the shared service.
 - **`download`** parses its heads in a `Session` of its own while it holds `SLOT_PARSE`; a script without `parse` still gets "NO PARSER SERVICE". Its parser ends on every way out, a failure too.
 - **Tested:** the network suite on x86 (QEMU 8.2, 4 CPUs, TCG, this session's machine) passes whole; the gate on i9 and PCU is left. `session_parsers_check`: two downloads held by the server at once, two parser processes besides the service, each with one capability, its endpoint in slot 1; once the server answers, both files arrive whole and both parsers are gone. A malformed head is refused in the download's own parser, so the shared service logs nothing of it. The shared service, killed, is restarted and serves `release` again.
-- **Left:** the updater's checks still use the shared service. The updater holds no loader client and may create no endpoint; the change is the update track's (requests-UPD.md).
+- **Left:** the updater's checks still use the shared service. The updater holds no loader client and may create no endpoint; the change is the update track's ([109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md)).
 
 **2026-10-13: a download whose parser had ended waited for ever.**
 - **Seen:** on aarch64 (QEMU under TCG), the gate's 8 MiB download hung at its resume, twice: over HTTP on i9 and over HTTPS on PCU (`CONNECTION CUT AT 3145728 OF 8388608, RESUMING`, then nothing for 1200 s).

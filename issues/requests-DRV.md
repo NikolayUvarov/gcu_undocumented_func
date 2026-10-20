@@ -6,6 +6,30 @@ The request on transfers to a gone device became [211-DRV-0021](211-DRV-0021-a-g
 
 The drivers track numbers its own tasks (`NNN-DRV-MMMM`), so requests from other tracks wait here. The drivers track turns each into a task and removes it from this file, and the file goes when it is empty.
 
+## BCM4331 transmit status must check its deadline on every path
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, for the maintainer's original
+MacBook network-stability report. **Priority:** P1. **Roadmap:** D / 550.
+**Constitution:** MC-6.1, MC-12.1, MC-12.3. Related owner task:
+[550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
+
+At owner branch `5623c9ba`, now integrated into ASTRA `ac1854f2`,
+`bcm_wifi/src/radio.rs::Radio::status` continues after every available
+intermediate or wrong-cookie TX status before reaching its 100 ms deadline
+check or RX poll. Continuously available statuses can bypass that bound;
+a final matching status is accepted even if the clock has passed the end.
+The radio service is synchronous, so its caller's IPC timeout does not stop
+this loop. [Audit and evidence boundary](../issues-audit/2026-10-16-bcm-tx-wait-audit.md).
+
+Please number and implement a bounded production wait on every path,
+preserving the existing status format and 100 ms budget. Exercise continuous
+unrelated/intermediate statuses, no status, success before the deadline and
+a matching status observed after it. Verify the transmit-slot ownership on
+timeout before allowing reuse; a missing TX result is not completion.
+Publish the built owner commit to fast-test before tests, and record the
+original MacBook's ping-under-load/recovery run separately. This finding
+does not yet establish the hardware cause of the reported packet loss.
+
 ## The MacBook Pro's speakers: more of 551's step 2 if the GPIO is not enough (551)
 
 **Recorded by:** the kernel track (KRN), 2026-10-09, for [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md). That task stays with the kernel session until done (TRACKS 1.5).
@@ -248,3 +272,24 @@ This is the Ryzen machine's request above, with one addition:
 - The `vfs`, `disk` and `block` suites pass on IDE and AHCI disks.
 - A request on a drive that never leaves BSY ends with `ERR_IO` within the stated time. A host test with a stand-in for the ports, or a QEMU disk made to stall, shows it.
 - No path in either driver indexes the DMA region or the buffer without a check of its own.
+
+## BCM4331 applies the selected country and channel policy
+
+**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
+country-switching request; roadmap D / 550; MC-2.3, MC-6.1, MC-12.1, MC-12.3.
+
+The original Intel MacBook and Ryzen are physically in Uzbekistan (`UZ`). The
+maintainer wants switching among all countries in the verified regulatory
+catalogue. Please coordinate BCM4331's part with the
+[NET policy/configuration request](requests-NET.md#wifi-country-selection-from-the-complete-verified-regulatory-catalog)
+and [APP selector](requests-APP.md#wifi-country-and-channel-selector); ASTRA
+implements the RTL8852BE catalogue portion in its existing DRV-0032 task.
+
+Intersect the selected country's frequency/EIRP restrictions with the actual
+BCM/SPROM/platform limits; do not treat a chip country table as the whole
+regulatory decision. Keep unsupported constraints visible and ensure old
+channel/TX decisions cannot survive a country-policy change. Coordinate the
+versioned radio interface or restart boundary rather than silently changing an
+existing wire contract. Preserve normal association, software WPA2 and the
+original MacBook path; validate actual hardware separately from policy fixtures.
+This request does not replace the preceding H12 deadline correction.
