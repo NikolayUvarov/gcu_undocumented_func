@@ -6071,6 +6071,11 @@ def net_suite(args, disk):
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting", "wifiping"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
+    # 000-NET-0015: a copy of netcheck that also asks for a card's read-only client (REQUEST_NET_COUNTERS, in SLOT_NET).
+    elf = bytearray((disk / "netcheck.elf").read_bytes())
+    note = elf.index(b"MINDREQ1") + 8
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x800000).to_bytes(4, "little")
+    (disk / "cardcheck.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
@@ -6112,6 +6117,12 @@ def net_suite(args, disk):
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)
+        # 000-NET-0015: through the same read-only client the card's info and counters are read, and a frame sent, a
+        # frame received and a ring lent are each refused.
+        out = vm.command("cardcheck card")
+        for line in ("NETCHECK card INFO MAC 525400123456 MTU 1500 LINK UP", "NETCHECK card COUNTERS SENT ", "NETCHECK card SEND Denied",
+                     "NETCHECK card RECEIVE Denied", "NETCHECK card ATTACH Denied", "NETCHECK card OK"):
+            require(out, line)
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
