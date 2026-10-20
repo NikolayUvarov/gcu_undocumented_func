@@ -1,6 +1,6 @@
 # 351-NET-0022 — A TLS client that cannot present the device certificate
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** open · **Blocked by:** — for the service; `KRN` and `APP` for lending such a client ([requests-KRN.md](requests-KRN.md), [requests-APP.md](requests-APP.md)) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.9
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the service's part and the QEMU check built) · **Blocked by:** `APP`'s [351-APP-0083](351-APP-0083-tls-without-the-device-certificate.md) in `main` (the shell lending the badged copy; on the tools branch and `fast-test`) · **Main task:** [351](351-self-update.md) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-11.9
 
 From the tools track's request in requests-NET.md ("A TLS client without the device certificate", 2026-10-09).
 
@@ -20,6 +20,13 @@ The shell lends its client of `tls` to a program that asks for `REQUEST_TLS` and
 
 - `tls` refuses `client-certificate` to a badged client and logs it; it still answers an unbadged one. Built for x86 now.
 - **In QEMU** (the `tls` suite), once the shell lends the badged copy: a program with the lent client gets `denied` for `client-certificate`, while the shell's `https -c` still sends the certificate.
+
+## Progress (2026-10-20): the QEMU check
+
+- **The shell's part** is 351-APP-0083: for `REQUEST_TLS` it lends a copy of `SLOT_TLS` badged `BADGE_TLS_NO_DEVICE`, without the right to badge. It is on the tools branch and in `fast-test`, not yet in `main`.
+- **`webcheck --client-cert`** asks the TLS service for the device certificate; when the handshake sent it, `webcheck` says so (`WEBCHECK TLS: THE DEVICE CERTIFICATE SENT`).
+- **The `tls` suite** (after the shell's `https -c`, which still sends the certificate): `webcheck` with `--client-cert` to the server that asks for one gets `Denied`, and `tls` logs `THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT`.
+- **Run locally** (x86, QEMU 8.2, TCG) on a merge with the tools branch: the `tls` suite passed, with `WEBCHECK: TLS CONNECT: Ok(Err(Denied))` and `tls`'s line for the program's PID. The gate waits for 351-APP-0083 in `main`.
 
 ## Related
 
