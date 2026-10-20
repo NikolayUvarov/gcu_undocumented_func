@@ -12,6 +12,10 @@
 //! 1.2 (351-NET-0027): SSH logins. The purpose `ssh-login` signs only what a public-key login with the device key
 //! signs, only for the SSH service's badge (`BADGE_KEY_SSH`, `mind::network`), within its own budget per boot; and
 //! anyone may read the device's public key (`public-key`), as the certificate.
+//!
+//! 1.3 (550-NET-0032): the Wi-Fi station's country, kept in the private directory beside its networks: a two-letter
+//! code, never a row of a catalogue. Only the station's badge reads or changes it; the station changes it only on a
+//! change client's word (wifi.wit 1.1 `set-country`).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -21,7 +25,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:keystore";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed.
@@ -199,6 +203,36 @@ pub fn public_key(endpoint: Endpoint) -> Result<core::result::Result<List<u8, 32
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<u8, 32> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The station's country (1.3): two capital letters, empty when none is kept (station badge only).
+pub fn wifi_country(endpoint: Endpoint) -> Result<core::result::Result<Text<2>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<2> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Keeps the station's country (1.3), replacing the one kept; `invalid` when `code` is not two capital letters (so
+/// never `00`), `no-key` when it could not be written (station badge only).
+pub fn wifi_keep_country(endpoint: Endpoint, code: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 259;
 
@@ -213,6 +247,8 @@ pub enum Request<'a> {
     WifiKeys { ssid: List<u8, 32>, authenticator: u64, supplicant: u64, anonce: List<u8, 32>, snonce: List<u8, 32> },
     WifiForget { ssid: List<u8, 32> },
     PublicKey,
+    WifiCountry,
+    WifiKeepCountry { code: Text<2> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -289,6 +325,21 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::PublicKey, call))
         }
+        9 => {
+            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiCountry, call))
+        }
+        10 => {
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let code = <Text<2> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::WifiKeepCountry { code }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -324,4 +375,12 @@ pub fn reply_wifi_forget(call: Call, value: core::result::Result<bool, Error>) -
 pub fn reply_public_key(call: Call, value: core::result::Result<&[u8], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<u8, 32>(value, w))
+}
+pub fn reply_wifi_country(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<2>(value, w))
+}
+pub fn reply_wifi_keep_country(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

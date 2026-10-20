@@ -39,9 +39,20 @@ pub struct Out { pub channel: Option<u8>, pub filter: Option<Filter>, pub send: 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Filter { pub all_beacons: bool, pub bssid: Mac }
 
-/// The channels where the station may send a probe request before it knows where it is: 1 to 11, which every
-/// regulatory domain allows. Elsewhere it only listens, and sends only to an access point it heard there.
-pub fn may_probe(channel: u8) -> bool { (1..=11).contains(&channel) }
+/// What the station may send on a channel (550-NET-0032).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Allowed {
+    /// Probe requests, and joining an access point there.
+    Send,
+    /// Nothing but joining an access point heard there (NO-IR, DFS): no probe request.
+    Listen,
+    /// Nothing: no country is applied, so the station listens and joins nothing.
+    Nothing,
+}
+
+// Before a country is known (a station built without the catalogue, 550-NET-0032 stage A): probe requests on 1 to 11,
+// which every regulatory domain allows; elsewhere it only listens, and sends only to an access point it heard there.
+fn unrestricted(channel: u8) -> Allowed { if (1..=11).contains(&channel) { Allowed::Send } else { Allowed::Listen } }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Step { Authenticating, Associating, Handshake }
@@ -59,6 +70,7 @@ struct Keys { tk: [u8; 16], pn: u64, replay: Replay, groups: [Option<(Gtk, Repla
 pub struct Station {
     own: Mac,
     channels: [u8; 64],
+    allowed: [Allowed; 64],
     channel_count: usize,
     state: State,
     reason: Reason,
@@ -81,14 +93,31 @@ pub struct Station {
 
 impl Station {
     /// A station with address `own` on a radio that can use `channels`, and OFDM on 2.4 GHz when `ofdm` (5 GHz is OFDM
-    /// alone): it offers, and sends at, only the rates the radio has.
+    /// alone): it offers, and sends at, only the rates the radio has. Until `restrict` it probes on 1 to 11 alone.
     pub fn new(own: Mac, channels: &[u8], ofdm: bool) -> Self {
         let mut list = [0u8; 64];
         let count = channels.len().min(64);
         list[..count].copy_from_slice(&channels[..count]);
-        Station { own, channels: list, channel_count: count, state: State::Off, reason: Reason::None, list: List::default(), scanning: None,
+        Station { own, channels: list, allowed: list.map(unrestricted), channel_count: count, state: State::Off, reason: Reason::None, list: List::default(), scanning: None,
                   join: None, supplicant: None, keys: None, heard: 0, rejoin: None, sequence: 0, ofdm, rates: [0; 12], rate_count: 0, rate: 0,
                   acked: 0, failed: 0 }
+    }
+
+    /// Puts the station under a country's rules (550-NET-0032): `channels` are the only ones it uses from now on, each
+    /// with what it may send there. Nothing chosen under the rules before stays: it leaves the network, ends a scan and
+    /// drops the networks it heard.
+    pub fn restrict(&mut self, channels: &[(u8, Allowed)], out: &mut Out, tx: &mut [u8]) {
+        self.leave(out, tx);
+        self.list.clear();
+        out.filter = Some(Filter { all_beacons: false, bssid: [0; 6] });
+        let count = channels.len().min(64);
+        for (i, &(channel, allowed)) in channels[..count].iter().enumerate() { (self.channels[i], self.allowed[i]) = (channel, allowed); }
+        self.channel_count = count;
+    }
+
+    // Whether the station may join an access point on `channel`.
+    fn may_join(&self, channel: u8) -> bool {
+        self.channels[..self.channel_count].iter().zip(&self.allowed).any(|(&c, &a)| c == channel && a != Allowed::Nothing)
     }
 
     pub fn state(&self) -> State { self.state }
@@ -118,7 +147,7 @@ impl Station {
     fn scan_channel(&mut self, index: usize, now: u64, out: &mut Out, tx: &mut [u8]) -> Result<(), Error> {
         let channel = self.channels[index];
         out.channel = Some(channel);
-        let active = may_probe(channel);
+        let active = self.allowed[index] == Allowed::Send;
         if active {
             let sequence = self.next_sequence();
             let len = frame::probe_request(tx, &self.own, &[], channel, self.ofdm, sequence)?;
@@ -138,6 +167,8 @@ impl Station {
             return Err(error);
         };
         if bss.security == Security::Wpa2 && secret.is_none() { return Err(Error::Invalid); }
+        // No country applied, or one whose rules leave the station nothing to send there (550-NET-0032).
+        if !self.may_join(bss.channel) { self.fail(Reason::Unsupported); return Err(Error::Unsupported); }
         if matches!(self.state, State::Joined | State::Joining) { self.leave(out, tx); }
         self.start(bss, secret, now, out, tx)
     }

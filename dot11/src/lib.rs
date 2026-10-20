@@ -4,6 +4,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod country;
 pub mod frame;
 pub mod scan;
 pub mod station;
@@ -22,7 +23,8 @@ pub enum Error {
     NoDevice,
     /// No network of that name in the last scan.
     NotFound,
-    /// Its networks use a protection the station does not join (WEP, WPA3, enterprise, TKIP).
+    /// Its networks use a protection the station does not join (WEP, WPA3, enterprise, TKIP), or a channel where the
+    /// country applied leaves it nothing to send (550-NET-0032).
     Unsupported,
     /// A WPA2 network without a key, or a frame the station will not send.
     Invalid,

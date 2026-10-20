@@ -9,6 +9,14 @@
 //! An SSID is up to 32 bytes as the access point sends them: most are UTF-8, some are not (GBK, Latin-1), so they travel
 //! as bytes and a program shows them as it can. An empty SSID is a hidden network's. The station does no DHCP: the
 //! address the link got is the network stack's (`ip`).
+//!
+//! 1.1 (550-NET-0032, for 550-APP-0082): the country the station runs under, from the regulatory catalogue built into
+//! it (wireless-regdb at a pinned commit, named by `catalogue`). A country is asked for by its two-letter code and kept
+//! by `keystore` (keystore.wit 1.3), never assumed: with none applied the station probes nowhere and `join` answers
+//! `unsupported`. The radio applies the country's limits under its own (wlanhw.wit 1.2, proposed). Asking for a
+//! country leaves the network and drops the last scan, so nothing chosen under the old rules is used under the new
+//! ones. A station built without a catalogue answers the country calls `unsupported` and keeps 1.0's behaviour
+//! (550-NET-0032, stage A).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -18,7 +26,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:wifi";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -103,6 +111,80 @@ impl Wire for Status {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { state: Wire::decode(r)?, ssid: Wire::decode(r)?, bssid: Wire::decode(r)?, channel: Wire::decode(r)?, weakness: Wire::decode(r)?, rate: Wire::decode(r)?, reason: Wire::decode(r)? }) }
 }
 
+/// A channel under a country (1.1): `send`, the station may probe and join there; `listen`, the rules forbid
+/// initiating (NO-IR) or ask for radar detection (DFS), so the station only listens there and joins an access point
+/// it heard; `barred`, the rules do not cover it, or restrict it in a way the station does not keep (indoor or
+/// outdoor only, one modulation alone, point-to-point); `radio`, the rules allow it and the radio does not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Standing { #[default] Send = 0, Listen = 1, Barred = 2, Radio = 3 }
+impl Standing {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Send), 1 => Some(Self::Listen), 2 => Some(Self::Barred), 3 => Some(Self::Radio), _ => None } }
+}
+impl Wire for Standing {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// One of the radio's channels under a country: its number, its standing, and the most power the rules allow there
+/// (EIRP in dBm, rounded down; 0 when barred).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Channel { pub number: u8, pub standing: Standing, pub eirp: u8 }
+impl Wire for Channel {
+    const MAX: usize = <u8 as Wire>::MAX + <Standing as Wire>::MAX + <u8 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.number.encode(w)?; self.standing.encode(w)?; self.eirp.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { number: Wire::decode(r)?, standing: Wire::decode(r)?, eirp: Wire::decode(r)? }) }
+}
+
+/// A country of the catalogue: its code (two capital letters, as wireless-regdb has them), and how many of the
+/// radio's channels it lets the station send on, and only listen on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Country { pub code: Text<2>, pub send: u8, pub listen: u8 }
+impl Wire for Country {
+    const MAX: usize = <Text<2> as Wire>::MAX + <u8 as Wire>::MAX + <u8 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.code.encode(w)?; self.send.encode(w)?; self.listen.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { code: Wire::decode(r)?, send: Wire::decode(r)?, listen: Wire::decode(r)? }) }
+}
+
+/// A page of the catalogue: how many countries it has, and up to 32 of them from the index asked for, by code. The
+/// world domain `00` is not one of them: it is never a chosen country.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Countries { pub total: u16, pub page: List<Country, 32> }
+impl Wire for Countries {
+    const MAX: usize = <u16 as Wire>::MAX + <List<Country, 32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.total.encode(w)?; self.page.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { total: Wire::decode(r)?, page: Wire::decode(r)? }) }
+}
+
+/// `none`: no country asked for, or none kept; `applied`: the station runs under `applied`; `failed`: the radio
+/// refused `asked`'s limits, and nothing is applied (the station does not fall back to an earlier country).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CountryState { #[default] None = 0, Applied = 1, Failed = 2 }
+impl CountryState {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::None), 1 => Some(Self::Applied), 2 => Some(Self::Failed), _ => None } }
+}
+impl Wire for CountryState {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// The station's country: the code asked for and the code applied (empty: none), the state, whether the radio
+/// confirmed its limits (a wlanhw.wit 1.1 radio cannot: the station alone keeps to the channels), whether `keystore`
+/// keeps the choice across restarts, and the catalogue's identity (the first 16 hex digits of the SHA-256 of its
+/// db.txt; empty: no catalogue).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CountryStatus { pub asked: Text<2>, pub applied: Text<2>, pub state: CountryState, pub radio: bool, pub kept: bool, pub catalogue: Text<16> }
+impl Wire for CountryStatus {
+    const MAX: usize = <Text<2> as Wire>::MAX + <Text<2> as Wire>::MAX + <CountryState as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.asked.encode(w)?; self.applied.encode(w)?; self.state.encode(w)?; self.radio.encode(w)?; self.kept.encode(w)?; self.catalogue.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { asked: Wire::decode(r)?, applied: Wire::decode(r)?, state: Wire::decode(r)?, radio: Wire::decode(r)?, kept: Wire::decode(r)?, catalogue: Wire::decode(r)? }) }
+}
+
 /// Starts a scan of every channel and answers when it ends (about 2 s), with the access points heard. While joining
 /// or joined it does not leave the channel and answers the list as it stands.
 pub fn scan(endpoint: Endpoint) -> Result<core::result::Result<List<Network, 32>, Error>> {
@@ -174,6 +256,69 @@ pub fn forget(endpoint: Endpoint, ssid: &[u8]) -> Result<core::result::Result<bo
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <bool as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// A page of the catalogue from index `from` (1.1). `unsupported`: no catalogue in this station.
+pub fn countries(endpoint: Endpoint, from: u16) -> Result<core::result::Result<Countries, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        from.encode(&mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 196, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Countries as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The radio's channels under country `code` as the station would use them, `00` too, for information (1.1).
+/// `invalid`: not two capital letters, nor `00`; `not-found`: not in the catalogue; `no-device`: no radio yet;
+/// `unsupported`: no catalogue in this station.
+pub fn channels(endpoint: Endpoint, code: &str) -> Result<core::result::Result<List<Channel, 64>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 194, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Channel, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// The station's country (1.1).
+pub fn country(endpoint: Endpoint) -> Result<CountryStatus> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 29, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <CountryStatus as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
+/// Asks for country `code` (change badge only, 1.1): the station leaves the network and drops the last scan, has the
+/// radio apply the country's limits and `keystore` keep the code, and answers the status after. `invalid`: not two
+/// capital letters, or `00`; `not-found`: not in the catalogue; `no-device`: no radio yet; `unsupported`: no
+/// catalogue in this station. A radio that refuses the limits is not an error: the status says `failed`.
+pub fn set_country(endpoint: Endpoint, code: &str) -> Result<core::result::Result<CountryStatus, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<2>(code, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 29, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <CountryStatus as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `wifi` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -182,6 +327,10 @@ pub enum Request {
     Status,
     Leave,
     Forget { ssid: List<u8, 32> },
+    Countries { from: u16 },
+    Channels { code: Text<2> },
+    Country,
+    SetCountry { code: Text<2> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -227,6 +376,37 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Forget { ssid }, call))
         }
+        6 => {
+            let mut copy = [0u8; 2];
+            let (call, length) = wire::take_buffer(request, cap, 196, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let from = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Countries { from }, call))
+        }
+        7 => {
+            let mut copy = [0u8; 4];
+            let (call, length) = wire::take_buffer(request, cap, 194, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let code = <Text<2> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Channels { code }, call))
+        }
+        8 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 29, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Country, call))
+        }
+        9 => {
+            let mut copy = [0u8; 4];
+            let (call, length) = wire::take_buffer(request, cap, 29, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let code = <Text<2> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SetCountry { code }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -247,6 +427,21 @@ pub fn reply_leave(call: Call, value: core::result::Result<(), Error>) -> Result
     wire::finish(call, [0, 0])
 }
 pub fn reply_forget(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_countries(call: Call, value: core::result::Result<&Countries, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_channels(call: Call, value: core::result::Result<&[Channel], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Channel, 64>(value, w))
+}
+pub fn reply_country(call: Call, value: &CountryStatus) -> Result<()> {
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_set_country(call: Call, value: core::result::Result<&CountryStatus, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }

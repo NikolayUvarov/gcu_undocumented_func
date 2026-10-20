@@ -10,6 +10,8 @@ use mind::idl::keystore::{Error, WifiNetwork};
 use wpa::kept::{self, Kept};
 
 pub const FILE: &str = "system/keystore/wifi.kept";
+// The station's country (1.3, 550-NET-0032): its two letters alone. A file cut short holds none, so the station sends nothing.
+pub const COUNTRY: &str = "system/keystore/wifi.country";
 const BUDGET: u32 = 60; // handshakes' keys a minute
 const MINUTE_MS: usize = 60_000;
 const LABEL: &[u8] = b"MIND keystore: remembered Wi-Fi networks\0";
@@ -106,4 +108,25 @@ impl Wifi {
 
 impl Drop for Wifi {
     fn drop(&mut self) { wipe(&mut self.kek); }
+}
+
+// Two capital letters: a country of the catalogue's form (`00`, the world domain, is never one).
+fn country_code(code: &[u8]) -> Option<[u8; 2]> { <[u8; 2]>::try_from(code).ok().filter(|c| c.iter().all(u8::is_ascii_uppercase)) }
+
+/// The station's country, if one is kept.
+pub fn country() -> Option<[u8; 2]> {
+    let mut data = [0u8; 3];
+    let read = File::open(COUNTRY).and_then(|file| file.read_at(0, &mut data)).ok()?;
+    country_code(&data[..read])
+}
+
+/// Keeps `code` as the station's country, replacing the one kept.
+pub fn keep_country(pid: u64, code: &str) -> Result<(), Error> {
+    let Some(code) = country_code(code.as_bytes()) else { mind::println!("[KEYSTORE] REFUSED WI-FI COUNTRY FOR PID {}: NOT TWO CAPITAL LETTERS", pid); return Err(Error::Invalid) };
+    let shown = core::str::from_utf8(&code).unwrap_or("");
+    let result = fs::mkdir(stored::DIR).and_then(|_| File::create(COUNTRY)).and_then(|mut file| { file.write_at(0, &code)?; file.flush() });
+    match result {
+        Ok(()) => { mind::println!("[KEYSTORE] WI-FI COUNTRY {} KEPT FOR PID {}", shown, pid); Ok(()) }
+        Err(error) => { mind::println!("[KEYSTORE] WI-FI COUNTRY {} NOT WRITTEN: {:?}", shown, error); Err(Error::NoKey) }
+    }
 }
