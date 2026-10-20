@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -98,6 +98,21 @@ pub fn wifi(endpoint: Endpoint, receive: usize) -> Result<core::result::Result<(
     }
 }
 
+/// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
+/// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
+pub fn boot_notice(endpoint: Endpoint) -> Result<core::result::Result<Text<240>, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 242, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Text<240> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -106,6 +121,7 @@ pub enum Request {
     SetClock { date: u32, seconds: u32 },
     Battery,
     Wifi,
+    BootNotice,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -139,6 +155,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Wifi, Call::words(request, cap)))
         }
+        6 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 242, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::BootNotice, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -164,4 +187,8 @@ pub fn reply_battery(call: Call, value: core::result::Result<usize, Error>) -> R
 pub fn reply_wifi(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, false)
+}
+pub fn reply_boot_notice(call: Call, value: core::result::Result<&str, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_str::<240>(value, w))
 }

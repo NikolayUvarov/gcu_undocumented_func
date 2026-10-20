@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
-use mind::abi::BootInfo;
+use mind::abi::{BootInfo, BOOT_SLOT_A, BOOT_SLOT_B};
 use mind::fs::{self, File};
 use mind::gfx::Screen;
 use mind::util::FixedBuf;
@@ -23,6 +23,9 @@ const BOOTLOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     mind::about!("files — VFS demo: lists the root of the disk and reads a file through vfs_server.\nUsage: files\nEsc: exit.");
+    // The kernel at the root, else in the slot that booted on an image with slots (351-APP-0088).
+    let slot = match info.boot_slot.slot { BOOT_SLOT_A => Some("MIND/A/kernel.elf"), BOOT_SLOT_B => Some("MIND/B/kernel.elf"), _ => None };
+    let kernel = match slot { Some(path) if File::open("kernel.elf").is_err() => path, _ => "kernel.elf" };
     // In wm a window of its own (000-APP-0056: otherwise it ran unseen); its lines are kept to draw them again at the
     // size wm gives it.
     let info = mind::windowed::pixels(info, 608, 336, "files");
@@ -56,7 +59,7 @@ fn main(info: &'static BootInfo) {
     }
 
     // Read the whole ELF in chunks and compute a simple checksum.
-    for path in ["kernel.elf", BOOTLOADER] {
+    for path in [kernel, BOOTLOADER] {
         out.clear();
         match File::open(path) {
             Ok(mut file) => {
@@ -66,7 +69,8 @@ fn main(info: &'static BootInfo) {
                     if total == 0 { magic.copy_from_slice(&chunk[..4]); }
                     sum = chunk[..n].iter().fold(sum, |s, &b| s.wrapping_mul(31).wrapping_add(b as u32)); total += n;
                 }
-                let _ = write!(out, "[FILES] READ {} {}/{} BYTES MAGIC={:02X}{:02X}{:02X}{:02X} SUM={:08X}", path, total, file.size(), magic[0], magic[1], magic[2], magic[3], sum);
+                let _ = write!(out, "[FILES] READ {} {}/{} BYTES MAGIC={:02X}{:02X}{:02X}{:02X} SUM={:08X}{}", path, total, file.size(), magic[0], magic[1], magic[2], magic[3], sum,
+                               if Some(path) == slot { " (THE SLOT THAT BOOTED)" } else { "" });
             }
             Err(error) => { let _ = write!(out, "[FILES] OPEN {} FAILED: {:?}", path, error); }
         }

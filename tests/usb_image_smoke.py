@@ -77,13 +77,25 @@ def slots_check(args, work):
                 break
             time.sleep(.25)
         assert parsers == 1, parsers
+        # 351-APP-0088: files reads the kernel from the slot that booted, whole; the root has none.
+        pid = int(re.search(r"PID=(\d+) NAME=files BACKGROUND", vm.command("run files &"))[1])
+        output = ""
+        for _ in range(50):
+            output += vm.command(f"logs {pid}")
+            if "[FILES] DONE" in output:
+                break
+            time.sleep(.2)
+        size = len(payloads["kernel.elf"])
+        require(output, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
+        require(output, "(THE SLOT THAT BOOTED)")
+        vm.command(f"kill {pid}")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-slots{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
         log.write_text(vm.log)
     print(f"PASS ({args.arch}): the image packed with slots boots from slot A; the update zone is slot B; the updater reads "
-          "the running version from the release channel kept in slot A", flush=True)
+          "the running version from the release channel kept in slot A; files reads slot A's kernel whole", flush=True)
 
 
 def debug_mode(vm, name):

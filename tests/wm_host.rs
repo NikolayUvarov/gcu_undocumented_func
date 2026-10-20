@@ -1984,3 +1984,55 @@ fn the_picture_is_chosen_by_browsing() {
     wm.key(key(KEY_ENTER));
     assert!(wm.status().contains("BROWSE=data:.."), "{}", wm.status());
 }
+
+// 000-APP-0086: the safe start's notice offers the shell's window; a click on the status line runs it while it shows,
+// and not once another notice took its place.
+#[test]
+fn a_click_on_the_safe_starts_notice_opens_the_shells_window() {
+    let mut wm = Wm::new(160, 50);
+    let text = String::from("SAFE START: THE LAST RUN DID NOT END AS ASKED (a click here opens the shell's window)");
+    wm.offer = Some((text.clone(), String::from(menu::SHELL)));
+    wm.notice = Some(text.clone());
+    assert_eq!(wm.pointer(5, 48, 1, 0), Action::Redraw); // not the status line
+    wm.pointer(5, 48, 0, 0);
+    assert_eq!(wm.pointer(5, 49, 1, 0), Action::Run(String::from(menu::SHELL)));
+    wm.pointer(5, 49, 0, 0);
+    assert_eq!((wm.notice.as_ref(), wm.offer.as_ref()), (None, None));
+    wm.offer = Some((text, String::from(menu::SHELL)));
+    wm.notice = Some(String::from("Started fm (PID 40) with files"));
+    assert_ne!(wm.pointer(5, 49, 1, 0), Action::Run(String::from(menu::SHELL)));
+}
+
+// 000-APP-0091: the background painted by runs of one colour gives the pixels the pixel painter gives, for every block
+// size, a frame narrower than the screen (DARK beyond it), rectangles that start and end inside blocks, and nothing
+// painted twice.
+#[test]
+fn the_background_by_runs_is_the_background_by_pixels() {
+    for unit in 1..=5 {
+        let (mut b, _) = Backdrop::new(Config::default(), (64, 32), &mut |_: &str| None);
+        (b.unit, b.width, b.height) = (unit, 11, 7);
+        // Runs of one colour as well as changes at every block.
+        b.frame = (0..11 * 7).map(|i| if i % 11 < 4 { 0x112233 } else { (i as u32).wrapping_mul(2654435761) & 0xFFFFFF }).collect();
+        for &(x, y, w, h) in &[(0, 0, 70, 40), (3, 2, 9, 5), (1, 1, 1, 1), (13, 6, 30, 31), (unit * 11 - 2, 0, 7, 3)] {
+            let mut painted = vec![None; (x + w) * (y + h)];
+            b.blocks(x, y, w, h, &mut |px, py, pw, ph, colour| {
+                for yy in py..py + ph { for xx in px..px + pw {
+                    assert!(painted[yy * (x + w) + xx].replace(colour).is_none(), "painted twice: {} {}", xx, yy);
+                } }
+            });
+            for yy in y..y + h { for xx in x..x + w {
+                assert_eq!(painted[yy * (x + w) + xx], Some(b.pixel(xx, yy)), "unit {} rect {:?} at {} {}", unit, (x, y, w, h), xx, yy);
+            } }
+        }
+    }
+}
+
+// 000-APP-0049: the traffic's line from two samples of a card's counters (frames sent, received, ms).
+#[test]
+fn the_traffic_is_the_frames_a_second_between_two_samples() {
+    assert_eq!(background::net_line((100, 200, 1_000), (112, 260, 3_000)), "NET IN 30/S OUT 6/S");
+    assert_eq!(background::net_line((0, 0, 0), (0, 25_000, 1_000)), "NET IN 25K/S OUT 0/S");
+    // A restarted driver counts from 0 again: no negative rate; the same instant counts as a millisecond.
+    assert_eq!(background::net_line((500, 500, 10), (3, 4, 10)), "NET IN 0/S OUT 0/S");
+    assert!(background::net_line((0, 0, 0), (9_999_000, 9_999_000, 1_000)).len() <= 26);
+}

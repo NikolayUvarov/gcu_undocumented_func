@@ -77,7 +77,7 @@ fn pixel_face(info: &'static BootInfo) -> Next {
     loop {
         let key = mind::input::read_key();
         if key.is_some_and(mind::input::is_escape) {
-            print(b"[DZEN-CLOCK] RETURNING TO KERNEL.\r\n");
+            print(b"[DZEN-CLOCK] RETURNING TO THE SHELL.\r\n");
             return Next::Exit;
         }
         if switch_key(key) { return Next::Switch; }
@@ -184,7 +184,7 @@ fn text_face(info: &'static BootInfo) -> Next {
     let mut previous_face = None;
     loop {
         let key = mind::input::read_key();
-        if key.is_some_and(mind::input::is_escape) { print(b"[DZEN-CLOCK] RETURNING TO KERNEL.\r\n"); return Next::Exit; }
+        if key.is_some_and(mind::input::is_escape) { print(b"[DZEN-CLOCK] RETURNING TO THE SHELL.\r\n"); return Next::Exit; }
         if switch_key(key) { return Next::Switch; }
         match key.and_then(|k| k.char()).map(|c| c.to_ascii_lowercase()) {
             Some('d') => { show.digits = !show.digits; print(if show.digits { b"[DZEN-CLOCK] DIGITS ON\r\n" } else { b"[DZEN-CLOCK] DIGITS OFF\r\n" }); }

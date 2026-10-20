@@ -1,7 +1,8 @@
 //! Host tests of the shell console's lines (shell/src/ring.rs): wrapping, the input line's positions, truncation, the
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
 //! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074); the lines on
-//! the way to the first frame (shell/src/start.rs, 000-APP-0075).
+//! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
+//! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -12,6 +13,10 @@ mod redirect;
 mod clients;
 #[path = "../shell/src/start.rs"]
 mod start;
+#[path = "../shell/src/safe.rs"]
+mod safe;
+#[path = "../shell/src/netstat.rs"]
+mod netstat;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -170,4 +175,44 @@ fn the_first_frame_and_a_slow_step_before_it_are_logged_once() {
     start.stop();
     assert_eq!(start.step("THE SERIAL LINE", 60_000), None, "nothing is timed without a screen");
     assert_eq!(start.frame(640, 480, 60_000), None);
+}
+
+#[test]
+fn a_safe_start_is_told_with_what_it_left_out() {
+    let mut safe = safe::Safe::default();
+    for line in ["[INIT] STARTED logd PID=2",
+                 "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts, rtw89_wifi",
+                 "[INIT] audio_gw LEFT OUT BY THE SAFE START, PREPARED: `svc start audio_gw` STARTS IT",
+                 "[INIT] tts LEFT OUT BY THE SAFE START, PREPARED: `svc start tts` STARTS IT",
+                 "[INIT] bcm_wifi NOT STARTED: NO DEVICE",
+                 "[INIT] video_gw LEFT OUT BY THE SAFE START, NOT PREPARED: NoMemory",
+                 "[INIT] tts LEFT OUT BY THE SAFE START, PREPARED: `svc start tts` STARTS IT"] {
+        safe.line(line);
+    }
+    assert_eq!(safe.left_out, ["audio_gw", "tts"]);
+    assert_eq!(safe.notice().unwrap(), "SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts (svc start audio_gw, svc start tts)");
+    assert!(safe.notice().unwrap().len() <= 240);
+}
+
+#[test]
+fn a_normal_boot_tells_nothing() {
+    let mut safe = safe::Safe::default();
+    // Only init's line counts: the shell's own copy of the notice in the log starts none.
+    for line in ["[INIT] STARTED tts PID=21", "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED", "[INIT] READY"] { safe.line(line); }
+    assert_eq!(safe.notice(), None);
+}
+
+#[test]
+fn netstat_rows_line_up_under_the_header() {
+    let row = netstat::Row { protocol: "TCP", local_port: 49153, remote: Some((0x0A00_0202, 8080)), state: netstat::state(5), sent: 120, received: 53_400, program: "download", pid: 23 };
+    let line = netstat::line(&row);
+    assert_eq!(line, "TCP   49153 10.0.2.2:8080         ESTABLISHED  120        53400      download (PID 23)");
+    for word in ["LOCAL", "REMOTE", "STATE", "SENT", "RECEIVED", "PROGRAM"] {
+        let at = netstat::HEADER.find(word).unwrap();
+        assert_ne!(line.as_bytes()[at], b' ', "{} starts a column", word);
+        assert_eq!(line.as_bytes()[at - 1], b' ', "{} has a space before it", word);
+    }
+    let udp = netstat::Row { protocol: "UDP", local_port: 68, remote: Some((0, 0)), state: netstat::state(0), sent: 0, received: 0, program: "netstack", pid: 9 };
+    assert_eq!(netstat::line(&udp), "UDP   68    -                     -            0          0          netstack (PID 9)");
+    assert_eq!((netstat::state(11), netstat::state(12)), ("TIME-WAIT", "?"));
 }

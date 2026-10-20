@@ -2906,7 +2906,7 @@ def dzen_suite(vm):
     screen = look()[0]
     assert canon("T: PIXEL FACE") in screen[-1], screen[-1]
     vm.send("\x1b")
-    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO THE SHELL.")
     time.sleep(.1); vm.collect(); vm.output = ""
     vm.send("clock --text\n")  # the program (issue u007: the shell's one-line command is `time`)
     vm.expect("[CLOCK] 19:3")
@@ -4001,9 +4001,43 @@ def vfs_suite(args):
             time.sleep(1.6)
             after = vm.screenshot()
             vm.serial()
-            require(slow("screenshot"), "SCREENSHOT ram:screen-001.bmp")
-            require(slow("screenshot"), "SCREENSHOT ram:screen-002.bmp")
-            require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [FILE]")
+            # Without a file: data/media/, kept across reboots (000-APP-0089); -d takes it later, the shell going on.
+            require(slow("screenshot"), "SCREENSHOT data/media/screen-001.bmp")
+            require(vm.command("screenshot -d 1"), "SCREENSHOT IN 1 S")
+            delayed = ""
+            for _ in range(180):
+                delayed = vm.command("dmesg -s shell", raw=True, timeout=180)  # the shell is busy while it writes the BMP
+                if "(AFTER -D)" in delayed:
+                    break
+                time.sleep(1)
+            require(delayed, "[SHELL] SCREENSHOT data/media/screen-002.bmp: ")
+            require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [-D SECONDS] [FILE]")
+            require(vm.command("screenshot -d 0"), "USAGE: SCREENSHOT [-D SECONDS] [FILE]")
+            # Ctrl+Alt+F6 while clock is in front: its screen, with no shell in it.
+            vm.send("clock\n")
+            vm.expect("[CLOCK] ")
+            time.sleep(1)
+            clock_screen = vm.screenshot()
+            vm.hmp("sendkey ctrl-alt-f6"); vm.serial(enter=False)
+            vm.send("\x1b")
+            vm.expect("SHELL RESUMED.", timeout=180)
+            keyed = ""
+            for _ in range(60):
+                keyed = vm.command("dmesg -s shell", raw=True)
+                if "(CTRL+ALT+F6)" in keyed:
+                    break
+                time.sleep(1)
+            require(keyed, "[SHELL] SCREENSHOT data/media/screen-003.bmp: ")
+            # record -s 2: frames half the screen's size; without a file, data/media/record-001.avi.
+            for command, line in (("run record -s 2 -t 2 data/half.avi &", "[RECORD] data/half.avi THE SCREEN"), ("run record -r 1 -t 1 &", "[RECORD] data/media/record-001.avi THE SCREEN")):
+                pid = int(re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command(command))[1])
+                for _ in range(120):
+                    if pid not in task_rows(vm):
+                        break
+                    time.sleep(.5)
+                else:
+                    raise AssertionError(f"{command}: record did not end")
+                require(vm.command(f"logs {pid}"), line)
             # record (issue 093): 3 s of the screen while clock is in front, into data/; the display shows the dot meanwhile.
             recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
             vm.send("clock\n")
@@ -4035,6 +4069,16 @@ def vfs_suite(args):
         assert b"sub" not in subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True).stdout
         # The BMP shows what QEMU's display showed: the command's own line (above the cursor's rows, which moved on).
         width, height, size = map(int, shot.groups())
+        # The key's: clock's screen as QEMU showed it a moment before (its seconds may have moved on), no shell's.
+        keyed_bmp = mtype("data/media/screen-003.bmp")
+        assert len(keyed_bmp) == size and keyed_bmp[:2] == b"BM", len(keyed_bmp)
+        clock_pixels = clock_screen.split(b"\n", 3)[3]
+        bmp_stride = (width * 3 + 3) & ~3
+        same = sum(keyed_bmp[54 + (height - 1 - y) * bmp_stride + x * 3:][:3][::-1] == clock_pixels[(y * width + x) * 3:(y * width + x) * 3 + 3]
+                   for y in range(0, height, 8) for x in range(0, width, 8))
+        assert same >= 0.9 * ((height + 7) // 8) * ((width + 7) // 8), same
+        half = mtype("data/half.avi")
+        assert half[:4] == b"RIFF" and struct.unpack_from("<II", half, 64) == (width // 2, height // 2), half[:96]
         bmp = mtype("data/screen.bmp")
         assert len(bmp) == size and bmp[:2] == b"BM" and struct.unpack_from("<iiHH", bmp, 18) == (width, height, 1, 24), (len(bmp), bmp[:54])
         header, dims, pixels = screen.split(b"\n", 3)[0], screen.split(b"\n", 3)[1], screen.split(b"\n", 3)[3]
@@ -4080,7 +4124,8 @@ def vfs_suite(args):
         try:
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
-            require(vm.command("ls data"), f"6 ENTRIES, 6 FILES, {15 + size + len(avi_file) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            require(vm.command("ls data/media"), "4 ENTRIES, 4 FILES, ")
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
@@ -4125,7 +4170,8 @@ def vfs_suite(args):
         fsck_volume(image, start, fs_sectors)
         disks_check(args, image, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
-          f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
+          f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it, into data/media/ without a file, a second later with -d 1, "
+          f"and with Ctrl+Alt+F6 of clock in front; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames), half the size with -s 2; reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
 
 
@@ -5541,6 +5587,10 @@ def session_parsers_check(vm, held, body):
         text = vm.command(f"stat caps {pid}", raw=True)
         require(text, "STAT CAPS VERSION=2 COUNT=1 ")
         assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    # netstat (000-APP-0031): both connections to the server, established, under download's name.
+    table = vm.command("netstat", raw=True)
+    rows = re.findall(fr"^TCP +\d+ +10\.0\.2\.2:{held.server_address[1]} +ESTABLISHED +\d+ +\d+ +download \(PID \d+\)", table, re.M)
+    assert len(rows) == 2, table
     held.go.set()
     for _ in range(80):  # each parser ends with its download
         listed = vm.command("ps", raw=True)
@@ -5551,7 +5601,10 @@ def session_parsers_check(vm, held, body):
     assert not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers), listed
     for name in ("h1", "h2"):
         require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
-    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+    assert f"10.0.2.2:{held.server_address[1]}" not in vm.command("netstat", raw=True), "the rows go with the downloads"
+    require(vm.command("netstat -i", raw=True), "IP 10.0.2.15/24")
+    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download; "
+          "netstat lists both connections as ESTABLISHED under download's name, and not after", flush=True)
 
 
 def stall_server(body, cut):
@@ -5729,6 +5782,7 @@ def wifi_join_check(vm):
             break
         time.sleep(1)
     require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+    assert re.search(r"^CARD 2 MAC \S+ IP 10\.0\.4\.15/24 .* WI-FI", shown, re.M), shown  # 550-APP-0085
     # The first echo may wait on ARP for the gateway, slow under TCG: three tries (gate 20, aarch64 on PCU).
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
@@ -5828,6 +5882,9 @@ def net_suite(args, disk):
         for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
             (disk / "data" / f"{name}.txt").write_text(text)
         sign_manifest.sign_volume(disk)
+    # 000-APP-0049: wm's background shows the card's traffic.
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/wm.conf").write_text("show = net\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5847,6 +5904,12 @@ def net_suite(args, disk):
         else:
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+        # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
+        # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
+        vm.send("wm\n")
+        require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        vm.expect("RESUMED.", timeout=30)
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
@@ -6004,12 +6067,17 @@ def net_suite(args, disk):
         for line in ("NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT", "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED", "NETCHECK CARD 2 Wireless"):
             require(cards, line)
         assert "PREFERRED" not in cards, cards
+        # The shell's `ip` shows the same (550-APP-0085): each card's kind, the default, and the station's slot.
+        def ip_cards():
+            return dict((int(card), state.strip()) for card, state in re.findall(r"^CARD (\d)(?: MAC .* RECEIVED=\d+)?((?: [A-Z-]+)*)\s*$", vm.command("ip"), re.M))
+        assert ip_cards() == {0: "WIRED DEFAULT", 1: "WIRED", 2: "WI-FI NOT THERE"}, vm.command("ip")
         default_sends(0)
         require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
         log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
         require(log, "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] DEFAULT CARD 1 FROM THE POLICY")
         require(vm.command("netcheck cards"), "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED PREFERRED DEFAULT")
+        assert ip_cards() == {0: "WIRED", 1: "WIRED PREFERRED DEFAULT", 2: "WI-FI NOT THERE"}, vm.command("ip")
         default_sends(1)
         vm.hmp("set_link n1 off")
         require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
@@ -6297,17 +6365,18 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
-    # Copies of clock that also ask for the network and the TLS client (351-APP-0017): tlsclock has a rule in the
-    # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
+    # Copies of clock that also ask for the network, the TLS client (351-APP-0017) and the SSH service's (351-APP-0084):
+    # tlsclock has a rule in the policy, tlsnone none; scripts that declare only `network`, or one client, start tlsclock too.
     elf = bytearray((disk / "clock.elf").read_bytes())
     note = elf.index(b"MINDREQ1") + 8
-    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072).to_bytes(4, "little")
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072 | 16777216).to_bytes(4, "little")
     for name in ("tlsclock", "tlsnone"):
         (disk / f"{name}.elf").write_bytes(elf)
     (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
     (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
+    (disk / "data/ssh.msh").write_text("#!msh\nrequires: network ssh\nrun tlsclock &\n")
     # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
     entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
@@ -6373,7 +6442,7 @@ def tls_suite(args, disk):
         for slot, service in ((34, "ssh"), (35, "updater")):
             held = re.search(fr"^SLOT={slot} GEN=\d+ KIND=1 .*EP=(\d+)", shell, re.M)
             assert held and servers.get(int(held[1])) == real[service], (slot, service, shell)
-        tls_lending_check(vm, servers, real["tls"])
+        tls_lending_check(vm, servers, real["tls"], real["ssh"])
     finally:
         vm.close()
         for server in (good, rogue, asking):
@@ -6455,31 +6524,40 @@ def device_key_check(args, cpu):
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
 
 
-def tls_lending_check(vm, servers, tls):
-    """351-APP-0017: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
-    flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
-    service = {ep for ep, server in servers.items() if server == tls}
+def tls_lending_check(vm, servers, tls, ssh):
+    """351-APP-0017, 351-APP-0083, 351-APP-0084: the shell lends a TLS client in SLOT_TLS to a program that asks for it
+    (REQUEST_TLS) and gets a flow grant, badged BADGE_TLS_NO_DEVICE so that it cannot offer the device certificate, and
+    the SSH service's client in SLOT_SSH (REQUEST_SSH) the same way; not without a grant, and to a script's program only
+    what the script declares."""
+    services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
     def lent(command):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
         require(vm.command(f"kill {pid}"), "KILLED")
-        slot = re.search(r"^SLOT=20 [^\n]* EP=(\d+)", caps, re.M)
-        return out, bool(slot and int(slot[1]) in service)
+        held = {}
+        for slot, name in ((20, "tls"), (34, "ssh")):
+            found = re.search(fr"^SLOT={slot} [^\n]*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            if found and int(found[2]) in services[name]:
+                held[name] = int(found[1])
+        return out, held
 
-    out, tls_lent = lent("run tlsclock &")
-    assert tls_lent, out
+    out, held = lent("run tlsclock &")
+    assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
     require(vm.command("netgrants"), "GRANT ")
-    out, tls_lent = lent("run tlsnone &")
+    out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
-    assert not tls_lent, "no flow grant, no TLS client"
-    out, tls_lent = lent("msh data/notls.msh")
-    assert not tls_lent, "a script without `tls`"
-    out, tls_lent = lent("msh data/tls.msh")
-    assert tls_lent, out
-    print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
-          "grant, and to a script's program only if the script declares tls", flush=True)
+    assert not held, "no flow grant, no TLS or SSH client"
+    out, held = lent("msh data/notls.msh")
+    assert not held, "a script without `tls` or `ssh`"
+    out, held = lent("msh data/tls.msh")
+    assert held == {"tls": 1}, (held, out)
+    out, held = lent("msh data/ssh.msh")
+    assert held == {"ssh": 0}, (held, out)
+    print("PASS: the shell lends a TLS client that cannot offer the device certificate (BADGE_TLS_NO_DEVICE) and the SSH "
+          "service's client to a program with a flow grant that asks for them, not to one without a grant, and to a "
+          "script's program only what the script declares", flush=True)
 
 
 def tpm_check(args, cpu):
@@ -6931,10 +7009,14 @@ def wm_suite(vm):
     require(out, "[WM] BACKGROUND background = abstract; pattern = aurora; speed = 20; contrast = 60; complexity = 4; info = 50;")
     moved = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for py in range(48, 400, 8) for px in range(0, 1280, 8))
     assert moved > 16, moved
+    # The background's frame time, logged at its first frame (000-APP-0091): what drawing it and putting it on the
+    # screen took. Under emulation it says how long, not how fast a real machine is.
+    frame = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE, (\d+) MS AT MOST, (\d+) FRAMES IN \d+ S \((\d+)X(\d+) BLOCKS OF \d PX\)", "".join(seen))
+    assert frame and int(frame[1]) <= int(frame[2]) and int(frame[3]) >= 1, "".join(seen)[-2000:]
     require(vm.command("rm data/wm.conf"), "OK")
     require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
-          "desktop; the aurora pattern at speed 20 moves fast", flush=True)
+          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
     read[0] = len(vm.log)
 
@@ -8256,7 +8338,12 @@ def watchdog_suite(args, disk):
         frozen = time.monotonic()
         vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
         took = time.monotonic() - frozen
-        vm.expect("MIND> ", timeout=120)
+        # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
+        shown = vm.expect("MIND> ", timeout=120)
+        notice = re.search(r"^SAFE START: THE LAST RUN DID NOT END AS ASKED\. LEFT OUT: (.*) \((.*)\)$", shown, re.M)
+        assert notice and {"audio_gw", "tts", "video_gw"} <= set(notice[1].split(", ")), shown[-3000:]
+        assert notice[2] == ", ".join(f"svc start {name}" for name in notice[1].split(", ")), notice[0]
+        require(vm.command("dmesg -s shell", raw=True), "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
         log = vm.command("dmesg -s init", raw=True)
         require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
         assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
@@ -8267,6 +8354,11 @@ def watchdog_suite(args, disk):
         for name in ("audio_gw", "tts"):
             require(vm.command(f"svc start {name}"), f"{name} started: PID")
         require(vm.command("svc start bcm_wifi"), "svc: start bcm_wifi: no such service, or its device is missing")
+        # wm shows it on its status line, a click there opening the shell's window (shell.wit 1.6 boot-notice).
+        vm.send("wm\n")
+        require(vm.expect("[WM] READY", timeout=90), "[WM] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        vm.expect("RESUMED.", timeout=30)
         log = vm.command("dmesg -s init", raw=True)
         require(log, "[INIT] STARTED audio_gw PID=")
         require(log, "[INIT] STARTED tts PID=")
@@ -8282,6 +8374,7 @@ def watchdog_suite(args, disk):
         vm.expect("MIND> ", timeout=120)
         log = vm.command("dmesg -s init", raw=True)
         assert safe not in log and "STARTED audio_gw" in log, log[-2000:]
+        assert "SAFE START" not in vm.command("dmesg -s shell", raw=True)
     finally:
         vm.close()
     # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
@@ -8289,7 +8382,8 @@ def watchdog_suite(args, disk):
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
           f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
           f"sound or speech; sound and speech started by `svc start` from their prepared plans, without the platform "
-          f"privilege), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
+          f"privilege), ran past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left "
+          f"out; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
