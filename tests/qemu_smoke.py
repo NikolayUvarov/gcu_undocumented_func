@@ -8100,6 +8100,16 @@ def watchdog_suite(args, disk):
         log = vm.command("dmesg -s init", raw=True)
         require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
         assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
+        # Their plans prepared before the platform privilege went: the operator starts them without it (000-KRN-0131).
+        for name in ("audio_gw", "tts", "video_gw"):
+            require(log, f"[INIT] {name} LEFT OUT BY THE SAFE START, PREPARED: `svc start {name}` STARTS IT")
+        require(log, "[INIT] PLATFORM PRIVILEGE DROPPED")
+        for name in ("audio_gw", "tts"):
+            require(vm.command(f"svc start {name}"), f"{name} started: PID")
+        require(vm.command("svc start bcm_wifi"), "svc: start bcm_wifi: no such service, or its device is missing")
+        log = vm.command("dmesg -s init", raw=True)
+        require(log, "[INIT] STARTED audio_gw PID=")
+        require(log, "[INIT] STARTED tts PID=")
         deadline = time.monotonic() + 150
         while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
             assert time.monotonic() < deadline, log[-2000:]
@@ -8118,7 +8128,8 @@ def watchdog_suite(args, disk):
     assert took > 25, took
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
           f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
-          f"sound or speech), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
+          f"sound or speech; sound and speech started by `svc start` from their prepared plans, without the platform "
+          f"privilege), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows

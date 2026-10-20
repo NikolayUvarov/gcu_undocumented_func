@@ -256,10 +256,9 @@ impl Init {
     // Starts boot service `index` with its capabilities; Err(NotFound) if its hardware is absent.
     fn start(&mut self, index: usize) -> Result<u64> {
         let name = unit_name(index);
-        let (image, instance) = unit_image(index);
         if index == 0 || self.running(index) { return Err(Error::Other(ERR_BUSY)); }
         if let Some(plan) = self.plans[index] {
-            // A restart: the device was stopped when its driver ended; the same capabilities are granted again.
+            // A restart, or a start a safe start prepared: the device was stopped; the same capabilities are granted.
             if let Some(device) = self.devices[index] {
                 if matches!(name, "rtl8168" | "rtw89_wifi") {
                     platform::registers_only(device)?;
@@ -268,6 +267,33 @@ impl Init {
             if let Some(device) = self.others[index] { platform::resume(device)?; }
             return self.spawn(index, plan);
         }
+        let (plan, mut minted) = self.plan(index)?;
+        let pid = self.spawn(index, plan)?;
+        minted.count = 0; // kept for restarts
+        self.plans[index] = Some(plan);
+        Ok(pid)
+    }
+
+    // A service a safe start leaves out (000-KRN-0131): its capabilities are minted while init holds the platform
+    // privilege and kept, its devices stopped, so that `svc start` can start it once the privilege is dropped.
+    fn prepare(&mut self, index: usize) -> Result<()> {
+        let (plan, mut minted) = self.plan(index)?;
+        minted.count = 0;
+        self.plans[index] = Some(plan);
+        self.stopped[index] = true;
+        for device in [self.devices[index], self.others[index]].into_iter().flatten() {
+            if let Err(error) = platform::quiesce(device) { mind::println!("[INIT] {} QUIESCE FAILED: {:?}", unit_name(index), error); }
+        }
+        Ok(())
+    }
+    // Prepared by a safe start and not started since.
+    fn prepared(&self, index: usize) -> bool { self.plans[index].is_some() && self.pids[index] == 0 }
+
+    // The capabilities boot service `index` starts with, and what was minted for them; Err(NotFound) if its hardware is
+    // absent.
+    fn plan(&mut self, index: usize) -> Result<(Plan, Minted)> {
+        let name = unit_name(index);
+        let (image, instance) = unit_image(index);
         let mut minted = Minted::new();
         let mut grants = Grants::new();
         let mut flags = SPAWN_SERVICE;
@@ -485,14 +511,17 @@ impl Init {
                     if let Some(driver) = driver { self.lend(&mut grants, slot, driver)?; }
                 }
                 // The Wi-Fi station as its third card: a client without BADGE_WIFI, which serves idl/net.wit (550-KRN-0097).
-                if self.running(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
+                // A prepared station's client answers ERR_PEER until it is started (000-KRN-0131).
+                if self.running(service_index("wlan")) || self.prepared(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
             }
             // QEMU's stand-in radio (550-NET-0018): only the tests' images carry it, and it holds nothing but its endpoint.
             "wlansim" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
             // The 802.11 station (550-NET-0018) over the radio that runs: its client in slot 2, the station's alone (MC-2.3);
             // keystore's client for remembered networks in slot 3 (550-NET-0024). No radio, no station.
             "wlan" => {
-                let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r))).ok_or(Error::NotFound)?;
+                // A radio a safe start prepared serves the station once `svc start` starts it (000-KRN-0131).
+                let radio = RADIOS.into_iter().find(|&r| self.running(service_index(r)))
+                    .or_else(|| RADIOS.into_iter().find(|&r| self.prepared(service_index(r)))).ok_or(Error::NotFound)?;
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 self.lend(&mut grants, WIFI_RADIO, radio)?;
                 if self.running(service_index("keystore")) { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
@@ -636,7 +665,8 @@ impl Init {
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
                 if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
-                if self.running(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; } // lent on with the user's consent
+                // Lent on with the user's consent; a prepared gateway's client answers ERR_PEER until it is started.
+                if self.running(service_index("video_gw")) || self.prepared(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; }
             }
             _ => return Err(Error::NotFound),
         }
@@ -664,11 +694,7 @@ impl Init {
         };
         let mut kept = ([0u8; ARGS_KEPT], args.as_str().len());
         kept.0[..kept.1].copy_from_slice(args.as_str().as_bytes());
-        let plan = Plan { grants, flags, quota, args: kept };
-        let pid = self.spawn(index, plan)?;
-        minted.count = 0; // kept for restarts
-        self.plans[index] = Some(plan);
-        Ok(pid)
+        Ok((Plan { grants, flags, quota, args: kept }, minted))
     }
 
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
@@ -841,7 +867,7 @@ fn boot_order() -> impl Iterator<Item = usize> {
 
 
 // What a safe start leaves out (000-KRN-0076): the drivers and gateways of radios, cameras and sound, which a frozen
-// run was most likely in; absent saved plans cannot be started after Platform is dropped.
+// run was most likely in. Their plans are prepared and their devices stopped, so `svc start` starts them (000-KRN-0131).
 const SAFE_LEFT_OUT: [&str; 5] = ["bcm_wifi", "video_gw", "audio_gw", "tts", "rtw89_wifi"];
 // The run's mark is cleared this long after READY: a run that got that far ended well enough.
 const MARK_CLEAR_MS: usize = 60_000;
@@ -886,7 +912,6 @@ fn boot(info: &'static BootInfo) {
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
     let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
     for index in order {
-        if safe && SAFE_LEFT_OUT.contains(&unit_name(index)) { init.stopped[index] = true; continue; }
         // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
         // before the compositor takes the screen (211-PRT-0004).
         if unit_name(index) == "compositor" && info.photo_pause_s > 0 {
@@ -895,6 +920,16 @@ fn boot(info: &'static BootInfo) {
         }
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
+        // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
+        let name = unit_name(index);
+        if safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| init.running(service_index(r))))) {
+            match init.prepare(index) {
+                Ok(()) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
+                Err(Error::NotFound) => { init.missing[index] = true; init.stopped[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
+                Err(error) => { init.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
+            }
+            continue;
+        }
         match init.start(index) {
             // From now on init's own lines (and those printed so far) go to the system log too.
             Ok(_) if unit_name(index) == "logd" => {
