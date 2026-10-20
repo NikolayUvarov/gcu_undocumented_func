@@ -1,6 +1,6 @@
 # 800-LNK-0003 — `link`, MIND Core's end of the link: files, the log and a console, under explicit grants
 
-**Type:** service · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** [800-LNK-0001](800-LNK-0001-the-link-protocol.md), [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md); `KRN`: `init` starting `link` with its grants · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-11.4
+**Type:** service · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md); `KRN`: `init` starting `link` with its grants · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-11.4
 
 ## Problem
 

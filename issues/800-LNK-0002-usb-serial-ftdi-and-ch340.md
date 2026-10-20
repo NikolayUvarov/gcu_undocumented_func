@@ -28,4 +28,4 @@ MIND Core has no driver for either, so neither can carry the link (800-LNK-0001)
 
 ## Related
 
-[800-LNK-0001](800-LNK-0001-the-link-protocol.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), `usb_host`, `usb_storage` (the model of a class driver).
+[800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), `usb_host`, `usb_storage` (the model of a class driver).

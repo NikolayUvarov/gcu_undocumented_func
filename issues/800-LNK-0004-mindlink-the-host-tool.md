@@ -1,6 +1,6 @@
 # 800-LNK-0004 — `mindlink`, the Linux and WSL end of the link
 
-**Type:** host tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** [800-LNK-0001](800-LNK-0001-the-link-protocol.md) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-12.1
+**Type:** host tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** — ([800-LNK-0001](../issues-done/800-LNK-0001-the-link-protocol.done) done) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-12.1
 
 ## Problem
 
