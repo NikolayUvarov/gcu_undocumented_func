@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -3800,7 +3800,7 @@ def dmesg_check(vm):
     names another source keeps its real one; filters; reading needs the shell's client."""
     pids = vm.services()
     output = vm.command("dmesg", raw=True)
-    require(output, f"logd({pids['logd']}) [LOGD] READY: 256 RECORDS OF 200 BYTES")
+    require(output, f"logd({pids['logd']}) [LOGD] READY: 2048 RECORDS OF 200 BYTES")
     require(output, f"init({pids['init']}) [INIT] STARTED logd PID={pids['logd']}")  # printed before logd ran: kept, then sent
     require(output, f"init({pids['init']}) [INIT] STARTED vfs_server PID={pids['vfs_server']}")
     require(output, f"vfs_server({pids['vfs_server']}) [VFS] MOUNTED FAT")
@@ -3867,6 +3867,65 @@ def raw_fat_image(temp, replace=None, extra=None):
     sign_manifest.sign_volume(files)
     subprocess.run(["mcopy", "-s", "-i", f"{image}@@{start * 512}", *[str(p) for p in files.iterdir()], "::"], check=True, env=MTOOLS_ENV, capture_output=True)
     return image, start, fs_sectors
+
+
+def link_suite(args):
+    """800-LNK-0003, 800-KRN-0128: MIND Core's end of MIND Link through QEMU's emulated FT232 (`-device usb-serial` on a
+    pseudo-terminal), with `link.conf` at the root, against the host's `mindlink`: a file each way checked by SHA-256,
+    the system log read, a name outside data/link/ refused. 256-byte frames: the emulated chip keeps 384 bytes and is
+    filled again from the pseudo-terminal only when QEMU's main loop wakes (docs/link/mindlink.md). Skipped until init
+    starts `link` (it is in BOOT_SERVICES)."""
+    services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
+    if '"link"' not in services:
+        print("SKIP: link: not a boot service yet (800-KRN-0128)", flush=True)
+        return
+    if not raw_tools():
+        print("SKIP: link suite needs mkfs.fat and mtools", flush=True)
+        return
+    target = Path(tempfile.gettempdir()) / "mind-mindlink-target"
+    subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", str(ROOT / "tools/mindlink/Cargo.toml"),
+                    "--target-dir", str(target)], check=True)
+    mindlink = target / "release/mindlink"
+
+    def link(port, *command, ok=True, timeout=120):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
+                           capture_output=True, text=True, timeout=timeout)
+        out = r.stdout + r.stderr
+        assert (r.returncode == 0) == ok, (command, r.returncode, out)
+        return out
+
+    with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+        try:
+            port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+            # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
+            require(link(port, "hello"), '"MIND Core link"')
+            sent = Path(temp) / "sent.bin"
+            sent.write_bytes(os.urandom(64 * 1024))
+            require(link(port, "put", str(sent)), "put ")
+            back = Path(temp) / "back.bin"
+            require(link(port, "get", "sent.bin", str(back)), "got sent.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the file came back changed"
+            require(link(port, "ls"), "65536  sent.bin")
+            log = link(port, "log")
+            require(log, "[LINK] HELLO FROM")
+            # 800-KRN-0128: the kernel's own lines, copied in by init when logd starts, come over the link too.
+            require(log, "MIND CORE KERNEL: INIT STARTED")
+            require(link(port, "put", str(sent), "../escape.bin", ok=False), "not allowed")
+            require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED sent.bin")
+            # 800-KRN-0128, 0132: link holds exactly usb_serial's client, a scope of vfs_server, an application's loader
+            # client and a log reader.
+            pids = vm.services()
+            caps = vm.command(f"stat caps {pids['link']}", raw=True)
+            servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+            held = sorted((int(slot), servers.get(int(ep))) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M))
+            assert "COUNT=4 " in caps and held == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
+        finally:
+            vm.close()
+    print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
+          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):
@@ -8944,6 +9003,9 @@ def main():
             continue
         if suite == "hda":
             hda_suite(args)
+            continue
+        if suite == "link":
+            link_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)

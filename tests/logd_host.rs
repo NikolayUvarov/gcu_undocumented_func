@@ -3,7 +3,7 @@
 #[path = "../logd/src/ring.rs"]
 mod ring;
 
-use ring::{Ring, RATE, SLOTS, TEXT};
+use ring::{Ring, INIT_PID, RATE, SLOTS, TEXT};
 
 #[test]
 fn keeps_order_and_wraps() {
@@ -51,4 +51,13 @@ fn limits_each_sender() {
     assert_eq!(r.get(n - 1).unwrap().text(), "again");
     // Many senders: the table forgets the oldest, nothing is refused wrongly.
     for pid in 100..200 { assert!(r.push(7_000, pid, "many", 1, "one")); }
+}
+
+#[test]
+fn init_is_not_limited() {
+    // init copies the kernel's lines in one burst at boot (800-KRN-0128).
+    let mut r = Ring::new();
+    for i in 0..RATE * 10 { assert!(r.push(1_000, INIT_PID, "init", 1, &format!("kernel line {}", i))); }
+    assert_eq!((r.next(), r.suppressed()), (RATE as u64 * 10, 0));
+    assert_eq!(r.get(RATE as u64 * 10 - 1).unwrap().text(), format!("kernel line {}", RATE * 10 - 1));
 }

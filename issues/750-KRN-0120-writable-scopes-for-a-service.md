@@ -17,6 +17,10 @@
 3. **Inside a scope:** create, write, rename within the scope, flush and delete. A path outside it, and a rename out of it, is refused with the error a missing file gets, so a scope does not tell what lies outside.
 4. **No `vfs.wit` change** is expected. If one is needed, it is a minor version.
 
+## Progress (2026-10-20)
+
+Plan steps 1 and 2 are made for one service, `link` (800-KRN-0128): at each start `init` mints a `BADGE_USER` client from `vfs_server`'s keeper, opens `data/link/` (made if missing), asks `scope(dir, true)`, moves the scope into the service's `SLOT_VFS` and drops its own client. The link track's QEMU suite shows a file written and read in the scope and a name outside it refused. A general list of scopes per service in `init`'s arms, and the `isolation` case with a restart, are left.
+
 ## Acceptance criteria
 
 - [ ] A new `isolation` case (x86 and aarch64): a test service with a writable scope creates, renames and flushes files under its directory, and is refused everywhere else, a rename out of the scope included.

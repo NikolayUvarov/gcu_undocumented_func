@@ -1,0 +1,20 @@
+; The line between the boards (800-LNK-0005): 8N1 serial at 8 PIO cycles a bit, the state machine's clock divided
+; to the rate. The common pattern for a PIO UART, as in the RP2040 datasheet's PIO chapter.
+
+.program line_tx
+.side_set 1 opt
+    pull        side 1 [7]  ; idle and the stop bit: high; wait for a byte
+    set x, 7    side 0 [7]  ; the start bit
+bits:
+    out pins, 1             ; least significant bit first
+    jmp x-- bits       [6]
+
+.program line_rx
+start:
+    wait 0 pin 0            ; a start bit
+    set x, 7           [10] ; to the middle of the first data bit
+bits:
+    in pins, 1
+    jmp x-- bits       [6]
+    wait 1 pin 0            ; the stop bit; after a break, the line's return
+    push                    ; the byte in bits 31:24
