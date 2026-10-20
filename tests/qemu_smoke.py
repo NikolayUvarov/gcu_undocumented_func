@@ -6059,9 +6059,9 @@ def late_attach_check(args):
 
 def slow_radio_check(args):
     """550-NET-0030: wlansim built with `slow` answers nothing for its first 60 s, and for 20 s after the station asks
-    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once, each ping answered within 2 s;
-    the station joins once the radio answers; when the station's radio goes silent after the join, the wired card keeps
-    working the same way."""
+    (ARP) for 10.0.4.99. While the radio is silent the wired card's network works at once: each ping answered within 2 s,
+    and a page fetched over TCP; the station joins once the radio answers; when the station's radio goes silent after the
+    join, the wired card keeps working the same way."""
     if not args.slow_radio_elf or not raw_tools():
         print("SKIP: the slow radio needs wlansim built with `slow` (scripts/x86_fixtures.sh) and mtools", flush=True)
         return
@@ -6071,6 +6071,14 @@ def slow_radio_check(args):
         require(text, "PING: 3 SENT, 3 RECEIVED")
         assert len(times) == 3 and max(times) < 2_000_000, text
         return max(times) // 1000
+
+    web = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _Http)
+    web.daemon_threads = True
+    threading.Thread(target=web.serve_forever, daemon=True).start()
+
+    def fetched(path):  # a TCP socket through the wired card
+        page = vm.command(f"fetch 10.0.2.2:{web.server_address[1]} {path}")
+        require(page, "HTTP/1.0 200 OK"); require(page, f"hello from the host: {path}")
 
     policy = b"console 10.0.2.2 icmp\nconsole 10.0.4.99 icmp\n"
     with tempfile.TemporaryDirectory(prefix="smoke-slow-radio-", dir=ROOT / IMAGE) as temp:
@@ -6083,6 +6091,7 @@ def slow_radio_check(args):
             require(radio, "[WLANSIM] SILENT FOR 60 S: A RADIO THAT ANSWERS LATE")
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.2.15"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2")
             silent = pings(vm.command("ping 10.0.2.2"))
+            fetched("/radio-silent")
             radio += vm.command(f"logs {vm.services()['wlansim']}", raw=True)
             assert "ANSWERING AGAIN" not in radio, "the radio answered before the wired card's check"
             require(vm.service_logs("wlan", "THE RADIO HAS NOT ANSWERED"), "[WLAN] THE RADIO HAS NOT ANSWERED IN 2 S: SERVING WITHOUT IT, ASKING AGAIN")
@@ -6108,11 +6117,13 @@ def slow_radio_check(args):
             vm.command("ping 10.0.4.99")
             require(vm.service_logs("wlansim", "[WLANSIM] SILENT FOR 20 S"), "[WLANSIM] SILENT FOR 20 S")
             stalled = pings(vm.command("ping 10.0.2.2"))
+            fetched("/station-silent")
             assert "FAULT PID=" not in vm.command("faults")
         finally:
             vm.close()
-    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms while it was silent, the station "
-          f"joined once it answered; with the joined station's radio silent, within {stalled} ms", flush=True)
+            web.shutdown()
+    print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
+          f"silent, the station joined once it answered; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _certificates(directory):
