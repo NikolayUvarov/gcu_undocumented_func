@@ -41,11 +41,12 @@ Built for x86_64 and aarch64 (`wlan/src/main.rs`, `netstack/src/main.rs`). The Q
   - it answers nothing for 20 s after the station asks (ARP) for 10.0.4.99;
   - the default build has the same loop, never silent.
 - **The check** (`slow_radio_check`, the x86 `net` suite) boots a raw image with that radio and a VirtIO wired card:
-  - while the radio is silent: DHCP on the wired card, and `ping 10.0.2.2` 3 of 3, each within 2 s; `wlan` logs that the radio has not answered;
+  - while the radio is silent: DHCP on the wired card, `ping 10.0.2.2` 3 of 3, each within 2 s, and a page fetched over TCP from the host; `wlan` logs that the radio has not answered;
   - once the radio answers: `wifi` scans (the station's last scan was made while the radio was silent), `wifi join` joins MIND-TEST, and the stack gets 10.0.4.15 by DHCP on the station;
-  - with the joined station's radio silent (`ping 10.0.4.99`): `ping 10.0.2.2` 3 of 3, each within 2 s, and no task faults.
+  - with the joined station's radio silent (`ping 10.0.4.99`): `ping 10.0.2.2` 3 of 3, each within 2 s, a page fetched over TCP, and no task faults.
 - **Run locally** (x86, QEMU 8.2, TCG, 4 CPUs): it passed. The wired pings took at most 24 ms while the radio was silent, and at most 21 ms with the joined station's radio silent.
 - **Gate 22** (i9, `6228d50e`, x86 `net` suite): it passed. The wired pings took at most 26 ms while the radio was silent, and at most 23 ms with the joined station's radio silent. In `main` since then (the merge `2123985a`).
+- **A TCP connection added** (2026-10-20, after gate 22): the criterion speaks of sockets, so the check fetches a page from the host's web server in both phases. Run locally: it passed, pings within 28 and 24 ms.
 - **What it does not measure.** The stack's own bound, at most 2 s of waiting every 5 s for a card that does not answer, is the budget code of 550-NET-0032, which its host tests exercise (`tests/network_budget`). This check shows the effect on the other card, not the bound.
 
 ## Related
