@@ -5742,6 +5742,44 @@ def wifi_join_check(vm):
     require(run("wifi leave", 30), "[WIFI] LEFT")
     print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
 
+    def scanned():  # wifi's first look scans: a restarted station has heard nothing yet
+        vm.send("wifi\n")
+        vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+
+    def quit_wifi():
+        vm.send_bytes(b"q")
+        vm.expect("SHELL RESUMED.")
+        time.sleep(.2); vm.collect(); vm.output = ""
+
+    # 550-NET-0024: the remembered network outlives a restart of keystore and of wlan; the link carries traffic.
+    for name in ("keystore", "wlan"):
+        pid = vm.services()[name]
+        require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+        for _ in range(50):
+            if vm.services().get(name, pid) != pid:
+                break
+            time.sleep(.2)
+        else:
+            raise AssertionError(f"{name} PID={pid} was not restarted")
+    scanned(); quit_wifi()
+    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
+    for _ in range(3):
+        pinged = vm.command("wifiping ping:10.0.4.1")
+        if "NETCHECK ping:10.0.4.1 OK" in pinged:
+            break
+    require(pinged, "NETCHECK ping:10.0.4.1 OK")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    # Forgotten through wifi's screen (f): keystore drops it, and a join with no passphrase is refused.
+    scanned()
+    vm.send_bytes(b"f")
+    vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
+    quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
+    require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
+    require(run("wifi join MIND-TEST", 90), "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
+          "forgotten through wifi's screen, then refused without a passphrase", flush=True)
+
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
     CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
