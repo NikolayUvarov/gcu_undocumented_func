@@ -1,6 +1,6 @@
 # 000-APP-0096 — `wm`'s network line counts every card, the Wi-Fi station's too
 
-**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** in progress (on the tools branch, 2026-10-20; the gate and the MacBook Pro left) · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
+**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 2a33a71b (2026-10-20), checked in QEMU; the MacBook Pro's run left · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-20, from the maintainer's report: "now we have network working but desktop widget with date time cpu load says 'no network counters'".
 
@@ -41,7 +41,13 @@
 - **`wm/src/main.rs` `net_frames`:** the shell first, the card client second, the reason otherwise, the 10 s pause after a slow answer.
 - **The `net` suite** reads the first rate's line with the cards counted, with the wired card and over Wi-Fi alone. The first gate run expected the station before its join: the stack lists it only once joined (`1 CARDS, 0 WI-FI` on i9 and un-rizen-service), so the Wi-Fi check moved after the join.
 - **Docs:** `docs/tools` (EN, RU), `docs/idl`.
-- **Left:** the gate; the MacBook Pro's run.
+- **In `main`** since 2a33a71b (2026-10-20). The gate, on the branch with `main` abe3d70b:
+  - i9 (x86): every group on a3ebd34c but RAM above 4 GiB and the padded vector area, which passed on 2a33a71b;
+  - un-rizen-service (aarch64): build, boot and fault containment, programs, shell and four CPUs, NVMe and 16 CPUs on a3ebd34c; files, network and TLS, RAM, ACPI and PCI above 4 GiB, and GICv2 on 2a33a71b;
+  - locally: the network driver without legacy, TLC, services, scheduling and files on a3ebd34c; the build, the host tests, boot and keys on 2a33a71b.
+  The commits after a3ebd34c changed the suites, the IDL fuzzer's list and `dictate`'s and `speak`'s memory request; the groups that run them ran on 2a33a71b.
+- **This is QEMU's virtio-net and stand-in radio**, not the MacBook Pro's Wi-Fi (MC-12.1).
+- **Left:** the MacBook Pro over Wi-Fi: the line moves while a download runs.
 
 ## Related
 
