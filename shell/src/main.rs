@@ -259,6 +259,15 @@ impl Shell {
                     self.note(format_args!("FOR PID {} THE SHELL {}", message.sender, if held { "LENT ITS BATTERY CLIENT" } else { "HAS NO BATTERY CLIENT TO LEND" }));
                     let _ = commands::reply_battery(call, if held { Ok(SLOT_BATTERY) } else { Err(commands::Error::Unavailable) });
                 }
+                commands::Request::Wifi => {
+                    // A copy of the station's client (shell.wit 1.5, 550-APP-0033) for the window manager the shell
+                    // started, whose Settings start `wifi`: it joins and forgets networks, so no other client gets it.
+                    let manager = self.managers.contains(&message.sender);
+                    let held = mind::dev::cap_info(SLOT_WIFI).0 != 0;
+                    self.note(format_args!("FOR PID {} THE SHELL {}", message.sender,
+                        if !manager { "REFUSED ITS WI-FI CLIENT: NOT ITS WINDOW MANAGER" } else if held { "LENT ITS WI-FI CLIENT" } else { "HAS NO WI-FI CLIENT TO LEND" }));
+                    let _ = commands::reply_wifi(call, if !manager { Err(commands::Error::Refused) } else if held { Ok(SLOT_WIFI) } else { Err(commands::Error::Unavailable) });
+                }
                 commands::Request::Run { line } => {
                     let result = self.client_line(line.as_str(), message.sender);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
@@ -560,6 +569,9 @@ impl Shell {
         let parse = requests & mind::process::REQUEST_PARSE != 0 && mind::dev::cap_info(SLOT_PARSE).0 != 0 && granted("parse");
         // The battery service's client (211-APP-0070): it only reads.
         let battery = requests & mind::process::REQUEST_BATTERY != 0 && mind::dev::cap_info(SLOT_BATTERY).0 != 0 && granted("battery");
+        // The Wi-Fi station's configuration client (550-APP-0033, ABI 10), held while a radio runs: starting `wifi` is the
+        // user's request to choose a network.
+        let wifi = requests & mind::process::REQUEST_WIFI != 0 && mind::dev::cap_info(SLOT_WIFI).0 != 0 && granted("wifi");
         let (needs, authority, window_manager, display) = (loader::Needs { sysinfo: needs.sysinfo && granted("sysinfo"), file: needs.file && (granted("file") || granted("files")),
             lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
@@ -591,7 +603,8 @@ impl Shell {
         let wanted = [(needs.sysinfo && !authority, SLOT_SYSINFO, SLOT_SYSINFO), (authority, SLOT_SYSINFO, SLOT_AUTHORITY), (scoped, SLOT_FILE, SCOPE_RECEIVE), (needs.files, SLOT_FILE, SLOT_VFS), (needs.log, SLOT_LOG, SLOT_LOG),
                       (needs.lifecycle, SLOT_LIFECYCLE, SLOT_INIT), (window, SLOT_WINDOW, SLOT_WINDOWS), (window_manager, SLOT_WINDOW, SLOT_WINDOW_MANAGER),
                       (display, SLOT_DISPLAY, SLOT_DISPLAY), (gpio, SLOT_GPIO, SLOT_GPIO), (camera, SLOT_CAMERA, SLOT_CAMERA), (blockstore, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE),
-                      (blockstore_read, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ), (firmware, SLOT_FIRMWARE, SLOT_FIRMWARE), (parse, SLOT_PARSE, SLOT_PARSE)];
+                      (blockstore_read, SLOT_BLOCKSTORE, SLOT_BLOCKSTORE_READ), (firmware, SLOT_FIRMWARE, SLOT_FIRMWARE), (parse, SLOT_PARSE, SLOT_PARSE),
+                      (wifi, SLOT_WIFI, SLOT_WIFI)];
         let lent = wanted.iter().filter(|w| w.0).map(|&(_, slot, cap)| (slot, cap)).chain(extra.iter().copied())
             .try_for_each(|(slot, cap)| match lend(slot, cap) { Ok(Ok(())) => Ok(()), Err(error) | Ok(Err(error)) => Err(error) });
         if scoped { let _ = mind::ipc::drop_cap(SCOPE_RECEIVE); } // the loader holds its copy now
