@@ -1,13 +1,13 @@
 use crate::abi::*;
 use crate::sys::call;
 
-/// Sleeps `ms` milliseconds, ending on the first 10 ms tick after them (000-KRN-0065); input wakes the active program (in a window: the keys the
+/// Sleeps `ms` milliseconds, ending on the first tick after them (1 ms on x86, 10 ms on aarch64: 000-KRN-0065, 000-KRN-0083); input wakes the active program (in a window: the keys the
 /// window manager queues, issue 088). Returns the time slept.
 pub fn sleep(ms: usize) -> usize { if crate::windowed::active() { crate::windowed::wait(ms) } else { call(SYSCALL_WAIT, ms, 0) } }
 pub fn uptime_ms() -> usize { call(SYSCALL_UPTIME, 0, 0) }
 pub fn rdtsc() -> u64 { call(SYSCALL_RDTSC, 0, 0) as u64 }
 
-/// Monotonic nanoseconds since boot (calibrated TSC, or the 10 ms tick where the TSC rate is not constant).
+/// Monotonic nanoseconds since boot (the calibrated TSC or the generic timer; on x86 without a constant TSC rate, the tick).
 pub fn monotonic_ns() -> u64 { call(SYSCALL_CLOCK, 0, 0) as u64 }
 
 /// (nanoseconds since boot, resolution in ns, TSC frequency in Hz or 0 for the tick clock).

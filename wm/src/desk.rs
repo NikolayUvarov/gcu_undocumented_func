@@ -338,8 +338,15 @@ impl Desk {
         let mut owner = alloc::vec![0u16; cols * rows];
         if let Some(id) = self.full_screen() {
             let (index, w) = (self.index(id).unwrap_or(0), self.focused().unwrap());
+            let area = Rect::new(0, 0, cols, rows);
+            let visible = if self.held == Some(id) {
+                // Placement overlays the frame while full-screen content keeps its size and coordinates.
+                grid.frame_titled(area, Line::Double, &w.title, Style::new(theme.accent.fg, theme.panel.bg), theme.selected.inverse());
+                area.inner()
+            } else { area };
             for y in 0..rows {
                 for x in 0..cols {
+                    if !visible.contains(x, y) { continue; }
                     match w.content {
                         Content::Text => { let (ch, fg, bg) = if x < w.size.0 && y < w.size.1 { cell(id, x, y).unwrap_or((' ', 0, 0)) } else { (' ', theme.panel.fg, 0) }; grid.put(x, y, ch, Style::new(fg, bg)); }
                         Content::Pixels => { grid.put(x, y, PIXELS.ch, PIXELS.style); owner[y * cols + x] = index as u16 + 1; }
@@ -428,7 +435,7 @@ enum Drag {
 
 /// `List`: the window list (211-APP-0014), the selected window and its place in the list (kept when it closes).
 /// `Settings`: one window for what can be configured (000-APP-0048).
-pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect> }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings),
+pub enum Mode { Normal, Move { id: u32, before: Rect, restore: Option<Rect>, full: bool }, Run(InputLine), Help, Menu(Menu), List { id: Option<u32>, at: usize }, Settings(Settings),
     /// `more ▼`'s menu under the top bar (000-APP-0061): the items moved there, the chosen one, and its column.
     More { items: Vec<Bar>, row: usize, at: usize } }
 
@@ -586,8 +593,8 @@ impl Wm {
                     menu::Outcome::Say(text) => { self.mode = Mode::Normal; self.notice = Some(text); Action::Redraw }
                 };
             }
-            Mode::Move { id, before, restore } => {
-                let (id, before, restore) = (*id, *before, *restore);
+            Mode::Move { id, before, restore, full } => {
+                let (id, before, restore, full) = (*id, *before, *restore, *full);
                 let step = if key.ctrl() { 8 } else { 1 };
                 match (key.code(), key.shift()) {
                     (Code::Left, false) => self.desk.move_by(id, -step, 0),
@@ -598,8 +605,14 @@ impl Wm {
                     (Code::Right, true) => self.desk.resize_by(id, step, 0),
                     (Code::Up, true) => self.desk.resize_by(id, 0, -step),
                     (Code::Down, true) => self.desk.resize_by(id, 0, step),
-                    (Code::Enter, _) => { self.desk.snap(id); self.mode = Mode::Normal; }
-                    (Code::Esc, _) => { self.desk.place(id, before); self.desk.set_restore(id, restore); self.mode = Mode::Normal; }
+                    (Code::Enter, _) => { if self.desk.full_screen() != Some(id) { self.desk.snap(id); } self.mode = Mode::Normal; }
+                    (Code::Esc, _) => {
+                        if self.desk.full_screen() != Some(id) {
+                            self.desk.place(id, before); self.desk.set_restore(id, restore);
+                            if full { self.desk.toggle_full(id); }
+                        }
+                        self.mode = Mode::Normal;
+                    }
                     _ => {}
                 }
                 return Action::Redraw;
@@ -692,7 +705,7 @@ impl Wm {
     // Alt+M: moving the window in front.
     fn start_move(&mut self) {
         if self.window_for("Move").is_none() { return; }
-        if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore }; }
+        if let Some(w) = self.desk.focused() { self.mode = Mode::Move { id: w.id, before: w.rect, restore: w.restore, full: w.full }; }
     }
 
     /// The mouse went to cell (x, y) with `buttons` held (bit 0: left) and the wheel turned `wheel` steps. A press on
@@ -936,11 +949,18 @@ impl Wm {
     /// Draws everything; returns which window's pixels each cell shows (as `Desk::draw`, without the cells a dialog
     /// covers) and the text cursor (of the run line, or the focused text window's from `cursor`).
     pub fn draw(&mut self, grid: &mut Grid, theme: &Theme, cell: &mut dyn FnMut(u32, usize, usize) -> Option<(char, u32, u32)>, cursor: Option<(usize, usize)>) -> (Vec<u16>, Option<(usize, usize)>) {
+        // Keyboard placement has the same frame feedback as a pointer drag, without changing drag state.
+        let held = self.desk.held;
+        if let Mode::Move { id, .. } = self.mode { self.desk.held = Some(id); }
         let mut owner = self.desk.draw(grid, theme, cell);
+        self.desk.held = held;
         let cols = grid.cols;
         if let Some(id) = self.desk.full_screen() {
             let inner = self.desk.content(id);
             let mut shown = match self.desk.focused() { Some(w) if w.content == Content::Text => cursor.filter(|&(x, y)| x < inner.w && y < inner.h), _ => None };
+            if matches!(self.mode, Mode::Move { id: target, .. } if target == id) {
+                shown = shown.filter(|&(x, y)| inner.inner().contains(x, y));
+            }
             self.dialogs(grid, theme, &mut shown);
             for (index, tag) in owner.iter_mut().enumerate() { if *tag != 0 && grid.get(index % cols, index / cols) != PIXELS { *tag = 0; } }
             return (owner, shown);

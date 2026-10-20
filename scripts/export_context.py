@@ -13,8 +13,6 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-CODE_ROOTS = {"kernel", "bootloader", "common", "libmind", "app", "app2", "clock", "dzen-clock", "ping", "pong", "files", "beep",
-              "rtc", "ps2_kbd", "compositor", "ata", "ahci", "usb_storage", "vfs_server", "loader", "audio_gw", "tts", "say"}
 SKIP = {"target", "build", "dist", "out", "code_handoff", "code-handoff", "usb_root", "legacy", "patches_seq",
         "issues", "issues-done", "knowledge", "node_modules", "vendor", "__pycache__"}
 GROUPS = ("code", "build", "tests", "docs")
@@ -22,6 +20,11 @@ IDENT = re.compile(r"(?:r#)?(?:[^\W\d]|_)\w*", re.UNICODE)
 RAW = re.compile(r'(?:br|cr|r)(#{0,255})"')
 CHAR = re.compile(r"(?:b)?'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|[^\r\n])|[^'\\\r\n])'")
 MARKER = "@@ "
+# The two files beside code_concat.sh's (code_context.txt, constitution_context.txt); the rest in compact/.
+CODE, CHARTER, AUX = "code_context_compact.txt", "constitution_context_compact.txt", "compact"
+GENERATOR = "mind-core-context-v2"
+STALE = r"(?:code_context|constitution_context)_compact\.txt|compact/(?:code|build|tests|docs|index)\.txt|compact/parts/agent-\d{3,}\.txt"
+STALE_V1 = r"(?:code|build|tests|docs|constitution|agent|index)\.txt|parts/agent-\d{3,}\.txt"
 
 
 @dataclass
@@ -155,9 +158,14 @@ def minify_rust(source, keep_tests=False):
     return "".join(output) + "\n", removed
 
 
-def classify(path):
+def code_roots(root):
+    """Every crate at the top level (a directory with a Cargo.toml), and common/, which kernel and libmind include."""
+    return {p.parent.name for p in root.glob("*/Cargo.toml")} | {"common"}
+
+
+def classify(path, roots):
     parts, suffix = path.parts, path.suffix
-    if parts[0] in CODE_ROOTS:
+    if parts[0] in roots:
         if suffix == ".rs":
             return "code"
         if suffix in (".toml", ".ld") or path.name == "config":
@@ -177,7 +185,7 @@ def classify(path):
 
 
 def discover(root, enabled, patterns, out_dir):
-    found, matched = [], set()
+    found, matched, roots = [], set(), code_roots(root)
     for directory, dirs, names in os.walk(root):
         dirs[:] = sorted(d for d in dirs if d not in SKIP and (not d.startswith(".") or d == ".cargo")
                          and not (Path(directory) / d).is_symlink()
@@ -185,7 +193,7 @@ def discover(root, enabled, patterns, out_dir):
         for name in sorted(names):
             path = Path(directory) / name
             relative = path.relative_to(root)
-            group = classify(relative)
+            group = classify(relative, roots)
             if group not in enabled or path.is_symlink():
                 continue
             rel = relative.as_posix()
@@ -202,6 +210,26 @@ def discover(root, enabled, patterns, out_dir):
     if not found:
         raise ValueError("No current sources found.")
     return sorted(found, key=lambda item: item["path"])
+
+
+def constitution(root, archive):
+    """The Constitution and the RFCs in both languages (constitution/), the superseded editions in archive/ only on request."""
+    found, base = [], root / "constitution"
+    for directory, dirs, names in os.walk(base):
+        dirs[:] = sorted(d for d in dirs if archive or d != "archive")
+        for name in sorted(names):
+            path = Path(directory) / name
+            if path.suffix != ".md" or path.is_symlink():
+                continue
+            data = path.read_bytes()
+            found.append({"path": path.relative_to(root).as_posix(), "group": "constitution", "text": data.decode("utf-8"),
+                          "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+    return sorted(found, key=lambda item: item["path"])
+
+
+def compact_text(text):
+    """Markdown kept as written, its trailing spaces and runs of blank lines removed."""
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(line.rstrip() for line in text.splitlines())).strip("\n") + "\n"
 
 
 def blocks(files, compact=False, keep_tests=False):
@@ -268,14 +296,19 @@ def stats(text):
 
 
 def publish(directory, outputs):
+    """Writes the outputs; drops those an earlier run listed that this one does not write, the old layout's included."""
     directory.mkdir(parents=True, exist_ok=True)
-    old_manifest = directory / "manifest.json"
-    previous = {}
-    if old_manifest.is_file():
+    stale = []
+    for manifest, generator, pattern in ((directory / AUX / "manifest.json", GENERATOR, STALE),
+                                         (directory / "manifest.json", "mind-core-context-v1", STALE_V1)):
         try:
-            previous = json.loads(old_manifest.read_text(encoding="utf-8"))
+            previous = json.loads(manifest.read_text(encoding="utf-8")) if manifest.is_file() else {}
         except (ValueError, OSError):
-            pass
+            previous = {}
+        if previous.get("generator") == generator:
+            stale += [n for n in previous.get("outputs", {}) if n not in outputs and re.fullmatch(pattern, n)]
+            if generator != GENERATOR:
+                stale.append("manifest.json")
     for name, content in outputs.items():
         target = directory / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -287,10 +320,11 @@ def publish(directory, outputs):
             temporary.replace(target)
         finally:
             temporary.unlink(missing_ok=True)
-    if previous.get("generator") == "mind-core-context-v1":
-        for name in previous.get("outputs", {}):
-            if name not in outputs and re.fullmatch(r"(?:code|build|tests|docs|agent|index)\.txt|parts/agent-\d{3,}\.txt", name):
-                (directory / name).unlink(missing_ok=True)
+    for name in stale:
+        (directory / name).unlink(missing_ok=True)
+    for empty in (directory / "parts", directory / AUX / "parts"):
+        if empty.is_dir() and not any(empty.iterdir()):
+            empty.rmdir()
 
 
 def main():
@@ -300,9 +334,10 @@ def main():
     parser.add_argument("--include", action="append", default=[], help="path/directory/glob; may be repeated")
     parser.add_argument("--with-tests", action="store_true", help="add tests.txt")
     parser.add_argument("--with-docs", action="store_true", help="add docs.txt with the current README")
-    parser.add_argument("--agent-groups", default="code", help="groups for agent.txt: code,build,tests,docs")
+    parser.add_argument("--agent-groups", default="code", help=f"groups for {CODE}: code,build,tests,docs")
     parser.add_argument("--keep-tests-in-agent", action="store_true", help="keep cfg(test) modules in Rust")
     parser.add_argument("--chunk-chars", type=int, default=16000, help="character limit per part; 0 disables parts")
+    parser.add_argument("--constitution-archive", action="store_true", help=f"add the superseded editions to {CHARTER}")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     out_dir = (args.out_dir or root / "code_handoff").resolve()
@@ -319,47 +354,55 @@ def main():
     for group in GROUPS:
         subset = [f for f in files if f["group"] == group]
         if subset:
-            outputs[f"{group}.txt"] = render(f"MIND CORE {group}: original contents; @@ path; identical files referenced.\n", blocks(subset))
+            outputs[f"{AUX}/{group}.txt"] = render(f"MIND CORE {group}: original contents; @@ path; identical files referenced.\n", blocks(subset))
+    charter = constitution(root, args.constitution_archive)
+    for item in charter:
+        item["text"] = compact_text(item["text"])
+    if charter:
+        outputs[CHARTER] = render("MIND CORE constitution: the Constitution and the RFCs, English and Russian; trailing spaces and "
+                                  "repeated blank lines removed, nothing else; @@ path. Only its articles are normative (AGENTS.md).\n",
+                                  blocks(charter))
     full_bundle_names = ", ".join(outputs)
     agent_files = [f for f in files if f["group"] in agent_groups]
     if not agent_files:
-        raise ValueError("No files selected for agent.txt; adjust --agent-groups or --include.")
+        raise ValueError(f"No files selected for {CODE}; adjust --agent-groups or --include.")
     entries = blocks(agent_files, compact=True, keep_tests=args.keep_tests_in_agent)
     omitted = sum(f.get("agent_test_modules_omitted", 0) for f in agent_files)
     scope = ",".join(agent_groups)
     header = (f"MIND CORE agent view: {scope}; {len(agent_files)} files. Rust comments removed; literals/ASM preserved; "
               f"cfg(test) modules omitted: {omitted}. Other file types unchanged. @@ = file; identical = reuse. "
-              f"Scoped excerpt, not a patch. Full bundles: {full_bundle_names}; inventory: index.txt.\n")
-    outputs["agent.txt"] = render(header, entries)
+              f"Scoped excerpt, not a patch. Full bundles: {full_bundle_names}; inventory: {AUX}/index.txt.\n")
+    outputs[CODE] = render(header, entries)
     chunks = chunk_agent(header + "Parts: concatenate bodies by file/character offsets; a part may end mid-expression.\n", entries, args.chunk_chars)
     for number, chunk in enumerate(chunks, 1):
-        outputs[f"parts/agent-{number:03}.txt"] = chunk
+        outputs[f"{AUX}/parts/agent-{number:03}.txt"] = chunk
     original_bytes = sum(f["bytes"] for f in files)
     agent_input_bytes = sum(f["bytes"] for f in agent_files)
     index = ["MIND CORE context export", f"Full bundles: {full_bundle_names}.",
-             "Paste agent.txt OR parts/agent-*.txt in order, not both. Select fewer files with --include.",
+             f"Paste {CODE} OR {AUX}/parts/agent-*.txt in order, not both. Select fewer files with --include.",
              "Excluded: history, issues, knowledge snapshots, lockfiles, build outputs, old context dumps, symlinks.",
              "Rust agent view omits comments and (by default) cfg(test) modules; no runtime bodies/ASM/data elided.",
              "Token counts are characters/4 estimates, NOT counts for a particular model/tokenizer.",
              f"Selection: {args.include or 'all enabled live sources'}; agent groups: {scope}", "", "Files:"]
     index.extend(f"{f['group']:5} {f['path']} ({f['bytes']} bytes)" for f in files)
+    index.extend(f"constitution {f['path']} ({f['bytes']} bytes)" for f in charter)
     index += ["", "Outputs (bytes / estimated tokens):"]
     index.extend(f"{name}: {stats(text)['bytes']} / ~{stats(text)['estimated_tokens']}" for name, text in outputs.items())
-    outputs["index.txt"] = "\n".join(index) + "\n"
-    manifest = {"generator": "mind-core-context-v1", "token_estimate": "ceil(characters / 4); not model-specific",
+    outputs[f"{AUX}/index.txt"] = "\n".join(index) + "\n"
+    manifest = {"generator": GENERATOR, "token_estimate": "ceil(characters / 4); not model-specific",
                 "selection": args.include, "agent_groups": agent_groups, "source_bytes": original_bytes,
-                "agent_input_bytes": agent_input_bytes, "files": [{k: v for k, v in f.items() if k != "text"} for f in files],
+                "agent_input_bytes": agent_input_bytes, "files": [{k: v for k, v in f.items() if k != "text"} for f in files + charter],
                 "outputs": {name: stats(text) for name, text in outputs.items()}}
-    outputs["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
+    outputs[f"{AUX}/manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     publish(out_dir, outputs)
     print(f"Done: {out_dir}\nFiles: {len(files)}; {original_bytes:,} bytes of sources selected.")
-    for name in ("code.txt", "build.txt", "tests.txt", "docs.txt", "agent.txt"):
+    for name in (CODE, CHARTER, *(f"{AUX}/{g}.txt" for g in GROUPS)):
         if name in outputs:
             info = stats(outputs[name])
             print(f"{name}: {info['bytes']:,} bytes; ~{info['estimated_tokens']:,} tokens (estimate: chars/4)")
-    ratio = 100 * (1 - stats(outputs["agent.txt"])["bytes"] / agent_input_bytes)
+    ratio = 100 * (1 - stats(outputs[CODE])["bytes"] / agent_input_bytes)
     print(f"Agent: {ratio:.1f}% smaller than the same source files; parts: {len(chunks)}.")
-    print("For cut-and-paste: agent.txt or parts/agent-*.txt. Contents and limits: index.txt.")
+    print(f"For cut-and-paste: {CODE} or {AUX}/parts/agent-*.txt. Contents and limits: {AUX}/index.txt.")
 
 
 if __name__ == "__main__":

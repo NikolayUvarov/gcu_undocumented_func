@@ -1,6 +1,6 @@
 # Effector server handoff: native MIND agent and signed-package contract
 
-**Owner:** MIND Core EFF track, coordinating NET/KRN/UPD/APP dependencies · **Priority:** P1 · **Status:** open · **Recorded:** 2026-10-15, at the maintainer's explicit request, relayed by the Effector server project · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-7.5, MC-8.5, MC-9.2, MC-12.1–12.4, MC-12.7, MC-12.9
+**Owner:** MIND Core EFF track, coordinating NET/KRN/UPD/APP dependencies · **Priority:** P1 · **Status:** open (UPD numbered its two parts on 2026-10-20: the package contract, draft 0.1, and the check as [750-UPD-0019](750-UPD-0019-signed-application-packages.md), the updater's client for the gateway as [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Recorded:** 2026-10-15, at the maintainer's explicit request, relayed by the Effector server project · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-7.5, MC-8.5, MC-9.2, MC-12.1–12.4, MC-12.7, MC-12.9
 
 ## Ownership and existing work
 
@@ -47,7 +47,7 @@ The old reference to this server project's task 75 is obsolete; use task 81.
    HTTPS, private native AgentToken, independently scheduled heartbeat,
    bounded parsing, owner policy/audit and durable replay-safe results before
    ACK. Keep the initial shell denial until test-account msh and grants exist.
-2. Coordinate the existing [UPD](requests-UPD.md) and [KRN](requests-KRN.md)
+2. Coordinate the existing UPD ([750-UPD-0019](750-UPD-0019-signed-application-packages.md), [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) and [KRN](requests-KRN.md)
    requests and return a reviewed versioned signed-application contract:
    canonical signed bytes, application key role/trust, payload identity and
    architecture, native install/update/uninstall entries, rollback policy and

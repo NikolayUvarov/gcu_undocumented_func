@@ -5,6 +5,9 @@ use crate::pci;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
+#[cfg(target_arch = "x86_64")]
+#[path = "realtek_probe.rs"]
+mod realtek_probe;
 
 const UEFI_TYPES: [&str; 16] = ["reserved", "loader code", "loader data", "boot services code", "boot services data", "runtime services code",
     "runtime services data", "conventional", "unusable", "ACPI reclaim", "ACPI NVS", "memory-mapped I/O", "memory-mapped I/O ports", "PAL code", "persistent", "unaccepted"];
@@ -165,6 +168,7 @@ fn pci_section(out: &mut String, devices: &[pci::Device]) {
         for (base, end) in device.windows.iter().filter(|w| w.1 > w.0) { let _ = writeln!(out, "     window {:#X}-{:#X}", base, end - 1); }
         capabilities(out, &config);
         if vendor == 0x10DE && device.class >> 16 == 0x03 { nvidia(out, device); }
+        if matches!(device.id, 0x8168_10EC | 0xB852_10EC) { realtek(out, device); }
         hex_dump(out, &config, "     ");
     }
 }
@@ -201,4 +205,41 @@ fn nvidia(out: &mut String, device: &pci::Device) {
     if bar.io || bar.size == 0 || !decoding || bar.base + 4 > crate::mmu::IDENTITY_END as u64 { let _ = writeln!(out, "     NVIDIA chip: not read (BAR0 not decoded or not mapped)"); return; }
     let boot0 = unsafe { core::ptr::read_volatile(bar.base as *const u32) };
     let _ = writeln!(out, "     NVIDIA PMC_BOOT_0 {:08X}: chipset {:#X}, revision {:#X}", boot0, (boot0 >> 20) & 0x1FF, boot0 & 0xFF);
+}
+
+#[cfg(target_arch = "x86_64")]
+fn realtek(out: &mut String, device: &pci::Device) {
+    struct Hardware<'a>(&'a pci::Device);
+    impl realtek_probe::Access for Hardware<'_> {
+        fn config(&mut self, offset: u8) -> u32 { unsafe { pci::config(self.0, offset) } }
+        fn command(&mut self, value: u16) { unsafe { pci::command(self.0, value); } }
+        fn mapped_uncached(&mut self, address: u64) -> bool { unsafe { crate::mmu::identity_device_u32(address) } }
+        fn read_u32(&mut self, address: u64) -> u32 { unsafe { core::ptr::read_volatile(address as *const u32) } }
+    }
+    let bar = device.bars[2];
+    let probe = realtek_probe::Device { id: device.id, granted: device.granted, base: bar.base, size: bar.size, io: bar.io };
+    let name = if device.id == realtek_probe::WIFI_ID { "RTL8852BE SYS_CFG1" } else { "RTL8168 TxConfig" };
+    match realtek_probe::identify(probe, &mut Hardware(device)) {
+        Ok(identity) => {
+            let field = if device.id == realtek_probe::WIFI_ID { "digital cut" } else { "XID" };
+            let _ = writeln!(out, "     {} {:08X}: {} {:#X} (identity only; driver support not established)", name, identity.raw, field, identity.revision);
+        }
+        Err(reason) => {
+            if let realtek_probe::Skip::RegisterUnavailable(raw) = reason {
+                let _ = writeln!(out, "     {} {:08X}: unavailable ({})", name, raw, reason.reason());
+            } else if let realtek_probe::Skip::DecodeRestore(raw) = reason {
+                match raw {
+                    Some(raw) => { let _ = writeln!(out, "     {} {:08X}: probe failed ({})", name, raw, reason.reason()); }
+                    None => { let _ = writeln!(out, "     {}: probe failed ({})", name, reason.reason()); }
+                }
+            } else {
+                let _ = writeln!(out, "     {}: not read ({})", name, reason.reason());
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn realtek(out: &mut String, _device: &pci::Device) {
+    let _ = writeln!(out, "     Realtek chip identity: not read (probe implemented for x86-64 only)");
 }
