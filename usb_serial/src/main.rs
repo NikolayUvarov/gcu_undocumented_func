@@ -2,9 +2,9 @@
 #![no_main]
 // Ring 3 USB-serial class driver (800-LNK-0002): the first converter usb_host gives it (its client with the serial
 // badge in SLOT_DEV0 claims only the chips mind::usb::SERIAL_DEVICES names), served as idl/serial.wit to the one client
-// init lends SLOT_SERVICE to. The FTDI FT232R now; the WCH CH340 is claimed and refused until its requests are in. The
-// converter's bulk IN endpoint is polled by usb_host a packet at a time (usb.wit 1.3) and collected every 2 ms into a
+// init lends SLOT_SERVICE to: the FTDI FT232R and the WCH CH340. The converter's bulk IN endpoint is polled by usb_host a packet at a time (usb.wit 1.3) and collected every 2 ms into a
 // 64 KiB queue; bytes the client leaves longer are counted as lost. A converter pulled out is claimed again when back.
+mod ch340;
 mod ftdi;
 
 use mind::abi::{BootInfo, SLOT_DEV0};
@@ -23,7 +23,7 @@ const FIRST_BAUD: u32 = 115_200;
 /// The FTDI latency timer: a part-filled packet goes to the host after this many ms.
 const LATENCY_MS: u16 = 2;
 
-struct Port { host: Host, handle: u32, chip: u8, vendor: u16, product: u16, input: u8, out: u8, baud: u32, actual: u32 }
+struct Port { host: Host, handle: u32, chip: u8, vendor: u16, product: u16, input: u8, out: u8, baud: u32, actual: u32, version: u8 }
 
 // The received bytes, oldest first, in a ring.
 struct Queue { bytes: [u8; QUEUE], head: usize, len: usize, lost: u32, errors: u32 }
@@ -57,29 +57,55 @@ impl Port {
         let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
         let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
         let chip = if info.vendor == 0x0403 { CHIP_FTDI } else { CHIP_CH340 };
-        let (Some(input), Some(out), CHIP_FTDI) = (input, out, chip) else {
-            mind::println!("[SERIAL] CONVERTER {:04X}:{:04X} NOT DRIVEN YET (800-LNK-0002)", info.vendor, info.product);
+        let (Some(input), Some(out)) = (input, out) else {
+            mind::println!("[SERIAL] CONVERTER {:04X}:{:04X}: NO BULK ENDPOINTS", info.vendor, info.product);
             let _ = host.release(handle);
             return Err(host);
         };
-        let mut port = Port { host, handle, chip, vendor: info.vendor, product: info.product, input, out, baud: 0, actual: 0 };
-        let setup = [(ftdi::RESET, ftdi::RESET_SIO, 0), (ftdi::RESET, ftdi::PURGE_RX, 0), (ftdi::RESET, ftdi::PURGE_TX, 0), (ftdi::SET_DATA, ftdi::DATA_8N1, 0), (ftdi::SET_FLOW_CTRL, 0, 0),
-                     (ftdi::MODEM_CTRL, ftdi::DTR_RTS_ON, 0), (ftdi::SET_LATENCY_TIMER, LATENCY_MS, 0)];
-        for (request, value, index) in setup {
-            if vendor(&mut port, request, value, index).is_err() {
-                mind::println!("[SERIAL] FTDI {:04X}:{:04X}: REQUEST {} REFUSED", port.vendor, port.product, request);
-                let _ = port.host.release(port.handle);
-                return Err(port.host);
-            }
+        let mut port = Port { host, handle, chip, vendor: info.vendor, product: info.product, input, out, baud: 0, actual: 0, version: 0 };
+        let name = if chip == CHIP_FTDI { "FTDI" } else { "CH340" };
+        let set_up = if chip == CHIP_FTDI { port.setup_ftdi() } else { port.setup_ch340() };
+        if let Err(request) = set_up {
+            mind::println!("[SERIAL] {} {:04X}:{:04X}: REQUEST {:#04X} REFUSED", name, port.vendor, port.product, request);
+            let _ = port.host.release(port.handle);
+            return Err(port.host);
         }
         if port.configure(baud).is_err() { let _ = port.host.release(port.handle); return Err(port.host); }
-        mind::println!("[SERIAL] FTDI {:04X}:{:04X} AT {} BIT/S (MAKES {}), 8N1, NO FLOW CONTROL", port.vendor, port.product, port.baud, port.actual);
+        mind::println!("[SERIAL] {} {:04X}:{:04X} (VERSION {:#04X}) AT {} BIT/S (MAKES {}), 8N1, NO FLOW CONTROL", name, port.vendor, port.product, port.version, port.baud, port.actual);
         Ok(port)
     }
 
+    // FTDI AN232B-04/05: reset and purges, 8N1, no flow control, DTR and RTS on, the latency timer. Err: the request.
+    fn setup_ftdi(&mut self) -> Result<(), u8> {
+        let setup = [(ftdi::RESET, ftdi::RESET_SIO, 0), (ftdi::RESET, ftdi::PURGE_RX, 0), (ftdi::RESET, ftdi::PURGE_TX, 0), (ftdi::SET_DATA, ftdi::DATA_8N1, 0), (ftdi::SET_FLOW_CTRL, 0, 0),
+                     (ftdi::MODEM_CTRL, ftdi::DTR_RTS_ON, 0), (ftdi::SET_LATENCY_TIMER, LATENCY_MS, 0)];
+        for (request, value, index) in setup { vendor(self, request, value, index).map_err(|_| request)?; }
+        Ok(())
+    }
+
+    // The CH340: its version (whether it may send part-filled packets at once), a serial reset, DTR and RTS on; the rate
+    // and 8N1 come with `configure`. Err: the request.
+    fn setup_ch340(&mut self) -> Result<(), u8> {
+        match self.host.control(self.handle, 0xC0, ch340::READ_VERSION, 0, 0, 2) {
+            Ok(2) => self.version = self.host.buffer()[0],
+            _ => return Err(ch340::READ_VERSION),
+        }
+        vendor(self, ch340::SERIAL_INIT, 0, 0).map_err(|_| ch340::SERIAL_INIT)?;
+        vendor(self, ch340::MODEM_CONTROL, ch340::DTR_RTS_ON, 0).map_err(|_| ch340::MODEM_CONTROL)
+    }
+
     fn configure(&mut self, baud: u32) -> Result<u32, serial::Error> {
-        let (value, index, actual) = ftdi::divisor(baud).ok_or(serial::Error::Invalid)?;
-        vendor(self, ftdi::SET_BAUD_RATE, value, index)?;
+        let actual = if self.chip == CHIP_FTDI {
+            let (value, index, actual) = ftdi::divisor(baud).ok_or(serial::Error::Invalid)?;
+            vendor(self, ftdi::SET_BAUD_RATE, value, index)?;
+            actual
+        } else {
+            let (value, actual) = ch340::divisor(baud).ok_or(serial::Error::Invalid)?;
+            let value = if self.version > 0x27 { value | ch340::NO_WAIT } else { value };
+            vendor(self, ch340::WRITE_REGISTERS, ch340::RATE_REGISTERS, value)?;
+            vendor(self, ch340::WRITE_REGISTERS, ch340::LINE_REGISTERS, ch340::LINE_8N1)?;
+            actual
+        };
         (self.baud, self.actual) = (baud, actual);
         Ok(actual)
     }
@@ -89,8 +115,14 @@ impl Port {
         let mut data = [0u8; 8 * 64];
         let mut at = 0;
         let mut errors = 0;
+        let ftdi = self.chip == CHIP_FTDI;
         let r = self.host.reports(self.handle, self.input, |packet| {
-            let (n, bad) = ftdi::strip(packet, &mut data[at..]);
+            // The FTDI chip leads every packet with two status bytes; the CH340's are data alone.
+            let (n, bad) = if ftdi { ftdi::strip(packet, &mut data[at..]) } else {
+                let n = packet.len().min(data.len() - at);
+                data[at..at + n].copy_from_slice(&packet[..n]);
+                (n, false)
+            };
             at += n;
             if bad { errors += 1; }
         });
@@ -115,7 +147,7 @@ enum State { Up(Port), Down(Host, u32) }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("usb_serial — a USB-serial converter's line (the FTDI FT232R) for MIND Link's service alone; init starts it when the boot volume holds link.conf (800-LNK-0002).");
+    mind::about!("usb_serial — a USB-serial converter's line (the FTDI FT232R or the WCH CH340) for MIND Link's service alone; init starts it when the boot volume holds link.conf (800-LNK-0002).");
     let Ok(host) = Host::new(Endpoint(SLOT_DEV0)) else { mind::println!("[SERIAL] NO USB HOST"); return };
     let mut state = match Port::claim(host, FIRST_BAUD) { Ok(port) => State::Up(port), Err(host) => { mind::println!("[SERIAL] NO CONVERTER YET"); State::Down(host, FIRST_BAUD) } };
     let queue: &'static mut Queue = unsafe { &mut *core::ptr::addr_of_mut!(QUEUE_SPACE) };

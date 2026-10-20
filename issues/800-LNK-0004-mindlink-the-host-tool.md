@@ -39,6 +39,22 @@ The maintainer develops in WSL and Linux, so the link's other end runs there. It
   - the back-to-back run of the two converters, which needs usbipd-win installed and both converters attached to WSL. On the maintainer's PC they are COM4 (FTDI) and COM10 (CH340);
   - MIND Core's end (800-LNK-0002, 0003).
 
+- **2026-10-20: the first run over RS-485, on the maintainer's PC.**
+  - **The pair:** two identical USB–RS-485 converters (WCH CH340, 1A86:7523), COM3 and COM22, wired to each other by the maintainer. Both ends were `mindlink.exe` (800-LNK-0007): `serve` on COM22, the master on COM3.
+  - **Each rate, 1 MiB put and got back with matching SHA-256:**
+
+    | Rate (bit/s) | Put / get | Requests sent again |
+    |---|---|---|
+    | 115200 | 10.7 KB/s | 0 |
+    | 230400 | 20.6 KB/s | 0 |
+    | 460800 | 38.2 KB/s | 0 |
+    | 576000 | 19.7 / 14.5 KB/s | 100 / 175: damaged frames, all recovered |
+    | 921600 | no answer | — |
+
+  - **10 MiB each way at 460800 bit/s:** 275.1 s and 274.9 s (38.1 KB/s). The SHA-256 was the same on the master, the slave and the copy brought back. 3 requests were sent again during the put.
+  - **So this pair's clean limit is 460800 bit/s.** Above it frames are damaged, and at 921600 nothing gets through. Each request waits for its answer, so a transfer reaches about 83 % of the line's rate.
+  - **This is evidence for this pair and cable only** (MC-12.1). The acceptance asks for the run between Linux or WSL and a converter; that is left: one converter attached to WSL through usbipd.
+
 ## Related
 
 [800](800-mind-link.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0007](800-LNK-0007-the-windows-end.md).
