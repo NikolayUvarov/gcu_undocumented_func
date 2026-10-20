@@ -5940,21 +5940,21 @@ def wifi_join_check(vm):
         else:
             raise AssertionError(f"{name} PID={pid} was not restarted")
     scanned(); quit_wifi()
-    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
         if "NETCHECK ping:10.0.4.1 OK" in pinged:
             break
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
-    require(run("wifi leave", 30), "[WIFI] LEFT")
+    run("wifi leave", 30, "[WIFI] LEFT")
     # Forgotten through wifi's screen (f): keystore drops it, and a join with no passphrase is refused.
     scanned()
     vm.send_bytes(b"f")
     vm.expect("[WIFI] NOTICE MIND-TEST forgotten: its key is gone from the station", timeout=30)
     quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
     require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
-    require(run("wifi join MIND-TEST", 90), "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
+    run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
     print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
           "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
