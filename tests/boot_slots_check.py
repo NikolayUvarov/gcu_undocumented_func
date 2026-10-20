@@ -70,7 +70,11 @@ def run(boot, temp, volume, label, updater=None):
     # A trial of B with one try: it runs on trial, its try counted on the other record first; confirmed, it stays.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
-    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
+    # Its try is counted on the disk first. A real updater (no stand-in given) then confirms it as soon as init has
+    # (351-UPD-0021), in the other record.
+    counted = {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}
+    found = boot_slots.records(image.path)
+    assert counted in found and newer()[1] in (counted, {**counted, "sequence": counted["sequence"] + 1, "confirmed": True}), found
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
     booted("B", "SLOT B, CONFIRMED", zone, until=zone)
