@@ -1116,8 +1116,21 @@ def shell_suite(vm):
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
     print("PASS: pins and pinmap without a pin controller say so", flush=True)
-    # wifi (550-APP-0033): without the 802.11 station's client it says so; with --demo, against a stand-in of
-    # idl/wifi.wit 1.0, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    # wifi (550-APP-0033): this suite's disk has no radio, so no station runs and the shell has no client of it to lend
+    # (the net suite joins wlansim's network); the screen says so. With --demo, against a stand-in of idl/wifi.wit 1.0
+    # and no radio, Enter on MIND-Lab asks for its passphrase, which shows as dots only, and joins its access point.
+    dots = lambda screen, n: any(canon("•" * n) in row or canon("◘" * n) in row for row in screen)  # • or its inverse ◘
+
+    def typed_as_dots(text):
+        vm.send_bytes(text.encode())
+        for _ in range(30):
+            time.sleep(.3)
+            screen = screen_text(vm)
+            vm.serial(enter=False)
+            if dots(screen, len(text)):
+                break
+        assert dots(screen, len(text)) and not any(canon(text) in row for row in screen), screen
+
     vm.send("wifi\n")
     vm.expect("NO STATION", after="[WIFI] READY")
     time.sleep(.3)
@@ -1131,16 +1144,7 @@ def shell_suite(vm):
     vm.expect("MODE=LIST ROWS=9 AT=MIND-Lab LINK=OFF", after="[WIFI] READY")
     vm.send_bytes(b"\r")
     vm.expect("[WIFI] MODE=PASSPHRASE MIND-Lab REMEMBER=true")
-    vm.send_bytes(b"correct horse")
-    # A dot reads back as • or as its inverse ◘: a cell of two colours is matched with either as the foreground.
-    dots = lambda screen: any(canon("•" * 13) in row or canon("◘" * 13) in row for row in screen)
-    for _ in range(30):
-        time.sleep(.3)
-        screen = screen_text(vm)
-        vm.serial(enter=False)
-        if dots(screen):
-            break
-    assert dots(screen) and not any("horse" in row for row in screen), screen
+    typed_as_dots("correct horse")
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
@@ -2759,17 +2763,8 @@ def dzen_suite(vm):
                  for py in range(y - half, y + half + 1)
                  for px in range(x - half, x + half + 1)
                  if (radius + 6) ** 2 <= (px - x) ** 2 + (py - y) ** 2 <= (half - radius // 3) ** 2}
-        # At 19:35 the separate hour-sector marker is a short yellow diagonal outside the orbit, toward top right.
-        sector = {point for point, color in orbit.items() if color == b"\xff\xff\x00"}
-        if mode != "off":
-            assert max(half // 24, 2) <= len(sector) <= max(half // 16, 2), "a short hour-sector marker must be visible"
-            assert all(px > 0 and py == -px and (half * .78) ** 2 <= px * px + py * py <= (half * .90) ** 2
-                       for px, py in sector), "the yellow marker must point top right, outside the cycle orbit"
-            assert {px for px, _ in sector} == set(range(min(px for px, _ in sector), max(px for px, _ in sector) + 1)), "hour-sector marker must be continuous"
-        else:
-            assert not sector, "hiding the orbit must erase its hour-sector marker"
         assert all(p in (b"\x08\x0c\x12", b"\x80\x80\x80", b"\x18\x18\x18", b"\x28\x28\x28",
-                         b"\x60\x60\x60", b"\x40\x40\x40") for point, p in orbit.items() if point not in sector)
+                         b"\x60\x60\x60", b"\x40\x40\x40") for p in orbit.values())
         mark = {point for point, color in orbit.items() if color == b"\x80\x80\x80"}
         if mode != "off":
             diameter = max(half // 24, 2)
@@ -2782,12 +2777,13 @@ def dzen_suite(vm):
             assert other_color not in orbit.values(), "switching modes must restore the correct orbit brightness"
             reference = {point for point, color in orbit.items() if color == b"\x60\x60\x60"}
             assert len(reference) >= 6, "start reference tick must remain"
-            assert all(px > 0 and py > 0 and abs(px - py) <= 1 for px, py in reference), "cycle starts toward bottom right"
+            # 000-APP-0080: zero seconds point at the active hour's corner, the top right (yellow) at 19:35, in grey.
+            assert all(px > 0 and py < 0 and abs(px + py) <= 1 for px, py in reference), "cycle starts toward the hour's corner"
             small_ticks = sum(p == b"\x40\x40\x40" for p in orbit.values())
             if mode == "ticks":
                 assert small_ticks >= 35, "nine short 10-second ticks must be visible"
                 for index in range(1, 10):
-                    angle = 3 * math.pi / 4 + index * math.tau / 10
+                    angle = math.pi / 4 + index * math.tau / 10  # from the hour's corner, the top right
                     tx, ty = int(math.sin(angle) * half * 3 / 4), -int(math.cos(angle) * half * 3 / 4)
                     assert any(orbit.get((tx + dx, ty + dy)) in (b"\x40\x40\x40", b"\x80\x80\x80")
                                for dy in range(-2, 3) for dx in range(-2, 3)), index
@@ -2920,7 +2916,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; separate yellow top-right hour sector, bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; the grey zero tick and 10s ticks from the hour's top-right corner; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -5656,6 +5652,42 @@ def wifi_boot_check(vm):
           "in slot 3, netstack's third card in slot 4, the shell's configuration client with BADGE_WIFI_CHANGE in SLOT_WIFI", flush=True)
 
 
+
+def wifi_join_check(vm):
+    """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
+    MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
+    through the WPA2 handshake; d leaves it, q ends wifi."""
+    vm.send("wifi\n")
+    vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
+    vm.send_bytes(b"\r")
+    vm.expect("[WIFI] MODE=PASSPHRASE MIND-TEST REMEMBER=")
+    vm.send_bytes(b"mind test passphrase")
+    time.sleep(1)
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=JOINED MIND-TEST 02:00:00:57:4C:A0", timeout=60)
+    assert "mind test passphrase" not in vm.log, "the passphrase stays off the serial line"
+    vm.send_bytes(b"d")
+    vm.expect("LINK=OFF", timeout=20)
+    vm.send_bytes(b"q")
+    vm.expect("SHELL RESUMED.")
+    time.sleep(.2); vm.collect(); vm.output = ""
+    print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
+          "with wlansim's access point, and left", flush=True)
+    # 550-APP-0078: the same without a screen, the passphrase read from a file whose first line names the network.
+    def run(text, timeout):  # as vm.command, with a join's wait (60 s at most in wifi)
+        vm.send(text + "\n")
+        return vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30), "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
+    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    require(run("wifi status", 30), "[WIFI] STATUS OFF")
+    require(run("wifi join", 30), "usage: wifi")
+    assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
+    print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
+          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
     CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
@@ -5683,6 +5715,10 @@ def net_suite(args, disk):
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
+        # 550-APP-0078: passphrase files for `wifi join` without a screen: the right one, a wrong one, another network's.
+        (disk / "data").mkdir(exist_ok=True)
+        for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
+            (disk / "data" / f"{name}.txt").write_text(text)
         sign_manifest.sign_volume(disk)
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
@@ -5912,12 +5948,17 @@ def net_suite(args, disk):
             vm.close()
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
-    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else ())
+    # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
+    rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()
         require(vm.service_logs("init", "virtio_net NOT STARTED"), "virtio_net NOT STARTED: NO DEVICE")
         require(vm.command("net"), "NET: NO NETWORK CARD")
         require(vm.command("ip"), "IP: NoNetwork")
+        # The station needs no wired card: the suite's last VM, so the join changes nothing after it (550-APP-0033).
+        if args.wlansim_elf:
+            wifi_join_check(vm)
     finally:
         vm.close()
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
@@ -6718,6 +6759,7 @@ def wm_suite(vm):
     require(out, "[WM] BACKGROUND background = abstract; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right")
     # No battery service in QEMU (211-APP-0070): wm asks the shell for its client, gets none, and the top bar has no item.
     require(out, "[WM] BATTERY CLIENT FROM THE SHELL: NONE (NO BATTERY SERVICE)")
+    require(out, "[WM] WI-FI CLIENT FROM THE SHELL: NONE (NO STATION)")  # no radio on this disk (550-APP-0033)
     assert "BATTERY=" not in out, "no battery item"
     time.sleep(1.2)
     _, _, _, later = vm.screenshot().split(b"\n", 3)
@@ -7899,6 +7941,10 @@ def display_suite(args, disk):
             log = vm.command("dmesg -s compositor", raw=True)
             assert re.search(r"\[COMPOSITOR\] SCREEN \d+X\d+, STRIDE \d+, FORMAT (BGR|RGB|BIT MASKS)", log), (name, log)
             assert re.search(r"SCREEN IN FRONT #1: FIRST FRAME IN \d+ MS, \d+ OF \d+ PIXELS NOT BLACK", log), (name, log)
+            # 213-APP-0075: the shell names its first frame; with no start script, no AUTORUN line (000-APP-0079).
+            log = vm.command("dmesg -s shell", raw=True)
+            assert re.search(r"\[SHELL\] FIRST FRAME \d+X\d+ AT \d+\.\d S", log), (name, log)
+            assert "AUTORUN" not in log, (name, log)
             started = re.search(r"PID=(\d+) NAME=app BACKGROUND", vm.command("run app &"))
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
@@ -7911,9 +7957,42 @@ def display_suite(args, disk):
             assert seen == b"\xff\x00\x00", (name, seen)
         finally:
             vm.close()
-    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
+    print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front, the shell its first frame", flush=True)
     if args.arch == "x86_64":
         no_serial_check(args, disk)
+    autorun_check(args, disk)
+
+
+def autorun_check(args, disk):
+    """000-APP-0079: `autorun.msh` at the boot volume's root runs once at the shell's start, after its first frame, under
+    its own `requires:` line; the system log has its SHA-256 and its end. The shell's file client cannot write there."""
+    scripts = {
+        "ran": ("#!msh\nrequires: files\nwrite ram:autorun.txt \"autorun wrote this\"\nprint(\"autorun ran\")\n", "autorun ran", "OK"),
+        "limited": ("#!msh\nls data > ram:autorun.txt\nprint(\"not reached\")\n", "SCRIPT FAILED", "FAILED: > needs `requires: files` in the script (LINE 2)"),
+    }
+    try:
+        for name, (script, shown, ended) in scripts.items():
+            (disk / "autorun.msh").write_text(script)
+            sign_manifest.sign_volume(disk)
+            # No `ps` at the first prompt, as VM() types: keys typed while a script runs go to its Esc check.
+            vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
+            try:
+                vm.expect("MIND> ", timeout=90, after=shown)  # one wait: a match drops what came with it
+                log = vm.command("dmesg -s shell", raw=True)
+                digest = hashlib.sha256(script.encode()).hexdigest()
+                require(log, f"[SHELL] AUTORUN /autorun.msh SHA256 {digest}")
+                require(log, f"[SHELL] AUTORUN ENDED {ended}")
+                assert log.count("AUTORUN ENDED") == 1, log
+                if name == "ran":
+                    require(vm.command("cat ram:autorun.txt"), "autorun wrote this")
+                    require(vm.command("write /autorun.msh print(1)"), "ERROR")
+            finally:
+                vm.close()
+    finally:
+        (disk / "autorun.msh").unlink(missing_ok=True)
+        sign_manifest.sign_volume(disk)
+    print("PASS: autorun.msh at the boot volume's root runs once after the shell's first frame, its hash and end in the "
+          "log; a word its requires: lacks fails it; the shell cannot write the root", flush=True)
 
 
 def clock_suite(args, disk):

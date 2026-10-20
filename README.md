@@ -589,17 +589,16 @@ steps:
 
 The thin `HH:MM:SS` line starts visible. Press **D** to hide/show it (PS/2 or
 UART). A small gray dot moves on a faint, one-pixel orbit between the center
-and corner indicators. **C** selects the orbit with one thin reference tick
-toward the first hour corner (bottom right, 00–05); **P** selects the same orbit with nine additional, shorter
+and corner indicators. **C** selects the orbit with one thin grey reference tick,
+its zero seconds, pointing at the active hour's corner (bottom right for 00–05,
+bottom left for 06–11, and so on); it moves with the hour every six hours
+(000-APP-0080). **P** selects the same orbit with nine additional, shorter
 ticks every ten seconds. Pressing the active mode's key again hides the entire
 orbit and dot; pressing the other key switches modes directly. The orbit
 starts hidden. The simple **C** orbit uses a darker gray than the **P** orbit.
-A colored marker just outside the orbit points toward the current hour corner
-(bottom-left at 08:20), using that corner's color. The gray bottom-right tick
-remains the fixed zero of the 100-second cycle.
 The dot's diameter is half the former moving stroke's length
 (six pixels at the usual display size).
-The dot starts toward the bottom-right corner and moves clockwise, completing
+The dot starts at that tick, toward the hour's corner, and moves clockwise, completing
 one turn per 100 seconds, synchronized
 with the white corner intervals. It updates every 100 ms using uptime
 interpolation between RTC readings. The drawing restores the orbit/ticks

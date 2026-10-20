@@ -1,5 +1,6 @@
 // Corner indices run clockwise: top right, bottom right, bottom left, top left.
-// Both the first hour range and the orbit's zero-second reference start here.
+// The first hour range starts here; the orbit's zero-second reference points
+// at the active hour's corner (`Face::hour`, 000-APP-0080).
 pub const FIRST_CORNER: usize = 1;
 pub const COLORS: [u32; 6] = [0xFF0000, 0xFFFF00, 0x00FF00, 0x00FFFF, 0x0000FF, 0xFF00FF];
 pub const WHITE: u32 = 0x606060;
@@ -9,12 +10,15 @@ pub const OFF: u32 = 0x080C12;
 pub struct Face {
     pub corners: [u32; 4],
     pub center: u32,
+    /// The active hour's corner: the orbit's zero seconds point at it.
+    pub hour: usize,
 }
 
 impl Face {
     pub const DARK: Self = Self {
         corners: [OFF; 4],
         center: OFF,
+        hour: FIRST_CORNER,
     };
 
     pub fn at(seconds: usize) -> Option<Self> {
@@ -27,6 +31,7 @@ impl Face {
         let mut face = Self {
             corners: [OFF; 4],
             center: COLORS[(seconds / 600) % 6],
+            hour: hour_corner,
         };
         face.corners[hour_corner] = COLORS[hour % 6];
         for free in 0..3 {
