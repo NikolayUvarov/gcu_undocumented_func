@@ -173,15 +173,19 @@ impl Host {
             let descriptor: [u8; 9] = self.small(9).try_into().ok()?;
             Some((descriptor[2].min(15), ((descriptor[3] >> 5) & 3) as u8, descriptor[5] as u64 * 2))
         };
-        // The endpoints of the interfaces a class driver serves (and a hub's status endpoint), in one Configure Endpoint.
-        let wanted = |class: u8| SERVED.contains(&class) || (class == CLASS_HUB && hub.is_some());
+        // The endpoints of the interfaces a class driver serves, a USB-serial converter's included (800-DRV-0034), and a
+        // hub's status endpoint, in one Configure Endpoint.
+        let wanted = |info: &Interface| SERVED.contains(&info.class) || claims(mind::usb::BADGE_SERIAL, info) || (info.class == CLASS_HUB && hub.is_some());
         let mut planned = [(0u8, 0u32, 0u16, 0u8); MAX_RINGS];
         let (mut add, mut entries, mut rings, mut ring_count, mut status) = (1u32, 1u32, [(0u8, Ring::default()); MAX_RINGS], 0, None);
-        for iface in interfaces[..count].iter().filter(|i| wanted(i.info.class)) {
+        for iface in interfaces[..count].iter().filter(|i| wanted(&i.info)) {
             for endpoint in iface.info.endpoints() {
                 if !(endpoint.is_bulk() || endpoint.is_interrupt()) || ring_count == MAX_RINGS { continue; }
                 let (target, input) = (dci(endpoint.address), endpoint.is_in());
-                let Some(ring) = self.xhci.ring(endpoint.is_interrupt() && input) else { break };
+                // An interrupt IN ring keeps its report buffers in its own page; so does a converter's bulk IN ring, which
+                // `reports` polls the same way (800-DRV-0034).
+                let polled = input && (endpoint.is_interrupt() || endpoint.is_bulk() && claims(mind::usb::BADGE_SERIAL, &iface.info));
+                let Some(ring) = self.xhci.ring(polled) else { break };
                 let kind = match (endpoint.is_bulk(), input) { (true, false) => EP_BULK_OUT, (true, true) => EP_BULK_IN, (false, false) => EP_INTERRUPT_OUT, (false, true) => EP_INTERRUPT_IN };
                 // The interval as 2^n units of 125 µs: frames (1 ms) at full and low speed, an exponent above.
                 let interval = if !endpoint.is_interrupt() { 0 } else if device.speed >= 3 { endpoint.interval.clamp(1, 16) - 1 }
@@ -207,7 +211,7 @@ impl Host {
             for port in 1..=ports { let _ = self.control(index, 0x23, 3, 8, port as u16, 0); } // SET_FEATURE PORT_POWER
             mind::time::sleep(power.clamp(20, 500) as usize);
             // Every port is looked at once; after that only those the status endpoint reports (all, without one).
-            let armed = status.is_some_and(|(target, ring, packet)| self.xhci.arm(slot, target, ring, packet));
+            let armed = status.is_some_and(|(target, ring, packet)| self.xhci.arm(slot, target, ring, packet, false));
             if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; d.pending = 0xFFFE; d.status = if armed { status.map_or(0, |s| s.0) } else { 0 }; }
         }
         Some(())
@@ -459,7 +463,7 @@ impl Host {
             Some(armed) => armed,
             None => {
                 let ring = device.rings[..device.ring_count].iter().find(|r| r.0 == target).ok_or(Error::Invalid)?.1;
-                if !self.xhci.arm(device.slot, target, ring, endpoint.packet) { return Err(Error::NoMemory); }
+                if !self.xhci.arm(device.slot, target, ring, endpoint.packet, endpoint.is_bulk()) { return Err(Error::NoMemory); }
                 mind::println!("[USB] SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", device.slot, target, endpoint.packet, endpoint.interval);
                 self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }

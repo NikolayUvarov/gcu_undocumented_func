@@ -21,6 +21,17 @@
 - **In QEMU,** `usb_serial` claims the emulated FT232 (`-device usb-serial`) under `BADGE_SERIAL`, sets it up and moves 1 MiB each way through it (800-LNK-0002's run).
 - **The other class drivers** still claim only their own class: the USB suites pass.
 
+## Progress
+
+**2026-10-20, a local QEMU run, before the gate.**
+- **The setup:** QEMU's emulated FT232 (`-device usb-serial` on `qemu-xhci`, its line on a pseudo-terminal), with `init` patched locally to start `usb_serial` and `link`. That patch is KRN's to make and is not committed.
+- **The run:** `usb_host` gave the converter to `usb_serial` under `BADGE_SERIAL`, took its setup requests and polled its bulk IN endpoint. 1 MiB went each way intact (800-LNK-0002, 0003).
+- **Two faults the run found, both fixed:**
+  - **A converter's endpoints got no rings.** They are built only for the interfaces of served classes, so `reports` refused the endpoint. A converter's interface now counts as served.
+  - **The bulk IN ring held its own report buffers over its transfers.** A bulk ring fills its page, and the buffers sit at 0x400, so the endpoint stalled after 64 transfers. A converter's bulk IN endpoint now gets the polling ring, 64 transfers with the buffers after them, and `arm` refuses any other ring.
+- **Flow control:** a bulk IN endpoint is now lossless. A transfer goes back on the ring only while the 8-report queue has room for its packet, so the device holds what does not fit (NAK) instead of the oldest report being dropped. On emulated xHCI, re-armed transfers complete at once, and the old drop-oldest queue lost the middle of 600-byte frames.
+- **Left:** the USB suites in the gate, and a run on real hardware.
+
 ## Related
 
 [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), `usb_host/src/main.rs`, `libmind/src/usb.rs`.
