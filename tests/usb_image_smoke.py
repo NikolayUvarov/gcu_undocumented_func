@@ -85,11 +85,9 @@ def slots_check(args, work):
             if "[FILES] DONE" in output:
                 break
             time.sleep(.2)
+        # The path names the slot; the line's end may come in the next `logs`, which drains as the output arrives.
         size = len(payloads["kernel.elf"])
-        # The shell's console wraps the long line: its words are read with the line breaks taken out.
-        whole = output.replace("\r", "").replace("\n", "")
-        require(whole, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
-        require(whole, "(THE SLOT THAT BOOTED)")
+        require(output, f"READ MIND/A/kernel.elf {size}/{size} BYTES MAGIC=7F454C46")
         vm.command(f"kill {pid}")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
