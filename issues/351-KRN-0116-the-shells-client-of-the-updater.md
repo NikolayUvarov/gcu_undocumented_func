@@ -1,6 +1,6 @@
 # 351-KRN-0116 — The shell holds a client of `updater` in `SLOT_UPDATE`
 
-**Type:** `init`, ABI (`common/abi.rs`, ABI 11, with 351-KRN-0115) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.4, MC-9.5
+**Type:** `init`, ABI (`common/abi.rs`, ABI 12, with 351-KRN-0115) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-3.4, MC-9.5
 
 ## Problem
 
@@ -8,7 +8,7 @@
 
 ## Plan
 
-1. **A fixed slot `SLOT_UPDATE`** for the shell, in ABI 11 with `SLOT_SSH` (351-KRN-0115).
+1. **A fixed slot `SLOT_UPDATE`** for the shell, in ABI 12 with `SLOT_SSH` (351-KRN-0115).
 2. **`init` gives the shell an unbadged client.** The updater checks no badge: every request ends in a check of signed releases, and `apply` and `rollback` ask the user through the shell's command.
 3. **Not a launch slot yet.** The shell does not lend it to programs until the tools track asks for `update` in `msh`; then a request flag is a later ABI step.
 4. **When `updater` restarts,** `init` gives the shell a new client, as for the other services the shell holds.

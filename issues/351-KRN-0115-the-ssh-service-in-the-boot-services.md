@@ -1,6 +1,6 @@
 # 351-KRN-0115 — The SSH service in the boot services: `ssh` started by `init`, `keystore`'s client with `BADGE_KEY_SSH`, `SLOT_SSH` and `REQUEST_SSH`
 
-**Type:** `init`, ABI (`common/abi.rs`, ABI 11, with 351-KRN-0116), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-2.3, MC-3.4, MC-11.9
+**Type:** `init`, ABI (`common/abi.rs`, ABI 12, with 351-KRN-0116), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-2.3, MC-3.4, MC-11.9
 
 ## Problem
 
@@ -17,7 +17,7 @@ The network track's `ssh` service ([351-NET-0027](351-NET-0027-the-ssh-service.m
 4. **Its clients:**
    - the shell's, in a new fixed slot `SLOT_SSH`, with `CAP_BADGE` as `SLOT_TLS` (000-KRN-0109);
    - for programs, `REQUEST_SSH` lends the launcher's client in the same slot, for a program that also gets a flow grant, as `REQUEST_TLS` does. `SLOT_SSH` joins `LAUNCH_SLOTS`.
-5. **ABI 11** goes with `libmind`, `docs/api`, the README's slot table and `check`'s `launch: every slot`. It moves `SLOT_DYNAMIC` up.
+5. **ABI 12** goes with `libmind`, `docs/api`, the README's slot table and `check`'s `launch: every slot`. It moves `SLOT_DYNAMIC` up.
 
 ## Acceptance criteria
 
