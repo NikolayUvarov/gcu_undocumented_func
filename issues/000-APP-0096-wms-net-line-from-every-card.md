@@ -29,7 +29,9 @@
 
 ## Acceptance criteria
 
-- **The `net` suite** (x86, aarch64): `wm` logs `[WM] NET IN … (EVERY CARD'S FRAMES, n CARDS, w WI-FI, THE FIRST RATE)`, with `1 WI-FI` when the stand-in radio runs (`wlansim`).
+- **The `net` suite** (x86, aarch64): `wm` logs `[WM] NET IN … (EVERY CARD'S FRAMES, n CARDS, w WI-FI, THE FIRST RATE)`:
+  - with the wired card: its frames, `0 WI-FI` (the station is the stack's card only once joined);
+  - over Wi-Fi alone (the suite's last VM, no wired card, after `wifi join` with the stand-in radio `wlansim`): `1 CARDS, 1 WI-FI`, which the card client could not give.
 - **The MacBook Pro over Wi-Fi:** the line moves while a download runs.
 
 ## Progress (2026-10-20)
@@ -37,7 +39,7 @@
 - **`idl/shell.wit` 1.7** and `libmind/src/idl/shell.rs` (generated).
 - **`shell/src/net.rs` `card_counters`;** the shell's `net-counters` answer for the window managers it started.
 - **`wm/src/main.rs` `net_frames`:** the shell first, the card client second, the reason otherwise, the 10 s pause after a slow answer.
-- **The `net` suite** reads the first rate's line with the cards counted.
+- **The `net` suite** reads the first rate's line with the cards counted, with the wired card and over Wi-Fi alone. The first gate run expected the station before its join: the stack lists it only once joined (`1 CARDS, 0 WI-FI` on i9 and un-rizen-service), so the Wi-Fi check moved after the join.
 - **Docs:** `docs/tools` (EN, RU), `docs/idl`.
 - **Left:** the gate; the MacBook Pro's run.
 
