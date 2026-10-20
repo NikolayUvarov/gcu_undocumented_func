@@ -98,7 +98,7 @@ The slave refuses any other name with DENIED.
 **HELLO (1).**
 - Request: `version u8 = 1`, `role u8 = 0` (master), `max_payload u16`, then the master's name (optional).
 - Answer: `version u8`, `role u8 = 1` (slave), `max_payload u16`, then the slave's name (optional).
-- `max_payload` is 64 to 1024; a slave takes a smaller one as 64. Each end then sends payloads no larger than the smaller `max_payload`.
+- `max_payload` is 64 to 1024; a slave takes a smaller one as 64. Each end then sends payloads no larger than the smaller `max_payload`. A master may announce less than it can take, for a line that loses bytes or a converter with a small buffer.
 
 **POLL (2).** Empty request, empty answer: the line is alive.
 
@@ -157,9 +157,10 @@ The slave refuses any other name with DENIED.
 ### Log (channel 3)
 
 **LOG (30).**
-- Request: `cursor u64`, 0 from the start of the log.
-- Answer: `next u64`, then the log's bytes from `cursor`.
-- The master asks again from `next`. An answer with no bytes means nothing new yet.
+- Request: `cursor u64`: 0 from the start of the log, else the `next` of the last answer.
+- Answer: `next u64`, then the log's text from `cursor`, whole lines.
+- What the cursor counts is the slave's: `mindlink serve` counts bytes of its log file, MIND Core's `link` the system log's sequence numbers. The master only hands it back.
+- The master asks again from `next`. An answer with no text means nothing new yet.
 
 ### Input (channel 4)
 

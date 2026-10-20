@@ -29,7 +29,9 @@ commands: hello                       the other end's name and version
 options:  --baud <rate>               serial rate (default 115200)
           --timeout <ms>              how long one try waits for an answer (default from the rate)
           --tries <n>                 tries for each request (default 8)
-          --turnaround <us>           serve: pause before each answer, for RS-485 converters (default 500)";
+          --turnaround <us>           serve: pause before each answer, for RS-485 converters (default 500)
+          --payload <bytes>           the largest frame's payload, 64 to 1024 (default 1024): smaller for a noisy line,
+                                      or for QEMU's emulated converter, whose buffer holds 384 bytes";
 
 pub fn hex(bytes: &[u8]) -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() }
 
@@ -71,11 +73,11 @@ fn rate(bytes: u64, t: Duration) -> String {
     format!("{:.1} s, {:.1} KB/s", s, bytes as f64 / s / 1000.0)
 }
 
-struct Options { baud: u32, timeout: Option<u32>, tries: u32, turnaround_us: u64 }
+struct Options { baud: u32, timeout: Option<u32>, tries: u32, turnaround_us: u64, payload: usize }
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let mut o = Options { baud: 115200, timeout: None, tries: 8, turnaround_us: 500 };
+    let mut o = Options { baud: 115200, timeout: None, tries: 8, turnaround_us: 500, payload: linkproto::frame::MAX_PAYLOAD };
     let num = |args: &mut Vec<String>, i: usize| -> u64 {
         let v = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or_else(|| die(format!("{} takes a number", args[i])));
         args.drain(i..i + 2);
@@ -88,6 +90,7 @@ fn main() {
             "--timeout" => o.timeout = Some(num(&mut args, i) as u32),
             "--tries" => o.tries = num(&mut args, i).max(1) as u32,
             "--turnaround" => o.turnaround_us = num(&mut args, i),
+            "--payload" => o.payload = num(&mut args, i) as usize,
             "-h" | "--help" => { println!("{USAGE}"); return; }
             _ => i += 1,
         }
@@ -106,6 +109,7 @@ fn main() {
     let mut c = Client::new(port);
     c.master.timeout_ms = wait;
     c.master.tries = o.tries;
+    c.max_payload = o.payload;
     let mut theirs = [0u8; 64];
     let (hello, n) = c.hello("mindlink", &mut theirs).unwrap_or_else(|e| die(format!("{spec}: {}", explain(e))));
     let result = match (cmd.as_str(), args.iter().map(String::as_str).collect::<Vec<_>>().as_slice()) {
@@ -125,7 +129,7 @@ fn main() {
         ("get", [name]) => get(&mut c, name, Path::new(name)),
         ("get", [name, file]) => get(&mut c, name, Path::new(file)),
         ("ls", []) => ls(&mut c),
-        ("stat", [name]) => c.stat(name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
+        ("stat", [name]) => stat(&mut c, name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
         ("rm", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
@@ -135,12 +139,21 @@ fn main() {
     if let Err(e) = result { die(explain(e)); }
 }
 
+/// The other end hashes the whole file to answer, which on a slow store takes seconds: each try waits at least 15 s.
+fn stat(c: &mut Client<port::Port>, name: &str) -> Result<(u64, [u8; 32]), Error> {
+    let wait = c.master.timeout_ms;
+    c.master.timeout_ms = wait.max(15_000);
+    let r = c.stat(name);
+    c.master.timeout_ms = wait;
+    r
+}
+
 fn put(c: &mut Client<port::Port>, path: &Path, name: Option<&str>, force: bool) -> Result<(), Error> {
     let mut file = File::open(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
     let size = file.metadata().map(|m| m.len()).unwrap_or_else(|e| die(e));
     let name = name.map(str::to_string).unwrap_or_else(|| path.file_name().and_then(|n| n.to_str()).unwrap_or_else(|| die("give the file a name")).to_string());
     if !force {
-        if let Ok((their_size, digest)) = c.stat(&name) {
+        if let Ok((their_size, digest)) = stat(c, &name) {
             let mut sha = linkproto::sha256::Sha256::new();
             let mut buf = vec![0u8; 1 << 16];
             loop { let n = file.read(&mut buf).unwrap_or_else(|e| die(e)); if n == 0 { break; } sha.update(&buf[..n]); }

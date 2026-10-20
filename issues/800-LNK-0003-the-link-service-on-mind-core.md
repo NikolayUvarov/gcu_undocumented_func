@@ -1,6 +1,6 @@
 # 800-LNK-0003 — `link`, MIND Core's end of the link: files, the log and a console, under explicit grants
 
-**Type:** service · **Owner:** `LNK` · **Priority:** P1 · **Status:** open · **Blocked by:** [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md); `KRN`: `init` starting `link` with its grants · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-11.4
+**Type:** service · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress · **Blocked by:** [800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md); `KRN`: `init` starting `link` with its grants · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-11.4
 
 ## Problem
 
@@ -24,6 +24,29 @@ A MIND Core machine needs an end of the link that the other machine can reach. T
   - reads the system log;
   - is refused any path outside `data/link/`.
 - **On the MacBook Pro or the Ryzen,** the same through the RS-485 converters, from WSL.
+
+## Progress
+
+**2026-10-20, on `claude/LNK-link`.**
+- **`link` is written:** `linkproto`'s slave over `serial.wit`.
+  - **Files** only in `data/link/`. A put is written to `data/link/link-part.tmp` 16 KiB at a time and renamed only when its SHA-256 matches. A get reads 16 KiB ahead. The SHA-256 of the last eight files received is kept, so `stat` answers at once for them.
+  - **The system log** comes from its sequence numbers. There is no console.
+  - **The rate** comes from its arguments, `baud=<rate>`.
+  - **Logged:** hellos, files, refusals, and damaged frames.
+- **The QEMU run,** with `init` patched locally (KRN's part, not committed):
+  - a 1 MiB put and get with matching SHA-256;
+  - `ls`, `stat`, `rm`, the log;
+  - `../escape.bin` and `../init.elf` refused (DENIED).
+
+  In that run `link` held an ordinary user vfs client. So the confinement shown is `link`'s own check of names, not yet a vfs client confined to `data/link/` (750-KRN-0120).
+- **Found in the run, and fixed:**
+  - each put's data written straight to the volume took about 140 ms a frame;
+  - `stat` of a large file hashed it for longer than the master waited (`mindlink` now waits at least 15 s for `stat`).
+- **Left: from KRN,**
+  - `init` starting `link` when `link.conf` is at the root, with its words as arguments;
+  - a writable vfs client confined to `data/link/`;
+  - a reading log client;
+  - `usb_serial`'s client.
 
 ## Related
 

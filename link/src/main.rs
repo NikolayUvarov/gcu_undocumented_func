@@ -52,14 +52,49 @@ fn io(e: fs::Error) -> u8 {
     match e { fs::Error::NotFound => code::NOT_FOUND, fs::Error::Denied | fs::Error::ReadOnly | fs::Error::Name => code::DENIED, _ => code::IO }
 }
 
-/// The files of data/link/ and the system log.
-struct Store { put: Option<(File, [u8; 255], usize)>, get: Option<File> }
+/// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
+/// KiB ahead: each request carries at most 1 KiB, and a write to the volume costs far more than its bytes.
+struct Store { put: Option<(File, [u8; 255], usize)>, get: Option<File>, buffer: [u8; CHUNK], start: usize, len: usize, known: [Known; KNOWN] }
+
+/// The SHA-256 of files received here, so `stat` answers at once for them; the oldest is forgotten first.
+#[derive(Clone, Copy)]
+struct Known { name: [u8; 255], len: usize, size: u64, digest: [u8; 32] }
+const KNOWN: usize = 8;
+const UNKNOWN: Known = Known { name: [0; 255], len: 0, size: 0, digest: [0; 32] };
+
+const CHUNK: usize = 16 * 1024;
+
+impl Store {
+    fn forget(&mut self, name: &str) {
+        for k in self.known.iter_mut().filter(|k| &k.name[..k.len] == name.as_bytes()) { *k = UNKNOWN; }
+    }
+
+    fn remember(&mut self, name: &str, size: u64, digest: &[u8; 32]) {
+        self.forget(name);
+        self.known.rotate_right(1);
+        let k = &mut self.known[0];
+        k.name[..name.len()].copy_from_slice(name.as_bytes());
+        (k.len, k.size, k.digest) = (name.len(), size, *digest);
+    }
+
+    // The gathered bytes of a put written out.
+    fn drain(&mut self) -> Result<(), u8> {
+        let Some((file, _, _)) = self.put.as_mut() else { return Ok(()) };
+        if self.len > 0 {
+            match file.write_at(self.start, &self.buffer[..self.len]) { Ok(n) if n == self.len => {}, Ok(_) => return Err(code::IO), Err(e) => return Err(io(e)) }
+        }
+        self.start += self.len;
+        self.len = 0;
+        Ok(())
+    }
+}
 
 impl Files for Store {
     fn create(&mut self, name: &str, size: u64) -> Result<(), u8> {
         if size > u32::MAX as u64 { return Err(code::IO); }
         self.put = None;
         let file = File::create(PART).map_err(io)?;
+        (self.start, self.len) = (0, 0);
         let mut kept = [0u8; 255];
         kept[..name.len()].copy_from_slice(name.as_bytes());
         mind::println!("[LINK] RECEIVING {} ({} BYTES)", name, size);
@@ -68,12 +103,22 @@ impl Files for Store {
     }
 
     fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), u8> {
-        let (file, _, _) = self.put.as_mut().ok_or(code::BAD_REQUEST)?;
-        match file.write_at(offset as usize, data) { Ok(n) if n == data.len() => Ok(()), Ok(_) => Err(code::IO), Err(e) => Err(io(e)) }
+        if self.put.is_none() || offset as usize != self.start + self.len { return Err(code::BAD_REQUEST); }
+        let mut rest = data;
+        while !rest.is_empty() {
+            let n = rest.len().min(CHUNK - self.len);
+            self.buffer[self.len..self.len + n].copy_from_slice(&rest[..n]);
+            self.len += n;
+            rest = &rest[n..];
+            if self.len == CHUNK { self.drain()?; }
+        }
+        Ok(())
     }
 
     fn commit(&mut self, digest: &[u8; 32], matches: bool) -> Result<(), u8> {
+        let drained = self.drain();
         let (file, kept, len) = self.put.take().ok_or(code::BAD_REQUEST)?;
+        drained?;
         let name = core::str::from_utf8(&kept[..len]).map_err(|_| code::BAD_REQUEST)?;
         if !matches {
             drop(file);
@@ -87,7 +132,9 @@ impl Files for Store {
         let target = path(name, &mut buf);
         // A file of the same name is replaced.
         let _ = fs::remove(target);
+        self.forget(name);
         fs::rename(PART, target).map_err(io)?;
+        self.remember(name, self.start as u64, digest);
         mind::println!("[LINK] RECEIVED {}: SHA-256 {}", name, Hex(digest));
         Ok(())
     }
@@ -98,17 +145,27 @@ impl Files for Store {
         let size = file.size() as u64;
         mind::println!("[LINK] SENDING {} ({} BYTES)", name, size);
         self.get = Some(file);
+        (self.start, self.len) = (0, 0);
         Ok(size)
     }
 
     fn read_at(&mut self, offset: u64, out: &mut [u8]) -> Result<usize, u8> {
         let file = self.get.as_ref().ok_or(code::BAD_REQUEST)?;
-        match file.read_at(offset as usize, out) { Ok(0) => Err(code::IO), Ok(n) => Ok(n), Err(e) => Err(io(e)) }
+        let offset = offset as usize;
+        if offset < self.start || offset >= self.start + self.len {
+            self.len = match file.read_at(offset, &mut self.buffer) { Ok(0) => return Err(code::IO), Ok(n) => n, Err(e) => return Err(io(e)) };
+            self.start = offset;
+        }
+        let at = offset - self.start;
+        let n = out.len().min(self.len - at);
+        out[..n].copy_from_slice(&self.buffer[at..at + n]);
+        Ok(n)
     }
 
     fn stat(&mut self, name: &str) -> Result<(u64, [u8; 32]), u8> {
         let mut buf = [0u8; 320];
         let file = File::open(path(name, &mut buf)).map_err(io)?;
+        if let Some(k) = self.known.iter().find(|k| k.len > 0 && &k.name[..k.len] == name.as_bytes() && k.size == file.size() as u64) { return Ok((k.size, k.digest)); }
         let mut sha = mind::sha256::Sha256::new();
         let mut chunk = [0u8; 4096];
         let mut at = 0;
@@ -124,6 +181,7 @@ impl Files for Store {
     fn delete(&mut self, name: &str) -> Result<(), u8> {
         let mut buf = [0u8; 320];
         fs::remove(path(name, &mut buf)).map_err(io)?;
+        self.forget(name);
         mind::println!("[LINK] DELETED {}", name);
         Ok(())
     }
@@ -183,8 +241,10 @@ impl core::fmt::Display for Hex<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result { for b in self.0 { write!(f, "{:02x}", b)?; } Ok(()) }
 }
 
+static mut STORE: Store = Store { put: None, get: None, buffer: [0; CHUNK], start: 0, len: 0, known: [UNKNOWN; KNOWN] };
+
 /// The service with each hello and refusal logged.
-struct Logged(FileService<Store>);
+struct Logged(FileService<&'static mut Store>);
 impl Service for Logged {
     fn handle(&mut self, ch: u8, k: u8, p: &[u8], reply: &mut [u8]) -> Result<usize, u8> {
         if (ch, k) == (channel::CONTROL, kind::HELLO) {
@@ -215,10 +275,17 @@ fn main(_info: &'static BootInfo) {
             _ => { if !said { mind::println!("[LINK] WAITING FOR A SERIAL CONVERTER"); said = true; } mind::time::sleep(1000); }
         }
     }
-    let mut service = Logged(FileService::new(Store { put: None, get: None }));
+    let store: &'static mut Store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };
+    let mut service = Logged(FileService::new(store));
     service.0.set_name("MIND Core link");
     let mut slave = Slave::new(Port { endpoint, pending: [0; 4096], at: 0, len: 0 });
+    let mut dropped = 0;
     loop {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
+        // Damaged frames say the line is noisy or the rates differ.
+        if slave.stats.dropped != dropped {
+            dropped = slave.stats.dropped;
+            mind::println!("[LINK] {} DAMAGED FRAMES DROPPED SO FAR", dropped);
+        }
     }
 }

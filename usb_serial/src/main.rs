@@ -49,8 +49,9 @@ fn vendor(port: &mut Port, request: u8, value: u16, index: u16) -> Result<(), se
 }
 
 impl Port {
-    // The first converter usb_host has, set up at FIRST_BAUD; None when there is none now.
-    fn claim(host: Host) -> Result<Port, Host> {
+    // The first converter usb_host has, set up at `baud` (the client's last rate, so a converter plugged in again keeps
+    // it); Err when there is none now.
+    fn claim(host: Host, baud: u32) -> Result<Port, Host> {
         let mut host = host;
         let Ok((handle, info)) = host.claim() else { return Err(host) };
         let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
@@ -71,7 +72,7 @@ impl Port {
                 return Err(port.host);
             }
         }
-        if port.configure(FIRST_BAUD).is_err() { let _ = port.host.release(port.handle); return Err(port.host); }
+        if port.configure(baud).is_err() { let _ = port.host.release(port.handle); return Err(port.host); }
         mind::println!("[SERIAL] FTDI {:04X}:{:04X} AT {} BIT/S (MAKES {}), 8N1, NO FLOW CONTROL", port.vendor, port.product, port.baud, port.actual);
         Ok(port)
     }
@@ -83,8 +84,8 @@ impl Port {
         Ok(actual)
     }
 
-    // The packets usb_host collected, their data into `queue`; false when the converter is gone.
-    fn collect(&mut self, queue: &mut Queue) -> bool {
+    // The packets usb_host collected, their data into `queue`; the error when the converter is gone.
+    fn collect(&mut self, queue: &mut Queue) -> Result<(), mind::sys::Error> {
         let mut data = [0u8; 8 * 64];
         let mut at = 0;
         let mut errors = 0;
@@ -95,7 +96,7 @@ impl Port {
         });
         queue.push(&data[..at]);
         queue.errors = queue.errors.wrapping_add(errors);
-        r.is_ok()
+        r.map(|_| ())
     }
 
     fn write(&mut self, data: &[u8]) -> Result<(), serial::Error> {
@@ -109,28 +110,34 @@ impl Port {
     }
 }
 
-enum State { Up(Port), Down(Host) }
+// Up with the converter, or down with the rate to set when one comes.
+enum State { Up(Port), Down(Host, u32) }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let Ok(host) = Host::new(Endpoint(SLOT_DEV0)) else { mind::println!("[SERIAL] NO USB HOST"); return };
-    let mut state = match Port::claim(host) { Ok(port) => State::Up(port), Err(host) => { mind::println!("[SERIAL] NO CONVERTER YET"); State::Down(host) } };
+    let mut state = match Port::claim(host, FIRST_BAUD) { Ok(port) => State::Up(port), Err(host) => { mind::println!("[SERIAL] NO CONVERTER YET"); State::Down(host, FIRST_BAUD) } };
     let queue: &'static mut Queue = unsafe { &mut *core::ptr::addr_of_mut!(QUEUE_SPACE) };
     let mut scratch = [0u8; serial::REQUEST_MAX];
     let mut out = [0u8; 4096];
     let mut waiters: [Option<(wire::Call, u64)>; WAITERS] = [const { None }; WAITERS];
     let mut retry_at = 0u64;
+    let (mut lost, mut errors) = (0, 0);
     loop {
+        if (queue.lost, queue.errors) != (lost, errors) {
+            (lost, errors) = (queue.lost, queue.errors);
+            mind::println!("[SERIAL] {} BYTES LOST (NOT TAKEN IN TIME), {} PACKETS WITH LINE ERRORS SO FAR", lost, errors);
+        }
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         let now = mind::time::uptime_ms() as u64;
         state = match state {
-            State::Up(mut port) => if port.collect(queue) { State::Up(port) } else {
-                mind::println!("[SERIAL] THE CONVERTER IS GONE");
+            State::Up(mut port) => if let Err(e) = port.collect(queue) {
+                mind::println!("[SERIAL] THE CONVERTER IS GONE ({:?})", e);
                 let _ = port.host.release(port.handle);
-                State::Down(port.host)
-            },
+                State::Down(port.host, port.baud)
+            } else { State::Up(port) },
             // Looked for again every second: a converter plugged in later, or back.
-            State::Down(host) if now >= retry_at => { retry_at = now + 1000; match Port::claim(host) { Ok(port) => State::Up(port), Err(host) => State::Down(host) } }
+            State::Down(host, baud) if now >= retry_at => { retry_at = now + 1000; match Port::claim(host, baud) { Ok(port) => State::Up(port), Err(host) => State::Down(host, baud) } }
             down => down,
         };
         for slot in waiters.iter_mut() {
@@ -143,7 +150,7 @@ fn main(_info: &'static BootInfo) {
             Ok(decoded) => decoded,
             Err(reason) => { if request.is_call { let _ = wire::reject(reason); } continue; }
         };
-        let port = match &mut state { State::Up(port) => Some(port), State::Down(_) => None };
+        let port = match &mut state { State::Up(port) => Some(port), State::Down(..) => None };
         let no = serial::Error::NoDevice;
         let _ = match request {
             serial::Request::Info => match port {

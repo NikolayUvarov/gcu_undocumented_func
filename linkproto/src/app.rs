@@ -21,23 +21,25 @@ fn u64_at(p: &[u8], at: usize) -> Option<u64> { Some(u64::from_le_bytes(p.get(at
 fn u32_at(p: &[u8], at: usize) -> Option<u32> { Some(u32::from_le_bytes(p.get(at..at + 4)?.try_into().ok()?)) }
 fn u16_at(p: &[u8], at: usize) -> Option<u16> { Some(u16::from_le_bytes(p.get(at..at + 2)?.try_into().ok()?)) }
 
-/// The master's requests.
-pub struct Client<L: Line> { pub master: Master<L>, buf: [u8; MAX_PAYLOAD], pub chunk: usize }
+/// The master's requests. `max_payload` (MIN_PAYLOAD to MAX_PAYLOAD, set before `hello`) bounds the frames both ends
+/// send: smaller frames suit a line that loses bytes or a converter with a small buffer.
+pub struct Client<L: Line> { pub master: Master<L>, buf: [u8; MAX_PAYLOAD], pub chunk: usize, pub max_payload: usize }
 
 impl<L: Line> Client<L> {
-    pub fn new(line: L) -> Self { Self { master: Master::new(line), buf: [0; MAX_PAYLOAD], chunk: MAX_PAYLOAD - DATA_HEAD } }
+    pub fn new(line: L) -> Self { Self { master: Master::new(line), buf: [0; MAX_PAYLOAD], chunk: MAX_PAYLOAD - DATA_HEAD, max_payload: MAX_PAYLOAD } }
 
     /// Hello: the other end's, its name in `theirs` (the length returned), and the chunk both can carry.
     pub fn hello(&mut self, name: &str, theirs: &mut [u8]) -> Result<(Hello, usize), Error> {
         let mut p = [0u8; 4 + NAME_MAX];
-        p[..4].copy_from_slice(&[crate::frame::VERSION, ROLE_MASTER, MAX_PAYLOAD as u8, (MAX_PAYLOAD >> 8) as u8]);
+        let ours = self.max_payload.clamp(MIN_PAYLOAD, MAX_PAYLOAD);
+        p[..4].copy_from_slice(&[crate::frame::VERSION, ROLE_MASTER, ours as u8, (ours >> 8) as u8]);
         let n = name.len().min(NAME_MAX);
         p[4..4 + n].copy_from_slice(&name.as_bytes()[..n]);
         let mut r = [0u8; MAX_PAYLOAD];
         let len = self.master.call(channel::CONTROL, kind::HELLO, &p[..4 + n], &mut r)?;
         if len < 4 { return Err(Error::Protocol); }
         let hello = Hello { version: r[0], role: r[1], max_payload: u16::from_le_bytes([r[2], r[3]]) };
-        let max = (hello.max_payload as usize).min(MAX_PAYLOAD);
+        let max = (hello.max_payload as usize).min(ours);
         if max <= DATA_HEAD { return Err(Error::Protocol); }
         self.chunk = max - DATA_HEAD;
         let n = (len - 4).min(theirs.len());
@@ -56,7 +58,7 @@ impl<L: Line> Client<L> {
         let n = self.master.call(channel::FILES, kind::PUT_OPEN, &p[..8 + name.len()], &mut r)?;
         let resume = u64_at(&r[..n], 0).ok_or(Error::Protocol)?;
         if resume > size { return Err(Error::Protocol); }
-        let Self { master, buf, chunk } = self;
+        let Self { master, buf, chunk, .. } = self;
         let mut sha = Sha256::new();
         let mut offset = 0u64;
         // What the slave holds already is only hashed here.
@@ -161,6 +163,20 @@ pub trait Files {
     fn delete(&mut self, _name: &str) -> Result<(), u8> { Err(code::UNSUPPORTED) }
     fn log(&mut self, _cursor: u64, _out: &mut [u8]) -> Result<(usize, u64), u8> { Err(code::UNSUPPORTED) }
     fn console(&mut self, _input: &[u8], _out: &mut [u8]) -> Result<usize, u8> { Err(code::UNSUPPORTED) }
+}
+
+/// A store kept elsewhere (a static, so a large buffer is off the stack).
+impl<F: Files + ?Sized> Files for &mut F {
+    fn create(&mut self, name: &str, size: u64) -> Result<(), u8> { (**self).create(name, size) }
+    fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<(), u8> { (**self).write_at(offset, data) }
+    fn commit(&mut self, digest: &[u8; 32], matches: bool) -> Result<(), u8> { (**self).commit(digest, matches) }
+    fn open(&mut self, name: &str) -> Result<u64, u8> { (**self).open(name) }
+    fn read_at(&mut self, offset: u64, out: &mut [u8]) -> Result<usize, u8> { (**self).read_at(offset, out) }
+    fn list(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { (**self).list(cursor, out) }
+    fn stat(&mut self, name: &str) -> Result<(u64, [u8; 32]), u8> { (**self).stat(name) }
+    fn delete(&mut self, name: &str) -> Result<(), u8> { (**self).delete(name) }
+    fn log(&mut self, cursor: u64, out: &mut [u8]) -> Result<(usize, u64), u8> { (**self).log(cursor, out) }
+    fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, u8> { (**self).console(input, out) }
 }
 
 /// A file's name as the slave takes it: one component, printable, none of `/ \ :` and not `.` or `..`.
