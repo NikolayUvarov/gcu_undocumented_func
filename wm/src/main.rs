@@ -421,11 +421,39 @@ fn cpu_times() -> Option<(u64, u64)> {
     Some(list.as_slice().iter().filter(|c| c.online).fold((0, 0), |(busy, idle), c| (busy + c.busy_ns, idle + c.idle_ns)))
 }
 
-// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels).
-fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) {
+// The background's pixels in the cells `cells` (indices in a grid `cols` wide, of `cell` pixels, in order): neighbours
+// in a row as one rectangle, filled by runs of one colour (000-APP-0091). How many cells it painted.
+fn paint(screen: &Screen, origin: (usize, usize), cell: (usize, usize), cols: usize, cells: impl Iterator<Item = usize>, backdrop: &Backdrop) -> usize {
+    let mut fill = |x: usize, y: usize, w: usize, h: usize, colour: u32| screen.fill(x, y, w, h, colour);
+    let (mut painted, mut run): (usize, Option<(usize, usize)>) = (0, None); // the run of cells: its first and its length
+    let mut flush = |run: (usize, usize)| {
+        let (first, length) = run;
+        backdrop.blocks(origin.0 + first % cols * cell.0, origin.1 + first / cols * cell.1, length * cell.0, cell.1, &mut fill);
+    };
     for index in cells {
-        let (x, y) = (origin.0 + index % cols * cell.0, origin.1 + index / cols * cell.1);
-        for py in y..y + cell.1 { for px in x..x + cell.0 { screen.pixel(px, py, backdrop.pixel(px, py)); } }
+        painted += 1;
+        run = match run {
+            Some((first, length)) if first + length == index && index % cols != 0 => Some((first, length + 1)),
+            Some(done) => { flush(done); Some((index, 1)) }
+            None => Some((index, 1)),
+        };
+    }
+    if let Some(done) = run { flush(done); }
+    painted
+}
+
+// The background's frame time, logged at the first frame and then once a minute (000-APP-0091): what drawing it and
+// putting it on the screen took, on average and at most.
+#[derive(Default)]
+struct FrameTimes { frames: usize, total_ms: usize, worst_ms: usize, since: usize, logged: bool }
+impl FrameTimes {
+    fn add(&mut self, ms: usize, now: usize, backdrop: &Backdrop) {
+        if self.frames == 0 { self.since = now; }
+        (self.frames, self.total_ms, self.worst_ms) = (self.frames + 1, self.total_ms + ms, self.worst_ms.max(ms));
+        if self.logged && now < self.since + 60_000 { return; }
+        mind::println!("[WM] BACKGROUND FRAME {} MS ON AVERAGE, {} MS AT MOST, {} FRAMES IN {} S ({}X{} BLOCKS OF {} PX)", self.total_ms / self.frames, self.worst_ms,
+                       self.frames, (now - self.since) / 1000, backdrop.width, backdrop.height, backdrop.unit);
+        *self = FrameTimes { logged: true, ..FrameTimes::default() };
     }
 }
 
@@ -475,6 +503,7 @@ fn main(info: &'static BootInfo) {
     // The desktop's cells that showed the background when the screen was last drawn, the clock and the CPU's times.
     let (mut shown_background, mut clock, mut cpu, mut next_pattern, mut next_info): (Vec<bool>, _, Option<(u64, u64)>, usize, usize) = (Vec::new(), mind::rtc::Clock::new(), None, 0, 0);
     let mut last_pattern = mind::time::uptime_ms();
+    let mut frame_times = FrameTimes::default();
     let mut next_clock = 0usize; // when Settings' date page reads the clock again
     let mut fresh_clock = 0usize; // until when the background's clock reads the RTC each second: the shell may set it
     manager.sync();
@@ -678,6 +707,7 @@ fn main(info: &'static BootInfo) {
         // The background: the pattern on as its speed asks, the time and the CPU load once a second; drawn again when
         // either came.
         let mut background_moved = false;
+        let mut frame_began = None; // when this loop began a frame of the background, for its frame time
         // Settings' date page shows the clock each second (000-APP-0055).
         if let Mode::Settings(settings) = &mut manager.wm.mode {
             if settings.page == wm::settings::DATE && now >= next_clock {
@@ -713,6 +743,7 @@ fn main(info: &'static BootInfo) {
             let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: None };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
+            frame_began = Some(now);
         }
         if changed || relayout {
             let focused_cursor = manager.wm.desk.focus().and_then(|id| manager.live(id)).and_then(|l| l.surface.cursor());
@@ -739,8 +770,8 @@ fn main(info: &'static BootInfo) {
             // The background in the cells that just became the desktop's, those under the pointer, or all when it moved.
             if !cells.is_empty() {
                 let fresh = |i: &usize| cells[*i] && (background_moved || !shown_background.get(*i).copied().unwrap_or(false) || touched.contains(i));
-                paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop);
-            }
+                if paint(&screen, (x0, y0), cell, cols, (0..cells.len()).filter(fresh), &backdrop) == 0 { frame_began = None; }
+            } else { frame_began = None; }
             shown_background = cells;
             if relayout { pixels = manager.wm.desk.windows.iter().filter(|w| w.content == Content::Pixels).map(|w| w.id).collect(); }
             for id in pixels {
@@ -756,7 +787,11 @@ fn main(info: &'static BootInfo) {
             // Nothing else changed: the background's cells only, and the pointer over them again.
             paint(&screen, (x0, y0), cell, term.cols(), (0..shown_background.len()).filter(|&i| shown_background[i]), &backdrop);
             if let Some((sx, sy, size)) = shown_pointer { draw_pointer(&screen, sx, sy, size, backdrop.config.pointer_colour); }
-        }
-        mind::time::sleep(if busy { 5 } else { 30 });
+        } else { frame_began = None; }
+        let after = mind::time::uptime_ms();
+        if let Some(began) = frame_began { frame_times.add(after - began, after, &backdrop); }
+        // Until the pattern's next frame is due, 30 ms at most so that keys and the mouse are not kept waiting.
+        let wait = if busy { 5 } else if backdrop.moving() { next_pattern.saturating_sub(after).clamp(1, 30) } else { 30 };
+        mind::time::sleep(wait);
     }
 }

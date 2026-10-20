@@ -2002,3 +2002,27 @@ fn a_click_on_the_safe_starts_notice_opens_the_shells_window() {
     wm.notice = Some(String::from("Started fm (PID 40) with files"));
     assert_ne!(wm.pointer(5, 49, 1, 0), Action::Run(String::from(menu::SHELL)));
 }
+
+// 000-APP-0091: the background painted by runs of one colour gives the pixels the pixel painter gives, for every block
+// size, a frame narrower than the screen (DARK beyond it), rectangles that start and end inside blocks, and nothing
+// painted twice.
+#[test]
+fn the_background_by_runs_is_the_background_by_pixels() {
+    for unit in 1..=5 {
+        let (mut b, _) = Backdrop::new(Config::default(), (64, 32), &mut |_: &str| None);
+        (b.unit, b.width, b.height) = (unit, 11, 7);
+        // Runs of one colour as well as changes at every block.
+        b.frame = (0..11 * 7).map(|i| if i % 11 < 4 { 0x112233 } else { (i as u32).wrapping_mul(2654435761) & 0xFFFFFF }).collect();
+        for &(x, y, w, h) in &[(0, 0, 70, 40), (3, 2, 9, 5), (1, 1, 1, 1), (13, 6, 30, 31), (unit * 11 - 2, 0, 7, 3)] {
+            let mut painted = vec![None; (x + w) * (y + h)];
+            b.blocks(x, y, w, h, &mut |px, py, pw, ph, colour| {
+                for yy in py..py + ph { for xx in px..px + pw {
+                    assert!(painted[yy * (x + w) + xx].replace(colour).is_none(), "painted twice: {} {}", xx, yy);
+                } }
+            });
+            for yy in y..y + h { for xx in x..x + w {
+                assert_eq!(painted[yy * (x + w) + xx], Some(b.pixel(xx, yy)), "unit {} rect {:?} at {} {}", unit, (x, y, w, h), xx, yy);
+            } }
+        }
+    }
+}
