@@ -41,11 +41,14 @@ def fsck(image):
 def quiet_volume(volume, out, updater=None):
     """A copy of the volume without keystore, which stores a new device key at the first boot: a boot stopped in that
     write would leave the file system torn, and the checks stop boots early. With `updater`, the stand-in as
-    `updater.elf`. Signed again."""
+    `updater.elf`; without, no updater: it confirms a trial on the disk as soon as init has (351-UPD-0021), and here
+    the host writes the records. Signed again."""
     shutil.copytree(volume, out)
     (out / "keystore.elf").unlink(missing_ok=True)
     if updater:
         shutil.copyfile(updater, out / "updater.elf")
+    else:
+        (out / "updater.elf").unlink(missing_ok=True)
     sign_manifest.sign_volume(out)
     return out
 

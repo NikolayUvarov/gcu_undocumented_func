@@ -73,6 +73,8 @@ pub fn run(radio: &mut Radio) -> ! {
             // No shared ring yet: frames go by `receive`.
             wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
+            // wlanhw 1.2 (550-NET-0035): no country's limits applied yet, so none taken (the drivers track's answer replaces it).
+            wlanhw::Request::SetCountry { .. } => wlanhw::reply_set_country(call, Err(wlanhw::Error::Failed)),
         };
     }
 }
@@ -98,6 +100,7 @@ pub fn absent() -> ! {
             wlanhw::Request::Wait => wlanhw::reply_wait(call, 0),
             wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(no)) }
             wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(no)),
+            wlanhw::Request::SetCountry { .. } => wlanhw::reply_set_country(call, Err(no)),
         };
     }
 }
@@ -140,5 +143,6 @@ fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) 
         wlanhw::Request::Wait => wlanhw::reply_wait(call, 0),
         wlanhw::Request::Attach { ring } => { let _ = mind::ipc::drop_cap(ring); wlanhw::reply_attach(call, Err(wlanhw::Error::Invalid)) }
         wlanhw::Request::Kick => wlanhw::reply_kick(call, Err(wlanhw::Error::Invalid)),
+        wlanhw::Request::SetCountry { .. } => wlanhw::reply_set_country(call, Err(busy)),
     };
 }

@@ -293,3 +293,67 @@ versioned radio interface or restart boundary rather than silently changing an
 existing wire contract. Preserve normal association, software WPA2 and the
 original MacBook path; validate actual hardware separately from policy fixtures.
 This request does not replace the preceding H12 deadline correction.
+
+## The regulatory catalogue as a crate of its own, and `wlanhw.wit` 1.2 for a country's limits (550-NET-0035)
+
+**Progress:** the drivers track agreed to both (2026-10-20). `wlanhw.wit` 1.2 and `wlansim`'s side are on the network branch; `bcm_wifi` answers `set-country` when the drivers track merges it.
+
+**Recorded by:** the network track (NET), 2026-10-20, for [550-NET-0035](550-NET-0035-the-stations-country.md) (the request above, and NET's in requests-NET.md). For the drivers track and for ASTRA, which wrote the catalogue under 213-DRV-0032.
+
+### Problem
+
+- **The station needs the catalogue itself.** The country is chosen in the station (`wifi.wit` 1.1), and the station decides where it may send (`wlanhw.wit` 1.0). It needs:
+  - the whole catalogue, to list every country;
+  - each country's rules, for its channels.
+- **Where the catalogue is now.** It sits inside `rtw89_wifi` (`src/regulatory.rs` and `src/regulatory_tables.rs`, ASTRA 1e2cf1dd, on `fast-test`, not on `main`). The station cannot use it there without taking in the driver.
+- **One copy only.** A second copy in the station could drift from the radios' copy.
+- **A new request breaks the radios' build.** `bcm_wifi/src/serve.rs` and `rtw89_wifi/src/service.rs` match every `wlanhw` request, so a new one breaks their build until they answer it.
+
+### Plan (a proposal; the drivers track and ASTRA decide)
+
+- **A crate `regdb/`** (`no_std`, no other dependency) holding `regulatory.rs` and its generated tables as they are. It comes with:
+  - the generator `scripts/rtw89_regdb.py`, renamed if you wish;
+  - the licence entry.
+
+  `rtw89_wifi`, `bcm_wifi` and `wlan` depend on it. The network track needs from it, beyond what it has:
+  - a rule's frequency range, widest channel and flags, readable from outside the crate (`Country::source_rules` gives them);
+  - the database's SHA-256 (`PROVENANCE`).
+- **`wlanhw.wit` 1.2: `set-country(code, dfs, limits)`.** The text is in 550-NET-0035; NET has it written and holds it back. For each channel the station may use:
+  - the most EIRP;
+  - whether it may only listen there.
+
+  The radio:
+  - applies them under its own limits (board, SPROM, calibration, platform);
+  - answers its `info`, whose `channels` are then the only ones it tunes to;
+  - with no limits set, or after a failure, receives and sends nothing.
+
+  `wlansim`'s side is NET's.
+- **The transition.** Each radio answers `set-country` in the same change that brings 1.2 into its branch. Until it really applies limits, it may answer `failed`: the station then sends nothing on it, which is the safe side.
+
+### Acceptance criteria
+
+- `regdb` is on `main`, with the host tests that 213-DRV-0032 has for the catalogue.
+- `bcm_wifi` and `rtw89_wifi` answer `set-country` under 1.2:
+  - in host tests: limits applied, a channel twice refused, a failure that leaves the radio silent;
+  - on hardware: each machine separately, as 213-DRV-0032 says.
+
+## `virtio_blk`: a request waits a whole tick (351-NET-0034)
+
+**Recorded by:** the network track (NET), 2026-10-20, from the timings [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md) added to `download`.
+
+### Problem
+
+- **What was measured.** On aarch64 (`virtio_blk` boot disk, QEMU TCG on un-rizen), `download` read an 8 MiB file back in 512 requests of 16 KiB. It took 5,080 ms, all of it in the file service's reads, about 10 ms each.
+- **Why.** `virtio_blk/src/main.rs`'s `wait` spins 1,000 times, then calls `mind::time::sleep(1)`. On aarch64 the tick is 10 ms (`kernel/src/arch/aarch64/interrupts.rs`, `TICK_MS`), so every request that QEMU has not finished within the spins costs a whole tick. Under TCG that is nearly every one.
+- **What it costs.** The file service reads at about 1.6 MB/s on aarch64. On x86 (1 ms tick, `ata` by PIO) the same check reads 30 MiB in about 5 s.
+- **The same pattern** is in `ahci`'s `wait`, already in this file ("`ata` and `ahci`: waits with a deadline").
+
+### Plan (a proposal; the drivers track decides)
+
+- Wait on the queue's interrupt, or poll the used ring against `monotonic_ns` with a short sleep only once a request is known to be slow.
+- Give each request a deadline in time, as the critique asks of `ata`.
+
+### Acceptance criteria
+
+- The `net` suite's `TIME: download's … check` lines on aarch64 show reads well under a tick each.
+- The `vfs` and `store` suites pass.

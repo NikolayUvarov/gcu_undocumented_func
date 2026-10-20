@@ -28,6 +28,15 @@ From the request "The station offers only the rates the radio can receive" in re
 - In QEMU, the `net` suite with `wlansim`: the station associates offering 1 to 11 Mb/s alone, gets its lease, and `wlansim` refuses no frame. This waits for `init` to start `wlan` (550-KRN-0097).
 - On the MacBook Pro, with `bcm_wifi` leaving the bit clear: a WPA2 network is joined and DHCP answers (the maintainer's run).
 
+## Progress (2026-10-20)
+
+The QEMU criterion holds in the `net` suite, x86 and aarch64, gate 20. With `wlansim`, a radio without OFDM:
+- the station offered 1, 2, 5.5 and 11 Mb/s alone;
+- `wlansim` refused none of its frames;
+- the lease came, and the gateway answered a ping.
+
+Left: the MacBook Pro's run.
+
 ## Progress (2026-10-14)
 
 Built: `idl/wlanhw.wit` 1.1, `dot11`, `wlan` and `wlansim`, for x86_64 and aarch64. The host tests pass (`dot11`: 12, two of them new). The QEMU check and the MacBook Pro's run wait for 550-KRN-0097.

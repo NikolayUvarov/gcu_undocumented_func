@@ -1,6 +1,6 @@
 # Requests for the kernel track (KRN), not numbered yet
 
-**Owner:** kernel track · **Status:** open (4 requests waiting, 2026-10-20: the PS/2 key press and three from the ASTRA branch; the SSH service became [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.md), the shell's client of the updater [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md), the updater's loader client [109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md), the shell's audio levels [000-KRN-0118](000-KRN-0118-the-shells-audio-client-may-change-the-levels.md), the Effector agent's boot images and grants [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), its writable scopes [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md) and its lifecycle client [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md), the RTL8852BE's platform power policy [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) and its radio endpoint [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md); the aarch64 boot check's wait for the block store's `READY` was done in [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done); the Wi-Fi station in the boot services, `keystore`'s client for it and the station's configuration slot became [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), the read-only card client and the badged TLS client [000-KRN-0109](../issues-done/000-KRN-0109-the-shells-clients-may-badge-for-programs.done); a launch session holding every launch slot became [000-KRN-0101](../issues-done/000-KRN-0101-a-launch-session-holds-every-launch-slot.done), `init` saying whether it confirmed a trial boot [000-KRN-0102](../issues-done/000-KRN-0102-init-says-how-the-boot-went.done), the tools stopping when their console is gone [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done); a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
+**Owner:** kernel track · **Status:** open (3 requests waiting, 2026-10-20: the PS/2 key press and two from the ASTRA branch; the CPU-budget wording of the threat model became [000-KRN-0130](../issues-done/000-KRN-0130-the-threat-model-states-the-cpu-budgets.done); the SSH service became [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.md), the shell's client of the updater [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md), the updater's loader client [109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md), the shell's audio levels [000-KRN-0118](000-KRN-0118-the-shells-audio-client-may-change-the-levels.md), the Effector agent's boot images and grants [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), its writable scopes [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md) and its lifecycle client [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md), the RTL8852BE's platform power policy [213-KRN-0122](213-KRN-0122-platform-power-policy-for-the-wlan-device.md) and its radio endpoint [213-KRN-0123](213-KRN-0123-the-rtl8852be-radio-endpoint.md); the aarch64 boot check's wait for the block store's `READY` was done in [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done); the Wi-Fi station in the boot services, `keystore`'s client for it and the station's configuration slot became [550-KRN-0097](../issues-done/550-KRN-0097-the-wifi-station-in-the-boot-services.done), the read-only card client and the badged TLS client [000-KRN-0109](../issues-done/000-KRN-0109-the-shells-clients-may-badge-for-programs.done); a launch session holding every launch slot became [000-KRN-0101](../issues-done/000-KRN-0101-a-launch-session-holds-every-launch-slot.done), `init` saying whether it confirmed a trial boot [000-KRN-0102](../issues-done/000-KRN-0102-init-says-how-the-boot-went.done), the tools stopping when their console is gone [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done); a drive that comes back checked to hold the same volumes became [000-KRN-0079](../issues-done/000-KRN-0079-a-returning-drive-is-checked-to-be-the-same-medium.done), the BCM4331's core stopped before its bus mastering became [550-KRN-0082](../issues-done/550-KRN-0082-the-bcm4331-core-stopped-before-its-bus-mastering.done), the badge right became [000-KRN-0073](../issues-done/000-KRN-0073-a-badge-set-only-with-the-right-to-set-it.done), the IDL fuzzer in CI became [000-KRN-0069](../issues-done/000-KRN-0069-the-idl-fuzzer-in-ci.done), bus mastering off at boot [550-KRN-0070](../issues-done/550-KRN-0070-bus-mastering-off-until-a-driver-has-the-device.done), blockstore's quota [251-KRN-0071](../issues-done/251-KRN-0071-a-memory-quota-for-blockstore.done), the FAT free count [251-KRN-0072](../issues-done/251-KRN-0072-free-clusters-counted-a-fat-sector-at-a-time.done); QEMU's vvfat crash in the aarch64 boot suite is [000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done))
 
 The kernel track numbers its own tasks (`NNN-KRN-MMMM`), so requests from other tracks wait here. The kernel track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -42,34 +42,6 @@ No cause found yet. What was ruled out, and what is left:
 
   Neither fits one press in seven while `wm` keeps the focus.
 - **Asked of the tools track if it fails again:** the run's serial log and `wm`'s state lines around the lost key, and whether `wm` logs one line for each event it reads or one for each read. If it can read two presses in one call, "6 lines for 7 presses" may be two presses in one line, and the press that went missing may be the Enter the shell needed.
-
-## CPU-budget threat-model wording (for 000-KRN-0105)
-
-**Recorded by:** ASTRA auditor-fixer, 2026-10-15; MC-12.1, MC-12.3, MC-12.9.
-
-The [hardware audit](../issues-audit/2026-10-15-hardware-audit.md), H08, found
-another stale profile statement for [000-KRN-0105](../issues-done/000-KRN-0105-root-documents-agree-with-the-code.done):
-`docs/profile/threat-model.md` says there are no CPU budgets and only
-round-robin sharing. At the reviewed `1aea9100` candidate, `scheduler.rs`
-implements budget exhaustion and period renewal (`Scheduler::ready`, `select`),
-system-band precedence and `SCHED_SET`; new tasks default to unlimited.
-`docs/profile/README.md` correctly marks MC-5.1–5.5 partial, and `clocks.md`
-states the ten-millisecond slice limitation. The `busy` suite checks a 20/100
-budget with an observed 12–35% range; that is not a guarantee of exactly 20%.
-
-Please include this paragraph in the existing documentation task. Proposed
-wording: complete protection against CPU denial of service is not claimed;
-per-task budgets exist, default to unlimited and are enforced at scheduling
-points, including the end of each ten-millisecond slice. Ready system-band
-tasks take precedence over applications. Admission control, deadline/jitter
-bounds and automatic service CPU-budget assignment by `init` are not provided.
-Retain the limitations of [038](../issues-done/038-scheduling-budgets.done).
-
-Acceptance: the threat-model paragraph agrees with the implementation and
-the other profile documents without upgrading their partial guarantee. This
-request changes no scheduler policy or existing test tolerance.
-
-
 
 ## Realtek staging integration assigned to the ASTRA auditor
 

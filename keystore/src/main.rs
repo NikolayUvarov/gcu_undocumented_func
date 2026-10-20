@@ -6,7 +6,7 @@
 // never exported. Serves
 // idl/keystore.wit: the certificate and the public key to anyone; signatures only to the signer's badge (the TLS
 // service) for TLS and to the SSH service's badge for SSH logins (1.2), only for data of the form the purpose names, and
-// within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) only to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
+// within each one's budget per boot; the Wi-Fi station's remembered networks (1.1, wifi.rs) and its country (1.3) only to the station's badge. Holds: an RTC client (slot 2) for the certificate's start
 // date, a VFS client with its own badge (slot 3) for `system/keystore`, the TPM service's client with the seal badge
 // (slot 4).
 extern crate alloc;
@@ -125,9 +125,15 @@ impl Keys {
         }
     }
 
+    // A call only the station's badge may make: `denied` to any other, in the log.
+    fn station(badge: u16, pid: u64, what: &str) -> Result<(), Error> {
+        if badge != BADGE_KEY_STATION { mind::println!("[KEYSTORE] REFUSED WI-FI {} FOR PID {}: NOT THE STATION", what, pid); return Err(Error::Denied); }
+        Ok(())
+    }
+
     // The remembered networks for a station's call: `denied` first to any other badge, then `no-key` without the key.
     fn wifi(&mut self, badge: u16, pid: u64, what: &str) -> Result<&mut wifi::Wifi, Error> {
-        if badge != BADGE_KEY_STATION { mind::println!("[KEYSTORE] REFUSED WI-FI {} FOR PID {}: NOT THE STATION", what, pid); return Err(Error::Denied); }
+        Self::station(badge, pid, what)?;
         self.wifi.as_mut().ok_or(Error::NoKey)
     }
 
@@ -214,6 +220,15 @@ fn main(_info: &'static BootInfo) {
             Ok((keystore::Request::WifiForget { ssid }, call)) => {
                 let result = keys.wifi(request.badge, request.sender, "FORGET").and_then(|w| w.forget(request.sender, ssid.as_slice()));
                 keystore::reply_wifi_forget(call, result)
+            }
+            // The station's country (1.3): its badge only; it needs no key, as nothing in it is secret.
+            Ok((keystore::Request::WifiCountry, call)) => {
+                let kept = Keys::station(request.badge, request.sender, "COUNTRY").map(|()| wifi::country());
+                keystore::reply_wifi_country(call, kept.as_ref().map(|code| code.as_ref().map_or("", |c| core::str::from_utf8(c).unwrap_or(""))).map_err(|e| *e))
+            }
+            Ok((keystore::Request::WifiKeepCountry { code }, call)) => {
+                let result = Keys::station(request.badge, request.sender, "COUNTRY").and_then(|()| wifi::keep_country(request.sender, code.as_str()));
+                keystore::reply_wifi_keep_country(call, result)
             }
         };
     }
