@@ -31,4 +31,4 @@ The link track's requests of 2026-10-20 (`internal-dev-messages`, `KRN/2026-10-2
 
 ## Related
 
-[800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.md) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
+[800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](../issues-done/351-KRN-0115-the-ssh-service-in-the-boot-services.done) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).

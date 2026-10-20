@@ -1,6 +1,6 @@
 # 000-KRN-0131 — A safe start prepares the services it leaves out, so `svc start` starts them
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made, checked in QEMU for sound and speech; the gate and a radio on a machine left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.12, MC-6.3, MC-6.4
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 1b1436a; a radio started this way on a machine left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.12, MC-6.3, MC-6.4
 
 ## Problem
 
@@ -23,8 +23,10 @@ The ASTRA branch's hardware audit (H10, [2026-10-15](../issues-audit/2026-10-15-
 
 - [x] A safe start starts no left-out service, and each of them is prepared (`[INIT] NAME LEFT OUT BY THE SAFE START, PREPARED`): the `watchdog` suite.
 - [x] After the platform privilege is dropped, `svc start audio_gw` and `svc start tts` start them; `svc start bcm_wifi` answers that its device is missing where there is none: the `watchdog` suite, locally on 4 CPUs.
-- [ ] The gate passes.
+- [x] The gate passes.
 - [ ] On a machine with a left-out radio (the MacBook Pro's BCM4331), after a safe start, `svc start bcm_wifi` and `svc start wlan` join a network without a reboot.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The `watchdog` suite with the prepared plans passed on i9.
 
 ## Related
 

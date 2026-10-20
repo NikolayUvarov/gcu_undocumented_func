@@ -1,6 +1,6 @@
-# 000-KRN-0020 — The build runs its crates in parallel, a log each
+# 000-KRN-0020 — The build runs its crates in parallel, a log each — done
 
-**Type:** build · **Owner:** `KRN` · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Roadmap:** track A (the gate's time) · **Constitution:** MC-12.1
+**Type:** build · **Owner:** `KRN` · **Priority:** P2 · **Status:** done (2026-10-20) · **Blocked by:** — · **Roadmap:** track A (the gate's time) · **Constitution:** MC-12.1
 
 ## Problem
 
@@ -37,6 +37,13 @@ The second criterion has a host test: `tests/build_jobs_test.py`, in `scripts/ho
 | aarch64 (`aarch64_root/`) | 1430 s | 878 s | 104, byte for byte the same |
 
 Left: the gate on a tree built this way (every gate builds with the parallel jobs).
+
+## Resolution
+
+In `main` (`scripts/build_jobs.sh`, used by `02_build.sh` and `scripts/build_aarch64.sh`):
+- **The same files.** On Effector's i7-930 (the tree at 43e39c8), clean builds with `MIND_BUILD_JOBS=1` and with 8 jobs gave byte for byte the same `usb_root/` (110 files) and `aarch64_root/` (104 files). Every gate builds with the parallel jobs, and gate g0131 passed on them.
+- **A failing crate** is named at the end with its errors, the build exits 1, and the other jobs' logs are complete: `tests/build_jobs_test.py`, in `scripts/host_tests.sh`.
+- **The times**, on that machine: x86 1431 s → 891 s, aarch64 1430 s → 878 s (the table above).
 
 ## Related
 

@@ -1,6 +1,6 @@
 # 000-KRN-0124 — Switching a machine between Linux and MIND Core: one boot of MIND Core by `BootNext`, and back to Linux by any restart
 
-**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the script, its host tests and the docs made; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
+**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -99,6 +99,8 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
   - `logs` telling a boot of MIND Core from none.
 - **Docs.** docs/write-disk.md and its Russian version, section 10 (version 1.4).
 - **Left:** the run on the Ryzen with the maintainer.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The host tests ran in it.
 
 ## Related
 

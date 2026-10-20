@@ -1,6 +1,6 @@
 # 213-KRN-0126 — The kernel's DMA limit holds the Realtek radio's region: `rtw89_wifi` no longer fails with `NoMemory`
 
-**Type:** kernel (`kernel/src/scheduler.rs`), profile · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the Ryzen's boot left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-1.7, MC-12.1
+**Type:** kernel (`kernel/src/scheduler.rs`), profile · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (in `main` at 1b1436a; the Ryzen's boot left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-1.7, MC-12.1
 
 ## Problem
 
@@ -23,13 +23,15 @@ QEMU has no RTL8852BE, so no suite reached the limit.
 
 ## Acceptance criteria
 
-- [ ] The QEMU suites pass as before.
+- [x] The QEMU suites pass as before.
 - [ ] On the Ryzen:
   - `rtw89_wifi` starts;
   - `free` shows the DMA in use under 16 MiB;
   - no driver fails with `NoMemory`.
 
   Recorded for that machine and build.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a.
 
 ## Related
 
