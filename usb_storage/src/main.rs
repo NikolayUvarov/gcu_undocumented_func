@@ -16,7 +16,7 @@ const PROBE: usize = 512; // probes and sense data: never where a write's data w
 const CLAIM_TRIES: usize = 20; // usb_host may still be setting the device up
 
 // The claimed interface and its Bulk-Only Transport state.
-struct Bot { handle: u32, out: u8, input: u8, tag: u32 }
+struct Bot { handle: u32, out: u8, input: u8, tag: u32, vendor: u16, product: u16 }
 
 // `lost`: the device stopped answering and was not claimed again; `seen`: refusals already logged.
 struct Storage { host: Host, bot: Bot, sectors: u64, protected: bool, lost: bool, seen: [(u8, Sense); SEEN], seen_count: usize }
@@ -79,7 +79,7 @@ fn claim(host: &mut Host) -> Option<Bot> {
             Ok((handle, info)) => {
                 let out = info.endpoints().iter().find(|e| e.is_bulk() && !e.is_in()).map(|e| e.address);
                 let input = info.endpoints().iter().find(|e| e.is_bulk() && e.is_in()).map(|e| e.address);
-                if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, out, input, tag: 0 }); }
+                if let (6, 0x50, Some(out), Some(input)) = (info.subclass, info.protocol, out, input) { return Some(Bot { handle, out, input, tag: 0, vendor: info.vendor, product: info.product }); }
                 let _ = host.release(handle);
             }
             Err(_) => if attempt + 1 < CLAIM_TRIES { mind::time::sleep(100); },
@@ -111,8 +111,15 @@ const SEEN: usize = 16;
 impl Storage {
     fn probe() -> Option<Self> {
         let mut host = Host::new(Endpoint(SLOT_DEV0)).ok()?;
-        let mut bot = claim(&mut host)?;
-        let (sectors, _) = capacity(&mut host, &mut bot)?; // a reset at power-on is expected
+        // The first device with a medium. One without (a card reader with no card, an empty bay) stays claimed, so the
+        // next claim gives the next device rather than this one again (211-DRV-0035: the MacBook Pro's dock).
+        let (mut bot, sectors) = loop {
+            let mut bot = claim(&mut host)?;
+            match capacity(&mut host, &mut bot) {
+                Some((sectors, _)) => break (bot, sectors), // a reset at power-on is expected
+                None => mind::println!("[USB] STORAGE: {:04X}:{:04X} HAS NO MEDIUM OR IS NOT READY; THE NEXT DEVICE", bot.vendor, bot.product),
+            }
+        };
         // MODE SENSE(6), all pages, the 4-byte header: WP is bit 7 of byte 2. A device that does not answer is taken as
         // writable; a write it refuses fails anyway.
         let protected = matches!(bot_cycle(&mut host, &mut bot, &[0x1A, 0, 0x3F, 0, 4, 0], 4, false, PROBE), Cycle::Done(_)) && host.buffer()[PROBE + 2] & 0x80 != 0;
@@ -186,7 +193,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut storage = Storage::probe();
     match &storage {
-        Some(s) => mind::println!("[USB] MASS STORAGE: {} SECTORS{}", s.sectors, if s.protected { ", WRITE-PROTECTED" } else { "" }),
+        Some(s) => mind::println!("[USB] MASS STORAGE: {} SECTORS{}, {:04X}:{:04X}", s.sectors, if s.protected { ", WRITE-PROTECTED" } else { "" }, s.bot.vendor, s.bot.product),
         None => mind::println!("[USB] NO MASS STORAGE DEVICE"),
     }
     block::serve(BLOCK_KIND_USB, storage.as_mut().map(|s| s as &mut dyn Driver));
