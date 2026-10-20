@@ -27,4 +27,4 @@ Built for x86_64 and aarch64 (`updater/src/main.rs`, `updater/src/source.rs`). T
 
 ## Related
 
-[109-NET-0010](109-NET-0010-a-parser-per-session.md), [109-KRN-0096](109-KRN-0096-the-loader-starts-a-helper.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
+[109-NET-0010](109-NET-0010-a-parser-per-session.md), [109-KRN-0096](../issues-done/109-KRN-0096-the-loader-starts-a-helper.done), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
