@@ -5380,8 +5380,14 @@ def download_runs(vm, release, port, big, small, cut):
                  "DOWNLOAD: ITS HEAD PARSED: STATUS 206", f"DOWNLOAD: DONE {size} BYTES IN"):
         require(out, line)
     assert release.requests == [("/big.bin", None), ("/big.bin", f"bytes={cut}-")], release.requests
+    first = out
     out = run(f"download data/big.bin {url}/big.bin --sha256 {digest}", f"DOWNLOAD: SHA256 {digest} MATCHES", timeout=300)
     require(out, f"DOWNLOAD: RESUMING data/big.bin AT {size}"); require(out, f"DOWNLOAD: ALREADY COMPLETE, {size} BYTES")
+    # Each check's flush and its reads back are logged with their times (audit H13: a recheck silent for 300 s on i9).
+    for name, check in (("first", first), ("second", out)):
+        require(check, "DOWNLOAD: FLUSHED IN"); require(check, f"DOWNLOAD: READ BACK {size} OF {size} BYTES IN")
+        lines = [line.strip() for line in check.splitlines() if "DOWNLOAD: FLUSHED IN" in line or f"DOWNLOAD: READ BACK {size} OF" in line]
+        print(f"TIME: download's {name} check of {size >> 20} MiB: {'; '.join(lines)}", flush=True)
     print(f"PASS: download: {size >> 20} MiB over HTTP through its own grant, the connection cut at {cut >> 20} MiB and resumed with Range; SHA-256 checked; a complete file left as it is", flush=True)
     out = run(f"download data/small.bin {url}/small.bin --tries 1", "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 50000 BYTES")
     require(out, "DOWNLOAD: CONNECTION CUT AT 50000 OF 200000, RESUMING")
