@@ -2,7 +2,7 @@
 //! the moving dot in characters, the digital time and the hints, sized to the grid (a screen, or a text window of
 //! `wm` that may be resized). What is shown comes from `face.rs` and `cycle.rs`, as for the pixel face. Cells are one
 //! unit wide and two tall, so the discs and the orbit stay round. No system calls: tests/clock_host.rs.
-use crate::cycle::{hour_sector_at, point_at, OrbitMode};
+use crate::cycle::{point_at, OrbitMode};
 use crate::face::{time_text, Face, OFF};
 use crate::tui::{Grid, Style};
 
@@ -98,14 +98,11 @@ pub fn draw(grid: &mut Grid, face: Face, seconds: Option<usize>, phase: Option<u
             }
         }
         for index in 0..if show.mode == OrbitMode::Ticks { 10 } else { 1 } {
-            if let Some((x, y)) = cell(&l, point_at(index * 10_000, orbit as usize), cols, rows) {
+            if let Some((x, y)) = cell(&l, point_at(index * 10_000, orbit as usize, face.hour), cols, rows) {
                 grid.put(x, y, if index == 0 { '■' } else { '•' }, Style::new(if index == 0 { START_TICK } else { SMALL_TICK }, OFF));
             }
         }
-        if let Some((x, y)) = phase.and_then(|p| cell(&l, point_at(p, orbit as usize), cols, rows)) { grid.put(x, y, '●', Style::new(CYCLE, OFF)); }
-        if let Some((point, color)) = hour_sector_at(face, orbit as usize + 2) {
-            if let Some((x, y)) = cell(&l, point, cols, rows) { grid.put(x, y, '◆', Style::new(color, OFF)); }
-        }
+        if let Some((x, y)) = phase.and_then(|p| cell(&l, point_at(p, orbit as usize, face.hour), cols, rows)) { grid.put(x, y, '●', Style::new(CYCLE, OFF)); }
     }
     if show.digits && rows >= 2 {
         let text = time_text(seconds.unwrap_or(0));

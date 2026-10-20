@@ -1,6 +1,6 @@
 use crate::{
     abi::BootInfo,
-    cycle::{hour_sector_at, point_at, OrbitMode},
+    cycle::{point_at, OrbitMode},
     face::{Face, OFF},
     font::FONT,
 };
@@ -22,8 +22,6 @@ pub struct View {
     y: usize,
     half: usize,
     radius: usize,
-    face: Face,
-    mode: OrbitMode,
 }
 
 #[cfg(test)]
@@ -65,72 +63,90 @@ mod tests {
     }
 
     #[test]
-    fn hour_sector_changes_and_hiding_leave_no_marker_trails() {
-        let mut pixels = std::vec![0u32; 640 * 480];
-        let info = framebuffer(&mut pixels, 640, 480);
-        let mut view = View::new(&info);
-        view.clear();
-        view.cycle(None, None, OrbitMode::Off, OrbitMode::Simple);
-        for seconds in [21599, 21600, 8 * 3600 + 20 * 60, 43200, 64800, 0] {
-            let face = Face::at(seconds).unwrap();
-            view.face(face);
-            let mut expected = std::vec![0u32; 640 * 480];
-            let mut fresh = View::new(&framebuffer(&mut expected, 640, 480));
-            fresh.clear();
-            fresh.face(face);
-            fresh.cycle(None, None, OrbitMode::Off, OrbitMode::Simple);
-            assert_eq!(pixels, expected, "old sector erased at {}", seconds);
-            let ((x, y), color) = hour_sector_at(face, view.half * 3 / 4 + (view.half / 24).max(2) + 2).unwrap();
-            assert_eq!(pixels[(view.y as isize + y) as usize * 640 + (view.x as isize + x) as usize], color);
-        }
-        view.cycle(None, None, OrbitMode::Simple, OrbitMode::Off);
-        let hidden = pixels.clone();
-        view.clear();
-        view.face(Face::at(0).unwrap());
-        assert_eq!(pixels, hidden, "hiding erases the sector marker too");
-    }
-
-    #[test]
     fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
         let mut pixels = std::vec![0u32; 640 * 480];
         let info = framebuffer(&mut pixels, 640, 480);
-        let mut view = View::new(&info);
+        let view = View::new(&info);
         view.clear();
-        view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
+        let face = Face::at(19 * 3600 + 35 * 60).unwrap();
+        view.face(face);
         let background = pixels.clone();
         let mut simple = std::vec::Vec::new();
+        let corner = face.hour;
         for mode in [OrbitMode::Simple, OrbitMode::Ticks] {
-            view.cycle(None, None, OrbitMode::Off, mode);
+            view.cycle(None, None, (OrbitMode::Off, corner), (mode, corner));
             let stationary = pixels.clone();
             if mode == OrbitMode::Simple {
                 simple = stationary.clone();
             }
             let mut previous = None;
             for phase in (0..100000).step_by(100) {
-                let current = Some(point_at(phase, view.half() * 3 / 4));
-                view.cycle(previous, current, mode, mode);
+                let current = Some(point_at(phase, view.half() * 3 / 4, corner));
+                view.cycle(previous, current, (mode, corner), (mode, corner));
                 previous = current;
             }
-            view.cycle(previous, None, mode, mode);
+            view.cycle(previous, None, (mode, corner), (mode, corner));
             assert_eq!(
                 pixels, stationary,
                 "dot must restore every crossed orbit pixel and tick"
             );
             if mode == OrbitMode::Ticks {
-                view.cycle(None, None, mode, OrbitMode::Simple);
+                view.cycle(None, None, (mode, corner), (OrbitMode::Simple, corner));
                 assert_eq!(
                     pixels, simple,
                     "switching P to C removes all nine extra ticks"
                 );
-                view.cycle(None, None, OrbitMode::Simple, OrbitMode::Off);
+                view.cycle(None, None, (OrbitMode::Simple, corner), (OrbitMode::Off, corner));
             } else {
-                view.cycle(None, None, mode, OrbitMode::Off);
+                view.cycle(None, None, (mode, corner), (OrbitMode::Off, corner));
             }
             assert_eq!(
                 pixels, background,
                 "hiding must preserve all five indicators and erase the orbit"
             );
         }
+    }
+
+    #[test]
+    fn the_zero_tick_points_at_the_active_hour_and_moves_with_it() {
+        // 000-APP-0080: at 19:35 the hour is the top right corner's, and the orbit's zero tick points there, in the
+        // ticks' grey; at 06:00 the bottom left takes the hour, and the tick moves there with nothing left behind.
+        let (width, height) = (640, 480);
+        let mut pixels = std::vec![0u32; width * height];
+        let info = framebuffer(&mut pixels, width, height);
+        let view = View::new(&info);
+        let (cx, cy, radius) = (view.x as isize, view.y as isize, view.half() as isize * 3 / 4);
+        let at = |pixels: &[u32], (x, y): (isize, isize)| pixels[(cy + y) as usize * width + (cx + x) as usize];
+        let start = |pixels: &[u32]| -> std::vec::Vec<(isize, isize)> {
+            (0..height as isize).flat_map(|y| (0..width as isize).map(move |x| (x - cx, y - cy)))
+                .filter(|&(x, y)| x * x + y * y < (radius + 8).pow(2) && at(pixels, (x, y)) == START_TICK).collect()
+        };
+        view.clear();
+        let evening = Face::at(19 * 3600 + 35 * 60).unwrap();
+        assert_eq!(evening.hour, 0);
+        view.face(evening);
+        view.cycle(None, None, (OrbitMode::Off, evening.hour), (OrbitMode::Ticks, evening.hour));
+        let tick = start(&pixels);
+        assert!(tick.len() >= 4 && tick.iter().all(|&(x, y)| x > 0 && y < 0 && (x + y).abs() <= 1), "{:?}", tick);
+        assert!(!pixels.iter().any(|&p| crate::face::COLORS.contains(&p) && p != evening.corners[0] && p != evening.center),
+                "no colored mark besides the indicators");
+        // The dot at zero seconds sits on the tick.
+        let zero = point_at(0, view.half() * 3 / 4, evening.hour);
+        assert!(tick.iter().any(|&(x, y)| (x - zero.0).abs() <= 1 && (y - zero.1).abs() <= 1), "{:?} {:?}", zero, tick);
+
+        let (before, morning) = (Face::at(6 * 3600 - 1).unwrap(), Face::at(6 * 3600).unwrap());
+        assert_eq!((before.hour, morning.hour), (1, 2));
+        view.clear();
+        view.face(before);
+        view.cycle(None, None, (OrbitMode::Off, before.hour), (OrbitMode::Ticks, before.hour));
+        view.face(morning);
+        view.cycle(None, None, (OrbitMode::Ticks, before.hour), (OrbitMode::Ticks, morning.hour));
+        let moved = pixels.clone();
+        view.clear();
+        view.face(morning);
+        view.cycle(None, None, (OrbitMode::Off, morning.hour), (OrbitMode::Ticks, morning.hour));
+        assert_eq!(moved, pixels, "the hour's change redraws the orbit from its new zero, with nothing left behind");
+        assert!(start(&pixels).iter().all(|&(x, y)| x < 0 && y > 0), "06:00: toward the bottom left");
     }
 
     #[test]
@@ -142,7 +158,7 @@ mod tests {
         for (width, height) in [(400, 320), (1264, 752), (160, 96), (624, 736)] {
             let mut pixels = std::vec![GUARD; width * height + 4096];
             let info = framebuffer(&mut pixels, width, height);
-            let mut view = View::new(&info);
+            let view = View::new(&info);
             view.clear();
             view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
             let lit: std::vec::Vec<usize> = (0..width * height).filter(|&i| pixels[i] != BACKGROUND).map(|i| i % width).collect();
@@ -150,7 +166,7 @@ mod tests {
             assert!((left + right) / 2 >= width / 2 - 2 && (left + right) / 2 <= width / 2 + 2, "{}x{}: {}..{}", width, height, left, right);
             view.hints(true, false);
             view.digital(b"19:35:05", true);
-            view.cycle(None, Some(point_at(25000, view.half() * 3 / 4)), OrbitMode::Off, OrbitMode::Ticks);
+            view.cycle(None, Some(point_at(25000, view.half() * 3 / 4, 0)), (OrbitMode::Off, 0), (OrbitMode::Ticks, 0));
             assert!(pixels[width * height..].iter().all(|&p| p == GUARD), "{}x{}: drawn past the framebuffer", width, height);
             halves.push(view.half());
         }
@@ -167,8 +183,6 @@ impl View {
             y: (info.height / 2).saturating_sub(24),
             half,
             radius: (half / 3).max(1),
-            face: Face::DARK,
-            mode: OrbitMode::Off,
         }
     }
 
@@ -193,35 +207,25 @@ impl View {
         self.half
     }
 
+    /// The dot moved from `previous` to `current`; the orbit's mode, and the corner its ticks start at (the active
+    /// hour's, 000-APP-0080), from `old` to the new ones: the old orbit goes when either changes.
     pub fn cycle(
-        &mut self,
+        &self,
         previous: Option<(isize, isize)>,
         current: Option<(isize, isize)>,
-        old_mode: OrbitMode,
-        mode: OrbitMode,
+        (old_mode, old_corner): (OrbitMode, usize),
+        (mode, corner): (OrbitMode, usize),
     ) {
         if let Some(point) = previous {
             self.dot(point, BACKGROUND);
         }
-        if old_mode != mode {
-            self.hour_marker(true);
-            self.orbit(old_mode, true);
+        if old_mode != mode || old_corner != corner {
+            self.orbit(old_mode, old_corner, true);
         }
-        self.mode = mode;
         // Restore the thin orbit and any tick uncovered by the moving dot.
-        self.orbit(mode, false);
+        self.orbit(mode, corner, false);
         if let Some(point) = current {
             self.dot(point, CYCLE);
-        }
-        self.hour_marker(false);
-    }
-
-    fn hour_marker(&self, erase: bool) {
-        if self.mode == OrbitMode::Off { return; }
-        let start = self.half * 3 / 4 + (self.half / 24).max(2) + 2;
-        let end = start + (self.half / 16).max(2);
-        if let (Some((a, color)), Some((b, _))) = (hour_sector_at(self.face, start), hour_sector_at(self.face, end)) {
-            self.line(a, b, if erase { BACKGROUND } else { color });
         }
     }
 
@@ -248,7 +252,7 @@ impl View {
         }
     }
 
-    fn orbit(&self, mode: OrbitMode, erase: bool) {
+    fn orbit(&self, mode: OrbitMode, corner: usize, erase: bool) {
         if mode == OrbitMode::Off {
             return;
         }
@@ -297,8 +301,8 @@ impl View {
                 SMALL_TICK
             };
             self.line(
-                point_at(index * 10000, radius.saturating_sub(length)),
-                point_at(index * 10000, radius + length),
+                point_at(index * 10000, radius.saturating_sub(length), corner),
+                point_at(index * 10000, radius + length, corner),
                 color,
             );
         }
@@ -350,9 +354,7 @@ impl View {
         }
     }
 
-    pub fn face(&mut self, face: Face) {
-        self.hour_marker(true);
-        self.face = face;
+    pub fn face(&self, face: Face) {
         let left = self.x.saturating_sub(self.half);
         let top = self.y.saturating_sub(self.half);
         self.circle(self.x + self.half, top, face.corners[0]);
@@ -360,7 +362,6 @@ impl View {
         self.circle(left, self.y + self.half, face.corners[2]);
         self.circle(left, top, face.corners[3]);
         self.circle(self.x, self.y, face.center);
-        self.hour_marker(false);
     }
 
     pub fn digital(&self, text: &[u8; 8], visible: bool) {
