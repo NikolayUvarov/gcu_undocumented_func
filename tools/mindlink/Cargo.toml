@@ -1,0 +1,10 @@
+[package]
+name = "mindlink"
+version = "0.1.0"
+edition = "2021"
+description = "MIND Link's end on Linux and WSL: files, the log and a console over a serial line (800-LNK-0004)"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+linkproto = { path = "../../linkproto" }
