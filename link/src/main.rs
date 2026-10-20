@@ -264,6 +264,7 @@ fn baud() -> u32 {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("link — MIND Link's end on this machine: files in data/link/ and the system log for mindlink on another machine, over a serial converter; init starts it when the boot volume holds link.conf (800-LNK-0003).");
     let endpoint = Endpoint(SLOT_DEV0);
     fs::use_scope(Endpoint(SLOT_VFS), DIR);
     let baud = baud();
@@ -272,7 +273,9 @@ fn main(_info: &'static BootInfo) {
         match serial::configure(endpoint, baud) {
             Ok(Ok(actual)) => { mind::println!("[LINK] SERVING data/link/ AND THE LOG AT {} BIT/S (THE CONVERTER MAKES {})", baud, actual); break; }
             Ok(Err(serial::Error::Invalid)) => { mind::println!("[LINK] {} BIT/S IS NOT A RATE THE CONVERTER MAKES", baud); return; }
-            _ => { if !said { mind::println!("[LINK] WAITING FOR A SERIAL CONVERTER"); said = true; } mind::time::sleep(1000); }
+            Ok(Err(_)) => { if !said { mind::println!("[LINK] WAITING FOR A SERIAL CONVERTER"); said = true; } mind::time::sleep(1000); }
+            // No usb_serial behind the slot: started by hand, not by init.
+            Err(_) => { mind::println!("link: no serial port was given to it; init starts it when the boot volume holds link.conf"); return; }
         }
     }
     let store: &'static mut Store = unsafe { &mut *core::ptr::addr_of_mut!(STORE) };

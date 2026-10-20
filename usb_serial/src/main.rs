@@ -115,6 +115,7 @@ enum State { Up(Port), Down(Host, u32) }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    mind::about!("usb_serial — a USB-serial converter's line (the FTDI FT232R) for MIND Link's service alone; init starts it when the boot volume holds link.conf (800-LNK-0002).");
     let Ok(host) = Host::new(Endpoint(SLOT_DEV0)) else { mind::println!("[SERIAL] NO USB HOST"); return };
     let mut state = match Port::claim(host, FIRST_BAUD) { Ok(port) => State::Up(port), Err(host) => { mind::println!("[SERIAL] NO CONVERTER YET"); State::Down(host, FIRST_BAUD) } };
     let queue: &'static mut Queue = unsafe { &mut *core::ptr::addr_of_mut!(QUEUE_SPACE) };
