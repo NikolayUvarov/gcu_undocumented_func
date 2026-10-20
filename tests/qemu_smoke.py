@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -6161,13 +6161,20 @@ def tls_suite(args, disk):
         require(page, "CLIENT CERTIFICATE SENT"); require(page, f"hello from the host: /device to {name}")
         require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsClient FOR PID")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
-        # only the TLS service holds a capability to the key service, with the signer's badge.
+        # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
+        # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys.
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert holders == ["tls"], holders
+        assert {"tls", "ssh"} <= set(holders) <= {"tls", "ssh", "wlan"}, holders
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+        assert re.search(fr"^SLOT=4 GEN=\d+ KIND=1 .*BADGE=3 EP={keystore[0]}\b", vm.command(f"stat caps {real['ssh']}", raw=True), re.M)
+        # The shell holds the SSH service's client in SLOT_SSH (34) and the updater's in SLOT_UPDATE (35), ABI 12.
+        shell = vm.command(f"stat caps {real['shell']}", raw=True)
+        for slot, service in ((34, "ssh"), (35, "updater")):
+            held = re.search(fr"^SLOT={slot} GEN=\d+ KIND=1 .*EP=(\d+)", shell, re.M)
+            assert held and servers.get(int(held[1])) == real[service], (slot, service, shell)
         tls_lending_check(vm, servers, real["tls"])
     finally:
         vm.close()

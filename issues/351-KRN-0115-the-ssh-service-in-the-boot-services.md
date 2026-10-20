@@ -1,6 +1,6 @@
 # 351-KRN-0115 — The SSH service in the boot services: `ssh` started by `init`, `keystore`'s client with `BADGE_KEY_SSH`, `SLOT_SSH` and `REQUEST_SSH`
 
-**Type:** `init`, ABI (`common/abi.rs`, ABI 12, with 351-KRN-0116), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-2.3, MC-3.4, MC-11.9
+**Type:** `init`, ABI (`common/abi.rs`, ABI 12, with 351-KRN-0116), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made, ABI 12; the gate left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-2.3, MC-3.4, MC-11.9
 
 ## Problem
 
@@ -24,6 +24,27 @@ The network track's `ssh` service ([351-NET-0027](351-NET-0027-the-ssh-service.m
 - [ ] In the `net` suite (x86 and aarch64), `ssh` runs and holds `keystore`'s client with `BADGE_KEY_SSH` (`stat caps`), and the shell's client is in `SLOT_SSH`.
 - [ ] `check`'s `launch: every slot` lends an endpoint in every launch slot, `SLOT_SSH` among them.
 - [ ] Every other suite passes as before. The SFTP check of the `net` suite comes from the network track.
+
+## Progress (2026-10-20)
+
+Made, with ABI 12:
+- **Boot image.** `ssh` (`ssh.elf`) is a boot image after `tls` (`BOOT_IMAGES` 39).
+- **`init`** starts it with:
+  - its server endpoint;
+  - `keystore`'s client badged `BADGE_KEY_SSH` in slot 4;
+  - the log client;
+  - no network, as `tls`: clients lend their flows, which is how the service is written (351-NET-0027).
+- **The shell** holds its client in `SLOT_SSH` (34) with `CAP_BADGE`.
+- **For programs.** `REQUEST_SSH` (`1 << 24`) is defined and `SLOT_SSH` is a launch slot. The shell's lending for `REQUEST_SSH` is the tools track's part (requests-APP.md).
+- **Docs.** README, docs/api, the profile and `svc`'s table are updated.
+
+Tests:
+- **The `tls` suite**, which already examines the key service's clients, requires:
+  - `ssh` holds `keystore`'s client with badge 3;
+  - the shell's slot 34 names `ssh`'s endpoint.
+- **`check`'s "launch: every slot"** lends 20 slots, `SLOT_SSH` among them.
+
+Both pass locally on x86 (QEMU), with `bench`. Left: the gate, x86 and aarch64.
 
 ## Related
 
