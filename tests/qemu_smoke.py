@@ -4592,10 +4592,11 @@ def updater_suite(args, updater_elf):
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
-            # Its own endpoint, the clock, the file system, init (badged for reboot), the log every service has, the
-            # flow grant, TLS, the firmware privilege, the parser; nothing else.
+            # Its own endpoint, the clock, the file system, the loader's client for helpers only (109-KRN-0117), init
+            # (badged for reboot), the log every service has, the flow grant, TLS, the firmware privilege, the parser;
+            # nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            assert held and held[1] == " 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1 27:16 28:1", report
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
