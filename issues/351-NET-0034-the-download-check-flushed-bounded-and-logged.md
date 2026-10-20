@@ -1,8 +1,10 @@
-# 351-NET-0031 — `download`'s check at the end: flushed, bounded and in the log
+# 351-NET-0034 — `download`'s check at the end: flushed, bounded and in the log
 
 **Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 From the request "Download complete-file recheck stalls in the 6G Intel gate" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16), for [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md).
+
+Numbered 0034 and 0035 (with [550-NET-0035](550-NET-0035-the-stations-country.md)): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
 
 ## Problem
 
@@ -24,7 +26,7 @@ None of these steps was logged, and no call in them had a deadline (outside `wit
 - hashing or scheduling that was slow.
 
 **What is known about the boundary, from the code.** These are candidates, not the cause:
-- The default x86 boot disk in these suites is the legacy ATA driver (PIO, no interrupts). Its `command` and `flush` wait for BSY to clear without a bound (`ata/src/main.rs`). A drive that stays busy would hold the file service, and with it every file call.
+- The default x86 boot disk in these suites is the legacy ATA driver (PIO, no interrupts). Its `command` and `flush` wait for BSY to clear without a bound (`ata/src/main.rs`). A drive that stays busy would hold the file service, and with it every file call. The bound is already asked of `DRV` (requests-DRV.md, "`ata` and `ahci`: waits with a deadline", the critique of 2026-10-14).
 - The file service's chain cursor is one per volume (`vfs_server/src/fat.rs`, `read`). Another client reading another file on the same volume at the same time would send each of `download`'s reads back to the chain's start. Nothing in the suite is known to do that at this step.
 - A slow host: the first run's check ran under a 900 s limit, the second's under 300 s.
 

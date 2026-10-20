@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0031](351-NET-0031-the-download-check-flushed-bounded-and-logged.md), 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](000-NET-0015-a-card-read-only-client.md), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.md), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.md), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -86,55 +86,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 The network track's QEMU checks of the station, the remembered networks, the read-only card client and TLS without the device certificate can follow.
 
-## Wi-Fi country selection from the complete verified regulatory catalog
-
-**Recorded by:** ASTRA auditor-fixer, 2026-10-16, at the maintainer's explicit
-request; for 213-DRV-0032 and roadmap D / 550; MC-2.3, MC-3.3, MC-6.1,
-MC-12.1, MC-12.3, MC-12.4, MC-12.7.
-
-The maintainer confirmed Uzbekistan (`UZ`) for both the original Intel MacBook
-and Ryzen and requested switching among **all countries in the verified
-regulatory database**, not a fixed shortlist. The current `wifi` 1.0 interface
-has scan/join/status/leave/forget but no country selection. Please number the
-station/interface task; ASTRA supplies the RTL8852BE catalogue/driver portion
-under DRV-0032, without editing NET's interface or station in passing.
-
-Available implementation: ASTRA source
-[`1e2cf1dd`](https://github.com/NikolayUvarov/gcu_undocumented_func/blob/1e2cf1dd3996ca3ed2a475e7ded4aff4fde6d8ae/hwdocs/rtl8852be-regulatory.md)
-provides all 181 source country/territory codes plus separate world `00`,
-1,016 rule references, source/license hashes and exact integer units. It is
-already in fast-test `94ab2a0b`; 9 Rust and 11 Python fixtures and deterministic
-regeneration passed after that publication. `regulatory::countries()` and
-`select()` are pure catalog operations, not a live configuration interface.
-The database supplies codes rather than translated country names. Preserve
-these boundaries when making the shared station contract and the APP list.
-
-- Use the pinned upstream wireless-regdb catalogue as frequency/EIRP evidence;
-  chip power-table groups are not regulatory permission. Preserve restrictions
-  and unsupported states. Catalogue all country entries, with bounded paging
-  if needed; treat world/unknown `00` distinctly from a selected country.
-- Add explicit current/pending/applied country state and authorized selection
-  through a new interface version and migration. Reuse the existing Wi-Fi
-  change badge or document a narrower right; read-only callers cannot change it.
-  Persist a two-letter code, not a row index that changes with database updates.
-- UZ is this deployment's operator-provided initial choice. Missing/invalid
-  state or a missing database country must not silently become DE/US/world or
-  permission to transmit. Database presence is not itself operator authority.
-- Derive scan/join channels from the intersection of country restrictions and
-  actual driver capability. Retain NO-IR, DFS, indoor/outdoor and modulation
-  constraints. Do not label all database bands as implemented hardware support.
-- Coordinate with KRN's scoped configuration and native endpoint work, APP's
-  selector and both radio owners. Changing country must invalidate old scan/
-  join decisions and avoid TX under an obsolete admission. Stop/restart and
-  re-admit when live reconfiguration is unavailable; expose applied versus
-  requested state and a bounded error if application fails.
-- Country selection must not replace board-locked restrictions, verified
-  platform/SAR limits or the EIRP-to-conducted-power/antenna relationship.
-
-Acceptance: every catalogued country is selectable as configuration; unknown
-codes, read-only mutation, stale scan/join state and failed application are
-covered. Radio limits and effective channels are honest on both MacBook and
-Ryzen; a configuration round trip is not evidence of physical networking.
-Related: [APP](requests-APP.md#wifi-country-and-channel-selector),
-[KRN](213-KRN-0123-the-rtl8852be-radio-endpoint.md),
-[DRV](requests-DRV.md#bcm4331-applies-the-selected-country-and-channel-policy).

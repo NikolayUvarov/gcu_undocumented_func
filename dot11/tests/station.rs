@@ -1,9 +1,11 @@
 //! Host tests of the 802.11 station (550-NET-0017) against a simulated access point on one channel: a scan, joining
 //! an open and a WPA2-PSK network (the access point's handshake from `wpa::authenticator`), data both ways under CCMP,
-//! what makes the station refuse, fail or join again, and a radio without OFDM on 2.4 GHz (550-NET-0028).
+//! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), and a country's
+//! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
-use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
+use dot11::country::{self, Rule, Standing};
+use dot11::station::{Allowed, Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX, HANDSHAKE_MS, REJOIN_MS, SILENCE_MS};
 use dot11::Error;
 use wpa::authenticator::{Authenticator, FRAME_MAX as EAPOL_MAX};
 use wpa::ccmp;
@@ -521,4 +523,115 @@ fn frames_are_read_carefully() {
     let elements = [0, 3, b'a', b'b', b'c', 1, 9, 1];
     assert_eq!(frame::Elements::new(&elements).count(), 1);
     assert_eq!(frame::Elements::find_whole(&elements, 1), None);
+}
+
+// The air's channels, each with what a country lets the station send there.
+fn rules(allowed: impl Fn(u8) -> Allowed) -> Vec<(u8, Allowed)> { CHANNELS.iter().map(|&c| (c, allowed(c))).collect() }
+
+fn restrict(air: &mut Air, channels: &[(u8, Allowed)]) {
+    let mut out = Out::default();
+    air.station.restrict(channels, &mut out, &mut air.tx);
+    air.apply(out);
+}
+
+// The access point's beacon, heard on its channel.
+fn beacon(air: &mut Air) {
+    air.channel = air.ap.channel;
+    let b = air.ap.beacon();
+    air.hear(&b).unwrap();
+}
+
+#[test]
+fn with_no_country_applied_the_station_probes_nowhere_and_joins_nothing() {
+    let mut air = Air::new(wpa2());
+    restrict(&mut air, &rules(|_| Allowed::Nothing));
+    air.scan();
+    assert!(air.sent.is_empty(), "no probe request without a country");
+    // A beacon heard is listed, and still not joined.
+    beacon(&mut air);
+    assert_eq!(air.station.networks().iter().count(), 1);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)), Err(Error::Unsupported));
+    assert_eq!((air.station.state(), air.station.reason()), (State::Failed, Reason::Unsupported));
+    assert!(air.sent.is_empty(), "nothing sent to the access point");
+}
+
+#[test]
+fn a_country_lets_the_station_probe_where_it_may_and_join_where_it_listens() {
+    let mut air = Air::new(wpa2());
+    // Channel 6, the access point's, is NO-IR: listened to only; 13 is barred and not handed in.
+    let channels: Vec<_> = rules(|c| if c == 6 { Allowed::Listen } else { Allowed::Send }).into_iter().filter(|&(c, _)| c != 13).collect();
+    restrict(&mut air, &channels);
+    air.scan();
+    let probed: Vec<u8> = air.sent.iter().map(|(f, _)| f[0]).collect();
+    assert_eq!(probed.len(), 11, "probe requests on the 11 channels it may send on, not 6");
+    assert!(probed.iter().all(|&k| k == frame::PROBE_REQUEST << 4));
+    assert_eq!(air.station.networks().iter().count(), 0, "the access point on 6 was not asked");
+    // Heard there, it is joined: the station sends only to an access point it heard.
+    beacon(&mut air);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)).unwrap();
+    assert_eq!(air.station.state(), State::Joined, "{:?}", air.station.reason());
+}
+
+#[test]
+fn a_channel_the_country_leaves_out_is_not_joined() {
+    let mut air = Air::new(wpa2());
+    let channels: Vec<_> = rules(|_| Allowed::Send).into_iter().filter(|&(c, _)| c != 6).collect();
+    restrict(&mut air, &channels);
+    beacon(&mut air);
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)), Err(Error::Unsupported));
+    assert!(air.sent.is_empty());
+}
+
+#[test]
+fn a_change_of_country_leaves_the_network_and_drops_the_scan() {
+    let mut air = joined();
+    let before = air.sent.len();
+    restrict(&mut air, &rules(|_| Allowed::Send));
+    // The station said goodbye under the old rules, and kept nothing chosen under them.
+    assert_eq!(air.sent.len(), before + 1);
+    assert_eq!(air.sent.last().unwrap().0[0], frame::DEAUTHENTICATION << 4);
+    assert_eq!((air.station.state(), air.station.reason()), (State::Off, Reason::None));
+    assert_eq!(air.station.networks().iter().count(), 0);
+    assert!(air.station.network().is_none());
+    let pmk = keys::pmk(PASSPHRASE, SSID).map(Secret::Pmk);
+    assert_eq!(air.run(|s, now, out, tx| s.join(SSID, pmk, now, out, tx)), Err(Error::NotFound));
+    // A scan in progress ends too, and the radio's filter is back to the station's own frames.
+    air.run(|s, now, out, tx| s.scan(now, out, tx)).unwrap();
+    let mut out = Out::default();
+    air.station.restrict(&rules(|_| Allowed::Nothing), &mut out, &mut air.tx);
+    assert_eq!(air.station.state(), State::Off);
+    assert_eq!(out.filter.map(|f| f.all_beacons), Some(false));
+}
+
+#[test]
+fn country_rules_give_each_channel_its_standing() {
+    let rule = |start, end, eirp| Rule { start_khz: start, end_khz: end, bandwidth_khz: 40_000, eirp_mbm: eirp, ..Rule::default() };
+    let rules = [
+        rule(2_402_000, 2_482_000, 2000),
+        Rule { no_ir: true, ..rule(5_170_000, 5_250_000, 2301) },
+        Rule { dfs: true, ..rule(5_250_000, 5_330_000, 2000) },
+        Rule { one_environment: true, ..rule(5_490_000, 5_710_000, 2698) },
+        Rule { one_modulation: true, ..rule(5_735_000, 5_775_000, 1397) },
+        rule(5_755_000, 5_835_000, 1397),
+    ];
+    assert_eq!(country::standing(&rules, 1, true), (Standing::Send, 20));
+    assert_eq!(country::standing(&rules, 13, true), (Standing::Send, 20));
+    // Channel 14 (2474 to 2494 MHz) is not held whole by the 2.4 GHz rule.
+    assert_eq!(country::standing(&rules, 14, true), (Standing::Barred, 0));
+    assert_eq!(country::standing(&rules, 36, true), (Standing::Listen, 23));
+    assert_eq!(country::standing(&rules, 52, true), (Standing::Listen, 20));
+    assert_eq!(country::standing(&rules, 100, true), (Standing::Barred, 0));
+    // 153 (5755 to 5775 MHz) lies in two rules: ambiguous, so barred; 161 in one.
+    assert_eq!(country::standing(&rules, 153, true), (Standing::Barred, 0));
+    assert_eq!(country::standing(&rules, 161, true), (Standing::Send, 13));
+    // Allowed by the rules, not by the radio.
+    assert_eq!(country::standing(&rules, 6, false), (Standing::Radio, 20));
+    // Numbers that name no channel the station uses, and no rules at all.
+    for channel in [0, 15, 31, 184, 196] { assert_eq!(country::standing(&rules, channel, true), (Standing::Barred, 0)); }
+    assert_eq!(country::standing(&[], 6, true), (Standing::Barred, 0));
+    // A rule narrower than 20 MHz holds no channel.
+    assert_eq!(country::standing(&[Rule { bandwidth_khz: 10_000, ..rule(2_402_000, 2_482_000, 2000) }], 6, true), (Standing::Barred, 0));
 }

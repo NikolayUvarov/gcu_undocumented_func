@@ -8,7 +8,15 @@
 /// An SSID is up to 32 bytes as the access point sends them: most are UTF-8, some are not (GBK, Latin-1), so they travel
 /// as bytes and a program shows them as it can. An empty SSID is a hidden network's. The station does no DHCP: the
 /// address the link got is the network stack's (`ip`).
-package mind:wifi@1.0.0;
+///
+/// 1.1 (550-NET-0035, for 550-APP-0082): the country the station runs under, from the regulatory catalogue built into
+/// it (wireless-regdb at a pinned commit, named by `catalogue`). A country is asked for by its two-letter code and kept
+/// by `keystore` (keystore.wit 1.3), never assumed: with none applied the station probes nowhere and `join` answers
+/// `unsupported`. The radio applies the country's limits under its own (wlanhw.wit 1.2, proposed). Asking for a
+/// country leaves the network and drops the last scan, so nothing chosen under the old rules is used under the new
+/// ones. A station built without a catalogue answers the country calls `unsupported` and keeps 1.0's behaviour
+/// (550-NET-0035, stage A).
+package mind:wifi@1.1.0;
 
 interface wifi {
     /// How a network is protected: `wpa2` is RSN with PSK and CCMP, which the station joins, as it joins `open`;
@@ -46,4 +54,41 @@ interface wifi {
     leave: func() -> result<_, error>;
     /// Forgets a remembered network; false when none had the name (change badge only).
     forget: func(ssid: list<u8, 32>) -> result<bool, error>;
+
+    /// A channel under a country (1.1): `send`, the station may probe and join there; `listen`, the rules forbid
+    /// initiating (NO-IR) or ask for radar detection (DFS), so the station only listens there and joins an access point
+    /// it heard; `barred`, the rules do not cover it, or restrict it in a way the station does not keep (indoor or
+    /// outdoor only, one modulation alone, point-to-point); `radio`, the rules allow it and the radio does not.
+    enum standing { send, listen, barred, radio }
+    /// One of the radio's channels under a country: its number, its standing, and the most power the rules allow there
+    /// (EIRP in dBm, rounded down; 0 when barred).
+    record channel { number: u8, standing: standing, eirp: u8 }
+    /// A country of the catalogue: its code (two capital letters, as wireless-regdb has them), and how many of the
+    /// radio's channels it lets the station send on, and only listen on.
+    record country { code: string<2>, send: u8, listen: u8 }
+    /// A page of the catalogue: how many countries it has, and up to 32 of them from the index asked for, by code. The
+    /// world domain `00` is not one of them: it is never a chosen country.
+    record countries { total: u16, page: list<country, 32> }
+    /// `none`: no country asked for, or none kept; `applied`: the station runs under `applied`; `failed`: the radio
+    /// refused `asked`'s limits, and nothing is applied (the station does not fall back to an earlier country).
+    enum country-state { none, applied, failed }
+    /// The station's country: the code asked for and the code applied (empty: none), the state, whether the radio
+    /// confirmed its limits (a wlanhw.wit 1.1 radio cannot: the station alone keeps to the channels), whether `keystore`
+    /// keeps the choice across restarts, and the catalogue's identity (the first 16 hex digits of the SHA-256 of its
+    /// db.txt; empty: no catalogue).
+    record country-status { asked: string<2>, applied: string<2>, state: country-state, radio: bool, kept: bool, catalogue: string<16> }
+
+    /// A page of the catalogue from index `from` (1.1). `unsupported`: no catalogue in this station.
+    countries: func(from: u16) -> result<countries, error>;
+    /// The radio's channels under country `code` as the station would use them, `00` too, for information (1.1).
+    /// `invalid`: not two capital letters, nor `00`; `not-found`: not in the catalogue; `no-device`: no radio yet;
+    /// `unsupported`: no catalogue in this station.
+    channels: func(code: string<2>) -> result<list<channel, 64>, error>;
+    /// The station's country (1.1).
+    country: func() -> country-status;
+    /// Asks for country `code` (change badge only, 1.1): the station leaves the network and drops the last scan, has the
+    /// radio apply the country's limits and `keystore` keep the code, and answers the status after. `invalid`: not two
+    /// capital letters, or `00`; `not-found`: not in the catalogue; `no-device`: no radio yet; `unsupported`: no
+    /// catalogue in this station. A radio that refuses the limits is not an error: the status says `failed`.
+    set-country: func(code: string<2>) -> result<country-status, error>;
 }
