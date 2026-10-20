@@ -5688,12 +5688,33 @@ def wifi_join_check(vm):
     require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
     require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
+    # network, and its gateway answers a ping through the WPA2 link.
+    require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
+    require(vm.command("ip"), "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+    require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
+    print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
+          "answers a ping through the WPA2 link", flush=True)
     require(run("wifi leave", 30), "[WIFI] LEFT")
     require(run("wifi status", 30), "[WIFI] STATUS OFF")
     require(run("wifi join", 30), "usage: wifi")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
           "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+    # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
+    sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
+    offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
+    assert offers == {" 1 2 5.5 11"}, (offers, sim[-2000:])
+    assert "[WLANSIM] REFUSED A FRAME" not in sim, sim[-2000:]
+    print("PASS: the station offered 802.11b's rates alone to a radio without OFDM, and the radio refused none of its frames", flush=True)
+    # 550-NET-0024: a network remembered by keystore is joined again with no passphrase; its keys come from keystore.
+    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90), "[WIFI] JOINED MIND-TEST")
+    require(vm.service_logs("keystore", "WI-FI NETWORK MIND-TEST KEPT FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST KEPT FOR PID")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
+    require(run("wifi leave", 30), "[WIFI] LEFT")
+    print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -5716,8 +5737,9 @@ def net_suite(args, disk):
     # named (another copy) the web server by its name, looked up at the test DNS server (351-NET-0003).
     (disk / "netpolicy.txt").write_text(f"# test policy\nnetcheck 10.0.2.2 tcp {web_port} 600 100000\nnetcheck 10.0.2.2 icmp\nconsole 10.0.2.2 icmp\n"
                                         f"resolver 10.0.2.2:{dns_port}\nnamed www.mind.test tcp {web_port}\nnamed missing.example tcp {web_port}\n"
-                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
-    for copy in ("rogue", "named", "brief", "lasting"):
+                                        f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n"
+                                        "wifiping 10.0.4.1 icmp\n")  # the station's gateway, over wlansim (550-NET-0018)
+    for copy in ("rogue", "named", "brief", "lasting", "wifiping"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
