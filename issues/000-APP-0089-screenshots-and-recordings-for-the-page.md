@@ -1,6 +1,6 @@
 # 000-APP-0089 — Screenshots and recordings for the project's page
 
-**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (on the tools branch, 2026-10-20; the gate left) · **Blocked by:** PrintScreen: a key code from `KRN` ([requests-KRN.md](requests-KRN.md), "A key code for PrintScreen") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
+**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); PrintScreen (the kernel track's key code) and the MacBook Pro's run left · **Blocked by:** PrintScreen: a key code from `KRN` ([requests-KRN.md](requests-KRN.md), "A key code for PrintScreen") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, for [000-KRN-0093](000-KRN-0093-pictures-and-video-for-the-showcase.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -42,7 +42,8 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **Host tests:** `tests/record_host.rs` (a block averaged, the pixels that make no whole block left out, rows packed).
 - **The `vfs` suite** (raw FAT disk): `screenshot` writes `data/media/screen-001.bmp`; `screenshot -d 1` writes `screen-002.bmp` later; Ctrl+Alt+F6 with clock in front writes `screen-003.bmp`, which matches QEMU's picture of clock's screen (at least 90% of the sampled pixels; no shell in it); `record -s 2` writes an AVI of half the screen's width and height; `record` alone writes `data/media/record-001.avi`.
 - **Docs:** the help line, `docs/tools` (EN, RU).
-- **Left:** PrintScreen (the kernel track's key code); the gate on this batch; the MacBook Pro's picture and 30 s recording.
+- **In `main`** since 835c31c8 (2026-10-20). The gate: every x86 group on i9 and every aarch64 group on un-rizen-service (Effector); the host tests, TLC and the x86 groups boot, services, scheduling, files and keys locally. The batch's later commits changed only the suites, and each group ran on a commit that has the suites it runs. The `vfs` suite's checks ran in the files group locally.
+- **Left:** PrintScreen (the kernel track's key code); the MacBook Pro's picture and 30 s recording.
 
 ## Related
 

@@ -3915,16 +3915,17 @@ def link_suite(args):
             require(log, "MIND CORE KERNEL: INIT STARTED")
             require(link(port, "put", str(sent), "../escape.bin", ok=False), "not allowed")
             require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED sent.bin")
-            # 800-KRN-0128: link holds exactly usb_serial's client, a scope of vfs_server and a log reader.
+            # 800-KRN-0128, 0132: link holds exactly usb_serial's client, a scope of vfs_server, an application's loader
+            # client and a log reader.
             pids = vm.services()
             caps = vm.command(f"stat caps {pids['link']}", raw=True)
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
             held = sorted((int(slot), servers.get(int(ep))) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M))
-            assert "COUNT=3 " in caps and held == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (12, pids["logd"])], caps
+            assert "COUNT=4 " in caps and held == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
-          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its three grants", flush=True)
+          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):
