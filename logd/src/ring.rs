@@ -1,13 +1,16 @@
-//! The ring of `logd`: 256 records of up to 200 bytes of text in fixed slots (64 KiB), numbered in sequence, and a
-//! rate limit per sender (MC-10.2): what a sender writes beyond `RATE` records a second is refused and counted, and a
-//! record saying how many were refused comes before its next one. Builds on the host (tests/logd_host.rs).
+//! The ring of `logd`: 2048 records of up to 200 bytes of text in fixed slots (about 500 KiB, a whole boot's lines with
+//! the kernel's, 800-KRN-0128), numbered in sequence, and a rate limit per sender (MC-10.2): what a sender writes beyond
+//! `RATE` records a second is refused and counted, and a record saying how many were refused comes before its next one.
+//! `init` is not limited: its copy of the kernel's lines comes in one burst at boot. Builds on the host (tests/logd_host.rs).
 
-pub const SLOTS: usize = 256;
+pub const SLOTS: usize = 2048;
 pub const TEXT: usize = 200;
 pub const NAME: usize = 16;
 /// Records a sender may write per second.
 pub const RATE: u32 = 64;
 const SENDERS: usize = 32;
+/// `init`'s PID: the supervisor, not rate-limited.
+pub const INIT_PID: u64 = 1;
 pub const LEVEL_WARN: u8 = 2;
 
 #[derive(Clone, Copy)]
@@ -66,6 +69,7 @@ impl Ring {
     /// Adds a record from `pid` (`name` as the kernel reports it); false if the sender is over its rate and the
     /// record was refused.
     pub fn push(&mut self, time_ms: u64, pid: u64, name: &str, level: u8, text: &str) -> bool {
+        if pid == INIT_PID { self.append(time_ms, pid, name, level, text); return true; }
         let window = time_ms / 1000;
         // The sender's entry, or the one used longest ago.
         let index = match self.senders.iter().position(|s| s.pid == pid) {
