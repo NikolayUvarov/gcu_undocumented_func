@@ -273,6 +273,8 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 
 **The start script** (000-APP-0079): `autorun.msh` at the boot volume's root runs once after the shell's first frame, in console 1, under its own `requires:` line; the system log has its SHA-256 and its end, and Esc stops it ([docs/msh.md](../msh.md)). The shell writes only `ram:`, `log:` and `data/`, so only whoever writes the disk can put one there (the maintainer's hardware tests, 550-ASR-0007).
 
+**A safe start** (000-APP-0086): after a run that did not end as asked (a freeze the watchdog reset, a cut power), `init` starts safely and leaves the radios, the camera, sound and speech stopped (000-KRN-0076). The shell finds init's lines in the boot's log and says so above its first prompt, `SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: audio_gw, tts, video_gw (svc start audio_gw, svc start tts, svc start video_gw)`, and logs the same line. `wm` shows it on its status line (`shell.wit` 1.6 `boot-notice`), where a click opens the shell's window. After a normal boot nothing is shown.
+
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
 - Showing a console shows its foreground program, which gets the keyboard, or else its text and prompt. A program in a console not shown keeps running. Its output goes to that console's text, and an ended foreground program is reported there.

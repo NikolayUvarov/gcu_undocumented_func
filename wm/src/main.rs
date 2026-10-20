@@ -175,6 +175,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if needs.log { missing.push("log"); }
     if requests & mind::process::REQUEST_NETWORK != 0 { missing.push("network"); }
     if requests & mind::process::REQUEST_TLS != 0 { missing.push("tls"); }
+    if requests & mind::process::REQUEST_SSH != 0 { missing.push("ssh"); }
     if requests & mind::process::REQUEST_PARSE != 0 { missing.push("parse"); }
     if requests & mind::process::REQUEST_GPIO != 0 { if holds(SLOT_GPIO) && grant(SLOT_GPIO, SLOT_GPIO) { lent.push("gpio"); } else { missing.push("gpio"); } }
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
@@ -487,6 +488,18 @@ fn main(info: &'static BootInfo) {
         let asked = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::wifi(Endpoint(SLOT_SHELL), SLOT_WIFI));
         mind::println!("[WM] WI-FI CLIENT FROM THE SHELL: {}", match asked {
             Ok(Ok(())) => "LENT", Ok(Err(mind::idl::shell::Error::Unavailable)) => "NONE (NO STATION)", Ok(Err(_)) => "REFUSED", Err(_) => "NO ANSWER" });
+    }
+    // A safe start told by the shell (shell.wit 1.6, 000-APP-0086): on the status line until another notice, a click
+    // opening the shell's window, where `svc start` starts what it left out.
+    if holds(SLOT_SHELL) {
+        if let Ok(Ok(notice)) = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::boot_notice(Endpoint(SLOT_SHELL))) {
+            if !notice.as_str().is_empty() {
+                let text = format!("{} (a click here opens the shell's window)", notice.as_str());
+                mind::println!("[WM] {}", text);
+                manager.wm.offer = Some((text.clone(), String::from(menu::SHELL)));
+                manager.wm.notice = Some(text);
+            }
+        }
     }
     mind::println!("[WM] READY {}X{} WINDOWS {}", term.cols(), term.rows(), manager.lives.len());
     // `wm fm, fm data, clock` or `wm fm fm clock`: the programs to start.

@@ -5713,6 +5713,7 @@ def wifi_join_check(vm):
             break
         time.sleep(1)
     require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+    assert re.search(r"^CARD 2 MAC \S+ IP 10\.0\.4\.15/24 .* WI-FI", shown, re.M), shown  # 550-APP-0085
     require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
@@ -5945,12 +5946,17 @@ def net_suite(args, disk):
         for line in ("NETCHECK CARD 0 Wired PRESENT UP CONFIGURED DEFAULT", "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED", "NETCHECK CARD 2 Wireless"):
             require(cards, line)
         assert "PREFERRED" not in cards, cards
+        # The shell's `ip` shows the same (550-APP-0085): each card's kind, the default, and the station's slot.
+        def ip_cards():
+            return dict((int(card), state.strip()) for card, state in re.findall(r"^CARD (\d)(?: MAC .* RECEIVED=\d+)?((?: [A-Z-]+)*)\s*$", vm.command("ip"), re.M))
+        assert ip_cards() == {0: "WIRED DEFAULT", 1: "WIRED", 2: "WI-FI NOT THERE"}, vm.command("ip")
         default_sends(0)
         require(policy_answer(vm, "netpolicy add default card 1", "y"), "NETPOLICY: ADDED 1 LINE(S)")
         log = vm.service_logs("netstack", "DEFAULT ROUTE: CARD 1")
         require(log, "[NETSTACK] CARD 1 PREFERRED AS THE DEFAULT")
         require(vm.command("dmesg -s netpolicy"), "[NETPOLICY] DEFAULT CARD 1 FROM THE POLICY")
         require(vm.command("netcheck cards"), "NETCHECK CARD 1 Wired PRESENT UP CONFIGURED PREFERRED DEFAULT")
+        assert ip_cards() == {0: "WIRED", 1: "WIRED PREFERRED DEFAULT", 2: "WI-FI NOT THERE"}, vm.command("ip")
         default_sends(1)
         vm.hmp("set_link n1 off")
         require(vm.service_logs("netstack", "DEFAULT ROUTE: CARD 0"), "DEFAULT ROUTE: CARD 0")
@@ -6138,17 +6144,18 @@ def tls_suite(args, disk):
     asking, asking_context = _https_server(certificates, "server")
     ports = {name: server.server_address[1] for name, server in (("good", good), ("rogue", rogue), ("asking", asking))}
     network = ["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"]
-    # Copies of clock that also ask for the network and the TLS client (351-APP-0017): tlsclock has a rule in the
-    # policy, tlsnone none; a script that declares only `network` starts tlsclock too.
+    # Copies of clock that also ask for the network, the TLS client (351-APP-0017) and the SSH service's (351-APP-0084):
+    # tlsclock has a rule in the policy, tlsnone none; scripts that declare only `network`, or one client, start tlsclock too.
     elf = bytearray((disk / "clock.elf").read_bytes())
     note = elf.index(b"MINDREQ1") + 8
-    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072).to_bytes(4, "little")
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072 | 16777216).to_bytes(4, "little")
     for name in ("tlsclock", "tlsnone"):
         (disk / f"{name}.elf").write_bytes(elf)
     (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
     (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
+    (disk / "data/ssh.msh").write_text("#!msh\nrequires: network ssh\nrun tlsclock &\n")
     # A processor with the random number instruction, and one without it (an ARMv8.0 core has no RNDR).
     entropy, (with_entropy, without) = ("RNDR", ("max", "cortex-a72")) if args.arch == "aarch64" else ("RDRAND", ("qemu64,+rdrand", None))
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=[*network, "-cpu", with_entropy])
@@ -6214,7 +6221,7 @@ def tls_suite(args, disk):
         for slot, service in ((34, "ssh"), (35, "updater")):
             held = re.search(fr"^SLOT={slot} GEN=\d+ KIND=1 .*EP=(\d+)", shell, re.M)
             assert held and servers.get(int(held[1])) == real[service], (slot, service, shell)
-        tls_lending_check(vm, servers, real["tls"])
+        tls_lending_check(vm, servers, real["tls"], real["ssh"])
     finally:
         vm.close()
         for server in (good, rogue, asking):
@@ -6296,31 +6303,40 @@ def device_key_check(args, cpu):
           "the shell can neither read nor write it; the public key logged in the OpenSSH form; a change of the network policy kept after a reboot", flush=True)
 
 
-def tls_lending_check(vm, servers, tls):
-    """351-APP-0017: the shell lends its TLS client in SLOT_TLS to a program that asks for it (REQUEST_TLS) and gets a
-    flow grant; not without a grant, and to a script's program only if the script declares `tls`."""
-    service = {ep for ep, server in servers.items() if server == tls}
+def tls_lending_check(vm, servers, tls, ssh):
+    """351-APP-0017, 351-APP-0083, 351-APP-0084: the shell lends a TLS client in SLOT_TLS to a program that asks for it
+    (REQUEST_TLS) and gets a flow grant, badged BADGE_TLS_NO_DEVICE so that it cannot offer the device certificate, and
+    the SSH service's client in SLOT_SSH (REQUEST_SSH) the same way; not without a grant, and to a script's program only
+    what the script declares."""
+    services = {name: {ep for ep, server in servers.items() if server == pid} for name, pid in (("tls", tls), ("ssh", ssh))}
 
     def lent(command):
         out = vm.command(command)
         pid = int(re.search(r"STARTED PID=(\d+) NAME=\w+ BACKGROUND", out)[1])  # as the suites number them
         caps = vm.command(f"stat caps {pid + BASE}", raw=True)
         require(vm.command(f"kill {pid}"), "KILLED")
-        slot = re.search(r"^SLOT=20 [^\n]* EP=(\d+)", caps, re.M)
-        return out, bool(slot and int(slot[1]) in service)
+        held = {}
+        for slot, name in ((20, "tls"), (34, "ssh")):
+            found = re.search(fr"^SLOT={slot} [^\n]*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            if found and int(found[2]) in services[name]:
+                held[name] = int(found[1])
+        return out, held
 
-    out, tls_lent = lent("run tlsclock &")
-    assert tls_lent, out
+    out, held = lent("run tlsclock &")
+    assert held == {"tls": 1, "ssh": 0}, (held, out)  # BADGE_TLS_NO_DEVICE; the SSH service's as it is
     require(vm.command("netgrants"), "GRANT ")
-    out, tls_lent = lent("run tlsnone &")
+    out, held = lent("run tlsnone &")
     require(out, "NETWORK FOR tlsnone: NoPolicy")
-    assert not tls_lent, "no flow grant, no TLS client"
-    out, tls_lent = lent("msh data/notls.msh")
-    assert not tls_lent, "a script without `tls`"
-    out, tls_lent = lent("msh data/tls.msh")
-    assert tls_lent, out
-    print("PASS: the shell lends its TLS client to a program with a flow grant that asks for it, not to one without a "
-          "grant, and to a script's program only if the script declares tls", flush=True)
+    assert not held, "no flow grant, no TLS or SSH client"
+    out, held = lent("msh data/notls.msh")
+    assert not held, "a script without `tls` or `ssh`"
+    out, held = lent("msh data/tls.msh")
+    assert held == {"tls": 1}, (held, out)
+    out, held = lent("msh data/ssh.msh")
+    assert held == {"ssh": 0}, (held, out)
+    print("PASS: the shell lends a TLS client that cannot offer the device certificate (BADGE_TLS_NO_DEVICE) and the SSH "
+          "service's client to a program with a flow grant that asks for them, not to one without a grant, and to a "
+          "script's program only what the script declares", flush=True)
 
 
 def tpm_check(args, cpu):
@@ -8097,7 +8113,12 @@ def watchdog_suite(args, disk):
         frozen = time.monotonic()
         vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
         took = time.monotonic() - frozen
-        vm.expect("MIND> ", timeout=120)
+        # The shell tells the safe start above its first prompt, with `svc start` for each service left out (000-APP-0086).
+        shown = vm.expect("MIND> ", timeout=120)
+        notice = re.search(r"^SAFE START: THE LAST RUN DID NOT END AS ASKED\. LEFT OUT: (.*) \((.*)\)$", shown, re.M)
+        assert notice and {"audio_gw", "tts", "video_gw"} <= set(notice[1].split(", ")), shown[-3000:]
+        assert notice[2] == ", ".join(f"svc start {name}" for name in notice[1].split(", ")), notice[0]
+        require(vm.command("dmesg -s shell", raw=True), "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
         log = vm.command("dmesg -s init", raw=True)
         require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
         assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
@@ -8108,6 +8129,11 @@ def watchdog_suite(args, disk):
         for name in ("audio_gw", "tts"):
             require(vm.command(f"svc start {name}"), f"{name} started: PID")
         require(vm.command("svc start bcm_wifi"), "svc: start bcm_wifi: no such service, or its device is missing")
+        # wm shows it on its status line, a click there opening the shell's window (shell.wit 1.6 boot-notice).
+        vm.send("wm\n")
+        require(vm.expect("[WM] READY", timeout=90), "[WM] SAFE START: THE LAST RUN DID NOT END AS ASKED. LEFT OUT: ")
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        vm.expect("RESUMED.", timeout=30)
         log = vm.command("dmesg -s init", raw=True)
         require(log, "[INIT] STARTED audio_gw PID=")
         require(log, "[INIT] STARTED tts PID=")
@@ -8123,6 +8149,7 @@ def watchdog_suite(args, disk):
         vm.expect("MIND> ", timeout=120)
         log = vm.command("dmesg -s init", raw=True)
         assert safe not in log and "STARTED audio_gw" in log, log[-2000:]
+        assert "SAFE START" not in vm.command("dmesg -s shell", raw=True)
     finally:
         vm.close()
     # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
@@ -8130,7 +8157,8 @@ def watchdog_suite(args, disk):
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
           f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
           f"sound or speech; sound and speech started by `svc start` from their prepared plans, without the platform "
-          f"privilege), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
+          f"privilege), ran past {uptime:.0f} s and cleared its mark, the shell telling it with `svc start` for what it left "
+          f"out; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows

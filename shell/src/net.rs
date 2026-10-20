@@ -104,13 +104,28 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
         Ok(Err(error)) => failed(out, "IP", error),
         Err(_) => { stack_failed(out); return }
     }
-    // Every card (issue 105): its address and the frames it carried.
-    if let Ok(Ok(interfaces)) = socket::interfaces(STACK) {
-        for i in interfaces.as_slice() {
-            let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
-            let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
-            let _ = writeln!(out, " SENT={} RECEIVED={}", i.sent, i.received);
-        }
+    // Every card (issue 105): its address and the frames it carried, then its kind and whether it is the preferred and
+    // the default one (socket.wit 2.5, 550-APP-0085); a card the stack has a slot for but no driver yet, by its kind.
+    let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    let interfaces = match socket::interfaces(STACK) { Ok(Ok(interfaces)) => interfaces, _ => Default::default() };
+    for i in interfaces.as_slice() {
+        let _ = write!(out, "CARD {} MAC ", i.card); mac(out, &i.mac.to_be_bytes()[2..]);
+        let _ = write!(out, " IP "); dotted(out, i.address); let _ = write!(out, "/{} GATEWAY ", i.prefix); dotted(out, i.gateway);
+        let _ = write!(out, " SENT={} RECEIVED={}", i.sent, i.received);
+        if let Some(card) = cards.as_slice().iter().find(|c| c.card == i.card) { state(out, card); }
+        let _ = writeln!(out);
+    }
+    for card in cards.as_slice().iter().filter(|c| !interfaces.as_slice().iter().any(|i| i.card == c.card)) {
+        let _ = write!(out, "CARD {}", card.card); state(out, card);
+        let _ = writeln!(out, "{}", if card.present { "" } else { " NOT THERE" });
+    }
+}
+
+// A card's kind, then DOWN, PREFERRED and DEFAULT where they apply.
+fn state(out: &mut impl Write, card: &socket::Card) {
+    let _ = write!(out, " {}", match card.kind { socket::CardKind::Wired => "WIRED", socket::CardKind::Wireless => "WI-FI" });
+    for (on, word) in [(card.present && !card.up, " DOWN"), (card.preferred, " PREFERRED"), (card.default, " DEFAULT")] {
+        if on { let _ = write!(out, "{}", word); }
     }
 }
 

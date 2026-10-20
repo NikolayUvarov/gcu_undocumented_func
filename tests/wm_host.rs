@@ -1984,3 +1984,21 @@ fn the_picture_is_chosen_by_browsing() {
     wm.key(key(KEY_ENTER));
     assert!(wm.status().contains("BROWSE=data:.."), "{}", wm.status());
 }
+
+// 000-APP-0086: the safe start's notice offers the shell's window; a click on the status line runs it while it shows,
+// and not once another notice took its place.
+#[test]
+fn a_click_on_the_safe_starts_notice_opens_the_shells_window() {
+    let mut wm = Wm::new(160, 50);
+    let text = String::from("SAFE START: THE LAST RUN DID NOT END AS ASKED (a click here opens the shell's window)");
+    wm.offer = Some((text.clone(), String::from(menu::SHELL)));
+    wm.notice = Some(text.clone());
+    assert_eq!(wm.pointer(5, 48, 1, 0), Action::Redraw); // not the status line
+    wm.pointer(5, 48, 0, 0);
+    assert_eq!(wm.pointer(5, 49, 1, 0), Action::Run(String::from(menu::SHELL)));
+    wm.pointer(5, 49, 0, 0);
+    assert_eq!((wm.notice.as_ref(), wm.offer.as_ref()), (None, None));
+    wm.offer = Some((text, String::from(menu::SHELL)));
+    wm.notice = Some(String::from("Started fm (PID 40) with files"));
+    assert_ne!(wm.pointer(5, 49, 1, 0), Action::Run(String::from(menu::SHELL)));
+}
