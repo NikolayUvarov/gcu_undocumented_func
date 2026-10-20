@@ -5352,6 +5352,79 @@ def flow_bounds_check(vm, web_port):
           "a 10 s term ends the connection its grant holds, while a lasting grant holds its connection for 40 s", flush=True)
 
 
+class _SftpServer:
+    """OpenSSH's server on the host's loopback for download's sftp:// (351-NET-0027), as ssh/tests/openssh.rs starts it:
+    its own ed25519 host key (`pin`: the SHA-256 of its blob, in hex), a file to serve, and `authorized_keys` written
+    once the guest's device key is known. sshd reads that file at each login. Started for the test only, never as a
+    system service; `None` when there is no sshd (MIND_SSHD or /usr/sbin/sshd)."""
+
+    @classmethod
+    def start(cls):
+        sshd = os.environ.get("MIND_SSHD") or "/usr/sbin/sshd"
+        if not (os.path.isabs(sshd) and os.path.isfile(sshd) and shutil.which("ssh-keygen")):
+            return None
+        server = cls()
+        server.dir = Path(tempfile.mkdtemp(prefix="mind-sftp-"))
+        host = server.dir / "host_key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(host)], check=True)
+        server.pin = hashlib.sha256(base64.b64decode((server.dir / "host_key.pub").read_text().split()[1])).hexdigest()
+        server.user = subprocess.run(["id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
+        server.file = server.dir / "release.bin"
+        server.file.write_bytes(bytes((i * 7 + i // 251) & 0xFF for i in range(300_000)) + b"the end\n")
+        server.keys = server.dir / "authorized_keys"
+        server.keys.write_text("")
+        if os.geteuid() == 0:
+            os.makedirs("/run/sshd", exist_ok=True)  # as root, sshd wants its privilege separation directory
+        for _ in range(5):
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                server.port = probe.getsockname()[1]
+            (server.dir / "sshd_config").write_text(
+                f"Port {server.port}\nListenAddress 127.0.0.1\nHostKey {host}\nPidFile {server.dir / 'sshd.pid'}\n"
+                f"AuthorizedKeysFile {server.keys}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\n"
+                "UsePAM no\nStrictModes no\nSubsystem sftp internal-sftp\nLogLevel ERROR\n")
+            server.process = subprocess.Popen([sshd, "-D", "-E", str(server.dir / "sshd.log"), "-f", str(server.dir / "sshd_config")])
+            for _ in range(50):  # the banner on its port: a port taken meanwhile ends sshd
+                if server.process.poll() is not None:
+                    break
+                try:
+                    with socket.create_connection(("127.0.0.1", server.port), timeout=1) as probe:
+                        if probe.recv(64).startswith(b"SSH-2.0-"):
+                            return server
+                except OSError:
+                    time.sleep(.1)
+            server.process.kill(); server.process.wait()
+        raise AssertionError("sshd did not start: " + (server.dir / "sshd.log").read_text())
+
+    def stop(self):
+        self.process.kill(); self.process.wait()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def sftp_runs(vm, sftp):
+    """351-NET-0027: download reads a file over SFTP through the SSH service, logged in with the device key, the server
+    known by its pinned host key; keystore logs each login it signs. A wrong pin, and a server that does not know the
+    device key, are refused."""
+    log = vm.service_logs("keystore", "PUBLIC KEY")
+    key = re.search(r"\[KEYSTORE\] PUBLIC KEY (ssh-ed25519 [A-Za-z0-9+/]{68})", log)
+    assert key, log
+    url = f"sftp://{sftp.user}@10.0.2.2:{sftp.port}{sftp.file}"
+    digest = hashlib.sha256(sftp.file.read_bytes()).hexdigest()
+    # A server that does not know the device key: the login refused.
+    out = vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --tries 1", timeout=60)
+    require(out, "DOWNLOAD: CONNECT: Refused"); require(out, "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 0 BYTES")
+    sftp.keys.write_text(key[1] + " mind-device\n")
+    # Another host key than the pinned one: nothing is signed for it.
+    require(vm.command(f"download data/sftp.bin {url} --pin {'0' * 64}", timeout=60), "DOWNLOAD: SFTP: CONNECT: HostKey")
+    out = vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --sha256 {digest}", timeout=120)
+    require(out, f"DOWNLOAD: DONE {sftp.file.stat().st_size} BYTES"); require(out, f"DOWNLOAD: SHA256 {digest} MATCHES")
+    require(vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --sha256 {digest}", timeout=60), "DOWNLOAD: ALREADY COMPLETE")
+    require(vm.command(f"sha256 data/sftp.bin"), f"{digest}  data/sftp.bin")
+    require(vm.service_logs("keystore", "SIGNED SshLogin"), "[KEYSTORE] SIGNED SshLogin FOR PID")
+    print(f"PASS: download over SFTP: {sftp.file.stat().st_size} bytes through the SSH service, logged in with the device key (keystore "
+          "signed the login), the server known by its pinned host key; a wrong pin and a server without the device key refused", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -5381,8 +5454,10 @@ def download_check(args, disk):
     service_port, expired_port = service.server_address[1], expired.server_address[1]
     stall = stall_server(small, 50_000)  # holds a body half sent: a parser that ends meanwhile (109-NET-0010)
     (disk / "data").mkdir(exist_ok=True)
+    sftp = _SftpServer.start()  # 351-NET-0027
+    sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1]))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
@@ -5398,6 +5473,10 @@ def download_check(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
+        if sftp:
+            sftp_runs(vm, sftp)
+        else:
+            print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
         download_runs(vm, release, port, big, small, cut)
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
@@ -5408,6 +5487,8 @@ def download_check(args, disk):
         vm.close()
         held.go.set()
         stall.go.set()
+        if sftp:
+            sftp.stop()
         for server in (release, secure, rogue, held, service, expired, stall):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
