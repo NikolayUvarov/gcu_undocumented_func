@@ -32,6 +32,10 @@ From the kernel track's message to UPD (`internal-dev-messages`, `UPD/2026-10-14
 - The `update` suite passes on x86 and aarch64, and shows the resume's lines and each file's time.
 - No call of an attempt can wait more than 60 s. This is read from the code: the suite has no service that stops answering.
 
+## Progress (2026-10-20): the times read before the restart
+
+Gate 22's runs printed `TIME: the updater fetched 0 boot files`: the updater's lines go to its log, not to the serial line, and the restart after the fetch loses that log. The update suite now reads `dmesg -s updater` every second while the fetch runs, until the version is staged, and prints each file's time and the resume's line from that attempt. Run locally (x86, QEMU 8.2, TCG, 4 CPUs): 39 boot files, the slowest `tls.elf`, 1379760 bytes in 3354 ms; the resume `ASKED FOR THE REST FROM BYTE 689880`. The suite passed.
+
 ## Related
 
 [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done) (the same for `download`), [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).

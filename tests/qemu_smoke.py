@@ -4721,11 +4721,27 @@ def update_suite(args):
         cut = (newer / largest[0]).stat().st_size // 2
         https.cuts[f"/blobs/{largest[1]}"] = cut
         vm.collect(); vm.output = ""
-        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         # How long each boot file took, as the updater logs it (351-UPD-0018): evidence for a slow machine, not a check.
-        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", vm.log)  # before the restart, so not in `out`
+        # Its log goes with the restart, so it is read while the fetch runs, until the version is staged; a read the
+        # restart cuts short ends the reading, and the restart's lines stay in the output.
+        log = ""
+        for _ in range(900):
+            try:
+                log = vm.command("dmesg -s updater", raw=True)
+            except AssertionError as error:
+                if not str(error).startswith("Timeout waiting for") or vm.process.poll() is not None:
+                    raise
+                break
+            if "[UPDATER] FETCH: VERSION 6 STAGED" in log or "[UPDATER] APPLY:" in log:
+                break
+            time.sleep(1)
+        attempt = log.rpartition("[UPDATER] FETCH: VERSION 6 INTO SLOT")[2]
+        fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
+        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
         print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
+        for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
+            print(f"TIME: the resume: {line}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
