@@ -1,6 +1,6 @@
 # 550-ASR-0007 — Joining a Wi-Fi network, tested: in QEMU on every gate, and on the MacBook Pro on request
 
-**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** open · **Blocked by:** `APP`: a join without a screen and a start script (asked on `internal-dev-messages`, `APP/2026-10-14…-ASR-wifi-join-without-a-screen-and-a-start-script.md`); `NET`: the `net` suite's join check · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** assurance · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — (APP's join without a screen and start script, and NET's `net` suite join check, are in `main`) · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 
@@ -42,6 +42,11 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
   - it notes each step on the screen and in the system log, and ends with `*** WIFI JOIN Complete. Data collected ***`.
   
   Its `requires:` is `file wifi network log`. It is written against 550-APP-0078's planned lines: until that is in an image, `wifi join` fails and the script logs why.
+
+- **2026-10-20: both of APP's parts and the QEMU half are in `main`.**
+  - APP's `wifi join --passphrase-file` (550-APP-0078) and the root's `autorun.msh` (000-APP-0079) are in `main`. `tests/hardware/wifijoin.msh` uses them as they are: the command line, `JOINED`, and the exit status.
+  - NET's `net` suite checks over `wlansim`: the join, a wrong passphrase refused, the lease 10.0.4.15 and a ping of 10.0.4.1, 802.11b's rates alone, and a remembered network joined again. That is this task's QEMU half.
+  - **Left:** the MacBook Pro's run. `build-and-write.sh --wifijoin` writes `data/wifijoin.txt` and `autorun.msh` after the image, and the log ends with `*** WIFI JOIN Complete. Data collected ***`.
 
 ## Related
 
