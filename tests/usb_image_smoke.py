@@ -65,6 +65,18 @@ def slots_check(args, work):
         require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
         require(vm.service_logs("vfs_server", "UPDATE ZONE"), "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE")
         require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 1; THE NEWER RECORD: SLOT A CONFIRMED")
+        # 109-KRN-0117: the updater read the channel through a parser of its own, started with its loader client, which
+        # carries BADGE_HELPERS_ONLY (1); the parser ended with the check, so the shared parse service runs alone.
+        real = vm.services()
+        servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+        held = re.search(r"^SLOT=5 GEN=\d+ KIND=1 .*BADGE=1 EP=(\d+)", vm.command(f"stat caps {real['updater']}", raw=True), re.M)
+        assert held and servers.get(int(held[1])) == real["loader"], held
+        for _ in range(20):
+            parsers = len(re.findall(r"^\d+ parse ", vm.command("ps", raw=True), re.M))
+            if parsers == 1:
+                break
+            time.sleep(.25)
+        assert parsers == 1, parsers
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -88,6 +100,8 @@ def debug_mode(vm, name):
     assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
     assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
     require(saved, "DEBUG MODE ON (log:debug.txt)")
+    # A program that asks for the log keeps the shell's client, which reads: dmesg still shows the system log.
+    require(vm.command("dmesg -s loader"), "[LOADER] DEBUG MODE ON")
     require(vm.command("rm log:debug.txt"), "OK")
 
 
@@ -238,6 +252,10 @@ def run(args, booted):
     for section in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "Memory map (the firmware's)", "ACPI tables", "PCI functions", "The kernel's choices", "Kernel lines", "MIND CORE KERNEL: INIT STARTED"):
         assert section in report, (section, report[:2000])
     assert re.search(r"USB controller", report), report
+    if args.arch == "x86_64":
+        # 000-KRN-0081: the firmware's MTRRs and the PAT the kernel set, entry 1 write-combining for the framebuffer.
+        assert re.search(r"\n  MTRR {14}\d+ variable ranges", report), report[:3000]
+        require(report, "\n  PAT               0007040600070106\n")
     # 550-KRN-0070: no function a driver was not granted masters the bus, bridges and display controllers aside.
     functions = re.findall(r"class ([0-9A-F]{6}) .*? command ([0-9A-F]{4}) status [0-9A-F]{4}(.*)", report)
     assert functions, report[:3000]

@@ -1,6 +1,6 @@
 # 109-KRN-0117 — A loader client that only starts helpers, for the updater's parsers
 
-**Type:** `loader` (`loader.wit` 1.10), `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-3.4, MC-3.7, MC-8.5
+**Type:** `loader` (`loader.wit` 1.10), `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (in `main` at 1b1436a; a refused `run` with the badge not yet tested) · **Blocked by:** — · **Main task:** [109](../issues-done/109-session-parsers.done) · **Constitution:** MC-3.4, MC-3.7, MC-8.5
 
 ## Problem
 
@@ -16,7 +16,23 @@ The updater parses each check's channel, manifest and heads in a `parse` helper 
 
 - [ ] The `update` suite: the updater's check runs its parsing in a helper that holds only its endpoint (`stat caps`), and the helper is gone when the check ends.
 - [ ] A `program` call with the updater's loader client is refused with `denied` (`check`'s services group, a client with the badge).
-- [ ] The IDL fuzzer and the generated files follow `loader.wit` 1.10.
+- [x] The IDL fuzzer and the generated files follow `loader.wit` 1.10.
+
+## Progress (2026-10-20)
+
+Made:
+- **`loader.wit` 1.10.** A client badged `BADGE_HELPERS_ONLY` (`mind::process`, 1) may list, inspect and start helpers. `run` and every session call (`begin`, the grants, the commits, `abort`) are refused with `rights`, and a lent capability is dropped. The wire is unchanged; the generated binding is regenerated.
+- **`init`** lends the updater that client in `SLOT_LOADER` with an endpoint quota of 1, for the endpoint its check's parser serves. A restart keeps the client working, as for every client `init` lends.
+
+Test. `usb_image_smoke.py`'s slots check ("x86: USB image") requires:
+- the updater's slot 5 holds a client of `loader` with badge 1;
+- once the updater has read the running version through it, `parse` runs alone, so the check's own parser ended.
+
+It passes locally on x86.
+
+Not tested yet: a refused `run` with that badge. No program can hold such a client, and `check` has no way to get one.
+
+**The gate (2026-10-20).** Gate g0131 passed (`c23e754` on Effector's machines; the two groups with the updater suite again on `1b1436a`), and `main` is at 1b1436a. The updater suite now expects the loader's client in slot 5, and "x86: USB image" checked its badge and the check's parser ending.
 
 ## Related
 

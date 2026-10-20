@@ -25,7 +25,7 @@ const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyo
 static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
 use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const MSI_WHOLE: u16 = u16::MAX; // in `msi`: a device's MSI, not an MSI-X entry
-const DMA_LIMIT: usize = 8 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA
+const DMA_LIMIT: usize = 16 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA, from the kernel arena
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]

@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -843,6 +843,11 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    if vm.arch != "aarch64":
+        # 550-KRN-0061, 213-KRN-0114: QEMU has no Broadcom or Realtek card, so init starts none of their drivers.
+        for name in ("bcm_wifi", "rtl8168", "rtw89_wifi"):
+            assert name not in services, services
+            require(log, f"[INIT] {name} NOT STARTED: NO DEVICE")
     # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
     vm.send("stop\n")
     vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
@@ -4587,10 +4592,11 @@ def updater_suite(args, updater_elf):
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
         try:
             report = vm.service_logs("updater", "[UPDATER-STUB] FIRMWARE")
-            # Its own endpoint, the clock, the file system, init (badged for reboot), the log every service has, the
-            # flow grant, TLS, the firmware privilege, the parser; nothing else.
+            # Its own endpoint, the clock, the file system, the loader's client for helpers only (109-KRN-0117), init
+            # (badged for reboot), the log every service has, the flow grant, TLS, the firmware privilege, the parser;
+            # nothing else.
             held = re.search(r"\[UPDATER-STUB\] HOLDS((?: \d+:\d+)*)", report)
-            assert held and held[1] == " 1:1 2:1 3:1 11:1 12:1 18:1 20:1 27:16 28:1", report
+            assert held and held[1] == " 1:1 2:1 3:1 5:1 11:1 12:1 18:1 20:1 27:16 28:1", report
             require(report, "[UPDATER-STUB] FIRMWARE READ VFS READ WRITE DENIED")
             for command, answer in [("mkdir data/kept", "OK"), ("mkdir data/reboot", "OK")]:
                 require(vm.command(command), answer)
@@ -4907,8 +4913,17 @@ def hda_suite(args):
             require(log, "[LISTEN] PLAYED BACK")
         finally:
             vm.close()
+    # 213-KRN-0127: a second HD Audio function (here one with no codec, after the first): init lends audio_gw its
+    # registers in slot 3 and its line in slot 7, and the gateway still drives the first.
+    vm = VM(args, IMAGE, audio="none", audio_card="HDA", extra=["-device", "intel-hda,id=hda2,addr=0x18"])
+    try:
+        require(vm.service_logs("audio_gw", "[AUDIO] HDA READY"), "[AUDIO] HDA READY: CODEC 0")
+        held = vm.command(f"stat caps {vm.services()['audio_gw']}", raw=True)
+        assert re.search(r"^SLOT=3 GEN=\d+ KIND=8 ", held, re.M) and re.search(r"^SLOT=7 GEN=\d+ KIND=5 ", held, re.M), held
+    finally:
+        vm.close()
     print(f"PASS: Intel HD Audio: codec {found[1]}:{found[2]}, line out {found[3]} <- DAC {found[4]}, line in {found[5]} -> ADC {found[6]} ({found[7].lower()}); "
-          "beep's tones through the output stream, a second recorded from the input stream", flush=True)
+          "beep's tones through the output stream, a second recorded from the input stream; a second controller lent beside the first", flush=True)
 
 
 def listen_suite(vm, starts):
@@ -6217,13 +6232,20 @@ def tls_suite(args, disk):
         require(page, "CLIENT CERTIFICATE SENT"); require(page, f"hello from the host: /device to {name}")
         require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsClient FOR PID")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
-        # only the TLS service holds a capability to the key service, with the signer's badge.
+        # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
+        # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys.
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         real = vm.services()
         keystore = [ep for ep, server in servers.items() if server == real["keystore"]]
         holders = [service for service, pid in real.items() if service not in ("init", "keystore") and any(re.search(fr"BADGE=\d+ EP={ep}\b", vm.command(f"stat caps {pid}", raw=True)) for ep in keystore)]
-        assert holders == ["tls"], holders
+        assert {"tls", "ssh"} <= set(holders) <= {"tls", "ssh", "wlan"}, holders
         assert re.search(fr"BADGE=1 EP={keystore[0]}\b", vm.command(f"stat caps {real['tls']}", raw=True))
+        assert re.search(fr"^SLOT=4 GEN=\d+ KIND=1 .*BADGE=3 EP={keystore[0]}\b", vm.command(f"stat caps {real['ssh']}", raw=True), re.M)
+        # The shell holds the SSH service's client in SLOT_SSH (34) and the updater's in SLOT_UPDATE (35), ABI 12.
+        shell = vm.command(f"stat caps {real['shell']}", raw=True)
+        for slot, service in ((34, "ssh"), (35, "updater")):
+            held = re.search(fr"^SLOT={slot} GEN=\d+ KIND=1 .*EP=(\d+)", shell, re.M)
+            assert held and servers.get(int(held[1])) == real[service], (slot, service, shell)
         tls_lending_check(vm, servers, real["tls"])
     finally:
         vm.close()
@@ -8111,6 +8133,16 @@ def watchdog_suite(args, disk):
         log = vm.command("dmesg -s init", raw=True)
         require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
         assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
+        # Their plans prepared before the platform privilege went: the operator starts them without it (000-KRN-0131).
+        for name in ("audio_gw", "tts", "video_gw"):
+            require(log, f"[INIT] {name} LEFT OUT BY THE SAFE START, PREPARED: `svc start {name}` STARTS IT")
+        require(log, "[INIT] PLATFORM PRIVILEGE DROPPED")
+        for name in ("audio_gw", "tts"):
+            require(vm.command(f"svc start {name}"), f"{name} started: PID")
+        require(vm.command("svc start bcm_wifi"), "svc: start bcm_wifi: no such service, or its device is missing")
+        log = vm.command("dmesg -s init", raw=True)
+        require(log, "[INIT] STARTED audio_gw PID=")
+        require(log, "[INIT] STARTED tts PID=")
         deadline = time.monotonic() + 150
         while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
             assert time.monotonic() < deadline, log[-2000:]
@@ -8129,7 +8161,8 @@ def watchdog_suite(args, disk):
     assert took > 25, took
     print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
           f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
-          f"sound or speech), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
+          f"sound or speech; sound and speech started by `svc start` from their prepared plans, without the platform "
+          f"privilege), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
