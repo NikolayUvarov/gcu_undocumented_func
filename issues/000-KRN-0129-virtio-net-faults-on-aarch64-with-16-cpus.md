@@ -1,6 +1,6 @@
 # 000-KRN-0129 — `virtio_net` faults at boot on aarch64 with 16 CPUs (a data abort), and the "16 CPUs" group fails
 
-**Type:** kernel or driver (to be found) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-12.1
+**Type:** the network track's `netstack` (found) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the cause found; the fix is the network track's) · **Blocked by:** the request "The stack revokes a frame ring the driver may already map" in [requests-NET.md](requests-NET.md) · **Main task:** — · **Constitution:** MC-6.1, MC-12.1
 
 ## Problem
 
@@ -26,9 +26,17 @@ On aarch64, vector 36 is ESR class 0x24, a data abort from EL0: the driver touch
    Fix it where it is; a driver's own bug goes to its track.
 3. **A check.** The group passes several times in a row on PCU. The suite logs the fault's record when a service faults, so a later failure says where.
 
+## Progress (2026-10-20)
+
+**The cause: `netstack` revokes a frame ring that `virtio_net` has already mapped.** Its `Card::attach` revokes the ring when `net::attach` has no answer within the card's deadline (at most 250 ms), but the driver may have taken the call. The driver's next access to the ring faults, since the kernel unmaps a revoked lease.
+
+- **The record** from gate g0127 on PCU: the driver logged `FRAME RING ATTACHED`, the stack `CARD 0 READY` without `(FRAME RING)`, then `virtio_net PID=14 FAULT VECTOR 36`. Twelve more boots on PCU without load passed.
+- **Made to happen every time** on x86 with a 400 ms delay in the driver before its answer: `FAULT PID=15 CPU=2 VECTOR=14 ERROR=0x4 RIP=0x8000002e21 ADDR=0x8006036040`, a read of the unmapped ring.
+- **A fix** that keeps an unanswered ring lent until the next kick says whether the driver has it removed the fault in that boot. The code is the network track's, so it went there as a request, with the record and the proposed patch ([requests-NET.md](requests-NET.md)).
+
 ## Acceptance criteria
 
-- [ ] The fault's cause is named, with its record.
+- [x] The fault's cause is named, with its record (above).
 - [ ] The fix is in, and "aarch64: 16 CPUs" passes 5 times in a row on PCU.
 
 ## Related

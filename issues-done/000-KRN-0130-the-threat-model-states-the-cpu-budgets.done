@@ -1,0 +1,35 @@
+# 000-KRN-0130 — The threat model states the CPU budgets the scheduler has — done
+
+**Type:** profile (`docs/profile/threat-model.md`) · **Owner:** kernel session · **Priority:** P3 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-5.1–5.5, MC-12.1, MC-12.3
+
+## Problem
+
+The ASTRA branch's hardware audit (H08, [2026-10-15](../issues-audit/2026-10-15-hardware-audit.md)) found a stale statement that [000-KRN-0105](000-KRN-0105-root-documents-agree-with-the-code.done) missed. Its request in `requests-KRN.md` ("CPU-budget threat-model wording") says:
+- `docs/profile/threat-model.md` claims there are no CPU budgets, only round-robin sharing;
+- `kernel/src/scheduler.rs` has per-task budgets with periods (`Scheduler::ready`, `select`), the system band before applications, and `SCHED_SET`.
+
+## Plan
+
+Replace the line with what the code does, without raising the partial MC-5.1–5.5 in `docs/profile/README.md`.
+
+## Acceptance criteria
+
+- [x] The threat model's line agrees with `scheduler.rs` and with the profile's MC-5.1–5.5 row:
+  - budgets per task, unlimited by default, enforced at scheduling points and at each 10 ms slice's end;
+  - the system band first;
+  - no admission control, deadline or jitter bounds, budgets below the slice, or budgets `init` assigns by itself.
+- [x] No scheduling policy and no test tolerance changed.
+
+## Resolution
+
+`docs/profile/threat-model.md`, "Not protected against": the line on denial of service by CPU consumption now states the budgets and their limits. Checked against `kernel/src/scheduler.rs` on `main` a82d748:
+- a task starts with `budget_ns: 0`, unlimited;
+- `ready` skips a task whose `consumed` reached its budget, and `select` refills it at its period's start;
+- `select` takes the system band first;
+- `SCHED_SET` is the only setter, and `init` does not call it.
+
+The request was removed from `requests-KRN.md`.
+
+## Related
+
+[000-KRN-0105](000-KRN-0105-root-documents-agree-with-the-code.done), [038](038-scheduling-budgets.done), `docs/profile/README.md` (MC-5.1–5.5).
