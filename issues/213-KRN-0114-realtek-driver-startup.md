@@ -114,6 +114,16 @@ rustc 1.101.0-nightly c36f14571 and the separately fetched hash-pinned file.
 The private binary is an explicit local check, not a skipped or conditional
 passing case in the normal host gate. No production guard or API was changed.
 
+## Progress (2026-10-20)
+
+- **In `main`.** This task is in `main` since 289e84b. Every group of that gate passed, x86 and aarch64, so the x86 integration is no longer blocking.
+- **QEMU.** The `normal` suite on x86 now requires `[INIT] rtl8168 NOT STARTED: NO DEVICE` and `[INIT] rtw89_wifi NOT STARTED: NO DEVICE`, and neither among the services (QEMU has no Realtek card).
+- **The Ryzen** (fast-test d0c2dea, 2026-10-20, two boots):
+  - `rtl8168` started (`[RTL8168] XID=4C0 PHY=001CC800 LINK=DOWN MODE=MSI RINGS=256`);
+  - `[INIT] rtw89_wifi FAILED: NoMemory`, which the drivers track reported to this track and ASTRA.
+
+Left: the MacBook Pro's radio unchanged, and the Ryzen's `rtw89_wifi` start.
+
 ## Related
 
 [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md),

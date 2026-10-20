@@ -88,6 +88,8 @@ def debug_mode(vm, name):
     assert re.search(r"uptime\(\d+\) up \d", saved), saved[-1500:]
     assert len(re.findall(r"uptime\(\d+\) up \d", saved)) == 1, "only the run in debug mode is logged"
     require(saved, "DEBUG MODE ON (log:debug.txt)")
+    # A program that asks for the log keeps the shell's client, which reads: dmesg still shows the system log.
+    require(vm.command("dmesg -s loader"), "[LOADER] DEBUG MODE ON")
     require(vm.command("rm log:debug.txt"), "OK")
 
 
@@ -238,6 +240,10 @@ def run(args, booted):
     for section in ("MIND CORE HARDWARE REPORT 1", "\nCPU\n", "Memory map (the firmware's)", "ACPI tables", "PCI functions", "The kernel's choices", "Kernel lines", "MIND CORE KERNEL: INIT STARTED"):
         assert section in report, (section, report[:2000])
     assert re.search(r"USB controller", report), report
+    if args.arch == "x86_64":
+        # 000-KRN-0081: the firmware's MTRRs and the PAT the kernel set, entry 1 write-combining for the framebuffer.
+        assert re.search(r"\n  MTRR {14}\d+ variable ranges", report), report[:3000]
+        require(report, "\n  PAT               0007040600070106\n")
     # 550-KRN-0070: no function a driver was not granted masters the bus, bridges and display controllers aside.
     functions = re.findall(r"class ([0-9A-F]{6}) .*? command ([0-9A-F]{4}) status [0-9A-F]{4}(.*)", report)
     assert functions, report[:3000]

@@ -1,6 +1,6 @@
 # 213-KRN-0125 — The AMD FCH's watchdog: a frozen Ryzen restarts by itself
 
-**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
+**Type:** kernel (`kernel/src/arch/x86_64/watchdog.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made and host-tested; the Ryzen's run left) · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Constitution:** MC-6.1, MC-6.3, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -37,7 +37,7 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
 
 ## Acceptance criteria
 
-- [ ] Host tests of the sequence against a model of the registers:
+- [x] Host tests of the sequence against a model of the registers:
   - an FCH that arms;
   - one the firmware disabled;
   - a revision this code does not know, left alone;
@@ -49,6 +49,26 @@ The AMD FCH has a watchdog of its own, next to the SMBus controller (1022:790B a
   - with 000-KRN-0124, that restart is a boot into Linux.
 
   Recorded for that machine and its firmware only (MC-12.1).
+
+## Progress (2026-10-20)
+
+- **The sequence** is `kernel/src/arch/x86_64/fch.rs`, kept apart from the hardware:
+  - Zen's FCH only: SMBus 1022:790B, revision 0x51 or later. The Ryzen's is 0x51.
+  - The timer is found where the firmware decodes it: at 0xFEB0_0000 with `DECODEEN` bit 7, else at 0xFED8_0B00 with the ACPI MMIO block on.
+  - `DECODEEN3` is set to enable the timer and count seconds, and put back if the timer then reads disabled or does not answer.
+  - The timer is stopped, set to reset after 30 s, started with a trigger written apart, and fed every second.
+- **`watchdog.rs`** tries it where 00:1F.0 is no Intel LPC bridge, and stops it before a halt or a reboot. The boot line is `WATCHDOG: AMD FCH, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK` or `NONE (…)` with the reason. With no FCH either, it says `NONE (NO INTEL LPC BRIDGE AT 00:1F.0, NO AMD FCH AT 00:14.0)`.
+- **A reset by the timer.** `FIRED` survives the reset, so it is reported once and cleared. The `watchdog-test` kernel freezes only a run the timer did not restart.
+- **`tests/fch_watchdog_host.rs`** (in `host_tests.sh`) covers:
+  - arming at either address;
+  - the fired status;
+  - a timer the firmware disabled, either way, left as it was;
+  - an unknown revision, no FCH and an Intel ID, none touched;
+  - registers that do not answer;
+  - the feed and the stop.
+
+  Where the PPR's text was not at hand, the register facts follow Linux's `sp5100_tco` driver's behaviour on these chips; no code was copied from it.
+- **Left:** the gate (QEMU has no FCH, so its suites see no change) and the Ryzen's run.
 
 ## Related
 

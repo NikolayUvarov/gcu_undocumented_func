@@ -42,6 +42,14 @@ The analysis, from the code:
 - the tools track's part (`requests-APP.md`: the background drawn by rows, paced to a deadline);
 - the maintainer's look at the moving background at full contrast.
 
+## Progress (2026-10-20)
+
+- **The report checked.** `usb_image_smoke.py`, x86, now requires the report's `MTRR … variable ranges` line and `PAT 0007040600070106`.
+- **On real machines.** The MacBook Pro's and the Ryzen's reports show that PAT on every run since 2026-10-11.
+- **aarch64.** The display and `wm` suites still run on x86 only; on aarch64, `screenshot` and the shell pass ("aarch64: files, network and TLS").
+
+Left: the stutter at full contrast, which needs the tools track's `wm` change (`requests-APP.md`), and the aarch64 part.
+
 ## Related
 
 [174](174-full-use-of-pc-hardware.md), [211-KRN-0018](../issues-done/211-KRN-0018-the-compositors-quota-fits-the-screen.done).

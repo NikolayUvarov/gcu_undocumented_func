@@ -22,6 +22,17 @@
 - A crate that fails to compile is named with its errors at the end. The build exits with an error, and the other jobs' logs are complete.
 - The clean build's time is measured before and after on the same machine and recorded here.
 
+## Progress (2026-10-20)
+
+The second criterion has a host test: `tests/build_jobs_test.py`, in `scripts/host_tests.sh`. It runs `run_jobs` with stand-in jobs and checks that:
+- a failing job is named at the end with its compiler errors (or its log's end when it has none);
+- the build returns 1;
+- the jobs still running finish with complete logs.
+
+Left:
+- the comparison of a sequential build (`MIND_BUILD_JOBS=1`) with the parallel one, file by file, on x86 and aarch64;
+- the two clean builds' times on one machine.
+
 ## Related
 
 `scripts/ci_local.sh`, `.github/workflows/ci.yml`, issue 011 (pinned toolchain).

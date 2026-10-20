@@ -1,6 +1,6 @@
 # 000-KRN-0124 — Switching a machine between Linux and MIND Core: one boot of MIND Core by `BootNext`, and back to Linux by any restart
 
-**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
+**Type:** script (`scripts/boot_switch.py`), docs · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (the script, its host tests and the docs made; the Ryzen's run left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-6.1, MC-9.3, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -71,7 +71,7 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
 
 ## Acceptance criteria
 
-- [ ] Host tests (`tests/boot_switch_test.py`, in `host_tests.sh`), with recorded `efibootmgr -v` outputs and `lsblk` trees:
+- [x] Host tests (`tests/boot_switch_test.py`, in `host_tests.sh`), with recorded `efibootmgr -v` outputs and `lsblk` trees:
   - the MIND Core entry is found by its MBR partition;
   - it is created when missing, with `--create-only`;
   - a Linux entry that is not first, two candidate disks, or a mounted disk are refused;
@@ -82,7 +82,23 @@ With `BootNext`, every way a run of MIND Core can end returns to Linux: `reboot`
   - `logs` copies that boot's log and says it booted.
 
   The run is recorded with its logs, for that machine and its firmware only (MC-12.1, MC-12.9).
-- [ ] docs/write-disk.md (EN and RU) describes the switch, what the script refuses, and that a firmware ignoring `BootNext` keeps booting Linux.
+- [x] docs/write-disk.md (EN and RU) describes the switch, what the script refuses, and that a firmware ignoring `BootNext` keeps booting Linux.
+
+## Progress (2026-10-20)
+
+- **`scripts/boot_switch.py`**: `status`, `once [--disk DEV] [--reboot]` and `logs DIR`, as the plan says.
+  - It finds the stick's entry by its first partition's `HD(1,MBR,…)` node, or makes one with `--create-only`.
+  - It stops before `BootNext` if making the entry changed `BootOrder`.
+  - It says when Secure Boot is on.
+- **`tests/boot_switch_test.py`** (in `host_tests.sh`) runs the script against a model of the firmware's variables, `lsblk` and the MBR:
+  - an entry made and booted once;
+  - an existing one used and turned active;
+  - `BootOrder` never written;
+  - every refusal leaving the variables as they were;
+  - a create that moved `BootOrder` stopping before `BootNext`;
+  - `logs` telling a boot of MIND Core from none.
+- **Docs.** docs/write-disk.md and its Russian version, section 10 (version 1.4).
+- **Left:** the run on the Ryzen with the maintainer.
 
 ## Related
 
