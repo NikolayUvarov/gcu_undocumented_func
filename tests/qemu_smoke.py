@@ -5802,9 +5802,10 @@ def wifi_join_check(vm):
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
     # The log holds the first join's lease too: ip is asked until this join's lease is there (DHCP is slow under TCG).
+    # The whole line: a card's own line holds `IP 10.0.4.15/24` too, while the stack's may still say NoNetwork.
     for _ in range(60):
         shown = vm.command("ip")
-        if "IP 10.0.4.15/24" in shown:
+        if "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)" in shown:
             break
         time.sleep(1)
     require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
