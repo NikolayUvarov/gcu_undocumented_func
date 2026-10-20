@@ -4,7 +4,7 @@ The TCB is listed per guarantee (MC-1.6, MC-12.1). "Kernel" is everything in `ke
 
 | Guarantee | TCB |
 |---|---|
-| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices and its runtime variable services after it (`GetVariable`, `SetVariable`: the kernel calls them in ring 0 for `FIRMWARE_VARIABLE`, 351-KRN-0027), bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`** (no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
+| Memory isolation between tasks | CPU (MMU, privilege levels), UEFI firmware until ExitBootServices and its runtime variable services after it (`GetVariable`, `SetVariable`: the kernel calls them in ring 0 for `FIRMWARE_VARIABLE`, 351-KRN-0027), bootloader, kernel, Rust toolchain; **every DMA-capable driver and its device: `ahci`, `usb_host`, `audio_gw`, `virtio_net`, `virtio_blk`, `nvme`, `virtio_input`, `rtl8168`, `rtw89_wifi`, `bcm_wifi`** (each holds a DMA region from `init`; no IOMMU); `init` (it can mint DMA regions and device MMIO capabilities). |
 | Kernel integrity | Same as above. |
 | Capability confinement of applications | Kernel; `loader` (decides which client capabilities an application gets); `init` (decides what `loader` holds). |
 | Capability confinement of services | Kernel; `init`. |

@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 0.x (2026-10-04) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 11 (`ABI_VERSION` in `common/abi.rs`; 213-KRN-0114) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 
@@ -23,7 +23,7 @@ An application normally uses only `libmind` and the service clients; the raw ABI
 
 ## System calls
 
-Required authority is in brackets; "none" means every task may call it.
+This is the full list: every `SYSCALL_*` constant of `common/abi.rs`, which remains the definition. The README's table is a short form of it. Required authority is in brackets; "none" means every task may call it.
 
 ### Time, console, lifetime
 
@@ -34,7 +34,7 @@ Required authority is in brackets; "none" means every task may call it.
 | 44 | `CLOCK` | → monotonic ns; `arg2` = resolution ns, `msg[2]` = calibrated TSC Hz (0: tick clock) [none] |
 | 5 | `WAIT` | `arg1` = ms (at least 1, at most 60 s; ends early on input) → uptime at the call [none]. It ends at the first tick after the time asked (1 ms on x86, 10 ms on aarch64), never sooner by the monotonic clock (000-KRN-0065, 000-KRN-0083). IPC timeouts count from the uptime and may end up to a tick early |
 | 3 | `LOG` | `arg1` = address, `arg2` = length (≤ 4096) → bytes written to the task's log and console. While a reader drains the console (`CONSOLE_READ` within the last second; an application counts as read from its start), only what fits in the console's 4 KiB is taken and the caller sends the rest again (`mind::process::log` waits 2 ms between tries), so a console program's output is not lost to a slow reader; after a second without reads the console takes everything and drops its oldest bytes, as before (000-KRN-0030) [none] |
-| 7 | `EXIT` | ends the task [none] |
+| 7 | `EXIT` | `arg1` = code (0: success; issue 166); ends the task, does not return; a watch and `EXIT_STATUS` see `EXIT_NORMAL` \| code << 8 [none] |
 | 2 | `READ_KEY` | → legacy byte of the next input event that has one, 0 if none [focused task] |
 | 50 | `READ_INPUT` | → next input event word (layout in `common/abi.rs`, `input_event`; pointer events: `KEY_POINTER`, `pointer_fields` for a mouse's movement, `pointer_absolute_fields` when `POINTER_ABSOLUTE` is set: a tablet's position as a share of the screen in `POINTER_SCALE` steps, issue 161; `pointer_across` for a relative event's horizontal wheel, a trackpad's three-finger swipe, 211-DRV-0018), 0 if none [focused task] |
 | 56 | `INPUT_POINTER` | `arg1` = 1 to receive pointer events, 0 to stop (the caller only; without it the kernel drops them) [none] |
@@ -128,6 +128,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | 36 | `FOCUS` | `arg1` = PID (0: caller), `arg2` = 1 to keep buffered output → PID [process control] |
 | 37 | `TASK_LOGS` | `arg1` = PID, `msg[0]` = buffer, `msg[1]` = length → bytes drained [process control] |
 | 38 | `CONSOLE_READ` | as `TASK_LOGS`, the console copy; after the last focused or screenless program exited, both drain its unread console output [process control] |
+| 58 | `EXIT_STATUS` | `arg1` = PID of one of the last `EXIT_STATUSES` (16) tasks that ended → how it ended: `EXIT_NORMAL` \| code << 8, `EXIT_KILLED`, `EXIT_FAULT` \| vector << 8; `ERR_NOT_FOUND` for another PID (issue 166) [process control] |
 | 39 | `NOTICE` | → 0, or PID \| `NOTICE_EXITED` / PID \| `NOTICE_FRONT` (started in front by the task in front, issue 160) / PID sent to the background [process control] |
 | 43 | `HALT` | stops all CPUs: the others first, then COM1 and the screen say `MIND CORE: THE SYSTEM IS STOPPED`; the run's mark is cleared, as at a `REBOOT` (000-KRN-0110) [process control] |
 | 55 | `REBOOT` | resets the machine: the ACPI FADT reset register, else port 0xCF9, else the 8042 controller, else a triple fault; on aarch64 PSCI `SYSTEM_RESET`; does not return. `arg1` = `REBOOT_POWER_OFF` turns the machine off instead (aarch64: PSCI `SYSTEM_OFF`; x86: ACPI S5, the sleep type from the DSDT's `\_S5` written to PM1a/PM1b_CNT with SLP_EN, 000-KRN-0080; `ERR_INVALID` when the tables name no S5; the firmware's `_PTS` is not run, and a machine still on is halted with a message on the screen) [process control, or the restart privilege: `init`, which resets the machine for a client of its lifecycle interface badged `BADGE_REBOOT`, the updater's, 351-KRN-0022] |

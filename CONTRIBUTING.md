@@ -1,6 +1,11 @@
 # Contributing to MIND Core
 
-MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64 UEFI machines (QEMU first). Contributions of code, tests, documentation and reviews are welcome.
+MIND Core is a capability microkernel and its ring-3 services in Rust for UEFI machines (QEMU first) on two architectures, each with its own platform profile:
+
+- x86-64: [`x86-64/QEMU-0`](docs/profile/README.md);
+- aarch64: [`aarch64/QEMU-virt-0`](docs/profile/aarch64/README.md), which states only where it differs from the x86-64 profile.
+
+Contributions of code, tests, documentation and reviews are welcome.
 
 ## Where to start
 
@@ -19,10 +24,12 @@ MIND Core is a capability microkernel and its ring-3 services in Rust for x86-64
 scripts/host_tests.sh        # every host test, as CI runs them; any compile or test that fails stops it
 python3 tests/idl_test.py    # generated MIND IDL bindings are up to date
 python3 tests/qemu_smoke.py --qemu qemu-system-x86_64   # QEMU suites (see README for the test ELFs)
+ARCH=aarch64 ./02_build.sh --fixtures                   # the same crates for aarch64, into aarch64_root/
+python3 tests/qemu_smoke.py --arch aarch64              # the QEMU suites on virt
 scripts/ci_local.sh          # every CI group on this machine, with a PASS/FAIL table
 ```
 
-A change is ready when the suites it touches pass; a kernel change runs all QEMU suites on 4 CPUs and the SMP, isolation, heap and services suites on 1 CPU.
+A change is ready when the suites it touches pass; a kernel change runs all QEMU suites on 4 CPUs and the SMP, isolation, heap and services suites on 1 CPU, and a change to aarch64 also runs the aarch64 groups.
 
 ## Rules
 
