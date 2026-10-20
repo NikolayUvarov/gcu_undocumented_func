@@ -18,8 +18,10 @@
 /// 1.2 (550-NET-0035): the country's limits. The station hands the radio, for the country it runs under, each channel
 /// it may use with the most EIRP allowed there and whether it may only listen there; the radio applies them under its
 /// own limits (board, calibration, platform) and answers its `info` after, whose `channels` are then the only ones it
-/// tunes to. A 1.2 radio with no limits set, or whose limits failed, receives on its channels and sends nothing. A 1.1
-/// radio rejects the call: the station then keeps to the channels alone and says the radio did not confirm.
+/// tunes to. A radio whose limits failed receives on its channels and sends nothing. Until limits are first set it keeps
+/// 1.1's ways, so a station without the country catalogue (550-NET-0035, stage A) still joins; a station with one sets
+/// limits before it sends anything. A 1.1 radio rejects the call: the station then keeps to the channels alone and says
+/// the radio did not confirm.
 package mind:wlanhw@1.2.0;
 
 interface wlanhw {

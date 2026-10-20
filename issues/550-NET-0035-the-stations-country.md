@@ -1,6 +1,6 @@
 # 550-NET-0035 — The station's country: chosen from the whole regulatory catalogue, kept, applied by the radio
 
-**Type:** network (service and interfaces) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (stage A built) · **Blocked by:** stage B: the catalogue as a crate of its own, and `DRV`'s and ASTRA's word on `wlanhw.wit` 1.2 ([requests-DRV.md](requests-DRV.md)) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, MC-12.4, MC-12.7
+**Type:** network (service and interfaces) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (stage A built) · **Blocked by:** stage B: the catalogue as a crate of its own ([requests-DRV.md](requests-DRV.md); `DRV` agreed, 2026-10-20) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, MC-12.4, MC-12.7
 
 From the request "Wi-Fi country selection from the complete verified regulatory catalog" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16, at the maintainer's request). `APP`'s side is [550-APP-0082](550-APP-0082-wifi-country-selector.md), the RTL8852BE catalogue 213-DRV-0032 (ASTRA).
 
@@ -65,9 +65,9 @@ Numbered 0035, after [351-NET-0034](351-NET-0034-the-download-check-flushed-boun
 - **With no country applied** the station scans without probing and `join` answers `unsupported`. `country()` says why.
 - **If the radio refuses the limits:** the state is `failed` and nothing is applied, so the station only listens. It does not fall back to the country it had: the user may have moved.
 
-### `idl/wlanhw.wit` 1.2 (proposed to `DRV` and ASTRA; not in stage A)
+### `idl/wlanhw.wit` 1.2 (agreed with `DRV`, 2026-10-20)
 
-`bcm_wifi` (`DRV`) and `rtw89_wifi` (ASTRA) serve `wlanhw.wit` on their branches, with a `match` over every request. A new request breaks their build until they answer it, so 1.2 waits for their word and comes with their part.
+`bcm_wifi` (`DRV`) and `rtw89_wifi` (ASTRA) serve `wlanhw.wit` with a `match` over every request, so a new request breaks their build until they answer it. `DRV` agreed (`NET/2026-10-20T0648Z-DRV-...`): it answers `set-country` in `bcm_wifi` when it merges 1.2, at first with `failed` (the radio then neither tunes nor sends). `rtw89_wifi` answers `failed` too from the commit that merges 1.2 with it on `main`, until ASTRA applies limits.
 
 - **`set-country(code, dfs, limits)`:** for each channel the station may use, the most EIRP and whether it may only listen there. The radio:
   - applies them under its own limits (board, calibration, platform);
@@ -91,12 +91,12 @@ Numbered 0035, after [351-NET-0034](351-NET-0034-the-download-check-flushed-boun
     - the country calls answer `unsupported`;
     - `country()` answers `none` with an empty catalogue identity;
     - the station probes and joins as before;
-  - `wlanhw.wit` 1.2 and `wlansim`'s side of it are written, and held back until `DRV` and ASTRA agree;
+  - `wlanhw.wit` 1.2 and `wlansim`'s side of it: `wlansim` tunes only to the limits' channels and refuses a probe request where the station may only listen; until limits are first set it keeps 1.1's ways, as the station of stage A sets none;
   - messages to `APP`, `DRV` and ASTRA.
 
   Stage A changes no behaviour on a device. The requirement is not met yet.
 - **Stage B, once `regdb` and `DRV`'s word on 1.2 are in:**
-  - `wlanhw.wit` 1.2 with `wlansim`'s side, and each radio's answer to `set-country` (`DRV`, ASTRA);
+  - each radio's real answer to `set-country` (`DRV`, ASTRA);
   - `wlan` uses the catalogue;
   - with none applied it probes nowhere, and `join` answers `unsupported`;
   - the country is read back from `keystore` at start;
