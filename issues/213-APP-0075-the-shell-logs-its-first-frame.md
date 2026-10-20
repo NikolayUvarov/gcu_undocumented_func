@@ -1,6 +1,6 @@
 # 213-APP-0075 — The shell logs its first frame, and a slow step before it
 
-**Type:** tools (`shell`), diagnostics · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: done and checked in QEMU; a real machine's boot log left · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3
+**Type:** tools (`shell`), diagnostics · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 92781301 (2026-10-20), checked in QEMU; a real machine's boot log left · **Blocked by:** — · **Main task:** [213](213-amd-ryzen-pc.md) · **Roadmap:** track H · **Constitution:** MC-12.1, MC-12.3
 
 **Recorded by:** the kernel track (KRN), 2026-10-13, in `requests-APP.md`, for [213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md). Numbered by the tools track on 2026-10-14.
 

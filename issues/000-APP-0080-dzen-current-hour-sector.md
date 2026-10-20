@@ -1,6 +1,6 @@
 # 000-APP-0080 — The Dzen orbit's zero points at the active hour
 
-**Type:** tools / clock display · **Owner:** the tools track (`APP`), at the maintainer's word of 2026-10-20; first worked by the ASTRA auditor-fixer (the maintainer's assignment, 2026-10-15) · **Priority:** P2 · **Status:** open: done on the tools branch and in `fast-test`; the gate and the maintainer's look left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.3
+**Type:** tools / clock display · **Owner:** the tools track (`APP`), at the maintainer's word of 2026-10-20; first worked by the ASTRA auditor-fixer (the maintainer's assignment, 2026-10-15) · **Priority:** P2 · **Status:** open: in `main` since 92781301 (2026-10-20); the maintainer's look on a real machine left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1, MC-12.3
 
 ## Problem
 
@@ -47,4 +47,5 @@ The first version (ASTRA, `fast-test`, 1c30ffa9, b6b08c86) kept the fixed zero a
 - **Host tests:**
   - `tests/runtime.rs`: the dzen view and cycle tests, 12 in all (`zero_seconds_point_at_the_active_hours_corner`, `the_zero_tick_points_at_the_active_hour_and_moves_with_it`);
   - `tests/clock_host.rs`: 16.
-- **Left:** the `dzen` suite in the gate; the maintainer's look on a real machine.
+- **In `main`** since 92781301: the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally), the `dzen` suite with its grey zero tick toward the top right at 19:35 among them. The merge of `main` took out ASTRA's colored marker, which had come with the kernel branch.
+- **Left:** the maintainer's look on a real machine.
