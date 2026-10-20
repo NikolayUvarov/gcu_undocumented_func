@@ -4,7 +4,7 @@
 
 ## Problem
 
-This is the drivers track's request in its `requests-KRN.md` (2026-10-09), for [550-DRV-0020](../issues/550-DRV-0020-bcm4331-read-only-probe.md).
+This is the drivers track's request in its `requests-KRN.md` (2026-10-09), for [550-DRV-0020](550-DRV-0020-bcm4331-read-only-probe.done).
 
 `bcm_wifi/` is the stage-1 driver of the MacBook Pro's Broadcom BCM4331 (`14E4:4331`, class `02:80:00`). It only reads the chip: its identity, the 802.11 core's state and the SPROM with the MAC address.
 
@@ -22,7 +22,7 @@ It is written and builds, but nothing runs it:
 
 - **`common/abi.rs`.**
   - `bcm_wifi` and `bcm_wifi.elf` in the boot lists, after `virtio_net`; `BOOT_IMAGES` 33.
-  - The ABI version stays 5: it goes to `main` together with [211-KRN-0058](../issues/211-KRN-0058-slots-for-the-shell-and-the-clipboard.md), which raised it, and both changes are named in its history.
+  - The ABI version stays 5: it goes to `main` together with [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.done), which raised it, and both changes are named in its history.
 - **`02_build.sh`** builds `bcm_wifi`. **`scripts/build_aarch64.sh`** leaves it out: x86 only, like `ata` and `ps2_kbd`, since no aarch64 target has the chip. The bootloader already skips an image that the signed manifest does not list.
 - **`init`.**
   - It starts `bcm_wifi` when `DEVICE_FIND` finds `14E4:4331`, or a network controller of class `02:80:00` from vendor `14E4`.
@@ -56,4 +56,4 @@ It is written and builds, but nothing runs it:
 
 ## Related
 
-[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0020](../issues/550-DRV-0020-bcm4331-read-only-probe.md), [211-KRN-0058](../issues/211-KRN-0058-slots-for-the-shell-and-the-clipboard.md) (ABI 5).
+[550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md), [550-DRV-0020](550-DRV-0020-bcm4331-read-only-probe.done), [211-KRN-0058](211-KRN-0058-slots-for-the-shell-and-the-clipboard.done) (ABI 5).

@@ -106,4 +106,4 @@ Two msh scripts on the boot volume, `diag/quick.msh` and `diag/full.msh`, run fr
 
 ## Related
 
-[176](../issues/176-test-and-performance-utilities.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../issues-done/176-KRN-0063-check.done), [176-KRN-0064](../issues-done/176-KRN-0064-bench.done), [docs/tools/README.md](../docs/tools/README.md) §4.13, [docs/msh.md](../docs/msh.md), [211-KRN-0019](../issues/211-KRN-0019-boot-logs-on-the-log-partition.md) (the boot log), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the hardware report).
+[176](../issues/176-test-and-performance-utilities.md), [176-KRN-0062](../issues-done/176-KRN-0062-kbench.done), [176-KRN-0063](../issues-done/176-KRN-0063-check.done), [176-KRN-0064](../issues-done/176-KRN-0064-bench.done), [docs/tools/README.md](../docs/tools/README.md) §4.13, [docs/msh.md](../docs/msh.md), [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.done) (the boot log), [174-KRN-0038](../issues-done/174-KRN-0038-hardware-report.done) (the hardware report).

@@ -22,4 +22,4 @@ On the MacBook Pro (2026-10-09) the camera and every program that listens failed
 
 ## Related
 
-[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the journal), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md).
+[211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the journal), [551-DRV-0010](551-DRV-0010-hda-controller-and-codecs.md).

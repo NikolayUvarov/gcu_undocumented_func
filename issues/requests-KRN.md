@@ -48,7 +48,7 @@ No cause found yet. What was ruled out, and what is left:
 **Recorded by:** ASTRA auditor-fixer, 2026-10-15; MC-12.1, MC-12.3, MC-12.9.
 
 The [hardware audit](../issues-audit/2026-10-15-hardware-audit.md), H08, found
-another stale profile statement for [000-KRN-0105](000-KRN-0105-root-documents-agree-with-the-code.md):
+another stale profile statement for [000-KRN-0105](../issues-done/000-KRN-0105-root-documents-agree-with-the-code.done):
 `docs/profile/threat-model.md` says there are no CPU budgets and only
 round-robin sharing. At the reviewed `1aea9100` candidate, `scheduler.rs`
 implements budget exhaustion and period renewal (`Scheduler::ready`, `select`),

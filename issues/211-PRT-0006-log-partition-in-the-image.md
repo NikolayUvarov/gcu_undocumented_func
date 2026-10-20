@@ -14,7 +14,7 @@ A machine without a serial port leaves no record of a run, only what a photo of 
 
   Windows, macOS and Linux mount and write such a partition.
 - **The check.** `check_image` checks the partition's place, type, geometry and label.
-- **The system's side** is [211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md): `vfs_server` mounts the partition as `log:` and writes each boot's system log there.
+- **The system's side** is [211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done): `vfs_server` mounts the partition as `log:` and writes each boot's system log there.
 - **Tests.** `tests/usb_image_smoke.py` boots a copy of the image without a snapshot, on x86 and aarch64. Afterwards it reads the boot log and a file written on `log:` on the host with mtools, and checks the volume with `fsck.fat`.
 
 ## Acceptance criteria
@@ -25,4 +25,4 @@ A machine without a serial port leaves no record of a run, only what a photo of 
 
 ## Related
 
-[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md), [212](212-disk-tools.md).
+[211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done), [211-PRT-0001](211-PRT-0001-writer-for-an-internal-disk.md), [212](212-disk-tools.md).

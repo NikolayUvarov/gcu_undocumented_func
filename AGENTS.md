@@ -35,9 +35,7 @@ Each track has a **code**, a **range of main-task numbers**, an owner, a set of 
 - Two tracks never produce the same number, because the codes differ. A main task is split into tasks by any track that works on it: each numbers its own part.
 - Numbers given before this scheme (`158`, `205`, `u015`, …) stay as they are.
 
-The tracks — codes, ranges, directories, owners, branches and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md). Today they are `KRN` (kernel), `PRT` (porting), `NET` (network), `APP` (tools), `DRV` (drivers), `STO` (state and recovery), `UPD` (update and provenance), `MRN` (Marain), `SAF` (safety plane), `ASR` (assurance), `APL` (Apple Silicon) and `BLT` (Bluetooth).
-
-The registry of tracks — current owners, branches, statuses and starting tasks — is [TRACKS.md](TRACKS.md), the authoritative record. Open tracks can be taken in parallel.
+The tracks — codes, ranges, directories, owners, branches, statuses and starting tasks — are listed in the registry [TRACKS.md](TRACKS.md), the authoritative record. This file does not repeat the codes, so that the two cannot disagree. Open tracks can be taken in parallel.
 
 **To join.** A claim, an agreement or a proposal is a message on the branch `internal-dev-messages` (section 5). The outcome is recorded in [TRACKS.md](TRACKS.md) on `main`, which stays the authoritative record: a track is yours once the maintainer's commit there says so.
 

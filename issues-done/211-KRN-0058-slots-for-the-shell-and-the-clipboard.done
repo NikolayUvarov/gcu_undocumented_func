@@ -1,6 +1,6 @@
-# 211-KRN-0058 — Fixed slots for the shell's command endpoint and the clipboard (ABI 5)
+# 211-KRN-0058 — Fixed slots for the shell's command endpoint and the clipboard (ABI 5) — done
 
-**Type:** kernel (ABI) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Roadmap:** track G, for main task [211](211-intel-pc-from-a-sata-ssd.md) and the tools track's 211-APP-0040 and 000-APP-0032 · **Constitution:** MC-11.1 (authority only through held capabilities), MC-12.4 (an interface change gets a new version), MC-12.7 (an explicit transition)
+**Type:** kernel (ABI) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Roadmap:** track G, for main task [211](../issues/211-intel-pc-from-a-sata-ssd.md) and the tools track's 211-APP-0040 and 000-APP-0032 · **Constitution:** MC-11.1 (authority only through held capabilities), MC-12.4 (an interface change gets a new version), MC-12.7 (an explicit transition)
 
 ## Problem
 
@@ -11,7 +11,7 @@ The tools track asked for two slots in `requests-KRN.md` (2026-10-09; the reques
 
 The application slots 1–29 are all named. Fixed slots end at `SLOT_DYNAMIC` (30), and the kernel refuses a spawn grant at or above it. So a new slot moves `SLOT_DYNAMIC`, and a program built for the new layout does not start on a kernel built for the old one. That is an interface change: a new ABI version (MC-12.4).
 
-The maintainer's run on the MacBook Pro (2026-10-10) needs the first one. There `console` in `wm` could not reboot, kill, read the log or reach the network: only the shell holds those. The tools track does the rest ([requests-APP.md](requests-APP.md), "The camera from `wm`, and the shell in a window").
+The maintainer's run on the MacBook Pro (2026-10-10) needs the first one. There `console` in `wm` could not reboot, kill, read the log or reach the network: only the shell holds those. The tools track does the rest ([requests-APP.md](../issues/requests-APP.md), "The camera from `wm`, and the shell in a window").
 
 ## Plan
 
@@ -37,6 +37,15 @@ The maintainer's run on the MacBook Pro (2026-10-10) needs the first one. There 
 3. **The gate.** All suites pass on x86 and aarch64: the isolation, heap and SMP suites use `SLOT_DYNAMIC` by name.
 4. **End to end.** A launcher filling `SLOT_SHELL` in a launch session and the program holding the endpoint there is checked by the tools track's `wm` suite with 211-APP-0040, the first launcher to fill it.
 
+## Resolution
+
+Every criterion is met, with the ABI since moved on (11, `SLOT_DYNAMIC` 34).
+
+1. **The layout's host test:** `application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones` (`tests/runtime.rs`), in "host tests".
+2. **The ABI version.** The `boot` suite's `--loader-abi-kernel` and `--abi-kernel` cases still refuse a kernel of another version.
+3. **The gate.** The isolation, heap and SMP apps name `SLOT_DYNAMIC`, and every group passed in the gate of 10d3ec3 (`main` since 289e84b).
+4. **End to end.** The `wm` suite's shell window (211-APP-0040) holds the shell's endpoint in `SLOT_SHELL`. `check`'s "launch: every slot" row, required by the `bench` suite on x86 and aarch64, lends an endpoint in every launch slot.
+
 ## Related
 
-[072](../issues-done/072-fixed-grant-slots.done) (fixed grant slots), [109-KRN-0042](../issues-done/109-KRN-0042-parser-service-at-boot.done) (`SLOT_PARSE`, the same pattern), [requests-KRN.md](requests-KRN.md).
+[072](../issues-done/072-fixed-grant-slots.done) (fixed grant slots), [109-KRN-0042](../issues-done/109-KRN-0042-parser-service-at-boot.done) (`SLOT_PARSE`, the same pattern), [requests-KRN.md](../issues/requests-KRN.md).

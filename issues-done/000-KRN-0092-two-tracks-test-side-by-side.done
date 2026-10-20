@@ -1,6 +1,6 @@
-# 000-KRN-0092 — Two tracks' tests side by side on one machine: temporary files under each track's `TMPDIR`
+# 000-KRN-0092 — Two tracks' tests side by side on one machine: temporary files under each track's `TMPDIR` — done
 
-**Type:** test tooling (`scripts/ci_local.sh`, `scripts/x86_fixtures.sh`, `scripts/host_tests.sh`), the Effector guide · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; a gate with `TMPDIR` set left) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9
+**Type:** test tooling (`scripts/ci_local.sh`, `scripts/x86_fixtures.sh`, `scripts/host_tests.sh`), the Effector guide · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-20) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9
 
 ## Problem
 
@@ -25,7 +25,7 @@ Two tracks running these at once on one machine would overwrite each other's pro
 
 - [x] `ci_local.sh`, `x86_fixtures.sh` and `host_tests.sh` write nothing under a fixed `/tmp` path; `tests/gate_test.py` passes.
 - [x] With `TMPDIR` unset the paths are those of before.
-- [ ] A full gate (i9 x86, PCU aarch64) passes with `TMPDIR=/tmp/mind-KRN`, and the built programs and logs are found there.
+- [x] A full gate (i9 x86, PCU aarch64) passes with `TMPDIR=/tmp/mind-KRN`, and the built programs and logs are found there.
 - [x] docs/effector.md and its Russian version say how to use several queues and the track's `TMPDIR`.
 
 ## Progress
@@ -34,6 +34,13 @@ Two tracks running these at once on one machine would overwrite each other's pro
 
 - **The first gate with `TMPDIR=/tmp/mind-KRN`** (6b6135d): the x86 groups ran in a queue of their own on i9, beside the tools track's gate. Every group passed until `keys, shell, tools`, whose last suite's machine did not reach its prompt within 30 s: two tracks' QEMU runs shared the CPUs. The suites now wait 90 s for the first prompt; a boot that hangs still fails.
 - **A long `TMPDIR` breaks the suites:** QEMU's control sockets go under it, and a Unix socket's path must stay under 108 bytes. docs/effector.md (EN, RU) says to keep it short, as `/tmp/mind-<TRK>` is.
+
+## Resolution
+
+In `main` at 289e84b; the gate of 10d3ec3 passed every group on 2026-10-20 (un-rizen-service and i9; aarch64 split between them).
+
+- Every group ran with `TMPDIR=/tmp/mind-KRN` beside other tracks' gates on the same machines (NET's and APP's, each in its own `TMPDIR`): the built programs, `mind-ci-local/*.log` and the QEMU logs were found there and copied to `logs/<tag>/` by the gate scripts.
+- The machines were un-rizen-service and i9, with aarch64 split between them, not i9 and PCU as the criterion was written; PCU's queue held another track's gate.
 
 ## Related
 

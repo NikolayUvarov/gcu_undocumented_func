@@ -48,4 +48,4 @@ In QEMU, `usb_host` sees the disconnection at once, so the wait is `usb_storage`
 
 ## Related
 
-[211-KRN-0019](211-KRN-0019-boot-logs-on-the-log-partition.md) (the journal), [requests-DRV.md](requests-DRV.md), [requests-APP.md](requests-APP.md).
+[211-KRN-0019](../issues-done/211-KRN-0019-boot-logs-on-the-log-partition.done) (the journal), [requests-DRV.md](requests-DRV.md), [requests-APP.md](requests-APP.md).
