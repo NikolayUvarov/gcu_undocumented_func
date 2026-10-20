@@ -2,7 +2,7 @@
 #![no_main]
 
 use mind::abi::BootInfo;
-use mind::font::FONT;
+use mind::gfx::Screen;
 use mind::util::Decimal;
 
 const BACKGROUND: u32 = 0x001E1E2E;
@@ -10,34 +10,6 @@ const FOREGROUND: u32 = 0x00A6E3A1;
 const FRAME_INTERVAL_MS: usize = 30;
 
 fn os_print(message: &[u8]) { mind::process::log(message) }
-
-fn fill_rect(info: &BootInfo, x: usize, y: usize, width: usize, height: usize, color: u32) {
-    for py in y..y.saturating_add(height).min(info.height) {
-        for px in x..x.saturating_add(width).min(info.width) {
-            unsafe { core::ptr::write_volatile(info.fb_ptr.add(py * info.stride + px), color) };
-        }
-    }
-}
-
-fn draw_text(info: &BootInfo, x: usize, y: usize, text: &[u8], color: u32) {
-    for (index, &ch) in text.iter().enumerate() {
-        let glyph = FONT[ch.to_ascii_uppercase().saturating_sub(32).min(63) as usize];
-        for row in 0..8 {
-            for col in 0..8 {
-                let px = x + index * 8 + col;
-                let py = y + row;
-                if px < info.width
-                    && py < info.height
-                    && glyph & (1 << ((7 - row) * 8 + 7 - col)) != 0
-                {
-                    unsafe {
-                        core::ptr::write_volatile(info.fb_ptr.add(py * info.stride + px), color)
-                    };
-                }
-            }
-        }
-    }
-}
 
 fn bounce(frame: usize, limit: usize) -> usize {
     if limit == 0 {
@@ -63,6 +35,10 @@ fn main(info: &'static BootInfo) {
 
     // In wm a window of its own (000-APP-0056: otherwise it ran unseen, with no screen to draw on).
     let info = mind::windowed::pixels(info, 600, 240, "app2");
+    let Some(screen) = Screen::new(info) else {
+        os_print(b"[APP2] NO SCREEN TO DRAW ON. EXITING.\r\n");
+        return;
+    };
     // All state is local so every RUN APP2 starts a fresh animation and counter.
     let mut frame: usize = 0;
     let mut last_frame_ms = mind::time::uptime_ms().wrapping_sub(FRAME_INTERVAL_MS);
@@ -81,11 +57,11 @@ fn main(info: &'static BootInfo) {
     let travel_x = info.width.saturating_sub(size + 48);
     let travel_y = info.height.saturating_sub(top + size + 24);
     let mut previous_square = None;
-    fill_rect(info, 0, 0, info.width, info.height, BACKGROUND);
+    screen.clear(BACKGROUND);
 
     loop {
         if mind::input::read_key().is_some_and(mind::input::is_escape) {
-            os_print(b"[APP2] ESC PRESSED. RETURNING TO KERNEL.\r\n");
+            os_print(b"[APP2] ESC PRESSED. RETURNING TO THE SHELL.\r\n");
             return;
         }
 
@@ -103,30 +79,22 @@ fn main(info: &'static BootInfo) {
         let tick_text = tick_decimal.as_bytes();
 
         if let Some((x, y)) = previous_square {
-            fill_rect(info, x, y, size, size, BACKGROUND);
+            screen.fill(x, y, size, size, BACKGROUND);
         }
-        fill_rect(info, 96, 72, 160, 8, BACKGROUND);
-        fill_rect(info, 96, 96, 160, 8, BACKGROUND);
-        draw_text(info, 24, 24, b"SECOND APP (ELF) - RUN APP2", FOREGROUND);
-        draw_text(info, 24, 48, b"CTRL+Z: SHELL / ESC: EXIT", 0x00FFFFFF);
-        draw_text(info, 24, 72, b"FRAMES:", FOREGROUND);
-        draw_text(info, 96, 72, frame_text, 0x00FFFFFF);
-        draw_text(info, 24, 96, b"TSC:", FOREGROUND);
-        draw_text(info, 96, 96, tick_text, 0x00FFFFFF);
+        screen.fill(96, 72, 160, 8, BACKGROUND);
+        screen.fill(96, 96, 160, 8, BACKGROUND);
+        screen.text(24, 24, b"SECOND APP (ELF) - RUN APP2", 1, FOREGROUND, None);
+        screen.text(24, 48, b"CTRL+Z: SHELL / ESC: EXIT", 1, 0x00FFFFFF, None);
+        screen.text(24, 72, b"FRAMES:", 1, FOREGROUND, None);
+        screen.text(96, 72, frame_text, 1, 0x00FFFFFF, None);
+        screen.text(24, 96, b"TSC:", 1, FOREGROUND, None);
+        screen.text(96, 96, tick_text, 1, 0x00FFFFFF, None);
         let square_x = 24 + bounce(frame, travel_x);
         let square_y = top + bounce(frame, travel_y);
-        for (index, pixel) in sprite.as_mut_slice().chunks_exact(4).enumerate() {
-            let x = square_x + index % size;
-            let y = square_y + index / size;
-            if x < info.width && y < info.height {
-                unsafe {
-                    info.fb_ptr
-                        .add(y * info.stride + x)
-                        .write_volatile(u32::from_le_bytes(pixel.try_into().unwrap()));
-                }
-            }
+        for (index, pixel) in sprite.as_slice().chunks_exact(4).enumerate() {
+            screen.pixel(square_x + index % size, square_y + index / size, u32::from_le_bytes(pixel.try_into().unwrap()));
         }
-        previous_square = Some((24 + bounce(frame, travel_x), top + bounce(frame, travel_y)));
+        previous_square = Some((square_x, square_y));
 
         // Log periodically instead of flooding the UART on every redraw.
         if frame % 30 == 0 {

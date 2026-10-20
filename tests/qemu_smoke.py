@@ -2906,7 +2906,7 @@ def dzen_suite(vm):
     screen = look()[0]
     assert canon("T: PIXEL FACE") in screen[-1], screen[-1]
     vm.send("\x1b")
-    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO KERNEL.")
+    require(vm.expect("EXITED. SHELL RESUMED."), "[DZEN-CLOCK] RETURNING TO THE SHELL.")
     time.sleep(.1); vm.collect(); vm.output = ""
     vm.send("clock --text\n")  # the program (issue u007: the shell's one-line command is `time`)
     vm.expect("[CLOCK] 19:3")
