@@ -228,7 +228,10 @@ fn decoder_survives_noise() {
 #[test]
 fn clean_line_hello_put_get_list() {
     let (mut c, link) = pair(Faults::default(), 1, 0);
-    let (hello, _) = c.hello("test").unwrap();
+    c.master.line.service.set_name("disk");
+    let mut theirs = [0u8; 64];
+    let (hello, n) = c.hello("test", &mut theirs).unwrap();
+    assert_eq!(&theirs[..n], b"disk");
     assert_eq!((hello.version, hello.role, hello.max_payload as usize), (frame::VERSION, linkproto::app::ROLE_SLAVE, MAX_PAYLOAD));
     for (name, len) in [("empty", 0), ("one", 1), ("chunk", c.chunk), ("odd", 3 * c.chunk + 17)] {
         let bytes = data(len, len as u64);
@@ -304,7 +307,7 @@ fn lossy_line_megabyte() {
     let (mut c, _) = pair(faults, 0xC0FFEE, 65_000);
     c.master.timeout_ms = 50;
     c.master.tries = 12;
-    c.hello("lossy").unwrap();
+    c.hello("lossy", &mut [0; 64]).unwrap();
     let bytes = data(1 << 20, 99);
     assert_eq!(put(&mut c, "big.bin", &bytes).unwrap(), sha(&bytes));
     let chunks = (bytes.len() + c.chunk - 1) / c.chunk;
@@ -320,7 +323,7 @@ fn lossy_line_megabyte() {
 fn echoing_line() {
     let faults = Faults { echo: true, ..Faults::default() };
     let (mut c, _) = pair(faults, 4, 0);
-    c.hello("echo").unwrap();
+    c.hello("echo", &mut [0; 64]).unwrap();
     let bytes = data(10_000, 5);
     put(&mut c, "e", &bytes).unwrap();
     assert_eq!(get(&mut c, "e").unwrap(), bytes);
@@ -334,7 +337,7 @@ fn dead_line_times_out() {
     let (mut c, link) = pair(faults, 6, 0);
     c.master.timeout_ms = 100;
     c.master.tries = 3;
-    assert_eq!(c.hello("dead").map(|_| ()), Err(Error::Timeout));
+    assert_eq!(c.hello("dead", &mut [0; 64]).map(|_| ()), Err(Error::Timeout));
     assert_eq!(c.master.stats.retries, 2);
     assert_eq!(link.borrow().clock, 300);
 }

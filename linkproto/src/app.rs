@@ -27,8 +27,8 @@ pub struct Client<L: Line> { pub master: Master<L>, buf: [u8; MAX_PAYLOAD], pub 
 impl<L: Line> Client<L> {
     pub fn new(line: L) -> Self { Self { master: Master::new(line), buf: [0; MAX_PAYLOAD], chunk: MAX_PAYLOAD - DATA_HEAD } }
 
-    /// Hello: the other end's, and the chunk both can carry.
-    pub fn hello(&mut self, name: &str) -> Result<(Hello, usize), Error> {
+    /// Hello: the other end's, its name in `theirs` (the length returned), and the chunk both can carry.
+    pub fn hello(&mut self, name: &str, theirs: &mut [u8]) -> Result<(Hello, usize), Error> {
         let mut p = [0u8; 4 + NAME_MAX];
         p[..4].copy_from_slice(&[crate::frame::VERSION, ROLE_MASTER, MAX_PAYLOAD as u8, (MAX_PAYLOAD >> 8) as u8]);
         let n = name.len().min(NAME_MAX);
@@ -40,7 +40,9 @@ impl<L: Line> Client<L> {
         let max = (hello.max_payload as usize).min(MAX_PAYLOAD);
         if max <= DATA_HEAD { return Err(Error::Protocol); }
         self.chunk = max - DATA_HEAD;
-        Ok((hello, len - 4))
+        let n = (len - 4).min(theirs.len());
+        theirs[..n].copy_from_slice(&r[4..4 + n]);
+        Ok((hello, n))
     }
 
     /// Puts `size` bytes under `name`, read by `read(offset, out) -> n`: the SHA-256 the slave confirmed, and the offset
@@ -179,10 +181,18 @@ pub struct FileService<F: Files> {
     reading: Option<(u64, u64, Sha256)>,
     /// The largest answer: the master's `max_payload` from its hello.
     limit: usize,
+    /// The name this end gives in its hello.
+    name: [u8; 64],
+    name_len: usize,
 }
 
 impl<F: Files> FileService<F> {
-    pub fn new(files: F) -> Self { Self { files, writing: None, reading: None, limit: MAX_PAYLOAD } }
+    pub fn new(files: F) -> Self { Self { files, writing: None, reading: None, limit: MAX_PAYLOAD, name: [0; 64], name_len: 0 } }
+
+    pub fn set_name(&mut self, name: &str) {
+        self.name_len = name.len().min(self.name.len());
+        self.name[..self.name_len].copy_from_slice(&name.as_bytes()[..self.name_len]);
+    }
 }
 
 impl<F: Files> Service for FileService<F> {
@@ -195,7 +205,8 @@ impl<F: Files> Service for FileService<F> {
                 let theirs = u16_at(p, 2).ok_or(code::BAD_REQUEST)? as usize;
                 self.limit = theirs.clamp(MIN_PAYLOAD, MAX_PAYLOAD);
                 reply[..4].copy_from_slice(&[crate::frame::VERSION, ROLE_SLAVE, MAX_PAYLOAD as u8, (MAX_PAYLOAD >> 8) as u8]);
-                Ok(4)
+                reply[4..4 + self.name_len].copy_from_slice(&self.name[..self.name_len]);
+                Ok(4 + self.name_len)
             }
             (channel::FILES, kind::PUT_OPEN) => {
                 let size = u64_at(p, 0).ok_or(code::BAD_REQUEST)?;
