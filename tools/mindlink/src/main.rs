@@ -24,6 +24,8 @@ commands: hello                       the other end's name and version
           rm <name>                   delete a file
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
+          board <line>                a MIND Link board's control port: one command (hello, status, type <text>,
+                                      key <chord>, move <dx> <dy>, click, abs <x> <y>; docs/link/multi-device.md)
           serve <dir> [--log <file>] [--console <command>]
                                       be the slave: files in <dir>, the log from <file>, a console running <command>
 options:  --baud <rate>               serial rate (default 115200)
@@ -100,6 +102,7 @@ fn main() {
     let cmd = args.remove(0);
     let mut port = port::Port::open(&spec, o.baud).unwrap_or_else(|e| die(e));
     if cmd == "serve" { return serve(port, &args, &o); }
+    if cmd == "board" { return board(port, &args.join(" ")); }
 
     // One try waits for a request and an answer of the largest size at the line's rate, and a margin.
     let serial = !spec.contains(':');
@@ -265,6 +268,27 @@ fn console(c: &mut Client<port::Port>) -> Result<(), Error> {
         if let Some(t) = ended { if pending.is_empty() && n == 0 && t.elapsed() > Duration::from_secs(1) { return Ok(()); } }
         if n == 0 && input.is_empty() { std::thread::sleep(Duration::from_millis(100)); }
     }
+}
+
+/// One line to a multi-device's control port, and its answer (800-LNK-0005); the indicator's `@` lines have none.
+fn board(mut port: port::Port, line: &str) {
+    use linkproto::Line;
+    if line.is_empty() || line.contains('\n') { eprintln!("{USAGE}"); std::process::exit(2); }
+    // Whatever an earlier command left unread goes first.
+    let mut buf = [0u8; 256];
+    while port.read(&mut buf, 0) > 0 {}
+    if !port.write(format!("{line}\n").as_bytes()) { die("the control port failed"); }
+    if line.starts_with('@') { return; }
+    let mut answer = Vec::new();
+    let end = Instant::now() + Duration::from_secs(2);
+    while !answer.ends_with(b"\n") && Instant::now() < end {
+        let n = port.read(&mut buf, 100);
+        answer.extend_from_slice(&buf[..n]);
+    }
+    let text = String::from_utf8_lossy(&answer);
+    print!("{text}");
+    if text.is_empty() { die("the board did not answer: is this its control port (interface 4)?"); }
+    if text.starts_with("err") { std::process::exit(1); }
 }
 
 fn serve(mut port: port::Port, args: &[String], o: &Options) {
