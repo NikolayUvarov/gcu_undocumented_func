@@ -4,6 +4,7 @@
 // and its transmit status read back. Register facts come from the stage-4 and stage-5 fact sheets (b43 and brcmsmac,
 // described).
 use crate::stage3::Core;
+use crate::txwait;
 use core::sync::atomic::{fence, Ordering};
 use mind::abi::SLOT_MEM;
 use mind::dev::Dma;
@@ -48,7 +49,7 @@ pub const CORES_OFF: u8 = 0b100;
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { NoDevice, Empty, Invalid, Failed }
+pub enum Error { NoDevice, Busy, Empty, Invalid, Failed }
 
 // What passes: every beacon and probe response (a scan); frames to `own` (zero: the radio's address); group frames of
 // the network `bssid` (zero: none).
@@ -70,7 +71,7 @@ pub struct Counts {
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
-    dma: Dma, buffers: usize, next: usize, tx_ring: usize, tx_buffers: usize, tx_next: usize,
+    dma: Dma, buffers: usize, next: usize, tx_ring: usize, tx_buffers: usize, tx_next: usize, tx_generation: u8,
     pub mac: [u8; 6],
     channel: u8,
     filter: Filter,
@@ -134,7 +135,7 @@ impl<'a> Radio<'a> {
         }
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
-        let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, mac, channel: 0, filter: Filter::default(),
+        let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, tx_generation: 0, mac, channel: 0, filter: Filter::default(),
                             queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
         for slot in 0..SLOTS {
             r.poison(slot);
@@ -351,6 +352,9 @@ impl<'a> Radio<'a> {
         }
         let unicast = frame[4] & 1 == 0;
         let p = plcp(ofdm, code, rate, frame.len());
+        // The slot is the engine's until it has moved past it (the audit's H12): with no room the queue is full.
+        let current = ((self.c.r32(TX_STATUS) & 0x1FFF) as usize / 16) % TX_SLOTS;
+        if !txwait::room(self.tx_next, current, TX_SLOTS) { return Err(Error::Busy); }
         let slot = self.tx_next;
         let mut header = [0u8; HEADER];
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
@@ -361,7 +365,8 @@ impl<'a> Radio<'a> {
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);
         header[0x36..0x3C].copy_from_slice(&p);
         header[0x3C..0x3E].copy_from_slice(&frame[2..4]);
-        let cookie = 0x2000u16 | slot as u16;
+        let cookie = txwait::cookie(self.tx_generation, slot);
+        self.tx_generation = self.tx_generation.wrapping_add(1);
         header[0x4C..0x4E].copy_from_slice(&cookie.to_le_bytes());
         header[0x70..0x76].copy_from_slice(&p);
         let at = self.tx_buffers + slot * TX_STRIDE;
@@ -376,28 +381,16 @@ impl<'a> Radio<'a> {
         self.tx_next = (slot + 1) % TX_SLOTS;
         fence(Ordering::SeqCst);
         self.c.w32(TX_INDEX, (self.tx_next * 16) as u32);
-        let status = self.status(cookie);
+        // The FIFO's next entry: its second register is read only after a valid first, and that read takes it.
+        let c = self.c;
+        let fifo = || { let first = c.r32(TX_STATUS0); (first != u32::MAX && first & 1 != 0).then(|| (first, c.r32(TX_STATUS1))) };
+        let end = mind::time::uptime_ms() + STATUS_MS;
+        let status = txwait::wait(fifo, cookie, mind::time::uptime_ms, end, || { self.poll(); mind::time::sleep(1); });
         self.c.w32(IRQ_REASON, IRQ_TX_STATUS);
         let word = status.ok_or(Error::Failed)?;
         let (count, suppressed) = ((word >> 12 & 0xF) as u8, word >> 2 & 7);
         if count == 0 || suppressed != 0 { return Err(Error::Failed); }
         Ok(Sent { acked: word & 2 != 0, attempts: count })
-    }
-
-    // The final status word for `cookie`, others skipped, polling the receive ring while waiting.
-    fn status(&mut self, cookie: u16) -> Option<u32> {
-        let end = mind::time::uptime_ms() + STATUS_MS;
-        loop {
-            let first = self.c.r32(TX_STATUS0);
-            if first != u32::MAX && first & 1 != 0 {
-                let _ = self.c.r32(TX_STATUS1);
-                if first & 0x40 == 0 && (first >> 16) as u16 == cookie { return Some(first & 0xFFFF); }
-                continue;
-            }
-            if mind::time::uptime_ms() >= end { return None; }
-            self.poll();
-            mind::time::sleep(1);
-        }
     }
 
     // Both engines stopped, the MAC suspended; the core is the caller's to reset.

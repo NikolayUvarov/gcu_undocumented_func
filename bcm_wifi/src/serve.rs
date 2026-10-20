@@ -17,7 +17,7 @@ const WAITERS: usize = 4;
 const BANDS: u8 = BAND_2GHZ | BAND_2GHZ_OFDM;
 
 fn error(e: Error) -> wlanhw::Error {
-    match e { Error::NoDevice => wlanhw::Error::NoDevice, Error::Empty => wlanhw::Error::Empty, Error::Invalid => wlanhw::Error::Invalid, Error::Failed => wlanhw::Error::Failed }
+    match e { Error::NoDevice => wlanhw::Error::NoDevice, Error::Busy => wlanhw::Error::Busy, Error::Empty => wlanhw::Error::Empty, Error::Invalid => wlanhw::Error::Invalid, Error::Failed => wlanhw::Error::Failed }
 }
 
 // An address as the interface carries it: the low 48 bits, the first byte in bits 40-47.
