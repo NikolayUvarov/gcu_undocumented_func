@@ -11,7 +11,7 @@ The update track (requests-KRN.md, 2026-10-10, for [351-UPD-0007](../issues-done
 - **`init.wit` 1.4 `boot: func() -> result<boot, error>`:** the slot the machine booted from (`BOOT_SLOT_*`), whether it was on trial, and whether `init` confirmed it.
 - **When it answers:** `init` serves its requests only after it has confirmed or refused the boot, so the answer is never "not yet": a trial boot answered `confirmed: false` is one `init` refused, and the kernel restarts the machine at its deadline.
 - **Who may ask:** any client of `init`. The answer is what the bootloader handed the kernel and what `init` logged; it changes nothing.
-- **The updater's use** is the update track's part: a note in [requests-UPD.md](requests-UPD.md).
+- **The updater's use** is the update track's part: a note to the update track (`internal-dev-messages`, `UPD/`, 2026-10-20), since its requests file is gone.
 
 ## Acceptance criteria
 
@@ -20,4 +20,4 @@ The update track (requests-KRN.md, 2026-10-10, for [351-UPD-0007](../issues-done
 
 ## Related
 
-[requests-UPD.md](requests-UPD.md) (the note), 351-KRN-0014 (the trial boot and `BOOT_CONFIRM`), [docs/profile/README.md](../docs/profile/README.md) (MC-9.5).
+the note to the update track (`internal-dev-messages`), 351-KRN-0014 (the trial boot and `BOOT_CONFIRM`), [docs/profile/README.md](../docs/profile/README.md) (MC-9.5).

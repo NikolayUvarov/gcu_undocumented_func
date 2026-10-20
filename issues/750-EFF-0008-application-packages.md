@@ -1,6 +1,6 @@
 # 750-EFF-0008 — Signed application packages: install, update and remove an application
 
-**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0005](750-EFF-0005-zip-reader.md), [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (signed application packages: the contract, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the Effector server's package hash and non-shell entry point (its task 75, part B) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
+**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0005](750-EFF-0005-zip-reader.md), [750-EFF-0007](750-EFF-0007-gateway-service.md); [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (signed application packages: the contract, key role, verification); [requests-KRN.md](requests-KRN.md) (a writable scoped `vfs` client; the loader's check of an installed application); the open Effector package metadata/non-shell entry-point requirement in `sst-test-deploy: issues/81-mindcore-02-package-metadata.task.md` · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-3.11, MC-6.6
 
 ## Problem
 
