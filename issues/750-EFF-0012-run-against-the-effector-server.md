@@ -1,10 +1,12 @@
 # 750-EFF-0012 — A run against the real Effector server, recorded per configuration
 
-**Type:** evidence · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; the Effector server's task 75, part A; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** evidence · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; deployment and agent/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md`, and its `issues/81-mindcore-02-package-metadata.task.md` for the signed-package checks; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 
 The test server of 0002 follows the contract as read. Compatibility with the real server is a separate claim, and it holds only for the server builds and the configurations it was checked on (MC-12.9).
+
+The local server-only platform boundary is recorded in external `issues-done/81-mindcore-server-platform-boundary.task.md.done`. Its prepared change has not been deployed; it neither implements a MIND runtime agent nor closes the package metadata/signature requirements of 0008. Historical external task 75 is unrelated console work and is not a dependency of this run.
 
 ## Plan
 

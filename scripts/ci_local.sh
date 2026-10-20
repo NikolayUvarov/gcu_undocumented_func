@@ -11,6 +11,7 @@
 #   --group TEXT  only the groups whose name contains TEXT (repeatable); a part's build runs only when named, so the
 #     groups after it use the tree's earlier build: a long part in steps of its own (docs/effector.md).
 # Logs: $CI_LOCAL_LOGS (default $TMPDIR/mind-ci-local), one file per group, one directory per branch.
+# SSH host tests: $MIND_SSHD selects an absolute server path (default /usr/sbin/sshd).
 # Temporary files: under $TMPDIR (default /tmp). Two runs with different TMPDIR share no file and no lock, so two tracks'
 #   runs can share a machine (000-KRN-0092, docs/effector.md).
 # Needs (Ubuntu 24.04): qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm,
@@ -84,6 +85,7 @@ X86_GROUPS=(
     "x86: padded vector area|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-xsave-pad-target/x86_64-unknown-none/release/kernel --suites busy,smp,isolation"
     "x86: protection probes|$X86 --cpu-model max --kernel $MIND_TEST_OUT/mind-protection-target/x86_64-unknown-none/release/kernel --suites isolation"
     "x86: TSC measured again|$X86 --kernel $MIND_TEST_OUT/mind-tsc-skew-target/x86_64-unknown-none/release/kernel --suites clock"
+    "x86: the watchdog|$X86 --kernel $MIND_TEST_OUT/mind-watchdog-target/x86_64-unknown-none/release/kernel --suites watchdog"
     "x86: USB image|python3 scripts/make_usb_image.py --no-build --force && python3 tests/usb_image_smoke.py --firmware $OVMF"
     "x86: Secure Boot with our keys|python3 tests/secure_boot_smoke.py && python3 tests/dbx_update_smoke.py"
     "x86: reproducible build|scripts/reproducible.sh"
@@ -124,7 +126,8 @@ cd "${TREE:-$ROOT}" || exit 2
 missing=()
 for tool in cargo rustup python3 mcopy mkfs.fat qemu-img swtpm; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 want host && { command -v java >/dev/null || missing+=(java); } # the models (TLC) only
-want host && { [[ -x /usr/sbin/sshd ]] || missing+=("sshd (openssh-server)"); } # the SSH client's host tests (351-NET-0026)
+SSHD_PATH=${MIND_SSHD:-/usr/sbin/sshd}
+want host && { [[ $SSHD_PATH == /* && -f $SSHD_PATH && -x $SSHD_PATH ]] || missing+=("sshd (openssh-server or MIND_SSHD: $SSHD_PATH)"); } # the SSH client's host tests (351-NET-0026)
 { want x86 || want host; } && { command -v qemu-system-x86_64 >/dev/null || missing+=(qemu-system-x86_64); [[ -f $OVMF ]] || missing+=("$OVMF"); }
 want aarch64 && { command -v qemu-system-aarch64 >/dev/null || missing+=(qemu-system-aarch64); [[ -f /usr/share/AAVMF/AAVMF_CODE.fd ]] || missing+=(AAVMF); }
 if [[ ${#missing[@]} -gt 0 ]]; then

@@ -2,7 +2,7 @@
 /// services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
 /// SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
 /// the shell cannot be stopped.
-package mind:init@1.3.0;
+package mind:init@1.4.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -30,4 +30,9 @@ interface init {
     /// first. Only a client badged `BADGE_REBOOT` (`mind::process`: the updater's) may ask; others get `denied` (1.3,
     /// 351-KRN-0022).
     reboot: func() -> result<_, error>;
+    /// How this boot went (1.4, 000-KRN-0102): the slot it came from (`BOOT_SLOT_*`: 0 the volume's root, 1 A, 2 B),
+    /// whether it was on trial, and whether init confirmed it (`BOOT_CONFIRM`). init answers once it has decided, so a
+    /// trial boot not confirmed is one it refused: the kernel restarts the machine at the deadline. Any client may ask.
+    record boot { slot: u8, trial: bool, confirmed: bool }
+    boot: func() -> result<boot, error>;
 }

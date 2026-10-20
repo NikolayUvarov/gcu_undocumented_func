@@ -43,7 +43,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "netstack", "netpolicy", "parse", "tpm", "keystore", "tls", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "windows", "sysmon", "updater", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -236,10 +236,10 @@ class VM:
             self.process.stdin.flush()
             time.sleep(.01)
 
-    def command(self, text, raw=False):
+    def command(self, text, raw=False, timeout=8):
         self.send(text + "\n", raw)
         # The prompt after the echo of this line: a prompt printed late for the previous command is not this one's.
-        return self.expect("MIND> ", after=to_ordinal(text if raw else to_real(text)) + "\n")
+        return self.expect("MIND> ", timeout=timeout, after=to_ordinal(text if raw else to_real(text)) + "\n")
 
     def hmp(self, command):
         # A monitor command through QMP (human-monitor-command); what it printed. `cpu N` picks the CPU later
@@ -457,6 +457,14 @@ def center_pixel(vm):
     return pixels[at:at + 3]
 
 
+def center_pixel_soon(vm, want, seconds=5):
+    # The centre pixel once it is `want` or the time is up: a loaded host shows a program's first frame late.
+    deadline = time.monotonic() + seconds
+    while (seen := center_pixel(vm)) != want and time.monotonic() < deadline:
+        time.sleep(.1)
+    return seen
+
+
 # aarch64 idle check (issue 208): an idle virt with 4 CPUs uses about 0.45-0.6 s of host processor time a second
 # under TCG, one vCPU that spins instead of waiting in WFI about 1 s on its own. The lowest of a few samples is
 # compared, so one sample that meets a busy host or a burst of wakeups does not fail the check.
@@ -491,7 +499,8 @@ def applications_until_memory_ends(vm, others=0):
     def clocks(most):
         pids = []
         while len(pids) < most:
-            output = vm.command("run clock &")
+            # Each start loads the program while every clock before it draws: a loaded host makes that slow.
+            output = vm.command("run clock &", timeout=60)
             started = re.search(r"PID=(\d+) NAME=clock BACKGROUND", output)
             if not started:
                 require(output, "OUT OF MEMORY")
@@ -834,6 +843,13 @@ def normal_suite(vm):
     log = vm.command("dmesg -s init", raw=True)
     built = re.search(r"\[INIT\] BUILD: BRANCH (\S+), COMMIT ([0-9a-f]{12}(?:\+CHANGES)?)", log)
     assert built and built[1] != "UNKNOWN", log[-1500:]
+    # 000-KRN-0110, last: `stop` halts, and the kernel says so on COM1 and over the screen once the other CPUs stopped.
+    vm.send("stop\n")
+    vm.expect("MIND CORE KERNEL: THE SYSTEM IS STOPPED", timeout=30)
+    screen = "\n".join(screen_text(vm))
+    for line in ("MIND CORE: STOPPING THE SYSTEM...", "MIND CORE: THE SYSTEM IS STOPPED. IT IS SAFE TO TURN THE MACHINE OFF."):
+        assert line in screen, screen
+    print("PASS: stop: the kernel stops the other CPUs, then says on COM1 and on the screen that the system stopped", flush=True)
 
 
 def keys_suite(vm):
@@ -1559,9 +1575,11 @@ def kbench_check(vm):
 # The checks of `check` that must pass in the suites' QEMU machines (176-KRN-0063); the rest pass or are skipped with
 # a reason, and none fails ("sleeps last as asked" since 000-KRN-0065).
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
-               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "kernel memory unreadable",
+               "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "text input: none",
+               "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
+               "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -1585,6 +1603,8 @@ def check_tool_check(vm):
     skipped = {name: detail for name, (mark, detail) in rows.items() if mark == "○"}
     print(f"PASS: check: {summary[1]} passed, {summary[2]} failed {failed}, {summary[3]} skipped ({len(rows)} checks) in a table "
           f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
+    texts = [name for name in rows if name.startswith("text input: ")]
+    print(f"PASS: check: text input (000-KRN-0094): {'; '.join(f'{n[12:]}: {rows[n][1]}' for n in texts)}", flush=True)
     output = vm.command("check kernel")
     assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
     require(vm.command("check nosuch"), "check: no group nosuch")
@@ -2739,8 +2759,17 @@ def dzen_suite(vm):
                  for py in range(y - half, y + half + 1)
                  for px in range(x - half, x + half + 1)
                  if (radius + 6) ** 2 <= (px - x) ** 2 + (py - y) ** 2 <= (half - radius // 3) ** 2}
+        # At 19:35 the separate hour-sector marker is a short yellow diagonal outside the orbit, toward top right.
+        sector = {point for point, color in orbit.items() if color == b"\xff\xff\x00"}
+        if mode != "off":
+            assert max(half // 24, 2) <= len(sector) <= max(half // 16, 2), "a short hour-sector marker must be visible"
+            assert all(px > 0 and py == -px and (half * .78) ** 2 <= px * px + py * py <= (half * .90) ** 2
+                       for px, py in sector), "the yellow marker must point top right, outside the cycle orbit"
+            assert {px for px, _ in sector} == set(range(min(px for px, _ in sector), max(px for px, _ in sector) + 1)), "hour-sector marker must be continuous"
+        else:
+            assert not sector, "hiding the orbit must erase its hour-sector marker"
         assert all(p in (b"\x08\x0c\x12", b"\x80\x80\x80", b"\x18\x18\x18", b"\x28\x28\x28",
-                         b"\x60\x60\x60", b"\x40\x40\x40") for p in orbit.values())
+                         b"\x60\x60\x60", b"\x40\x40\x40") for point, p in orbit.items() if point not in sector)
         mark = {point for point, color in orbit.items() if color == b"\x80\x80\x80"}
         if mode != "off":
             diameter = max(half // 24, 2)
@@ -2891,7 +2920,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; separate yellow top-right hour sector, bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
@@ -5608,6 +5637,40 @@ def release_metadata_check(vm):
           f"{(len(files) + 7) // 8} pages) for the shell, whose answer makes the files' bytes exactly; a channel with a space refused and logged", flush=True)
 
 
+def wifi_boot_check(vm):
+    """550-KRN-0097: with QEMU's stand-in radio on the disk, init starts wlansim and the station wlan. wlan holds the
+    radio's client in slot 2, and nobody else does (MC-2.3), and keystore's with BADGE_KEY_STATION in slot 3; netstack
+    holds the station's client without a badge in slot 4, its third card; the shell holds the configuration client with
+    BADGE_WIFI_CHANGE (0x300) in SLOT_WIFI (33)."""
+    real = vm.services()
+    assert "wlansim" in real and "wlan" in real, real
+    started = vm.command("dmesg -s init")
+    require(started, "[INIT] STARTED wlansim PID"); require(started, "[INIT] STARTED wlan PID")
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+
+    def clients(name):
+        # (slot, rights, badge, the endpoint's server) of each endpoint client `name` holds.
+        caps = vm.command(f"stat caps {real[name]}", raw=True)
+        return [(int(s), int(r), int(b), servers.get(int(e))) for s, r, b, e in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) SIZE=0 BADGE=(\d+) EP=(\d+)", caps, re.M)]
+    assert (2, 6, 0, real["wlansim"]) in clients("wlan"), clients("wlan")
+    assert (3, 6, 2, real["keystore"]) in clients("wlan"), clients("wlan")
+    assert (4, 6, 0, real["wlan"]) in clients("netstack"), clients("netstack")
+    assert (33, 6, 0x300, real["wlan"]) in clients("shell"), clients("shell")
+    holders = [name for name in real if name not in ("init", "wlansim", "wlan") and any(c[3] == real["wlansim"] for c in clients(name))]
+    assert not holders, holders
+    print("PASS: the Wi-Fi station in the boot services: wlan over wlansim's client in slot 2 (nobody else's) with keystore's "
+          "in slot 3, netstack's third card in slot 4, the shell's configuration client with BADGE_WIFI_CHANGE in SLOT_WIFI", flush=True)
+
+
+def shell_badge_rights_check(vm):
+    """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
+    CAP_BADGE beside write and grant (rights 22), so the shell can mint the read-only and the no-device copies it lends."""
+    caps = vm.command(f"stat caps {vm.services()['shell']}", raw=True)
+    rights = {int(slot): int(r) for slot, r in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 RIGHTS=(\d+) ", caps, re.M)}
+    assert (rights.get(16), rights.get(20)) == (22, 22), rights
+    print("PASS: the shell's network card and TLS clients carry the right to badge, for the read-only and no-device copies", flush=True)
+
+
 def net_suite(args, disk):
     # Network card driver and stack in ring 3: DHCP, ICMP echo, DNS, TCP (HTTP) through QEMU's user-mode network,
     # raw frames from the driver, restart of the driver after device quiesce and of the stack.
@@ -5623,6 +5686,10 @@ def net_suite(args, disk):
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
+    if args.wlansim_elf:
+        # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
+        shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
+        sign_manifest.sign_volume(disk)
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5636,12 +5703,20 @@ def net_suite(args, disk):
         require(vm.command("net"), "NET MAC=52:54:00:12:34:56 LINK=UP MTU=1500")
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3")
         require(vm.command("ip"), "IP 10.0.2.15/24 GATEWAY 10.0.2.2 DNS 10.0.2.3 (DHCP)")
+        shell_badge_rights_check(vm)
+        if args.wlansim_elf:
+            wifi_boot_check(vm)
+        else:
+            print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
         require(page, "HTTP/1.0 200 OK"); require(page, "hello from the host: /mind")
-        require(vm.command("fetch 10.0.2.2:1 /"), "FETCH: Refused")
+        # Keep a non-listening port reserved: fixed low ports can be filtered by the host.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"fetch 10.0.2.2:{refused.getsockname()[1]} /"), "FETCH: Refused")
         # Flow grants (issue 102): what the policy names and nothing else; a program without policy gets no grant.
         checks = vm.command(f"netcheck tcp:10.0.2.2:{web_port} tcp:10.0.2.2:{web_port + 1} udp:10.0.2.2:9 ping:10.0.2.2 ping:10.0.2.3")
         for line in (f"NETCHECK tcp:10.0.2.2:{web_port} OK", f"NETCHECK tcp:10.0.2.2:{web_port + 1} Denied", "NETCHECK udp:10.0.2.2:9 Denied",
@@ -6017,7 +6092,10 @@ def tls_suite(args, disk):
                 server.kill(); server.wait()
         require(vm.command(f"https 10.0.2.2:{ports['good']} / other.test"), "HTTPS: Certificate")
         require(vm.command(f"https 10.0.2.2:{ports['rogue']} / mind.test"), "HTTPS: Certificate")
-        require(vm.command("https 10.0.2.2:1 / mind.test"), "HTTPS: Refused")
+        # Reserve the non-listening endpoint until TLS reports the underlying TCP refusal.
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            require(vm.command(f"https 10.0.2.2:{refused.getsockname()[1]} / mind.test"), "HTTPS: Refused")
         log = vm.command("dmesg -s tls")
         for line in ("mind.test VERIFIED, SUITE", "other.test REFUSED: CERTIFICATE NotValidForName", "mind.test REFUSED: CERTIFICATE UnknownIssuer"):
             require(log, line)
@@ -7831,12 +7909,12 @@ def display_suite(args, disk):
             assert started, (name, vm.output)
             vm.send(f"fg {started[1]}\n")
             vm.expect(f"FOREGROUND PID={started[1]}")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\x00\xff\xff", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\x00\xff\xff")
+            assert seen == b"\x00\xff\xff", (name, seen)
             vm.serial()  # the screenshot switched the console to the QEMU monitor
             vm.send(" \n")
-            time.sleep(.3)
-            assert center_pixel(vm) == b"\xff\x00\x00", (name, center_pixel(vm))
+            seen = center_pixel_soon(vm, b"\xff\x00\x00")
+            assert seen == b"\xff\x00\x00", (name, seen)
         finally:
             vm.close()
     print("PASS: cyan and red reach the screen unchanged on VGA std, virtio-vga and ramfb; the compositor logs the screen and the one in front", flush=True)
@@ -7854,9 +7932,10 @@ def clock_suite(args, disk):
         time.sleep(10)  # past the measures at 1 s and 8 s
 
         def clocks():
-            before = time.time()
+            # Compare elapsed clocks; host realtime can jump independently of both monotonic clocks.
+            before = time.monotonic_ns()
             line = vm.command("time", raw=True)
-            return (before + time.time()) / 2, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
+            return (before + time.monotonic_ns()) / 2e9, int(re.search(r"MONOTONIC NS=(\d+)", line)[1]) / 1e9, int(re.search(r"TSC HZ=(\d+)", line)[1]) // 1_000_000
         host0, guest0, measured = clocks()
         # Measured again below the first: 9% less where the first window was right, more or less where the host
         # stretched it too (i9: 4043 -> 3639 MHz).
@@ -7869,6 +7948,45 @@ def clock_suite(args, disk):
         vm.close()
     print(f"PASS: the TSC measured 9% high at boot is measured again on the PM timer ({was} -> {measured} MHz); "
           f"over 30 s the guest's clock kept the host's ({ratio:.3f})", flush=True)
+
+def watchdog_suite(args, disk):
+    """000-KRN-0076, with the test kernel `watchdog-test`, which stops every CPU for good 20 s after the machine's first
+    boot. On q35 the kernel arms the ICH9's TCO timer and feeds it from the boot CPU's tick: the chipset resets the frozen
+    machine at its second expiry, 30 s on, and the next boot says so. init finds the mark the stopped run left in a
+    firmware variable and starts safely, without radios, cameras and sound; it clears the mark a minute after READY, and
+    the boot after a reboot is a normal one."""
+    armed = "MIND CORE KERNEL: WATCHDOG: INTEL TCO, A RESET AFTER 30 S WITHOUT THE BOOT CPU'S TICK"
+    safe = "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), reboot=True, prompt=False, extra=("-machine", "q35"))
+    try:
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND CORE KERNEL: WATCHDOG TEST: EVERY CPU STOPPED FOR GOOD", timeout=120)
+        frozen = time.monotonic()
+        vm.expect(armed + "; IT RESTARTED THE LAST RUN", timeout=180)
+        took = time.monotonic() - frozen
+        vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        require(log, safe + " (A FREEZE, A RESET OR A CUT POWER); NOT STARTED: bcm_wifi, video_gw, audio_gw, tts")
+        assert "STARTED audio_gw" not in log and "STARTED tts" not in log, log[-2000:]
+        deadline = time.monotonic() + 150
+        while "[INIT] A MINUTE PAST READY: THE RUN'S MARK CLEARED" not in log:
+            assert time.monotonic() < deadline, log[-2000:]
+            time.sleep(5)
+            log = vm.command("dmesg -s init", raw=True)
+        uptime = int(re.search(r"MONOTONIC NS=(\d+)", vm.command("time", raw=True))[1]) / 1e9
+        assert uptime > 25, uptime
+        vm.send("reboot\n")
+        vm.expect(armed + "\n", timeout=90)
+        vm.expect("MIND> ", timeout=120)
+        log = vm.command("dmesg -s init", raw=True)
+        assert safe not in log and "STARTED audio_gw" in log, log[-2000:]
+    finally:
+        vm.close()
+    # The reset came from the watchdog: not before its 30 s, and the firmware booted the image again.
+    assert took > 25, took
+    print(f"PASS: watchdog: every CPU stopped, the chipset's TCO timer reset the machine and the next boot said so "
+          f"({took:.0f} s from the stop to the next kernel's line); that boot was a safe start (no radios, cameras, "
+          f"sound or speech), ran past {uptime:.0f} s and cleared its mark; the boot after a reboot was a normal one", flush=True)
 
 def no_serial_check(args, disk):
     """213-KRN-0098: a PC with no COM1 (no 16550 at 3F8: its ports read all ones, "a byte is ready" for ever) still shows
@@ -8294,6 +8412,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--panic-kernel", help="test-only kernel built with --features panic-test (boot suite)")
     parser.add_argument("--abi-kernel", help="test-only kernel built with --features abi-test (boot suite, issue 172)")
     parser.add_argument("--loader-abi-kernel", help="test-only kernel built with --features loader-abi-test (boot suite, 211-KRN-0012)")
@@ -8317,6 +8436,10 @@ def main():
         fixture = ROOT / IMAGE / "fixture-updater.elf"
         args.updater_elf = args.updater_elf or (str(fixture) if fixture.exists() else None)
     args.qemu, args.cpus = args.qemu or "qemu-system-x86_64", args.cpus or 4
+    # The stand-in radio where the fixture scripts build it (550-KRN-0097): aarch64 beside the image, x86 in MIND_TEST_OUT.
+    radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
+        Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
+    args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
     if args.disk == "nvme":
         BOOT_DRIVE, BOOT_DRIVER = "NVME", "nvme"
     if args.kernel:
@@ -8453,6 +8576,9 @@ def main():
                 continue
             if suite == "clock":
                 clock_suite(args, disk)
+                continue
+            if suite == "watchdog":
+                watchdog_suite(args, disk)
                 continue
             if suite == "net":
                 net_suite(args, disk)

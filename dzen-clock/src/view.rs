@@ -1,6 +1,6 @@
 use crate::{
     abi::BootInfo,
-    cycle::{point_at, OrbitMode},
+    cycle::{hour_sector_at, point_at, OrbitMode},
     face::{Face, OFF},
     font::FONT,
 };
@@ -22,12 +22,14 @@ pub struct View {
     y: usize,
     half: usize,
     radius: usize,
+    face: Face,
+    mode: OrbitMode,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::{ProgramImage, BOOT_IMAGES, PIXEL_BGR};
+    use crate::abi::{ProgramImage, BOOT_IMAGES, BOOT_PREFIX_IMAGES, PIXEL_BGR};
 
     // A framebuffer of `width` × `height` at the start of `pixels`.
     fn framebuffer(pixels: &mut [u32], width: usize, height: usize) -> BootInfo {
@@ -39,7 +41,7 @@ mod tests {
             programs: [ProgramImage {
                 data: core::ptr::null(),
                 len: 0,
-            }; BOOT_IMAGES],
+            }; BOOT_PREFIX_IMAGES],
             heap_ptr: core::ptr::null_mut(),
             heap_len: 0,
             ap_trampoline: 0,
@@ -58,14 +60,41 @@ mod tests {
             efi_runtime: 0,
             device_tree: 0,
             photo_pause_s: 0,
+            extra_programs: [ProgramImage { data: core::ptr::null(), len: 0 }; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
         }
+    }
+
+    #[test]
+    fn hour_sector_changes_and_hiding_leave_no_marker_trails() {
+        let mut pixels = std::vec![0u32; 640 * 480];
+        let info = framebuffer(&mut pixels, 640, 480);
+        let mut view = View::new(&info);
+        view.clear();
+        view.cycle(None, None, OrbitMode::Off, OrbitMode::Simple);
+        for seconds in [21599, 21600, 8 * 3600 + 20 * 60, 43200, 64800, 0] {
+            let face = Face::at(seconds).unwrap();
+            view.face(face);
+            let mut expected = std::vec![0u32; 640 * 480];
+            let mut fresh = View::new(&framebuffer(&mut expected, 640, 480));
+            fresh.clear();
+            fresh.face(face);
+            fresh.cycle(None, None, OrbitMode::Off, OrbitMode::Simple);
+            assert_eq!(pixels, expected, "old sector erased at {}", seconds);
+            let ((x, y), color) = hour_sector_at(face, view.half * 3 / 4 + (view.half / 24).max(2) + 2).unwrap();
+            assert_eq!(pixels[(view.y as isize + y) as usize * 640 + (view.x as isize + x) as usize], color);
+        }
+        view.cycle(None, None, OrbitMode::Simple, OrbitMode::Off);
+        let hidden = pixels.clone();
+        view.clear();
+        view.face(Face::at(0).unwrap());
+        assert_eq!(pixels, hidden, "hiding erases the sector marker too");
     }
 
     #[test]
     fn full_turn_restores_orbit_ticks_and_hiding_restores_background() {
         let mut pixels = std::vec![0u32; 640 * 480];
         let info = framebuffer(&mut pixels, 640, 480);
-        let view = View::new(&info);
+        let mut view = View::new(&info);
         view.clear();
         view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
         let background = pixels.clone();
@@ -113,7 +142,7 @@ mod tests {
         for (width, height) in [(400, 320), (1264, 752), (160, 96), (624, 736)] {
             let mut pixels = std::vec![GUARD; width * height + 4096];
             let info = framebuffer(&mut pixels, width, height);
-            let view = View::new(&info);
+            let mut view = View::new(&info);
             view.clear();
             view.face(Face::at(19 * 3600 + 35 * 60).unwrap());
             let lit: std::vec::Vec<usize> = (0..width * height).filter(|&i| pixels[i] != BACKGROUND).map(|i| i % width).collect();
@@ -138,6 +167,8 @@ impl View {
             y: (info.height / 2).saturating_sub(24),
             half,
             radius: (half / 3).max(1),
+            face: Face::DARK,
+            mode: OrbitMode::Off,
         }
     }
 
@@ -163,7 +194,7 @@ impl View {
     }
 
     pub fn cycle(
-        &self,
+        &mut self,
         previous: Option<(isize, isize)>,
         current: Option<(isize, isize)>,
         old_mode: OrbitMode,
@@ -173,12 +204,24 @@ impl View {
             self.dot(point, BACKGROUND);
         }
         if old_mode != mode {
+            self.hour_marker(true);
             self.orbit(old_mode, true);
         }
+        self.mode = mode;
         // Restore the thin orbit and any tick uncovered by the moving dot.
         self.orbit(mode, false);
         if let Some(point) = current {
             self.dot(point, CYCLE);
+        }
+        self.hour_marker(false);
+    }
+
+    fn hour_marker(&self, erase: bool) {
+        if self.mode == OrbitMode::Off { return; }
+        let start = self.half * 3 / 4 + (self.half / 24).max(2) + 2;
+        let end = start + (self.half / 16).max(2);
+        if let (Some((a, color)), Some((b, _))) = (hour_sector_at(self.face, start), hour_sector_at(self.face, end)) {
+            self.line(a, b, if erase { BACKGROUND } else { color });
         }
     }
 
@@ -307,7 +350,9 @@ impl View {
         }
     }
 
-    pub fn face(&self, face: Face) {
+    pub fn face(&mut self, face: Face) {
+        self.hour_marker(true);
+        self.face = face;
         let left = self.x.saturating_sub(self.half);
         let top = self.y.saturating_sub(self.half);
         self.circle(self.x + self.half, top, face.corners[0]);
@@ -315,6 +360,7 @@ impl View {
         self.circle(left, self.y + self.half, face.corners[2]);
         self.circle(left, top, face.corners[3]);
         self.circle(self.x, self.y, face.center);
+        self.hour_marker(false);
     }
 
     pub fn digital(&self, text: &[u8; 8], visible: bool) {
