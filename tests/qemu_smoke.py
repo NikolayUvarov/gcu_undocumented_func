@@ -5691,7 +5691,13 @@ def wifi_join_check(vm):
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
-    require(vm.command("ip"), "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
+    # The log holds the first join's lease too: ip is asked until this join's lease is there (DHCP is slow under TCG).
+    for _ in range(60):
+        shown = vm.command("ip")
+        if "IP 10.0.4.15/24" in shown:
+            break
+        time.sleep(1)
+    require(shown, "IP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1 (DHCP)")
     require(vm.command("wifiping ping:10.0.4.1"), "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
