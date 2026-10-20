@@ -32,7 +32,7 @@ use wm::menu::{self, Kind as ProgramKind};
 // SLOT_WIFI: a copy of the shell's client of the Wi-Fi station (shell.wit 1.5), passed on to wifi from Settings (550-APP-0033).
 // 64 MiB: the desktop background's frame and picture (000-APP-0047, 000-APP-0050), up to 4 MiB each, and a picture's
 // file of up to 32 MiB as it is decoded, beside the rest.
-mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY, memory: 64);
+mind::request!(REQUEST_WINDOW_MANAGER | REQUEST_FILES | REQUEST_SYSINFO | REQUEST_GPIO | REQUEST_CAMERA | REQUEST_SHELL | REQUEST_BATTERY | REQUEST_NET_COUNTERS, memory: 64);
 
 const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
@@ -181,6 +181,7 @@ fn start(command: &str, front: Option<u32>, pass: bool) -> Result<Started, Strin
     if requests & mind::process::REQUEST_CAMERA != 0 { if holds(SLOT_CAMERA) && grant(SLOT_CAMERA, SLOT_CAMERA) { lent.push("camera"); } else { missing.push("camera"); } }
     if requests & mind::process::REQUEST_BATTERY != 0 { if holds(SLOT_BATTERY) && grant(SLOT_BATTERY, SLOT_BATTERY) { lent.push("battery"); } else { missing.push("battery"); } }
     if requests & mind::process::REQUEST_WIFI != 0 { if holds(SLOT_WIFI) && grant(SLOT_WIFI, SLOT_WIFI) { lent.push("wifi"); } else { missing.push("wifi"); } }
+    if requests & mind::process::REQUEST_NET_COUNTERS != 0 { if holds(SLOT_NET) && grant(SLOT_NET, SLOT_NET) { lent.push("net-counters"); } else { missing.push("net-counters"); } }
     // Not the screen: a read-only lease of the window in front, nothing else of it.
     let mut window = None;
     if let Some(id) = front.filter(|_| pass || display) {
@@ -550,6 +551,8 @@ fn main(info: &'static BootInfo) {
     // Where the pointer was drawn last, and its size then.
     let mut shown_pointer: Option<(usize, usize, (usize, usize))> = None;
     let (mut free, mut total): (Option<u64>, Option<u64>) = (None, None); // the free memory the background shows
+    // The card's counters as last read, and the traffic's line made from the two last samples (000-APP-0049).
+    let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
     let has_battery = holds(SLOT_BATTERY);
     let mut next_battery = 0;
     let mut buttons = 0u8;
@@ -735,12 +738,25 @@ fn main(info: &'static BootInfo) {
                 }
                 // The frame pool's free memory (000-APP-0064), without the search for the arena's largest block.
                 // The pool's size too, for the memory gauge of the analog face (000-APP-0069).
+                // The card's traffic, through its read-only client the shell lent (BADGE_COUNTERS, 000-APP-0049).
+                if backdrop.config.net && holds(SLOT_NET) {
+                    match mind::idl::net::counters(Endpoint(SLOT_NET)) {
+                        Ok(c) => {
+                            let sample = (c.sent, c.received, now as u64);
+                            let line = net_sample.map_or_else(|| String::from("NET IN - OUT -"), |before| wm::background::net_line(before, sample));
+                            // The first rate in the log, for the suites: the background's pixels are not text.
+                            if net_sample.is_some() && !net_logged { net_logged = true; mind::println!("[WM] {} (THE CARD'S COUNTERS, THE FIRST RATE)", line); }
+                            (net_sample, net_text) = (Some(sample), Some(line));
+                        }
+                        Err(_) => (net_sample, net_text) = (None, None),
+                    }
+                }
                 if backdrop.config.memory {
                     let pool = mind::idl::sysinfo::pool(Endpoint::SYSINFO).ok().and_then(|r| r.ok());
                     (free, total) = (pool.as_ref().map(|p| p.frames_free), pool.as_ref().map(|p| p.frames));
                 }
             }
-            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: None };
+            let info = Info { seconds: clock.seconds_since_midnight(), date: clock.date(), cpu: &[], free, total, battery: manager.wm.battery, net: net_text.as_deref() };
             backdrop.render(&info, &|ch| *mind::font16::glyph(ch));
             background_moved = true;
             frame_began = Some(now);

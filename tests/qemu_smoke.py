@@ -5823,6 +5823,9 @@ def net_suite(args, disk):
         for name, text in (("wifijoin", "MIND-TEST\nmind test passphrase\n"), ("wifibad", "MIND-TEST\nnot the passphrase\n"), ("wifiother", "Home\nmind test passphrase\n")):
             (disk / "data" / f"{name}.txt").write_text(text)
         sign_manifest.sign_volume(disk)
+    # 000-APP-0049: wm's background shows the card's traffic.
+    (disk / "data").mkdir(exist_ok=True)
+    (disk / "data/wm.conf").write_text("show = net\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
         log = vm.service_logs("virtio_net", "[VIRTIO_NET] MAC=")
@@ -5842,6 +5845,12 @@ def net_suite(args, disk):
         else:
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
+        # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
+        # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
+        vm.send("wm\n")
+        require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+        vm.expect("RESUMED.", timeout=30)
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")

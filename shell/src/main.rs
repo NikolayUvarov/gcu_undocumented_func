@@ -596,6 +596,9 @@ impl Shell {
         // The Wi-Fi station's configuration client (550-APP-0033, ABI 10), held while a radio runs: starting `wifi` is the
         // user's request to choose a network.
         let wifi = requests & mind::process::REQUEST_WIFI != 0 && mind::dev::cap_info(SLOT_WIFI).0 != 0 && granted("wifi");
+        // A network card's counters (000-APP-0049, ABI 10): a copy of the shell's card client with BADGE_COUNTERS, which
+        // only reads the card; it reaches nothing on the network, so a script's `network` covers it.
+        let counters = requests & mind::process::REQUEST_NET_COUNTERS != 0 && mind::dev::cap_info(SLOT_NET).0 != 0 && granted("network");
         let (needs, authority, window_manager, display) = (loader::Needs { sysinfo: needs.sysinfo && granted("sysinfo"), file: needs.file && (granted("file") || granted("files")),
             lifecycle: needs.lifecycle && granted("lifecycle"), log: needs.log && granted("log"), files: needs.files && granted("files"), ..needs },
             authority && granted("authority"), window_manager && granted("window-manager"), display && granted("display"));
@@ -650,6 +653,13 @@ impl Shell {
             let copy = if badge != 0 { mind::ipc::mint_badged(slot, CAP_WRITE | CAP_GRANT, badge) } else { mind::ipc::mint(slot, CAP_WRITE | CAP_GRANT, 0, 0) };
             let lent = copy.map(|copy| { let lent = lend(slot, copy); let _ = mind::ipc::drop_cap(copy); lent }); // the loader holds its copy
             if let Ok(Ok(Err(error))) | Ok(Err(error)) | Err(error) = lent { let _ = loader::abort(Endpoint::LOADER, session); return Err(error); }
+        }
+        if counters {
+            // Without room for the copy the program runs without it, and says so.
+            if let Ok(copy) = mind::ipc::mint_badged(SLOT_NET, CAP_WRITE | CAP_GRANT, mind::network::BADGE_COUNTERS) {
+                let _ = lend(SLOT_NET, copy);
+                let _ = mind::ipc::drop_cap(copy); // the loader holds its copy
+            }
         }
         // Last, and not needed to start: a launch session holds 5 grants (requests-KRN.md); without it the program
         // runs, as from a console.

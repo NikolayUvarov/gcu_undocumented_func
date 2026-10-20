@@ -625,6 +625,14 @@ fn analog(frame: &mut [u32], width: usize, height: usize, (x, mut y): (usize, us
     }
 }
 
+/// A card's traffic between two samples of its counters (frames sent, frames received, ms) as the background's line
+/// (000-APP-0049): `NET IN 30/S OUT 12/S`, thousands as `K` from 10 000 a second.
+pub fn net_line(before: (u64, u64, u64), after: (u64, u64, u64)) -> String {
+    let ms = after.2.saturating_sub(before.2).max(1);
+    let rate = |was: u64, now: u64| { let r = now.saturating_sub(was) * 1000 / ms; if r >= 10_000 { format!("{}K", r / 1000) } else { format!("{}", r) } };
+    format!("NET IN {}/S OUT {}/S", rate(before.1, after.1), rate(before.0, after.0))
+}
+
 /// Draws the information `config` asks for over `frame`, at its place: one column, each line from the block's left edge
 /// (000-APP-0064).
 #[allow(clippy::too_many_arguments)]

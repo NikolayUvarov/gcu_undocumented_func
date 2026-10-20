@@ -2026,3 +2026,13 @@ fn the_background_by_runs_is_the_background_by_pixels() {
         }
     }
 }
+
+// 000-APP-0049: the traffic's line from two samples of a card's counters (frames sent, received, ms).
+#[test]
+fn the_traffic_is_the_frames_a_second_between_two_samples() {
+    assert_eq!(background::net_line((100, 200, 1_000), (112, 260, 3_000)), "NET IN 30/S OUT 6/S");
+    assert_eq!(background::net_line((0, 0, 0), (0, 25_000, 1_000)), "NET IN 25K/S OUT 0/S");
+    // A restarted driver counts from 0 again: no negative rate; the same instant counts as a millisecond.
+    assert_eq!(background::net_line((500, 500, 10), (3, 4, 10)), "NET IN 0/S OUT 0/S");
+    assert!(background::net_line((0, 0, 0), (9_999_000, 9_999_000, 1_000)).len() <= 26);
+}
