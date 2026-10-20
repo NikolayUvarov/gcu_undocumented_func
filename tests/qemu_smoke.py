@@ -2763,17 +2763,8 @@ def dzen_suite(vm):
                  for py in range(y - half, y + half + 1)
                  for px in range(x - half, x + half + 1)
                  if (radius + 6) ** 2 <= (px - x) ** 2 + (py - y) ** 2 <= (half - radius // 3) ** 2}
-        # At 19:35 the separate hour-sector marker is a short yellow diagonal outside the orbit, toward top right.
-        sector = {point for point, color in orbit.items() if color == b"\xff\xff\x00"}
-        if mode != "off":
-            assert max(half // 24, 2) <= len(sector) <= max(half // 16, 2), "a short hour-sector marker must be visible"
-            assert all(px > 0 and py == -px and (half * .78) ** 2 <= px * px + py * py <= (half * .90) ** 2
-                       for px, py in sector), "the yellow marker must point top right, outside the cycle orbit"
-            assert {px for px, _ in sector} == set(range(min(px for px, _ in sector), max(px for px, _ in sector) + 1)), "hour-sector marker must be continuous"
-        else:
-            assert not sector, "hiding the orbit must erase its hour-sector marker"
         assert all(p in (b"\x08\x0c\x12", b"\x80\x80\x80", b"\x18\x18\x18", b"\x28\x28\x28",
-                         b"\x60\x60\x60", b"\x40\x40\x40") for point, p in orbit.items() if point not in sector)
+                         b"\x60\x60\x60", b"\x40\x40\x40") for p in orbit.values())
         mark = {point for point, color in orbit.items() if color == b"\x80\x80\x80"}
         if mode != "off":
             diameter = max(half // 24, 2)
@@ -2786,12 +2777,13 @@ def dzen_suite(vm):
             assert other_color not in orbit.values(), "switching modes must restore the correct orbit brightness"
             reference = {point for point, color in orbit.items() if color == b"\x60\x60\x60"}
             assert len(reference) >= 6, "start reference tick must remain"
-            assert all(px > 0 and py > 0 and abs(px - py) <= 1 for px, py in reference), "cycle starts toward bottom right"
+            # 000-APP-0080: zero seconds point at the active hour's corner, the top right (yellow) at 19:35, in grey.
+            assert all(px > 0 and py < 0 and abs(px + py) <= 1 for px, py in reference), "cycle starts toward the hour's corner"
             small_ticks = sum(p == b"\x40\x40\x40" for p in orbit.values())
             if mode == "ticks":
                 assert small_ticks >= 35, "nine short 10-second ticks must be visible"
                 for index in range(1, 10):
-                    angle = 3 * math.pi / 4 + index * math.tau / 10
+                    angle = math.pi / 4 + index * math.tau / 10  # from the hour's corner, the top right
                     tx, ty = int(math.sin(angle) * half * 3 / 4), -int(math.cos(angle) * half * 3 / 4)
                     assert any(orbit.get((tx + dx, ty + dy)) in (b"\x40\x40\x40", b"\x80\x80\x80")
                                for dy in range(-2, 3) for dx in range(-2, 3)), index
@@ -2924,7 +2916,7 @@ def dzen_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     assert heap_used(vm) == baseline
     assert "FAULT PID=" not in vm.command("faults")
-    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; separate yellow top-right hour sector, bottom-right start and 10s ticks; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
+    print("PASS: dzen-clock colors; small clockwise dot; darker C orbit; the grey zero tick and 10s ticks from the hour's top-right corner; UART/PS2 C/P/D/H; clean title/hint toggle; mode switching and erasure; independent instances; fg/exit/reclaim; the text faces of dzen-clock (T switches faces) and clock", flush=True)
 
 
 def files_check(vm, pid):
