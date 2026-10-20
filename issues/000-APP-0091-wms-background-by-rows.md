@@ -1,6 +1,6 @@
 # 000-APP-0091 — `wm`'s moving background drawn by rows, paced to a deadline
 
-**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** in progress (on the tools branch, 2026-10-20; the gate and the MacBook Pro left) · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
+**Type:** tools (`wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the MacBook Pro with 000-KRN-0081 left · **Blocked by:** — · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-12.1
 
 **Recorded by:** the kernel track (KRN), 2026-10-11, in `requests-APP.md`, at the maintainer's request: "the moving background jerks when the bright screen is on, and redrawing is slow". The kernel's part is [000-KRN-0081](000-KRN-0081-the-framebuffer-written-combined.md). Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -39,7 +39,8 @@ So `wm` runs at about 5–11 frames a second, unevenly.
 - **Host test:** `tests/wm_host.rs`, `the_background_by_runs_is_the_background_by_pixels`: units 1 to 5, a frame narrower than the screen, rectangles that start and end inside blocks, each pixel painted once and as `pixel` gives it.
 - **The `wm` suite** reads the frame line after the aurora pattern at speed 20.
 - **Not done:** the cheaper pattern (per-column and per-row terms, no square root), a finer phase, and skipping cells whose colour did not change. They change what the pattern draws, so they wait for the MacBook Pro's frame time with this step: if it is even at full contrast, they are not needed.
-- **Left:** the gate on this batch; the MacBook Pro with 000-KRN-0081.
+- **In `main`** since 835c31c8 (2026-10-20). The gate: every x86 group on i9 and every aarch64 group on un-rizen-service (Effector); the host tests, TLC and the x86 groups boot, services, scheduling, files and keys locally. The batch's later commits changed only the suites, and each group ran on a commit that has the suites it runs. The `wm` suite's frame line was read in the keys, shell and tools group locally.
+- **Left:** the MacBook Pro with 000-KRN-0081.
 
 ## Related
 
