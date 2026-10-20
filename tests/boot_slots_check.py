@@ -41,11 +41,14 @@ def fsck(image):
 def quiet_volume(volume, out, updater=None):
     """A copy of the volume without keystore, which stores a new device key at the first boot: a boot stopped in that
     write would leave the file system torn, and the checks stop boots early. With `updater`, the stand-in as
-    `updater.elf`. Signed again."""
+    `updater.elf`; without, no updater: it confirms a trial on the disk as soon as init has (351-UPD-0021), and here
+    the host writes the records. Signed again."""
     shutil.copytree(volume, out)
     (out / "keystore.elf").unlink(missing_ok=True)
     if updater:
         shutil.copyfile(updater, out / "updater.elf")
+    else:
+        (out / "updater.elf").unlink(missing_ok=True)
     sign_manifest.sign_volume(out)
     return out
 
@@ -70,11 +73,7 @@ def run(boot, temp, volume, label, updater=None):
     # A trial of B with one try: it runs on trial, its try counted on the other record first; confirmed, it stays.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
-    # Its try is counted on the disk first. A real updater (no stand-in given) then confirms it as soon as init has
-    # (351-UPD-0021), in the other record.
-    counted = {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}
-    found = boot_slots.records(image.path)
-    assert counted in found and newer()[1] in (counted, {**counted, "sequence": counted["sequence"] + 1, "confirmed": True}), found
+    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
     booted("B", "SLOT B, CONFIRMED", zone, until=zone)
