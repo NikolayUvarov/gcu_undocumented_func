@@ -1,6 +1,6 @@
 # 109-UPD-0017 — The updater's checks in a parser of their own
 
-**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (built; its check waits for `init`'s loader client) · **Blocked by:** `KRN` for a loader client that only starts helpers ([requests-KRN.md](requests-KRN.md), "A loader client for the updater's parsers") · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-NET-0010](109-NET-0010-a-parser-per-session.md) · **Roadmap:** track C, D · **Constitution:** MC-11.11, Appendix B.6
+**Type:** update (service) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (built; the check waits for the loader) · **Blocked by:** `KRN`: the loader starts no helper on a disk with boot slots ([requests-KRN.md](requests-KRN.md), 2026-10-20); `init`'s helpers-only client ([109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md)) is in `main` · **Main task:** [109](../issues-done/109-session-parsers.done), for [109-NET-0010](109-NET-0010-a-parser-per-session.md) · **Roadmap:** track C, D · **Constitution:** MC-11.11, Appendix B.6
 
 From the request "The updater's checks in a parser of their own" in requests-UPD.md (recorded by the kernel track, 2026-10-12).
 
@@ -24,6 +24,13 @@ The `update` suite's check runs its parsing in a helper that holds only its endp
 ## Progress (2026-10-14)
 
 Built for x86_64 and aarch64 (`updater/src/main.rs`, `updater/src/source.rs`). The QEMU check waits for `init`'s loader client.
+
+## Progress (2026-10-20)
+
+- `init` lends the updater the helpers-only loader client in `SLOT_LOADER` since `main` 1b1436a ([109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md)).
+- **The check, written and run locally (x86).** The test release server holds the next check's request for the channel (`scripts/serve_release.py` `holds`, at most 10 s, under the updater's 15 s without progress). Meanwhile exactly one `parse` beside the shared service should run, holding one capability, an endpoint in slot 1 (`stat caps`), and it should be gone with the check.
+- **It failed:** only the shared `parse` ran. The updater now logs why a check falls back (`[UPDATER] PARSER: THE SHARED SERVICE (...)`), and the reason is `Loader(NotFound)` at every check. The suite boots a disk with boot slots, where `parse.elf` is only in `MIND/A/`, and the loader looks for it at the root. That is the kernel track's code, so it went to [requests-KRN.md](requests-KRN.md) ("The loader starts no helper on a disk with boot slots"), with `download`'s parser (109-NET-0010), which falls back the same way there.
+- **The check is out of the suite** until the loader starts helpers there; it comes back with that change. The `holds` hook stays in `scripts/serve_release.py`, unused for now.
 
 ## Related
 

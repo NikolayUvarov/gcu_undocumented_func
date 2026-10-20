@@ -12,6 +12,8 @@ for fixture in busy_app isolation_app heap_app block_app; do
 done
 (cd tests/updater_stub && cargo build --release --target-dir "$OUT/mind-updater-target")
 (cd tests/wlansim && cargo build --release --target-dir "$OUT/mind-wlansim-target") # the stand-in radio (550-NET-0018)
+(cd virtio_net && cargo build --release --features late-attach --target-dir "$OUT/mind-late-attach-target") # 000-NET-0036
+(cd tests/wlansim && cargo build --release --features slow --target-dir "$OUT/mind-wlansim-slow-target") # 550-NET-0030
 for variant in panic:panic abi:abi loader-abi:loader-abi trial:trial x2apic:x2apic bar-move:bar xsave-pad:xsave-pad protection:protection tsc-skew:tsc-skew watchdog:watchdog; do
     (cd kernel && cargo build --release --features "${variant%%:*}-test" --target-dir "$OUT/mind-${variant#*:}-target")
 done

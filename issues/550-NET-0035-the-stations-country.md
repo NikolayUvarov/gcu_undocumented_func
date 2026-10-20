@@ -4,7 +4,7 @@
 
 From the request "Wi-Fi country selection from the complete verified regulatory catalog" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16, at the maintainer's request). `APP`'s side is [550-APP-0082](550-APP-0082-wifi-country-selector.md), the RTL8852BE catalogue 213-DRV-0032 (ASTRA).
 
-Numbered 0035, after [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
+Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
 
 ## Problem
 
