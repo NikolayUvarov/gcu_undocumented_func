@@ -46,6 +46,19 @@ On the MacBook Pro, `wlan` (or, until it exists, a test client) sets a channel, 
   - **Without the endpoint** nothing changes: the core stays in reset unless the test is asked for.
 - **Still needed: `init`'s part** (requests-KRN.md, "The Wi-Fi station in the boot services", 550-KRN-0097): `bcm_wifi`'s service endpoint, lent to `wlan` alone.
 - **On the MacBook Pro the station can join only at CCK rates for now:** OFDM reception is weak ([550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md)).
+- **2026-10-20: the transmit-status wait bounded on every path** (ASTRA's audit H12, `issues-audit/2026-10-16-bcm-tx-wait-audit.md`, taken from `requests-DRV.md`).
+  - `bcm_wifi/src/txwait.rs` holds the wait as plain logic. The deadline (100 ms) is checked before every entry the status FIFO gives, so no stream of intermediate or other frames' statuses outlasts it, and a status read after the deadline does not count.
+  - A frame's cookie carries a generation beside its slot, so a late status of a slot's earlier frame never answers for the next.
+  - A slot is reused only once the DMA engine's current descriptor has left it (one slot kept free). With no room, `send` answers `busy`: a missing status is not taken as completion.
+  - `tests/bcm_txwait_host.rs` drives the production logic: a stream of other statuses, none, a match before and after the deadline, a gone chip, the cookies, the ring's room. The earlier loop fails two of its seven tests.
+  - The MacBook Pro's ping-under-load run is apart from this: the finding is not established as the cause of the reported loss.
+- **2026-10-20: `wlanhw` 1.2, `set-country` (550-NET-0035, `NET`'s 4c53d3bc).** The interface, its bindings and `wlansim`'s side are taken from `NET`'s commit, without the rest of `NET`'s branch.
+  - **`bcm_wifi` checks the limits:** a two-letter capital code, and each channel once and one of its own (1 to 13), else `invalid`.
+  - **Then it keeps to them:** `info` and the answer list only the allowed channels. `set-channel` elsewhere answers `invalid`, and the radio leaves a channel that is no longer allowed for the first allowed one. `send` answers `invalid` on a channel outside the limits, and for a probe request where the station may only listen.
+  - **Until limits are first set,** 1.1's ways hold, as in `wlansim`: the station of stage A sets none.
+  - **EIRP is not applied:** the transmit gain is fixed (entry 40) and not calibrated in dBm, and the log says so when a country is set. Applying it waits for [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md).
+  - **Not exercised:** no station calls `set-country` yet, so it has run on no machine.
+  - **The busy path** (during the test) answers `busy`, and the radio-less path `no-device`.
 
 ## Related
 

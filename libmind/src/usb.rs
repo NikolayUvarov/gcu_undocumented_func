@@ -12,6 +12,18 @@ pub const BADGE_STORAGE: u16 = 2;
 pub const BADGE_VIDEO: u16 = 3;
 /// The interface class a badge allows (HID 3, mass storage 8, video 0x0E).
 pub fn class_of(badge: u16) -> Option<u8> { match badge { BADGE_HID => Some(3), BADGE_STORAGE => Some(8), BADGE_VIDEO => Some(0x0E), _ => None } }
+/// USB-serial converters (800-LNK-0002): the vendor-specific interface (class 0xFF) of a chip `SERIAL_DEVICES` names.
+pub const BADGE_SERIAL: u16 = 4;
+/// The converters `usb_serial` drives, by vendor and product ID: the FTDI FT232R and the WCH CH340.
+pub const SERIAL_DEVICES: [(u16, u16); 2] = [(0x0403, 0x6001), (0x1A86, 0x7523)];
+pub fn is_serial(vendor: u16, product: u16) -> bool { SERIAL_DEVICES.contains(&(vendor, product)) }
+/// Whether `badge` names a class driver at all.
+pub fn known(badge: u16) -> bool { badge == BADGE_SERIAL || class_of(badge).is_some() }
+/// Whether the client with `badge` may claim interface `info`: its class, or for a converter its chip.
+pub fn claims(badge: u16, info: &Interface) -> bool {
+    if badge == BADGE_SERIAL { return info.class == 0xFF && is_serial(info.vendor, info.product); }
+    class_of(badge) == Some(info.class)
+}
 
 /// The client's buffer: control data and descriptions at its start, bulk data anywhere in it.
 pub const BUFFER: usize = 68 * 1024;

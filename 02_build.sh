@@ -166,6 +166,9 @@ declare -A SEEN=()
         SEEN[$crate_dir]=1
         printf '%s\t%s\t%s\n' "$crate_dir" "$BUILD_SCRIPT_DIR/$crate_dir" "cargo build --release"
     done
+    # Built every time, not put on the disk: a program the loader does not count as a boot service is an application,
+    # and these two are services init is to start (800-LNK-0002, 0003; BOOT_SERVICES is the kernel track's).
+    for crate_dir in usb_serial link; do printf '%s\t%s\t%s\n' "$crate_dir" "$BUILD_SCRIPT_DIR/$crate_dir" "cargo build --release"; done
 } | run_jobs "$JOB_LOGS" "$JOBS"
 
 echo ">>> [2/2] Staging EFI/ELF files..."

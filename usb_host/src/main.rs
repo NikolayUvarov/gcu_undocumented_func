@@ -16,7 +16,7 @@ use mind::idl::{usb, wire};
 use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 use mind::sys::{Error, Result};
-use mind::usb::{class_of, EndpointInfo, Interface, BULK_MAX, CONTROL_MAX, MAX_ENDPOINTS};
+use mind::usb::{claims, known, EndpointInfo, Interface, BULK_MAX, CONTROL_MAX, MAX_ENDPOINTS};
 use xhci::{Ring, Xhci, DATA, EP_BULK_IN, EP_BULK_OUT, EP_CONTROL, EP_INTERRUPT_IN, EP_INTERRUPT_OUT, IOC, ISP, SMALL, STALL, TYPE_NORMAL};
 
 const RECEIVED_CAP: usize = 9;
@@ -41,7 +41,7 @@ struct Device {
     interfaces: [Iface; MAX_INTERFACES], count: usize,
 }
 
-struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 4], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
+struct Host { xhci: Xhci, devices: [Option<Device>; MAX_DEVICES], generation: u16, buffers: [Option<Mapping>; 5], root_failed: u64, scanned: u64, step: &'static str, root_tries: [u8; 64], ehci: &'static mut [Option<ehci::Bus>; 2] }
 
 // The EHCI buses live in static memory: a service has no heap, and its 64 KiB stack holds the xHCI host already.
 static mut EHCI_BUSES: [Option<ehci::Bus>; 2] = [const { None }; 2];
@@ -173,15 +173,19 @@ impl Host {
             let descriptor: [u8; 9] = self.small(9).try_into().ok()?;
             Some((descriptor[2].min(15), ((descriptor[3] >> 5) & 3) as u8, descriptor[5] as u64 * 2))
         };
-        // The endpoints of the interfaces a class driver serves (and a hub's status endpoint), in one Configure Endpoint.
-        let wanted = |class: u8| SERVED.contains(&class) || (class == CLASS_HUB && hub.is_some());
+        // The endpoints of the interfaces a class driver serves, a USB-serial converter's included (800-DRV-0034), and a
+        // hub's status endpoint, in one Configure Endpoint.
+        let wanted = |info: &Interface| SERVED.contains(&info.class) || claims(mind::usb::BADGE_SERIAL, info) || (info.class == CLASS_HUB && hub.is_some());
         let mut planned = [(0u8, 0u32, 0u16, 0u8); MAX_RINGS];
         let (mut add, mut entries, mut rings, mut ring_count, mut status) = (1u32, 1u32, [(0u8, Ring::default()); MAX_RINGS], 0, None);
-        for iface in interfaces[..count].iter().filter(|i| wanted(i.info.class)) {
+        for iface in interfaces[..count].iter().filter(|i| wanted(&i.info)) {
             for endpoint in iface.info.endpoints() {
                 if !(endpoint.is_bulk() || endpoint.is_interrupt()) || ring_count == MAX_RINGS { continue; }
                 let (target, input) = (dci(endpoint.address), endpoint.is_in());
-                let Some(ring) = self.xhci.ring(endpoint.is_interrupt() && input) else { break };
+                // An interrupt IN ring keeps its report buffers in its own page; so does a converter's bulk IN ring, which
+                // `reports` polls the same way (800-DRV-0034).
+                let polled = input && (endpoint.is_interrupt() || endpoint.is_bulk() && claims(mind::usb::BADGE_SERIAL, &iface.info));
+                let Some(ring) = self.xhci.ring(polled) else { break };
                 let kind = match (endpoint.is_bulk(), input) { (true, false) => EP_BULK_OUT, (true, true) => EP_BULK_IN, (false, false) => EP_INTERRUPT_OUT, (false, true) => EP_INTERRUPT_IN };
                 // The interval as 2^n units of 125 µs: frames (1 ms) at full and low speed, an exponent above.
                 let interval = if !endpoint.is_interrupt() { 0 } else if device.speed >= 3 { endpoint.interval.clamp(1, 16) - 1 }
@@ -207,7 +211,7 @@ impl Host {
             for port in 1..=ports { let _ = self.control(index, 0x23, 3, 8, port as u16, 0); } // SET_FEATURE PORT_POWER
             mind::time::sleep(power.clamp(20, 500) as usize);
             // Every port is looked at once; after that only those the status endpoint reports (all, without one).
-            let armed = status.is_some_and(|(target, ring, packet)| self.xhci.arm(slot, target, ring, packet));
+            let armed = status.is_some_and(|(target, ring, packet)| self.xhci.arm(slot, target, ring, packet, false));
             if let Some(d) = self.devices[index].as_mut() { d.hub_ports = ports; d.pending = 0xFFFE; d.status = if armed { status.map_or(0, |s| s.0) } else { 0 }; }
         }
         Some(())
@@ -315,11 +319,11 @@ impl Host {
     }
 
     fn claim(&mut self, badge: u16) -> Result<u32> {
-        let class = class_of(badge).ok_or(Error::Rights)?;
+        if !known(badge) { return Err(Error::Rights); }
         self.buffer(badge).map_err(|_| Error::Invalid)?; // no buffer: this instance is new to the client
         for index in 0..MAX_DEVICES {
             let Some(device) = self.devices[index].as_mut() else { continue };
-            let Some(iface) = (0..device.count).find(|&i| device.interfaces[i].info.class == class && device.interfaces[i].owner == 0) else { continue };
+            let Some(iface) = (0..device.count).find(|&i| claims(badge, &device.interfaces[i].info) && device.interfaces[i].owner == 0) else { continue };
             device.interfaces[iface].owner = badge;
             let (info, generation) = (device.interfaces[iface].info, device.generation);
             info.encode(self.buffer(badge)?);
@@ -329,7 +333,7 @@ impl Host {
             let Some(bus) = self.ehci[b].as_mut() else { continue };
             for index in 0..bus.devices.len() {
                 let Some(device) = bus.devices[index].as_mut() else { continue };
-                let Some(iface) = (0..device.count).find(|&i| device.interfaces[i].info.class == class && device.interfaces[i].owner == 0) else { continue };
+                let Some(iface) = (0..device.count).find(|&i| claims(badge, &device.interfaces[i].info) && device.interfaces[i].owner == 0) else { continue };
                 device.interfaces[iface].owner = badge;
                 let (info, generation) = (device.interfaces[iface].info, device.generation);
                 info.encode(self.buffer(badge)?);
@@ -384,6 +388,8 @@ impl Host {
         let (kind, recipient) = ((request_type >> 5) & 3, request_type & 0x1F);
         match (kind, recipient) {
             (0, 0) => request == 6 && request_type & 0x80 != 0, // GET_DESCRIPTOR from the device
+            // A USB-serial converter is set up by vendor requests to the device (800-LNK-0002); it has no other interface.
+            (2, 0) => mind::usb::is_serial(info.vendor, info.product),
             (0, 1) if request == 11 => false, // SET_INTERFACE: `select`, which knows the setting's endpoints
             (_, 1) => index as u8 == info.number,
             (_, 2) => info.endpoints().iter().any(|e| e.address == index as u8),
@@ -449,13 +455,15 @@ impl Host {
         if longest.is_some_and(|l| l == 0 || l as usize > 512) { return Err(Error::Invalid); }
         if let Some((b, _)) = ehci_device(handle) { return self.ehci_reports(b, badge, index, iface, address, longest); }
         let device = self.devices[index].ok_or(Error::NotFound)?;
-        let endpoint = device.interfaces[iface].info.endpoints().iter().copied().find(|e| e.address == address && e.is_interrupt() && e.is_in()).ok_or(Error::Invalid)?;
+        // An interrupt IN endpoint, or a full-speed bulk IN one, polled a packet at a time (usb.wit 1.3, 800-LNK-0002).
+        let endpoint = device.interfaces[iface].info.endpoints().iter().copied()
+            .find(|e| e.address == address && e.is_in() && (e.is_interrupt() || e.is_bulk() && e.packet <= 64)).ok_or(Error::Invalid)?;
         let target = dci(address);
         let armed = match self.xhci.armed(device.slot, target) {
             Some(armed) => armed,
             None => {
                 let ring = device.rings[..device.ring_count].iter().find(|r| r.0 == target).ok_or(Error::Invalid)?.1;
-                if !self.xhci.arm(device.slot, target, ring, endpoint.packet) { return Err(Error::NoMemory); }
+                if !self.xhci.arm(device.slot, target, ring, endpoint.packet, endpoint.is_bulk()) { return Err(Error::NoMemory); }
                 mind::println!("[USB] SLOT {} ENDPOINT {}: POLLED (PACKET {}, INTERVAL {})", device.slot, target, endpoint.packet, endpoint.interval);
                 self.xhci.armed(device.slot, target).ok_or(Error::NoMemory)?
             }
@@ -613,7 +621,7 @@ impl Host {
         let _ = match request {
             usb::Request::Attach { buffer } => {
                 // The earlier buffer goes first: its address may be the one the new mapping gets.
-                let result = if class_of(badge).is_none() { Err(Error::Rights) } else {
+                let result = if !known(badge) { Err(Error::Rights) } else {
                     drop(self.buffers[badge as usize].take());
                     self.release_all(badge); // a new buffer is a new client instance: the old one's interfaces are free
                     Mapping::new(buffer).and_then(|m| if m.len() < mind::usb::BUFFER { Err(Error::Invalid) } else { self.buffers[badge as usize] = Some(m); Ok(()) })
@@ -668,7 +676,7 @@ fn main(_info: &'static BootInfo) {
         };
         match ehci::Ehci::init(mmio, dma) { Ok(hc) => buses[nth] = Some(ehci::Bus::new(hc, nth as u8)), Err(why) => mind::println!("[USB] EHCI {}: {}", nth, why) }
     }
-    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
+    let mut host = Host { xhci, devices: [None; MAX_DEVICES], generation: 0, buffers: [None, None, None, None, None], root_failed: 0, scanned: 0, step: "", root_tries: [0; 64], ehci: buses };
     // Ports that come up a little later are found by the next scans.
     mind::time::sleep(50);
     host.scan();
