@@ -4,6 +4,12 @@
 //! `video_gw` (a camera's, 158) are its clients. A client's badge names the device class it may claim
 //! (`mind::usb::BADGE_HID`, `BADGE_STORAGE`, `BADGE_VIDEO`), so a class driver reaches only its own interfaces (MC-3.3).
 //! Data travel through the client's buffer, lent with `attach`.
+//!
+//! 1.3 (800-LNK-0002): `mind::usb::BADGE_SERIAL` names `usb_serial`, which claims the vendor-specific interface of a
+//! USB-serial converter by its vendor and product ID (`mind::usb::SERIAL_DEVICES`), and may send vendor requests to
+//! that device as a whole: such a converter has no other interface. `reports` and `reports-up-to` also take a bulk IN
+//! endpoint of up to 64-byte packets (on xHCI), which is then polled a packet at a time, as an interrupt one is: a
+//! converter's received bytes wait in `usb_host` for the client. The wire is unchanged.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -13,7 +19,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:usb";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted
@@ -68,7 +74,8 @@ pub fn bulk(endpoint: Endpoint, handle: u32, address: u8, offset: u32, length: u
 }
 
 /// The reports received on the interrupt IN endpoint with address `address` since the last call, written at the buffer's start as
-/// a length byte and the report each; returns their count. The first call starts polling the endpoint.
+/// a length byte and the report each; returns their count. The first call starts polling the endpoint. 1.3: or the
+/// packets received on a bulk IN endpoint of up to 64-byte packets, each as a report (xHCI only).
 pub fn reports(endpoint: Endpoint, handle: u32, address: u8) -> Result<u16> {
     let words = [6 | MAJOR << 8 | ((handle) as usize) << 16 | ((address) as usize) << 48, 0];
     let reply = wire::call(endpoint, words, None)?;
