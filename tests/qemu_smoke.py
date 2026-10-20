@@ -5488,7 +5488,7 @@ def download_check(args, disk):
             sftp_runs(vm, sftp)
         else:
             print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
-        download_runs(vm, release, port, big, small, cut)
+        download_runs(vm, release, port, big, small, cut, 5 + len(sftp_port))
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
@@ -5560,7 +5560,7 @@ def pinned_runs(vm, certificates, port, rogue_port, expired_port):
           "neither, a wrong name and an expired certificate refused", flush=True)
 
 
-def download_runs(vm, release, port, big, small, cut):
+def download_runs(vm, release, port, big, small, cut, rules):
     url = f"http://10.0.2.2:{port}"
     size = len(big)
 
@@ -5594,7 +5594,8 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 5 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, the held one and the stalling one
+    # The release servers over http, https and the untrusted one, the held one, the stalling one, and the SFTP server when there is one.
+    require(vm.command("dmesg -s netpolicy"), f"TO download: {rules} RULES, 3600 S, {64 << 20} BYTES")
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
@@ -5632,7 +5633,7 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
     require(run(f"download ram:x.bin {rogue}/small.bin", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
     # A pinned key is trusted whoever signed its certificate.
     require(run(f"download ram:rogue.bin {rogue}/small.bin --pin {pins['rogue']} --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
-    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// URLS")
+    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// AND sftp:// URLS")
     log = vm.command("dmesg -s tls")
     require(log, "10.0.2.2 REFUSED: NOT THE PINNED KEY"); require(log, "10.0.2.2 REFUSED: CERTIFICATE UnknownIssuer")
     require(vm.command("msh notls.msh"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")

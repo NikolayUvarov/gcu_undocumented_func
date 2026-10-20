@@ -1,6 +1,6 @@
 # 351-NET-0027 — The SSH service, and logins signed by the key service
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (the service and the key service's part built; `download` and the QEMU check wait for `KRN`) · **Blocked by:** `KRN` for starting the service, its slot and request flag ([requests-KRN.md](requests-KRN.md), "The SSH service in the boot services") · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** in progress (`download sftp://` and its QEMU check built; the gate waits for the shell's part in `main`) · **Blocked by:** `APP`'s [351-APP-0084](351-APP-0084-the-shell-lends-the-ssh-client.md), the shell lending the SSH client (on the tools branch and `fast-test`, not yet in `main`); `KRN`'s part is in `main` (351-KRN-0115) · **Main task:** [351](351-self-update.md) (phase 3), for [351-NET-0004](351-NET-0004-ssh-client.md) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-11.9, MC-11.11, MC-12.4, Appendix B.6
 
 The second part of [351-NET-0004](351-NET-0004-ssh-client.md): the protocol of [351-NET-0026](../issues-done/351-NET-0026-the-ssh-protocol.done) inside the system.
 
@@ -54,6 +54,18 @@ Built, for x86_64 and aarch64:
   - `KRN`: `init` starts `ssh` with `keystore`'s client badged `BADGE_KEY_SSH` in slot 4, and `SLOT_SSH` and `REQUEST_SSH` for the shell and programs (requests-KRN.md);
   - `APP`: the shell lends it (requests-APP.md);
   - this track: `download`'s `sftp://` through `SLOT_SSH`, and the `net` suite's check against OpenSSH's server on the host.
+
+## Progress (2026-10-20): `download sftp://`
+
+- **`init`** starts `ssh` with `keystore`'s client badged `BADGE_KEY_SSH`, and has `SLOT_SSH` and `REQUEST_SSH` (351-KRN-0115, in `main`).
+- **`download`** (`c7c3a863`): `sftp://USER@HOST[:PORT]/PATH --pin HEX`. It asks for `REQUEST_SSH` and lends the service a child of its flow grant, then logs in with the device key. It reads in 32 KiB pieces from where the file ends; a cut is resumed by another attempt, and every call waits at most 60 s. `docs/network/downloads.md` 0.6 describes it.
+- **The `net` suite's check** (`sftp_runs`): OpenSSH's server on the host's loopback, started for the test with its own host key (skipped without sshd):
+  - a server without the device key: refused;
+  - a wrong pin: refused (`HostKey`);
+  - 300 008 bytes downloaded, matching their SHA-256, and `ALREADY COMPLETE` the second time;
+  - `keystore` logs `SIGNED SshLogin` for the login.
+- **Run locally** (x86, QEMU 8.2, TCG, 4 CPUs) on a merge with the tools branch, which has the shell lending the client: the whole `download` VM passed. Without that branch the shell lends no SSH client, so the gate waits for 351-APP-0084 in `main`.
+- **Left:** the gate (x86 and aarch64); `keystore` refusing data of another form is checked by the host tests (`ssh/tests/login.rs`), as no program but the SSH service can ask it.
 
 ## Related
 
