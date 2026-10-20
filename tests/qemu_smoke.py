@@ -5765,13 +5765,22 @@ def wifi_join_check(vm):
     print("PASS: wifi over the shell's station client (SLOT_WIFI): MIND-TEST listed, joined through wlan's WPA2 handshake "
           "with wlansim's access point, and left", flush=True)
     # 550-APP-0078: the same without a screen, the passphrase read from a file whose first line names the network.
-    def run(text, timeout):  # as vm.command, with a join's wait (60 s at most in wifi)
+    # wifi's line goes through the system log: a wifi that ends at once may see the shell's prompt on the serial line
+    # before it (the gates of ASR and NET, 2026-10-20), so the line may come in logd's record of wifi instead, once more
+    # than it was there before the command.
+    def run(text, timeout, line):  # as vm.command, with a join's wait (60 s at most in wifi)
+        before = vm.command("dmesg -s wifi", raw=True).count(line)
         vm.send(text + "\n")
-        return vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
-    require(run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30), "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
-    require(run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90), "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
-    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    require(run("wifi status", 30), "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+        out = vm.expect("MIND> ", timeout=timeout, after=to_ordinal(to_real(text)) + "\n")
+        for _ in range(20):
+            if line in out or vm.command("dmesg -s wifi", raw=True).count(line) > before:
+                return out
+            time.sleep(.5)
+        raise AssertionError((line, out))
+    run("wifi join MIND-TEST --passphrase-file data/wifiother.txt", 30, "[WIFI] REFUSED MIND-TEST: the file's first line is not the network's name")
+    run("wifi join MIND-TEST --passphrase-file data/wifibad.txt", 90, "[WIFI] REFUSED MIND-TEST: the passphrase is wrong")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     # 550-NET-0018, for 550-ASR-0007: the stack takes the joined station as a card, leases 10.0.4.15 from wlansim's
     # network, and its gateway answers a ping through the WPA2 link.
     require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1 DNS 10.0.4.1")
@@ -5791,9 +5800,9 @@ def wifi_join_check(vm):
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
-    require(run("wifi leave", 30), "[WIFI] LEFT")
-    require(run("wifi status", 30), "[WIFI] STATUS OFF")
-    require(run("wifi join", 30), "usage: wifi")
+    run("wifi leave", 30, "[WIFI] LEFT")
+    run("wifi status", 30, "[WIFI] STATUS OFF")
+    run("wifi join", 30, "usage: wifi")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
           "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
@@ -5804,12 +5813,12 @@ def wifi_join_check(vm):
     assert "[WLANSIM] REFUSED A FRAME" not in sim, sim[-2000:]
     print("PASS: the station offered 802.11b's rates alone to a radio without OFDM, and the radio refused none of its frames", flush=True)
     # 550-NET-0024: a network remembered by keystore is joined again with no passphrase; its keys come from keystore.
-    require(run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90), "[WIFI] JOINED MIND-TEST")
+    run("wifi join MIND-TEST --passphrase-file data/wifijoin.txt --remember", 90, "[WIFI] JOINED MIND-TEST")
     require(vm.service_logs("keystore", "WI-FI NETWORK MIND-TEST KEPT FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST KEPT FOR PID")
-    require(run("wifi leave", 30), "[WIFI] LEFT")
-    require(run("wifi join MIND-TEST", 90), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    run("wifi leave", 30, "[WIFI] LEFT")
+    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
-    require(run("wifi leave", 30), "[WIFI] LEFT")
+    run("wifi leave", 30, "[WIFI] LEFT")
     print("PASS: MIND-TEST remembered by keystore and joined again with no passphrase, its handshake's keys from keystore", flush=True)
 
     def scanned():  # wifi's first look scans: a restarted station has heard nothing yet
