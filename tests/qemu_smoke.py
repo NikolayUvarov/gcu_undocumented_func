@@ -4001,9 +4001,43 @@ def vfs_suite(args):
             time.sleep(1.6)
             after = vm.screenshot()
             vm.serial()
-            require(slow("screenshot"), "SCREENSHOT ram:screen-001.bmp")
-            require(slow("screenshot"), "SCREENSHOT ram:screen-002.bmp")
-            require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [FILE]")
+            # Without a file: data/media/, kept across reboots (000-APP-0089); -d takes it later, the shell going on.
+            require(slow("screenshot"), "SCREENSHOT data/media/screen-001.bmp")
+            require(vm.command("screenshot -d 1"), "SCREENSHOT IN 1 S")
+            delayed = ""
+            for _ in range(180):
+                delayed = vm.command("dmesg -s shell", raw=True, timeout=180)  # the shell is busy while it writes the BMP
+                if "(AFTER -D)" in delayed:
+                    break
+                time.sleep(1)
+            require(delayed, "[SHELL] SCREENSHOT data/media/screen-002.bmp: ")
+            require(vm.command("screenshot two words"), "USAGE: SCREENSHOT [-D SECONDS] [FILE]")
+            require(vm.command("screenshot -d 0"), "USAGE: SCREENSHOT [-D SECONDS] [FILE]")
+            # Ctrl+Alt+F6 while clock is in front: its screen, with no shell in it.
+            vm.send("clock\n")
+            vm.expect("[CLOCK] ")
+            time.sleep(1)
+            clock_screen = vm.screenshot()
+            vm.hmp("sendkey ctrl-alt-f6"); vm.serial(enter=False)
+            vm.send("\x1b")
+            vm.expect("SHELL RESUMED.", timeout=180)
+            keyed = ""
+            for _ in range(60):
+                keyed = vm.command("dmesg -s shell", raw=True)
+                if "(CTRL+ALT+F6)" in keyed:
+                    break
+                time.sleep(1)
+            require(keyed, "[SHELL] SCREENSHOT data/media/screen-003.bmp: ")
+            # record -s 2: frames half the screen's size; without a file, data/media/record-001.avi.
+            for command, line in (("run record -s 2 -t 2 data/half.avi &", "[RECORD] data/half.avi THE SCREEN"), ("run record -r 1 -t 1 &", "[RECORD] data/media/record-001.avi THE SCREEN")):
+                pid = int(re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command(command))[1])
+                for _ in range(120):
+                    if pid not in task_rows(vm):
+                        break
+                    time.sleep(.5)
+                else:
+                    raise AssertionError(f"{command}: record did not end")
+                require(vm.command(f"logs {pid}"), line)
             # record (issue 093): 3 s of the screen while clock is in front, into data/; the display shows the dot meanwhile.
             recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
             vm.send("clock\n")
@@ -4035,6 +4069,16 @@ def vfs_suite(args):
         assert b"sub" not in subprocess.run(["mdir", "-b", "-i", part, "::/data"], env=MTOOLS_ENV, capture_output=True).stdout
         # The BMP shows what QEMU's display showed: the command's own line (above the cursor's rows, which moved on).
         width, height, size = map(int, shot.groups())
+        # The key's: clock's screen as QEMU showed it a moment before (its seconds may have moved on), no shell's.
+        keyed_bmp = mtype("data/media/screen-003.bmp")
+        assert len(keyed_bmp) == size and keyed_bmp[:2] == b"BM", len(keyed_bmp)
+        clock_pixels = clock_screen.split(b"\n", 3)[3]
+        bmp_stride = (width * 3 + 3) & ~3
+        same = sum(keyed_bmp[54 + (height - 1 - y) * bmp_stride + x * 3:][:3][::-1] == clock_pixels[(y * width + x) * 3:(y * width + x) * 3 + 3]
+                   for y in range(0, height, 8) for x in range(0, width, 8))
+        assert same >= 0.9 * ((height + 7) // 8) * ((width + 7) // 8), same
+        half = mtype("data/half.avi")
+        assert half[:4] == b"RIFF" and struct.unpack_from("<II", half, 64) == (width // 2, height // 2), half[:96]
         bmp = mtype("data/screen.bmp")
         assert len(bmp) == size and bmp[:2] == b"BM" and struct.unpack_from("<iiHH", bmp, 18) == (width, height, 1, 24), (len(bmp), bmp[:54])
         header, dims, pixels = screen.split(b"\n", 3)[0], screen.split(b"\n", 3)[1], screen.split(b"\n", 3)[3]
@@ -4080,7 +4124,8 @@ def vfs_suite(args):
         try:
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
-            require(vm.command("ls data"), f"6 ENTRIES, 6 FILES, {15 + size + len(avi_file) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
+            require(vm.command("ls data/media"), "4 ENTRIES, 4 FILES, ")
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
@@ -4125,7 +4170,8 @@ def vfs_suite(args):
         fsck_volume(image, start, fs_sectors)
         disks_check(args, image, Path(temp))
     print("PASS: vfs: files written to a raw FAT disk in data/ pass fsck.fat and read back with mtools and after a reboot; the RAM disk is empty after it; "
-          f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames); reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
+          f"screenshot writes the screen as a BMP ({width}x{height}) and the display's capture dot goes out after it, into data/media/ without a file, a second later with -d 1, "
+          f"and with Ctrl+Alt+F6 of clock in front; record writes 3 s of clock as AVI/MJPEG ({len(set(pictures))} pictures in 30 frames), half the size with -s 2; reboot stops {len(stopped)} services and keeps an unsynced file; reboot -f; "
           f"{'power off' if args.arch == 'aarch64' else 'power off refused'}", flush=True)
 
 
