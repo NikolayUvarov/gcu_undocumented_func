@@ -310,9 +310,9 @@ existing wire contract. Preserve normal association, software WPA2 and the
 original MacBook path; validate actual hardware separately from policy fixtures.
 This request does not replace the preceding H12 deadline correction.
 
-## The regulatory catalogue as a crate of its own, and `wlanhw.wit` 1.2 for a country's limits (550-NET-0032)
+## The regulatory catalogue as a crate of its own, and `wlanhw.wit` 1.2 for a country's limits (550-NET-0035)
 
-**Recorded by:** the network track (NET), 2026-10-20, for [550-NET-0032](550-NET-0032-the-stations-country.md) (the request above, and NET's in requests-NET.md). For the drivers track and for ASTRA, which wrote the catalogue under 213-DRV-0032.
+**Recorded by:** the network track (NET), 2026-10-20, for [550-NET-0035](550-NET-0035-the-stations-country.md) (the request above, and NET's in requests-NET.md). For the drivers track and for ASTRA, which wrote the catalogue under 213-DRV-0032.
 
 ### Problem
 
@@ -332,7 +332,7 @@ This request does not replace the preceding H12 deadline correction.
   `rtw89_wifi`, `bcm_wifi` and `wlan` depend on it. The network track needs from it, beyond what it has:
   - a rule's frequency range, widest channel and flags, readable from outside the crate (`Country::source_rules` gives them);
   - the database's SHA-256 (`PROVENANCE`).
-- **`wlanhw.wit` 1.2: `set-country(code, dfs, limits)`.** The text is in 550-NET-0032; NET has it written and holds it back. For each channel the station may use:
+- **`wlanhw.wit` 1.2: `set-country(code, dfs, limits)`.** The text is in 550-NET-0035; NET has it written and holds it back. For each channel the station may use:
   - the most EIRP;
   - whether it may only listen there.
 

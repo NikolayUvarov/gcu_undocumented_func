@@ -5,7 +5,7 @@
 // It holds the radio and nothing else that can act (MC-2.3); a passphrase becomes a PMK at once and is not kept. A
 // network to remember goes to `keystore` (slot 3, BADGE_KEY_STATION, 550-NET-0024), which keeps its PMK and answers
 // each handshake's keys: the station holds no PMK of a remembered network (MC-11.9). The country (wifi.wit 1.1,
-// 550-NET-0032) needs the regulatory catalogue, not in this build yet (stage A): its calls answer `unsupported`, no
+// 550-NET-0035) needs the regulatory catalogue, not in this build yet (stage A): its calls answer `unsupported`, no
 // country is applied, and the station keeps to the rules that hold before one is known (probes on 1 to 11 alone).
 use dot11::scan::{Bss, Security};
 use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};

@@ -1,7 +1,7 @@
 //! Host tests of the 802.11 station (550-NET-0017) against a simulated access point on one channel: a scan, joining
 //! an open and a WPA2-PSK network (the access point's handshake from `wpa::authenticator`), data both ways under CCMP,
 //! what makes the station refuse, fail or join again, a radio without OFDM on 2.4 GHz (550-NET-0028), and a country's
-//! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0032).
+//! rules: where the station probes, listens and joins, and what a change of country leaves behind (550-NET-0035).
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA};
 use dot11::scan::{self, Security};
 use dot11::country::{self, Rule, Standing};

@@ -24,7 +24,7 @@ pub enum Error {
     /// No network of that name in the last scan.
     NotFound,
     /// Its networks use a protection the station does not join (WEP, WPA3, enterprise, TKIP), or a channel where the
-    /// country applied leaves it nothing to send (550-NET-0032).
+    /// country applied leaves it nothing to send (550-NET-0035).
     Unsupported,
     /// A WPA2 network without a key, or a frame the station will not send.
     Invalid,

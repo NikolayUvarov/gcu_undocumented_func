@@ -1,8 +1,10 @@
-# 550-NET-0032 — The station's country: chosen from the whole regulatory catalogue, kept, applied by the radio
+# 550-NET-0035 — The station's country: chosen from the whole regulatory catalogue, kept, applied by the radio
 
 **Type:** network (service and interfaces) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open (stage A built) · **Blocked by:** stage B: the catalogue as a crate of its own, and `DRV`'s and ASTRA's word on `wlanhw.wit` 1.2 ([requests-DRV.md](requests-DRV.md)) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-2.3, MC-3.3, MC-6.1, MC-12.1, MC-12.3, MC-12.4, MC-12.7
 
 From the request "Wi-Fi country selection from the complete verified regulatory catalog" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16, at the maintainer's request). `APP`'s side is [550-APP-0082](550-APP-0082-wifi-country-selector.md), the RTL8852BE catalogue 213-DRV-0032 (ASTRA).
+
+Numbered 0035, after [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
 
 ## Problem
 

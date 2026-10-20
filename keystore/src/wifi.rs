@@ -10,7 +10,7 @@ use mind::idl::keystore::{Error, WifiNetwork};
 use wpa::kept::{self, Kept};
 
 pub const FILE: &str = "system/keystore/wifi.kept";
-// The station's country (1.3, 550-NET-0032): its two letters alone. A file cut short holds none, so the station sends nothing.
+// The station's country (1.3, 550-NET-0035): its two letters alone. A file cut short holds none, so the station sends nothing.
 pub const COUNTRY: &str = "system/keystore/wifi.country";
 const BUDGET: u32 = 60; // handshakes' keys a minute
 const MINUTE_MS: usize = 60_000;

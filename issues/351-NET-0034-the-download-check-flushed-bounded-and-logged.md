@@ -1,8 +1,10 @@
-# 351-NET-0031 — `download`'s check at the end: flushed, bounded and in the log
+# 351-NET-0034 — `download`'s check at the end: flushed, bounded and in the log
 
 **Type:** network (program) · **Owner:** `NET` track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Roadmap:** D / 550, H / 213 · **Constitution:** MC-6.1, MC-12.1, MC-12.3
 
 From the request "Download complete-file recheck stalls in the 6G Intel gate" in requests-NET.md (ASTRA auditor-fixer, 2026-10-16), for [audit H13](../issues-audit/2026-10-16-download-recheck-stall.md).
+
+Numbered 0034 and 0035 (with [550-NET-0035](550-NET-0035-the-stations-country.md)): ASTRA's tasks 550-NET-0031 to 0033, on `fast-test` since 2026-10-15, hold the counters before them.
 
 ## Problem
 

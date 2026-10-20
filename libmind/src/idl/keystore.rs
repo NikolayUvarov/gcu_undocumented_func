@@ -13,7 +13,7 @@
 //! signs, only for the SSH service's badge (`BADGE_KEY_SSH`, `mind::network`), within its own budget per boot; and
 //! anyone may read the device's public key (`public-key`), as the certificate.
 //!
-//! 1.3 (550-NET-0032): the Wi-Fi station's country, kept in the private directory beside its networks: a two-letter
+//! 1.3 (550-NET-0035): the Wi-Fi station's country, kept in the private directory beside its networks: a two-letter
 //! code, never a row of a catalogue. Only the station's badge reads or changes it; the station changes it only on a
 //! change client's word (wifi.wit 1.1 `set-country`).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]

@@ -1,4 +1,4 @@
-//! A country's rules on the radio's channels (550-NET-0032): where the station may send, where it may only listen, and
+//! A country's rules on the radio's channels (550-NET-0035): where the station may send, where it may only listen, and
 //! where it may not go. The rules come from the regulatory catalogue (wireless-regdb) through the station service; this
 //! module only reads them, so a channel is never allowed by default.
 

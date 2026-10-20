@@ -39,7 +39,7 @@ pub struct Out { pub channel: Option<u8>, pub filter: Option<Filter>, pub send: 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Filter { pub all_beacons: bool, pub bssid: Mac }
 
-/// What the station may send on a channel (550-NET-0032).
+/// What the station may send on a channel (550-NET-0035).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Allowed {
     /// Probe requests, and joining an access point there.
@@ -50,7 +50,7 @@ pub enum Allowed {
     Nothing,
 }
 
-// Before a country is known (a station built without the catalogue, 550-NET-0032 stage A): probe requests on 1 to 11,
+// Before a country is known (a station built without the catalogue, 550-NET-0035 stage A): probe requests on 1 to 11,
 // which every regulatory domain allows; elsewhere it only listens, and sends only to an access point it heard there.
 fn unrestricted(channel: u8) -> Allowed { if (1..=11).contains(&channel) { Allowed::Send } else { Allowed::Listen } }
 
@@ -103,7 +103,7 @@ impl Station {
                   acked: 0, failed: 0 }
     }
 
-    /// Puts the station under a country's rules (550-NET-0032): `channels` are the only ones it uses from now on, each
+    /// Puts the station under a country's rules (550-NET-0035): `channels` are the only ones it uses from now on, each
     /// with what it may send there. Nothing chosen under the rules before stays: it leaves the network, ends a scan and
     /// drops the networks it heard.
     pub fn restrict(&mut self, channels: &[(u8, Allowed)], out: &mut Out, tx: &mut [u8]) {
@@ -167,7 +167,7 @@ impl Station {
             return Err(error);
         };
         if bss.security == Security::Wpa2 && secret.is_none() { return Err(Error::Invalid); }
-        // No country applied, or one whose rules leave the station nothing to send there (550-NET-0032).
+        // No country applied, or one whose rules leave the station nothing to send there (550-NET-0035).
         if !self.may_join(bss.channel) { self.fail(Reason::Unsupported); return Err(Error::Unsupported); }
         if matches!(self.state, State::Joined | State::Joining) { self.leave(out, tx); }
         self.start(bss, secret, now, out, tx)
