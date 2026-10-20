@@ -1,0 +1,8 @@
+MIND-APP-MANIFEST 1
+key b9378a23aa9a796f
+name hello
+version 3
+arch x86_64
+system 7
+file bin/hello 96 bf3e3996f57af12baa28b1d27854bed59792018c8db8cb7ed810ee309a8fc3d6 00000000 0
+file data/greeting.txt 30 f1651cd40e00cc0e89a5b45fff4b6a95b9741b36bf9c9d7b44689d54fb8627d9 00000000 0

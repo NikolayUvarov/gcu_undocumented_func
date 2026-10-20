@@ -334,3 +334,24 @@ This request does not replace the preceding H12 deadline correction.
 - `bcm_wifi` and `rtw89_wifi` answer `set-country` under 1.2:
   - in host tests: limits applied, a channel twice refused, a failure that leaves the radio silent;
   - on hardware: each machine separately, as 213-DRV-0032 says.
+
+## `virtio_blk`: a request waits a whole tick (351-NET-0034)
+
+**Recorded by:** the network track (NET), 2026-10-20, from the timings [351-NET-0034](351-NET-0034-the-download-check-flushed-bounded-and-logged.md) added to `download`.
+
+### Problem
+
+- **What was measured.** On aarch64 (`virtio_blk` boot disk, QEMU TCG on un-rizen), `download` read an 8 MiB file back in 512 requests of 16 KiB. It took 5,080 ms, all of it in the file service's reads, about 10 ms each.
+- **Why.** `virtio_blk/src/main.rs`'s `wait` spins 1,000 times, then calls `mind::time::sleep(1)`. On aarch64 the tick is 10 ms (`kernel/src/arch/aarch64/interrupts.rs`, `TICK_MS`), so every request that QEMU has not finished within the spins costs a whole tick. Under TCG that is nearly every one.
+- **What it costs.** The file service reads at about 1.6 MB/s on aarch64. On x86 (1 ms tick, `ata` by PIO) the same check reads 30 MiB in about 5 s.
+- **The same pattern** is in `ahci`'s `wait`, already in this file ("`ata` and `ahci`: waits with a deadline").
+
+### Plan (a proposal; the drivers track decides)
+
+- Wait on the queue's interrupt, or poll the used ring against `monotonic_ns` with a short sleep only once a request is known to be slow.
+- Give each request a deadline in time, as the critique asks of `ata`.
+
+### Acceptance criteria
+
+- The `net` suite's `TIME: download's … check` lines on aarch64 show reads well under a tick each.
+- The `vfs` and `store` suites pass.
