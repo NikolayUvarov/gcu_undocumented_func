@@ -4912,8 +4912,17 @@ def hda_suite(args):
             require(log, "[LISTEN] PLAYED BACK")
         finally:
             vm.close()
+    # 213-KRN-0127: a second HD Audio function (here one with no codec, after the first): init lends audio_gw its
+    # registers in slot 3 and its line in slot 7, and the gateway still drives the first.
+    vm = VM(args, IMAGE, audio="none", audio_card="HDA", extra=["-device", "intel-hda,id=hda2,addr=0x18"])
+    try:
+        require(vm.service_logs("audio_gw", "[AUDIO] HDA READY"), "[AUDIO] HDA READY: CODEC 0")
+        held = vm.command(f"stat caps {vm.services()['audio_gw']}", raw=True)
+        assert re.search(r"^SLOT=3 GEN=\d+ KIND=8 ", held, re.M) and re.search(r"^SLOT=7 GEN=\d+ KIND=5 ", held, re.M), held
+    finally:
+        vm.close()
     print(f"PASS: Intel HD Audio: codec {found[1]}:{found[2]}, line out {found[3]} <- DAC {found[4]}, line in {found[5]} -> ADC {found[6]} ({found[7].lower()}); "
-          "beep's tones through the output stream, a second recorded from the input stream", flush=True)
+          "beep's tones through the output stream, a second recorded from the input stream; a second controller lent beside the first", flush=True)
 
 
 def listen_suite(vm, starts):

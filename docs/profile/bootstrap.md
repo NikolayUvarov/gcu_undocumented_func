@@ -31,7 +31,7 @@ MC-3.12 requires a verifiable boundary where the initial distribution of authori
 | `tts` | server endpoint, client endpoint of `audio_gw` |
 | `virtio_net`, `virtio_net#1` | server endpoint (one per instance: the first and the second VirtIO card in PCI order, issue 105); if a VirtIO network card (1AF4:1041 or 1000) is present: the memory BAR holding its modern configuration structures and an MSI-X vector (the IRQ line if MSI-X cannot be set up), or for a legacy-only card its I/O BAR0 and IRQ line; 160 KiB DMA |
 | `rtl8168` | exact PCI 10EC:8168 class 02:00; BAR2 with memory decoding only, retained 2 MiB DMA, optional MSI, net server endpoint; selected PCI index as an argument. The driver validates its revision and prepares rings before DEVICE_START. Physical traffic is not yet verified (213-DRV-0031, 213-KRN-0114) |
-| `rtw89_wifi` | exact PCI 10EC:B852 class 02:80; BAR2 with memory decoding only and read-only VFS client. No DMA, IRQ, network endpoint or station grant; this board-access stage is not a usable radio and safe start leaves it out (213-DRV-0032) |
+| `rtw89_wifi` | exact PCI 10EC:B852 class 02:80; BAR2 with memory decoding only, a retained 8 MiB DMA region (`SLOT_MEM`: a 128 KiB command reservation and the receive region after it, disjoint), a `vfs_server` client badged `BADGE_READER` (its firmware) when `vfs_server` runs; selected PCI index as an argument. No IRQ, network endpoint or station grant; this firmware, MAC, receive and initial-PHY diagnostic is not a usable radio, and safe start leaves it out (213-DRV-0032, 213-KRN-0114) |
 | `bcm_wifi` | if a Broadcom BCM4331 or another Broadcom network controller (class 02:80:00) is present: its BAR0 (slot 2), a 512 KiB DMA region below 4 GiB, its MSI or INTx line, a `vfs_server` client badged `BADGE_READER` (its microcode in `data/firmware/b43/`); a server endpoint for `idl/wlanhw.wit`, whose client only `wlan` gets (550-DRV-0027, 550-KRN-0097) |
 | `wlansim` | server endpoint only: QEMU's stand-in radio (`idl/wlanhw.wit`, 550-NET-0018), which only the tests' images carry |
 | `wlan` | started only when a radio runs (`bcm_wifi`, else `wlansim`): server endpoint, the radio's client (slot 2), which no other task holds (MC-2.3), and a `keystore` client badged `BADGE_KEY_STATION` (slot 3, the remembered networks' keys, 550-NET-0024). Its endpoint serves `idl/net.wit` to `netstack` and `idl/wifi.wit` to clients with `BADGE_WIFI` (550-KRN-0097). `tpm` and `keystore` start before it, and it before `netstack` |
@@ -61,7 +61,7 @@ The initial distribution ends when `init` logs `[INIT] PLATFORM PRIVILEGE DROPPE
 
 ## Kernel-side validation
 
-Whatever `init` asks for, the kernel only mints: port ranges inside 0x60, 0x64, 0x70–0x71, 0x1F0–0x1F7, 0x3F6, 0x3F8–0x3FF; IRQ lines 1–15 except 2; BARs and IRQ lines of enumerated PCI functions; the GOP framebuffer; DMA regions up to 8 MiB in total. PIC, PIT and PCI configuration ports are never handed out.
+Whatever `init` asks for, the kernel only mints: port ranges inside 0x60, 0x64, 0x70–0x71, 0x1F0–0x1F7, 0x3F6, 0x3F8–0x3FF; IRQ lines 1–15 except 2; BARs and IRQ lines of enumerated PCI functions; the GOP framebuffer; DMA regions up to 16 MiB in total. PIC, PIT and PCI configuration ports are never handed out.
 
 ## Realtek staged device control (213-KRN-0114)
 
@@ -76,6 +76,8 @@ Init requires the old process to be dead and the device stop to succeed before
 clearing retained DMA. Failed stop or mapping quarantines the service and
 prevents restart. Quiescing also precedes restart-budget quarantine. These
 software checks do not establish that hardware has drained all transactions.
-The new PCI fixtures and integrated x86 QEMU runs are pending; earlier suite
-results do not validate this ABI 11 change. ARM and physical Ryzen/MacBook
-validation remain pending.
+The host tests of PCI control, the Realtek drivers and the ABI 11 boot record,
+and every x86 and aarch64 QEMU group, passed on this code at the gate of
+10d3ec3 (in `main` since 289e84b). QEMU has no Realtek device: those groups
+show that the rest of the boot is unchanged, not that the Realtek drivers work.
+Physical Ryzen and MacBook validation remain pending.
