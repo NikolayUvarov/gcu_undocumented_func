@@ -46,6 +46,12 @@ On the MacBook Pro, `wlan` (or, until it exists, a test client) sets a channel, 
   - **Without the endpoint** nothing changes: the core stays in reset unless the test is asked for.
 - **Still needed: `init`'s part** (requests-KRN.md, "The Wi-Fi station in the boot services", 550-KRN-0097): `bcm_wifi`'s service endpoint, lent to `wlan` alone.
 - **On the MacBook Pro the station can join only at CCK rates for now:** OFDM reception is weak ([550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md)).
+- **2026-10-20: the transmit-status wait bounded on every path** (ASTRA's audit H12, `issues-audit/2026-10-16-bcm-tx-wait-audit.md`, taken from `requests-DRV.md`).
+  - `bcm_wifi/src/txwait.rs` holds the wait as plain logic. The deadline (100 ms) is checked before every entry the status FIFO gives, so no stream of intermediate or other frames' statuses outlasts it, and a status read after the deadline does not count.
+  - A frame's cookie carries a generation beside its slot, so a late status of a slot's earlier frame never answers for the next.
+  - A slot is reused only once the DMA engine's current descriptor has left it (one slot kept free). With no room, `send` answers `busy`: a missing status is not taken as completion.
+  - `tests/bcm_txwait_host.rs` drives the production logic: a stream of other statuses, none, a match before and after the deadline, a gone chip, the cookies, the ring's room. The earlier loop fails two of its seven tests.
+  - The MacBook Pro's ping-under-load run is apart from this: the finding is not established as the cause of the reported loss.
 
 ## Related
 
