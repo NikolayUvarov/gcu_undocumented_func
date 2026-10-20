@@ -48,6 +48,12 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
   - NET's `net` suite checks over `wlansim`: the join, a wrong passphrase refused, the lease 10.0.4.15 and a ping of 10.0.4.1, 802.11b's rates alone, and a remembered network joined again. That is this task's QEMU half.
   - **Left:** the MacBook Pro's run. `build-and-write.sh --wifijoin` writes `data/wifijoin.txt` and `autorun.msh` after the image, and the log ends with `*** WIFI JOIN Complete. Data collected ***`.
 
+- **2026-10-20: the MacBook Pro joined CoolNet2** (`fast-test` 832c9080, the Wi-Fi firmware copied after the write). The maintainer joined by hand from `wm`'s Settings, Wi-Fi; the log was read over MIND Link (800-LNK-0003):
+  - `[WLAN] JOINING CoolNet2 ON CHANNEL 8` at 256.782 s, `Joined` at 256.823 s (WPA2), the network kept by `keystore`;
+  - `[NETSTACK] DHCP 192.168.2.236/24 GATEWAY 192.168.2.1 DNS 8.8.8.8 ON CARD 2` at 260.434 s, and the default route on it;
+  - no transmit fault from `bcm_wifi` in the log, and the passphrase nowhere in it.
+- **Left:** the scripted run (`tests/hardware/wifijoin.msh` as `autorun.msh`, `build-and-write.sh --wifijoin`), with its ping of the gateway and its end marker.
+
 ## Related
 
 [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), the requests to `APP` and `NET` on `internal-dev-messages` (2026-10-14), `tests/wlansim/`.
