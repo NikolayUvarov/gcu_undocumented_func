@@ -23,15 +23,66 @@ const STOP: (u32, u32) = (0x00FF_FFFF, 0x0080_0000); // white on dark red
 
 /// Takes the bootloader's framebuffer if the kernel's identity map reaches it, and clears it.
 pub unsafe fn init(info: &BootInfo) {
-    let bytes = info.stride * info.height * 4;
-    if info.fb_ptr.is_null() || info.width < 8 || info.height < 16 || !crate::mmu::reach_device(info.fb_ptr as usize, bytes) { return; }
-    WIDTH.store(info.width, Relaxed); HEIGHT.store(info.height, Relaxed); STRIDE.store(info.stride, Relaxed);
-    FORMAT.store(info.pixel_format, Relaxed);
-    for (mask, &value) in MASKS.iter().zip(info.pixel_masks.iter()) { mask.store(value, Relaxed); }
-    BASE.store(info.fb_ptr as usize, Relaxed);
-    let clear = pixel_to_device(BOOT.1, info.pixel_format, info.pixel_masks);
-    for y in 0..info.height { for x in 0..info.width { core::ptr::write_volatile((info.fb_ptr).add(y * info.stride + x), clear); } }
-    crate::cpu::write_back(info.fb_ptr as usize, bytes);
+    let frame = Framebuffer { base: info.fb_ptr, width: info.width, height: info.height, stride: info.stride, format: info.pixel_format, masks: info.pixel_masks };
+    let Some(bytes) = frame.bytes() else { return; };
+    if crate::mmu::reach_device(frame.base as usize, bytes) { activate(frame, bytes); }
+}
+
+/// Uses only an ABI 10/11 prefix and the inherited UEFI mapping, before allocator or kernel page tables exist.
+pub unsafe fn init_early(info: *const BootInfo) {
+    let frame = Framebuffer {
+        base: core::ptr::addr_of!((*info).fb_ptr).read(), width: core::ptr::addr_of!((*info).width).read(),
+        height: core::ptr::addr_of!((*info).height).read(), stride: core::ptr::addr_of!((*info).stride).read(),
+        format: core::ptr::addr_of!((*info).pixel_format).read(), masks: core::ptr::addr_of!((*info).pixel_masks).read(),
+    };
+    if let Some(bytes) = frame.early_bytes() { activate(frame, bytes); }
+}
+
+#[derive(Clone, Copy)]
+struct Framebuffer { base: *mut u32, width: usize, height: usize, stride: usize, format: u32, masks: [u32; 3] }
+impl Framebuffer {
+    fn bytes(self) -> Option<usize> {
+        if self.base.is_null() || (self.base as usize) % 4 != 0 || self.width < 8 || self.height < 16 || self.width > self.stride || self.format > crate::abi::PIXEL_BITMASK { return None; }
+        let bytes = self.stride.checked_mul(self.height)?.checked_mul(4)?;
+        (self.base as usize).checked_add(bytes)?;
+        Some(bytes)
+    }
+    fn early_bytes(self) -> Option<usize> {
+        let bytes = self.bytes()?;
+        // Larger early displays stay serial-only; no page-table walks, mapping changes or unbounded clears.
+        if bytes > 256 * 1024 * 1024 || (self.base as u64).checked_add(bytes as u64)? > 1u64 << 32 { return None; }
+        Some(bytes)
+    }
+}
+
+unsafe fn activate(frame: Framebuffer, bytes: usize) {
+    WIDTH.store(frame.width, Relaxed); HEIGHT.store(frame.height, Relaxed); STRIDE.store(frame.stride, Relaxed);
+    FORMAT.store(frame.format, Relaxed);
+    for (mask, &value) in MASKS.iter().zip(frame.masks.iter()) { mask.store(value, Relaxed); }
+    BASE.store(frame.base as usize, Relaxed);
+    let clear = pixel_to_device(BOOT.1, frame.format, frame.masks);
+    for y in 0..frame.height { for x in 0..frame.width { core::ptr::write_volatile(frame.base.add(y * frame.stride + x), clear); } }
+    crate::cpu::write_back(frame.base as usize, bytes);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Framebuffer;
+    fn frame() -> Framebuffer { Framebuffer { base: 0x1000 as *mut u32, width: 640, height: 480, stride: 640, format: crate::abi::PIXEL_BGR, masks: [0; 3] } }
+    #[test]
+    fn early_framebuffer_rejects_invalid_geometry_and_overflow() {
+        let f = frame();
+        assert_eq!(f.early_bytes(), Some(640 * 480 * 4));
+        for bad in [Framebuffer { base: core::ptr::null_mut(), ..f }, Framebuffer { base: 0x1001 as *mut u32, ..f }, Framebuffer { width: 7, ..f }, Framebuffer { height: 15, ..f }, Framebuffer { stride: 639, ..f }, Framebuffer { stride: usize::MAX, ..f }, Framebuffer { base: (usize::MAX - 3) as *mut u32, ..f }, Framebuffer { format: 3, ..f }] { assert_eq!(bad.early_bytes(), None); }
+    }
+    #[test]
+    fn early_framebuffer_stays_within_its_mapping_and_clear_limit() {
+        let f = frame();
+        let bytes = f.bytes().unwrap();
+        assert_eq!(Framebuffer { base: ((1u64 << 32) - bytes as u64) as *mut u32, ..f }.early_bytes(), Some(bytes));
+        assert_eq!(Framebuffer { base: ((1u64 << 32) - bytes as u64 + 4) as *mut u32, ..f }.early_bytes(), None);
+        assert_eq!(Framebuffer { width: 16384, stride: 16384, height: 4097, ..f }.early_bytes(), None);
+    }
 }
 
 /// The compositor draws its first frame over the whole screen: the kernel writes there again only for a fatal stop.

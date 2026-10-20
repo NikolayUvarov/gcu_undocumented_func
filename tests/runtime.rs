@@ -52,6 +52,44 @@ fn phys(kind: u32, start: u64, end: u64) -> abi::StatPhys {
 }
 
 #[test]
+fn realtek_probe_mapping_accepts_only_present_uncached_identity_leaves() {
+    let pdpt = memory::Region::new(4096, 4096).unwrap();
+    let pd = memory::Region::new(4096, 4096).unwrap();
+    let pt = memory::Region::new(4096, 4096).unwrap();
+    let physical = 0xfce0_0040u64;
+    unsafe {
+        let root = pdpt.ptr() as *mut u64;
+        let directory = pd.ptr() as *mut u64;
+        let leaves = pt.ptr() as *mut u64;
+        let pde = directory.add((physical >> 21 & 511) as usize);
+        let pte = leaves.add((physical >> 12 & 511) as usize);
+        let valid = || mmu::identity_device_u32_in(root, physical);
+        assert!(!valid(), "absent PDPT entry");
+        root.add(3).write(pd.ptr() as u64 | 3);
+        assert!(!valid(), "absent PDE");
+        pde.write(0xfce0_0083);
+        assert!(!valid(), "large write-back leaf");
+        pde.write(0xfce0_009b);
+        assert!(valid(), "large UC identity leaf");
+        pde.write(0xfcc0_009b);
+        assert!(!valid(), "large non-identity mapping");
+        pde.write(pt.ptr() as u64 | 3);
+        assert!(!valid(), "absent PTE");
+        pte.write(0xfce0_0003);
+        assert!(!valid(), "small write-back leaf");
+        pte.write(0xfce0_001b);
+        assert!(valid(), "small UC identity leaf");
+        pte.write(0xfce0_101b);
+        assert!(!valid(), "small non-identity mapping");
+        assert!(!mmu::identity_device_u32_in(root, physical + 1));
+        assert!(!mmu::identity_device_u32_in(root, 1 << 32));
+        assert!(!mmu::identity_device_u32_in(root, u64::MAX - 3));
+        root.add(3).write(0xc000_009b);
+        assert!(!valid(), "unexpected 1 GiB leaf is not dereferenced as a table");
+    }
+}
+
+#[test]
 fn identity_cache_keeps_ryzen_loader_ram_write_back_above_three_gib() {
     // Adjacent types and addresses from the Ryzen report; the 64 MiB kernel arena is inside the loader-data range.
     let map = [
@@ -317,7 +355,7 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 33, 34, 10));
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 33, 34, 11));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));

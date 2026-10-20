@@ -4,6 +4,7 @@ Tests are run as described in the [README](../../README.md) ("Runtime checks"). 
 
 | Statement | Evidence |
 |---|---|
+| The x86 hardware report restricts Realtek chip-identity reads to RTL8168 TxConfig and RTL8852BE SYS_CFG1, on ungranted/non-mastering endpoints in D0 when a PM capability exists, with valid BAR2 and an existing uncached identity mapping; temporary memory decode is restored without clearing PCI Status flags (213-KRN-0113) | Eight host tests in `tests/realtek_probe_host.rs` exercise the production guard/restore flow using a PCI/MMIO fixture, including refusal paths and unavailable values. `tests/runtime.rs::realtek_probe_mapping_accepts_only_present_uncached_identity_leaves` checks actual large/small page-table walks. Host tests and x86 kernel release build passed, 2026-10-15. The coordinated kernel gate and actual Ryzen identity observation are pending; no NIC driver support follows from these tests. Hardware refusal to restore Command is reported explicitly. |
 | The x86 kernel's low identity map selects write-back PAT for firmware RAM, including the Ryzen loader arena above 3 GiB, and uncached PAT for reserved, unknown and device pages; mixed 2 MiB regions use 4 KiB leaves (213-KRN-0112) | Five `identity_cache_*` host regressions in `tests/runtime.rs` inspect the generated PDEs/PTEs, including the reported Ryzen loader-data ranges and device remapping. Passed on the host, 2026-10-15. The BSP's PAT/CR3 transition uses cache no-fill mode and cache/TLB flushes, restoring the firmware MTRR configuration; compiled-object inspection confirms no calls or explicit stack/data accesses in the critical sequence. Host tests do not execute this privileged transition. The kernel gate and a corrected Ryzen boot are pending; no hardware latency improvement is claimed. `StatPhys` does not carry UEFI cache attributes, so RAM type determines the PAT choice and firmware MTRRs still constrain the effective memory type. |
 | Ring 3 with IOPL 0; kernel memory not readable or writable; code RX, stack NX; privileged instructions fault; syscall pointers validated; a fault terminates only the task | QEMU `isolation` suite (`tests/isolation_app.rs` cases r, w, t, n, c, o, u, g, s, y, e, h, p) |
 | The kernel kept out of programs' pages (000-KRN-0039): with `-cpu max` x86 sets SMEP, SMAP and UMIP, a program's `sgdt` faults, and the probe kernel's read of a program's page and jump into it both fault; with `qemu64` none is offered and the boot line says so; aarch64 sets PAN (`-cpu max`), programs' pages being PXN already | `isolation` suite (case `U`, `protection_check`), CI group "x86: protection probes" (`protection-test` kernel), aarch64 `smp` suite; QEMU only, a real machine's line is in its hardware report |
@@ -121,3 +122,63 @@ The full tables are in the resolutions of [176-KRN-0062](../../issues-done/176-K
 - A minted port sub-range (applications hold no ports).
 - That a holder of only the observe privilege cannot kill, focus or read logs (no such task exists before `sysmon`).
 - Playback reaching the audio output in the `listen` suite (QEMU's capture backend has no output file); the kernel's validation of `PLATFORM_CAP` arguments.
+
+
+The RTL8852BE initial-channel coexistence callbacks in
+[connection RFK notes](../../hwdocs/rtl8852be-connection-rfk.md) have ten additional
+Session model cases. All 62 Session cases passed on own source
+`bf6747f58975f9ba15b73d06948f3a32819d16cc`, after native build and raw
+publication `c38df1ddff7151af1e1ededf551f736c2f6b6766` (2026-10-16,
+0.29 s; no failures or ignored cases). They cover
+source host-state notifications, conditional measured A2DP time and exact normal
+MCC packets through the owned command/RX session. They do not establish hardware
+calibration, RFK transmission authority, a continuous coexistence service or WLAN
+connectivity; no profile guarantee is expanded by this slice.
+
+RTL8852BE private DPK source `40addff026369c01da5cc3f4f72654d19f99eb6f`
+passed all 14 focused production-engine models on its own branch after native
+build and raw publication `c38df1ddff7151af1e1ededf551f736c2f6b6766`
+(2026-10-16, 0.01 s; no failures or ignored cases). The earlier published source
+`2fc291a5` passed 13/14; that failure exposed post-STOP restoration and remains
+recorded in [DPK notes](../../hwdocs/rtl8852be-dpk.md). Both table-provenance
+Python cases and exact pinned-table regeneration passed on that first run;
+the correction changed neither table nor generator. This is host-model evidence,
+not physical RFK quality, transmission authority or working WLAN.
+
+
+The RTL8852BE [initial calibration provider](../../hwdocs/rtl8852be-calibration-policy.md)
+source `202bba961c512f6b16cf501c0158bf813189a402` passed fourteen focused
+models (2026-10-16, 0.03 s, no failures or ignores) after own native build and raw
+publication `882bd73575306964bb53e552cb2d073ae8f64ab3`, covering exact source/Board/policy binding,
+known-absent versus invalid platform input, actual PMAC units/rate limits, single-use
+permissions and the cumulative cold channel-RFK coordinator. All nine affected
+complete host harnesses also passed; their overlapping counts and unchanged
+private-firmware ignores are recorded in the provider notes. The native scoped
+input consumer and actual RF output/traffic remain
+unvalidated; no platform guarantee is expanded by the internal permission type.
+
+
+The private RTL8852BE [owned packet-mode continuation](../../hwdocs/rtl8852be-data-mode.md)
+passed thirteen cold-path cases and all thirteen affected complete host harnesses
+on own source `974088b104d11671cdcaadff8707a38f3fbf009e`, after build and raw
+publication `33fa88bff00df750b3265d4dacd9be72716f93a3` (2026-10-16).
+Counts, unchanged private-firmware ignore and the first 12/13 fixture failure
+are retained in the notes. Evidence covers the sealed startup/data transition,
+actual source scheduler/queue checks and modelled single-reader progress with
+counted Wi-Fi overflow. Continuous BTC processing, sequence reuse, native
+endpoint and actual RF traffic remain unvalidated; no platform guarantee is
+expanded by these host results.
+
+### RTL8852BE active filter continuation (2026-10-16)
+
+
+Active-filter source `96070fbe379eea198b13ff72664a68bb0ce64f65` passed all ten
+new cold cases and thirteen existing packet-mode cases as part of the complete
+data-mode harness after raw `4ea2d9eb93cf91c59491fc95de887ee01e081888` publication.
+The own-branch complete runs passed: data mode 264, BTC Session 241, station 263,
+post-MAC 241 and TX 241 (overlapping fixtures, not independent totals), with zero
+failures and the same one inherited private-firmware ignore in each. Execution
+was 1.07–1.21 seconds per harness on 2026-10-16; native compilation passed in
+1.55 seconds. The manifest `/tmp/rtw89-active-filter-validation-96070fbe.json`
+records exact source/publication, commands' results and per-harness log paths.
+These remain host-model observations, not physical radio or native-service evidence.

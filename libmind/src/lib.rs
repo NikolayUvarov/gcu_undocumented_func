@@ -20,6 +20,7 @@ pub mod cid;
 pub mod control;
 pub mod dag;
 pub mod debug;
+pub mod deadline;
 pub mod dev;
 pub mod fs;
 pub mod firmware;

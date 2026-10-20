@@ -101,6 +101,7 @@ The kernel contains no list of services and no per-service capability table. It 
 | `tts` | service endpoint, audio gateway client | text to speech (Russian and Latin script), streamed to `audio_gw` |
 | `video_gw` | service endpoint, a VFS client, a compositor client | video gateway (issue 158, `idl/video.wit`): cameras and their frames for the program started for one (the shell's client, lent for `REQUEST_CAMERA`); one owner per camera; the compositor's camera mark while a stream is open. A USB video class camera through `usb_host` (`mind::uvc`: its descriptors, the probe and commit of a YUY2 frame size, frames from its isochronous payloads, scaled to the size asked for); with `video/synthetic` on the boot disk, a moving test pattern as well |
 | `virtio_net` | service endpoint, the memory BAR of a VirtIO network card's modern interface and an MSI-X vector (or, for a legacy card, I/O BAR0 and its IRQ line), 160 KiB DMA | network card driver (modern VirtIO with MSI-X, or legacy): raw Ethernet frames (`idl/net.wit`); its clients are `netstack` and the shell's `net` diagnostics. One instance per card (issue 105): `virtio_net` drives the first VirtIO card in PCI order, `virtio_net#1` the second, each with its own device, DMA region, endpoint and restart budget. Completes TCP/UDP checksums of sent frames when the stack asks and the card offers it (issue 106). Frames to and from `netstack` go through a ring the stack lends it (issue 107), not one call each |
+| `rtw89_wifi` | initially non-mastering BAR2, retained 8 MiB disjoint command/RX DMA, read-only firmware VFS client | RTL8852BE cut-1/RFE-1 bounded firmware/MAC/RX/initial-PHY diagnostic, followed by independent shutdown; no WLAN endpoint or usable network link yet ([hardware status](hwdocs/rtl8852be.md)) |
 | `netstack` | service endpoint, clients of `virtio_net` and `virtio_net#1` | network stack (smoltcp): DHCP with a static QEMU fallback, ARP, ICMP echo, a DNS resolver, UDP and TCP sockets (`idl/socket.wit`); an interface per card with its own DHCP, a flow goes out through the card whose network holds the destination, else through the first with a gateway; shell commands `ip` (every card with its frame counters; `ip offload on|off`: transmit checksum offload, off by default, see [docs/profile/network.md](docs/profile/network.md)), `ping`, `nslookup`, `fetch`; benchmark program `netbench` |
 | `netpolicy` | service endpoint, network stack clients (an unbadged one to mint grants from, the policy badge), a VFS client | network policy broker: grants each program that asks for the network (`REQUEST_NETWORK`) a stack client limited to the destinations, term and volume `netpolicy.txt` names for it (an address, or a host name looked up when the grant is made at the file's `resolver`, 351-NET-0003); the policy changes while the system runs with `netpolicy add|remove <line>`, after the user agrees, and is kept in its private directory `system/netpolicy` (108, [docs/network/policy.md](docs/network/policy.md)); `netgrants`, `netrevoke <program>` in the shell; test program `netcheck` |
 | `parse` | service endpoint | parser service (109-NET-0008, `idl/parse.wit`; for each `download`, a process of its own that holds only that session's endpoint, 109-NET-0010): turns bytes from outside into typed messages for the program that holds the network and the files, so that program parses nothing itself (MC-11.11, Appendix B.6's session parser): the heads of HTTP responses for `download`, and release channels and boot manifests for the updater and the shell's `release` (351-NET-0011), whose client takes an answer only if it encodes again to exactly the bytes it gave; nothing kept between requests, a refusal logged with the client's PID, restarted by `init` if it fails ([docs/network/airlock.md](docs/network/airlock.md)) |
@@ -477,7 +478,7 @@ At the `MIND>` prompt, enter a command and press Enter (commands are case-insens
 * `console [program [arguments]]` — a terminal for programs (issue u004): a line typed starts a program; what a console program prints shows in console's window or screen (it lends the program an endpoint in `SLOT_CONSOLE`, issue 162), a program with a screen opens a window of its own in `wm`. `list`, `clear`, `exit`; ↑ ↓ history, PgUp/PgDn and the wheel scroll back. In `wm` and in `fm` in a window, console programs run in a `console` window by themselves.
 * `RUN keys` — show the key events a program receives: key code, modifiers, character; mouse movement, buttons and wheel (Esc exits).
 * `fm [directory]` — file manager (Norton Commander keys): two panels over the boot disk (`A:`), the RAM disk (`ram:`) and, where they are mounted, the log partition (`log:`), the model disk (`models:`) and the block store (`store:`: published names as files, a copy there publishes one, F8 unpublishes, 300-APP-0038) (full: name, size, date, time; brief: names in columns; Ctrl+L information, Ctrl+Q quick view of the file under the cursor in the other panel), Tab switches panels, Enter opens a directory, starts a program (in front: fm comes back when it ends, issue 160) or views a file in the built-in viewer, Backspace goes up, F3 view, F4 edit in the built-in editor (`edit`'s keys; Shift+F4 a new file), F5 copy, F6 move or rename, F7 make a directory, F8 delete — the marked entries or the one under the cursor, whole trees, between volumes too; the copy and move dialogs offer the other panel's directory (`A:/…`, `ram:/…`, or a new name); existing targets are overwritten or skipped on request; a progress window shows the file and the total, Esc stops, and a failed step asks Retry / Skip / Abort (a partly written copy is removed). Ins/+/-/* mark, Ctrl+F3–F6 sort by name/extension/time/size, Ctrl+H hidden files, Ctrl+R reread, Ctrl+U swap panels, Alt+F1/F2 volume, Alt+F7 find by mask from the current directory down, F9 menu, F1 keys, F10 or Esc quit. Typing goes to the command line under the panels: Enter runs `cd <dir>`, `edit <file>`, `view <file>` or a program with arguments (names of the active panel's entries become their paths; with fm in a `wm` window the program opens a window of its own in front; on a full screen it takes fm's place in front, and fm comes back when it ends: issue 160), Esc clears it, Alt+Enter adds the name under the cursor; Ctrl+O hides or shows both panels (their place shows what the command line did), Ctrl+F1 / Ctrl+F2 the left / right one, Ctrl+P the other one, as in Midnight Commander. The mouse (issue u001): a click puts the cursor on an entry, a double click opens it, a right click marks it, the wheel moves the cursor (or scrolls the viewer and the editor), a click on the key bar presses that key; on a screen of its own the cell under the mouse is shown inverted. fm asks for the user's files (`REQUEST_FILES`): the shell lends its own VFS client, so fm can change `ram:`, `log:` and `data/` on the boot disk; other files open read-only in the editor, which says so (READ-ONLY in its status line; Shift+F2 saves a copy on `ram:` or in `data/`). In fm, `edit` and `view` the key bar shows what F1–F10 do with Shift, Ctrl or Alt while that modifier is held (on the PS/2 keyboard; a terminal sends a modifier only with a key, so its bar stays plain).
-* `wm [program ...]` — window manager ([docs/tools §4.9](docs/tools/README.md), issue 088): `wm fm fm clock dzen-clock` shows the programs side by side in windows on one screen (`wm fm data, edit ram:a.txt` with arguments; Alt+R starts more). Text programs draw into a window at the size of its inside (`mind::tui::Terminal::open`), `clock` and `dzen-clock` into a pixel window (`mind::windowed::pixels`), laid out again when its frame changes (issue u009). Alt+Tab switches windows, Alt+arrows take half the screen, Alt+1…4 a quarter, Alt+Enter maximizes, Alt+F gives the window in front the whole screen without its frame and the bars (and its frame back), Alt+L lists the windows with their PIDs and states to bring one to the front or close it (211-APP-0014), Alt+M moves (arrows) and resizes (Shift+arrows) with snapping at the edges, Alt+W closes a window, Alt+H shows the keys, a right click on the desktop or Alt+P opens the programs by category (issue u003); the items of the top bar can be clicked instead of their keys, for a host that keeps Alt+Tab for itself (issue u008); with the PS/2 mouse a title is dragged (and snaps; a snapped or maximized window dragged off the edge gets its size back, as `[⇕]` gives it) and the `◆` corner resizes, `[▲]` maximizes, and clicks, drags and the wheel inside a window go to its program at the cell of its content (issue u001). Other keys go only to the window in front. Alt+Q leaves wm with the programs running — the next `wm` shows them where they were, as after a crash or `kill` — and Alt+X closes every window. The windows are kept by the window broker `windows` (issue 157); a program started from wm gets a broker client and, of what it asks for, only what wm holds (the user's files, system information), and no screen of its own.
+* `wm [program ...]` — window manager ([docs/tools §4.9](docs/tools/README.md), issue 088): `wm fm fm clock dzen-clock` shows the programs side by side in windows on one screen (`wm fm data, edit ram:a.txt` with arguments; Alt+R starts more). Text programs draw into a window at the size of its inside (`mind::tui::Terminal::open`), `clock` and `dzen-clock` into a pixel window (`mind::windowed::pixels`), laid out again when its frame changes (issue u009). Alt+Tab switches windows, Alt+arrows take half the screen, Alt+1…4 a quarter, Alt+Enter maximizes, Alt+F gives the window in front the whole screen without its frame and the bars (and its frame back), Alt+L lists the windows with their PIDs and states to bring one to the front or close it (211-APP-0014), Alt+M moves (arrows) and resizes (Shift+arrows) with snapping at the edges; an accent frame and inverted title mark this mode, including over a fullscreen window, Alt+W closes a window, Alt+H shows the keys, a right click on the desktop or Alt+P opens the programs by category (issue u003); the items of the top bar can be clicked instead of their keys, for a host that keeps Alt+Tab for itself (issue u008); with the PS/2 mouse a title is dragged (and snaps; a snapped or maximized window dragged off the edge gets its size back, as `[⇕]` gives it) and the `◆` corner resizes, `[▲]` maximizes, and clicks, drags and the wheel inside a window go to its program at the cell of its content (issue u001). Other keys go only to the window in front. Alt+Q leaves wm with the programs running — the next `wm` shows them where they were, as after a crash or `kill` — and Alt+X closes every window. The windows are kept by the window broker `windows` (issue 157); a program started from wm gets a broker client and, of what it asks for, only what wm holds (the user's files, system information), and no screen of its own.
 * `find [path] [-name masks] [-type f|d] [-size +N|-N]` — entries of a volume, depth-first in name order (`A:` or nothing for the boot disk, `ram:` for the RAM disk; masks with `*` and `?`, case-insensitive; sizes in bytes or with `k`/`M`).
 * `grep [-i] [-n] [-r] [-l] [-c] pattern [path...]` — lines matching a simple regular expression (`.`, `*`, `[a-z]`, `[^...]`, `^`, `$`, `\`); `-i` folds Latin and Cyrillic case; `-r` searches directories; a file with a NUL byte is reported as binary.
 * `pins [pin | set <pin> in|out|alt<k> | write <pin> 0|1 | pull <pin> up|down|none | watch <pin>...]` — the pins of an ARM board through the `gpio` service (issue u015): every pin with its header position, active function by name (from `hwdocs/`), level and pull; one pin's functions with the active one marked; changes with the shell's control client (a reserved pin is refused). A console program; without a pin controller (x86, QEMU) it says so.
@@ -593,6 +594,9 @@ toward the first hour corner (bottom right, 00–05); **P** selects the same orb
 ticks every ten seconds. Pressing the active mode's key again hides the entire
 orbit and dot; pressing the other key switches modes directly. The orbit
 starts hidden. The simple **C** orbit uses a darker gray than the **P** orbit.
+A colored marker just outside the orbit points toward the current hour corner
+(bottom-left at 08:20), using that corner's color. The gray bottom-right tick
+remains the fixed zero of the 100-second cycle.
 The dot's diameter is half the former moving stroke's length
 (six pixels at the usual display size).
 The dot starts toward the bottom-right corner and moves clockwise, completing
@@ -660,7 +664,7 @@ if let Some(mut buffer) = mind::mem::Pages::new(8192) {
 | 14 | CAP_DROP | slot |
 | 45 | CAP_MINT | slot, rights mask; msg[0] = offset, msg[1] = length (0: to the end), msg[2] = endpoint badge (0: keep) → slot of a narrower child |
 | 46 | CAP_REVOKE | slot → number of descendants removed; their mappings are gone everywhere when it returns |
-| 49 | DEVICE_STATE | device index, `DEVICE_STOP`/`DEVICE_START` → 0 — platform privilege or a capability over one of the device's BARs |
+| 49 | DEVICE_STATE | device index, `DEVICE_STOP`/`DEVICE_START`/`DEVICE_REGISTERS` → 0 — platform privilege or a capability over one of the device's BARs |
 | 48 | TASK_WATCH | PID of a task the caller spawned, endpoint with the read right → 0; the task's exit arrives there as a message with `MSG_FLAG_EXIT` (PID, reason) |
 | 58 | EXIT_STATUS | PID of one of the last 16 tasks that ended → how it ended: `EXIT_NORMAL \| code << 8`, `EXIT_KILLED`, `EXIT_FAULT \| vector << 8` — needs process control (issue 166) |
 | 47 | MEM_DETACH | heap block address → slot of a move-only memory object; `ERR_BUSY` if the block is shared |
@@ -752,37 +756,40 @@ From WSL with the supplied Windows setup, use `--qemu /mnt/c/msys64/ucrt64/bin/q
 
 Both exporters write to `code_handoff/` in the project root by default,
 independently of the working directory. The directory is ignored by Git.
-The full exporter keeps its original file markers and writes `code_context.txt`:
+The full exporter keeps its original file markers and writes two files: `code_context.txt` with everything but
+`constitution/`, and `constitution_context.txt` with the Constitution and the RFCs in both languages (its `archive/` of
+superseded editions only with `CONSTITUTION_ARCHIVE=1`):
 
 ```bash
 ./code_concat.sh
 ```
 
-The compact exporter needs only Bash and Python 3:
+The compact exporter needs only Bash and Python 3. It writes its two files beside those, with the suffix
+`_compact`: `code_context_compact.txt` and `constitution_context_compact.txt`; the rest goes to `code_handoff/compact/`:
 
 ```bash
 ./code_concat_compact.sh
 ```
 
-Compact results also go to `code_handoff/`:
-
-| File | Contents / when to paste |
+| File in `code_handoff/` | Contents / when to paste |
 |---|---|
-| `index.txt` | File inventory, scope, sizes and limitations; use it to choose relevant files. |
-| `code.txt` | Current Rust sources, including comments and inline tests, with short file markers. |
-| `build.txt` | Manifests, `.cargo/config.toml`, linkers, build/run/USB/export scripts and their helpers. |
-| `agent.txt` | Compact Rust code for discussion: comments/formatting reduced; inline `#[cfg(test)] mod ...` blocks omitted by default. |
-| `parts/agent-001.txt`, etc. | The same agent bodies split for copy/paste, at most 16,000 Unicode characters per file including headers. |
-| `manifest.json` | Selected source paths/hashes, original/output sizes, estimates and explicit test-module omissions. |
+| `code_context_compact.txt` | Compact Rust code for discussion: comments/formatting reduced; inline `#[cfg(test)] mod ...` blocks omitted by default. |
+| `constitution_context_compact.txt` | The Constitution and the RFCs in English and Russian (`constitution/`), only trailing spaces and repeated blank lines removed; the superseded editions in `archive/` only with `--constitution-archive`. |
+| `compact/index.txt` | File inventory, scope, sizes and limitations; use it to choose relevant files. |
+| `compact/code.txt` | Current Rust sources, including comments and inline tests, with short file markers. |
+| `compact/build.txt` | Manifests, `.cargo/config.toml`, linkers, build/run/USB/export scripts and their helpers. |
+| `compact/parts/agent-001.txt`, etc. | The compact code split for copy/paste, at most 16,000 Unicode characters per file including headers. |
+| `compact/manifest.json` | Selected source paths/hashes, original/output sizes, estimates and explicit test-module omissions. |
 
-Paste **`agent.txt` OR the numbered parts in order**, not both. Keep the file
+Paste **`code_context_compact.txt` OR the numbered parts in order**, not both. Keep the file
 markers and part headers: parts identify the file and character offset in its
 compact body. Splits prefer line boundaries; a very long line/string can be
 split across parts without dropping any text. This is an analysis view, not a
 patch to apply to the repository. Original source files are never modified.
 
-The default selection includes `kernel`, `bootloader`, `common`, `libmind`, all
-applications and services, and current tooling. It excludes historical patches, `legacy`, issue
+The default selection includes every crate at the top level (a directory with a
+`Cargo.toml`: `kernel`, `bootloader`, `libmind`, all drivers, services and
+applications), `common`, and current tooling. It excludes historical patches, `legacy`, issue
 files, old `knowledge` snapshots, dependencies/build outputs, `Cargo.lock`,
 symlinks and previous context dumps. Files do not need to be committed to Git.
 Byte-identical files (such as shared linker/config files) are included once per
@@ -793,7 +800,7 @@ data and runtime function bodies are preserved. The scanner handles nested
 comments and preserves operator separation. Python, shell, PowerShell, C#,
 TOML and linker file bodies are kept intact: their indentation, here-documents
 and strings are not subject to Rust minification. For comments, rationale or
-inline tests, use `code.txt` or enable the relevant option below.
+inline tests, use `compact/code.txt` or enable the relevant option below.
 
 For the largest reduction in context, select only the files needed for the
 question. The exporter does **not** automatically resolve their dependencies:
@@ -823,9 +830,9 @@ question. The exporter does **not** automatically resolve their dependencies:
 `--include` accepts a file, directory prefix or quoted glob and can be repeated.
 An unmatched selection is an error, not an empty or silently truncated export.
 `--agent-groups` defaults to `code`; enabling `--with-tests`/`--with-docs`
-creates `tests.txt`/`docs.txt` without automatically enlarging `agent.txt`.
+creates `compact/tests.txt`/`compact/docs.txt` without automatically enlarging `code_context_compact.txt`.
 Generated stale bundles/parts from a previous export in the same output
-directory are removed; unrelated files are retained. Identical inputs/options
+directory are removed, those of the older layout (`agent.txt`, `parts/` in `code_handoff/`) included; unrelated files are retained. Identical inputs/options
 produce identical output, and a source/selection error leaves the prior export
 intact.
 
@@ -862,3 +869,21 @@ Licensed under either of
 at your option. Data files from other projects keep their own licences, listed in [THIRD_PARTY.md](THIRD_PARTY.md): the Russian stress dictionary `phonetics/data/stress_ru.txt` is CC BY-SA 4.0 (OpenRussian), the English lexicon `phonetics/data/lexicon_en.txt` is under the CMUdict BSD-style licence, the voice model `voice/model.bin`, trained on speech made with them, is shared under CC BY-SA 4.0 to be safe, and the 8×16 font MIND Mono (`fonts/mind-mono-16.bdf`, a subset of Terminus Font 4.49.1) is under the SIL Open Font License 1.1.
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+### Ryzen network staging (213-KRN-0114)
+
+The separate [country catalog](hwdocs/rtl8852be-regulatory.md) contains all 181
+country/territory codes from pinned wireless-regdb, with world `00` separate,
+and exposes exact 2.4 GHz/20 MHz coverage, EIRP ceilings and restrictions. UZ
+is the operator's explicit deployment choice. Selection is a library input;
+UI, persistence, actual channel switching and native policy consumption remain
+integration work, and country selection alone grants no transmission authority.
+
+ABI 11 adds boot entries for RTL8168 Ethernet and the RTL8852BE diagnostic.
+Rebuild and write the bootloader, kernel and services from one build.
+Realtek BARs start with memory decoding only; MSI setup does not enable DMA.
+The Ethernet service enables mastering after its rings are ready. The current
+Wi-Fi executable runs the board, firmware, MAC, RX and initial-PHY diagnostic
+and powers down. It has no WLAN service endpoint and cannot associate or carry
+network traffic. Hardware acceptance remains separate for Ryzen and the original
+MacBook; see [the integration task](issues/213-KRN-0114-realtek-driver-startup.md).

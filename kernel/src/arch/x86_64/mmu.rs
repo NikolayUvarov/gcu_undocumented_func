@@ -293,6 +293,28 @@ pub unsafe fn reach_device(start: usize, len: usize) -> bool {
     true
 }
 
+// A report may read a device only through an existing UC identity leaf; this never alters mappings.
+pub unsafe fn identity_device_u32(physical: u64) -> bool {
+    let pdpt = KERNEL_PDPT.load(Ordering::Acquire) as *const u64;
+    !pdpt.is_null() && identity_device_u32_in(pdpt, physical)
+}
+
+// The caller supplies the kernel's valid page-table tree, held stable throughout this bounded walk.
+pub(crate) unsafe fn identity_device_u32_in(pdpt: *const u64, physical: u64) -> bool {
+    const ADDRESS: u64 = 0x000F_FFFF_FFFF_F000;
+    if physical & 3 != 0 || physical.checked_add(4).is_none_or(|end| end > IDENTITY_END) { return false; }
+    let pdpte = pdpt.add((physical >> 30) as usize).read();
+    if pdpte & VALID == 0 || pdpte & (1 << 7) != 0 || pdpte & ADDRESS == 0 { return false; }
+    let pde = ((pdpte & ADDRESS) as *const u64).add((physical >> 21 & 511) as usize).read();
+    if pde & VALID == 0 { return false; }
+    if pde & (1 << 7) != 0 {
+        return pde & UNCACHED == UNCACHED && pde & ADDRESS & !(LARGE - 1) == physical & !(LARGE - 1);
+    }
+    if pde & ADDRESS == 0 { return false; }
+    let pte = ((pde & ADDRESS) as *const u64).add((physical >> 12 & 511) as usize).read();
+    pte & (VALID | UNCACHED) == VALID | UNCACHED && pte & ADDRESS == physical & !(PAGE as u64 - 1)
+}
+
 /// Makes the kernel's identity mapping of the 2 MiB page holding `physical` (below 4 GiB) uncached, for device
 /// registers the kernel itself writes (MSI-X tables). The caller checks that the page holds no RAM.
 pub unsafe fn uncached(physical: usize) {

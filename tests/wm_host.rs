@@ -741,6 +741,79 @@ fn a_dragged_window_is_marked() {
 }
 
 // The desktop background (000-APP-0047, 000-APP-0050).
+#[test]
+fn keyboard_placement_marks_the_target_until_enter_or_escape() {
+    for content in [Content::Text, Content::Pixels] {
+        let mut wm = Wm::new(160, 50);
+        wm.desk.add(Win::new(1, 101, content, (80, 25), "target"));
+        wm.desk.place(1, Rect::new(20, 10, 40, 20));
+        let styles = |wm: &mut Wm| {
+            let mut cells = vec![Cell::BLANK; 160 * 50];
+            let mut grid = Grid::new(&mut cells, 160, 50);
+            wm.draw(&mut grid, &DARK, &mut |_, _, _| None, None);
+            let r = wm.desk.get(1).unwrap().rect;
+            (grid.get(r.x, r.y + 2).style, (r.x..r.right()).any(|x| grid.get(x, r.y).style == DARK.selected.inverse()))
+        };
+        let normal = styles(&mut wm);
+        let before = wm.desk.get(1).unwrap().rect;
+        for exit in [KEY_ESC, KEY_ENTER] {
+            wm.key(alt_char('m'));
+            let active = styles(&mut wm);
+            assert_eq!(active.0.fg, DARK.accent.fg);
+            assert!(active.1, "the placement title is inverted before moving");
+            wm.pointer(5, 5, 0, 0);
+            assert_eq!(styles(&mut wm), active, "pointer motion must not clear keyboard placement");
+            wm.key(key(KEY_RIGHT));
+            wm.key(Key(event(KEY_DOWN, 0, MOD_SHIFT)));
+            assert_eq!(styles(&mut wm), active, "moving and resizing retain the highlight");
+            wm.key(key(exit));
+            assert_eq!(styles(&mut wm), normal, "the frame returns to its ordinary focused style");
+            assert!(matches!(wm.mode, Mode::Normal));
+            if exit == KEY_ESC { assert_eq!(wm.desk.get(1).unwrap().rect, before); }
+        }
+    }
+}
+
+#[test]
+fn full_screen_placement_overlays_a_frame_without_resizing_content() {
+    for content in [Content::Text, Content::Pixels] {
+        let mut wm = Wm::new(160, 50);
+        wm.desk.add(Win::new(1, 101, content, (160, 50), "target"));
+        wm.desk.place(1, Rect::new(20, 10, 40, 20));
+        wm.key(alt_char('f'));
+        let before = wm.desk.get(1).unwrap().clone();
+        wm.desk.take_changed();
+        let mut cells = vec![Cell::BLANK; 160 * 50];
+        let mut grid = Grid::new(&mut cells, 160, 50);
+        let mut text = |_: u32, _: usize, _: usize| Some(('.', 0xFFFFFF, 0x0000AA));
+        for exit in [KEY_ENTER, KEY_ESC] {
+            wm.key(alt_char('m'));
+            let (owner, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((0, 0)));
+            assert_eq!(wm.desk.get(1), Some(&before), "entering placement changes no window geometry or flags");
+            assert!(wm.desk.take_changed().is_empty(), "no resize request on entry");
+            assert_eq!(wm.desk.content(1), Rect::new(0, 0, 160, 50));
+            assert_eq!(grid.get(0, 2).style.fg, DARK.accent.fg);
+            assert!((0..160).any(|x| grid.get(x, 0).style == DARK.selected.inverse()));
+            assert_eq!(owner[0], 0, "the frame covers full-screen pixels");
+            assert_eq!(cursor, None, "a text cursor cannot paint over the placement frame");
+            if content == Content::Pixels { assert_eq!(owner[160 + 1], 1, "interior pixels stay visible"); }
+            else { assert_eq!(grid.get(1, 1).ch, '.', "text content keeps its coordinates"); }
+            wm.pointer(5, 5, 0, 0);
+            wm.key(key(exit));
+            let (owner, cursor) = wm.draw(&mut grid, &DARK, &mut text, Some((0, 0)));
+            assert_eq!(wm.desk.get(1), Some(&before), "finishing without movement preserves full screen");
+            assert!(wm.desk.take_changed().is_empty());
+            if content == Content::Pixels { assert!(owner.iter().all(|&tag| tag == 1)); }
+            else { assert_eq!((grid.get(0, 0).ch, cursor), ('.', Some((0, 0)))); }
+        }
+        wm.key(alt_char('m'));
+        wm.key(key(KEY_RIGHT));
+        assert_eq!(wm.desk.full_screen(), None, "an actual move still leaves full screen");
+        wm.key(key(KEY_ESC));
+        assert_eq!(wm.desk.get(1), Some(&before), "cancel restores the original full-screen state");
+    }
+}
+
 use background::{colours, cover, ink, layout, overlay, pattern, used_percent, Backdrop, Config, Face, Info, Pattern, Picture, Place};
 
 fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }

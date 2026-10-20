@@ -1,6 +1,6 @@
 # 750 — The Effector agent: MIND Core managed by the Effector fleet server
 
-**Type:** main task · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later: [requests-NET.md](requests-NET.md) (HTTP for a service, a certificate pin and long-lived sessions; JSON in the parser service; a flow for a long-running service), [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants with private directories, a writable scoped `vfs` client, a lifecycle client limited to named services), [requests-UPD.md](requests-UPD.md) (an `updater` client for the gateway, signed application packages), [requests-APP.md](requests-APP.md) (the shell's `effector` command); outside this repository, the Effector server's support for a `mindcore` platform (its task 75) · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
+**Type:** main task · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later: [requests-NET.md](requests-NET.md) (HTTP for a service, a certificate pin and long-lived sessions; JSON in the parser service; a flow for a long-running service), [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants with private directories, a writable scoped `vfs` client, a lifecycle client limited to named services), [requests-UPD.md](requests-UPD.md) (an `updater` client for the gateway, signed application packages), [requests-APP.md](requests-APP.md) (the shell's `effector` command); outside this repository, release/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md` and signed-package metadata/non-shell entries in `issues/81-mindcore-02-package-metadata.task.md` · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
 
 Asked by the maintainer (2026-10-09): a MIND Core machine should be managed by the maintainer's existing fleet server, Effector (project `sst-test-deploy`), as its Windows and Linux terminals are. The server installs software, updates applications, collects diagnostics and data, and controls services and restarts. Opened by the session that surveyed both projects; the `EFF` track is open.
 
@@ -57,7 +57,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 **Trust both ways.**
 - The server is trusted by its pinned leaf certificate, current and next.
-- The machine presents the token Effector requires today. It also presents the device key ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), kept across boots) as its client certificate, which identifies the machine once Effector accepts agents by device key (Effector's task 75).
+- The machine presents the native AgentToken Effector requires today. The planned device-key certificate ([351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), kept across boots) remains a separate identity extension: current `connect-pins` cannot send a client certificate, and external `issues/81-mindcore-01-agent-and-live-acceptance.task.md` retains the server/agent identity work. Task 81's platform boundary did not implement device-key authentication.
 - The heartbeat carries the device key's fingerprint and the image's manifest hash (350), so a run names its machine and image (MC-12.1).
 
 **`effector_gw` — the gateway.**
@@ -110,12 +110,12 @@ The agent must not turn the server into an unchecked remote administrator. Every
 
 ### Compatibility
 
-- **The contract.** The agent speaks the subset of the protocol fixed in 750-EFF-0001, pinned to the Effector build it was checked against (server 1.2.0.127, commit `5d42b29`, as a starting point).
+- **The contract.** The planned agent speaks the subset fixed in [750-EFF-0001](750-EFF-0001-protocol-contract.md). [Contract 1.0](../docs/effector/protocol.md) records the exact source/live revisions reviewed on 2026-10-15; the earlier 1.2.0.127 survey is historical evidence, not a current interoperability result.
 - **Version changes (MC-12.4, MC-12.7).**
   - Unknown fields are ignored.
   - A server whose contract version the agent does not know is reported and not guessed at.
   - A change of the subset is a new contract version.
-- **Server side.** The Effector server needs its own changes for a third operating system (its task 75): a `mindcore` program list and path rules, action capabilities, no shell actions, and a published contract. Until then a MIND Core endpoint appears online and accepts packages, but program-bound actions and file transfers do not work.
+- **Server side.** External `sst-test-deploy: issues-done/81-mindcore-server-platform-boundary.task.md.done` records only the prepared local `mindcore` program/path/native-update boundary, not a deployment. `issues/81-mindcore-01-agent-and-live-acceptance.task.md` retains release, runtime/action-capability/identity and real-agent checks. `issues/81-mindcore-02-package-metadata.task.md` retains signed-package metadata and non-shell entries with 0008. The native protocol is published, but no MIND runtime agent exists and neither online status nor package acceptance has been established on MIND. Legacy/unrestricted shell actions remain denied; scoped test-account msh is the separate future path described in 501 and contract 1.0.
 
 ## Plan: tasks by phase
 
@@ -177,7 +177,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 - 0001–0005 can run in parallel.
 - 0006 also waits for the `NET` and `KRN` requests.
 - 0008–0010 wait for `UPD`, `KRN` and the Effector server.
-- 0012 needs the Effector server's task 75 (part A) and [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core).
+- 0012 needs the named deployed server build and live-agent work of external 81-01, package metadata from 81-02 for its package checks, and [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core). Historical external task 75 is unrelated console work.
 
 ## Acceptance criteria
 
