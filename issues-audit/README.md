@@ -31,6 +31,8 @@ An audit's results are evidence of what was reviewed at that commit, not a proof
 
 | File | What |
 |---|---|
+| [2026-10-16-download-recheck-stall.md](2026-10-16-download-recheck-stall.md) | Intel 6 GiB gate stalls on the already-complete download recheck; exact failure, uncertain cause and NET investigation request |
+| [2026-10-16-bcm-tx-wait-audit.md](2026-10-16-bcm-tx-wait-audit.md) | BCM4331 TX status loop bypasses its deadline on intermediate/unrelated statuses; owner request and hardware evidence boundary |
 | [2026-10-09-baseline.md](2026-10-09-baseline.md) | The state of the repository before the first audit |
 | [2026-10-09-repository-audit.md](2026-10-09-repository-audit.md) | Code audit at `2cbda21`: eight confirmed findings covering FAT, blockstore, packaging, CI and file-manager/editor data loss; routing and acceptance criteria |
 | [2026-10-09-validation.txt](2026-10-09-validation.txt) | Host-test results, skipped checks, existing ELF fixture hashes and audit reproduction output |
