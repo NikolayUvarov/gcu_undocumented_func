@@ -13,7 +13,7 @@
 //! 1.1 (550-NET-0035, for 550-APP-0082): the country the station runs under, from the regulatory catalogue built into
 //! it (wireless-regdb at a pinned commit, named by `catalogue`). A country is asked for by its two-letter code and kept
 //! by `keystore` (keystore.wit 1.3), never assumed: with none applied the station probes nowhere and `join` answers
-//! `unsupported`. The radio applies the country's limits under its own (wlanhw.wit 1.2, proposed). Asking for a
+//! `unsupported`. The radio applies the country's limits under its own (wlanhw.wit 1.2). Asking for a
 //! country leaves the network and drops the last scan, so nothing chosen under the old rules is used under the new
 //! ones. A station built without a catalogue answers the country calls `unsupported` and keeps 1.0's behaviour
 //! (550-NET-0035, stage A).

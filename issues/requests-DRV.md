@@ -312,6 +312,8 @@ This request does not replace the preceding H12 deadline correction.
 
 ## The regulatory catalogue as a crate of its own, and `wlanhw.wit` 1.2 for a country's limits (550-NET-0035)
 
+**Progress:** the drivers track agreed to both (2026-10-20). `wlanhw.wit` 1.2 and `wlansim`'s side are on the network branch; `bcm_wifi` answers `set-country` when the drivers track merges it.
+
 **Recorded by:** the network track (NET), 2026-10-20, for [550-NET-0035](550-NET-0035-the-stations-country.md) (the request above, and NET's in requests-NET.md). For the drivers track and for ASTRA, which wrote the catalogue under 213-DRV-0032.
 
 ### Problem

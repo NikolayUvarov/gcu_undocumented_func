@@ -441,7 +441,7 @@ types! {
     voice: Action Order;
     wifi: Security Error State Reason Network Status Standing Channel Country Countries CountryState CountryStatus;
     window: Error Kind Placement Info;
-    wlanhw: Error Info Filter Sent;
+    wlanhw: Error Info Filter Sent Limit;
 }
 
 /// libmind/src/idl, from the repository root where the host tests run.
