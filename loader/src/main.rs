@@ -126,13 +126,24 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
-    let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
     let image = Image::Memory { cap, len: size };
-    let result = match (front.filter(|_| screen != 0), fed) {
-        (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
-        (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
-        (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+    let spawn = |memory_mib: u16| {
+        let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
+        match (front.filter(|_| screen != 0), fed) {
+            (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
+            (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
+            (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+        }
     };
+    let mut result = spawn(memory_mib);
+    // More than loader's quota (the frame pool) asked: the kernel refuses before it moves a grant, and the program gets
+    // all of loader's quota instead, which the frame pool limits further anyway (000-KRN-0134).
+    if memory_mib as usize > HEAP_MAX_BYTES >> 20 && matches!(result, Err(Error::Other(ERR_LIMIT))) {
+        if let Ok(started) = spawn(SPAWN_MEMORY_ALL as u16) {
+            mind::println!("[LOADER] {}: {} MiB ASKED, MORE THAN LOADER'S QUOTA: GIVEN ALL OF IT", core::str::from_utf8(task.as_bytes()).unwrap_or("?"), memory_mib);
+            result = Ok(started);
+        }
+    }
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
