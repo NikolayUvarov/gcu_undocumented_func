@@ -29,9 +29,14 @@ The second criterion has a host test: `tests/build_jobs_test.py`, in `scripts/ho
 - the build returns 1;
 - the jobs still running finish with complete logs.
 
-Left:
-- the comparison of a sequential build (`MIND_BUILD_JOBS=1`) with the parallel one, file by file, on x86 and aarch64;
-- the two clean builds' times on one machine.
+**The measurement** (2026-10-20, Effector's i7-930 machine, 8 threads, WSL2 Ubuntu 24.04, the tree at 43e39c8). Each build started clean: every crate's `target/` and the image's root removed.
+
+| Architecture | Sequential (`MIND_BUILD_JOBS=1`) | Parallel (8 jobs) | Files in the root |
+|---|---|---|---|
+| x86 (`usb_root/`) | 1431 s | 891 s | 110, byte for byte the same (SHA-256 of each) |
+| aarch64 (`aarch64_root/`) | 1430 s | 878 s | 104, byte for byte the same |
+
+Left: the gate on a tree built this way (every gate builds with the parallel jobs).
 
 ## Related
 

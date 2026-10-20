@@ -11,7 +11,7 @@ The link track's requests of 2026-10-20 (`internal-dev-messages`, `KRN/2026-10-2
 
 ## Plan
 
-1. **Two boot images.** `usb_serial` after `usb_hid`, and `link` after `vfs_server` and `logd`. That is an ABI change; it goes with 351-KRN-0115 and 0116 into ABI 12.
+1. **Two boot images.** `usb_serial` after `usb_hid`, and `link` after `vfs_server` and `logd`. That is an ABI change: ABI 13, since ABI 12 (351-KRN-0115, 0116) went ahead without them while the link track's code is not in `main`.
 2. **Started only when the boot volume's root holds `link.conf`,** as `autorun.msh` is read: only whoever writes the disk can put it there. Otherwise both are `NOT STARTED: NO LINK.CONF`.
 3. **`usb_serial`'s grants,** as `usb_storage`'s and `usb_hid`'s: `usb_host`'s client badged `BADGE_SERIAL` in `SLOT_DEV0`, and its server endpoint in `SLOT_SERVICE`.
 4. **`link`'s grants:**
@@ -31,4 +31,4 @@ The link track's requests of 2026-10-20 (`internal-dev-messages`, `KRN/2026-10-2
 
 ## Related
 
-[800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.md) (ABI 12), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
+[800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.md) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
