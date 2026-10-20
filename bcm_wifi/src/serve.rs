@@ -1,7 +1,7 @@
 // The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.2 served on the service endpoint, which init lends to the
 // station `wlan` alone (MC-2.3). Received frames are polled from the ring every few milliseconds; `wait` answers when
 // one is queued. No shared ring yet: frames go by `receive`, as the station takes them.
-use crate::radio::{Error, Filter, Radio, FRAME_MAX, RADIO_HEADER};
+use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, RADIO_HEADER};
 use mind::idl::codec::List;
 use mind::idl::{wire, wlanhw};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -53,6 +53,60 @@ impl Country {
     }
 }
 
+/// The radio's traffic over a period (550-DRV-0036), logged when unicast data went out in it, so a ping's loss can be
+/// placed: the data frames sent to the access point, acknowledged or not and after how many tries, by rate; and what
+/// came in meanwhile, by modulation and outcome.
+struct Tally { start: u64, sent: u32, acked: u32, retried: u32, tries: u32, rates: [(u8, u16, u16); 8], seen: Counts }
+const TALLY_MS: u64 = 10_000;
+
+impl Tally {
+    fn new(radio: &Radio) -> Self { Tally { start: mind::time::uptime_ms() as u64, sent: 0, acked: 0, retried: 0, tries: 0, rates: [(0, 0, 0); 8], seen: radio.counts } }
+
+    fn sent(&mut self, frame: &[u8], rate: u8, s: &Sent) {
+        // Unicast data only: a ping and its kin, not management frames or broadcasts.
+        if frame.len() < 10 || frame[0] & 0x0C != 0x08 || frame[4] & 1 != 0 { return; }
+        self.sent += 1;
+        self.tries += s.attempts as u32;
+        if s.acked { self.acked += 1; if s.attempts > 1 { self.retried += 1; } }
+        if let Some(r) = self.rates.iter_mut().find(|r| r.0 == rate || r.0 == 0) {
+            r.0 = rate;
+            r.1 += 1;
+            if s.acked { r.2 += 1; }
+        }
+    }
+
+    fn tick(&mut self, radio: &Radio) {
+        if (mind::time::uptime_ms() as u64) < self.start + TALLY_MS { return; }
+        if self.sent > 0 {
+            let (k, b) = (radio.counts, self.seen);
+            let f = |kind: usize, outcome: usize| k.frames[kind][outcome].wrapping_sub(b.frames[kind][outcome]);
+            let mut rates = [0u8; 96];
+            let mut w = Text { buf: &mut rates, len: 0 };
+            for r in self.rates.iter().filter(|r| r.0 != 0) {
+                let _ = core::fmt::Write::write_fmt(&mut w, format_args!(" {}{}:{}/{}", r.0 / 2, if r.0 % 2 == 1 { ".5" } else { "" }, r.1, r.2));
+            }
+            let rates = core::str::from_utf8(&w.buf[..w.len]).unwrap_or("");
+            mind::println!("[BCM] {} S: SENT {} DATA FRAMES, {} ACKED ({} AFTER A RETRY), {} LOST, {} TRIES; MBIT/S SENT/ACKED{}; RECEIVED CCK {} OK {} BAD FCS {} BAD PLCP, OFDM {} OK {} BAD FCS {} BAD PLCP, HT {} OK {} BAD FCS {} BAD PLCP; QUEUED {}, FILTERED {}, BAD {}, ACKS TO US CCK {} OFDM {}, DMA ERRORS {}",
+                           (mind::time::uptime_ms() as u64 - self.start) / 1000, self.sent, self.acked, self.retried, self.sent - self.acked, self.tries, rates,
+                           f(0, 0), f(0, 1), f(0, 2), f(1, 0), f(1, 1), f(1, 2), f(2, 0), f(2, 1), f(2, 2),
+                           k.queued.wrapping_sub(b.queued), k.filtered.wrapping_sub(b.filtered), k.bad.wrapping_sub(b.bad),
+                           k.acks_cck.wrapping_sub(b.acks_cck), k.acks_ofdm.wrapping_sub(b.acks_ofdm), k.dma_errors.wrapping_sub(b.dma_errors));
+        }
+        *self = Tally::new(radio);
+    }
+}
+
+/// A line built without a heap.
+struct Text<'a> { buf: &'a mut [u8], len: usize }
+impl core::fmt::Write for Text<'_> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let n = s.len().min(self.buf.len() - self.len);
+        self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.len += n;
+        Ok(())
+    }
+}
+
 fn error(e: Error) -> wlanhw::Error {
     match e { Error::NoDevice => wlanhw::Error::NoDevice, Error::Busy => wlanhw::Error::Busy, Error::Empty => wlanhw::Error::Empty, Error::Invalid => wlanhw::Error::Invalid, Error::Failed => wlanhw::Error::Failed }
 }
@@ -69,9 +123,11 @@ pub fn run(radio: &mut Radio) -> ! {
     let mut out = [0u8; RADIO_HEADER + FRAME_MAX];
     let mut waiters: [Option<wire::Call>; WAITERS] = [const { None }; WAITERS];
     let mut country: Option<Country> = None;
+    let mut tally = Tally::new(radio);
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         radio.poll();
+        tally.tick(radio);
         if radio.waiting() != 0 {
             for call in waiters.iter_mut().filter_map(Option::take) { let _ = wlanhw::reply_wait(call, radio.waiting() as u32); }
         }
@@ -93,7 +149,9 @@ pub fn run(radio: &mut Radio) -> ! {
                 wlanhw::reply_send(call, Err(wlanhw::Error::Invalid))
             }
             wlanhw::Request::Send { frame, rate, attempts } => {
-                let sent = radio.send(frame, rate, attempts).map(|s| wlanhw::Sent { acked: s.acked, attempts: s.attempts });
+                let sent = radio.send(frame, rate, attempts);
+                if let Ok(s) = &sent { tally.sent(frame, rate, s); }
+                let sent = sent.map(|s| wlanhw::Sent { acked: s.acked, attempts: s.attempts });
                 wlanhw::reply_send(call, sent.as_ref().map_err(|&e| error(e)))
             }
             wlanhw::Request::Receive => match radio.take(&mut out) {
