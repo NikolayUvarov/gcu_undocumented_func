@@ -7982,9 +7982,10 @@ def autorun_check(args, disk):
         for name, (script, shown, ended) in scripts.items():
             (disk / "autorun.msh").write_text(script)
             sign_manifest.sign_volume(disk)
-            vm = VM(args, disk.relative_to(ROOT).as_posix())
+            # No `ps` at the first prompt, as VM() types: keys typed while a script runs go to its Esc check.
+            vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
             try:
-                vm.expect(shown, timeout=30)
+                vm.expect(shown, timeout=90)
                 vm.expect("MIND> ", timeout=30)
                 log = vm.command("dmesg -s shell", raw=True)
                 digest = hashlib.sha256(script.encode()).hexdigest()

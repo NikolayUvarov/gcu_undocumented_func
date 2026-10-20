@@ -1166,7 +1166,8 @@ fn main(info: &'static BootInfo) {
     shell.prompt();
     let mut vt = Vt::new();
     let mut events = Events::new();
-    let mut autorun = true;
+    // The start script: tried once a second after the first frame, for a minute at most (000-APP-0079).
+    let (mut autorun, autorun_until) = (Some(0u64), mind::time::uptime_ms() as u64 + 60_000);
     loop {
         for index in 0..SESSIONS { if shell.activate(index) { shell.tend(); } }
         shell.tend_window();
@@ -1215,7 +1216,13 @@ fn main(info: &'static BootInfo) {
             if let Some(line) = start.frame(info.width, info.height, mind::time::uptime_ms() as u64) { mind::println!("{}", line); }
         }
         // The start script, once, after the first frame (or at once without a screen) (000-APP-0079).
-        if autorun && start.drawn() { autorun = false; if msh::autorun(&mut shell) { shell.prompt(); } }
+        let now = mind::time::uptime_ms() as u64;
+        if let Some(next) = autorun.filter(|&next| start.drawn() && now >= next) {
+            autorun = match msh::autorun(&mut shell, now >= autorun_until) {
+                msh::Autorun::Later => Some(next.max(now) + 1000),
+                msh::Autorun::Done(ran) => { if ran { shell.prompt(); } None }
+            };
+        }
         // Wait for the next tick, or for the voice program's call or the window manager's.
         match shell.voice.endpoint {
             Some(endpoint) => {

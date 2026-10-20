@@ -225,10 +225,19 @@ pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
     false
 }
 
+/// What became of a try at the start script: `Done(ran)`, or `Later` while the file service does not answer yet.
+pub enum Autorun { Done(bool), Later }
+
 /// The start script (000-APP-0079): `autorun.msh` at the boot volume's root, where no program can write, run once after the
-/// shell's first frame as `msh /autorun.msh`; its hash and its end go to the system log. Without the file, nothing.
-pub fn autorun(shell: &mut Shell) -> bool {
-    let source = match read(AUTORUN) { Ok(source) => source, Err("NOT FOUND") => return false, Err(e) => { mind::println!("[SHELL] AUTORUN {} NOT RUN: {}", AUTORUN, e); return false; } };
+/// shell's first frame as `msh /autorun.msh`; its hash and its end go to the system log. Without the file, nothing. The
+/// file service gets `AUTORUN_MS` a try, so a busy one never holds the shell's keys; `last` gives up on it.
+pub fn autorun(shell: &mut Shell, last: bool) -> Autorun {
+    let source = match mind::idl::wire::with_timeout(AUTORUN_MS, || read(AUTORUN)) {
+        Ok(source) => source,
+        Err("NOT FOUND") => return Autorun::Done(false),
+        Err("VFS NOT AVAILABLE") if !last => return Autorun::Later,
+        Err(e) => { mind::println!("[SHELL] AUTORUN {} NOT RUN: {}", AUTORUN, e); return Autorun::Done(false); }
+    };
     let mut hash = String::new();
     for byte in mind::sha256::digest(source.as_bytes()) { let _ = write!(hash, "{:02x}", byte); }
     mind::println!("[SHELL] AUTORUN {} SHA256 {}", AUTORUN, hash);
@@ -236,10 +245,11 @@ pub fn autorun(shell: &mut Shell) -> bool {
     let _ = writeln!(shell.term, "AUTORUN {} (ESC STOPS IT)", AUTORUN);
     let ended = match run(shell, AUTORUN, false) { Ok(()) => String::from("OK"), Err(line) => line };
     mind::println!("[SHELL] AUTORUN ENDED {}", ended);
-    true
+    Autorun::Done(true)
 }
 
 const AUTORUN: &str = "/autorun.msh";
+const AUTORUN_MS: u32 = 200;
 
 /// `msh file [args]`, `msh -c "code"`, `msh --check file`; `name.msh [args]` is `msh name.msh [args]`.
 pub fn command(shell: &mut Shell, args: &[u8]) {
