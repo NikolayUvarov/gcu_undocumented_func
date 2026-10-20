@@ -42,6 +42,7 @@ mindlink [options] <port> <command> [arguments]
 | `rm <name>` | deletes a file |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
+| `board <line>` | one line to a [multi-device](multi-device.md) board's control port (`type …`, `key …`, `move …`, `status`), and its answer |
 | `serve <dir> [--log <file>] [--console <command>]` | the slave: files in `<dir>`, the log read from `<file>`, a console running `<command>` through `/bin/sh -c`. Without `--console` there is no console |
 
 **Options:**
