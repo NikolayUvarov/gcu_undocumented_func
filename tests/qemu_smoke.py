@@ -7530,7 +7530,11 @@ def wm_suite(vm):
                 screen_has("Choose the picture (BMP, PNG, JPEG): data")
                 keys("esc", text="SETTINGS=Background:Image file")
                 keys("f3", text="BROWSE=data:..")
-                keys("down", text="BROWSE=data:sky.bmp")
+                # Directories come first: data/media/ when a screenshot or a recording made it before (000-APP-0089).
+                keys("down", text="BROWSE=data:")
+                if last_state().endswith("BROWSE=data:media"):
+                    keys("down", text="BROWSE=data:sky.bmp")
+                assert last_state().endswith("BROWSE=data:sky.bmp"), last_state()
                 keys("down", text="BROWSE=data:sky.jpg")
                 keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
                 assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
