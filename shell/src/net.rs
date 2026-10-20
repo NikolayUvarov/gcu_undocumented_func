@@ -121,6 +121,20 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
     }
 }
 
+/// Every card's frames as the stack counts them, the Wi-Fi station's too, the default card marked (shell.wit 1.7,
+/// 000-APP-0096).
+pub fn card_counters() -> Result<mind::idl::codec::List<mind::idl::shell::CardCounters, 4>, mind::idl::shell::Error> {
+    let Ok(Ok(interfaces)) = socket::interfaces(STACK) else { return Err(mind::idl::shell::Error::Unavailable) };
+    let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    let mut list = mind::idl::codec::List::default();
+    for i in interfaces.as_slice() {
+        let card = cards.as_slice().iter().find(|c| c.card == i.card);
+        list.push(mind::idl::shell::CardCounters { card: i.card, wireless: card.is_some_and(|c| c.kind == socket::CardKind::Wireless),
+                                                    default: card.is_some_and(|c| c.default), sent: i.sent, received: i.received });
+    }
+    Ok(list)
+}
+
 // A card's kind, then DOWN, PREFERRED and DEFAULT where they apply.
 fn state(out: &mut impl Write, card: &socket::Card) {
     let _ = write!(out, " {}", match card.kind { socket::CardKind::Wired => "WIRED", socket::CardKind::Wireless => "WI-FI" });
@@ -129,18 +143,43 @@ fn state(out: &mut impl Write, card: &socket::Card) {
     }
 }
 
-pub fn ping(out: &mut impl Write, args: &[u8]) {
-    let Some(host) = core::str::from_utf8(args).ok().and_then(|t| t.split_whitespace().next()) else { let _ = writeln!(out, "PING <HOST>"); return };
-    let Some(target) = address(out, host) else { return };
-    let mut received = 0;
-    for _ in 0..3 {
-        match socket::ping(STACK, target, 1000) {
-            Ok(Ok(us)) => { received += 1; let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us); }
-            Ok(Err(error)) => failed(out, "PING", error),
+// `ping [-c count] [-i seconds] [-w seconds] [-f] host` (000-APP-0095): each line on the screen as it comes, Esc or
+// Ctrl+C stopping it, then the tally. A request the policy or the stack refuses for good ends it.
+pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
+    let asked = match crate::ping::parse(core::str::from_utf8(args).unwrap_or("")) { Ok(asked) => asked, Err(usage) => { let _ = writeln!(shell.term, "{}", usage); return } };
+    let Some(target) = address(&mut shell.term, asked.host) else { return };
+    let (mut tally, mut dots, mut stopped) = (crate::ping::Tally::default(), false, false);
+    while asked.count == 0 || tally.sent < asked.count {
+        let started = mind::time::uptime_ms() as u64;
+        let out = &mut shell.term;
+        match socket::ping(STACK, target, asked.wait_ms) {
+            Ok(Ok(us)) => {
+                tally.reply(us);
+                if !asked.fast { let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us); }
+            }
+            Ok(Err(Error::Timeout)) if asked.fast => { tally.lost(); dots = true; let _ = write!(out, "."); }
+            Ok(Err(error)) => {
+                tally.lost();
+                if core::mem::take(&mut dots) { let _ = writeln!(out); }
+                failed(out, "PING", error);
+                if matches!(error, Error::Denied | Error::Invalid) { break; }
+            }
             Err(_) => { stack_failed(out); return; }
         }
+        // The wait for the next request, the screen kept up to date and Esc watched meanwhile.
+        let next = started + asked.interval_ms as u64;
+        loop {
+            shell.term.render(None);
+            if crate::msh::interrupted(shell) { stopped = true; break; }
+            let now = mind::time::uptime_ms() as u64;
+            if now >= next || asked.count != 0 && tally.sent >= asked.count { break; }
+            let _ = mind::time::sleep((next - now).min(10) as usize);
+        }
+        if stopped { break; }
     }
-    let _ = writeln!(out, "PING: 3 SENT, {} RECEIVED", received);
+    if dots { let _ = writeln!(shell.term); }
+    if stopped { let _ = writeln!(shell.term, "^C"); }
+    tally.line(&mut shell.term, stopped);
 }
 
 pub fn nslookup(out: &mut impl Write, args: &[u8]) {
