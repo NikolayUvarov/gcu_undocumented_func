@@ -237,6 +237,41 @@ pub fn grants(out: &mut impl Write) {
     }
 }
 
+// netstat [-i] (000-APP-0031): the stack's open sockets (socket.wit 2.4 `sockets`, every one for the operator), each
+// under the program whose grant opened it (netpolicy `list`), else its task's name; then the cards as `ip` shows them.
+// -i: the cards alone.
+pub fn netstat(out: &mut impl Write, args: &[u8]) {
+    let args = core::str::from_utf8(args).unwrap_or("").trim();
+    if !args.is_empty() && args != "-i" { let _ = writeln!(out, "NETSTAT [-I]"); return; }
+    if args.is_empty() {
+        let grants = netpolicy::list(BROKER).unwrap_or_default();
+        let (tasks, count) = crate::tasks();
+        let _ = writeln!(out, "{}", crate::netstat::HEADER);
+        let (mut start, mut shown) = (0u32, 0usize);
+        loop {
+            let page = match socket::sockets(STACK, start) {
+                Ok(Ok(page)) => page,
+                Ok(Err(error)) => { failed(out, "NETSTAT", error); return }
+                Err(_) => { stack_failed(out); return }
+            };
+            for s in page.as_slice() {
+                let grant = grants.as_slice().iter().find(|g| g.badge == s.badge).map(|g| g.program.as_str());
+                let task = tasks[..count].iter().find(|t| t.pid == s.pid).map(|t| crate::label(&t.name));
+                let program = grant.or(task).unwrap_or(if s.badge == mind::network::BADGE_OPERATOR { "shell" } else { "?" });
+                let protocol = match s.protocol { socket::Protocol::Tcp => "TCP", socket::Protocol::Udp => "UDP", socket::Protocol::Icmp => "ICMP" };
+                let row = crate::netstat::Row { protocol, local_port: s.local_port, remote: Some((s.remote_address, s.remote_port)), state: crate::netstat::state(s.state as usize),
+                                                sent: s.sent, received: s.received, program, pid: s.pid };
+                let _ = writeln!(out, "{}", crate::netstat::line(&row));
+            }
+            shown += page.len();
+            if page.len() < 32 { break; }
+            start += 32;
+        }
+        let _ = writeln!(out, "{} SOCKET(S)", shown);
+    }
+    ip(out, b"");
+}
+
 pub fn revoke(out: &mut impl Write, args: &[u8]) {
     let Some(program) = core::str::from_utf8(args).ok().and_then(|t| t.split_whitespace().next()) else { let _ = writeln!(out, "NETREVOKE <PROGRAM>"); return };
     match netpolicy::revoke(BROKER, program) {

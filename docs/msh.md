@@ -129,7 +129,7 @@ after an error**:
   declaration is its first line after `#!msh` and comments: `requires: files network`, in the words of
   `mind::request!`:
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, and `>` or `>>` after a command (000-APP-0074);
-  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`;
+  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
   - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
 

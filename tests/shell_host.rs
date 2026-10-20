@@ -2,7 +2,7 @@
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
 //! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074); the lines on
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
-//! (shell/src/safe.rs, 000-APP-0086).
+//! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -15,6 +15,8 @@ mod clients;
 mod start;
 #[path = "../shell/src/safe.rs"]
 mod safe;
+#[path = "../shell/src/netstat.rs"]
+mod netstat;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -198,4 +200,19 @@ fn a_normal_boot_tells_nothing() {
     // Only init's line counts: the shell's own copy of the notice in the log starts none.
     for line in ["[INIT] STARTED tts PID=21", "[SHELL] SAFE START: THE LAST RUN DID NOT END AS ASKED", "[INIT] READY"] { safe.line(line); }
     assert_eq!(safe.notice(), None);
+}
+
+#[test]
+fn netstat_rows_line_up_under_the_header() {
+    let row = netstat::Row { protocol: "TCP", local_port: 49153, remote: Some((0x0A00_0202, 8080)), state: netstat::state(5), sent: 120, received: 53_400, program: "download", pid: 23 };
+    let line = netstat::line(&row);
+    assert_eq!(line, "TCP   49153 10.0.2.2:8080         ESTABLISHED  120        53400      download (PID 23)");
+    for word in ["LOCAL", "REMOTE", "STATE", "SENT", "RECEIVED", "PROGRAM"] {
+        let at = netstat::HEADER.find(word).unwrap();
+        assert_ne!(line.as_bytes()[at], b' ', "{} starts a column", word);
+        assert_eq!(line.as_bytes()[at - 1], b' ', "{} has a space before it", word);
+    }
+    let udp = netstat::Row { protocol: "UDP", local_port: 68, remote: Some((0, 0)), state: netstat::state(0), sent: 0, received: 0, program: "netstack", pid: 9 };
+    assert_eq!(netstat::line(&udp), "UDP   68    -                     -            0          0          netstack (PID 9)");
+    assert_eq!((netstat::state(11), netstat::state(12)), ("TIME-WAIT", "?"));
 }

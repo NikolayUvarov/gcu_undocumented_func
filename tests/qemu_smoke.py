@@ -5571,6 +5571,10 @@ def session_parsers_check(vm, held, body):
         text = vm.command(f"stat caps {pid}", raw=True)
         require(text, "STAT CAPS VERSION=2 COUNT=1 ")
         assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    # netstat (000-APP-0031): both connections to the server, established, under download's name.
+    table = vm.command("netstat", raw=True)
+    rows = re.findall(fr"^TCP +\d+ +10\.0\.2\.2:{held.server_address[1]} +ESTABLISHED +\d+ +\d+ +download \(PID \d+\)", table, re.M)
+    assert len(rows) == 2, table
     held.go.set()
     for _ in range(80):  # each parser ends with its download
         listed = vm.command("ps", raw=True)
@@ -5581,7 +5585,10 @@ def session_parsers_check(vm, held, body):
     assert not any(re.search(fr"^{pid} ", listed, re.M) for pid in parsers), listed
     for name in ("h1", "h2"):
         require(vm.command(f"sha256 ram:{name}.bin"), f"{hashlib.sha256(body).hexdigest()}  ram:{name}.bin")
-    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download", flush=True)
+    assert f"10.0.2.2:{held.server_address[1]}" not in vm.command("netstat", raw=True), "the rows go with the downloads"
+    require(vm.command("netstat -i", raw=True), "IP 10.0.2.15/24")
+    print("PASS: parse per session: two downloads at once, their heads parsed in two processes that hold only their own endpoint (stat caps), each gone with its download; "
+          "netstat lists both connections as ESTABLISHED under download's name, and not after", flush=True)
 
 
 def stall_server(body, cut):

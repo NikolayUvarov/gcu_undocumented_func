@@ -128,7 +128,7 @@ print("done: {total}")
 - Сценарий выполняется с полномочиями сеанса оболочки, который его запустил, **но не больше, чем объявил**.
   Объявление — его первая строка после `#!msh` и комментариев: `requires: files network`, словами `mind::request!`:
   - `files`: `write`, `mkdir`, `rm`, `mv`, `sync`, `screenshot`, а также `>` или `>>` после команды (000-APP-0074);
-  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`;
+  - `network`: `ping`, `nslookup`, `fetch`, `https`, `net`, `netrevoke`, `ip`, `tls`, `netstat`;
   - `log`: `logger`, `log()`;
   - `lifecycle`: `kill`, `budget`, `stop`, `reboot`.
 

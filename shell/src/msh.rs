@@ -23,7 +23,7 @@ const MAX_SCRIPT: usize = 64 * 1024;
 fn needs(command: &str) -> Option<&'static str> {
     let is = |names: &[&str]| names.iter().any(|n| n.eq_ignore_ascii_case(command));
     if is(&["write", "mkdir", "rm", "mv", "sync", "screenshot"]) { Some("files") }
-    else if is(&["ping", "nslookup", "fetch", "https", "net", "netrevoke", "ip", "tls"]) { Some("network") }
+    else if is(&["ping", "nslookup", "fetch", "https", "net", "netrevoke", "ip", "tls", "netstat"]) { Some("network") }
     else if is(&["logger"]) { Some("log") }
     else if is(&["kill", "budget", "stop", "reboot", "poweroff", "shutdown"]) { Some("lifecycle") }
     else { None }
