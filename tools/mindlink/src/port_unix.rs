@@ -1,4 +1,4 @@
-//! The byte stream to the other end: a serial port set raw through termios, a TCP connection, or a pseudo-terminal
+//! The byte stream to the other end on Linux: a serial port set raw through termios, a TCP connection, or a pseudo-terminal
 //! that `serve` makes for tests. Linux only (glibc's termios layout).
 use std::ffi::{c_char, c_int, c_short, c_uint, c_void, CStr};
 use std::fs::{File, OpenOptions};
