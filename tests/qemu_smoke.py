@@ -1626,7 +1626,9 @@ def check_tool_check(vm):
           f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
     texts = [name for name in rows if name.startswith("text input: ")]
     print(f"PASS: check: text input (000-KRN-0094): {'; '.join(f'{n[12:]}: {rows[n][1]}' for n in texts)}", flush=True)
-    output = vm.command("check kernel")
+    # The kernel group waits for kbench in "a tool's console closes": up to 10 s for each of its outputs, 30 s for its end
+    # (176-KRN-0147).
+    output = vm.command("check kernel", timeout=90)
     assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
     require(vm.command("check nosuch"), "check: no group nosuch")
     print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
