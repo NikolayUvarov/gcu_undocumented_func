@@ -1,6 +1,6 @@
 # 750-EFF-0002 — A test server on the host for the Effector contract
 
-**Type:** test tool · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0001](750-EFF-0001-protocol-contract.md) (the contract it serves) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2
+**Type:** test tool · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0001](750-EFF-0001-protocol-contract.md) (the contract it serves) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # 750-EFF-0005 — `mind::zip`: a bounded ZIP reader
 
-**Type:** library (`libmind`) · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.5, MC-11.11, MC-5.1
+**Type:** library (`libmind`) · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-11.5, MC-11.11, MC-5.1
 
 ## Problem
 
