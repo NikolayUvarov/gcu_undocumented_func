@@ -35,8 +35,12 @@ pub const NETWORK_ROWS: [(&str, &str, &str); 5] = [
     ("Flow grants", "console netgrants", "what each program may reach"),
     ("Policy", "console netpolicy", "its lines; a change asks first"),
 ];
-pub const CLOCK_ROWS: [&str; 7] = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds", "Set the clock"];
-const SET: usize = 6;
+pub const CLOCK_ROWS: [&str; 8] = ["Year", "Month", "Day", "Hours", "Minutes", "Seconds", "Time zone", "Set the clock"];
+const ZONE: usize = 6;
+const SET: usize = 7;
+// The zone row's step and ends, in minutes east of UTC (000-APP-0099); others, as UTC+05:45, through `date zone`.
+const ZONE_STEP: i32 = 30;
+const ZONE_ENDS: (i32, i32) = (-12 * 60, 14 * 60);
 // Each field's range and digits.
 const FIELDS: [(u32, u32, u32); 6] = [(2000, 2099, 4), (1, 12, 2), (1, 31, 2), (0, 23, 2), (0, 59, 2), (0, 59, 2)];
 const WIDTH: usize = 84;
@@ -46,11 +50,11 @@ const LIST: usize = 17; // the pages' column
 /// The window's state: the page, the row on it, whether the keys move in the pages' list, and the image's file as typed.
 /// On the date and time page: the clock as last read (`now`: year, month, day; seconds since midnight), the fields
 /// being set, whether the user changed them, digits being typed, its row, and whether `wm` holds the shell's commands
-/// (`shell`), through which the clock is set. On the screen page: its row, the screen in pixels and wm's scale in use.
+/// (`shell`), through which the clock is set, and the zone it shows (`zone`, minutes east of UTC). On the screen page: its row, the screen in pixels and wm's scale in use.
 /// `message`: a line about the last try on any page.
 pub struct Settings {
     pub page: usize, pub row: usize, pub on_pages: bool, pub file: InputLine, screen: (usize, usize),
-    pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize,
+    pub now: Option<((u32, u32, u32), u32)>, pub fields: [u32; 6], pub edited: bool, typed: Option<(u32, u32)>, pub clock_row: usize, pub zone: i32,
     pub message: Option<String>, pub shell: bool, pub screen_row: usize, pub pixels: (usize, usize), pub scale: u16, pub net_row: usize,
     /// The picture's file chosen by browsing (000-APP-0072), and how a directory is read: its entries (name, directory).
     pub browser: Option<Browser>, pub lister: Lister,
@@ -106,7 +110,14 @@ impl Browser {
 
 /// What a key or a click did.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, Run(String) }
+pub enum Outcome { Stay, Close, Changed(Config), SetClock { date: u32, seconds: u32 }, SetZone { west: bool, minutes: u32 }, Run(String) }
+
+/// A zone's name: `UTC`, `UTC+03:00`, `UTC-05:30`.
+pub fn zone_name(minutes: i32) -> String {
+    if minutes == 0 { return String::from("UTC"); }
+    let m = minutes.unsigned_abs();
+    format!("UTC{}{:02}:{:02}", if minutes < 0 { '-' } else { '+' }, m / 60, m % 60)
+}
 
 /// Days since 2000-01-01 of a date from 2000 to 2099; None for a day the month does not have.
 pub fn days(year: u32, month: u32, day: u32) -> Option<u32> {
@@ -124,7 +135,7 @@ impl Settings {
     pub fn new(config: &Config, screen: (usize, usize)) -> Self {
         let mut file = InputLine::new();
         if let Picture::Image(name) = &config.picture { for ch in name.chars() { file.insert(ch); } }
-        Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, message: None, shell: false,
+        Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
                screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, browser: None, lister: no_files }
     }
 
@@ -186,13 +197,15 @@ impl Settings {
         match key.code() {
             Code::Up => { self.clock_row = row.saturating_sub(1); self.typed = None; }
             Code::Down => { self.clock_row = (row + 1).min(SET); self.typed = None; }
-            Code::Left | Code::Right if row < SET => {
+            // The zone at once, as the screen page's rows (000-APP-0099).
+            Code::Left | Code::Right if row == ZONE => return self.zone_step(if key.code() == Code::Right { ZONE_STEP } else { -ZONE_STEP }),
+            Code::Left | Code::Right if row < ZONE => {
                 let (lo, hi, _) = FIELDS[row];
                 let v = self.fields[row];
                 self.fields[row] = if key.code() == Code::Right { if v >= hi { lo } else { v + 1 } } else if v <= lo { hi } else { v - 1 };
                 (self.edited, self.typed, self.message) = (true, None, None);
             }
-            Code::Char if row < SET && key.char().is_some_and(|c| c.is_ascii_digit()) => {
+            Code::Char if row < ZONE && key.char().is_some_and(|c| c.is_ascii_digit()) => {
                 // Digits replace the field as they are typed; the field's last digit ends it.
                 let digit = key.char().and_then(|c| c.to_digit(10)).unwrap_or(0);
                 let (value, count) = self.typed.unwrap_or((0, 0));
@@ -206,6 +219,20 @@ impl Settings {
             _ => {}
         }
         Outcome::Stay
+    }
+
+    // ← →: the zone `by` minutes on, around its ends, set through the shell at once.
+    fn zone_step(&mut self, by: i32) -> Outcome {
+        self.typed = None;
+        if !self.shell {
+            self.message = Some(String::from("wm holds no shell's commands, so it cannot set the zone: date zone in the shell's window"));
+            return Outcome::Stay;
+        }
+        let (west, east) = ZONE_ENDS;
+        let next = self.zone + by;
+        self.zone = if next > east { west } else if next < west { east } else { next };
+        self.message = Some(format!("Setting the zone to {}", zone_name(self.zone)));
+        Outcome::SetZone { west: self.zone < 0, minutes: self.zone.unsigned_abs() }
     }
 
     // Enter: the clock set to the fields, once they make a time and wm holds the shell's commands.
@@ -554,10 +581,12 @@ impl Settings {
             if let Some(message) = &self.message { grid.text_max(x, below + lines.len() + 1, message, w, theme.accent); }
         } else if self.page == DATE {
             let now = match self.now { Some(((y, mo, d), s)) => format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, s / 3600, s / 60 % 60, s % 60), None => String::from("cannot be read") };
-            grid.text_max(x, inner.y, &format!("The clock (it keeps no time zone): {}", now), w, theme.dialog);
+            grid.text_max(x, inner.y, &format!("The clock, {}: {}", zone_name(self.zone), now), w, theme.dialog);
             for (i, name) in CLOCK_ROWS.iter().enumerate() {
                 let chosen = !self.on_pages && self.clock_row == i;
-                let line = if i == SET { format!("[ {} ]  at once, through the shell", name) } else {
+                let line = if i == SET { format!("[ {} ]  at once, through the shell", name) } else if i == ZONE {
+                    format!("{:<11} < {} >  at once; the RTC keeps UTC", name, zone_name(self.zone))
+                } else {
                     format!("{:<11} < {:0width$} >", name, self.fields[i], width = FIELDS[i].2 as usize)
                 };
                 grid.text_padded(x, inner.y + 1 + i, &line, w, if chosen { theme.selected } else { theme.dialog });

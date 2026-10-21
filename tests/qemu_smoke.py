@@ -1180,8 +1180,27 @@ def shell_suite(vm):
     for wrong in ("2031-02-30 08:30", "2100-01-01 00:00", "2031-05-17"):
         require(vm.command(f"date set {wrong}"), "USAGE: DATE SET YYYY-MM-DD HH:MM[:SS]")
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
+    # The time zone (000-APP-0099): the RTC keeps UTC, every clock shows it with the zone the rtc service holds (rtc.wit
+    # 1.3); date zone sets it and keeps it in data/clock.conf; date set takes the zone's time. Back to UTC at the end.
+    require(vm.command("date zone"), "ZONE: UTC (THE RTC KEEPS UTC")
+    minute = lambda text, zone: (lambda m: m and int(m[1]) * 60 + int(m[2]))(re.search(rf"DATE: \d{{4}}-\d\d-\d\d (\d\d):(\d\d):\d\d {re.escape(zone)}\s", text))
+    utc = minute(vm.command("date"), "UTC")
+    require(vm.command("date zone +03:00"), "ZONE UTC+03:00, KEPT IN data/clock.conf")
+    east = minute(vm.command("date"), "UTC+03:00")
+    assert utc is not None and east is not None and (east - utc) % 1440 in (180, 181), (utc, east)
+    require(vm.command("cat data/clock.conf"), "zone UTC+03:00")
+    require(vm.service_logs("rtc", "[RTC] ZONE"), "[RTC] ZONE UTC+03:00 SET BY PID")
+    require(vm.command("date set 2031-05-17 09:00:00"), "CLOCK SET, IN UTC+03:00 (THE RTC KEEPS UTC)")
+    require(vm.command("date"), "DATE: 2031-05-17 09:00:0")
+    require(vm.command("date zone -05:30"), "ZONE UTC-05:30, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 00:30:0")  # 06:00 UTC
+    for wrong in ("+15:00", "3", "Moscow", "+03:60"):
+        require(vm.command(f"date zone {wrong}"), "USAGE: DATE ZONE")
+    require(vm.command("date zone UTC"), "ZONE UTC, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 06:00:0")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
-    print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    print("PASS: date set: the clock set by the shell and read back; impossible dates refused; date zone shifted every "
+          "reading by UTC+03:00 and UTC-05:30, kept it in data/clock.conf, and date set took the zone's time", flush=True)
     # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
     # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
     # names.
@@ -7998,7 +8017,7 @@ def wm_suite(vm):
                 time.sleep(.3)
                 screen = screen_text(vm)
                 vm.serial(enter=False)
-                found = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen))
+                found = re.search(r"The clock, UTC(?:[+-]\d\d:\d\d)?: (\d{4})-", "".join(screen))
                 if found and (want is None or int(found[1]) == want):
                     return int(found[1])
             raise AssertionError((want, screen))
@@ -8007,7 +8026,7 @@ def wm_suite(vm):
             known = {m[0] for m in windows_re.findall("".join(seen))}
             year = page()
             keys("right" if step > 0 else "left")
-            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            keys(*["down"] * 7, text="SETTINGS=Date and time:Set the clock")
             keys("ret", text=f"[WM] SET CLOCK {year + step:04}-")
             until(f'THE SHELL RAN "date set {year + step:04}-')
             assert re.search(rf'THE SHELL RAN "date set {year + step:04}-[^"]*" AT ONCE', "".join(seen)), "".join(seen)[-2000:]
@@ -8021,8 +8040,18 @@ def wm_suite(vm):
 
         year = set_year(1)
         set_year(-1)
+        # The zone row (000-APP-0099): → and ← set it through the shell at once, kept in data/clock.conf; the page's clock
+        # line names it. Back to UTC, which the suites after this one expect.
+        page()
+        keys(*["down"] * 6, text="SETTINGS=Date and time:Time zone")
+        for key_name, zone in (("right", "UTC+00:30"), ("left", "UTC")):
+            keys(key_name, text=f"[WM] SET ZONE {zone}: The clocks show {zone} now, kept in data/clock.conf")
+            until(f'THE SHELL RAN "date zone {zone}" AT ONCE')
+            screen_has(f"The clock, {zone}: ")
+        assert last_state().startswith("MODE=SETTINGS"), last_state()
+        keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: the date page set the year to {year + 1} and back at once through the shell, with no question "
-              "and no window of the shell's; the page stayed open and showed it", flush=True)
+              "and no window of the shell's; the page stayed open and showed it; its zone row set UTC+00:30 and UTC again", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
