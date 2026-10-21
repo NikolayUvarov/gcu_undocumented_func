@@ -67,6 +67,10 @@ Evidence for the configurations named only (MC-12.1).
 
   That build had the endpoint (800-KRN-0137) but not yet `stop` and `watch` in `link`. Those were tested in QEMU only.
 - **2026-10-21, `stop` and `watch` used** (800-KRN-0138, merged from `KRN`'s branch). The `link` suite passed with exit codes and a stop.
+- **2026-10-21, exit codes and a stop on the MacBook Pro** (`fast-test` d2daa430, `link.conf` `baud=460800 run`), from Windows over the cable:
+  - `check --exit 3` (`t/ck.elf`, put over the link) ended with exit code 3, and `mindlink run` returned 3;
+  - `memtest` ended with 0 and its 105 bytes of output;
+  - `memtest hold` was stopped by `mindlink stop`: `link` logged `STOP ASKED BY THE MASTER`, then the run as stopped with its 34 bytes of output.
 
 ## Related
 
