@@ -52,9 +52,16 @@ try {
         sleep(2000)
     }
 
+    # A scan at start may miss the network (the MacBook Pro, 2026-10-21): up to 5 tries, 3 s apart.
     begun = now()
-    let joined = run(join)
-    note("WIFI JOIN: {upper(str(joined))} AFTER {now() - begun} MS")
+    let joined = false
+    let tries = 0
+    while !joined && tries < 5 {
+        if tries > 0 { sleep(3000) }
+        tries = tries + 1
+        joined = run(join)
+    }
+    note("WIFI JOIN: {upper(str(joined))} AFTER {now() - begun} MS, {tries} TRIES")
     if joined {
         # The address DHCP gives: up to 30 s.
         begun = now()

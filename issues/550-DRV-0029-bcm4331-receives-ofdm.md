@@ -63,7 +63,7 @@ Evidence for this machine only (MC-12.1).
 - **2026-10-21: CoolNet2's OFDM is not received at all,** with core 2's front end off ([550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md)).
   - Over seven periods of 10 s on channel 8, the radio received 210 to 428 good CCK frames each period, no good OFDM frame, and 2 to 8 OFDM frames with a bad PLCP header.
   - This network's signal was not measured in that run.
-  - Until OFDM comes through, the station is offered 802.11b only ([550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.md)). So this task's criterion "802.11g for the station" is met only with `data/wifi-ofdm.txt`.
+  - Until OFDM comes through, the station is offered 802.11b only ([550-DRV-0037](../issues-done/550-DRV-0037-802-11b-until-ofdm-is-received.done)). So this task's criterion "802.11g for the station" is met only with `data/wifi-ofdm.txt`.
 
 - **2026-10-21: what the next run with `data/wifi-ofdm.txt` will tell.** Two things differ from the runs of 2026-10-14, where OFDM came through:
   - **the channel:** CoolNet2 is on channel 8, and those runs probed networks on channels 1, 3 and 6 only. Channel 8's values in the radio's and the PHY's tables follow the same steps as the channels around it, so a slip in one entry is not likely, though not ruled out;
@@ -89,6 +89,30 @@ Evidence for this machine only (MC-12.1).
   - **A frame with a bad FCS weaker than -75 dBm on every core** is counted apart, as noise, not by rate.
   - **If no good frame comes for 5 s** while they are kept, it stops keeping them and says so, so the station keeps its network.
   - **In this test the receiving side is logged every 10 s,** sent or not.
+
+- **2026-10-21, the counts on the MacBook Pro: long OFDM frames never come through** (`fast-test` a96b1f0, `data/wifi-ofdm.txt`, core 2 off, CoolNet2 on channel 8 at -45 dBm; nine periods of 10 s, 40 pings of the gateway among them):
+
+  | OFDM frames by MPDU length | Good | Bad FCS | Good share |
+  |---|---|---|---|
+  | up to 64 bytes | 5409 | 1491 | 78 % |
+  | 65 to 256 bytes | 61 | 161 | 27 % |
+  | more than 256 bytes | 2 | 152 | 1 % |
+
+  - **By rate:** 24 Mbit/s 4427 good of 4445; 54 Mbit/s 114 of 142; 6 Mbit/s 895 of 2576; 48 Mbit/s 8 of 44.
+  - **The power does not explain it.** The mean power by core was -41/-71/-115 dBm for good frames, -43/-72/-115 for bad ones. No frame with a bad FCS was weaker than -75 dBm on every core.
+  - **The clipped flag** was set on every OFDM frame, good or bad. What that bit means on this PHY is not checked.
+  - **The station all the same:** it joined as 802.11g, DHCP 0.3 s after the join, and the gateway answered 39 of 40 pings.
+    - The replies are short frames: 38 of 51 frames of 65 to 256 bytes were good in that period.
+    - Our own frames went up to 54 Mbit/s, 40 of 41 acknowledged.
+  - **No starvation:** with only bad-FCS frames kept, the 5 s guard never fired. The station's scan heard 12 access points, CoolNet2 among them.
+  - **Unlike the run of the morning** (550-DRV-0036, without kept frames), good OFDM frames come in by the hundred. Why is not known: the kept frames, or something since.
+
+  **What it points to.** A frame's start is received well and its later symbols are not, at the same power. So the next things to look at are those that act along a frame:
+  - the phase and frequency tracking on the pilots;
+  - the sampling clock;
+  - the receive gain changing within a frame.
+
+  A count by duration in symbols rather than bytes would tell time from length. The 6 Mbit/s frames may be partly HT frames from other networks whose HT part was not decoded.
 
 ## Related
 
