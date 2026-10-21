@@ -148,7 +148,7 @@ struct Scheduler {
     listeners: [Option<Listener>; INPUT_LISTENERS], // keys taken out of the focused stream (INPUT_LISTEN)
     notices: [usize; 8], notice_count: usize, // NOTICE values for the focus owner
     exited_console: Option<(u64, Queue<4096>)>, // unread output of the last focused or screenless task that exited
-    ended: [(u64, usize); EXIT_STATUSES], ended_next: usize, // (PID, reason) of the last tasks that ended (EXIT_STATUS)
+    ended: [(u64, usize, u64); EXIT_STATUSES], ended_next: usize, // (PID, reason, spawner's PID) of the last tasks that ended (EXIT_STATUS)
     dirty: bool, endpoints: Vec<bool>, endpoint_owner: Vec<Option<(usize, u64)>>, irq_bind: [[Option<IrqBinding>; IRQ_SHARERS]; LINES], irq_pending: [bool; LINES], msi: [Option<(usize, u16)>; MSI_VECTORS], send_seq: u64, flush: [bool; cpu::MAX], woken: [bool; cpu::MAX], readied: Cpus, // woken: a wake IPI is on its way to that CPU; readied: CPUs a task became ready for since the last wake_idle
     on_cpu: [Vec<usize>; cpu::MAX], // each CPU's task slots in order, sized to them: added at spawn, removed at reap
     accounting: Accounting, cursor: [[usize; 2]; cpu::MAX], // last slot picked per CPU and band: round robin within each band
@@ -220,7 +220,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -320,6 +320,11 @@ impl Scheduler {
         created + self.tasks.iter().flatten().filter(|t| t.state != State::Exited && t.parent == Some((slot, pid))).map(|t| t.quota_endpoints).sum::<usize>()
     }
     fn live(&self, slot: usize) -> bool { slot != 0 && self.tasks[slot].as_ref().is_some_and(|t| t.state != State::Exited) }
+    // How child `pid` of the task in `slot` (`parent`) ended: from its entry until it is reclaimed, then from the last ones.
+    fn ended_child(&self, slot: usize, parent: u64, pid: u64) -> Option<usize> {
+        let exited = (1..self.tasks.len()).find_map(|i| self.tasks[i].as_ref().filter(|t| t.pid == pid && t.state == State::Exited && t.parent == Some((slot, parent))).map(|t| t.exit_reason));
+        exited.or_else(|| self.ended.iter().find(|e| e.0 != 0 && e.0 == pid && e.2 == parent).map(|e| e.1))
+    }
     // Whether `slot` was spawned by `ancestor` or by one of its live descendants (the parent links, while each lives).
     fn descends_from(&self, slot: usize, ancestor: usize) -> bool {
         let mut at = slot;
@@ -407,7 +412,7 @@ impl Scheduler {
     // Common exit path (exit, kill, exception): wakes clients waiting for a reply from the task.
     fn terminate(&mut self, slot: usize, notify: bool, reason: usize) {
         let task = self.tasks[slot].as_mut().unwrap(); let pid = task.pid; task.state = State::Exited; task.pending_cap = None; task.exit_reason = reason;
-        self.ended[self.ended_next] = (pid, reason); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
+        self.ended[self.ended_next] = (pid, reason, task.parent.map_or(0, |p| p.1)); self.ended_next = (self.ended_next + 1) % EXIT_STATUSES;
         // Final recovery boundary (MC-6.8): without init no policy or bootstrap authority is left, so the system stops.
         if task.parent.is_none() { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "INIT EXITED: SYSTEM HALTED (REASON={:016X})\n", reason); cpu::halt_all(); }
         if let Some(ep) = task.watch { self.post_exit(ep, pid, reason); }
@@ -600,6 +605,7 @@ impl Scheduler {
         for b in self.irq_bind.iter().flatten().flatten() { used[b.ep] = true; }
         for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
         self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
+        if self.exits.is_empty() && self.exits.capacity() != 0 { self.exits = Vec::new(); }
         // Unused endpoints at the end of a grown table go, back to its first size at least (issue 171).
         let keep = used.iter().rposition(|&u| u).map_or(0, |last| last + 1).max(ENDPOINTS);
         if keep < used.len() {
@@ -1019,7 +1025,8 @@ impl Scheduler {
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
         if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
-        if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
+        // An emptied queue of exit notices holds no heap memory (800-KRN-0138).
+        if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); if self.exits.is_empty() { self.exits = Vec::new(); } self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let deadline = self.deadline(request.arg2);
@@ -1413,12 +1420,12 @@ impl Scheduler {
                     }
                 }
             },
-            // A child that already ended (and is not reclaimed yet) gets its exit notice at once: a service that dies
-            // before its owner watches it is not lost (issue 201).
-            SYSCALL_TASK_WATCH if (1..self.tasks.len()).any(|i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited && t.parent == Some((slot, task.pid)))) => {
-                let target = (1..self.tasks.len()).find(|&i| self.tasks[i].as_ref().is_some_and(|t| t.pid == request.arg1 as u64 && t.state == State::Exited)).unwrap();
+            // A child that already ended gets its exit notice at once: a service that dies before its owner watches it is
+            // not lost (issue 201), nor a program that ends and is reclaimed before its launcher watches it (800-KRN-0138).
+            SYSCALL_TASK_WATCH if self.find(request.arg1 as u64).is_none() && self.ended_child(slot, task.pid, request.arg1 as u64).is_some() => {
+                let reason = self.ended_child(slot, task.pid, request.arg1 as u64).unwrap();
                 match self.cap(slot, request.arg2) {
-                    Some(Capability::Endpoint(ep, rights, _)) if rights & CAP_READ != 0 => { let reason = self.tasks[target].as_ref().unwrap().exit_reason; self.post_exit(ep, request.arg1 as u64, reason); Ok(0) }
+                    Some(Capability::Endpoint(ep, rights, _)) if rights & CAP_READ != 0 => { self.post_exit(ep, request.arg1 as u64, reason); Ok(0) }
                     _ => Err(ERR_RIGHTS),
                 }
             }

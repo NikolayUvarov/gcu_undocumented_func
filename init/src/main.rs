@@ -724,6 +724,8 @@ impl Init {
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             // The endpoint a check's parser serves (109-KRN-0117).
             "updater" => Quota { endpoints: 1, ..Quota::default() },
+            // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
+            "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },

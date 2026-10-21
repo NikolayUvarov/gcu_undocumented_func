@@ -46,4 +46,4 @@ Evidence for the configurations named only (MC-12.1). The tool claims nothing of
 
 ## Related
 
-[800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-KRN-0132](800-KRN-0132-link-starts-programs-for-the-master.md), [750-EFF-0001](750-EFF-0001-protocol-contract.md), [docs/link/effector485.md](../docs/link/effector485.md), [docs/effector.md](../docs/effector.md).
+[800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-KRN-0132](../issues-done/800-KRN-0132-link-starts-programs-for-the-master.done), [750-EFF-0001](750-EFF-0001-protocol-contract.md), [docs/link/effector485.md](../docs/link/effector485.md), [docs/effector.md](../docs/effector.md).
