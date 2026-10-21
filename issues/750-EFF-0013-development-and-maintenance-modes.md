@@ -49,9 +49,9 @@ The plan until now is different:
    - `KRN` and `APP` get the requests.
    - 0006's boot service and 0007's gateway follow it.
 
-## Open question for the maintainer (from `KRN`)
+## The safe start (the maintainer's answer to `KRN`, 2026-10-21)
 
-Does a safe start (000-KRN-0076) still start the services in the maintenance mode? For: help from outside is what a machine that failed to boot needs. Against: a safe start trusts as little as it can.
+A safe start (000-KRN-0076) **still starts both services in the maintenance mode**: help from outside is what a machine that failed to boot needs.
 
 ## Acceptance criteria
 
@@ -61,6 +61,7 @@ Does a safe start (000-KRN-0076) still start the services in the maintenance mod
   - `mode maintenance on`, confirmed at the console, starts both without a reboot.
   - After three reboots, the mode still holds and both services run.
   - `mode … off` stops both, and the session ends.
+  - A safe start with the maintenance mode on starts both services.
   - A change made through the Mind's badge is shown and audited. A request from a holder without the badge is refused.
 - **The threat analysis and the profile** say that the services run only in these modes, and on which configurations that was tested (MC-12.3).
 
