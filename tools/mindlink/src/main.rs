@@ -27,7 +27,7 @@ commands: hello                       the other end's name and version
           get <name> [<file>]         fetch a file
           ls [<dir>]                  the other end's files; a directory's name ends in /
           stat <name>                 a file's size and SHA-256
-          rm <name>                   delete a file
+          rm <name>                   delete a file (also: delete <name>, as effector485 names it)
           mkdir <dir>                 make a directory and its missing parents
           mv <from> <to> [--force]    move or rename a file or directory; --force replaces a file at <to>
           rmdir <dir> [-r]            remove an empty directory; -r: and everything in it
@@ -155,7 +155,7 @@ fn main() {
         ("ls", []) => ls(&mut c, ""),
         ("ls", [dir]) => ls(&mut c, dir.trim_end_matches('/')),
         ("stat", [name]) => stat(&mut c, name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
-        ("rm", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
+        ("rm" | "delete", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
         ("mkdir", [dir]) => c.mkdir(dir.trim_end_matches('/')).map(|_| println!("made {dir}")),
         ("mv", [from, to]) => c.rename(from, to, false).map(|_| println!("moved {from} to {to}")),
         ("mv", [from, to, "--force"]) | ("mv", ["--force", from, to]) => c.rename(from, to, true).map(|_| println!("moved {from} to {to}")),
