@@ -27,7 +27,7 @@ A second gap came out of the design: a watch set right after SPAWN loses the not
 2. **The kernel keeps the spawner's PID** beside each of the last `EXIT_STATUSES` tasks that ended.
    - TASK_WATCH of a child that ended and was reclaimed answers from there at once, as it does before the reclaim.
    - No ABI change: the call, its arguments and the notice are as before.
-3. **`check`'s row "launch: stop and notice"** (the tools suite requires it):
+3. **`check`'s row "launch: stop and notice"** (the bench suite requires it, on x86 and aarch64):
    - `check --child`, watched, is stopped and its notice says killed;
    - `check --exit 3`, which ends at once, gives its notice with code 3;
    - `stop` of PID 1 and of the ended child is refused with `not-found`;
@@ -36,9 +36,16 @@ A second gap came out of the design: a watch set right after SPAWN loses the not
 
 ## Acceptance criteria
 
-- [ ] `check`'s row "launch: stop and notice" passes in the tools suite, x86 and aarch64, in the gate.
+- [ ] `check`'s row "launch: stop and notice" passes in the bench suite, x86 and aarch64, in the gate.
 - [ ] The link track's STOP and exit reason (800-LNK-0009) use `stop` and `watch` in its `link` suite.
 - [ ] The gate passes.
+
+## Progress (2026-10-21, gate g0139)
+
+- **Passed:** every group but one, on 936c27b with `main` 0d16c5a. That includes the bench suite with the new row on aarch64 ("aarch64: programs, shell and four CPUs").
+- **Failed: the `wm` suite** in "x86: keys, shell, tools", three runs in three. After every program closed, the kernel heap stayed 96 bytes above the suite's baseline (45 432 against 45 336).
+- **The cause.** `wm`'s menu starts `check`, whose new row is the first in that suite to leave exit notices waiting in the kernel's queue: `check` is inside a loader call when its children end. That first use gave the queue room for four notices (96 bytes), and the queue kept that room once it had delivered them.
+- **The fix.** The kernel frees the queue once it is empty, at a delivery and when notices for endpoints nobody holds are dropped, as it already does for its list of orphaned memory. With it, a diagnostic run of the `wm` suite ended at the baseline exactly.
 
 ## Related
 
