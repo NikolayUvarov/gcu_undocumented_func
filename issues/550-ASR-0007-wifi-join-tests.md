@@ -54,6 +54,14 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
   - no transmit fault from `bcm_wifi` in the log, and the passphrase nowhere in it.
 - **Left:** the scripted run (`tests/hardware/wifijoin.msh` as `autorun.msh`, `build-and-write.sh --wifijoin`), with its ping of the gateway and its end marker.
 
+- **2026-10-21: a remembered network joined at start, with no passphrase on the disk.**
+  - `tests/hardware/wifijoin.msh` joins without `--passphrase-file` when `data/wifijoin.txt` holds the network's name alone, as a network `keystore` remembers. The shell's own parser takes the script (a host check, `script::parse`).
+  - The maintainer's `build-and-write.sh --keep-wifi` provides that case:
+    - before the write, it saves `system/keystore/` (`wifi.kept`, `device.key`, `wifi.country`) from the disk into `~/.config/mind/keystore`, mode 600;
+    - after the write, it puts them back, with that one-line file and the script as `autorun.msh`;
+    - so a rewritten MacBook Pro rejoins CoolNet2 by itself.
+  - Saved from the MacBook Pro's disk on 2026-10-21. The rejoin itself is still to be run.
+
 ## Related
 
 [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), the requests to `APP` and `NET` on `internal-dev-messages` (2026-10-14), `tests/wlansim/`.
