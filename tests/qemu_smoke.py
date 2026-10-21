@@ -4134,12 +4134,17 @@ def vfs_suite(args):
             recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
             vm.send("clock\n")
             vm.expect("[CLOCK] ")
-            time.sleep(1)
-            _, size_, _, during = vm.screenshot().split(b"\n", 3)
+            # The dot shows once record captures, which a loaded machine starts later than 1 s on (gate 25: i7-930, PCU).
+            deadline = time.monotonic() + 15
+            while True:
+                _, size_, _, during = vm.screenshot().split(b"\n", 3)
+                dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
+                if during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)) or time.monotonic() > deadline:
+                    break
+                time.sleep(.3)
             vm.serial(enter=False)
-            dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
             assert during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)), "the capture dot while recording"
-            time.sleep(3)  # clock stays in front for the rest of the recording
+            time.sleep(3.5)  # clock stays in front for the rest of the recording, which began before the dot showed
             vm.send("\x1b")
             vm.expect("SHELL RESUMED.")
             time.sleep(.2); vm.collect(); vm.output = ""
@@ -6020,7 +6025,7 @@ def wifi_join_check(vm):
     # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
     # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
     vm.send("wm\n")
-    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)

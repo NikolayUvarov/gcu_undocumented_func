@@ -42,9 +42,10 @@ const SYNC_MS: usize = 250;
 const SHELL_MS: u32 = 2000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
-/// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not.
-const NET_SHELL_MS: u32 = 50;
-const SHELL_QUIET_MS: usize = 10_000;
+/// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not: a
+/// loaded machine's shell answers in more than 50 ms (gate 25, PCU), a busy one (a long command) not at all.
+const NET_SHELL_MS: u32 = 250;
+const SHELL_QUIET_MS: usize = 5_000;
 // How often the battery is read: as often as its service reads it (idl/battery.wit).
 const BATTERY_MS: usize = 5000;
 // How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
