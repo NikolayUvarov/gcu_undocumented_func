@@ -118,35 +118,63 @@ SSE wakeup/cut/EOF, file ownership/hash/cut, packages, redirects, another
 certificate, strict JSON and size bounds. It tests the fixture, not an
 as-yet-unwritten MIND client. No real endpoint is registered by these tests.
 
-## Next persistent agent slice
+## Running the session (750-EFF-0006, first slice)
 
-Use existing [750-EFF-0006](../../issues/750-EFF-0006-session-service.md),
-[0003](../../issues-done/750-EFF-0003-interface-and-policy.done) and
-[0007](../../issues/750-EFF-0007-gateway-service.md), not another protocol:
+`effector` is the session service's first slice: a program started from the
+shell until [750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md)
+makes it a boot service. It heartbeats, polls and answers **every** command
+`denied`, after journaling the answer; nothing on the machine is acted on yet
+(the gateway is [750-EFF-0007](../../issues/750-EFF-0007-gateway-service.md)).
 
-- `effector/src/main.rs` and `Cargo.toml`: an opt-in, persistent outbound
-  session using `mind::http::Connection`, `tls.connect-pins`, `parse.json` and
-  the network grant. Keep heartbeat and request execution independently
-  schedulable; reconnect with backoff and report grant expiration distinctly.
-- `effector/src/protocol.rs`: bounded JSON writer, typed responses with strict
-  expected-field/type/duplicate checks, base-path preservation and native
-  string-valued ACK. Refuse payloads beyond the current parser bounds.
-- `effector/src/journal.rs`: persist command/result before ACK and recover
-  pending ACKs after restart. No local side effects in this service.
-- `effector_gw/src/main.rs`: the gateway serving [`idl/effector.wit`](../../idl/effector.wit)
-  1.0 with the [policy](policy.md) and audit line of 750-EFF-0003. Start with
-  status and explicit denial; enable named logs and test-account msh scripts
-  only with their own grants/tests.
-- Kernel-owned boot image entries and `init` grants, plus the tools-owned
-  `effector setup/status/enable/disable`, remain tracked in their existing
-  requests. AgentToken must be provisioned privately; an operator API key
-  cannot replace it.
-- `tests/effector_host.rs`: writer and response-schema edge cases, journal
-  replay and conflicting IDs. `tests/qemu_smoke.py` effector suite: ten-minute
-  heartbeat, wrong pin, interrupted stream/connection, repeat ID, failed ACK,
-  unauthorized action and service grants. Run x86 and aarch64 separately.
+**Files, all in one directory** (the only one the shell lends it, `REQUEST_FILE`):
 
-Only then run [750-EFF-0012](../../issues/750-EFF-0012-run-against-the-effector-server.md)
-against the named live server, then each real machine. ZIP/install/update work
-is not a prerequisite to the first heartbeat, but remains part of main task
-750 and must not be silently dropped from it.
+| File | Written by | Contents |
+|---|---|---|
+| `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`). Any other line refuses the file (`effector/src/config.rs`) |
+| `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token |
+| `agent_id` | the agent, once | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
+| `journal` | the agent | `effector-journal 1`, then one line per answer, appended and flushed before its ACK (`effector/src/journal.rs`) |
+
+**The network policy line** (`netpolicy add`, which asks the user, 108): the
+program name `effector`, the server's address and port, a term and volume for
+a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
+
+**Run:** `effector data/effector/effector.conf [--for SECONDS]`. With `--for`
+it stops after that long and sends a `shutting_down` heartbeat; without it, it
+runs until it is stopped. It prints one line per event (`CONNECTED`, `DENIED`,
+`ACK … ACCEPTED`, `REPEATED`, refusals); the token never reaches the log.
+
+**How it behaves:**
+
+- One HTTPS connection to the pinned server (`tls.wit` 1.2 `connect-pins`),
+  reconnected with back-off from 1 to 30 s. Every request is bounded by 3 s
+  of silence, so a stalled server delays a heartbeat by at most that.
+- Heartbeat every 1.5 s, before anything else in the loop; poll at least every
+  10 s, at once again after a command or an accepted ACK (the server hands one
+  command a poll), with `at_capacity=1` while an answer waits for its ACK, so
+  the server holds new commands instead of delivering one that would be
+  refused: it delivers each command only once.
+- A command is journaled with its answer, then the answer is sent; an ACK the
+  server failed is retried with back-off; after a restart the saved answers are
+  sent again, never run again, and a redelivered command gets its saved answer.
+
+**Not done in this slice** (each stays in its task):
+
+- the boot service, its private directory for the token and `init`'s grants
+  (750-KRN-0119, 0120, 0121): the token sits in `data/effector/`, which the
+  shell can read;
+- the gateway and any action (750-EFF-0007 and on): every command is denied;
+- the wake-up stream (SSE): polling only, as the contract allows a first slice;
+- journal retention: the journal keeps 64 answers and then refuses new commands;
+- the ten-minute online check beside stalled cards (550-NET-0032), and the
+  device key as a client certificate (`connect-pins` cannot send one).
+
+**Tested** in QEMU (`tests/qemu_smoke.py --suites effector`, x86_64 and
+aarch64) against the fixture: online with heartbeats at most 1.6 s apart over
+30 s; three commands denied after journaling; an ACK the server failed retried;
+a shutdown heartbeat; restarted, three saved answers read back and a
+redelivered command answered from the journal; a server with another
+certificate refused before any request; the token absent from the log. Host
+tests: `tests/effector_{session,json,wire,config,journal,policy}_host.rs`. This
+is evidence for QEMU against the fixture, not for the real Effector server or a
+physical machine (750-EFF-0012).

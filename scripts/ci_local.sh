@@ -69,7 +69,7 @@ HOST_GROUPS=(
 )
 X86_GROUPS=(
     "build (x86 test programs)|scripts/x86_fixtures.sh"
-    "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,normal,memory,dzen"
+    "x86: boot, display, network, TLS, shell, memory, clock|$X86 --suites boot,display,net,tls,effector,normal,memory,dzen"
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci"
@@ -95,7 +95,7 @@ A64_GROUPS=(
     "build (aarch64)|ARCH=aarch64 ./02_build.sh --fixtures"
     "aarch64: boot and fault containment|python3 tests/aarch64_smoke.py"
     "aarch64: programs, shell and four CPUs|$A64 --suites normal,shell,bench,smp,busy,usb,devicetree,efivar"
-    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,updater"
+    "aarch64: files, network and TLS|$A64 --suites vfs,store,storefaults,net,tls,effector,updater"
     "aarch64: RAM, ACPI and PCI above 4 GiB|$A64 --suites normal,net --machine virt,gic-version=3,highmem=on --memory 6G"
     "aarch64: GICv2 with GICv2m|$A64 --suites normal,smp,net --machine virt,gic-version=2,highmem=off"
     "aarch64: NVMe boot disk|$A64 --suites vfs --disk nvme"

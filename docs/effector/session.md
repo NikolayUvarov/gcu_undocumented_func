@@ -14,7 +14,9 @@ commands and emits scheduling attempts and a durable-write request.
   A future gateway result must come through the separately authorized 0003/
   0007 interface; this internal denial journal is not a remotely callable
   operation that can claim another action completed.
-- The command ID and agent ID use 1–64 ASCII letters, digits, `_` or `-`.
+- The agent ID uses 1–64 ASCII letters, digits, `_` or `-`; the command ID
+  also `.`, which the real server's IDs carry (`20261021064900.000000001_000042`,
+  found on 2026-10-21, 750-EFF-0006).
   Action, program and payload are at most 512 UTF-8 bytes. The fingerprint
   includes length-delimited fields, target agent and optional expiry under a
   versioned domain tag. A conflicting reuse of an ID fails before a write.
@@ -96,9 +98,12 @@ ignored tests. Host: x86_64 Linux 6.6.87.2 WSL2; compiler:
 `fast-test`. This is host state-machine evidence, not a QEMU, transport,
 hardware or full-gate result.
 
-Still open: the 0004 writer/schema adapter, actual HTTPS transport using
-`connect-pins` and parser-service JSON, native configuration/private-token
-setup, gateway durable store, kernel boot images and grants, owner controls,
-SSE, pin rotation, the two-architecture QEMU/isolation suite, ten-minute online
-behavior and live server/hardware acceptance. Existing 0006 and the KRN/APP/
-UPD requests retain these requirements; this core does not close the task.
+Since 2026-10-21 the first slice of the service builds on this core: the
+program `effector/src/main.rs`, its wire adapter (`wire.rs`), configuration
+(`config.rs`), file journal (`journal.rs`) and JSON writer (`json.rs`). It runs
+the three lanes in one loop, each request bounded by 3 s of silence, heartbeat
+first; see [README.md](README.md), "Running the session". Still open: the boot
+service and its private token directory, `init`'s grants, owner controls, SSE,
+pin rotation from the server, journal retention, the gateway's results, the
+isolation suite, ten-minute online behavior beside stalled cards, and live
+server and hardware acceptance (750-EFF-0006, 0007, 0012; KRN/APP/UPD tasks).
