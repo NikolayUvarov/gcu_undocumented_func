@@ -39,4 +39,4 @@ The maintainer asked on 2026-10-21: "Can we add debug developer mode to allow fu
 
 ## Related
 
-[800-KRN-0128](../issues-done/800-KRN-0128-init-starts-usb-serial-and-link.done), [800-KRN-0132](800-KRN-0132-link-starts-programs-for-the-master.md), [800-KRN-0137](800-KRN-0137-link-may-make-one-endpoint.md), [800-KRN-0138](800-KRN-0138-stop-and-watch-the-programs-a-caller-started.md), 800-LNK-0012, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).
+[800-KRN-0128](../issues-done/800-KRN-0128-init-starts-usb-serial-and-link.done), [800-KRN-0132](../issues-done/800-KRN-0132-link-starts-programs-for-the-master.done), [800-KRN-0137](../issues-done/800-KRN-0137-link-may-make-one-endpoint.done), [800-KRN-0138](800-KRN-0138-stop-and-watch-the-programs-a-caller-started.md), 800-LNK-0012, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).

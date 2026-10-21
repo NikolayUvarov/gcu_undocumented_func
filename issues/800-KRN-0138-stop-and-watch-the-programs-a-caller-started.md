@@ -1,6 +1,6 @@
 # 800-KRN-0138 — The loader ends the programs it started for a caller, and sends their exit notices where the caller asks
 
-**Type:** `loader`, `kernel` · **Owner:** kernel session · **Priority:** P1 · **Status:** made, in `fast-test` (2026-10-21); the gate is left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.11, MC-10.2, MC-12.4
+**Type:** `loader`, `kernel` · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (f7c64d7, 2026-10-21); the link track's use is left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.11, MC-10.2, MC-12.4
 
 ## Problem
 
@@ -36,9 +36,9 @@ A second gap came out of the design: a watch set right after SPAWN loses the not
 
 ## Acceptance criteria
 
-- [ ] `check`'s row "launch: stop and notice" passes in the bench suite, x86 and aarch64, in the gate.
+- [x] `check`'s row "launch: stop and notice" passes in the bench suite, x86 and aarch64, in the gate.
 - [ ] The link track's STOP and exit reason (800-LNK-0009) use `stop` and `watch` in its `link` suite.
-- [ ] The gate passes.
+- [x] The gate passes.
 
 ## Progress (2026-10-21, gate g0139)
 
@@ -47,6 +47,13 @@ A second gap came out of the design: a watch set right after SPAWN loses the not
 - **The cause.** `wm`'s menu starts `check`, whose new row is the first in that suite to leave exit notices waiting in the kernel's queue: `check` is inside a loader call when its children end. That first use gave the queue room for four notices (96 bytes), and the queue kept that room once it had delivered them.
 - **The fix.** The kernel frees the queue once it is empty, at a delivery and when notices for endpoints nobody holds are dropped, as it already does for its list of orphaned memory. With it, a diagnostic run of the `wm` suite ended at the baseline exactly.
 
+## Progress (2026-10-21, gate g0141)
+
+- **The fix held.** Gate g0140 on 7c35af1 passed every group; four were run a second time on a quiet un-rizen after timing out on an i9 loaded by another track's gate (load average 15 on 16 threads). "keys, shell, tools" passed with the `wm` suite back at its heap baseline.
+- **Gate g0141 in `main`.** `main` moved (3112f34, the link track's work). Gate g0141 on f7c64d7, that `main` merged in, passed every group on i9, un-rizen and PCU. `main` = f7c64d7.
+  - `check` passed 54 rows, none failed, "launch: stop and notice" among them: x86 in "keys, shell, tools", aarch64 in "programs, shell and four CPUs".
+- **Left:** the link track's STOP and exit reason in its `link` suite (800-LNK-0009).
+
 ## Related
 
-[800-KRN-0132](800-KRN-0132-link-starts-programs-for-the-master.md) (`link`'s loader client), [800-KRN-0137](800-KRN-0137-link-may-make-one-endpoint.md) (its endpoint), 800-LNK-0009, 800-LNK-0011, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md), [docs/api/README.md](../docs/api/README.md) (TASK_WATCH).
+[800-KRN-0132](../issues-done/800-KRN-0132-link-starts-programs-for-the-master.done) (`link`'s loader client), [800-KRN-0137](../issues-done/800-KRN-0137-link-may-make-one-endpoint.done) (its endpoint), 800-LNK-0009, 800-LNK-0011, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md), [docs/api/README.md](../docs/api/README.md) (TASK_WATCH).
