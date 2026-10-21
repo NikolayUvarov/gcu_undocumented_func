@@ -45,6 +45,7 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
                 install file=<path here> [name=<file name>]    into apps/, replacing any
                 uninstall name=<file name>                     from apps/
                 log [from=<cursor>] [max_bytes=<n>]
+                reboot                                         restarts the other end (MIND Core: dev in link.conf)
           status <id>                    the operation as JSON
           wait <id>                      its output as it comes, until it ends; the exit code of a program
           output <id>                    its output so far

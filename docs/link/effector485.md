@@ -60,11 +60,13 @@ Each operation has:
 | `install` | `file`, `name` | puts a program into `apps/`, replacing one of the same name |
 | `uninstall` | `name` | deletes `apps/<name>` |
 | `log` | `from`, `max_bytes` | the other end's log from a cursor (default 0, 64 KiB); `next` in the result |
+| `reboot` | — | restarts the other end (MIND Core: `dev` in `link.conf`); the daemon says hello again when it is back |
 
 **Names on the other end** are paths below its directory: on MIND Core, `data/link/` (protocol, section 5).
 
 **What the other end allows** decides the rest:
 - MIND Core starts programs only with the word `run` in `link.conf`;
+- with `dev`, the developer mode (800-LNK-0012), it also runs the built-in programs by name (`netcheck`, `wifi`), lends them the network, the Wi-Fi station and the system monitor that `init` grants it, and restarts on `reboot`;
 - `mindlink serve` only with `--run`.
 
 ## The API
