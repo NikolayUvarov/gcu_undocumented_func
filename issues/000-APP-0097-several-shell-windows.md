@@ -24,7 +24,7 @@
 ## Acceptance criteria
 
 - **The `wm` suite** (x86, aarch64):
-  - the first `Shell` from the menu opens `shell`, and `cd diag` there changes its prompt;
+  - the first `Shell` from the menu opens `shell`, and `cd ram:` there changes its prompt;
   - a second `Shell` opens `shell 2`, a window of its own whose banner says `THE SHELL'S WINDOW 2:` and whose prompt is not the first one's;
   - both close.
 - **Host tests:** `shell_host` and `idl_fuzz_host` pass with `shell.wit` 1.8.
