@@ -126,6 +126,11 @@ pub fn ip(out: &mut impl Write, args: &[u8]) {
 pub fn card_counters() -> Result<mind::idl::codec::List<mind::idl::shell::CardCounters, 4>, mind::idl::shell::Error> {
     let Ok(Ok(interfaces)) = socket::interfaces(STACK) else { return Err(mind::idl::shell::Error::Unavailable) };
     let cards = match socket::cards(STACK) { Ok(Ok(cards)) => cards, _ => Default::default() };
+    // An empty answer once in the log, with the cards the stack knows, for a machine whose wm says NET: NO CARD.
+    static EMPTY_LOGGED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if interfaces.as_slice().is_empty() && !EMPTY_LOGGED.swap(true, core::sync::atomic::Ordering::Relaxed) {
+        mind::println!("[SHELL] NET-COUNTERS: THE STACK LISTS NO INTERFACE ({} CARDS, {} UP)", cards.as_slice().len(), cards.as_slice().iter().filter(|c| c.up).count());
+    }
     let mut list = mind::idl::codec::List::default();
     for i in interfaces.as_slice() {
         let card = cards.as_slice().iter().find(|c| c.card == i.card);
