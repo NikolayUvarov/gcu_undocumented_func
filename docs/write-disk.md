@@ -137,7 +137,7 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
     - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
     - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
   - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
-  - **If a rewritten disk is not started,** run the command again.
+  - **A rewrite loses it:** after the disk is written again, the Mac starts macOS once more (seen 2026-10-21). Run the commands again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the commands are the same. Updates through the link do not rewrite the disk.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));

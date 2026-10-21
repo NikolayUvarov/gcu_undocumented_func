@@ -37,6 +37,22 @@ The kernel track asked on 2026-10-21 (`requests-LNK.md`, for 351-KRN-0141, at th
 
 Evidence for the configurations named only (MC-12.1). `stage` reports what the updater logs. The release's checks are the updater's (MC-12.3).
 
+## Progress
+
+- **2026-10-21: the first update of the MacBook Pro through the link.** It used KRN's `scripts/link_update.py` (351-KRN-0141), which puts the release file by file and follows the log.
+  - **The image:** `build_and_write.sh --slots --link-dev --keep-wifi` (800-LNK-0014).
+  - **The release:** version 202610211847, built from `claude/LNK-link` with KRN's ABI 14 branch merged locally, to match the bootloader on the disk.
+  - **The run:**
+    - 43 files in 274 s over RS-485 at 460 800 bit/s;
+    - the updater fetched them into slot B and the Mac restarted on trial into slot B, by itself;
+    - `init` confirmed the trial boot 4 s after start, and `SLOT B CONFIRMED ON THE DISK`;
+    - `link_update.py` ended with 0, about ten minutes in all.
+  - **From WSL through COM22:** `mindlink.exe` needs Windows paths, so `tools/mindlink/mindlink-exe.sh` now passes them.
+  - **`mindlink delete`** is `rm`'s other name, as `effector485` calls it.
+- **Left of this task:**
+  - `put -r` and `effector485`'s `stage`: `link_update.py` already does the staging from the command line, so these serve Effector-style operations;
+  - the `link` suite's tree.
+
 ## Related
 
 [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/update/updater.md](../docs/update/updater.md), [docs/link/mindlink.md](../docs/link/mindlink.md), [docs/link/effector485.md](../docs/link/effector485.md).

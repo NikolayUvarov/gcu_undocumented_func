@@ -28,7 +28,7 @@ The maintainer asked on 2026-10-21 to keep it in the repository, and to leave a 
 ## Acceptance criteria
 
 - [x] Through the link, `--list` lists the USB disks and leaves no copy behind; a copy variable from outside is refused (2026-10-21, on the maintainer's machine, `gcu_uf_fast-test/build-and-write.sh` → the clone at `fast-test` 0eb5f32).
-- [ ] A write of the MacBook Pro's disk through the link, with `--link-dev --keep-wifi`, as before.
+- [x] A write of the MacBook Pro's disk through the link, with `--link-dev --keep-wifi`, as before: on 2026-10-21 with `--slots` too, `fast-test` b559bdf. The Mac started slot A, `link` in developer mode, joined CoolNet2 from the kept network, and the updater waited for `data/link/rel/`.
 
 ## Related
 
