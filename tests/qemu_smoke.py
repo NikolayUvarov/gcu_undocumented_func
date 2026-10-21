@@ -7145,7 +7145,8 @@ def wm_suite(vm):
         shows(menu_shell, "THE SHELL'S WINDOW:")
         # Asked again while it is open: a second shell, titled shell 2, a session of its own (the maintainer's report,
         # 2026-10-21: the menu brought back the first).
-        typed("cd diag", "MIND diag> ")
+        typed("cd diag")
+        shows(menu_shell, "MIND diag> ")
         front(next(w for w in state()[2] if w != menu_shell))
         before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
