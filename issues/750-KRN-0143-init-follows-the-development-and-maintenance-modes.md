@@ -44,10 +44,11 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 - [ ] `set-mode` through `BADGE_MODE` starts and stops both with no reboot, and writes the file.
 - [ ] `BADGE_MIND` turns the maintenance mode on with a reason, and cannot turn a mode off or set the development mode; a holder without either badge is refused.
 - [ ] Every change is logged with its badge, PID and reason.
+- [ ] A safe start with the maintenance mode on starts both services.
 
-## Questions to settle
+## Settled
 
-- **A safe start** (000-KRN-0076): does the maintenance mode still start the services? Help from outside is what a machine that failed to boot needs, but a safe start trusts as little as it can. The maintainer decides.
+- **A safe start** (000-KRN-0076) starts both services when the maintenance mode is on: help from outside is what a machine that failed to boot needs (the maintainer, 2026-10-21, through EFF). Whether a safe start keeps the development mode was not asked.
 
 ## Related
 
