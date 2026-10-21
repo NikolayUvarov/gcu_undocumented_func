@@ -74,19 +74,31 @@ impl Hda {
         hda.ring.as_mut_slice()[CAPTURE_AT..DMA_BYTES].fill(0);
         hda.ring.as_mut_slice()[..CAPTURE_AT].fill(0);
         hda.start_corb();
-        let Some(vendor) = hda.parameter(0, 0) else { mind::println!("[AUDIO] HDA: THE CODEC DOES NOT ANSWER (CORBRP {} RIRBWP {})", hda.regs.read16(CORBRP), hda.regs.read16(RIRBWP)); return None };
+        let Some(vendor) = hda.parameter(0, 0) else {
+            mind::println!("[AUDIO] HDA: THE CODEC DOES NOT ANSWER (CORBRP {} RIRBWP {})", hda.regs.read16(CORBRP), hda.regs.read16(RIRBWP));
+            hda.halt();
+            return None;
+        };
         let revision = hda.parameter(0, 2).unwrap_or(0);
         let (mut summary, mut len) = ([0u8; SUMMARY], 0);
         put(&mut summary, &mut len, format_args!("CODEC {} {:04X}:{:04X} REVISION {:08X}", hda.codec, vendor >> 16, vendor & 0xFFFF, revision));
         let found = hda.configure(&mut summary, &mut len);
         hda.summary = summary; hda.summary_len = len;
-        if !found { mind::println!("[AUDIO] HDA: {}; NO OUTPUT PATH", core::str::from_utf8(&hda.summary[..hda.summary_len]).unwrap_or("?")); return None; }
+        if !found { mind::println!("[AUDIO] HDA: {}; NO OUTPUT PATH", core::str::from_utf8(&hda.summary[..hda.summary_len]).unwrap_or("?")); hda.halt(); return None; }
         hda.program(hda.out_sd, OUT_LIST, BUFFERS, OUT_TAG, 0);
         if hda.has_input { hda.program(hda.in_sd, IN_LIST, CAPTURE_BUFFERS, IN_TAG, CAPTURE_AT); }
         // Interrupts on buffer completion for both streams, when the line is granted (else the gateway polls).
         let stream_bits = (1u32 << (inputs as u32)) | if hda.has_input { 1 } else { 0 };
         hda.regs.write32(INTCTL, (1 << 31) | stream_bits);
         Some(hda)
+    }
+
+    // A controller given up on goes back into reset, so its command rings stop writing into the DMA region another
+    // controller may take next (213-KRN-0127).
+    fn halt(&mut self) {
+        self.regs.write8(CORBCTL, 0); self.regs.write8(RIRBCTL, 0);
+        self.regs.write32(GCTL, self.regs.read32(GCTL) & !1);
+        for _ in 0..1000 { if self.regs.read32(GCTL) & 1 == 0 { break; } mind::time::sleep(1); }
     }
 
     pub fn summary(&self) -> &str { core::str::from_utf8(&self.summary[..self.summary_len]).unwrap_or("?") }

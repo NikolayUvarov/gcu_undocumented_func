@@ -3,7 +3,8 @@
 Russian: [mindlink_RU.md](mindlink_RU.md).
 
 `mindlink` speaks the [MIND Link protocol](protocol.md) over a serial port. Task: [800-LNK-0004](../../issues/800-LNK-0004-mindlink-the-host-tool.md).
-- **As master:** it moves files, reads the other end's log and types at its console.
+- **As master:** it moves files and directories, starts programs and reads their output, reads the other end's log and types at its console.
+- **[effector485](effector485.md)**, built beside it, queues such work as operations for agents to hand over and come back to.
 - **As `serve`:** it plays the slave over a directory, so the line can be tested between two Linux ends before MIND Core's end (800-LNK-0003) exists.
 
 ## Build
@@ -25,6 +26,10 @@ tools/mindlink/build.sh
 mindlink [options] <port> <command> [arguments]
 ```
 
+Options come before the command; what follows the command is its own, a program's arguments too.
+
+**Names** on the other end are paths below its directory, their parts joined by `/` (`apps/test/x.elf`), none of them `.` or `..` ([protocol, section 5](protocol.md#5-requests)). An older end takes one part only.
+
 **Ports:**
 
 | Port | What it is |
@@ -41,14 +46,22 @@ mindlink [options] <port> <command> [arguments]
 | `hello` | the other end's name, protocol version and payload size; on an FTDI port, warns when the latency timer slows answers |
 | `put <file> [<name>] [--force]` | sends a file. Skipped when the other end has the same bytes (its SHA-256), unless `--force`. An interrupted put of the same name and size resumes |
 | `get <name> [<file>]` | fetches a file into `<file>.part`, renamed once its SHA-256 matches |
-| `ls` | the other end's files with their sizes |
+| `ls [<dir>]` | a directory's files with their sizes, and its directories, ending in `/`; the top without `<dir>` |
 | `stat <name>` | a file's size and SHA-256 |
 | `rm <name>` | deletes a file |
+| `mkdir <dir>` | makes a directory and its missing parents |
+| `mv <from> <to> [--force]` | moves or renames a file or a whole directory; `--force` replaces a file at `<to>` |
+| `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
+| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it. On MIND Core, `link.conf` must hold the word `run` |
+| `start <program> [<argument>...]` | the same, printing only the run's number and the program's PID |
+| `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
+| `runs` | the runs the other end knows: number, PID, state, program |
+| `stop <run>` | ends a run's program. MIND Core's `link` cannot yet (800-KRN-0132) |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |
 | `board <line>` | one line to a [multi-device](multi-device.md) board's control port (`type …`, `key …`, `move …`, `status`), and its answer |
-| `serve <dir> [--log <file>] [--console <command>]` | the slave: files in `<dir>`, the log read from `<file>`, a console running `<command>` through `/bin/sh -c`. Without `--console` there is no console |
+| `serve <dir> [--log <file>] [--console <command>] [--run]` | the slave: files in `<dir>` and its directories, the log read from `<file>`, a console running `<command>` through `/bin/sh -c`. Without `--console` there is no console. `--run` lets the master start programs in `<dir>`, as the user who serves: as good as a shell for whoever holds the cable. A program put over the link gets its owner's execute bit when it is run |
 
 **Options:**
 
@@ -147,6 +160,9 @@ mindlink --payload 256 /dev/pts/N hello
 `tools/mindlink/tests/mindlink.rs` runs `mindlink` against its own `serve`:
 - over a pseudo-terminal, the termios path: every command, with 1.5 MB each way;
 - over TCP;
-- against a stopped server, which must fail in bounded time.
+- against a stopped server, which must fail in bounded time;
+- a tree made, moved and removed, with `ls` at each step; programs started with `serve --run`, their output and exit code, a stop; none started without `--run`.
+
+`tools/mindlink/tests/effector485.rs` drives [effector485](effector485.md) the same way.
 
 `scripts/host_tests.sh` runs them. They say nothing about a real converter or cable (MC-12.1).

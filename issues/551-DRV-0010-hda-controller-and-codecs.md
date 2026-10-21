@@ -89,6 +89,12 @@ Left: the MacBook Pro (its CS4206 found and logged, the speaker amplifier and th
   - **Fix:** `MIND_AUDIO_HW=hda|ac97` (`-device intel-hda -device hda-duplex,audiodev=snd0` for HDA), and the comment.
   - There is nothing to add to `03_run_qemu_aarch64.sh`: `audio_gw` is built for x86 only (`scripts/build_aarch64.sh`'s `X86_ONLY`).
 
+- **2026-10-20: the second HD Audio function, for the Ryzen's sound (213-KRN-0127, KRN's `init` part in `main`).**
+  - **The probing order:** `audio_gw` drives `SLOT_DEV0`'s function when it has an output path. Otherwise it tries `SLOT_DEV1`'s, with that function's line in slot 7, where `init` puts it. It logs `THE FIRST FUNCTION IS NOT USED; TRYING THE SECOND` and `DRIVING THE SECOND FUNCTION`.
+  - **A controller given up on goes back into reset** (CORB and RIRB stopped, CRST low). Its command rings no longer write into the DMA region that both share.
+  - **QEMU** with two `intel-hda` controllers, the first without a codec and the second with `hda-output`: the second was driven with interrupts, and `beep` played through it.
+  - **Not yet:** the Ryzen itself, `05:00.6` behind the HDMI function `05:00.1`.
+
 ## Related
 
 [551](551-sound-on-pcs.md), the AC97 path in `audio_gw/src/main.rs`.
