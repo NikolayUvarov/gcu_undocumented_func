@@ -79,6 +79,17 @@ Evidence for this machine only (MC-12.1).
   - **almost nothing at OFDM, good or bad, at a power that should be received:** the receiver does not detect OFDM on channel 8. Next: `--wifitest`'s probes there, and channel 8's tables against b43's source;
   - **good frames with another core set:** the cores, as on 2026-10-14.
 
+- **2026-10-21, the first run with the counts heard nothing** (`fast-test` 5a28fe6, `data/wifi-ofdm.txt`, developer mode):
+  - with frames with a bad FCS and a bad PLCP header kept, the station's scans heard no access point at all ("SCANNED, 0 ACCESS POINTS"), on the boot and twice more over the link;
+  - `bcm_wifi` did not fault. Nothing was sent, so no traffic line showed what came in;
+  - the boot before, the same radio in 802.11b without the kept frames had heard 15 access points.
+
+  **What follows.** A frame whose PLCP header failed is mostly noise the receiver took for a frame's start. Kept, such frames seem to crowd out the rest; the cause is not measured.
+  - **Now `bcm_wifi` keeps only frames with a bad FCS,** whose header held.
+  - **A frame with a bad FCS weaker than -75 dBm on every core** is counted apart, as noise, not by rate.
+  - **If no good frame comes for 5 s** while they are kept, it stops keeping them and says so, so the station keeps its network.
+  - **In this test the receiving side is logged every 10 s,** sent or not.
+
 ## Related
 
 [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), requests-NET.md (the station's rates; the stack's wait), `bcm_wifi/`.

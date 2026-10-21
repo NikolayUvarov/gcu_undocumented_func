@@ -19,7 +19,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 21 | 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -69,12 +69,15 @@ pub struct Sent { pub acked: bool, pub attempts: u8 }
 // (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames. OFDM frames good
 // and with a bad FCS (index 0 and 1) by rate (6 to 54 Mbit/s) and by MPDU length (up to 64, 65 to 256, longer), and the
 // powers and clipped count of those with a bad FCS: what tells a frame received badly from one not heard (550-DRV-0029).
+// A frame with a bad FCS weaker than BAD_FCS_FLOOR on every core is noise taken for a frame: only counted, in `ofdm_weak`.
 #[derive(Clone, Copy, Default)]
 pub struct Counts {
     pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
     pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
     pub ofdm_rates: [[u32; 2]; 8], pub ofdm_lengths: [[u32; 2]; 3], pub bad_fcs_power: [i32; 3], pub bad_fcs_clipped: u32,
+    pub ofdm_weak: u32,
 }
+pub const BAD_FCS_FLOOR: i8 = -75;
 
 // OFDM's rates in 500 kbit/s, in the order Counts keeps them.
 pub const OFDM_RATES: [u8; 8] = [12, 18, 24, 36, 48, 72, 96, 108];
@@ -255,7 +258,8 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
-    // Control frames, and frames with a bad FCS or PLCP, passed to the host as well, for a test.
+    // Control frames, and frames with a bad FCS, passed to the host as well, for a test. Frames with a bad PLCP header
+    // are not: with them kept on the MacBook Pro the station heard no access point at all (550-DRV-0029, 2026-10-21).
     pub fn keep(&mut self, control: bool, bad: bool) {
         self.mac_extra = if control { MAC_KEEP_CONTROL } else { 0 } | if bad { MAC_KEEP_BAD } else { 0 };
         self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
@@ -322,7 +326,9 @@ impl<'a> Radio<'a> {
         self.counts.frames[kind][outcome] += 1;
         let pad = if status & 4 != 0 { 2 } else { 0 };
         // An OFDM frame whose PLCP header held: its rate and length, and its powers when its FCS failed.
-        if kind == 1 && outcome < 2 && length >= pad + 6 + 4 {
+        let strong = [s[9], s[10], s[11]].iter().any(|&p| (BAD_FCS_FLOOR..0).contains(&(p as i8)));
+        if kind == 1 && outcome == 1 && !strong { self.counts.ofdm_weak += 1; }
+        else if kind == 1 && outcome < 2 && length >= pad + 6 + 4 {
             let rate = rx_rate(true, s[OFFSET + pad]);
             if let Some(i) = OFDM_RATES.iter().position(|&r| r == rate) { self.counts.ofdm_rates[i][outcome] += 1; }
             let mpdu = length - pad - 6 - 4;
