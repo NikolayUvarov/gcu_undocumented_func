@@ -17,7 +17,7 @@ On 2026-10-21, on the MacBook Pro joined to CoolNet2, the radio received no good
 
 ## Acceptance criteria
 
-- [ ] **On the MacBook Pro with CoolNet2, without the file:**
+- [x] **On the MacBook Pro with CoolNet2, without the file** (2026-10-21, below):
   - the join and the DHCP lease within a few seconds;
   - `ping -c 20` to the gateway answered at least 19 times;
   - 550-DRV-0036's lines show the data received as CCK.
@@ -31,7 +31,7 @@ Evidence for this machine and network only (MC-12.1). 802.11b's rates bound the 
 - **2026-10-21, the MacBook Pro** (`fast-test` ffd5dcc), joined by hand to CoolNet2, then `ping -c 20`:
   - **Receiving:** 483 to 523 good CCK frames each 10 s, and no OFDM frame at all, good or bad. The access point kept to CCK.
   - **DHCP took 15 s** after the join, where it had taken 50 s.
-  - **Sending is now where frames are lost.** At 11 Mbit/s 7 of 14 data frames were lost after 4 tries; at 5.5 Mbit/s 1 of 15. The next task is [550-DRV-0038](550-DRV-0038-retries-at-a-lower-rate.md).
+  - **Sending is now where frames are lost.** At 11 Mbit/s 7 of 14 data frames were lost after 4 tries; at 5.5 Mbit/s 1 of 15. The next task is [550-DRV-0038](../issues-done/550-DRV-0038-retries-at-a-lower-rate.done).
   - **`ping -c 20` to the gateway: 15 of 20 answered,** where pings had answered about 2 of 3 with 802.11g. The criterion of 19 is not met, so it stays open for 550-DRV-0038.
 - **2026-10-21, the MacBook Pro again** (`fast-test` d2daa430, with 550-DRV-0038), rejoined by `autorun.msh` at start (550-ASR-0007):
   - `[BCM] 2.4 GHZ OFFERED TO THE STATION: 802.11B ONLY, CCK`;
@@ -40,6 +40,11 @@ Evidence for this machine and network only (MC-12.1). 802.11b's rates bound the 
   - **the script's three pings of the gateway** all answered, 13 to 28 ms.
 
   Of the first criterion, the join, the lease and the CCK lines are met on this machine and network; `ping -c 20` on this build is left.
+- **2026-10-21, the pings, over the link** (`fast-test` d8acd167, `link.conf` with `dev`, 800-LNK-0012). `netcheck` was started from the development machine: one echo request per check, none sent again.
+  - **The gateway answered 19 of 20, then 39 of 40, and 20 of 20 after a restart.** The first criterion is met on this machine and network.
+  - **Receiving:** 423 to 500 good CCK frames each 10 s, no OFDM frame.
+  - **The two losses** were data frames lost on their way out ([550-DRV-0038](../issues-done/550-DRV-0038-retries-at-a-lower-rate.done)).
+- **Left:** the second criterion, 802.11g offered with `data/wifi-ofdm.txt`. That is the next run, with 550-DRV-0029's counts.
 
 ## Related
 
