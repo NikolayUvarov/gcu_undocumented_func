@@ -10,7 +10,7 @@
 - **The station joins only from its last scan** (`dot11` `Station::join`, `idl/wifi.wit` `join`), and `wlan` scans only when asked. Nothing had scanned since the boot.
   - The `wifi` window scans when it opens, so a join by hand works.
   - `wifi join` without a screen never scanned, so a script could not join at start.
-- **The `net` suite hid it.** After restarting `keystore` and `wlan`, it opened `wifi`'s window to scan before `wifi join`.
+- **The `net` suite hid it.** In its VM whose radio answers late, the station's only scan is made while the radio is silent, as at the Mac's start; the suite opened `wifi`'s window to scan again before `wifi join`.
 
 ## Plan
 
@@ -25,7 +25,8 @@
 - **Host tests** (`tests/wifi_host.rs`), against a station that joins only what it last scanned:
   - a join before any scan scans once, then joins, both when the join is refused and when the link fails afterwards;
   - a network no scan hears is scanned for once, then refused.
-- **The `net` suite** (x86, aarch64): after `keystore` and `wlan` restart, `wifi join MIND-TEST` with no scan before it logs the scan line and joins.
+- **The `net` suite** (x86, where the slow radio is built): in the VM whose radio answers late, `wifi join MIND-TEST` with no scan after the radio answered logs the scan line with `IT AMONG THEM` and joins.
+  - Not after `keystore` and `wlan` restart, as first tried (gate if6b6 on i9, 2026-10-21). There the restarted station joined without a scan: `dot11` takes every beacon it hears into its list, and `wlansim`, not restarted, still passes the joined network's beacons.
 - **The MacBook Pro:** `tests/hardware/wifijoin.msh` as `autorun.msh` joins the remembered network at start. This is QEMU's stand-in radio until then (MC-12.1).
 
 ## Related
