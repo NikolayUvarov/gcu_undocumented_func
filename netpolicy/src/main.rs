@@ -20,7 +20,7 @@ use mind::idl::netpolicy::{self, Error};
 use mind::idl::socket::{self, Protocol, Rule};
 use mind::idl::wire;
 use mind::ipc::{self, Endpoint};
-use mind::network::BADGE_GRANT_LAST;
+use mind::network::{may_change_policy, BADGE_GRANT_LAST};
 
 const SOURCE: usize = 2; // unbadged stack client: badged children are minted from it
 const CONTROL: Endpoint = Endpoint(4); // the stack's policy client (mind::network::BADGE_POLICY)
@@ -178,7 +178,8 @@ impl Broker {
         }
     }
 
-    fn prepare(&mut self, program: &str) -> Result<u16, Error> {
+    // `launcher`: the asking client's badge; a launch-only client (link's) is named in the grant's line (800-NET-0038).
+    fn prepare(&mut self, program: &str, launcher: u16) -> Result<u16, Error> {
         if program.is_empty() { return Err(Error::Invalid); }
         if self.grants.len() >= GRANTS { return Err(Error::Limit); }
         let dns = match socket::config(CONTROL) { Ok(Ok(config)) => config.dns, _ => 0 };
@@ -192,7 +193,8 @@ impl Broker {
             return Err(Error::NoNetwork);
         }
         self.grants.push(Grant { badge, program: Text::new(program).unwrap_or_default(), cap, rules: rules.len() as u8, taken: false, pid: 0 });
-        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES, {} S, {} BYTES", badge, program, rules.len(), seconds, bytes);
+        mind::println!("[NETPOLICY] GRANT {} TO {}: {} RULES, {} S, {} BYTES{}", badge, program, rules.len(), seconds, bytes,
+            if may_change_policy(launcher) { "" } else { ", ASKED BY A LAUNCH-ONLY CLIENT" });
         Ok(badge)
     }
 
@@ -283,6 +285,11 @@ impl Broker {
     }
 }
 
+fn denied(what: &str, pid: u64) -> Error {
+    mind::println!("[NETPOLICY] {} REFUSED FOR PID {}: A LAUNCH-ONLY CLIENT", what, pid);
+    Error::Denied
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut broker = Broker { grants: Vec::new(), next: 0, preferred: None, told: 0, read: false };
@@ -297,7 +304,11 @@ fn main(_info: &'static BootInfo) {
         if !request.is_call { continue; }
         let _ = match netpolicy::decode(&request, RECEIVED) {
             Err(reason) => wire::reject(reason),
-            Ok((netpolicy::Request::Prepare { program }, call)) => netpolicy::reply_prepare(call, broker.prepare(program.as_str())),
+            Ok((netpolicy::Request::Prepare { program }, call)) => netpolicy::reply_prepare(call, broker.prepare(program.as_str(), request.badge)),
+            // A launch-only client (link's in its developer mode) may not change the policy or end grants (800-NET-0038).
+            Ok((netpolicy::Request::Revoke { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_revoke(call, Err(denied("REVOKE", request.sender))),
+            Ok((netpolicy::Request::Add { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_add(call, Err(denied("ADD", request.sender))),
+            Ok((netpolicy::Request::Remove { .. }, call)) if !may_change_policy(request.badge) => netpolicy::reply_remove(call, Err(denied("REMOVE", request.sender))),
             Ok((netpolicy::Request::Take { badge }, call)) => {
                 // The capability goes out once, to the launcher that prepared it.
                 let result = match broker.grants.iter_mut().find(|g| g.badge == badge && !g.taken) { Some(g) => { g.taken = true; Ok(g.cap) } None => Err(Error::NotFound) };
