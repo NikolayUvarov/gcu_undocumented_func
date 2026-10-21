@@ -1,6 +1,6 @@
 # 000-APP-0049 — The network traffic on `wm`'s background
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs is not checked yet · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](000-NET-0015-a-card-read-only-client.md), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs is not checked yet · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done) on 2026-10-10: the background's `show = net` is there and says "NET: NO COUNTERS".
 

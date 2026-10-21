@@ -40,4 +40,4 @@ In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, p
 
 ## Related
 
-[550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.done), 000-KRN-0073 (`CAP_BADGE`), 000-KRN-0101 (a session holds every launch slot), [000-NET-0015](../issues/000-NET-0015-a-card-read-only-client.md), [351-NET-0022](../issues/351-NET-0022-tls-without-the-device-certificate.md).
+[550-KRN-0097](550-KRN-0097-the-wifi-station-in-the-boot-services.done), 000-KRN-0073 (`CAP_BADGE`), 000-KRN-0101 (a session holds every launch slot), [000-NET-0015](000-NET-0015-a-card-read-only-client.done), [351-NET-0022](351-NET-0022-tls-without-the-device-certificate.done).

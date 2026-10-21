@@ -1,6 +1,6 @@
 # 550-NET-0028 — The station offers only the rates the radio has: 802.11b while `bcm_wifi` hears no OFDM
 
-**Type:** network (library, service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** 550-KRN-0097 (`init` starts `wlan`, for the QEMU check) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-12.4, Appendix B.6
+**Type:** network (library, service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open (the QEMU criterion holds) · **Blocked by:** the maintainer: the hardware criterion asks for a radio without OFDM, and the MacBook Pro's `bcm_wifi` names OFDM now · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-12.4, Appendix B.6
 
 From the request "The station offers only the rates the radio can receive" in requests-NET.md (recorded by the kernel track at the maintainer's word, from the drivers track's runs of 550-DRV-0028 on the MacBook Pro).
 
@@ -27,6 +27,13 @@ From the request "The station offers only the rates the radio can receive" in re
 - Host tests (`dot11/tests/station.rs`): a station without OFDM offers 1 to 11 Mb/s alone in its probe and association requests, claims no short slot, joins a WPA2 network, sends at 11 Mb/s and steps to 5.5 and back, and never at an OFDM rate. An access point answering status 18 fails the join as `unsupported`. A station with OFDM offers all twelve rates as before.
 - In QEMU, the `net` suite with `wlansim`: the station associates offering 1 to 11 Mb/s alone, gets its lease, and `wlansim` refuses no frame. This waits for `init` to start `wlan` (550-KRN-0097).
 - On the MacBook Pro, with `bcm_wifi` leaving the bit clear: a WPA2 network is joined and DHCP answers (the maintainer's run).
+
+## Progress (2026-10-20): the MacBook Pro names OFDM now
+
+From the maintainer's run of 2026-10-20 on the MacBook Pro (`fast-test` 832c9080, recorded in 550-ASR-0007 and 550-DRV-0027 by `f750a8af`): the station joined `CoolNet2` (WPA2) through `bcm_wifi` and DHCP answered. But `bcm_wifi` now names OFDM on 2.4 GHz (`BANDS = BAND_2GHZ | BAND_2GHZ_OFDM`, `bcm_wifi/src/serve.rs`): it receives OFDM up to 54 Mbit/s, as `requests-DRV.md` asked once it heard it. So the station offered OFDM rates too, and this run is not the criterion's configuration ("with `bcm_wifi` leaving the bit clear").
+
+- **The criterion as written** cannot be run on the Mac any more. A radio without OFDM is the QEMU check's (`wlansim`), which passes.
+- **Whether to close the task on that**, or keep the hardware criterion for another radio without OFDM, is the maintainer's to say; this record changes no criterion.
 
 ## Progress (2026-10-20)
 

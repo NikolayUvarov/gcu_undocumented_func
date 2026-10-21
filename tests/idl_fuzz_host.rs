@@ -418,7 +418,7 @@ macro_rules! types {
 }
 types! {
     battery: Error Status;
-    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update;
+    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
     display: Error Mode;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot;
