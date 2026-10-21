@@ -7,6 +7,14 @@ pub const BADGE_POLICY: u16 = 0xFFFF;
 /// Flow grants of the broker use badges from 1 up to this one.
 pub const BADGE_GRANT_LAST: u16 = 0xFFFD;
 
+/// A client of the network policy broker that may only launch (idl/netpolicy.wit 1.2, 800-NET-0038): it prepares, takes
+/// and binds grants and reads the policy, but may not change the policy or revoke a grant. The shell's has no badge.
+pub const BADGE_LAUNCH: u16 = 1;
+
+/// Whether a client of the policy broker with `badge` may change the policy and revoke grants: only one with no badge,
+/// whose holder asks its user first (the shell, 108). A badge this version does not know changes nothing either.
+pub fn may_change_policy(badge: u16) -> bool { badge == 0 }
+
 /// A network card driver's client that only reads the card (idl/net.wit 1.3, 000-NET-0015): `info`, `counters`,
 /// `offloads`.
 pub const BADGE_COUNTERS: u16 = 1;

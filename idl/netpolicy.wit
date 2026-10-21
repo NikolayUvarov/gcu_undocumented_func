@@ -7,11 +7,17 @@
 /// directory of the boot disk (`system/netpolicy/netpolicy.txt`, which only the broker opens), and the broker reads it
 /// in place of the shipped `netpolicy.txt`. Only a launcher holds a client: the shell asks the user before it adds or
 /// removes a line. Grants made before a change keep their rules; the next grant follows the change.
-package mind:netpolicy@1.1.0;
+///
+/// 1.2 (800-NET-0038): a client badged `mind::network::BADGE_LAUNCH` may only launch: it prepares, takes and binds
+/// grants and reads the policy and the grants, and is refused `revoke`, `add` and `remove` (`denied`), as is a client
+/// with any other badge. The shell's client has no badge; `link` gets a launcher's in its developer mode, as it has no
+/// user to ask.
+package mind:netpolicy@1.2.0;
 
 interface netpolicy {
-    /// `unwritable` (1.1): the change could not be stored, so it was not made.
-    enum error { no-policy, no-network, limit, not-found, invalid, unwritable }
+    /// `unwritable` (1.1): the change could not be stored, so it was not made. `denied` (1.2): a launcher's client asked
+    /// to change the policy or to revoke a grant.
+    enum error { no-policy, no-network, limit, not-found, invalid, unwritable, denied }
 
     /// A live grant: its badge, the program it was made for, rules, milliseconds left, bytes used.
     record grant { badge: u16, program: string<16>, rules: u8, left-ms: u32, used: u64 }
