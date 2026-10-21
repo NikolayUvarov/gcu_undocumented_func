@@ -4079,7 +4079,7 @@ def modes_suite(args):
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
-                assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 0\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
+                assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()

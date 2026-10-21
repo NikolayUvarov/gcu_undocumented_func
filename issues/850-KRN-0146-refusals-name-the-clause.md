@@ -38,7 +38,7 @@ None of these says which requirement it enforces. A reader of a log, or of a scr
 | `stop-task` of a service's PID | always; a service stops through `stop` | MC-6.8 | init is the party responsible for a service's lifecycle, and `stop` also quiets its device |
 
 - The `reboot`, `stop` and `restart` refusals logged nothing before; the mode refusal did, and keeps its words with the clause added.
-- The `modes` suite now reads the whole line: `MODE CHANGE REFUSED: PID … (BADGE 0) MAY NOT TURN MAINTENANCE ON (MC-12.6)`.
+- The `modes` suite now reads the whole line: `MODE CHANGE REFUSED: PID … (BADGE 2) MAY NOT TURN MAINTENANCE ON (MC-12.6)`, badge 2 being the lifecycle client the shell lends `check`.
 - **Not tested on a machine:** the `reboot`, `stop` and `stop-task` lines. A `check` row that asks them would stop or restart the machine if `init` ever let it through, so none was added.
 
 **The boot loader** (`bootloader/src/verify.rs`, shared with the update track): its refusals of a signed volume end with their clause, as `BOOT ERROR: <file>: <reason>`.
@@ -52,7 +52,7 @@ None of these says which requirement it enforces. A reader of a log, or of a scr
 
 **The rule** is in CONTRIBUTING.md, under Rules: other tracks adopt it as they touch their refusals.
 
-**Tested** on this session's machine, with `scripts/ci_local.sh` on the working tree: the host tests, "x86: boot, display, network, TLS, shell, memory, clock", "x86: services, storage, audio" (`modes`), "x86: files and block writes" (`update`, `linkupdate`), "aarch64: boot and fault containment" and "aarch64: files, network and TLS".
+**Tested** on this session's machine, with `scripts/ci_local.sh` on the working tree: the host tests, "x86: boot, display, network, TLS, shell, memory, clock", "x86: services, storage, audio" (`modes`), "x86: files and block writes" (`update`, `linkupdate`), "aarch64: boot and fault containment" and "aarch64: files, network and TLS". The `modes` suite first expected badge 0 and failed on both architectures, though the line was right; with badge 2 it passed on both, alone.
 
 ## Related
 
