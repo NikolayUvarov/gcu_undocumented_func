@@ -60,7 +60,17 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
     - before the write, it saves `system/keystore/` (`wifi.kept`, `device.key`, `wifi.country`) from the disk into `~/.config/mind/keystore`, mode 600;
     - after the write, it puts them back, with that one-line file and the script as `autorun.msh`;
     - so a rewritten MacBook Pro rejoins CoolNet2 by itself.
-  - Saved from the MacBook Pro's disk on 2026-10-21. The rejoin itself is still to be run.
+  - Saved from the MacBook Pro's disk on 2026-10-21.
+
+- **2026-10-21: the MacBook Pro rejoined CoolNet2 by itself** (`fast-test` d2daa430, `build-and-write.sh --keep-wifi`, no typing):
+  - `[SHELL] AUTORUN /autorun.msh`; `WIFI JOIN: THE NETWORK "CoolNet2" (REMEMBERED BY KEYSTORE)`;
+  - **the join:** `wlan` had no scan yet and answered NOT FOUND; `wifi join` then scanned once (APP's 550-APP-0098), heard CoolNet2 among 15 access points and joined, `TRUE AFTER 1745 MS`;
+  - **the address:** `DHCP 192.168.2.236/24 GATEWAY 192.168.2.1` on card 2, the default route on it, `ADDRESS AFTER 1002 MS`;
+  - **the gateway:** `PING: 3 SENT, 3 RECEIVED, 0% LOST`; `wifi status` at -45 dBm;
+  - `*** WIFI JOIN Complete. Data collected ***`, then `[SHELL] AUTORUN ENDED OK`;
+  - the passphrase appears nowhere in the log (checked against the maintainer's file, not printed).
+
+  This meets the MacBook Pro criterion for a network `keystore` remembers. A join from `data/wifijoin.txt`'s passphrase (`--wifijoin`) has run in QEMU only.
 
 ## Related
 

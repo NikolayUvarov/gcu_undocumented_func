@@ -32,6 +32,14 @@ Evidence for this machine and network only (MC-12.1). 802.11b's rates bound the 
   - **Receiving:** 483 to 523 good CCK frames each 10 s, and no OFDM frame at all, good or bad. The access point kept to CCK.
   - **DHCP took 15 s** after the join, where it had taken 50 s.
   - **Sending is now where frames are lost.** At 11 Mbit/s 7 of 14 data frames were lost after 4 tries; at 5.5 Mbit/s 1 of 15. The next task is [550-DRV-0038](550-DRV-0038-retries-at-a-lower-rate.md).
+  - **`ping -c 20` to the gateway: 15 of 20 answered,** where pings had answered about 2 of 3 with 802.11g. The criterion of 19 is not met, so it stays open for 550-DRV-0038.
+- **2026-10-21, the MacBook Pro again** (`fast-test` d2daa430, with 550-DRV-0038), rejoined by `autorun.msh` at start (550-ASR-0007):
+  - `[BCM] 2.4 GHZ OFFERED TO THE STATION: 802.11B ONLY, CCK`;
+  - **the join and the lease:** joined 1.7 s after the script asked; DHCP's lease 0.5 s after the join;
+  - **receiving:** 465 good CCK frames in the first 10 s, none bad, and no OFDM frame; 389 to 443 in the later periods;
+  - **the script's three pings of the gateway** all answered, 13 to 28 ms.
+
+  Of the first criterion, the join, the lease and the CCK lines are met on this machine and network; `ping -c 20` on this build is left.
 
 ## Related
 

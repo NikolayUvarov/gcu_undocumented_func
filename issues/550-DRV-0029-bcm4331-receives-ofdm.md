@@ -65,6 +65,20 @@ Evidence for this machine only (MC-12.1).
   - This network's signal was not measured in that run.
   - Until OFDM comes through, the station is offered 802.11b only ([550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.md)). So this task's criterion "802.11g for the station" is met only with `data/wifi-ofdm.txt`.
 
+- **2026-10-21: what the next run with `data/wifi-ofdm.txt` will tell.** Two things differ from the runs of 2026-10-14, where OFDM came through:
+  - **the channel:** CoolNet2 is on channel 8, and those runs probed networks on channels 1, 3 and 6 only. Channel 8's values in the radio's and the PHY's tables follow the same steps as the channels around it, so a slip in one entry is not likely, though not ruled out;
+  - **the frames:** those runs counted acknowledgements, 14 bytes; the access point's data to the station is longer. A receiver that keeps the start of a frame and loses its later symbols decodes the one and not the other.
+
+  Until now a frame with a bad FCS never reached `bcm_wifi` outside the test, so "no good OFDM" could not be told apart from "no OFDM heard". Now, with `data/wifi-ofdm.txt` (`bcm_wifi/src/serve.rs` `ofdm_lines`, `radio.rs` `Counts`):
+  - frames with a bad FCS or PLCP are kept and counted, not queued for the station;
+  - every period that logs traffic adds two lines: OFDM frames good and with a bad FCS by rate (6 to 54 Mbit/s) and by length (up to 64 bytes, 65 to 256, longer), and the mean power by core of each, with how many were clipped;
+  - **`cores-off=<0 to 7>` in the file** switches off the front ends of the cores in that mask (core 0 is bit 0) in place of core 2's alone: `cores-off=6` leaves core 0 alone, `cores-off=0` every core on. The boot logs the cores it switched off.
+
+  What each outcome would mean:
+  - **long frames with a bad FCS, short ones good:** the frame's start is received and its later symbols are not. Next: the receive gain held through a frame, IQ balance, frequency tracking;
+  - **almost nothing at OFDM, good or bad, at a power that should be received:** the receiver does not detect OFDM on channel 8. Next: `--wifitest`'s probes there, and channel 8's tables against b43's source;
+  - **good frames with another core set:** the cores, as on 2026-10-14.
+
 ## Related
 
 [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), requests-NET.md (the station's rates; the stack's wait), `bcm_wifi/`.
