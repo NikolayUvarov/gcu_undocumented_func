@@ -5,7 +5,7 @@
 // described).
 use crate::stage3::Core;
 use crate::txwait;
-use core::sync::atomic::{fence, Ordering};
+use core::sync::atomic::{fence, AtomicU8, Ordering};
 use mind::abi::SLOT_MEM;
 use mind::dev::Dma;
 use mind::mem::Pages;
@@ -19,7 +19,7 @@ const IO_STATUS_DMA64: u32 = 1 << 12;
 const RX_ENABLE: u32 = 38 << 1 | 1 | 0x800; const TRANSLATION: u32 = 0x8000_0000;
 // MAC control: station, beacons of every network (filtered here), awake, PMQ discarded; AP, the keep-bad bits, power
 // save and discarding transmit status off.
-const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 21 | 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
+const MAC_SET: u32 = 1 << 17 | 1 << 20 | 1 << 26 | 1 << 30; const MAC_KEEP_CONTROL: u32 = 1 << 22; const MAC_KEEP_BAD: u32 = 1 << 23; const MAC_CLEAR: u32 = 1 << 18 | 1 << 21 | 1 << 22 | 1 << 23 | 1 << 25 | 1 << 29;
 // The receive ring: 8 KiB-aligned (bit 12 of its address must stay clear on the BCM4331); 128 buffers of 2390 bytes.
 const RING_BYTES: usize = 8192; const SLOTS: usize = 128; const BUFFER: u32 = 2390; const STRIDE: usize = 2432; const OFFSET: usize = 38;
 // The transmit engine (engine 1: the BCM4331 sends everything there), the transmit status FIFO; slots hold a header and a frame.
@@ -46,6 +46,10 @@ const TX_CORES: u16 = 0x00C0;
 // The cores whose front ends stay off: with core 2's on, OFDM frames from access points at -43 dBm were not received;
 // with it off they were, every one (2026-10-14, 550-DRV-0028). Its transmitter is not among TX_CORES.
 pub const CORES_OFF: u8 = 0b100;
+// The cores the radio switches off when it comes up: CORES_OFF, or another set for a test (data/wifi-ofdm.txt, 550-DRV-0029).
+static CORES_OFF_AT_UP: AtomicU8 = AtomicU8::new(CORES_OFF);
+pub fn set_cores_off_at_up(mask: u8) { CORES_OFF_AT_UP.store(mask & 0b111, Ordering::Relaxed); }
+pub fn cores_off_at_up() -> u8 { CORES_OFF_AT_UP.load(Ordering::Relaxed) }
 
 // Why a call failed, as idl/wlanhw.wit names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,12 +66,21 @@ pub struct Sent { pub acked: bool, pub attempts: u8 }
 
 // What the receive side did since the radio came up. `frames`: by modulation (CCK, OFDM, HT) and outcome (good, bad
 // FCS, bad PLCP; bad ones reach the host only when kept, `keep`). The acknowledgements to us among the good frames
-// (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames.
+// (control frames kept), and the per-core powers summed and the clipped count of good OFDM frames. OFDM frames good
+// and with a bad FCS (index 0 and 1) by rate (6 to 54 Mbit/s) and by MPDU length (up to 64, 65 to 256, longer), and the
+// powers and clipped count of those with a bad FCS: what tells a frame received badly from one not heard (550-DRV-0029).
+// A frame with a bad FCS weaker than BAD_FCS_FLOOR on every core is noise taken for a frame: only counted, in `ofdm_weak`.
 #[derive(Clone, Copy, Default)]
 pub struct Counts {
     pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
     pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
+    pub ofdm_rates: [[u32; 2]; 8], pub ofdm_lengths: [[u32; 2]; 3], pub bad_fcs_power: [i32; 3], pub bad_fcs_clipped: u32,
+    pub ofdm_weak: u32,
 }
+pub const BAD_FCS_FLOOR: i8 = -75;
+
+// OFDM's rates in 500 kbit/s, in the order Counts keeps them.
+pub const OFDM_RATES: [u8; 8] = [12, 18, 24, 36, 48, 72, 96, 108];
 
 pub struct Radio<'a> {
     c: &'a Core<'a>,
@@ -95,6 +108,12 @@ fn rate_code(rate: u8) -> Option<(bool, u8, u16)> {
     })
 }
 
+// The rate a frame's retries go at, one step below `rate` (500 kb/s units), as b43 picks it: the header's fallback
+// fields (550-DRV-0038). On the MacBook Pro 11 Mbit/s lost half its frames where 5.5 lost one in fifteen.
+fn fallback(rate: u8) -> u8 {
+    match rate { 4 => 2, 11 => 4, 22 => 11, 12 => 11, 18 => 12, 24 => 18, 36 => 24, 48 => 36, 72 => 48, 96 => 72, 108 => 96, other => other }
+}
+
 // The received rate in 500 kb/s units from the frame type and the PLCP's first byte; 0 for HT or an unknown code.
 fn rx_rate(ofdm: bool, plcp0: u8) -> u8 {
     if ofdm {
@@ -103,6 +122,9 @@ fn rx_rate(ofdm: bool, plcp0: u8) -> u8 {
         match plcp0 { 0x0A => 2, 0x14 => 4, 0x37 => 11, 0x6E => 22, _ => 0 }
     }
 }
+
+// A core's front end as a word for the log: off when its bit is in `mask`.
+fn onoff(mask: u8, core: u8) -> &'static str { if mask >> core & 1 != 0 { "OFF" } else { "ON" } }
 
 // The PLCP header for `len` frame bytes (the FCS added) at `rate`.
 fn plcp(ofdm: bool, code: u8, rate: u8, len: usize) -> [u8; 6] {
@@ -168,9 +190,11 @@ impl<'a> Radio<'a> {
         mind::println!("[BCM] RADIO UP: RX RING AT {:#X} ({} SLOTS), TX RING AT {:#X} ({} SLOTS); GAIN ENTRY {} ({:08X}); {} STALE TRANSMIT STATUSES; RX STATUS {:08X}, ERROR {:08X}",
                        rx_address, SLOTS, tx_address, TX_SLOTS, TX_GAIN, entry, stale, c.r32(RX_STATUS), c.r32(RX_ERROR));
         if r.set_channel(1).is_err() { mind::println!("[BCM] CHANNEL 1 NOT SET"); }
-        match r.cores_off(CORES_OFF) {
-            Ok(()) => mind::println!("[BCM] CORE 2'S FRONT END OFF: WITH IT ON, OFDM IS RECEIVED ONLY FROM STRONG SENDERS"),
-            Err(_) => mind::println!("[BCM] CORE 2'S FRONT END NOT SWITCHED OFF"),
+        let off = cores_off_at_up();
+        match r.cores_off(off) {
+            Ok(()) if off == CORES_OFF => mind::println!("[BCM] CORE 2'S FRONT END OFF: WITH IT ON, OFDM IS RECEIVED ONLY FROM STRONG SENDERS"),
+            Ok(()) => mind::println!("[BCM] FRONT ENDS OFF FOR A TEST: CORE 0 {}, CORE 1 {}, CORE 2 {}", onoff(off, 0), onoff(off, 1), onoff(off, 2)),
+            Err(_) => mind::println!("[BCM] FRONT ENDS NOT SWITCHED OFF (CORES {:03b})", off),
         }
         Some(r)
     }
@@ -234,7 +258,8 @@ impl<'a> Radio<'a> {
         Ok(t)
     }
 
-    // Control frames, and frames with a bad FCS or PLCP, passed to the host as well, for a test.
+    // Control frames, and frames with a bad FCS, passed to the host as well, for a test. Frames with a bad PLCP header
+    // are not: with them kept on the MacBook Pro the station heard no access point at all (550-DRV-0029, 2026-10-21).
     pub fn keep(&mut self, control: bool, bad: bool) {
         self.mac_extra = if control { MAC_KEEP_CONTROL } else { 0 } | if bad { MAC_KEEP_BAD } else { 0 };
         self.c.w32(MAC_CONTROL, (self.c.r32(MAC_CONTROL) & !MAC_CLEAR) | MAC_SET | self.mac_extra);
@@ -299,8 +324,21 @@ impl<'a> Radio<'a> {
         let kind = match phy0 & 3 { 0 => 0, 1 => 1, _ => 2 };
         let outcome = if status & 1 != 0 { 1 } else if phy0 & 0x0300 != 0 { 2 } else { 0 };
         self.counts.frames[kind][outcome] += 1;
-        if outcome != 0 || status & 1 << 4 != 0 { self.counts.bad += 1; return; }
         let pad = if status & 4 != 0 { 2 } else { 0 };
+        // An OFDM frame whose PLCP header held: its rate and length, and its powers when its FCS failed.
+        let strong = [s[9], s[10], s[11]].iter().any(|&p| (BAD_FCS_FLOOR..0).contains(&(p as i8)));
+        if kind == 1 && outcome == 1 && !strong { self.counts.ofdm_weak += 1; }
+        else if kind == 1 && outcome < 2 && length >= pad + 6 + 4 {
+            let rate = rx_rate(true, s[OFFSET + pad]);
+            if let Some(i) = OFDM_RATES.iter().position(|&r| r == rate) { self.counts.ofdm_rates[i][outcome] += 1; }
+            let mpdu = length - pad - 6 - 4;
+            self.counts.ofdm_lengths[if mpdu <= 64 { 0 } else if mpdu <= 256 { 1 } else { 2 }][outcome] += 1;
+            if outcome == 1 {
+                for i in 0..3 { self.counts.bad_fcs_power[i] += s[9 + i] as i8 as i32; }
+                if phy0 & 0x000C != 0 { self.counts.bad_fcs_clipped += 1; }
+            }
+        }
+        if outcome != 0 || status & 1 << 4 != 0 { self.counts.bad += 1; return; }
         if length < pad + 6 + 4 + 10 { self.counts.bad += 1; return; }
         let (plcp0, start, end) = (s[OFFSET + pad], OFFSET + pad + 6, OFFSET + length - 4);
         let ofdm = kind == 1;
@@ -360,10 +398,13 @@ impl<'a> Radio<'a> {
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
         header[0x04..0x06].copy_from_slice(&frame[0..2]);
         header[0x08..0x0A].copy_from_slice(&(TX_CORES | ofdm as u16).to_le_bytes()); // no per-frame power
-        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&control1.to_le_bytes());
-        header[0x12] = code; header[0x14] = ofdm as u8; header[0x15] = self.channel;
+        // The retries at the fallback rate: its PHY control word, its encoding (0x14) and its PLCP header (0x36).
+        let fb = fallback(rate);
+        let (fb_ofdm, fb_code, fb_control1) = rate_code(fb).unwrap_or((ofdm, code, control1));
+        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&fb_control1.to_le_bytes());
+        header[0x12] = code; header[0x14] = fb_ofdm as u8; header[0x15] = self.channel;
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);
-        header[0x36..0x3C].copy_from_slice(&p);
+        header[0x36..0x3C].copy_from_slice(&plcp(fb_ofdm, fb_code, fb, frame.len()));
         header[0x3C..0x3E].copy_from_slice(&frame[2..4]);
         let cookie = txwait::cookie(self.tx_generation, slot);
         self.tx_generation = self.tx_generation.wrapping_add(1);

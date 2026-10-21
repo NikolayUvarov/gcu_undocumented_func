@@ -2,7 +2,7 @@
 // view of a scan of channels 1 to 13 with every beacon let through; a broadcast probe request on channels 1 to 11 at 1
 // and at 6 Mbit/s; probe requests to every network heard at 1 Mbit/s and at OFDM rates up to 54 Mbit/s with core 2's
 // front end off, and with other cores on (550-DRV-0028), control frames kept, the filter following that network.
-use crate::radio::{Filter, Radio, CORES_OFF, FRAME_MAX, RADIO_HEADER, TX_GAIN};
+use crate::radio::{cores_off_at_up, Filter, Radio, FRAME_MAX, RADIO_HEADER, TX_GAIN};
 use crate::stage3::Core;
 
 const DWELL_MS: usize = 200; const ANSWER_MS: usize = 150; const TX_CHANNELS: u8 = 11;
@@ -182,7 +182,7 @@ pub fn run<'a>(c: &'a Core<'a>, mac: [u8; 6]) -> Option<Radio<'a>> {
             mind::println!("[BCM]   {}: {} ({}, {}; {}/{}; {}/{}/{}; {:?})", name, acked, tries, heard.responses, k.acks_cck - before.acks_cck,
                            k.acks_ofdm - before.acks_ofdm, good, k.frames[1][1] - before.frames[1][1], k.frames[1][2] - before.frames[1][2], power);
         }
-        let _ = radio.cores_off(CORES_OFF);
+        let _ = radio.cores_off(cores_off_at_up());
     }
     radio.keep(false, false);
     let _ = radio.set_gain(TX_GAIN);

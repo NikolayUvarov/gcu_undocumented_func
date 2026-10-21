@@ -37,6 +37,7 @@ commands: hello                       the other end's name and version
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
           runs                        the runs the other end knows
           stop <run>                  stop a run's program
+          reboot                      restart the other end's machine (MIND Core: link.conf must hold the word dev)
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
@@ -166,6 +167,7 @@ fn main() {
         ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
         ("runs", []) => runs(&mut c),
         ("stop", [run]) => c.stop(number(run)).map(|_| println!("stopped run {run}")),
+        ("reboot", []) => c.reboot().map(|_| println!("{spec}: restarting")),
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
         ("console", []) => console(&mut c),
@@ -267,6 +269,10 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     let (run, pid) = c.run(program, args)?;
     eprintln!("run {run}: {program} started as PID {pid}");
     let (state, exit) = out(c, run, true)?;
+    if state == linkproto::app::RUN_FAULTED {
+        eprintln!("run {run}: faulted (vector {exit})");
+        std::process::exit(1);
+    }
     let code = (exit != linkproto::app::EXIT_UNKNOWN).then_some(exit as i32);
     eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
               code.map_or(String::new(), |c| format!(", exit code {c}")));

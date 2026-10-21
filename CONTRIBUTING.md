@@ -13,7 +13,7 @@ Contributions of code, tests, documentation and reviews are welcome.
 - [issues/](issues/README.md): tasks scheduled now. Each task names its acceptance criteria. Pick one, or open a GitHub issue to propose a new one.
 - [Constitution v1.6](constitution/EN/MIND_CORE_Constitution_v1.6.md): normative requirements (`MC-<article>.<clause>`); [docs/profile](docs/profile/README.md) says which of them the code meets and with what evidence.
 - [docs/api](docs/api/README.md): system calls, `libmind`, service interfaces.
-- [AGENTS.md](AGENTS.md): working through a coding agent — tracks and their issue ranges, branches, the gate to `main`, coordination between tracks.
+- [AGENTS.md](AGENTS.md): working through a coding agent — tracks and their issue ranges, branches, the landing queue to `main`, coordination between tracks.
 - [TRACKS.md](TRACKS.md): the registry of tracks — codes, task numbers `NNN-TRK-MMMM`, ranges, owners; open tracks can be taken in parallel.
 
 ## Build and test
@@ -34,6 +34,10 @@ A change is ready when the suites it touches pass; a kernel change runs all QEMU
 ## Rules
 
 - **Commits:** one task per commit where possible, a message saying what changed and why; reference the issue number.
+- **Getting to `main`** (the maintainer's decision, 2026-10-21):
+  - code lands through the landing queue: a request in `LANDING/` on the `internal-dev-messages` branch, then one gated candidate for every pending request, which only the integrator pushes ([AGENTS.md](AGENTS.md), section 4, `scripts/land.sh`);
+  - a text-only commit goes to `main` directly;
+  - a pull request from a fork is reviewed, then landed the same way.
 - **Comments:** English, one line, the essence only. Match the style of the surrounding code.
 - **ABI:** system call numbers, records and capability rules live in `common/abi.rs` and change only together with the kernel, `libmind`, [docs/api](docs/api/README.md) and the tests. Service interfaces change through `idl/*.wit` and `scripts/mind_idl.py` (generated files are committed).
 - **Profile:** a change that alters a statement in `docs/profile` updates it in the same commit.

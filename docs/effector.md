@@ -189,6 +189,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 4. Gates on a remote machine
 
 - **A gate run through Effector is a local gate** in the sense of [AGENTS.md](../AGENTS.md), section 4, when every group of `scripts/ci_local.sh` passes.
+- **The landing queue's gate** (AGENTS.md, section 4, since 2026-10-21) runs this way. `scripts/land.sh gate` spreads every group of `scripts/ci_local.sh --list` over the machines' lanes and runs a failed group once more, alone. It sends the key only from the file `$EFFECTOR_KEY_FILE` (section 2). The presets name its lanes: `full`, and `no-i9` while another track's gate loads i9.
 - **Say where it ran:** "local gate on PCU through Effector", and name the configuration of section 1.
 - **Until the full gate fits there** (section 1), a remote machine adds evidence beside a gate, and does not replace one.
 

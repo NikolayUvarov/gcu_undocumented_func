@@ -1,0 +1,54 @@
+# 550-DRV-0038 — `bcm_wifi` sends a frame's retries at the rate one step lower — done
+
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md), through [550-DRV-0006](../issues/550-DRV-0006-broadcom-wifi.md) · **Constitution:** MC-6.1, MC-12.1, MC-12.3
+
+## Problem
+
+**Sending is where frames are lost now.** On 2026-10-21 the MacBook Pro was offered 802.11b only ([550-DRV-0037](../issues/550-DRV-0037-802-11b-until-ofdm-is-received.md)), and receiving stopped losing frames. Over six periods of 10 s ([550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md)):
+- **at 11 Mbit/s:** 14 data frames sent, 7 acknowledged, the other 7 lost after their 4 tries;
+- **at 5.5 Mbit/s:** 15 sent, 14 acknowledged.
+
+**Why the station keeps losing them.** `wlan` steps down after two frames lost in a row and up again after ten acknowledged, so it keeps returning to 11 Mbit/s and its losses.
+
+**Why the retries do not help.** The transmit header names a fallback rate for a frame's retries: its PHY control word at 0x0C, its encoding at 0x14 and its PLCP header at 0x36 (b43's `phy_ctl1_fb`, `extra_ft`, `plcp_fb`). `bcm_wifi` gave it the frame's own rate, so every try went at the rate that failed.
+
+## Plan
+
+- **The fallback rate is one step below,** as b43 picks it (`b43_calc_fallback_rate`): 11 → 5.5 → 2 → 1 Mbit/s, and 54 → 48 → 36 → 24 → 18 → 12 → 9 → 6 → 5.5.
+- **Which tries go at it** is the microcode's choice: the header gives it the fallback. The run measures what it does.
+
+## Acceptance criteria
+
+- [x] **On the MacBook Pro with CoolNet2, 802.11b,** 550-DRV-0036's lines show it:
+  - data frames at 11 Mbit/s lost far less often than one in two;
+  - `ping -c 20` to the gateway answered at least 19 times.
+- [x] **Nothing else goes wrong:** the join, DHCP and frames at 1 Mbit/s are as before.
+
+Evidence for this machine and network only (MC-12.1). That the microcode uses the fallback for the retries is b43's documentation of the header, not measured here yet (MC-12.3).
+
+## Progress
+
+- **The baseline,** before this change (`fast-test` ffd5dcc, 802.11b): `ping -c 20` to the gateway answered 15 of 20.
+- **2026-10-21, written** (`bcm_wifi/src/radio.rs`, `fallback`). It builds.
+- **2026-10-21, the MacBook Pro** (`fast-test` d2daa430), joined by `autorun.msh`, with no traffic but its own over 78 minutes:
+  - **data frames at 11 Mbit/s: 12 sent, 11 acknowledged, 1 lost** after its tries, where the baseline lost 7 of 14;
+  - by period: 9 of 9 in the first 10 s (1 retried, 11 tries), 1 of 1 at 823 s (3 tries), 1 of 2 at 4424 s (5 tries);
+  - the join, DHCP and the script's three pings as in 550-DRV-0037.
+
+  **Not yet shown.** 12 frames are too few for a rate of loss, and `ping -c 20` on this build is left. The counts are kept by the frame's first rate, so which rate each retry went at is not measured (MC-12.3).
+
+- **2026-10-21, the MacBook Pro over the link** (`fast-test` d8acd167, `link.conf` `baud=460800 run dev`, 800-LNK-0012). The pings were `netcheck`'s, started from the development machine: one echo request each, one second for its answer, none sent again.
+  - **The gateway answered 83 of 85 pings:** 19 of 20, 39 of 40, 5 of 5, and 20 of 20 after a restart.
+  - **Data frames at 11 Mbit/s: 92 sent, 88 acknowledged, 4 lost** after their tries. Each lost ping matched one data frame lost on its way out, and receiving lost nothing.
+  - **The join and DHCP:** `autorun.msh` rejoined CoolNet2 at each start. DHCP's lease came 0.5 s after the join on the first boot, and 10 s after it on the second, whose first period lost 2 of 5 frames.
+  - The station stepped down to 5.5 Mbit/s for a while after those losses, and up again: 10 of 10 frames acknowledged there.
+
+## Resolution
+
+- **Where:** `bcm_wifi/src/radio.rs`, `fallback`. The transmit header names the rate one step below the frame's own for its retries, as b43 picks it.
+- **Shown on the MacBook Pro with CoolNet2, 802.11b** (`fast-test` d8acd167): 4 of 92 data frames at 11 Mbit/s lost, where the baseline lost 7 of 14; the gateway answered 19 of 20 and 39 of 40 pings, and 20 of 20 after a restart.
+- **Not measured:** which rate each retry went at. The counts are kept by a frame's first rate, and that the microcode uses the fallback is b43's account of the header (MC-12.3).
+
+## Related
+
+[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0037](../issues/550-DRV-0037-802-11b-until-ofdm-is-received.md), [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md).

@@ -3896,7 +3896,8 @@ def link_suite(args):
     pseudo-terminal), with `link.conf` at the root, against the host's `mindlink`: a file each way checked by SHA-256,
     the system log read, a name outside data/link/ refused. 800-LNK-0010: a tree made, filled, moved and removed, `ls`
     showing each step, names that climb out refused. 800-LNK-0009 (`run` in link.conf): a program put into a directory
-    of data/link/ started with arguments, its output and its end read, a path the loader cannot take refused. 256-byte
+    of data/link/ started with arguments, its output, its end and its exit code read (800-KRN-0138), one stopped, a path
+    the loader cannot take refused. 256-byte
     frames: the emulated chip keeps 384 bytes and is filled again from the pseudo-terminal only when QEMU's main loop
     wakes (docs/link/mindlink.md). Skipped until init starts `link` (it is in BOOT_SERVICES)."""
     services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
@@ -3919,9 +3920,12 @@ def link_suite(args):
         return out
 
     with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run\n"})
+        # `dev` (800-LNK-0012) with a policy that lets netcheck ping the gateway.
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run dev\n", "netpolicy.txt": b"netcheck 10.0.2.2 icmp\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
-                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link",
+                       # A network card, for the developer mode's netcheck (800-LNK-0012).
+                       "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"))
         try:
             port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
             # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
@@ -3944,13 +3948,19 @@ def link_suite(args):
             pids = vm.services()
             caps = vm.command(f"stat caps {pids['link']}", raw=True)
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
-            held = sorted((int(slot), servers.get(int(ep))) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M))
-            # With `run` in link.conf, link also holds an endpoint of its own for its programs' output, and the send copy
-            # it lends them (800-LNK-0009): nothing granted.
+            caps_held = [(int(slot), int(ep)) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M)]
+            held = sorted((slot, servers.get(ep)) for slot, ep in caps_held)
+            # With `run` in link.conf, link also holds one endpoint of its own (800-KRN-0137) for its programs' output, the
+            # send copy it lends them and the receiving copy the loader's watch gets (800-LNK-0009): nothing granted.
             granted = [h for h in held if h[1] != pids["link"]]
-            own = [h for h in held if h[1] == pids["link"]]
+            own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
-            assert count == len(held) and len(own) <= 2 and granted == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
+            # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
+            # init's reboot client, the policy broker and the Wi-Fi station.
+            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
+            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0))}  # 0: no station runs
+            assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
+            assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -3978,27 +3988,58 @@ def link_suite(args):
             link(port, "put", str(program), "t/mt.elf")
             logged = vm.command("dmesg -s link", raw=True)
             require(logged, "[LINK] MOVED a/b/s.bin TO c/s.bin")
-            programs = "NO ENDPOINT FOR PROGRAMS' OUTPUT" not in logged
-            if not programs:
-                # init gives link no endpoint of its own yet (LNK's request to KRN of 2026-10-20): RUN is refused.
-                require(link(port, "run", "t/mt.elf", ok=False), "does not serve this")
-                print("SKIP: link: programs: init gives link no endpoint for their output yet (requested of KRN, 800-LNK-0009)", flush=True)
+            require(logged, "[LINK] PROGRAMS IN data/link/ MAY BE STARTED")
+            require(link(port, "run", "t/mt.elf"), "USAGE: MEMTEST ALLOC")
+            require(link(port, "run", "t/mt.elf", "--help"), "memtest — test program of task memory")
+            require(link(port, "runs"), "ended\tdata/link/t/mt.elf")
+            require(link(port, "run", "t/missing.elf", ok=False), "no such file")
+            require(link(port, "run", "t/" + "m" * 60 + ".elf", ok=False), "not allowed")
+            # 800-KRN-0138: the exit code from the loader's watch, and STOP through the loader.
+            shutil.copyfile(ROOT / IMAGE / "check.elf", Path(temp) / "ck.elf")
+            link(port, "put", str(Path(temp) / "ck.elf"), "t/ck.elf")
+            ended = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, "run", "t/ck.elf", "--exit", "3"],
+                                   capture_output=True, text=True, timeout=120)
+            assert ended.returncode == 3 and "exit code 3" in ended.stderr, (ended.returncode, ended.stdout + ended.stderr)
+            require(link(port, "run", "t/mt.elf"), "ended, exit code 0")
+            held = link(port, "start", "t/mt.elf", "hold", "1").split("\t")[0]
+            time.sleep(1)
+            require(link(port, "runs"), f"{held}\t")
+            require(link(port, "stop", held), f"stopped run {held}")
+            require(link(port, "runs"), "stopped\tdata/link/t/mt.elf")
+            logged = vm.command("dmesg -s link", raw=True)
+            assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", logged), "the start is logged"
+            require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
+            assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
+
+            # 800-LNK-0012, the developer mode: built-in programs by name, and what init grants link with `dev` lent on.
+            dev = re.search(r"\[LINK\] DEVELOPER MODE \(link.conf: dev\): BUILT-IN PROGRAMS BY NAME; FROM INIT:([A-Z ]*)", logged)
+            assert dev, logged[-2000:]
+            powers = dev[1].split()
+            require(link(port, "run", "memtest"), "USAGE: MEMTEST ALLOC")
+            checks = {"NETWORK": (("netcheck", "ping:10.0.2.2"), "NETCHECK ping:10.0.2.2 OK"),
+                      "WIFI": (("wifi", "status"), "[WIFI] STATUS"), "SYSINFO": (("uptime",), "up ")}
+            # No radio in this machine, so no station runs: its client is lent all the same, and `wifi` says it does not answer.
+            if "wlan" not in pids:
+                checks["WIFI"] = (("wifi", "status"), "the station does not answer")
+            for power, (command, wanted) in checks.items():
+                if power in powers:
+                    require(link(port, "run", *command, ok=power != "WIFI" or "wlan" in pids), wanted)
+                    assert re.search(rf"\[LINK\] RUN \d+: STARTED {command[0]} AS PID \d+, LENT.* {power}", vm.command("dmesg -s link", raw=True)), power
+            missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
+            if missing:
+                print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
+            if "REBOOT" in powers:
+                # The last step: the machine restarts once the answer is out (QEMU exits: -no-reboot).
+                require(link(port, "reboot"), "restarting")
+                vm.process.wait(timeout=60)
             else:
-                require(logged, "[LINK] PROGRAMS IN data/link/ MAY BE STARTED")
-                require(link(port, "run", "t/mt.elf"), "USAGE: MEMTEST ALLOC")
-                require(link(port, "run", "t/mt.elf", "--help"), "memtest — test program of task memory")
-                require(link(port, "runs"), "ended\tdata/link/t/mt.elf")
-                require(link(port, "run", "t/missing.elf", ok=False), "no such file")
-                require(link(port, "run", "t/" + "m" * 60 + ".elf", ok=False), "not allowed")
-                # Ending a program needs a grant init does not give yet (800-KRN-0132, point 3).
-                run_id = link(port, "runs").splitlines()[1].split("\t")[0]
-                require(link(port, "stop", run_id, ok=False), "does not serve this")
-                assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", vm.command("dmesg -s link", raw=True)), "the start is logged"
+                require(link(port, "reboot", ok=False), "does not serve this")
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
-          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants; "
-          "a tree made, moved and removed" + ("; a program put into data/link/t/ started twice with its output read to its end" if programs else ""), flush=True)
+          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
+          "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
+          "the developer mode started a built-in program by name", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):
@@ -4185,12 +4226,17 @@ def vfs_suite(args):
             recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
             vm.send("clock\n")
             vm.expect("[CLOCK] ")
-            time.sleep(1)
-            _, size_, _, during = vm.screenshot().split(b"\n", 3)
+            # The dot shows once record captures, which a loaded machine starts later than 1 s on (gate 25: i7-930, PCU).
+            deadline = time.monotonic() + 15
+            while True:
+                _, size_, _, during = vm.screenshot().split(b"\n", 3)
+                dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
+                if during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)) or time.monotonic() > deadline:
+                    break
+                time.sleep(.3)
             vm.serial(enter=False)
-            dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
             assert during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)), "the capture dot while recording"
-            time.sleep(3)  # clock stays in front for the rest of the recording
+            time.sleep(3.5)  # clock stays in front for the rest of the recording, which began before the dot showed
             vm.send("\x1b")
             vm.expect("SHELL RESUMED.")
             time.sleep(.2); vm.collect(); vm.output = ""
@@ -5990,6 +6036,8 @@ def ping_options_check(vm):
     took = time.monotonic() - began
     require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
     assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    # Each line names its request's place in the run (the maintainer's request, 2026-10-21).
+    assert [int(n) for n in re.findall(r"^\[(\d)/3\] REPLY FROM", out, re.M)] == [1, 2, 3], out[-1500:]
     out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
     require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
     assert "REPLY FROM" not in out, out[-1500:]
@@ -6002,8 +6050,8 @@ def ping_options_check(vm):
     require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
     require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
     vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[1] REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[2] REPLY FROM 10.0.2.2: TIME=", timeout=10)
     vm.send_bytes(b"\x03")
     out = vm.expect("MIND> ", timeout=10)
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
@@ -6069,7 +6117,7 @@ def wifi_join_check(vm):
     # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
     # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
     vm.send("wm\n")
-    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
@@ -6525,15 +6573,15 @@ def slow_radio_check(args):
             else:
                 raise AssertionError(("the radio never answered", radio))
             require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
-            # The station's last scan was made while the radio was silent: wifi scans again, as a user's first look does.
-            vm.send("wifi\n")
-            vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
-            vm.send_bytes(b"q")
-            vm.expect("SHELL RESUMED.")
-            time.sleep(.2); vm.collect(); vm.output = ""
+            # The station's last scan was made while the radio was silent, as on the MacBook Pro at a boot's start: the join
+            # scans once by itself, then joins (550-APP-0098; before it, wifi's window scanned first).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
             vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
-            require(vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n"), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
+            require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
+                             joined + vm.command("dmesg -s wifi", raw=True))
+            assert scan and scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
             vm.command("ping 10.0.4.99")
@@ -6545,7 +6593,7 @@ def slow_radio_check(args):
             vm.close()
             web.shutdown()
     print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
-          f"silent, the station joined once it answered; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
+          f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _certificates(directory):
@@ -7173,7 +7221,7 @@ def wm_suite(vm):
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
     # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
-    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell(?: \d+)?"')
     shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
@@ -7263,7 +7311,7 @@ def wm_suite(vm):
         shows(again, "THE SHELL'S WINDOW:")
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
-        # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
+        # (idl/shell.wit 1.8 new-window), for another window each time (000-APP-0097), and wm brings it to the front.
         before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
@@ -7275,16 +7323,30 @@ def wm_suite(vm):
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
         shows(menu_shell, "THE SHELL'S WINDOW:")
+        # Asked again while it is open: a second shell, titled shell 2, a session of its own (the maintainer's report,
+        # 2026-10-21: the menu brought back the first).
+        typed("cd ram:")  # ram: is on every disk the suite boots; diag/ is not on the wm suite's
+        shows(menu_shell, "MIND ram:> ")
         front(next(w for w in state()[2] if w != menu_shell))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down")
-        keys("ret", text=f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
-        while state()[1] != menu_shell:
+        keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
+        while not shells("".join(seen)) - before:
+            wait('"shell 2"', lines=0)
+        second = int((shells("".join(seen)) - before).pop())
+        assert second != menu_shell
+        until(f"[WM] SHELL WINDOW: The shell's window ({second})")
+        while second not in state()[2] or state()[1] != second:
             wait()
+        rows = shows(second, "THE SHELL'S WINDOW 2:")
+        assert not any(canon("MIND ram:> ") in row for row in rows), rows  # the first one's directory is its own
+        close_shell(second)
+        front(menu_shell)  # the focus goes to the window under the closed one, not back to the first shell
         close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
-              "and opened again with Ctrl+Alt+F5 and from the menu's first item, which brings it to the front when open", flush=True)
+              "and opened again with Ctrl+Alt+F5 and from the menu's first item; asked again, a second shell of its own", flush=True)
 
     def full_screen_and_list(fm, clock, top):
         # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
