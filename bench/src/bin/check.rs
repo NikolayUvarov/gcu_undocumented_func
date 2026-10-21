@@ -2,7 +2,7 @@
 #![no_main]
 // check [group …]: a self-test of what is done (176-KRN-0063). Each check passes (✓), fails with its reason (✗) or is
 // skipped with its reason (○); the summary counts them and the exit status is 1 if any failed. The table goes to the
-// screen and, with each check's details, to log:checkNNNN.txt. Of init's lifecycle interface it calls only `list`.
+// screen and, with each check's details, to log:checkNNNN.txt. Of init's lifecycle interface it calls `boot`, `list`, `mode`, and `set-mode` to see it refused.
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -374,6 +374,19 @@ fn services(run: &mut Run, info: &mind::BootInfo) {
         Ok(Ok(b)) if !b.trial && b.confirmed => fail(String::from("init says it confirmed a boot that was not on trial")),
         Ok(Ok(b)) => pass(format!("{}, {}", match b.slot as u32 { BOOT_SLOT_A => "slot A", BOOT_SLOT_B => "slot B", _ => "the volume's root" }, if b.trial { "on trial, confirmed" } else { "not on trial" })),
         other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
+    // The machine's modes (init.wit 1.5, 750-KRN-0143): any client reads them; only the shell's mode client changes them.
+    run.report("the modes", match lifecycle::mode(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(m)) => pass(format!("{}, as set by {}", match (m.development, m.maintenance) { (true, true) => "development and maintenance", (true, false) => "development", (false, true) => "maintenance", _ => "normal" }, m.by.as_str())),
+        other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
+    run.report("a mode change refused", match lifecycle::set_mode(Endpoint(SLOT_LIFECYCLE), lifecycle::Mode::Maintenance, true, "check: a lifecycle client may not") {
+        Ok(Err(lifecycle::Error::Denied)) => pass(String::from("denied to a lifecycle client")),
+        Ok(Ok(())) => {
+            let _ = lifecycle::set_mode(Endpoint(SLOT_LIFECYCLE), lifecycle::Mode::Maintenance, false, "check: undoing a change it should not have made");
+            fail(String::from("init turned the maintenance mode on for a lifecycle client"))
+        }
+        other => fail(format!("not denied: {:?}", other.map(|r| r.err()))),
     });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {

@@ -1619,7 +1619,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -4060,6 +4060,48 @@ def link_suite(args):
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
           "the developer mode started a built-in program by name", flush=True)
+
+
+def modes_suite(args):
+    """750-KRN-0143: the machine's modes. A raw image whose data/mode.conf names the development mode and a word init does
+    not know: init reads it once the boot volume is there, says so and leaves the word out; with no Effector service in
+    this build it says that too. The shell holds init's mode client in SLOT_MODE (36), badged BADGE_MODE (3), and no
+    other. `check services` reads the modes through its lifecycle client and is refused a change. A second boot with no
+    data/mode.conf is in the normal mode."""
+    if not raw_tools():
+        print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
+        return
+    for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
+        with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={"data/mode.conf": words} if words else None)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            try:
+                log = vm.command("dmesg -s init", raw=True)
+                require(log, f"[INIT] MODE: {expected}")
+                if words:
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
+                    require(log, "[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES")
+                    pids = vm.services()
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    shell = vm.command(f"stat caps {pids['shell']}", raw=True)
+                    held = re.search(r"^SLOT=36 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M)
+                    assert held and held[1] == "3" and servers.get(int(held[2])) == 1, shell
+                    badged = [s for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M) if b == "3" and servers.get(int(ep)) == 1]
+                    assert badged == ["36"], (badged, shell)
+                vm.send("check services\n")
+                out = vm.expect("MIND> ", timeout=300, after="check services\n")
+                rows = {name: (mark, text) for mark, name, text in CHECK_ROW.findall(out)}
+                state = "development, as set by disk" if words else "normal, as set by disk"
+                assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
+                assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
+                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE CHANGE REFUSED: PID ")
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
+          "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
+          "the modes and is refused a change, which init logs", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):
@@ -9519,6 +9561,9 @@ def main():
             continue
         if suite == "linkupdate":
             linkupdate_suite(args)
+            continue
+        if suite == "modes":
+            modes_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)
