@@ -26,14 +26,14 @@ if [[ $# -ge 4 ]]; then
 fi
 
 # Windows may show the disk's earlier volume, with the same label, for a while after the writer ends, and files copied
-# onto it are lost (2026-10-10): the volume is the one whose MANIFEST is the image's.
+# onto it are lost (2026-10-10): the volume is the one whose MANIFEST is the image's, at its root or in MIND/A (slots).
 read -r -d '' PS_COPY <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "__TAG__: $_"; exit 1 }
 $source = '__SOURCE__'; $manifest = '__MANIFEST__'; $files = @(__FILES__)
 for ($i = 0; $i -lt 30; $i++) {
     $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
     if ($v -and -not $manifest) { break }
-    if ($v -and (Test-Path "$($v.DriveLetter):\MANIFEST") -and (Get-FileHash "$($v.DriveLetter):\MANIFEST").Hash -eq $manifest) { break }
+    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq $manifest }).Count) { break }
     $v = $null; Start-Sleep 2
 }
 if (-not $v) { Write-Output '__TAG__: no volume MIND CORE holding the image just built (its MANIFEST) within 60 s'; exit 1 }
