@@ -49,3 +49,13 @@
 ## Related
 
 [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [750-EFF-0006](750-EFF-0006-session-service.md), `idl/init.wit`, `idl/log.wit`, `idl/sysinfo.wit`, `idl/vfs.wit`.
+
+## Progress — 2026-10-21
+
+The gateway's decisions and effects are built as a library, apart from IPC, so they are tested on the host before `init` can start the service (750-KRN-0119):
+
+- **`effector_gw/src/gateway.rs`:** every request of `idl/effector.wit` goes through the badge (actions only from the session, `reload-policy` and `audit` only from the owner), the deadline, the owner's policy and an audit line written before the answer; a request whose audit line cannot be written is not done (MC-10.6). The machine's authorities are a trait (`Machine`) the service will bind to `init`'s grants.
+  - **Done:** `status`; `service-control`; files and the log ring out in pieces of 32 KiB with their SHA-256, a file that changes after it was hashed refused; files in, in order, no more than announced, checked by size and SHA-256 before they are published, discarded otherwise, an existing file kept unless replacing was asked; `cancel`; the owner's `reload-policy` (a file that does not parse leaves no policy) and `audit`.
+  - **Answered `unsupported` when the policy allows them:** packages (0008), updates (0009), reboot (0010), the screen, test scripts (501).
+- **Tests:** `tests/effector_gateway_host.rs`, 9 host tests against a fake machine, in `scripts/host_tests.sh`.
+- **Still open:** the service binary (`decode`, the generated replies, `Machine` over `init`'s grants), which needs 750-KRN-0119's boot image, badges and slots, 0120's writable scope and 0121's lifecycle client; the session's use of it in place of its own denial; the `effector` suite's gateway checks and the `isolation` row.
