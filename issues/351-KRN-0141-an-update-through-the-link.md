@@ -64,7 +64,8 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
   | x86 | 43 | 9 643 243 | 185 s and 186 s (about 52 KB/s) |
   | aarch64 | 37 | 8 590 656 | 294 s and 289 s |
 
-- **Left for criterion 1:** the gate. The suite is on `claude/youthful-mendel-mf1soy` 7361af5 and goes to `main` through the landing queue.
+- **Criterion 1 on x86:** the suite passed in landing round 3's gate (`land-e4fd3b37`, "x86: files and block writes", every group green), `main` e4fd3b3.
+- **On aarch64:** it joins "aarch64: files, network and TLS" in round 4, on top of EFF's `effector` suite in the same line. Locally it passed twice more with the script's code, x86 in 174 s and aarch64 in 274 s through the link.
 - **For criterion 2:** the suite shows that the directory source refuses a bad signature and that its release passes the manifest's digests, through the same `stage()` as HTTPS. Whether it checks all that HTTPS checks (an expired or older channel, a changed blob, a resumed file) is still the update track's to say.
 
 **For criterion 3: `scripts/link_update.py`** (2026-10-21). The maintainer said the MacBook Pro now restarts into MIND Core by itself.
