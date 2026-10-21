@@ -67,6 +67,29 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 - **Left for criterion 1:** the gate. The suite is on `claude/youthful-mendel-mf1soy` 7361af5 and goes to `main` through the landing queue.
 - **For criterion 2:** the suite shows that the directory source refuses a bad signature and that its release passes the manifest's digests, through the same `stage()` as HTTPS. Whether it checks all that HTTPS checks (an expired or older channel, a changed blob, a resumed file) is still the update track's to say.
 
+**For criterion 3: `scripts/link_update.py`** (2026-10-21). The maintainer said the MacBook Pro now restarts into MIND Core by itself.
+- **What it does, in one command on the machine at the other end of the cable:**
+  - it makes the current build a signed release, as `scripts/release.py` does. The version defaults to the time (`YYYYMMDDHHMM`), so it is above any earlier one;
+  - it puts only what the updater reads into `data/link/rel/`, the channel last. `mindlink put` skips a blob the Mac holds already, so a second update sends only what changed;
+  - it follows `mindlink log` through the trial restart. It ends at `[UPDATER] SLOT … CONFIRMED ON THE DISK` (exit 0), or at a refusal, a rollback or the time limit (exit 1).
+- **The `linkupdate` suite now runs the script's own code:** what is put, the puts, and the follower that ends at the refusal and at the confirmation. `tests/link_update_test.py` checks the follower on scripted logs.
+- **The maintainer's run, once:**
+  1. Build: `./02_build.sh`.
+  2. Write the stick with slots and this `update.txt` (`make_usb_image.py --slots --update update.txt`, plus `link.conf` as `build-and-write.sh` writes it now):
+
+     ```text
+     source data/link/rel
+     channel stable
+     automatic apply
+     every 20
+     ```
+
+  3. Boot the Mac from it. `mindlink log` should show `[UPDATER] SLOT A, VERSION 0 …` and checks refused as `Missing` every 20 s.
+- **Every update after that:**
+  - build;
+  - `python3 scripts/link_update.py COM<n> --mindlink path\to\mindlink.exe --mindlink-option=--baud --mindlink-option=460800`, with the options the cable needs.
+- **Not done yet:** the Mac's run itself, recorded here with its configuration when it is made. The release LNK's `effector485 stage` makes (351-LNK-0013) can use the same layout.
+
 ## Related
 
 [351](351-self-update.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater), [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done) (images with slots), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md) (directories over the link), [800-LNK-0011](800-LNK-0011-effector485.md) (`effector485`).
