@@ -111,14 +111,21 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
 - **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
-  - **To make the disk the default startup disk,** run this once in macOS's Terminal, with the disk attached:
+  - **To make the disk the default startup disk,** run this once in macOS's Terminal, with the disk attached.
+    - macOS mounts only the log partition, `MIND LOG`. The boot partition is marked as the EFI system partition (type `0xEF`), which macOS leaves unmounted, so it is mounted by hand first.
+    - `MIND LOG`'s disk is the stick: `disk2`, say, and the boot partition is its first, `disk2s1`.
 
     ```bash
-    sudo bless --mount "/Volumes/MIND CORE" --setBoot --file "/Volumes/MIND CORE/EFI/BOOT/BOOTX64.EFI" --shortform
+    diskutil info "/Volumes/MIND LOG" | grep "Part of Whole"     # the stick, e.g. disk2
+    sudo mkdir -p /Volumes/MINDCORE
+    sudo mount -t msdos /dev/disk2s1 /Volumes/MINDCORE           # its boot partition
+    sudo bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform
+    bless --getBoot                                              # the device the firmware starts now
+    sudo umount /Volumes/MINDCORE
     ```
 
     `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
-  - **Not tried yet.** macOS's System Integrity Protection (from 10.11) may refuse it. Then the same command from macOS Recovery (Command-R at power-on, Utilities, Terminal) may work; that is not tried either.
+  - **Not working yet.** On 2026-10-21 the first try failed only because the boot partition was not mounted. With it mounted, `bless` is not tried yet. macOS's System Integrity Protection (from 10.11) may refuse it. Then the same command from macOS Recovery (Command-R at power-on, Utilities, Terminal) may work; that is not tried either.
   - **If a rewritten disk is not started,** run the command again.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
