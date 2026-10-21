@@ -237,6 +237,11 @@ impl<L: Line> Client<L> {
         Ok((text.len(), (next != u32::MAX).then_some(next)))
     }
 
+    /// Restarts the other end's machine; it answers first.
+    pub fn reboot(&mut self) -> Result<(), Error> {
+        self.master.call(channel::CONTROL, kind::REBOOT, &[], &mut [0u8; 8]).map(|_| ())
+    }
+
     /// Console bytes to the other end, its console's output since the last call back into `out`.
     pub fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut r = [0u8; MAX_PAYLOAD];
@@ -276,6 +281,8 @@ pub trait Files {
     fn stop(&mut self, _run: u32) -> Result<(), u8> { Err(code::UNSUPPORTED) }
     /// "run\tpid\tstate\tname\n" lines from entry `cursor`; the next cursor, None at the end.
     fn runs(&mut self, _cursor: u32, _out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { Err(code::UNSUPPORTED) }
+    /// Restarts the machine once this request is answered.
+    fn reboot(&mut self) -> Result<(), u8> { Err(code::UNSUPPORTED) }
 }
 
 /// A store kept elsewhere (a static, so a large buffer is off the stack).
@@ -298,6 +305,7 @@ impl<F: Files + ?Sized> Files for &mut F {
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { (**self).output(run, cursor, out) }
     fn stop(&mut self, run: u32) -> Result<(), u8> { (**self).stop(run) }
     fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { (**self).runs(cursor, out) }
+    fn reboot(&mut self) -> Result<(), u8> { (**self).reboot() }
 }
 
 /// A file's name as the slave takes it: one component, printable, none of `/ \ :` and not `.` or `..`.
@@ -345,6 +353,7 @@ impl<F: Files> Service for FileService<F> {
         let reply = &mut reply[..limit];
         match (ch, k) {
             (channel::CONTROL, kind::POLL) => Ok(0),
+            (channel::CONTROL, kind::REBOOT) => self.files.reboot().map(|_| 0),
             (channel::CONTROL, kind::HELLO) => {
                 let theirs = u16_at(p, 2).ok_or(code::BAD_REQUEST)? as usize;
                 self.limit = theirs.clamp(MIN_PAYLOAD, MAX_PAYLOAD);

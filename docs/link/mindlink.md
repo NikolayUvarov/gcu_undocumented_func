@@ -57,6 +57,7 @@ Options come before the command; what follows the command is its own, a program'
 | `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
 | `runs` | the runs the other end knows: number, PID, state, program |
 | `stop <run>` | ends a run's program |
+| `reboot` | restarts the other end's machine. On MIND Core, `link.conf` must hold the word `dev` |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |

@@ -112,6 +112,10 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 
 **POLL (2).** Empty request, empty answer: the line is alive.
 
+**REBOOT (3)** (800-LNK-0012). Empty request, empty answer. The slave's machine restarts once the answer is out.
+- MIND Core's `link` does so only with the word `dev` in `link.conf` (DENIED otherwise) and the lifecycle client `init` grants with it (UNSUPPORTED without it).
+- `mindlink serve` refuses it with UNSUPPORTED.
+
 ### Files (channel 2)
 
 **Put.** A file is sent in order from offset 0 and checked by SHA-256 at the end.
@@ -187,6 +191,8 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 
 The slave starts a program from its directory for the master, keeps its output and tells its end (800-LNK-0009).
 - **On MIND Core** only when `link.conf` holds the word `run`, through the loader as an application starts one (800-KRN-0132).
+  - **With `dev`** (the developer mode, 800-LNK-0012), a name of one part without `.` (`wifi`, `netcheck`) is a built-in program from the volume's root.
+  - **Also with `dev`,** the programs get the network, the Wi-Fi station and the system monitor where they ask for them and `init` granted `link` those.
 - **`mindlink serve`** only with `--run`.
 - **Without it,** RUN is refused with DENIED.
 

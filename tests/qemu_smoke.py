@@ -3920,9 +3920,12 @@ def link_suite(args):
         return out
 
     with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run\n"})
+        # `dev` (800-LNK-0012) with a policy that lets netcheck ping the gateway.
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run dev\n", "netpolicy.txt": b"netcheck 10.0.2.2 icmp\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
-                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
+                extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link",
+                       # A network card, for the developer mode's netcheck (800-LNK-0012).
+                       "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"))
         try:
             port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
             # The emulated chip comes when its pseudo-terminal is opened: the first hello waits for it to be set up.
@@ -3952,7 +3955,12 @@ def link_suite(args):
             granted = [h for h in held if h[1] != pids["link"]]
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
-            assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1 and granted == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
+            # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
+            # init's reboot client, the policy broker and the Wi-Fi station.
+            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
+            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0))}  # 0: no station runs
+            assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
+            assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -4002,11 +4010,36 @@ def link_suite(args):
             assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", logged), "the start is logged"
             require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
             assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
+
+            # 800-LNK-0012, the developer mode: built-in programs by name, and what init grants link with `dev` lent on.
+            dev = re.search(r"\[LINK\] DEVELOPER MODE \(link.conf: dev\): BUILT-IN PROGRAMS BY NAME; FROM INIT:([A-Z ]*)", logged)
+            assert dev, logged[-2000:]
+            powers = dev[1].split()
+            require(link(port, "run", "memtest"), "USAGE: MEMTEST ALLOC")
+            checks = {"NETWORK": (("netcheck", "ping:10.0.2.2"), "NETCHECK ping:10.0.2.2 OK"),
+                      "WIFI": (("wifi", "status"), "[WIFI] STATUS"), "SYSINFO": (("uptime",), "up ")}
+            # No radio in this machine, so no station runs: its client is lent all the same, and `wifi` says it does not answer.
+            if "wlan" not in pids:
+                checks["WIFI"] = (("wifi", "status"), "the station does not answer")
+            for power, (command, wanted) in checks.items():
+                if power in powers:
+                    require(link(port, "run", *command, ok=power != "WIFI" or "wlan" in pids), wanted)
+                    assert re.search(rf"\[LINK\] RUN \d+: STARTED {command[0]} AS PID \d+, LENT.* {power}", vm.command("dmesg -s link", raw=True)), power
+            missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
+            if missing:
+                print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
+            if "REBOOT" in powers:
+                # The last step: the machine restarts once the answer is out (QEMU exits: -no-reboot).
+                require(link(port, "reboot"), "restarting")
+                vm.process.wait(timeout=60)
+            else:
+                require(link(port, "reboot", ok=False), "does not serve this")
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
-          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants; "
-          "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped", flush=True)
+          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
+          "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
+          "the developer mode started a built-in program by name", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):

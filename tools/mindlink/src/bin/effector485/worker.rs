@@ -268,6 +268,8 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
         "move" => c.rename(p.str("from").unwrap(), p.str("to").unwrap(), p.bool("replace") == Some(true))?,
         "delete" => c.delete(name)?,
         "uninstall" => c.delete(&format!("apps/{name}"))?,
+        // The other end answers, then restarts: the daemon says hello again once it is back.
+        "reboot" => c.reboot()?,
         "rmdir" => c.rmdir(name, p.bool("recursive") == Some(true))?,
         "run" => {
             let (run, pid) = c.run(name, p.str("args").unwrap_or(""))?;
