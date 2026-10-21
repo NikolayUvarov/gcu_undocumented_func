@@ -4,7 +4,7 @@
 
 ## Problem
 
-**Sending is where frames are lost now.** On 2026-10-21 the MacBook Pro was offered 802.11b only ([550-DRV-0037](../issues/550-DRV-0037-802-11b-until-ofdm-is-received.md)), and receiving stopped losing frames. Over six periods of 10 s ([550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md)):
+**Sending is where frames are lost now.** On 2026-10-21 the MacBook Pro was offered 802.11b only ([550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.done)), and receiving stopped losing frames. Over six periods of 10 s ([550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md)):
 - **at 11 Mbit/s:** 14 data frames sent, 7 acknowledged, the other 7 lost after their 4 tries;
 - **at 5.5 Mbit/s:** 15 sent, 14 acknowledged.
 
@@ -51,4 +51,4 @@ Evidence for this machine and network only (MC-12.1). That the microcode uses th
 
 ## Related
 
-[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0037](../issues/550-DRV-0037-802-11b-until-ofdm-is-received.md), [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md).
+[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.done), [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md).
