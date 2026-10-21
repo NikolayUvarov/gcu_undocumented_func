@@ -1,6 +1,6 @@
-# 000-APP-0097 — Several windows of the shell, each a session of its own
+# 000-APP-0097 — Several windows of the shell, each a session of its own — done
 
-**Type:** tools (`shell`, `wm`, interface) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — (follows [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done)) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-12.3, MC-12.4
+**Type:** tools (`shell`, `wm`, interface) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** — (follows [211-APP-0040](../issues-done/211-APP-0040-the-shells-commands-in-console.done)) · **Roadmap:** track D · **Constitution:** MC-3.11, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-21, from the maintainer's report: "when i try to run second shell i got into first open, may be we should fix it", and the question that followed: why only 4 windows, and what if more are needed.
 
@@ -23,11 +23,21 @@
 
 ## Acceptance criteria
 
-- **The `wm` suite** (x86, aarch64):
+- **The `wm` suite** (x86; aarch64's CI runs no `wm` suite):
   - the first `Shell` from the menu opens `shell`, and `cd ram:` there changes its prompt;
   - a second `Shell` opens `shell 2`, a window of its own whose banner says `THE SHELL'S WINDOW 2:` and whose prompt is not the first one's;
   - both close.
 - **Host tests:** `shell_host` and `idl_fuzz_host` pass with `shell.wit` 1.8.
+
+## Resolution
+
+- **`shell/src/main.rs`:** up to 32 window sessions after the four consoles (`WINDOWS`), each with its own text, line, history, scrollback, `msh` statements and directory, titled `shell`, `shell 2`… `open_window(another)` opens one beside those open; a window closed by its manager goes with its session. The shell listens for Ctrl+Alt+F1…F5 alone.
+- **`idl/shell.wit` 1.8 `new-window`** and `libmind/src/idl/shell.rs` (generated). `window` (1.0) keeps its meaning.
+- **`wm/src/main.rs`:** the Shell menu item asks for `new-window` and says why when the shell cannot open one (`busy` with 32 open, `no-memory`).
+- **The `wm` suite:** the menu's first shell takes `cd ram:`; a second one opens `shell 2` with `THE SHELL'S WINDOW 2:` and its own prompt; both close.
+- **Docs:** `docs/tools` (EN, RU), `docs/idl`.
+- **In `main`** with landing round 2, `main` 1d841622 (2026-10-21), the kernel session's gate of candidate 97c4a4c1. Before it, on the branch: every group of `ci_local.sh --list` on fe83e221 and the `net` and `wm` groups locally on 893ef487; the second shell's check passed on i9 and locally (`asked again, a second shell of its own`).
+- **The checks' own errors, fixed on the way:** `typed()` read the first window, closed by then; the `wm` suite's disk has no `diag/`; the focus goes to the window under a closed one.
 
 ## Related
 
