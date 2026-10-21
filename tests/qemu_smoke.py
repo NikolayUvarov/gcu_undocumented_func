@@ -6844,6 +6844,96 @@ def _https_server(directory, certificate):
     return server, context
 
 
+def effector_suite(args, disk):
+    """750-EFF-0006, first slice: the Effector agent started from the shell against the contract's fixture
+    (tests/effector_server.py) over HTTPS with a pinned leaf: it stays online with heartbeats less than five seconds
+    apart, answers every command `denied` after journaling it, retries an ACK the server failed, sends a shutdown
+    heartbeat; restarted, it reads its journal back and answers a redelivered command with the saved answer, not a new
+    one; a server with another certificate is refused; the token never reaches the log."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    import effector_server  # noqa: E402
+    agent, token = "mind-test", "mind-effector-test-token"
+    server = effector_server.EffectorFixture(token=token).start()
+    rogue = effector_server.EffectorFixture(token=token).start()
+    beats, stop_watch = [], threading.Event()
+
+    def heartbeats():
+        return sum(1 for r in list(server.requests) if r["path"].endswith("/api/heartbeat") and r["status"] == 200)
+
+    def watch():
+        seen = 0
+        while not stop_watch.is_set():
+            with server.changed:
+                server.changed.wait(0.2)
+            n = heartbeats()
+            if n > seen:
+                beats.extend([time.monotonic()] * (n - seen))
+                seen = n
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 600 100000\n")
+    for name, port in (("effector", server.port), ("rogue", rogue.port)):
+        directory = disk / "data" / name
+        directory.mkdir(parents=True, exist_ok=True)
+        # The rogue directory names the good server's pin for the rogue server: its certificate must be refused.
+        (directory / "effector.conf").write_text(f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n")
+        (directory / "token").write_text(token + "\n")
+        (directory / "agent_id").write_text(agent + "\n")
+    entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        exec_id = server.queue(agent, "exec_v1", {"command": "echo forbidden", "run_as": "service", "session": "service", "timeout_seconds": 5})
+        restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
+        unknown_id = server.queue(agent, "powershell_v1", {"command": "Get-Date"})
+        server.inject("/api/commands/ack", "ack_500")  # the first ACK fails once: it is retried, not dropped
+        vm.send("effector data/effector/effector.conf --for 30\n")
+        out = vm.expect("MIND> ", timeout=120, after="EFFECTOR: STOPPED")
+        for line in ("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS)", "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)",
+                     f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: DENIED {restart_id} restart_service", f"EFFECTOR: DENIED {unknown_id} powershell_v1",
+                     f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED", "EFFECTOR: STOPPING", "EFFECTOR: STOPPED\n"):
+            require(out, line)
+        for command in (exec_id, restart_id, unknown_id):
+            result = server.operation(command)
+            assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
+        record = server.agents[agent]
+        assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
+        assert record["system_state"] == "shutting_down", record
+        gaps = [b - a for a, b in zip(beats, beats[1:])]
+        assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
+        print(f"PASS: the Effector agent online against the fixture: {len(beats)} heartbeats, at most {max(gaps):.1f} s apart; "
+              "three commands answered denied after journaling, a failed ACK retried, a shutdown heartbeat", flush=True)
+        # Restarted: the journal read back; a redelivered command gets its saved answer again, not a new one.
+        vm.send("effector data/effector/effector.conf --for 16\n")
+        # The saved answers are acknowledged again first (never run again); then the server hands cmd-2 over again.
+        first = vm.expect(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED", timeout=60)
+        require(first, "(3 SAVED RESULTS)")
+        server.redeliver(restart_id)
+        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
+        for line in (f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", f"EFFECTOR: ACK {restart_id} denied ACCEPTED"):
+            require(out, line)
+        assert f"EFFECTOR: DENIED {restart_id}" not in out, out
+        journal = vm.command("cat data/effector/journal")
+        require(journal, "effector-journal 1")
+        assert journal.count(" denied -") == 3, journal
+        print("PASS: restarted, the agent reads its journal back (3 saved results) and answers a redelivered command with "
+              "the saved answer, journaled once", flush=True)
+        # A server with another certificate: refused, nothing sent to it.
+        vm.send("effector data/rogue/effector.conf --for 6\n")
+        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
+        require(out, "EFFECTOR: TLS CONNECT REFUSED")
+        assert not any(r["path"].endswith("/api/heartbeat") for r in list(rogue.requests)), list(rogue.requests)
+        require(vm.command("dmesg -s tls"), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
+        assert token not in vm.log, "the token reached the log"
+        print("PASS: a server with another certificate refused before any request; the token never in the log", flush=True)
+    finally:
+        stop_watch.set()
+        vm.close()
+        server.close()
+        rogue.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
+
+
 def tls_suite(args, disk):
     # TLS service and key service (issue 103): HTTPS with the server certificate verified against tlsroots.pem, wrong
     # name and untrusted CA refused, the device certificate (key in the key service only) for a server that asks for
@@ -9333,7 +9423,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
+    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -9367,7 +9457,7 @@ def main():
         shutil.copytree(ROOT / IMAGE, ROOT / copy, ignore=shutil.ignore_patterns("smoke-*", "*.ppm"))
         shutil.copyfile(args.kernel, ROOT / copy / "kernel.elf")
         IMAGE = copy
-    suites = ["boot", "display", "net", "tls", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "bench", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
+    suites = ["boot", "display", "net", "tls", "effector", "netbench", "normal", "memory", "dzen", "services", "store", "storefaults", "ahci", "audio", "tts", "listen", "keys", "shell", "tools", "bench", "windows", "wm", "tablet", "usb", "vfs", "edit", "disk"] + (["busy", "smp"] if args.busy_elf else [])
     if args.isolation_elf:
         suites.append("isolation")
     if args.heap_elf:
@@ -9377,7 +9467,7 @@ def main():
     if args.updater_elf:
         suites.append("updater")
     if args.arch == "aarch64":
-        suites = ["normal", "shell", "bench", "vfs", "store", "storefaults", "net", "tls"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
+        suites = ["normal", "shell", "bench", "vfs", "store", "storefaults", "net", "tls", "effector"] + (["busy", "smp"] if args.busy_elf else []) + (["updater"] if args.updater_elf else [])  # the suites that run on virt (issues 202-203)
     if args.suites:
         suites = args.suites.split(",")
     for suite in suites:
@@ -9512,6 +9602,9 @@ def main():
                 continue
             if suite == "tls":
                 tls_suite(args, disk)
+                continue
+            if suite == "effector":
+                effector_suite(args, disk)
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)

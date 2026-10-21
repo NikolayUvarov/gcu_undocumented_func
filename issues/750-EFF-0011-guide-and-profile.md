@@ -1,6 +1,6 @@
 # 750-EFF-0011 — The owner's guide, the profile and the threat model
 
-**Type:** documentation · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008 (what the guide describes) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.3, MC-12.9, MC-10.7
+**Type:** documentation · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008 (what the guide describes) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.3, MC-12.9, MC-10.7
 
 ## Problem
 

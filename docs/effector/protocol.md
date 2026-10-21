@@ -216,7 +216,7 @@ The next MIND slice is a persistent token-authenticated session, not a port of
 the Linux Go binary: that binary requires Linux processes, files and systemd.
 Use `libmind::http::Connection`, `tls.connect-pins` and `parse.json`; keep the
 local operations in the separately authorized gateway. Existing tasks
-[0003](../../issues/750-EFF-0003-interface-and-policy.md),
+[0003](../../issues-done/750-EFF-0003-interface-and-policy.done),
 [0006](../../issues/750-EFF-0006-session-service.md),
 [0007](../../issues/750-EFF-0007-gateway-service.md) and
 [501](../../issues/501-effector.md) retain their remaining acceptance criteria.

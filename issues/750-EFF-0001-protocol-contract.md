@@ -1,6 +1,6 @@
 # 750-EFF-0001 — The Effector protocol subset the agent implements, as a versioned contract
 
-**Type:** contract (documentation) · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** — (publishing approved by the maintainer, 2026-10-09: [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-12.4, MC-12.7, MC-12.3
+**Type:** contract (documentation) · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** — (publishing approved by the maintainer, 2026-10-09: [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-2.3, MC-12.4, MC-12.7, MC-12.3
 
 ## Problem
 
@@ -43,7 +43,7 @@
 
 ## Related
 
-[750](750-effector-agent.md), [750-EFF-0002](750-EFF-0002-test-server.md), [750-EFF-0003](750-EFF-0003-interface-and-policy.md), [docs/idl/README.md](../docs/idl/README.md).
+[750](750-effector-agent.md), [750-EFF-0002](750-EFF-0002-test-server.md), [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [docs/idl/README.md](../docs/idl/README.md).
 
 ## Progress — 2026-10-15
 

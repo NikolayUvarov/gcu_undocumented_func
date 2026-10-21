@@ -7,6 +7,7 @@ pub mod battery;
 pub mod block;
 pub mod blockstore;
 pub mod display;
+pub mod effector;
 pub mod gpio;
 pub mod init;
 pub mod keyboard;

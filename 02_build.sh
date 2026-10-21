@@ -100,6 +100,7 @@ USER_CRATES=(
     "tpm:tpm:tpm.elf"
     "netcheck:netcheck:netcheck.elf"
     "webcheck:webcheck:webcheck.elf"
+    "effector:effector:effector.elf"
     "download:download:download.elf"
     "windows:windows:windows.elf"
     "wintest:wintest:wintest.elf"

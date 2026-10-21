@@ -79,6 +79,7 @@ The network track agreed the interface (550-NET-0018) with changes it asked of t
 - **The maintainer's report:** the window showed `wifi` twice, `wm`'s title bar and the program's own frame title just under it.
 - **In a window** (`Terminal::screen()` is none) the frame has no title, or only `DEMO: a stand-in station, no radio` with `--demo`. On a screen of its own, the frame keeps ` wifi `.
 - **Host test:** `tests/wifi_host.rs`, `a_window_is_not_titled_wifi_twice`.
+- **In `main`** with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1.
 
 ## Related
 
