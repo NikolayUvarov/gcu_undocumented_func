@@ -593,6 +593,7 @@ fn main(info: &'static BootInfo) {
     // The frames as last read, and the traffic's line made from the two last samples (000-APP-0049); until when the
     // shell is not asked again after it did not answer in time (000-APP-0096).
     let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
+    let mut net_why: Option<&'static str> = None; // the last reason without a rate the log named
     let mut shell_quiet_until = 0usize;
     let mut net_from: Option<&'static str> = None;
     let has_battery = holds(SLOT_BATTERY);
@@ -823,7 +824,11 @@ fn main(info: &'static BootInfo) {
                             (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
                         }
                         Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,
-                        Err(NetMissing::Why(line)) => (net_sample, net_text, net_from) = (None, Some(String::from(line)), None),
+                        Err(NetMissing::Why(line)) => {
+                            // Each reason once in the log: the background's pixels are not text.
+                            if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
+                            (net_sample, net_text, net_from) = (None, Some(String::from(line)), None)
+                        }
                     }
                 }
                 if backdrop.config.memory {
