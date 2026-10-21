@@ -1,6 +1,6 @@
 # 000-KRN-0140 — The landing queue: one integrator gates the candidate that becomes `main`
 
-**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** made (2026-10-21); the first round is left · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
+**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): the first round landed; a round with two tracks' requests is left · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
 
 ## Problem
 
@@ -48,8 +48,20 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 ## Acceptance criteria
 
 - [x] `tests/land_test.py` passes in the host tests.
-- [ ] The first landing round: a candidate with this task, gated by `scripts/land.sh gate`, pushed and announced.
+- [x] The first landing round: a candidate with this task, gated by `scripts/land.sh gate`, pushed and announced (below).
 - [ ] A round with requests from two tracks lands both at once.
+
+## Progress
+
+**The first round, 2026-10-21.** It landed this task's own request.
+- **The candidate.** `claude/youthful-mendel-mf1soy` 48ff4b2, a fast-forward over `main` 98586f1.
+  - The first gate, `land-82debc67` on 82debc6, was stopped: i9's x86 build gave no result, since `ci_local.sh` refuses the host part where no sshd is, and the lane went on with an old image.
+  - 48ff4b2 fixed both (the host part's builds run where sshd is absent; a failed build stops its lane), with a request that superseded the first.
+- **The gate, `land-48ff4b28`:** every group of `ci_local.sh --list` on i9, un-rizen (two lanes) and PCU, preset `full`: green.
+- **The push.** `main` had moved with text (4e416cd: 750-UPD-0019, 800-NET-0038), and its merge conflicted in `issues/README.md`.
+  - The conflict was resolved by hand, keeping both rows. The merge changes `issues/` only.
+  - `main` = a67ca61. The answer is `LANDING/2026-10-21T1211Z-KRN-landed-48ff4b28.md`.
+- **What it changed in the script.** `push` stopped with git's error on that conflict. It now leaves the merge in the candidate's tree to be resolved by hand, and on the next run pushes the hand merge only if it adds text alone (the next commit; `tests/land_test.py` covers it).
 
 ## Related
 
