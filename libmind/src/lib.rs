@@ -73,6 +73,8 @@ pub mod jpegdec;
 #[cfg(feature = "alloc")]
 pub mod inflate;
 #[cfg(feature = "alloc")]
+pub mod zip;
+#[cfg(feature = "alloc")]
 pub mod png;
 #[cfg(feature = "alloc")]
 pub mod uvc;

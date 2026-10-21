@@ -7,6 +7,8 @@ use crate::frame::{self, Decoder, Header, MAX_PAYLOAD, MAX_WIRE};
 pub mod kind {
     pub const HELLO: u8 = 1;
     pub const POLL: u8 = 2;
+    /// The slave's machine restarts, after its answer (800-LNK-0012).
+    pub const REBOOT: u8 = 3;
     pub const PUT_OPEN: u8 = 10;
     pub const PUT_DATA: u8 = 11;
     pub const PUT_CLOSE: u8 = 12;

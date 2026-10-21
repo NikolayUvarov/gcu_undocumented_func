@@ -1,7 +1,7 @@
 //! `wifi join`, `wifi status` and `wifi leave` without a screen (550-APP-0078), for scripts and the hardware tests of
 //! 550-ASR-0007. The passphrase comes from a file whose first line names the network, never from the command line, and
 //! no line made here holds it. No system calls: tests/wifi_host.rs.
-use crate::station::{mac, rate, shown, Link, Refusal, Station};
+use crate::station::{mac, rate, shown, Link, Reason, Refusal, Station};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -69,32 +69,68 @@ pub fn passphrase(text: &[u8], ssid: &[u8]) -> Result<String, &'static str> {
     core::str::from_utf8(secret).map(String::from).map_err(|_| "the file's passphrase is not text")
 }
 
-/// Joins `ssid` and waits for the station's answer, `JOIN_MS` at most: the exit status and the line to log. `now`
+/// Joins `ssid` and waits for the station's answer, `JOIN_MS` at most: the exit status and the lines to log. `now`
 /// reads a clock in ms; `pause` waits that many ms. A station that does not remember networks is asked again without.
+/// One whose last scan did not hear `ssid` (a join at start, before any scan) scans once and is asked again
+/// (550-APP-0098).
 pub fn join(station: &mut dyn Station, ssid: &[u8], passphrase: &str, remember: bool, now: &mut dyn FnMut() -> u64, pause: &mut dyn FnMut(u64)) -> (u32, String) {
     let name = shown(ssid);
-    let mut answer = station.join(ssid, passphrase, remember);
-    let unkept = remember && answer == Err(Refusal::Unsupported);
-    if unkept { answer = station.join(ssid, passphrase, false); }
-    match answer {
-        Ok(()) => {}
-        Err(Refusal::NoStation(why)) => return (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
-        Err(refusal) => return (REFUSED, format!("[WIFI] REFUSED {}: {}", name, refusal.text())),
+    let (mut answer, unkept) = start(station, ssid, passphrase, remember);
+    let mut scanned = None;
+    if answer == Err(Refusal::NotFound) {
+        scanned = Some(scan(station, ssid));
+        answer = start(station, ssid, passphrase, remember).0;
     }
-    let start = now();
+    if let Err(refusal) = answer { return with(&scanned, refused(&name, refusal)); }
+    let mut begun = now();
     loop {
         match station.status() {
             Ok(Link::Joined { ssid: joined, bssid, channel, rate: units, .. }) if joined == ssid => {
                 let kept = if unkept { ", NOT REMEMBERED: THE STATION KEEPS NO NETWORKS" } else { "" };
-                return (JOINED, format!("[WIFI] JOINED {} {} CHANNEL {} {} MB/S{}", name, mac(bssid), channel, rate(units), kept));
+                return with(&scanned, (JOINED, format!("[WIFI] JOINED {} {} CHANNEL {} {} MB/S{}", name, mac(bssid), channel, rate(units), kept)));
             }
-            Ok(Link::Failed { ssid: failed, reason }) if failed == ssid => return (REFUSED, format!("[WIFI] REFUSED {}: {}", name, reason.text())),
-            Err(Refusal::NoStation(why)) => return (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
+            Ok(Link::Failed { ssid: failed, reason: Reason::NotFound }) if failed == ssid && scanned.is_none() => {
+                scanned = Some(scan(station, ssid));
+                if let Err(refusal) = start(station, ssid, passphrase, remember).0 { return with(&scanned, refused(&name, refusal)); }
+                begun = now();
+                continue;
+            }
+            Ok(Link::Failed { ssid: failed, reason }) if failed == ssid => return with(&scanned, (REFUSED, format!("[WIFI] REFUSED {}: {}", name, reason.text()))),
+            Err(Refusal::NoStation(why)) => return with(&scanned, (NO_STATION, format!("[WIFI] NO STATION: {}", why))),
             _ => {}
         }
-        if now().saturating_sub(start) >= JOIN_MS { return (NO_ANSWER, format!("[WIFI] NO ANSWER {} IN {} S", name, JOIN_MS / 1000)); }
+        if now().saturating_sub(begun) >= JOIN_MS { return with(&scanned, (NO_ANSWER, format!("[WIFI] NO ANSWER {} IN {} S", name, JOIN_MS / 1000))); }
         pause(POLL_MS);
     }
+}
+
+// Asks the station to join, and again without `remember` when it keeps no networks (true then).
+fn start(station: &mut dyn Station, ssid: &[u8], passphrase: &str, remember: bool) -> (Result<(), Refusal>, bool) {
+    let answer = station.join(ssid, passphrase, remember);
+    if remember && answer == Err(Refusal::Unsupported) { (station.join(ssid, passphrase, false), true) } else { (answer, false) }
+}
+
+// The one scan of a join the last scan did not hear: the line it logs.
+fn scan(station: &mut dyn Station, ssid: &[u8]) -> String {
+    match station.scan() {
+        Ok(heard) => format!("[WIFI] THE LAST SCAN DID NOT HEAR {}: SCANNED, {} ACCESS POINTS, {}", shown(ssid), heard.len(),
+                             if heard.iter().any(|n| n.ssid == ssid) { "IT AMONG THEM" } else { "NOT IT" }),
+        Err(refusal) => format!("[WIFI] THE LAST SCAN DID NOT HEAR {}: THE SCAN FAILED: {}", shown(ssid), refusal.text()),
+    }
+}
+
+fn refused(name: &str, refusal: Refusal) -> (u32, String) {
+    match refusal {
+        Refusal::NoStation(why) => (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
+        // The window's text names its key to scan again; here a scan already ran.
+        Refusal::NotFound => (REFUSED, format!("[WIFI] REFUSED {}: {}", name, Reason::NotFound.text())),
+        refusal => (REFUSED, format!("[WIFI] REFUSED {}: {}", name, refusal.text())),
+    }
+}
+
+// The scan's line, if one ran, before the end's.
+fn with(scanned: &Option<String>, (code, line): (u32, String)) -> (u32, String) {
+    (code, match scanned { Some(scan) => format!("{}\n{}", scan, line), None => line })
 }
 
 /// The link's state as one line, and the exit status.

@@ -112,6 +112,10 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 
 **POLL (2).** Empty request, empty answer: the line is alive.
 
+**REBOOT (3)** (800-LNK-0012). Empty request, empty answer. The slave's machine restarts once the answer is out.
+- MIND Core's `link` does so only with the word `dev` in `link.conf` (DENIED otherwise) and the lifecycle client `init` grants with it (UNSUPPORTED without it).
+- `mindlink serve` refuses it with UNSUPPORTED.
+
 ### Files (channel 2)
 
 **Put.** A file is sent in order from offset 0 and checked by SHA-256 at the end.
@@ -187,6 +191,8 @@ The slave refuses any other name with DENIED. Before the additions of 2026-10-20
 
 The slave starts a program from its directory for the master, keeps its output and tells its end (800-LNK-0009).
 - **On MIND Core** only when `link.conf` holds the word `run`, through the loader as an application starts one (800-KRN-0132).
+  - **With `dev`** (the developer mode, 800-LNK-0012), a name of one part without `.` (`wifi`, `netcheck`) is a built-in program from the volume's root.
+  - **Also with `dev`,** the programs get the network, the Wi-Fi station and the system monitor where they ask for them and `init` granted `link` those.
 - **`mindlink serve`** only with `--run`.
 - **Without it,** RUN is refused with DENIED.
 
@@ -195,18 +201,18 @@ The slave starts a program from its directory for the master, keeps its output a
 | RUN (50) | `name_len u8`, the program's name, then its arguments (UTF-8, the rest) | `run u32`, `pid u64`: the run's number, and the program's process |
 | OUTPUT (51) | `run u32`, `cursor u64` | `state u8`, `exit u32`, `from u64`, then output from offset `from` |
 | STOP (52) | `run u32` | empty: the program is ended |
-| RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped` |
+| RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped`, `faulted` |
 
 - **Output** is counted from the program's start.
   - The slave keeps the last part of it: at least 16 KiB on MIND Core, 64 KiB in `mindlink serve`.
   - `from` is the cursor, or more when the bytes from the cursor are no longer kept.
   - The master asks again from `from` plus the bytes it got.
-- **`state`:** 0 running, 1 ended, 2 stopped.
+- **`state`:** 0 running, 1 ended, 2 stopped, 3 ended by a fault.
   - Once the state is not 0, an answer with no bytes means there is no more output.
-- **`exit`:** the program's exit code, or 0xFFFFFFFF while unknown.
-  - MIND Core's `link` does not learn it yet (800-KRN-0132).
+- **`exit`:** the program's exit code; for state 3, the fault's vector; 0xFFFFFFFF while unknown.
+  - MIND Core's `link` learns it from the loader, which watches the program for it (800-KRN-0138). With an older loader it stays unknown.
 - **A run's number** is the slave's, and a restarted slave starts new numbers. A run it does not know is NOT_FOUND.
-- **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` cannot yet: init gives it no such grant (800-KRN-0132, point 3).
+- **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` asks the loader, which ends only the programs it started for `link` (800-KRN-0138).
 
 ### Input (channel 4)
 

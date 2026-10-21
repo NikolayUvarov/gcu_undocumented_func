@@ -59,6 +59,8 @@ pub struct Wifi {
     pub problem: Option<String>,
     /// With the stand-in station (`--demo`): the title says so.
     pub demo: bool,
+    /// In a window of `wm`, whose title bar already names `wifi`: the frame names only the demo.
+    pub windowed: bool,
     // Remembering was asked and the station answered that it does not remember networks: said when joined.
     unkept: bool,
 }
@@ -71,7 +73,7 @@ fn wipe(line: &mut InputLine) {
 
 impl Wifi {
     pub fn new(demo: bool) -> Self {
-        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo, unkept: false }
+        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo, windowed: false, unkept: false }
     }
 
     fn refused(&mut self, refusal: Refusal) {
@@ -209,7 +211,11 @@ impl Wifi {
         let (cols, rows) = (grid.cols, grid.rows);
         grid.clear(theme.panel);
         let area = grid.area();
-        grid.frame_titled(area, Line::Single, if self.demo { " wifi — DEMO: a stand-in station, no radio " } else { " wifi " }, theme.frame, theme.header);
+        match (self.windowed, self.demo) {
+            (false, demo) => grid.frame_titled(area, Line::Single, if demo { " wifi — DEMO: a stand-in station, no radio " } else { " wifi " }, theme.frame, theme.header),
+            (true, true) => grid.frame_titled(area, Line::Single, " DEMO: a stand-in station, no radio ", theme.frame, theme.header),
+            (true, false) => grid.frame(area, Line::Single, theme.frame),
+        }
         let w = cols.saturating_sub(4);
         if let Some(why) = &self.problem {
             grid.text_max(2, 2, "No Wi-Fi station:", w, theme.error);

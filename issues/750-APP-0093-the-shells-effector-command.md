@@ -1,6 +1,6 @@
 # 750-APP-0093 — The shell's `effector` command: setup, policy, status
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** `EFF`: [750-EFF-0003](750-EFF-0003-interface-and-policy.md) (the interface and the policy), [750-EFF-0006](750-EFF-0006-session-service.md) (the session service); `svc enable` ([173-APP-0092](173-APP-0092-svc-boot.md)) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** — · **Constitution:** MC-3.11, MC-7
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** `EFF`: [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done) (the interface and the policy), [750-EFF-0006](750-EFF-0006-session-service.md) (the session service); `svc enable` ([173-APP-0092](173-APP-0092-svc-boot.md)) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** — · **Constitution:** MC-3.11, MC-7
 
 **Recorded by:** the Effector agent track (EFF), 2026-10-09, in `requests-APP.md`, for main task 750 at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -25,4 +25,4 @@ In QEMU, the shell sets up the agent, enables it, and the 750-EFF-0006 suite see
 
 ## Related
 
-[750](750-effector-agent.md), [750-EFF-0003](750-EFF-0003-interface-and-policy.md), [750-EFF-0006](750-EFF-0006-session-service.md).
+[750](750-effector-agent.md), [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [750-EFF-0006](750-EFF-0006-session-service.md).

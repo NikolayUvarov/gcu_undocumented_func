@@ -74,6 +74,13 @@ The network track agreed the interface (550-NET-0018) with changes it asked of t
 - **In `main`** since 92781301 (2026-10-20), after the kernel track's ABI 10 (now 11) reached it: the gate on 92781301 passed (every x86 group on i9, every aarch64 group on un-rizen-service, the rest locally).
 - **Left:** the maintainer's check on the MacBook Pro (`wifi` lists the networks around, and joins one).
 
+## Progress: one title in a window (2026-10-21)
+
+- **The maintainer's report:** the window showed `wifi` twice, `wm`'s title bar and the program's own frame title just under it.
+- **In a window** (`Terminal::screen()` is none) the frame has no title, or only `DEMO: a stand-in station, no radio` with `--demo`. On a screen of its own, the frame keeps ` wifi `.
+- **Host test:** `tests/wifi_host.rs`, `a_window_is_not_titled_wifi_twice`.
+- **In `main`** with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1.
+
 ## Related
 
 [550](550-network-on-real-hardware.md), [550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [requests-NET.md](requests-NET.md).

@@ -1,10 +1,12 @@
 # 750 — The Effector agent: MIND Core managed by the Effector fleet server
 
-**Type:** main task · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later: [requests-NET.md](requests-NET.md) (HTTP for a service, a certificate pin and long-lived sessions; JSON in the parser service; a flow for a long-running service), [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md) (boot images and `init`'s grants with private directories, a writable scoped `vfs` client, a lifecycle client limited to named services), [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md) and [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (an `updater` client for the gateway, signed application packages), [requests-APP.md](requests-APP.md) (the shell's `effector` command); outside this repository, release/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md` and signed-package metadata/non-shell entries in `issues/81-mindcore-02-package-metadata.task.md` · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
+**Type:** main task · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** for phase 2 and later (the network's parts are done: [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), [0019](../issues-done/750-NET-0019-http-for-services.done), [0020](../issues-done/750-NET-0020-tls-with-two-pins.done), [0021](../issues-done/750-NET-0021-json-in-the-parser-service.done)): [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md) (boot images and `init`'s grants with private directories, a writable scoped `vfs` client, a lifecycle client limited to named services), [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md) and [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (an `updater` client for the gateway, signed application packages), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the shell's `effector` command); outside this repository, release/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md` and signed-package metadata/non-shell entries in `issues/81-mindcore-02-package-metadata.task.md` · **Roadmap:** stage V (distribution: "remote capabilities through a gateway", Article 7), track D (session parsers with minimal authority), track C (updates only through `updater`); no roadmap item yet · **Constitution:** MC-1.6, MC-8.1, MC-12.6, MC-7.1, MC-7.4–7.6, MC-6.6, MC-6.9, MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-3.11, MC-11.3–11.6, MC-11.9, MC-11.11, MC-10.2, MC-10.3, MC-10.7, MC-8.5, MC-9.2, MC-9.4, MC-9.8, MC-2.3, MC-12.1–12.4, MC-12.7, MC-12.9
 
 Asked by the maintainer (2026-10-09): a MIND Core machine should be managed by the maintainer's existing fleet server, Effector (project `sst-test-deploy`), as its Windows and Linux terminals are. The server installs software, updates applications, collects diagnostics and data, and controls services and restarts. Opened by the session that surveyed both projects; the `EFF` track is open.
 
 **Revised the same day,** after the maintainer's review and 501's revision, which had planned the same agent inside 501: 750 holds the agent and its contract, and 501 builds its test runs on it. The revision brought in the device key as the machine's identity, the image's manifest hash in the heartbeat, test scripts in a test account, and screenshots. `main`'s new authority map (109) moved JSON parsing into the `parse` service.
+
+**Revised on 2026-10-21, the maintainer's decision:** Effector is how the OS is managed in every aspect during development. That needs high privileges and is risky, so the agent runs **only in the development and maintenance modes**, and in them it is a service that runs all the time. A mode is turned on explicitly, by the operator or by the Mind when it needs help from outside, both by a word on the boot volume and by a command, so that it survives reboots. [750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md) holds the design.
 
 ## Problem
 
@@ -73,9 +75,13 @@ The agent must not turn the server into an unchecked remote administrator. Every
 - It checks every typed request against the policy, binding it to the permitted scope (MC-3.8). It then executes the request, records it in the audit trail (MC-10.3) and returns a typed result.
 - It never sees HTTP or JSON from the network.
 
-### Off by default, set up by the owner
+### Only in the development and maintenance modes, set up by the owner
 
-- Neither service starts until the owner enables it (`data/services.txt`, 173).
+- **The mode decides whether the agent runs** ([750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md), MC-1.6, MC-12.6):
+  - without the word `development` or `maintenance` in the mode file on the boot volume, `init` starts neither service and makes no Effector grants;
+  - with either word, both run from boot and are restarted, as other boot services are;
+  - the operator turns a mode on or off with a command (confirmed at the local console), or when the disk is written; the Mind may turn the maintenance mode on when it needs help from outside, through the same switch (MC-8.1);
+  - the command writes the word, so the mode survives reboots until it is turned off.
 - The owner writes the configuration and the policy with the shell's `effector` command (requests-APP): server URL, certificate pins, the token, and what the server may do.
   - `effector` takes the token into its private directory and removes the shell's copy.
   - The flow's policy line is added with `netpolicy add`, which asks the user (108).
@@ -125,9 +131,9 @@ The agent must not turn the server into an unchecked remote administrator. Every
 |---|---|---|
 | [750-EFF-0001](750-EFF-0001-protocol-contract.md) | `EFF` | The protocol subset the agent implements, its contract version and the action mapping, in `docs/effector/protocol.md` |
 | [750-EFF-0002](750-EFF-0002-test-server.md) | `EFF` | A test server on the host (`tests/effector_server.py`) that serves that contract over HTTPS, with fault hooks |
-| [750-EFF-0003](750-EFF-0003-interface-and-policy.md) | `EFF` | `idl/effector.wit` 1.0 between the two services, the policy file, the audit record, the threat analysis |
-| [750-EFF-0004](750-EFF-0004-json.md) | `EFF` | `mind::json`: a bounded JSON reader and writer for `no_std` with `alloc` |
-| [750-EFF-0005](750-EFF-0005-zip-reader.md) | `EFF` | `mind::zip`: a bounded ZIP reader (stored and deflate) |
+| [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done) | `EFF` | `idl/effector.wit` 1.0 between the two services, the policy file, the audit record, the threat analysis |
+| [750-EFF-0004](../issues-done/750-EFF-0004-json.done) | `EFF` | `mind::json`: a bounded JSON reader and writer for `no_std` with `alloc` |
+| [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done) | `EFF` | `mind::zip`: a bounded ZIP reader (stored and deflate) |
 
 **Phase 2 — the agent online (needs NET and KRN):**
 
@@ -135,6 +141,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 |---|---|---|
 | [750-EFF-0006](750-EFF-0006-session-service.md) | `EFF` | `effector`: configuration, identity, heartbeat, stream and poll, ACK journal, pin rotation, shutdown heartbeat |
 | [750-EFF-0007](750-EFF-0007-gateway-service.md) | `EFF` | `effector_gw`: policy, audit, services, logs, files |
+| [750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md) | `EFF` (with `KRN`, `APP`) | The agent only in the development and maintenance modes: the mode file, `init` following it, the `mode` command, the Mind's request |
 
 **Phase 3 — software and updates (needs UPD, KRN and the Effector server):**
 
@@ -164,6 +171,8 @@ The agent must not turn the server into an unchecked remote administrator. Every
 | An `updater` client for the gateway | `UPD` | 0009 |
 | Signed application packages: format, key role, verification | `UPD` | 0008 |
 | The shell's `effector` command | `APP` | 0006, 0011 |
+| `init` follows the mode: both services only with `development` or `maintenance`, started and stopped when it changes: [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`init.wit` 1.5 `set-mode`, `BADGE_MODE`, `BADGE_MIND`) | `KRN` | 0013 |
+| The `mode` command in the shell and `msh`, confirmed at the console (request of 2026-10-21 on `internal-dev-messages`) | `APP` | 0013 |
 
 ### Order
 
@@ -190,6 +199,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
   - it answers every shell action `denied`;
   - it survives a cut connection and a repeated command ID without running anything twice;
   - every operation appears in the audit trail.
+- **Only in a mode (0013):** without the development or maintenance mode neither service runs and no process holds an Effector grant; a mode turned on by its word or its command holds across reboots and stops both services when it is turned off.
 - **Against the real Effector server, on a build named in the record (0012):** the same operations from the server's web interface and API, recorded with the configuration they ran on.
 - **The authority map** ([docs/network/airlock.md](../docs/network/airlock.md)) has rows for both services, and each meets MC-11.11.
 - **The profile:**
