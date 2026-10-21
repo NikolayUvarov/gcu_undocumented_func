@@ -2,7 +2,8 @@
 //! Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 //! (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 //! them, see `inspect`), then commits. A client badged `BADGE_HELPERS_ONLY` (`mind::process`, 1.10) may only list,
-//! inspect and start helpers: every call that starts a program or opens a session is refused with `rights`.
+//! inspect and start helpers: every call that starts a program or opens a session is refused with `rights`. A caller
+//! may end the programs the loader started for it and learn how they ended (1.11).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:loader";
-pub const VERSION: (u8, u8, u8) = (1, 10, 0);
+pub const VERSION: (u8, u8, u8) = (1, 11, 0);
 const MAJOR: usize = 1;
 
 /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
@@ -218,6 +219,27 @@ pub fn commit_with_input(endpoint: Endpoint, session: u32, front: bool, receive:
     }
 }
 
+/// The exit notice of the program this session starts goes to `notices`, an endpoint that must carry the right to
+/// receive (`rights`): when it ends, a receive there gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason] (TASK_WATCH,
+/// sender PID 0). The loader keeps the copy until the commit or `abort` (1.11, 800-KRN-0138).
+pub fn watch(endpoint: Endpoint, session: u32, notices: usize) -> Result<core::result::Result<(), Error>> {
+    let words = [14 | MAJOR << 8 | ((session) as usize) << 16, 0];
+    let reply = wire::call(endpoint, words, Some((notices, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
+/// Ends program `pid`, which the loader started for the caller (`run` or a commit); `not-found` for any other task
+/// or one that has ended (1.11, 800-KRN-0138).
+pub fn stop(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<(), Error>> {
+    let words = [15 | MAJOR << 8, ((pid) as usize) << 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `loader` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -234,6 +256,8 @@ pub enum Request {
     GrantFirmware { session: u32, cap: usize },
     Helper { which: HelperKind, served: usize },
     CommitWithInput { session: u32, front: bool },
+    Watch { session: u32, notices: usize },
+    Stop { pid: u64 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -317,6 +341,14 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::CommitWithInput { session: wire::field(&words, 0, 16, 32) as u32, front: wire::field(&words, 0, 48, 1) != 0 }, Call::words(request, cap)))
         }
+        14 => {
+            wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_ENDPOINT, true)?;
+            Ok((Request::Watch { session: wire::field(&words, 0, 16, 32) as u32, notices: cap }, Call::words(request, cap)))
+        }
+        15 => {
+            wire::body(request, cap, [0x0, 0xffffffffffffffff], CAP_KIND_NONE, false)?;
+            Ok((Request::Stop { pid: wire::field(&words, 1, 0, 64) as u64 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -372,4 +404,12 @@ pub fn reply_helper(call: Call, value: core::result::Result<u64, Error>) -> Resu
 pub fn reply_commit_with_input(call: Call, value: core::result::Result<usize, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish_cap(call, value, true)
+}
+pub fn reply_watch(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
+}
+pub fn reply_stop(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }
