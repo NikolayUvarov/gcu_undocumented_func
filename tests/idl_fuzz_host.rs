@@ -429,7 +429,7 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant;
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
-    rtc: Error;
+    rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;

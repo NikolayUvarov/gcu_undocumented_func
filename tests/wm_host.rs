@@ -1349,6 +1349,8 @@ fn the_date_page_sets_the_clock_through_the_shell() {
     // Day 28, then the button: the clock is set at once, and Settings stay open to show it (000-APP-0060).
     for ch in "28".chars() { wm.key(chr(ch)); }
     for _ in 0..4 { wm.key(key(KEY_DOWN)); }
+    assert!(wm.status().ends_with(":Time zone"), "{}", wm.status());
+    wm.key(key(KEY_DOWN));
     assert!(wm.status().ends_with(":Set the clock"), "{}", wm.status());
     assert_eq!(wm.key(key(KEY_ENTER)), Action::SetClock { date: 9920, seconds: 14 * 3600 + 5 * 60 + 31 });
     assert!(wm.status().starts_with("MODE=SETTINGS"), "{}", wm.status());
@@ -1554,6 +1556,30 @@ fn every_page_and_row_of_settings_reacts() {
     assert_eq!(s.message.as_deref(), Some("Speed is at its lowest already: 1"));
     assert!(matches!(s.key(key(KEY_RIGHT), &config), Outcome::Changed(_)));
     assert!(s.message.is_none());
+    // The zone row (000-APP-0099): ← → set it at once through the shell, 30 minutes a step, around its ends.
+    for shell in [false, true] {
+        let mut s = Settings::new(&config, (160, 50));
+        s.shell = shell;
+        s.set_now(Some((2026, 10, 10)), Some(3600));
+        s.key(key(KEY_DOWN), &config);
+        s.key(key(KEY_DOWN), &config);
+        s.key(key(KEY_ENTER), &config);
+        for _ in 0..6 { s.key(key(KEY_DOWN), &config); }
+        if !shell {
+            assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::Stay);
+            assert!(s.message.as_deref().is_some_and(|m| m.contains("cannot set the zone")), "{:?}", s.message);
+            continue;
+        }
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::SetZone { west: false, minutes: 30 });
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::SetZone { west: false, minutes: 0 });
+        assert_eq!(s.key(key(KEY_LEFT), &config), Outcome::SetZone { west: true, minutes: 30 });
+        s.zone = 14 * 60;
+        assert_eq!(s.key(key(KEY_RIGHT), &config), Outcome::SetZone { west: true, minutes: 12 * 60 }, "past UTC+14:00, UTC-12:00");
+        s.zone = 180;
+        assert_eq!(s.key(chr('5'), &config), Outcome::Stay, "digits do not type a zone");
+        assert_eq!(s.zone, 180);
+    }
+    assert_eq!((settings::zone_name(0), settings::zone_name(180), settings::zone_name(-330)), ("UTC".into(), "UTC+03:00".into(), "UTC-05:30".into()));
     // Each row of the date page: Enter tries to set the clock, which says what came of it.
     for shell in [false, true] {
         for row in 0..CLOCK_ROWS.len() {

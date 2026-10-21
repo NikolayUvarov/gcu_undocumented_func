@@ -508,6 +508,13 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 }
 
 mind::entry!(main);
+
+// The date page's clock as the clocks show it: local, and its zone (000-APP-0099).
+fn show_clock(settings: &mut wm::settings::Settings) {
+    let local = mind::rtc::local_date_time();
+    settings.set_now(local.map(|(date, _)| date), local.map(|(_, seconds)| seconds as usize));
+    settings.zone = mind::rtc::zone().minutes();
+}
 fn main(info: &'static BootInfo) {
     mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+F full screen, Alt+L the windows,\nAlt+M move/resize, Alt+W close, Alt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all.\nThe mouse drags titles and corners.");
     if !holds(SLOT_WINDOW) { mind::println!("[WM] NO WINDOW BROKER CLIENT: START WM FROM THE SHELL"); return; }
@@ -672,7 +679,29 @@ fn main(info: &'static BootInfo) {
                     // The background reads the RTC anew for a while, and the page at once.
                     fresh_clock = mind::time::uptime_ms() + FRESH_MS;
                     if let Mode::Settings(settings) = &mut manager.wm.mode {
-                        settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                        show_clock(settings);
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
+                Action::SetZone { west, minutes } => {
+                    // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
+                    // from its next reading of the RTC, this page and the background at once.
+                    let zone = wm::settings::zone_name(if west { -(minutes as i32) } else { minutes as i32 });
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the zone needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_zone(Endpoint(SLOT_SHELL), west, minutes)) {
+                            Ok(Ok(())) => format!("The clocks show {} now, kept in data/clock.conf", zone),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", zone),
+                            Ok(Err(error)) => format!("The zone is not set ({:?})", error),
+                            Err(_) => String::from("The zone is not set: the shell does not answer"),
+                        }
+                    };
+                    mind::println!("[WM] SET ZONE {}: {}", zone, text);
+                    fresh_clock = mind::time::uptime_ms() + FRESH_MS;
+                    clock = mind::rtc::Clock::new();
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        show_clock(settings);
                         settings.message = Some(text.clone());
                     }
                     manager.wm.notice = Some(text);
@@ -754,7 +783,7 @@ fn main(info: &'static BootInfo) {
             if settings.page == wm::settings::DATE && now >= next_clock {
                 // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
-                settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                show_clock(settings);
                 relayout = true;
             }
         }

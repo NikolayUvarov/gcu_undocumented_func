@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 // LEGACY: the CMOS RTC on ISA ports (docs/legacy.md); the PL031 of aarch64 `virt` is the other clock (issue 202).
-// Ring 3 RTC driver: answers CALL with the time since midnight and the date, and sets them for the client with the
-// setting badge (idl/rtc.wit).
+// Ring 3 RTC driver: answers CALL with the time since midnight and the date (UTC), and sets them for the client with the
+// setting badge; it keeps the time zone the clocks show the time in, which the same client sets (idl/rtc.wit 1.3).
 mod cmos;
 use cmos::{decode_time, encode_date, encode_time};
 use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0};
@@ -84,6 +84,8 @@ impl Clock {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // UTC until the shell sets it from data/clock.conf (000-APP-0099).
+    let mut zone = rtc::Offset { west: false, minutes: 0 };
     let clock = match cap_info(SLOT_DEV0).0 { CAP_KIND_MMIO => Mmio::map(SLOT_DEV0).map(Clock::Pl031).unwrap_or(Clock::Cmos(Ports(SLOT_DEV0))), _ => Clock::Cmos(Ports(SLOT_DEV0)) };
     loop {
         // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
@@ -95,6 +97,16 @@ fn main(_info: &'static BootInfo) {
                 let result = if request.badge & mind::rtc::BADGE_SET == 0 { Err(rtc::Error::Rights) } else { clock.set(date, seconds) };
                 if result.is_ok() { mind::println!("[RTC] SET BY PID {}", request.sender); }
                 rtc::reply_set(call, result)
+            }
+            Ok((rtc::Request::Zone, call)) => rtc::reply_zone(call, &zone),
+            Ok((rtc::Request::SetZone { zone: asked }, call)) => {
+                let result = if request.badge & mind::rtc::BADGE_SET == 0 { Err(rtc::Error::Rights) }
+                    else if mind::rtc::Zone::from_offset(&asked).is_none() { Err(rtc::Error::Invalid) } else { Ok(()) };
+                if result.is_ok() {
+                    zone = asked;
+                    mind::println!("[RTC] ZONE {} SET BY PID {}", mind::rtc::Zone::from_offset(&zone).unwrap_or_default(), request.sender);
+                }
+                rtc::reply_set_zone(call, result)
             }
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),

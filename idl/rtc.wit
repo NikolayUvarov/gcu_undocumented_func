@@ -1,14 +1,24 @@
 /// Calendar time from the CMOS RTC, a service separate from the monotonic clock (MC-5.6).
-package mind:rtc@1.2.0;
+/// The RTC keeps UTC (1.3): the PL031 counts it, and macOS, Linux and QEMU keep the CMOS clock so; a machine whose other
+/// system keeps local time there leaves the zone at UTC. The clocks show `now` with the zone's offset.
+package mind:rtc@1.3.0;
 
 interface rtc {
     /// Why setting the clock failed (1.2): not the setting client, a time out of range, a clock that does not answer.
     enum error { rights, invalid, unavailable }
-    /// Seconds since midnight; none if the RTC cannot be read.
+    /// A time zone as its offset from UTC (1.3, 000-APP-0099): `minutes` east of it, or west with `west`; no daylight
+    /// saving. UTC+03:00 is { west: false, minutes: 180 }, UTC-05:30 { west: true, minutes: 330 }.
+    record offset { west: bool, minutes: u32 }
+    /// Seconds since midnight, UTC; none if the RTC cannot be read.
     now: func() -> option<u32>;
-    /// Days since 2000-01-01 (the date of `now`); none if the RTC cannot be read (1.1).
+    /// Days since 2000-01-01 (the date of `now`, UTC); none if the RTC cannot be read (1.1).
     date: func() -> option<u32>;
-    /// Sets the clock to `date` (days since 2000-01-01, up to 2099-12-31) and `seconds` since midnight, without a time
-    /// zone; only the client with the setting badge (`mind::rtc::BADGE_SET`, the shell's) may (1.2, 211-KRN-0051).
+    /// Sets the clock to `date` (days since 2000-01-01, up to 2099-12-31) and `seconds` since midnight, UTC; only the
+    /// client with the setting badge (`mind::rtc::BADGE_SET`, the shell's) may (1.2, 211-KRN-0051).
     set: func(date: u32, seconds: u32) -> result<_, error>;
+    /// The zone the clocks show the time in (1.3); UTC until it is set. The service keeps it while it runs: the shell
+    /// sets it at its start from `data/clock.conf`.
+    zone: func() -> offset;
+    /// Sets the zone, for the client with the setting badge (1.3); `invalid` west of UTC-12:00 or east of UTC+14:00.
+    set-zone: func(zone: offset) -> result<_, error>;
 }
