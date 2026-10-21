@@ -3,7 +3,8 @@
 // Block store (issue 300-STO-0002, docs/storage; MC-4.2, 4.8): immutable blocks named by their CID in an append-only
 // log on a block device (store.rs); nothing stored is overwritten and every block read is checked against its CID.
 // Serves idl/blockstore.wit to the rights in each client's badge (mind::blockstore, 300-STO-0004); every refusal is
-// logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007).
+// logged. Leases are measured on the monotonic clock (303-STO-0001); a commit changes several names at once (304-STO-0007);
+// the current names are listed by prefix, 16 at a time (300-STO-0018).
 // A medium it cannot mount leaves it running and answering every request with the reason (305-STO-0008). Holds: a block client with the write badge in slot 2, a RAM disk of its own (issues/requests-KRN.md).
 mod store;
 
@@ -14,8 +15,8 @@ use cid::Cid;
 use mind::abi::BootInfo;
 use mind::block::Device as Client;
 use mind::blockstore::{allowed, Operation};
-use mind::idl::blockstore::{self, Collected, Error, Head as Current, Kept, Pinned, Request, Stats, Usage};
-use mind::idl::codec::List;
+use mind::idl::blockstore::{self, Collected, Error, Head as Current, Kept, Named, Pinned, Request, Stats, Usage};
+use mind::idl::codec::{List, Text};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
 use store::{slots_for, Device, Entry, Extent, Head, Pin, Store, Update, BLOCK_MAX, BUFFER, COMMIT_MAX, SECTOR};
@@ -138,6 +139,7 @@ fn main(_info: &'static BootInfo) {
             Ok((Request::Usage, call)) if refused(Operation::Usage) => blockstore::reply_usage(call, Err(Error::Rights)),
             Ok((Request::Commit { .. }, call)) if refused(Operation::Commit) => blockstore::reply_commit(call, Err(Error::Rights)),
             Ok((Request::Snapshot { .. }, call)) if refused(Operation::Snapshot) => blockstore::reply_snapshot(call, Err(Error::Rights)),
+            Ok((Request::Names { .. }, call)) if refused(Operation::Names) => blockstore::reply_names(call, Err(Error::Rights)),
             Ok((Request::Put { codec, data }, call)) => {
                 let codec = match codec { blockstore::Codec::Raw => cid::Codec::Raw, blockstore::Codec::DagCbor => cid::Codec::DagCbor };
                 let cid = store.as_mut().map_err(|e| *e).and_then(|s| s.put(codec, data).map_err(error)).map(|c| c.to_bytes());
@@ -258,6 +260,19 @@ fn main(_info: &'static BootInfo) {
                     Ok(names.len())
                 });
                 blockstore::reply_snapshot(call, read.map(|n| &heads[..n]))
+            }
+            Ok((Request::Names { prefix, after }, call)) => {
+                let mut page = [Named::default(); 16];
+                let n = store.as_ref().map_err(|e| *e).and_then(|s| s.names(prefix.as_str().as_bytes(), after.as_str().as_bytes()).map_err(error)).map(|names| {
+                    let mut n = 0;
+                    // A stored name is 1 to 64 bytes of ASCII, so it is always text of at most 64.
+                    for (slot, (name, version, root)) in page.iter_mut().zip(names) {
+                        *slot = Named { name: Text::new(core::str::from_utf8(name).unwrap_or("")).unwrap_or_default(), version, root: List::from_slice(&root.to_bytes()).unwrap_or_default() };
+                        n += 1;
+                    }
+                    n
+                });
+                blockstore::reply_names(call, n.map(|n| &page[..n]))
             }
             Ok((Request::Usage, call)) => {
                 let usage = store.as_ref().map_err(|e| *e).map(|s| {

@@ -52,5 +52,5 @@ ensure_toolchain() {
     [ -n "$have" ] && [ ${#missing[@]} -eq 0 ] && return 0
     local what="is not installed"; [ -n "$have" ] && what="lacks ${missing[*]}"
     echo ">>> The pinned toolchain $channel $what: installing it once, before the parallel build..."
-    rustup toolchain install "$channel" --profile minimal "${add[@]}" || { echo "!!! rustup could not install the pinned toolchain $channel (rust-toolchain.toml)" >&2; return 1; }
+    rustup toolchain install --no-self-update "$channel" --profile minimal "${add[@]}" || { echo "!!! rustup could not install the pinned toolchain $channel (rust-toolchain.toml)" >&2; return 1; }
 }

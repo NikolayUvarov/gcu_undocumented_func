@@ -15,8 +15,9 @@ use mind::voice::dictation::Dictation;
 use mind::voice::fbank::{Fbank, BANDS};
 use mind::voice::{Stream, Wav};
 
-// The model (71 MB), the features and the encoder's values of a long utterance.
-mind::request!(REQUEST_CONSOLE, memory: 384);
+// The model (71 MB), the features and the encoder's values of a long utterance, within the frame pool of a 512 MiB
+// machine (383 MiB since ABI 13): the loader refuses a request larger than its own quota.
+mind::request!(REQUEST_CONSOLE, memory: 320);
 
 const USAGE: &str = "Usage: dictate [--model FILE] file.wav | dictate --features file.wav";
 /// The Russian model as `scripts/models.py disk --add` puts it on the model disk.

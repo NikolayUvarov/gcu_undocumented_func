@@ -2,7 +2,7 @@
 /// authorities (MC-3.11); it lends a client of this interface in SLOT_SHELL to a program that asks for it
 /// (REQUEST_SHELL), and a client gets only what the interface offers: the shell decides which commands it takes, and
 /// asks the user in its own window before one that changes the machine, except the clock its window manager sets (1.3).
-package mind:shell@1.6.0;
+package mind:shell@1.7.0;
 
 interface shell {
     /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -36,4 +36,11 @@ interface shell {
     /// How the boot went (1.6, 000-APP-0086): after a safe start, the notice the shell shows above its first prompt,
     /// with the services the start left out and `svc start` for each; empty after a normal boot. For any client.
     boot-notice: func() -> result<string<240>, error>;
+    /// One card as the network stack counts its frames (1.7, 000-APP-0096): its index, whether it is the Wi-Fi station
+    /// and the default card, and its frames sent and received since the stack started.
+    record card-counters { card: u8, wireless: bool, default: bool, sent: u64, received: u64 }
+    /// Every card's frames, the Wi-Fi station's too (1.7, 000-APP-0096): for the window manager the shell started, whose
+    /// `show = net` line gives the frames a second. It reads only and reaches nothing on the network. `refused` for any
+    /// other client; `unavailable`: no network stack.
+    net-counters: func() -> result<list<card-counters, 4>, error>;
 }
