@@ -109,7 +109,37 @@ fn kernel(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
     text_input(run);
     every_slot(run);
+    stop_and_notice(run);
     console_closes(run);
+}
+
+// The loader ends a program it started for check, and only such a one, and sends each one's exit notice where check
+// asked (loader 1.11, 800-KRN-0138): one that waits, stopped, and one that ends at once with code 3.
+fn stop_and_notice(run: &mut Run) {
+    let name = "launch: stop and notice";
+    let Ok(endpoint) = Endpoint::create() else { return run.report(name, fail(String::from("no endpoint created"))) };
+    let killed = child::start_watched("check", "--child", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)).and_then(|pid| match loader::stop(Endpoint::LOADER, pid) {
+        Ok(Ok(())) => child::exit_notice(endpoint, pid).map(|exit| (pid, exit)),
+        other => { let _ = child::stop(endpoint, pid); Err(format!("stop: {:?}", other)) }
+    });
+    let exited = child::start_watched("check", "--exit 3", endpoint).and_then(|pid| child::exit_notice(endpoint, pid));
+    // Init (PID 1) is not check's program, nor is one that has ended.
+    let refused = [loader::stop(Endpoint::LOADER, 1), loader::stop(Endpoint::LOADER, killed.as_ref().map_or(1, |&(pid, _)| pid))];
+    // A watch needs the right to receive.
+    let send_only = loader::begin(Endpoint::LOADER, "check", "--exit 0").ok().and_then(Result::ok).map(|session| {
+        let watched = ipc::mint(endpoint.0, CAP_WRITE, 0, 0).map(|copy| { let watched = loader::watch(Endpoint::LOADER, session, copy); let _ = ipc::drop_cap(copy); watched });
+        let _ = loader::abort(Endpoint::LOADER, session);
+        watched
+    });
+    let not_found = |r: &mind::Result<Result<(), loader::Error>>| matches!(r, Ok(Err(loader::Error::NotFound)));
+    run.report(name, match (killed, exited) {
+        (Ok((pid, mind::process::Exit::Killed)), Ok(mind::process::Exit::Code(3))) if refused.iter().all(not_found) && matches!(send_only, Some(Ok(Ok(Err(loader::Error::Rights))))) =>
+            pass(format!("PID {} killed; code 3 noticed; 3 refused", pid)),
+        (Ok(_), Ok(_)) if !refused.iter().all(not_found) => fail(format!("stop of PID 1 or an ended one: {:?}", refused)),
+        (Ok(_), Ok(_)) if !matches!(send_only, Some(Ok(Ok(Err(loader::Error::Rights))))) => fail(format!("a send-only watch: {:?}", send_only)),
+        (killed, exited) => fail(format!("stopped: {:?}; ended at once: {:?}", killed.map(|k| k.1), exited)),
+    });
+    let _ = ipc::drop_cap(endpoint.0);
 }
 
 // A tool whose console is gone stops at its next row (176-KRN-0103): kbench, its output sent to an endpoint that goes.
@@ -452,6 +482,7 @@ fn main(info: &'static mind::BootInfo) {
     if args == "--child" { return child::serve(); }
     if args == "--reader" { return child::read_input(); }
     if args == "--slots" { return child::report_slots(); }
+    if let Some(code) = args.strip_prefix("--exit ") { mind::process::exit_with(code.parse().unwrap_or(1)); }
     if let Some(kind) = args.strip_prefix("--probe ") { return child::probe(kind); }
     let chosen: Vec<&str> = args.split_whitespace().collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("check: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }
