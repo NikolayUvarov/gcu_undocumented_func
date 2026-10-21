@@ -1,13 +1,14 @@
 #![no_std]
 #![no_main]
-// webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME]: the network
+// webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--client-cert]: the network
 // track's check of HTTP for services (750-NET-0019). Over one connection (TCP, or a session of the TLS service for
 // https) it posts JSON to URL and reads the response, chunked or not; then GETs URL N more times on the same
 // connection; with --stream it GETs URL once more and reads its body to its end, however long the server holds it, up
 // to --idle seconds without a byte; with none of these, one GET. With one or two --pin, https trusts the server by
 // them and the TLS service still checks its certificate for NAME (default: the host) (tls.wit 1.2, 750-NET-0020).
 // Response heads go to the parser service, as download's do; with --json, a JSON body too, one line per value
-// (parse.wit 1.4, 750-NET-0021). One line per step.
+// (parse.wit 1.4, 750-NET-0021). With --client-cert, https asks the TLS service to present the device certificate, which a
+// client it lends without that right is refused (351-NET-0022). One line per step.
 extern crate alloc;
 
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
@@ -116,10 +117,10 @@ fn show_json(text: &[u8]) {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json]");
+    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json] [--client-cert]");
     let mut words = mind::process::args_str().split_whitespace();
     let Some(url) = words.next() else { fail(format_args!("USAGE: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS]")) };
-    let (mut post, mut repeat, mut stream, mut idle, mut as_json) = (None, 0u32, false, 15usize, false);
+    let (mut post, mut repeat, mut stream, mut idle, mut as_json, mut client_certificate) = (None, 0u32, false, 15usize, false, false);
     let (mut pins, mut name) = (mind::idl::codec::List::<tls::Pin, 2>::default(), None);
     while let Some(word) = words.next() {
         match word {
@@ -138,6 +139,7 @@ fn main(_info: &'static BootInfo) {
             "--repeat" => repeat = words.next().and_then(|n| n.parse().ok()).unwrap_or(0),
             "--stream" => stream = true,
             "--json" => as_json = true,
+            "--client-cert" => client_certificate = true,
             "--idle" => idle = words.next().and_then(|n| n.parse().ok()).unwrap_or(15),
             _ => fail(format_args!("UNKNOWN OPTION {}", word)),
         }
@@ -149,10 +151,10 @@ fn main(_info: &'static BootInfo) {
     let link = if url.https {
         let session = match tls::attach(TLS, SLOT_NETWORK) { Ok(Ok(s)) => s, other => fail(format_args!("TLS: {:?}", other.map_err(|_| ()))) };
         let name = name.unwrap_or(url.host);
-        let connected = if pins.as_slice().is_empty() { tls::connect(TLS, session, name, address, url.port, false, 10_000) }
+        let connected = if pins.as_slice().is_empty() { tls::connect(TLS, session, name, address, url.port, client_certificate, 10_000) }
                         else { tls::connect_pins(TLS, session, name, address, url.port, pins.as_slice(), 10_000) };
         match connected {
-            Ok(Ok(_)) => Link::Tls(session),
+            Ok(Ok(peer)) => { if peer.client_certificate { mind::println!("WEBCHECK TLS: THE DEVICE CERTIFICATE SENT"); } Link::Tls(session) }
             other => { let _ = tls::close(TLS, session); fail(format_args!("TLS CONNECT: {:?}", other.map_err(|_| ()))) }
         }
     } else {

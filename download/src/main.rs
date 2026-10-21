@@ -8,18 +8,22 @@ extern crate alloc;
 // directory (REQUEST_FILE). The response head is parsed by the parser service (REQUEST_PARSE, 109-NET-0009), which holds
 // neither; download checks what it says against what it asked for. https runs a session of the TLS service over the
 // same flow grant (REQUEST_TLS); the server is verified against the system's roots, or by its pinned key (--pin).
+// sftp reads the file through the SSH service over the same flow grant (REQUEST_SSH, 351-NET-0027), logged in with the
+// device key, the server known by its pinned host key alone.
 use alloc::vec::Vec;
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, ERR_TIMEOUT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, ERR_TIMEOUT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_SSH, SLOT_TLS};
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Head, Parser, Sink, Transport, Url};
-use mind::idl::{socket, tls, wire};
+use mind::idl::{socket, ssh, tls, wire};
 use core::sync::atomic::{AtomicUsize, Ordering};
 use mind::ipc::Endpoint;
 
-mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_FILE | REQUEST_PARSE | REQUEST_TLS);
+mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_FILE | REQUEST_PARSE | REQUEST_TLS | REQUEST_SSH);
 
 const STACK: Endpoint = Endpoint(SLOT_NETWORK);
 const TLS: Endpoint = Endpoint(SLOT_TLS);
+const SSH: Endpoint = Endpoint(SLOT_SSH);
+const SFTP_READ: u64 = 32 * 1024; // ssh.wit's largest read
 const IDLE_MS: usize = 15_000; // no progress for this long: the connection counts as cut
 const STAGE: usize = 64 * 1024; // the body is written to the file in pieces of this size
 // No call to the stack, the TLS service, a parser or the loader waits longer, so a stalled connection ends in another
@@ -204,6 +208,78 @@ impl<T: Parser> Parser for Traced<'_, T> {
     }
 }
 
+// An sftp:// URL: sftp://USER@HOST[:PORT]/PATH, the path as the server takes it.
+struct SftpUrl<'a> { user: &'a str, host: &'a str, port: u16, path: &'a str }
+
+impl<'a> SftpUrl<'a> {
+    fn parse(url: &'a str) -> Option<Self> {
+        let rest = url.strip_prefix("sftp://")?;
+        let (authority, path) = rest.split_at(rest.find('/')?);
+        let (user, server) = authority.split_once('@')?;
+        let (host, port) = match server.rsplit_once(':') { Some((host, port)) => (host, port.parse::<u16>().ok().filter(|&p| p != 0)?), None => (server, 22) };
+        let fits = |s: &str, max: usize| !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_graphic());
+        (fits(user, 64) && fits(host, 253) && fits(path, 255)).then_some(SftpUrl { user, host, port, path })
+    }
+}
+
+// A session of the SSH service, closed on every way out.
+struct SshSession(u32);
+impl Drop for SshSession { fn drop(&mut self) { let _ = ssh::close(SSH, self.0); } }
+
+// What an SFTP attempt came to: the file's size once all of it is in `output`, a cut or a failure worth another try,
+// or a refusal that asking again will not change.
+enum Sftp { Done(u64), Retry, Fatal(&'static str, ssh::Error) }
+
+// One SFTP attempt: a session over a child of the flow grant, the login, the file read from where `output` ends.
+fn sftp_attempt(url: &SftpUrl, address: u32, pin: &[u8; 32], output: &mut Output, resuming: bool) -> Sftp {
+    let session = match ssh::attach(SSH, SLOT_NETWORK) {
+        Ok(Ok(session)) => SshSession(session),
+        Ok(Err(error)) => return Sftp::Fatal("ATTACH", error),
+        Err(_) => { mind::println!("DOWNLOAD: CONNECT: NO ANSWER FROM THE SSH SERVICE"); return Sftp::Retry }
+    };
+    match ssh::connect(SSH, session.0, address, url.port, url.user, pin, 10_000) {
+        Ok(Ok(())) => {}
+        Ok(Err(error @ (ssh::Error::Refused | ssh::Error::Timeout | ssh::Error::Closed | ssh::Error::NoNetwork))) => { mind::println!("DOWNLOAD: CONNECT: {:?}", error); return Sftp::Retry }
+        Ok(Err(error)) => return Sftp::Fatal("CONNECT", error),
+        Err(_) => { mind::println!("DOWNLOAD: CONNECT: NO ANSWER FROM THE SSH SERVICE"); return Sftp::Retry }
+    }
+    let file = match ssh::open(SSH, session.0, url.path) {
+        Ok(Ok(file)) => file,
+        Ok(Err(error)) => return Sftp::Fatal("OPEN", error),
+        Err(_) => return Sftp::Retry,
+    };
+    let total = match ssh::size(SSH, session.0, file) {
+        Ok(Ok(total)) => total,
+        Ok(Err(error)) => return Sftp::Fatal("SIZE", error),
+        Err(_) => return Sftp::Retry,
+    };
+    // A file longer than the server's is not a part of it: it starts again.
+    let start = if output.at > total { 0 } else { output.at };
+    if output.begin(start, total).is_err() { return Sftp::Fatal("WRITE", ssh::Error::Failed); }
+    if resuming && start > 0 { mind::println!("DOWNLOAD: ASKED FOR THE REST FROM BYTE {}", start); }
+    let mut buffer = alloc::vec![0u8; SFTP_READ as usize];
+    let mut offset = start;
+    while offset < total {
+        let length = (total - offset).min(SFTP_READ) as u32;
+        match ssh::read(SSH, session.0, file, offset, length, &mut buffer) {
+            Ok(Ok(got)) if got > 0 => {
+                if output.write(offset, &buffer[..got]).is_err() { return Sftp::Fatal("WRITE", ssh::Error::Failed); }
+                offset += got as u64;
+            }
+            // The server's file ended before the size it gave, or the connection went: what came is kept.
+            Ok(Ok(_)) | Ok(Err(ssh::Error::Closed | ssh::Error::Timeout | ssh::Error::Refused | ssh::Error::NoNetwork)) | Err(_) => {
+                if output.flush().is_err() { return Sftp::Fatal("WRITE", ssh::Error::Failed); }
+                mind::println!("DOWNLOAD: CONNECTION CUT AT {} OF {}, RESUMING", output.at, total);
+                return Sftp::Retry;
+            }
+            Ok(Err(error)) => return Sftp::Fatal("READ", error),
+        }
+    }
+    let _ = ssh::close_file(SSH, session.0, file);
+    if output.flush().is_err() { return Sftp::Fatal("WRITE", ssh::Error::Failed); }
+    Sftp::Done(total)
+}
+
 fn ipv4(text: &str) -> Option<u32> {
     let mut address = [0u8; 4]; let mut parts = text.split('.');
     for byte in address.iter_mut() { *byte = parts.next()?.parse().ok()?; }
@@ -262,34 +338,8 @@ fn fail(what: core::fmt::Arguments) -> ! {
     mind::process::exit_with(1)
 }
 
-mind::entry!(main);
-fn main(_info: &'static BootInfo) {
-    mind::about!("download — downloads a file over HTTP/1.1 or HTTPS, resuming one already partly there and a connection cut midway (Range).\nUsage: download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]\n  URL: http[s]://HOST[:PORT]/PATH; HOST is A.B.C.D or a name (looked up with a `download dns` policy line).\n  --sha256: the file's expected SHA-256; --tries: connections before giving up (default 5).\n  --pin: https only, the SHA-256 of the server's public key (SubjectPublicKeyInfo): the server is trusted by it alone.\nIt reaches only what netpolicy.txt grants download; https is verified against tlsroots.pem without --pin.");
-    let mut words = mind::process::args_str().split_whitespace();
-    const USAGE: &str = "USAGE: download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]";
-    let (Some(path), Some(url)) = (words.next(), words.next()) else { fail(format_args!("{}", USAGE)) };
-    let (mut expected, mut tries, mut pin) = (None, 5u32, None);
-    let hex64 = |h: &str| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit());
-    while let Some(word) = words.next() {
-        match (word, words.next()) {
-            ("--sha256", Some(h)) if hex64(h) => expected = Some(h),
-            ("--tries", Some(n)) if n.parse::<u32>().is_ok_and(|n| n > 0) => tries = n.parse().unwrap_or(5),
-            ("--pin", Some(h)) if hex64(h) => pin = Some(core::array::from_fn::<u8, 32, _>(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap_or(0))),
-            _ => fail(format_args!("{}", USAGE)),
-        }
-    }
-    let Ok(url) = Url::parse(url) else { fail(format_args!("NOT AN http:// OR https:// URL: {}", url)) };
-    if pin.is_some() && !url.https { fail(format_args!("--pin IS FOR https:// URLS")); }
-    if url.https && mind::dev::cap_info(SLOT_TLS).0 != CAP_KIND_ENDPOINT { fail(format_args!("HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")); }
-    if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
-    // It does not parse response heads itself: without the parser service it does not download (MC-11.11).
-    if mind::dev::cap_info(SLOT_PARSE).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PARSER SERVICE")); }
-    // A parser process of this download's own (109-NET-0010); the shared service where the loader starts none.
-    let mut parser = match mind::parse::Session::own(Endpoint::LOADER) {
-        Ok(own) => { OWN_PARSER.store(own.endpoint().0, Ordering::Relaxed); own }
-        Err(why) => { mind::println!("DOWNLOAD: NO PARSER OF ITS OWN ({:?}): THE SHARED SERVICE PARSES", why); mind::parse::Session::shared(Endpoint(SLOT_PARSE)) }
-    };
-    // The client the launcher lent is confined to the file's directory.
+// The client the launcher lent is confined to the file's directory; the file is opened there, to be written on.
+fn open_output(path: &str) -> Output {
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT {
         let (volume, rest) = fs::split(path);
         let parent = rest.rfind('/').map_or("", |i| &rest[..i]);
@@ -304,16 +354,96 @@ fn main(_info: &'static BootInfo) {
         }
     }
     let file = match File::open_mode(path, MODE_WRITE | MODE_CREATE) { Ok(file) => file, Err(error) => fail(format_args!("CANNOT OPEN {}: {:?}", path, error)) };
-    let address = match ipv4(url.host) {
+    let output = Output { at: file.size() as u64, file, stage: alloc::vec![0; STAGE], staged: 0, failed: false };
+    if output.at > 0 { mind::println!("DOWNLOAD: RESUMING {} AT {}", path, output.at); }
+    output
+}
+
+// A host's address: A.B.C.D, or a name the stack looks up (a `download dns` policy line).
+fn resolve(host: &str) -> u32 {
+    match ipv4(host) {
         Some(address) => address,
-        None => match socket::resolve(STACK, url.host, 0, 0, 5000) {
+        None => match socket::resolve(STACK, host, 0, 0, 5000) {
             Ok(Ok(address)) => address,
-            Ok(Err(error)) => fail(format_args!("CANNOT LOOK UP {}: {:?}", url.host, error)),
+            Ok(Err(error)) => fail(format_args!("CANNOT LOOK UP {}: {:?}", host, error)),
             Err(_) => fail(format_args!("NO NETWORK GRANT")),
         },
+    }
+}
+
+// The end of a download: how it went, then the file's SHA-256 as it is on the disk, against the one expected.
+fn finish(path: &str, output: &Output, already: bool, total: u64, started: usize, connections: u32, expected: Option<&str>) {
+    if already {
+        mind::println!("DOWNLOAD: ALREADY COMPLETE, {} BYTES", total);
+    } else {
+        mind::println!("DOWNLOAD: DONE {} BYTES IN {} MS, {} CONNECTIONS", total, now() - started, connections);
+    }
+    let digest = hex(&sha256(path, &output.file));
+    let digest = core::str::from_utf8(&digest).unwrap_or("");
+    match expected {
+        None => mind::println!("DOWNLOAD: SHA256 {}", digest),
+        Some(h) if h.eq_ignore_ascii_case(digest) => mind::println!("DOWNLOAD: SHA256 {} MATCHES", digest),
+        Some(_) => fail(format_args!("SHA256 {} DOES NOT MATCH", digest)),
+    }
+}
+
+// sftp://: the file read through the SSH service, resumed from where the file ends, each attempt's calls bounded.
+fn sftp(path: &str, url: &SftpUrl, pin: Option<&[u8; 32]>, tries: u32, expected: Option<&str>) {
+    let Some(pin) = pin else { fail(format_args!("sftp:// NEEDS --pin: THE SHA-256 OF THE SERVER'S HOST KEY")) };
+    if mind::dev::cap_info(SLOT_SSH).0 != CAP_KIND_ENDPOINT { fail(format_args!("SFTP NEEDS AN SSH CLIENT, AND NONE WAS LENT")); }
+    if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
+    let mut output = open_output(path);
+    let (address, already, started) = (resolve(url.host), output.at, now());
+    let mut connections = 0;
+    let total = loop {
+        if connections == tries { fail(format_args!("GAVE UP AFTER {} CONNECTIONS AT {} BYTES", connections, output.at)); }
+        connections += 1;
+        let resuming = output.at > 0 || connections > 1;
+        let attempt = wire::with_timeout(CALL_MS, || sftp_attempt(url, address, pin, &mut output, resuming));
+        if output.failed { fail(format_args!("CANNOT WRITE {}", path)); }
+        match attempt {
+            Sftp::Done(total) => break total,
+            Sftp::Retry => { mind::time::sleep(1000); }
+            Sftp::Fatal("WRITE", _) => fail(format_args!("CANNOT WRITE {}", path)),
+            Sftp::Fatal(step, error) => fail(format_args!("SFTP: {}: {:?}", step, error)),
+        }
     };
-    let mut output = Output { at: file.size() as u64, file, stage: alloc::vec![0; STAGE], staged: 0, failed: false };
-    if output.at > 0 { mind::println!("DOWNLOAD: RESUMING {} AT {}", path, output.at); }
+    finish(path, &output, already == total && connections == 1, total, started, connections, expected);
+}
+
+mind::entry!(main);
+fn main(_info: &'static BootInfo) {
+    mind::about!("download — downloads a file over HTTP/1.1, HTTPS or SFTP, resuming one already partly there and a connection cut midway.\nUsage: download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]\n  URL: http[s]://HOST[:PORT]/PATH or sftp://USER@HOST[:PORT]/PATH; HOST is A.B.C.D or a name (looked up with a\n  `download dns` policy line).\n  --sha256: the file's expected SHA-256; --tries: connections before giving up (default 5).\n  --pin: for https, the SHA-256 of the server's public key (SubjectPublicKeyInfo), trusted by it alone; for sftp, which\n  needs it, the SHA-256 of the server's ssh-ed25519 host key blob. sftp logs in as USER with the device key.\nIt reaches only what netpolicy.txt grants download; https is verified against tlsroots.pem without --pin.");
+    let mut words = mind::process::args_str().split_whitespace();
+    const USAGE: &str = "USAGE: download FILE URL [--sha256 HEX] [--tries N] [--pin HEX]";
+    let (Some(path), Some(url)) = (words.next(), words.next()) else { fail(format_args!("{}", USAGE)) };
+    let (mut expected, mut tries, mut pin) = (None, 5u32, None);
+    let hex64 = |h: &str| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit());
+    while let Some(word) = words.next() {
+        match (word, words.next()) {
+            ("--sha256", Some(h)) if hex64(h) => expected = Some(h),
+            ("--tries", Some(n)) if n.parse::<u32>().is_ok_and(|n| n > 0) => tries = n.parse().unwrap_or(5),
+            ("--pin", Some(h)) if hex64(h) => pin = Some(core::array::from_fn::<u8, 32, _>(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap_or(0))),
+            _ => fail(format_args!("{}", USAGE)),
+        }
+    }
+    if url.starts_with("sftp://") {
+        let Some(sftp_url) = SftpUrl::parse(url) else { fail(format_args!("NOT AN sftp://USER@HOST[:PORT]/PATH URL: {}", url)) };
+        return sftp(path, &sftp_url, pin.as_ref(), tries, expected);
+    }
+    let Ok(url) = Url::parse(url) else { fail(format_args!("NOT AN http://, https:// OR sftp:// URL: {}", url)) };
+    if pin.is_some() && !url.https { fail(format_args!("--pin IS FOR https:// AND sftp:// URLS")); }
+    if url.https && mind::dev::cap_info(SLOT_TLS).0 != CAP_KIND_ENDPOINT { fail(format_args!("HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")); }
+    if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
+    // It does not parse response heads itself: without the parser service it does not download (MC-11.11).
+    if mind::dev::cap_info(SLOT_PARSE).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PARSER SERVICE")); }
+    // A parser process of this download's own (109-NET-0010); the shared service where the loader starts none.
+    let mut parser = match mind::parse::Session::own(Endpoint::LOADER) {
+        Ok(own) => { OWN_PARSER.store(own.endpoint().0, Ordering::Relaxed); own }
+        Err(why) => { mind::println!("DOWNLOAD: NO PARSER OF ITS OWN ({:?}): THE SHARED SERVICE PARSES", why); mind::parse::Session::shared(Endpoint(SLOT_PARSE)) }
+    };
+    let mut output = open_output(path);
+    let address = resolve(url.host);
     let started = now();
     let mut connections = 0;
     let got = loop {
@@ -350,16 +480,5 @@ fn main(_info: &'static BootInfo) {
             Err(error) => fail(format_args!("HTTP: {:?}", error)),
         }
     };
-    if got.end == got.start && got.start > 0 {
-        mind::println!("DOWNLOAD: ALREADY COMPLETE, {} BYTES", got.total);
-    } else {
-        mind::println!("DOWNLOAD: DONE {} BYTES IN {} MS, {} CONNECTIONS", got.total, now() - started, connections);
-    }
-    let digest = hex(&sha256(path, &output.file));
-    let digest = core::str::from_utf8(&digest).unwrap_or("");
-    match expected {
-        None => mind::println!("DOWNLOAD: SHA256 {}", digest),
-        Some(h) if h.eq_ignore_ascii_case(digest) => mind::println!("DOWNLOAD: SHA256 {} MATCHES", digest),
-        Some(_) => fail(format_args!("SHA256 {} DOES NOT MATCH", digest)),
-    }
+    finish(path, &output, got.end == got.start && got.start > 0, got.total, started, connections, expected);
 }

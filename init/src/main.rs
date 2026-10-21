@@ -406,7 +406,19 @@ impl Init {
                 self.lend(&mut grants, SLOT_LOADER, "loader")?;
                 let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
-                let _ = core::fmt::Write::write_str(&mut args, core::str::from_utf8(&words[..length]).unwrap_or(""));
+                let words = core::str::from_utf8(&words[..length]).unwrap_or("");
+                let _ = core::fmt::Write::write_str(&mut args, words);
+                // Developer mode, link.conf's word `dev` (800-KRN-0139, the maintainer's decision of 2026-10-21): what the
+                // shell lends its programs without asking, so whoever holds the cable may debug the machine as its user.
+                // The servers start after link: their keepers are made now and reached once they run.
+                if words.split_ascii_whitespace().any(|word| word == "dev") {
+                    self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
+                    self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
+                    grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT);
+                    // Init's lifecycle client that may only reboot, as the updater's (351-KRN-0022).
+                    grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, NETWORK POLICY, WI-FI AND REBOOT CLIENTS");
+                }
             }
             "virtio_blk" => {
                 // The instance's VirtIO block device (vendor 1AF4, modern-only 1042 or transitional 1001), in PCI order:
@@ -724,6 +736,8 @@ impl Init {
             "shell" => Quota { tasks: 0, endpoints: 1, memory_mib: 0 },
             // The endpoint a check's parser serves (109-KRN-0117).
             "updater" => Quota { endpoints: 1, ..Quota::default() },
+            // The endpoint where the programs link starts send their output (800-LNK-0009, 800-KRN-0137).
+            "link" => Quota { endpoints: 1, ..Quota::default() },
             // The windows' memory is the broker's: a pixel window has room for the screen (up to 1920 × 1200, 9 MiB)
             // so that its content follows its frame (issue 163).
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },

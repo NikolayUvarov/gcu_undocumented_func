@@ -23,6 +23,8 @@ const MAX_IMAGE: usize = 4 * 1024 * 1024;
 const HELPER_MEMORY_MIB: u16 = 2;
 const HELPERS_EACH: usize = 4; // live helpers a caller may have at once
 const HELPERS: usize = 32;
+// Programs the loader started, by caller, that the caller may end (1.11, 800-KRN-0138): the last STARTED that live.
+const STARTED: usize = 64;
 
 // Program name -> file: "clock" -> clock.elf; a path with a dot or directory is used as is.
 fn path_for(name: &[u8], path: &mut FixedBuf<64>) -> Result<(), Error> {
@@ -126,13 +128,24 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
-    let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
     let image = Image::Memory { cap, len: size };
-    let result = match (front.filter(|_| screen != 0), fed) {
-        (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
-        (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
-        (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+    let spawn = |memory_mib: u16| {
+        let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
+        match (front.filter(|_| screen != 0), fed) {
+            (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
+            (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
+            (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+        }
     };
+    let mut result = spawn(memory_mib);
+    // More than loader's quota (the frame pool) asked: the kernel refuses before it moves a grant, and the program gets
+    // all of loader's quota instead, which the frame pool limits further anyway (000-KRN-0134).
+    if memory_mib as usize > HEAP_MAX_BYTES >> 20 && matches!(result, Err(Error::Other(ERR_LIMIT))) {
+        if let Ok(started) = spawn(SPAWN_MEMORY_ALL as u16) {
+            mind::println!("[LOADER] {}: {} MiB ASKED, MORE THAN LOADER'S QUOTA: GIVEN ALL OF IT", core::str::from_utf8(task.as_bytes()).unwrap_or("?"), memory_mib);
+            result = Ok(started);
+        }
+    }
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
@@ -148,8 +161,15 @@ fn read_image(file: &File) -> Result<(Pages, usize), Error> {
 
 // Starts helper `name` (1.8, 109-KRN-0096) with the endpoint in RECEIVED_CAP moved into its SLOT_INIT and nothing else:
 // no standard clients, no screen, no log even in debug mode, no tasks or endpoints of its own. `--session` tells it so.
+// A helper is a boot service: on a disk with boot slots its file is the booted slot's, the copy the bootloader verified
+// against the manifest (109-KRN-0133).
 fn spawn_helper(name: &str) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
+    match BOOT_SLOT.load(core::sync::atomic::Ordering::Relaxed) {
+        BOOT_SLOT_A => { let _ = write!(path, "MIND/A/"); }
+        BOOT_SLOT_B => { let _ = write!(path, "MIND/B/"); }
+        _ => {}
+    }
     path_for(name.as_bytes(), &mut path)?;
     let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?;
     let (image, size) = read_image(&file)?;
@@ -164,20 +184,25 @@ fn spawn_helper(name: &str) -> Result<u64, Error> {
     result
 }
 
-// A launch in progress (idl/loader.wit): who started it, what to run, the capabilities lent for the program's slots.
-struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); SESSION_GRANTS], count: usize }
+// A launch in progress (idl/loader.wit): who started it, what to run, the capabilities lent for the program's slots,
+// and where its exit notice goes (`watch`, 1.11).
+struct Session { id: u32, owner: u64, name: [u8; 64], name_len: usize, args: [u8; ARGS_MAX], args_len: usize, grants: [(u8, usize); SESSION_GRANTS], count: usize, notices: Option<usize> }
 
 // Every launch slot and SLOT_FIRMWARE at once (000-KRN-0101): with the standard five and the debug log, 24 of SPAWN's 32.
 const SESSION_GRANTS: usize = LAUNCH_SLOTS.len() + 1;
 const _: () = assert!(5 + SESSION_GRANTS + 1 <= SPAWN_GRANTS_MAX);
 
 impl Session {
-    fn drop_grants(&mut self) { for &(_, handle) in &self.grants[..self.count] { let _ = ipc::drop_cap(handle); } self.count = 0; }
+    fn drop_grants(&mut self) {
+        for &(_, handle) in &self.grants[..self.count] { let _ = ipc::drop_cap(handle); }
+        self.count = 0;
+        if let Some(handle) = self.notices.take() { let _ = ipc::drop_cap(handle); }
+    }
 }
 
 const SESSIONS: usize = 4;
 
-struct Launcher { sessions: [Option<Session>; SESSIONS], next: u32, helpers: [Option<(u64, u64)>; HELPERS] }
+struct Launcher { sessions: [Option<Session>; SESSIONS], next: u32, helpers: [Option<(u64, u64)>; HELPERS], started: [Option<(u64, u64)>; STARTED], oldest: usize }
 
 impl Launcher {
     fn find(&mut self, id: u32, owner: u64) -> Option<usize> { self.sessions.iter().position(|s| s.as_ref().is_some_and(|s| s.id == id && s.owner == owner)) }
@@ -190,7 +215,7 @@ impl Launcher {
         }
         let index = self.sessions.iter().position(Option::is_none).ok_or(loader::Error::Sessions)?;
         self.next = self.next.wrapping_add(1).max(1);
-        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); SESSION_GRANTS], count: 0 };
+        let mut session = Session { id: self.next, owner, name: [0; 64], name_len: name.len(), args: [0; ARGS_MAX], args_len: args.len(), grants: [(0, 0); SESSION_GRANTS], count: 0, notices: None };
         session.name[..name.len()].copy_from_slice(name.as_bytes()); session.args[..args.len()].copy_from_slice(args.as_bytes());
         self.sessions[index] = Some(session);
         Ok(self.next)
@@ -229,6 +254,35 @@ impl Launcher {
     // The firmware variable privilege (1.6): only in SLOT_FIRMWARE; the IDL has checked its kind (351-KRN-0027).
     fn grant_firmware(&mut self, owner: u64, id: u32) -> Result<(), loader::Error> { self.keep(owner, id, SLOT_FIRMWARE as u8) }
 
+    // The endpoint the program's exit notice goes to (1.11): it must carry the right to receive, as TASK_WATCH asks.
+    fn watch(&mut self, owner: u64, id: u32) -> Result<(), loader::Error> {
+        let index = self.find(id, owner).ok_or(loader::Error::NotFound)?;
+        if mind::dev::cap_info(RECEIVED_CAP).2 & CAP_READ as usize == 0 { return Err(loader::Error::Rights); }
+        let handle = ipc::mint(RECEIVED_CAP, u8::MAX, 0, 0).map_err(|_| loader::Error::NoMemory)?;
+        if let Some(old) = self.sessions[index].as_mut().unwrap().notices.replace(handle) { let _ = ipc::drop_cap(old); }
+        Ok(())
+    }
+
+    // A program started for `owner`, which it may end (`stop`): a free or ended entry, else the oldest one.
+    fn record(&mut self, owner: u64, pid: u64) {
+        let index = self.started.iter().position(|e| e.is_none_or(|(_, pid)| !mind::process::alive(pid))).unwrap_or_else(|| { let at = self.oldest; self.oldest = (at + 1) % STARTED; at });
+        self.started[index] = Some((owner, pid));
+    }
+
+    // `run` (no session): the program gets only the standard grants.
+    fn run(&mut self, owner: u64, name: &str, args: &str) -> Result<u64, Error> {
+        let (pid, _) = load(name.as_bytes(), args.as_bytes(), &[], None, false)?;
+        self.record(owner, pid);
+        Ok(pid)
+    }
+
+    // Ends a program the loader started for `owner` (1.11): the kernel lets a task end its descendants.
+    fn stop(&mut self, owner: u64, pid: u64) -> Result<(), loader::Error> {
+        let index = self.started.iter().position(|&e| e == Some((owner, pid))).ok_or(loader::Error::NotFound)?;
+        self.started[index] = None;
+        mind::control::kill(pid).map_err(|error| if error == Error::NotFound { loader::Error::NotFound } else { loader::Error::Invalid })
+    }
+
     // `front`: in front for the owner (commit-in-front); refused while the owner is not in front, the session kept.
     // `fed`: with a text input (commit-with-input); the PID and the writer's handle.
     fn commit(&mut self, owner: u64, id: u32, front: bool, fed: bool) -> Result<(u64, usize), loader::Error> {
@@ -236,7 +290,14 @@ impl Launcher {
         let mut session = self.sessions[index].take().unwrap();
         let result = load(&session.name[..session.name_len], &session.args[..session.args_len], &session.grants[..session.count], front.then_some(owner), fed);
         if let Err(Error::Other(ERR_FOCUS)) = result { self.sessions[index] = Some(session); return Err(loader::Error::Rights); }
-        if result.is_err() { session.drop_grants(); }
+        match result {
+            Ok((pid, _)) => {
+                self.record(owner, pid);
+                // Set at once: the kernel keeps a notice for a child that ended before it is watched (800-KRN-0138).
+                if let Some(handle) = session.notices.take() { let _ = mind::process::watch(pid, Endpoint(handle)); let _ = ipc::drop_cap(handle); }
+            }
+            Err(_) => session.drop_grants(),
+        }
         result.map_err(|error| match error {
             Error::NotFound => loader::Error::NotFound, Error::NoMemory => loader::Error::NoMemory, Error::Rights => loader::Error::Rights,
             Error::Other(ERR_LIMIT) => loader::Error::Limit, Error::Other(ERR_BUSY) => loader::Error::Busy, Error::Other(ERR_IO) => loader::Error::Unreadable,
@@ -292,10 +353,14 @@ fn programs() -> List<loader::Program, 128> {
 }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+// The slot this boot runs from (BootInfo.boot_slot), for the helpers' files.
+static BOOT_SLOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(BOOT_SLOT_ROOT);
+
+fn main(info: &'static BootInfo) {
+    BOOT_SLOT.store(info.boot_slot.slot, core::sync::atomic::Ordering::Relaxed);
     let _ = fs::prepare();
     mind::println!("[LOADER] READY");
-    let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS] };
+    let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS], started: [None; STARTED], oldest: 0 };
     loop {
         let Ok(request) = Endpoint::SERVICE.recv(RECEIVED_CAP) else { continue };
         let owner = request.sender;
@@ -313,8 +378,10 @@ fn main(_info: &'static BootInfo) {
             Ok((loader::Request::CommitInFront { .. }, call)) if refuse => loader::reply_commit_in_front(call, Err(denied)),
             Ok((loader::Request::CommitWithInput { .. }, call)) if refuse => loader::reply_commit_with_input(call, Err(denied)),
             Ok((loader::Request::Abort { .. }, call)) if refuse => loader::reply_abort(call, Err(denied)),
+            Ok((loader::Request::Watch { .. }, call)) if refuse => { let _ = ipc::drop_cap(RECEIVED_CAP); loader::reply_watch(call, Err(denied)) }
+            Ok((loader::Request::Stop { .. }, call)) if refuse => loader::reply_stop(call, Err(denied)),
             Ok((loader::Request::List, call)) => loader::reply_list(call, programs().as_slice()),
-            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, load(name.as_str().as_bytes(), args.as_str().as_bytes(), &[], None, false).map(|(pid, _)| pid)),
+            Ok((loader::Request::Run { name, args }, call)) => loader::reply_run(call, launcher.run(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Begin { name, args }, call)) => loader::reply_begin(call, launcher.begin(owner, name.as_str(), args.as_str())),
             Ok((loader::Request::Grant { session, slot, .. }, call)) => loader::reply_grant(call, launcher.grant(owner, session, slot)),
             Ok((loader::Request::GrantMemory { session, slot, .. }, call)) => loader::reply_grant_memory(call, launcher.grant_memory(owner, session, slot)),
@@ -329,6 +396,8 @@ fn main(_info: &'static BootInfo) {
                 sent
             }
             Ok((loader::Request::Abort { session }, call)) => loader::reply_abort(call, launcher.abort(owner, session)),
+            Ok((loader::Request::Watch { session, .. }, call)) => loader::reply_watch(call, launcher.watch(owner, session)),
+            Ok((loader::Request::Stop { pid }, call)) => loader::reply_stop(call, launcher.stop(owner, pid)),
             Ok((loader::Request::Inspect { name }, call)) => loader::reply_inspect(call, inspect(name.as_str()).as_ref().map_err(|e| *e)),
             Ok((loader::Request::InspectRequests { name }, call)) => loader::reply_inspect_requests(call, requests(name.as_str())),
             Ok((loader::Request::Helper { which, .. }, call)) => {

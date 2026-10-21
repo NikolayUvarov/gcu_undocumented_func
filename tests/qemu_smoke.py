@@ -1597,7 +1597,7 @@ def kbench_check(vm):
 CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota holds", "capability rights", "capability revocation",
                "a program starts", "IPC: call and reply", "IPC: a lent page", "a program ends", "text input: none",
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
-               "a tool's console closes", "kernel memory unreadable",
+               "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
                "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
@@ -3173,6 +3173,28 @@ def store_suite(vm):
         require(snap, line)
     print("PASS: block store commits: two names change at once or not at all (a stale version, a missing root), a "
           "snapshot reads them at one point, a commit with a removal is found whole after a restart", flush=True)
+    # 300-STO-0018: the current names by prefix, 16 at a time. 18 names published 3 to a commit (a shell line holds 256
+    # bytes), the last first.
+    listed = [f"list/n{k:02}" for k in range(18)]
+    for start in range(15, -1, -3):
+        chunk = listed[start:start + 3]
+        require(blocks("commit " + " ".join(f"{name} 0 {left}" for name in chunk)), f"COMMITTED {chunk[-1]} VERSION 1")
+    def named(out):
+        return re.findall(r"^(\S+) VERSION (\d+) ROOT (\S+)\r?$", out, re.M)
+    out = blocks("names list/")
+    require(out, "18 NAMES IN 2 PAGES")
+    assert named(out) == [(name, "1", left) for name in listed], out
+    # Every name: the removed ones (obj, pair) are not listed.
+    out = blocks("names")
+    require(out, "19 NAMES IN 2 PAGES")
+    assert [n for n, _, _ in named(out)] == ["copy"] + listed and named(out)[0] == ("copy", "3", root), out
+    # Listing is reading: the client badged get alone may (blocksro).
+    out = vm.command("blocksro names list/n1", timeout=60)
+    require(out, "8 NAMES IN 1 PAGES")
+    assert [n for n, _, _ in named(out)] == listed[10:], out
+    require(blocks("names a:b"), "blocks: names: Invalid")
+    print("PASS: block store names: the current names by prefix in byte order, 16 a page, removed ones left out; a client "
+          "that may only read lists them", flush=True)
     # 306-STO-0009: checkpoints. Each run of tally is an instance: it restores the last checkpoint, applies one request
     # and saves the next, its manifest and state under two names in one commit.
     def tally(args):
@@ -4870,6 +4892,8 @@ def update_suite(args):
     try:
         log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
+        assert "PARSER: THE SHARED SERVICE" not in log, log
         (server / "channels/stable").write_bytes(forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
@@ -4904,7 +4928,11 @@ def update_suite(args):
             time.sleep(1)
         attempt = log.rpartition("[UPDATER] FETCH: VERSION 6 INTO SLOT")[2]
         fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
-        out = vm.expect("MIND> ", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        # init's confirmation is a kernel line that can land inside the shell's first prompt (M…IND>): the suite waits for
+        # the line, whole, then for a fresh prompt (000-KRN-0136).
+        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
         print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
         for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
@@ -5473,6 +5501,79 @@ def flow_bounds_check(vm, web_port):
           "a 10 s term ends the connection its grant holds, while a lasting grant holds its connection for 40 s", flush=True)
 
 
+class _SftpServer:
+    """OpenSSH's server on the host's loopback for download's sftp:// (351-NET-0027), as ssh/tests/openssh.rs starts it:
+    its own ed25519 host key (`pin`: the SHA-256 of its blob, in hex), a file to serve, and `authorized_keys` written
+    once the guest's device key is known. sshd reads that file at each login. Started for the test only, never as a
+    system service; `None` when there is no sshd (MIND_SSHD or /usr/sbin/sshd)."""
+
+    @classmethod
+    def start(cls):
+        sshd = os.environ.get("MIND_SSHD") or "/usr/sbin/sshd"
+        if not (os.path.isabs(sshd) and os.path.isfile(sshd) and shutil.which("ssh-keygen")):
+            return None
+        server = cls()
+        server.dir = Path(tempfile.mkdtemp(prefix="mind-sftp-"))
+        host = server.dir / "host_key"
+        subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(host)], check=True)
+        server.pin = hashlib.sha256(base64.b64decode((server.dir / "host_key.pub").read_text().split()[1])).hexdigest()
+        server.user = subprocess.run(["id", "-un"], capture_output=True, text=True, check=True).stdout.strip()
+        server.file = server.dir / "release.bin"
+        server.file.write_bytes(bytes((i * 7 + i // 251) & 0xFF for i in range(300_000)) + b"the end\n")
+        server.keys = server.dir / "authorized_keys"
+        server.keys.write_text("")
+        if os.geteuid() == 0:
+            os.makedirs("/run/sshd", exist_ok=True)  # as root, sshd wants its privilege separation directory
+        for _ in range(5):
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                server.port = probe.getsockname()[1]
+            (server.dir / "sshd_config").write_text(
+                f"Port {server.port}\nListenAddress 127.0.0.1\nHostKey {host}\nPidFile {server.dir / 'sshd.pid'}\n"
+                f"AuthorizedKeysFile {server.keys}\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPubkeyAuthentication yes\n"
+                "UsePAM no\nStrictModes no\nSubsystem sftp internal-sftp\nLogLevel ERROR\n")
+            server.process = subprocess.Popen([sshd, "-D", "-E", str(server.dir / "sshd.log"), "-f", str(server.dir / "sshd_config")])
+            for _ in range(50):  # the banner on its port: a port taken meanwhile ends sshd
+                if server.process.poll() is not None:
+                    break
+                try:
+                    with socket.create_connection(("127.0.0.1", server.port), timeout=1) as probe:
+                        if probe.recv(64).startswith(b"SSH-2.0-"):
+                            return server
+                except OSError:
+                    time.sleep(.1)
+            server.process.kill(); server.process.wait()
+        raise AssertionError("sshd did not start: " + (server.dir / "sshd.log").read_text())
+
+    def stop(self):
+        self.process.kill(); self.process.wait()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def sftp_runs(vm, sftp):
+    """351-NET-0027: download reads a file over SFTP through the SSH service, logged in with the device key, the server
+    known by its pinned host key; keystore logs each login it signs. A wrong pin, and a server that does not know the
+    device key, are refused."""
+    log = vm.service_logs("keystore", "PUBLIC KEY")
+    key = re.search(r"\[KEYSTORE\] PUBLIC KEY (ssh-ed25519 [A-Za-z0-9+/]{68})", log)
+    assert key, log
+    url = f"sftp://{sftp.user}@10.0.2.2:{sftp.port}{sftp.file}"
+    digest = hashlib.sha256(sftp.file.read_bytes()).hexdigest()
+    # A server that does not know the device key: the login refused.
+    out = vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --tries 1", timeout=60)
+    require(out, "DOWNLOAD: CONNECT: Refused"); require(out, "DOWNLOAD: GAVE UP AFTER 1 CONNECTIONS AT 0 BYTES")
+    sftp.keys.write_text(key[1] + " mind-device\n")
+    # Another host key than the pinned one: nothing is signed for it.
+    require(vm.command(f"download data/sftp.bin {url} --pin {'0' * 64}", timeout=60), "DOWNLOAD: SFTP: CONNECT: HostKey")
+    out = vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --sha256 {digest}", timeout=120)
+    require(out, f"DOWNLOAD: DONE {sftp.file.stat().st_size} BYTES"); require(out, f"DOWNLOAD: SHA256 {digest} MATCHES")
+    require(vm.command(f"download data/sftp.bin {url} --pin {sftp.pin} --sha256 {digest}", timeout=60), "DOWNLOAD: ALREADY COMPLETE")
+    require(vm.command(f"sha256 data/sftp.bin"), f"{digest}  data/sftp.bin")
+    require(vm.service_logs("keystore", "SIGNED SshLogin"), "[KEYSTORE] SIGNED SshLogin FOR PID")
+    print(f"PASS: download over SFTP: {sftp.file.stat().st_size} bytes through the SSH service, logged in with the device key (keystore "
+          "signed the login), the server known by its pinned host key; a wrong pin and a server without the device key refused", flush=True)
+
+
 def download_check(args, disk):
     """download (351-NET-0001): 30 MiB over HTTP into data/ through its own grant, the first response cut at 10 MiB and
     the rest asked for with Range; the SHA-256 checked in the system; a file already complete; a download given up on
@@ -5502,8 +5603,10 @@ def download_check(args, disk):
     expired, _ = _https_server(certificates, "expired")
     service_port, expired_port = service.server_address[1], expired.server_address[1]
     (disk / "data").mkdir(exist_ok=True)
+    sftp = _SftpServer.start()  # 351-NET-0027
+    sftp_port = [sftp.port] if sftp else []
     (disk / "netpolicy.txt").write_text(f"# download may reach the release servers for an hour, up to 64 MiB\n"
-                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1]))
+                                        + "".join(f"download 10.0.2.2 tcp {p} 3600 {64 << 20}\n" for p in (port, tls_port, rogue_port, held.server_address[1], stall.server_address[1], *sftp_port))
                                         + "".join(f"webcheck 10.0.2.2 tcp {p}\n" for p in (service_port, rogue_port, expired_port)))
     # Scripts that lend download everything it asks for but the parser service (109-NET-0009), or but the TLS client.
     (disk / "noparse.msh").write_text(f"#!msh\nrequires: console network file\ndownload data/n.bin http://10.0.2.2:{port}/small.bin\n")
@@ -5519,7 +5622,11 @@ def download_check(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), ahci=args.arch == "x86_64", rtc="utc",
             extra=[*cpu, "-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0"])
     try:
-        download_runs(vm, release, port, big, small, cut)
+        if sftp:
+            sftp_runs(vm, sftp)
+        else:
+            print("SKIP: download over SFTP needs OpenSSH's server on the host (MIND_SSHD or /usr/sbin/sshd) and ssh-keygen", flush=True)
+        download_runs(vm, release, port, big, small, cut, 5 + len(sftp_port))
         session_parsers_check(vm, held, small)
         parser_restart_check(vm, stall, small)
         https_download_runs(vm, secure, tls_port, rogue_port, {name: _spki_pin(certificates / f"{name}.pem") for name in ("server", "rogue")}, big, small, cut)
@@ -5529,6 +5636,8 @@ def download_check(args, disk):
         vm.close()
         held.go.set()
         stall.go.set()
+        if sftp:
+            sftp.stop()
         for server in (release, secure, rogue, held, stall, service, expired):
             server.shutdown()
         shutil.rmtree(files, ignore_errors=True)
@@ -5589,7 +5698,7 @@ def pinned_runs(vm, certificates, port, rogue_port, expired_port):
           "neither, a wrong name and an expired certificate refused", flush=True)
 
 
-def download_runs(vm, release, port, big, small, cut):
+def download_runs(vm, release, port, big, small, cut, rules):
     url = f"http://10.0.2.2:{port}"
     size = len(big)
 
@@ -5623,7 +5732,8 @@ def download_runs(vm, release, port, big, small, cut):
     require(run(f"download data/x.bin http://10.0.2.2:{port + 1}/x --tries 1", "DOWNLOAD: GAVE UP"), "DOWNLOAD: CONNECT: Denied")
     require(run("download data/x.bin https://10.0.2.2/x", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Denied")
     require(run(f"download kernel.elf {url}/small.bin", "DOWNLOAD: CANNOT OPEN"), "DOWNLOAD: CANNOT OPEN kernel.elf")
-    require(vm.command("dmesg -s netpolicy"), f"TO download: 5 RULES, 3600 S, {64 << 20} BYTES")  # the release servers over http, https and the untrusted one, the held one and the stalling one
+    # The release servers over http, https and the untrusted one, the held one, the stalling one, and the SFTP server when there is one.
+    require(vm.command("dmesg -s netpolicy"), f"TO download: {rules} RULES, 3600 S, {64 << 20} BYTES")
     print("PASS: download: a run given up on is resumed by the next; a missing file, a port outside the grant (over http and https) and a file outside data/ refused", flush=True)
     parser_check(vm, url)
     release_metadata_check(vm)
@@ -5661,7 +5771,7 @@ def https_download_runs(vm, secure, port, rogue_port, pins, big, small, cut):
     require(run(f"download ram:x.bin {rogue}/small.bin", "DOWNLOAD: TLS"), "DOWNLOAD: TLS: Certificate")
     # A pinned key is trusted whoever signed its certificate.
     require(run(f"download ram:rogue.bin {rogue}/small.bin --pin {pins['rogue']} --sha256 {small_digest}", "MATCHES", timeout=60), f"DOWNLOAD: SHA256 {small_digest} MATCHES")
-    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// URLS")
+    require(run(f"download ram:x.bin http://10.0.2.2:{port}/small.bin --pin {pins['server']}", "DOWNLOAD:"), "DOWNLOAD: --pin IS FOR https:// AND sftp:// URLS")
     log = vm.command("dmesg -s tls")
     require(log, "10.0.2.2 REFUSED: NOT THE PINNED KEY"); require(log, "10.0.2.2 REFUSED: CERTIFICATE UnknownIssuer")
     require(vm.command("msh notls.msh"), "DOWNLOAD: HTTPS NEEDS A TLS CLIENT, AND NONE WAS LENT")
@@ -5871,6 +5981,34 @@ def wifi_boot_check(vm):
 
 
 
+def ping_options_check(vm):
+    """ping's options (000-APP-0095): -c and -i, -f with no line for each reply, -w and a dot for each request lost,
+    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) goes out through QEMU's gateway to the host's network, which may answer
+    (some sandboxes answer every address) or not: the dots must be the requests lost either way."""
+    began = time.monotonic()
+    out = vm.command("ping -c 3 -i 0.5 10.0.2.2", timeout=20)
+    took = time.monotonic() - began
+    require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
+    assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
+    require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
+    assert "REPLY FROM" not in out, out[-1500:]
+    began = time.monotonic()
+    out = vm.command("ping -f -c 4 -w 0.2 192.0.2.1", timeout=30)
+    took = time.monotonic() - began
+    tally = re.search(r"(?:\n(\.+))?\nPING: 4 SENT, (\d) RECEIVED, (\d+)% LOST", out)
+    assert tally and len(tally[1] or "") == 4 - int(tally[2]) and int(tally[3]) == (4 - int(tally[2])) * 25, out[-1500:]
+    assert "REPLY FROM" not in out and took < 10, (took, out[-1500:])
+    require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
+    require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
+    vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.send_bytes(b"\x03")
+    out = vm.expect("MIND> ", timeout=10)
+    assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
+
+
 def wifi_join_check(vm):
     """550-APP-0033: the shell lends wifi the station's configuration client (SLOT_WIFI, ABI 10). Over wlansim it lists
     MIND-TEST; Enter asks for the passphrase, which goes nowhere but to the station, and wlan joins the access point
@@ -5928,6 +6066,15 @@ def wifi_join_check(vm):
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
     print("PASS: the joined station is the stack's card: 10.0.4.15 leased from wlansim's network, its gateway 10.0.4.1 "
           "answers a ping through the WPA2 link", flush=True)
+    # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
+    # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
+    vm.send("wm\n")
+    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
+    since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
+    vm.hmp("sendkey alt-q"); vm.serial(enter=False)
+    vm.logged("SHELL RESUMED.", since)
+    print("PASS: wm's network line over Wi-Fi alone: the station's frames from the shell (shell.wit 1.7)", flush=True)
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
@@ -6011,6 +6158,11 @@ def net_suite(args, disk):
                                         f"brief 10.0.2.2 tcp {web_port} 10\nlasting 10.0.2.2 tcp {web_port} {2**32 - 1} {2**64 - 1}\n")
     for copy in ("rogue", "named", "brief", "lasting", "wifiping"):
         shutil.copyfile(disk / "netcheck.elf", disk / f"{copy}.elf")
+    # 000-NET-0015: a copy of netcheck that also asks for a card's read-only client (REQUEST_NET_COUNTERS, in SLOT_NET).
+    elf = bytearray((disk / "netcheck.elf").read_bytes())
+    note = elf.index(b"MINDREQ1") + 8
+    elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 0x800000).to_bytes(4, "little")
+    (disk / "cardcheck.elf").write_bytes(elf)
     if args.wlansim_elf:
         # QEMU's stand-in radio as a boot image, which only the tests' images carry (550-KRN-0097).
         shutil.copyfile(args.wlansim_elf, disk / "wlansim.elf")
@@ -6041,13 +6193,23 @@ def net_suite(args, disk):
         else:
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
-        # wm asks for a card's counters (REQUEST_NET_COUNTERS): the shell lends a copy of its card client badged
-        # BADGE_COUNTERS, which only reads the card, and wm's `show = net` line gives its frames a second (000-APP-0049).
+        ping_options_check(vm)
+        # wm's `show = net` line gives the frames a second (000-APP-0049): every card's as the stack counts them, the
+        # Wi-Fi station's too, from the shell (shell.wit 1.7, 000-APP-0096); the card client badged BADGE_COUNTERS the
+        # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
         vm.send("wm\n")
-        require(vm.expect("(THE CARD'S COUNTERS, THE FIRST RATE)", timeout=90), "[WM] NET IN ")
+        rate = vm.expect(", THE FIRST RATE)", timeout=90)
+        # The station is a card of the stack only once joined: wifi_join_check counts it over Wi-Fi alone.
+        assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, [1-4] CARDS, 0 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
         since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
         vm.hmp("sendkey alt-q"); vm.serial(enter=False)
         vm.logged("SHELL RESUMED.", since)
+        # 000-NET-0015: through the same read-only client the card's info and counters are read, and a frame sent, a
+        # frame received and a ring lent are each refused.
+        out = vm.command("cardcheck card")
+        for line in ("NETCHECK card INFO MAC 525400123456 MTU 1500 LINK UP", "NETCHECK card COUNTERS SENT ", "NETCHECK card SEND Denied",
+                     "NETCHECK card RECEIVE Denied", "NETCHECK card ATTACH Denied", "NETCHECK card OK"):
+            require(out, line)
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
@@ -6510,7 +6672,7 @@ def tls_suite(args, disk):
     elf[note:note + 4] = (int.from_bytes(elf[note:note + 4], "little") | 64 | 131072 | 16777216).to_bytes(4, "little")
     for name in ("tlsclock", "tlsnone"):
         (disk / f"{name}.elf").write_bytes(elf)
-    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\n")
+    (disk / "netpolicy.txt").write_text(f"tlsclock 10.0.2.2 tcp {ports['good']} 600 100000\nwebcheck 10.0.2.2 tcp {ports['asking']} 600 100000\n")
     (disk / "data").mkdir(exist_ok=True)
     (disk / "data/notls.msh").write_text("#!msh\nrequires: network\nrun tlsclock &\n")
     (disk / "data/tls.msh").write_text("#!msh\nrequires: network tls\nrun tlsclock &\n")
@@ -6565,6 +6727,11 @@ def tls_suite(args, disk):
         page = vm.command(f"https -c 10.0.2.2:{ports['asking']} /device mind.test")
         require(page, "CLIENT CERTIFICATE SENT"); require(page, f"hello from the host: /device to {name}")
         require(vm.command("dmesg -s keystore"), "[KEYSTORE] SIGNED TlsClient FOR PID")
+        # 351-NET-0022: the TLS client the shell lends a program carries no right to the device certificate: asked for
+        # it, the TLS service refuses and logs it, while the shell's own `https -c` above still sent it.
+        out = vm.command(f"webcheck https://10.0.2.2:{ports['asking']}/program --name mind.test --client-cert", timeout=60)
+        assert "Denied" in out and "CERTIFICATE SENT" not in out, out
+        require(vm.command("dmesg -s tls"), "THE DEVICE CERTIFICATE REFUSED TO A CLIENT WITHOUT THE RIGHT TO IT")
         # Besides init (which keeps every service endpoint and minted client for restarts) and the key service itself,
         # the TLS service holds a capability to the key service with the signer's badge, and the SSH service one with
         # the SSH login's (351-KRN-0115); the Wi-Fi station's, where it runs, asks only for its networks' keys.

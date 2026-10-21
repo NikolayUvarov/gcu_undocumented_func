@@ -135,7 +135,8 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     echo "sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-utils ovmf qemu-efi-aarch64 ipxe-qemu dosfstools mtools swtpm swtpm-tools default-jre-headless" >&2
     exit 2
 fi
-rustup toolchain install >/dev/null || exit 2
+# No self-update check: it needs the network, and a failed check would stop the run before any group (000-KRN-0135).
+rustup toolchain install --no-self-update >/dev/null || exit 2
 
 # Branches: each in its own worktree, merged with main unless --no-merge, then this script with --tree.
 safe() { tr -c 'A-Za-z0-9._\n-' '_' <<<"$1"; }

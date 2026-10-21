@@ -2,7 +2,8 @@
 //! scrollback, and a console that follows its window's size (211-APP-0040); what the shell takes from a client of its
 //! commands (shell/src/clients.rs, 211-APP-0044); `>` and `>>` (shell/src/redirect.rs, 000-APP-0074); the lines on
 //! the way to the first frame (shell/src/start.rs, 000-APP-0075); a safe start told from the boot's log
-//! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031).
+//! (shell/src/safe.rs, 000-APP-0086); `netstat`'s rows (shell/src/netstat.rs, 000-APP-0031); `ping`'s options and
+//! tally (shell/src/ping.rs, 000-APP-0095).
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../shell/src/ring.rs"]
@@ -17,6 +18,8 @@ mod start;
 mod safe;
 #[path = "../shell/src/netstat.rs"]
 mod netstat;
+#[path = "../shell/src/ping.rs"]
+mod ping;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -215,4 +218,37 @@ fn netstat_rows_line_up_under_the_header() {
     let udp = netstat::Row { protocol: "UDP", local_port: 68, remote: Some((0, 0)), state: netstat::state(0), sent: 0, received: 0, program: "netstack", pid: 9 };
     assert_eq!(netstat::line(&udp), "UDP   68    -                     -            0          0          netstack (PID 9)");
     assert_eq!((netstat::state(11), netstat::state(12)), ("TIME-WAIT", "?"));
+}
+
+#[test]
+fn ping_takes_its_count_interval_wait_and_fast_mode() {
+    let plain = ping::parse("10.0.2.2").unwrap();
+    assert_eq!(plain, ping::Asked { host: "10.0.2.2", count: 3, interval_ms: 1000, wait_ms: 1000, fast: false });
+    let asked = ping::parse("-c 5 -i 0.2 -w 1.5 ya.ru").unwrap();
+    assert_eq!((asked.host, asked.count, asked.interval_ms, asked.wait_ms), ("ya.ru", 5, 200, 1500));
+    assert_eq!(ping::parse("10.0.2.2 -C 0 -I .05").map(|a| (a.count, a.interval_ms)), Ok((0, 50)));
+    // -f: the next request at once and 100 of them, unless -c or -i says otherwise.
+    assert_eq!(ping::parse("-f 10.0.2.2").map(|a| (a.count, a.interval_ms, a.fast)), Ok((100, 0, true)));
+    assert_eq!(ping::parse("-f -c 20 -i 0.01 10.0.2.2").map(|a| (a.count, a.interval_ms)), Ok((20, 10)));
+    for wrong in ["", "-c", "-c x 10.0.2.2", "-c 1000001 h", "-i 61 h", "-i 0.0001 h", "-i 1.2.3 h", "-i . h", "-w 0.05 h", "-w 31 h",
+                  "-x h", "a b"] {
+        assert!(ping::parse(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(ping::parse("-s 64 h").unwrap_err().contains("NETWORK STACK"));
+    assert!(ping::parse("-p ff h").unwrap_err().contains("NETWORK STACK"));
+}
+
+#[test]
+fn ping_ends_with_its_tally() {
+    let line = |tally: &ping::Tally, stopped| { let mut out = String::new(); tally.line(&mut out, stopped); out };
+    let mut tally = ping::Tally::default();
+    assert_eq!(line(&tally, false), "PING: 0 SENT, 0 RECEIVED, 0% LOST\n");
+    for us in [800, 120, 100] { tally.reply(us); }
+    // The suites read `PING: 3 SENT, 3 RECEIVED` at its start.
+    assert_eq!(line(&tally, false), "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST)\n");
+    tally.lost();
+    assert_eq!(line(&tally, true), "PING: 4 SENT, 3 RECEIVED, 25% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST), STOPPED\n");
+    let mut lost = ping::Tally::default();
+    for _ in 0..3 { lost.lost(); }
+    assert_eq!(line(&lost, false), "PING: 3 SENT, 0 RECEIVED, 100% LOST\n");
 }

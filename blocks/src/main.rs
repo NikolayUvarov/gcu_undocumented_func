@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 // blocks: the block store from the shell (300-STO-0003, docs/storage). Puts a file or a test pattern as an object
-// (mind::dag), reads one back with every block checked, publishes, resolves and removes names, changes several at
-// once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store, and imports a model disk's
+// (mind::dag), reads one back with every block checked, publishes, resolves, lists (300-STO-0018) and removes names,
+// changes several at once (304-STO-0007), pins objects, shows what the caller retains, collects, fills the store, and imports a model disk's
 // speech models (251-STO-0014, models.rs). A console program: it asks the shell for the store's client (REQUEST_BLOCKSTORE),
 // the user's files (REQUEST_FILES) and the parser service (REQUEST_PARSE, for a model disk's MANIFEST.json).
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_BLOCKSTORE, SLOT_FILE};
@@ -107,9 +107,32 @@ fn snapshot<'a>(words: impl Iterator<Item = &'a str>) {
     }
 }
 
+// names [prefix]: every current name with the prefix, asked for a page of 16 at a time after the last one.
+fn names(prefix: &str) {
+    let (mut after, mut count, mut pages) = (Text::<64>::default(), 0, 0);
+    loop {
+        match blockstore::names(STORE, prefix, after.as_str()) {
+            Ok(Ok(page)) => {
+                pages += 1;
+                for n in page.as_slice() {
+                    match Cid::from_bytes(n.root.as_slice()) {
+                        Ok(root) => mind::println!("{} VERSION {} ROOT {}", n.name, n.version, root),
+                        Err(_) => mind::println!("{} VERSION {}", n.name, n.version),
+                    }
+                }
+                count += page.as_slice().len();
+                match page.as_slice().last() { Some(last) if page.as_slice().len() == 16 => after = last.name, _ => break }
+            }
+            Ok(Err(e)) => return mind::println!("blocks: names: {:?}", e),
+            Err(e) => return store_silent(e),
+        }
+    }
+    mind::println!("{} NAMES IN {} PAGES", count, pages);
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>");
+    mind::about!("blocks — the block store: objects by content (CID), names, statistics.\nUsage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>");
     if mind::dev::cap_info(SLOT_FILE).0 == CAP_KIND_ENDPOINT { mind::fs::use_endpoint(Endpoint(SLOT_FILE)); }
     if mind::dev::cap_info(SLOT_BLOCKSTORE).0 != CAP_KIND_ENDPOINT { mind::println!("blocks: no client of the block store"); return; }
     let (builder, buffer, data) = unsafe { (&mut *core::ptr::addr_of_mut!(BUILDER), &mut *core::ptr::addr_of_mut!(BUFFER), &mut *core::ptr::addr_of_mut!(DATA)) };
@@ -119,6 +142,10 @@ fn main(_info: &'static BootInfo) {
     match rest.next() {
         Some("commit") => return commit(rest),
         Some("snapshot") => return snapshot(rest),
+        Some("names") => return match (rest.next(), rest.next()) {
+            (prefix, None) => names(prefix.unwrap_or("")),
+            _ => mind::println!("blocks: names [prefix]"),
+        },
         Some("models") => return models::command(rest, builder, buffer, data, &mut remote),
         _ => {}
     }
@@ -268,6 +295,6 @@ fn main(_info: &'static BootInfo) {
             }
             mind::println!("FILLED {} BLOCKS", count);
         }
-        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>"),
+        _ => mind::println!("Usage: blocks stat | put <file> | pattern <bytes> | get <cid> <file> | check <cid> [pattern] | publish <name> <cid> [expected version] | resolve <name> | history <name> | names [prefix] | unpublish <name> <version> | commit <name> <expected> <cid|->... | snapshot <name>... | pin <cid> | unpin <id> | pins | usage | collect | fill [blocks] | models import [id] | models get <id> <path> <file>"),
     }
 }

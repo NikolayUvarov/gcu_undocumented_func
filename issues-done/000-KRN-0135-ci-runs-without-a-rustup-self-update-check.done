@@ -1,0 +1,35 @@
+# 000-KRN-0135 — The local CI runs without rustup's self-update check — done
+
+**Type:** CI (`scripts/ci_local.sh`, `scripts/build_jobs.sh`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.9
+
+## Problem
+
+On 2026-10-20 three groups ended before any test ran, on two machines:
+- gate g0132 on i9: "x86: 16 CPUs";
+- gate g0134 on un-rizen: "aarch64: files, network and TLS" and "aarch64: 16 CPUs".
+
+The cause was the same in all three:
+- `scripts/ci_local.sh` runs `rustup toolchain install` before its groups, and rustup then checks for an update of itself;
+- the check could not reach `static.rust-lang.org` (`client error (Connect)`), so rustup failed and the run stopped with exit 2;
+- the pinned toolchain was installed already.
+
+So a passing network check is a condition of every group, though no group needs it.
+
+## Plan
+
+- **`--no-self-update`** in both calls: `ci_local.sh`'s check of the pinned toolchain, and `build_jobs.sh`'s `ensure_toolchain`.
+- Installing a missing toolchain or component still needs the network, as before.
+
+## Acceptance criteria
+
+- [x] A gate's groups run when rustup's servers cannot be reached and the pinned toolchain is installed.
+
+## Related
+
+[docs/effector.md](../docs/effector.md) (the gate machines), `rust-toolchain.toml`.
+
+## Resolution
+
+- **Where.** `scripts/ci_local.sh` and `scripts/build_jobs.sh` pass `--no-self-update`.
+- **Shown** on the kernel session's machine, with the network made unreachable (the proxy pointed at a closed port): `rustup toolchain install --no-self-update` exits 0 with the pinned toolchain installed; without the flag it exits 1, as on the gate machines.
+- **Gate.** Gate g0138 on 8def173 (`main` f8d50ac merged): every group passed — host tests, models (TLC), the x86 builds and 24 x86 groups (un-rizen and i9), the aarch64 builds and 9 aarch64 groups (un-rizen and PCU). The x86 groups that had timed out on an overloaded un-rizen (load average 40 on 16 threads) in gates g0132–g0137 ran on i9. `main` = 8def173. No group stopped at rustup's check.
