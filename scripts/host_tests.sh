@@ -28,6 +28,7 @@ cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"
 python3 tests/idl_test.py
+python3 tests/land_test.py # the landing queue's requests, plan and candidate (AGENTS.md, section 4)
 python3 tests/font_test.py
 python3 tests/manifest_test.py
 python3 tests/release_test.py
