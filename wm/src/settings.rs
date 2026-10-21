@@ -507,7 +507,7 @@ impl Settings {
                    (ROWS[7], check(config.time)), (ROWS[8], format!("{} of the time", check(config.seconds))),
                    (ROWS[9], format!("< {}% >  the time's digits", config.time_size)), (ROWS[10], check(config.date)), (ROWS[11], check(config.cpu)),
                    (ROWS[12], check(config.memory)), (ROWS[13], format!("{}  its charge, and the time left or to full", check(config.battery))),
-                   (ROWS[14], format!("{} (no counters yet)", check(config.net).as_str())),
+                   (ROWS[14], format!("{}  every card's frames a second, in and out", check(config.net))),
                    (ROWS[15], format!("< {}% >  the lines under the time", config.text_size)), (ROWS[16], format!("< {} >", place)),
                    (ROWS[17], String::from(if config.face == Face::Analog { "< analog >  a dial, and gauges of CPU, memory, battery" } else { "< digital >  digits, and a graph of the CPU" }))])
     }

@@ -1283,6 +1283,7 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Combined("data/background.bmp".into())), other => panic!("{:?}", other) }
     assert!(draw_wm(&mut wm).iter().any(|row| row.contains("combined (the image, lit by the pattern)")));
     assert!(draw_wm(&mut wm).iter().any(|row| row.contains("< 20% >  the image's brightness, up and down")));
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("[ ]  every card's frames a second, in and out")), "the net row (000-APP-0096)");
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::None), other => panic!("{:?}", other) }
     match wm.key(chr(' ')) { Action::Settings(c) => assert_eq!(c.picture, Picture::Abstract), other => panic!("{:?}", other) }
     // The pattern's kind cycles; the speed, contrast, complexity and brightness step and stop at their ends.
