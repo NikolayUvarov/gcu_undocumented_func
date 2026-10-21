@@ -48,7 +48,7 @@ Options come before the command; what follows the command is its own, a program'
 | `get <name> [<file>]` | fetches a file into `<file>.part`, renamed once its SHA-256 matches |
 | `ls [<dir>]` | a directory's files with their sizes, and its directories, ending in `/`; the top without `<dir>` |
 | `stat <name>` | a file's size and SHA-256 |
-| `rm <name>` | deletes a file |
+| `rm <name>`, `delete <name>` | deletes a file |
 | `mkdir <dir>` | makes a directory and its missing parents |
 | `mv <from> <to> [--force]` | moves or renames a file or a whole directory; `--force` replaces a file at `<to>` |
 | `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
@@ -88,6 +88,14 @@ mindlink.exe --baud 921600 COM10 put build.img
 - **Device Manager** shows each converter's COM number.
 - **An FTDI port's latency timer** is the port's Advanced property, 16 ms by default; 1 ms speeds up every answer.
 - **A port in WSL is not in Windows.** A converter attached to WSL through usbipd is gone from Windows until it is detached.
+- **From WSL, through a Windows port:** `tools/mindlink/mindlink-exe.sh` runs `mindlink.exe` (`MINDLINK_EXE`, or the one on the PATH). It passes each argument that names a file here as its Windows path. `mindlink.exe` reads WSL's files as `\\wsl.localhost\…`.
+  - Scripts that call `mindlink` use it so.
+  - An update through the link (351-KRN-0141) on the MacBook Pro, 2026-10-21:
+
+    ```bash
+    MINDLINK_EXE=/mnt/c/…/mindlink.exe scripts/link_update.py COM22 --mindlink tools/mindlink/mindlink-exe.sh \
+        --mindlink-option=--baud --mindlink-option=460800
+    ```
 
 ## The converters on WSL
 

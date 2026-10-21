@@ -72,6 +72,12 @@ The maintainer asked for the join to be tested without typing (2026-10-14).
 
   This meets the MacBook Pro criterion for a network `keystore` remembers. A join from `data/wifijoin.txt`'s passphrase (`--wifijoin`) has run in QEMU only.
 
+- **2026-10-21: the join is tried up to five times, 3 s apart.**
+  - After the first update through the link (351-KRN-0141), the boot's one scan did not hear CoolNet2, and `wifijoin.msh` gave up: `WIFI JOIN: FALSE`.
+  - A `wifi join CoolNet2` over the link a minute later joined at once.
+  - Now the script tries again, and says how many tries it took.
+  - `tests/wifijoin_host.rs` runs the script in the shell's own interpreter, against a host that answers as the Mac does: a join on the third try, a give-up after five, a join at once. It is in `scripts/host_tests.sh`.
+
 ## Related
 
 [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), the requests to `APP` and `NET` on `internal-dev-messages` (2026-10-14), `tests/wlansim/`.

@@ -40,7 +40,7 @@ Evidence for this machine only (MC-12.1). The line counts what the driver sees; 
 - **What it shows:**
   - The radio does not receive OFDM from this access point. The answers it sends at OFDM rates are lost, and only those it retries at CCK rates arrive. That fits a ping answering 2 of 3.
   - Sending works.
-  - Next: [550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.md) offers the station 802.11b only, so the access point keeps to CCK. [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) goes on looking for why OFDM fails.
+  - Next: [550-DRV-0037](../issues-done/550-DRV-0037-802-11b-until-ofdm-is-received.done) offers the station 802.11b only, so the access point keeps to CCK. [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) goes on looking for why OFDM fails.
 - **The line was cut:** a log record keeps 200 bytes, so the counts after `HT … BAD` were lost. They are now two lines, `SENT` and `RECEIVED`.
 
 ## Related

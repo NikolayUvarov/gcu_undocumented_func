@@ -1,6 +1,6 @@
 # 351-KRN-0141 — An update through the link: a release put into `data/link/` installed by the updater
 
-**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** — for the suite; the request in [requests-UPD.md](requests-UPD.md) ("An update through the link") and [351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md) for the rest · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
+**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** criteria 1 and 3 met (2026-10-21); the update track's word on the directory source left · **Blocked by:** — for the suite; the request in [requests-UPD.md](requests-UPD.md) ("An update through the link") and [351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md) for the rest · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -42,9 +42,9 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 
 ## Acceptance criteria
 
-- [ ] The `linkupdate` suite passes on x86 and aarch64, in the gate: release 6 put through the link boots on trial and is confirmed; a channel with a bad signature is refused first.
+- [x] The `linkupdate` suite passes on x86 and aarch64, in the gate: release 6 put through the link boots on trial and is confirmed; a channel with a bad signature is refused first.
 - [ ] The directory source's checks are the HTTPS source's, said by the update track (or fixed).
-- [ ] On the maintainer's MacBook Pro, a release put over RS-485 is installed and confirmed (the maintainer's run, recorded here with its configuration).
+- [x] On the maintainer's MacBook Pro, a release put over RS-485 is installed and confirmed (the maintainer's run, recorded here with its configuration).
 
 ## Progress (2026-10-21)
 
@@ -64,8 +64,42 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
   | x86 | 43 | 9 643 243 | 185 s and 186 s (about 52 KB/s) |
   | aarch64 | 37 | 8 590 656 | 294 s and 289 s |
 
-- **Left for criterion 1:** the gate. The suite is on `claude/youthful-mendel-mf1soy` 7361af5 and goes to `main` through the landing queue.
+- **Criterion 1 on x86:** the suite passed in landing round 3's gate (`land-e4fd3b37`, "x86: files and block writes", every group green), `main` e4fd3b3.
+- **On aarch64:** it joins "aarch64: files, network and TLS" in round 4, on top of EFF's `effector` suite in the same line. Locally it passed twice more with the script's code, x86 in 174 s and aarch64 in 274 s through the link.
 - **For criterion 2:** the suite shows that the directory source refuses a bad signature and that its release passes the manifest's digests, through the same `stage()` as HTTPS. Whether it checks all that HTTPS checks (an expired or older channel, a changed blob, a resumed file) is still the update track's to say.
+
+**For criterion 3: `scripts/link_update.py`** (2026-10-21). The maintainer said the MacBook Pro now restarts into MIND Core by itself.
+- **What it does, in one command on the machine at the other end of the cable:**
+  - it makes the current build a signed release, as `scripts/release.py` does. The version defaults to the time (`YYYYMMDDHHMM`), so it is above any earlier one;
+  - it puts only what the updater reads into `data/link/rel/`, the channel last. `mindlink put` skips a blob the Mac holds already, so a second update sends only what changed;
+  - it follows `mindlink log` through the trial restart. It ends at `[UPDATER] SLOT … CONFIRMED ON THE DISK` (exit 0), or at a refusal, a rollback or the time limit (exit 1).
+- **The `linkupdate` suite now runs the script's own code:** what is put, the puts, and the follower that ends at the refusal and at the confirmation. `tests/link_update_test.py` checks the follower on scripted logs.
+- **The maintainer's run, once:**
+  1. Build: `./02_build.sh`.
+  2. Write the stick with slots and this `update.txt` (`make_usb_image.py --slots --update update.txt`, plus `link.conf` as `build-and-write.sh` writes it now):
+
+     ```text
+     source data/link/rel
+     channel stable
+     automatic apply
+     every 20
+     ```
+
+  3. Boot the Mac from it. `mindlink log` should show `[UPDATER] SLOT A, VERSION 0 …` and checks refused as `Missing` every 20 s.
+- **Every update after that:**
+  - build;
+  - `python3 scripts/link_update.py COM<n> --mindlink path\to\mindlink.exe --mindlink-option=--baud --mindlink-option=460800`, with the options the cable needs.
+- **Not done yet:** the Mac's run itself, recorded here with its configuration when it is made. The release LNK's `effector485 stage` makes (351-LNK-0013) can use the same layout.
+
+**Criteria 1 and 3 met (2026-10-21):**
+- **The gate.** Landing round 5 (`land-4f67455f`, every group green, `main` 3bdd026) ran `linkupdate` in "x86: files and block writes" and in "aarch64: files, network and TLS", with the script's code.
+- **The MacBook Pro**, recorded by the link track in its landing request (`LANDING/2026-10-21T1859Z-LNK-…`):
+  - the stick was written by `scripts/build_and_write.sh --slots`, with `update.txt` naming `data/link/rel` and `link.conf`;
+  - the Mac started slot A, made its default with `bless` from macOS Recovery (`docs/write-disk.md`, section 6);
+  - `scripts/link_update.py` ran from WSL against COM22, over RS-485, on `fast-test` with this branch;
+  - it put 43 files in 274 s;
+  - the Mac restarted into slot B on trial by itself, `[UPDATER] SLOT B CONFIRMED ON THE DISK`, and the script ended with 0.
+- **Left:** criterion 2, the update track's statement on the directory source's checks (`requests-UPD.md`).
 
 ## Related
 

@@ -38,6 +38,7 @@ import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 import release as release_tool  # noqa: E402
+import link_update  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
 from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
@@ -1618,7 +1619,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -4068,6 +4069,48 @@ def link_suite(args):
           "the developer mode started a built-in program by name", flush=True)
 
 
+def modes_suite(args):
+    """750-KRN-0143: the machine's modes. A raw image whose data/mode.conf names the development mode and a word init does
+    not know: init reads it once the boot volume is there, says so and leaves the word out; with no Effector service in
+    this build it says that too. The shell holds init's mode client in SLOT_MODE (36), badged BADGE_MODE (3), and no
+    other. `check services` reads the modes through its lifecycle client and is refused a change. A second boot with no
+    data/mode.conf is in the normal mode."""
+    if not raw_tools():
+        print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
+        return
+    for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
+        with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
+            image, _, _ = raw_fat_image(Path(temp), extra={"data/mode.conf": words} if words else None)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            try:
+                log = vm.command("dmesg -s init", raw=True)
+                require(log, f"[INIT] MODE: {expected}")
+                if words:
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
+                    require(log, "[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES")
+                    pids = vm.services()
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    shell = vm.command(f"stat caps {pids['shell']}", raw=True)
+                    held = re.search(r"^SLOT=36 GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M)
+                    assert held and held[1] == "3" and servers.get(int(held[2])) == 1, shell
+                    badged = [s for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", shell, re.M) if b == "3" and servers.get(int(ep)) == 1]
+                    assert badged == ["36"], (badged, shell)
+                vm.send("check services\n")
+                out = vm.expect("MIND> ", timeout=300, after="check services\n")
+                rows = {name: (mark, text) for mark, name, text in CHECK_ROW.findall(out)}
+                state = "development, as set by disk" if words else "normal, as set by disk"
+                assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
+                assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
+                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE CHANGE REFUSED: PID ")
+                assert "PANIC" not in vm.log, vm.log[-2000:]
+            finally:
+                vm.close()
+                (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
+          "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
+          "the modes and is refused a change, which init logs", flush=True)
+
+
 def fsck_volume(image, start, fs_sectors):
     volume = image.parent / "volume.img"
     with image.open("rb") as f:
@@ -5074,33 +5117,17 @@ def linkupdate_suite(args):
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
                                        "automatic apply\nevery 20\ntries 3\n")
     image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
-    # What the updater reads from its source, and nothing more: the boot files' blobs, the manifest and its signature.
-    release = f"releases/6/{arch}"
-    files = [f"blobs/{digest}" for _, digest in boot_files] + [f"{release}/MANIFEST", f"{release}/MANIFEST.SIG"]
+    # What the updater reads from its source, and nothing more, as scripts/link_update.py puts it on a real machine.
+    files = link_update.release_files(manifest6, arch, 6)
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
             extra=[*cpu, "-nic", "none", "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link",
                    "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
 
-    def link(*command, ok=True, timeout=300):
-        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
-                           capture_output=True, text=True, timeout=timeout)
-        out = r.stdout + r.stderr
-        assert (r.returncode == 0) == ok, (command, r.returncode, out)
-        return out
-
-    def logged(line, timeout):
-        # The log as the agent at the other end reads it.
-        deadline, log = time.monotonic() + timeout, ""
-        while time.monotonic() < deadline:
-            log = link("log")
-            if line in log:
-                return log
-            time.sleep(5)
-        raise AssertionError((line, log[-3000:]))
     try:
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
-        require(link("hello"), '"MIND Core link"')
+        link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
+        require(link.run("hello").stdout, '"MIND Core link"')
         # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
@@ -5109,18 +5136,24 @@ def linkupdate_suite(args):
         assert {2, 3, 12} <= granted <= {2, 3, 5, 12}, caps
         started = time.monotonic()
         for path in files:
-            link("mkdir", f"rel/{path.rpartition('/')[0]}")
-            link("put", str(server / path), f"rel/{path}")
+            link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
-        link("mkdir", "rel/channels")
         bad = temp / "forged"
         bad.write_bytes(forged)
-        link("put", str(bad), "rel/channels/stable")
-        log = logged("[UPDATER] CHECK: REFUSED: Signature", 120)
+        before = link.log()
+        link.put(bad, "channels/stable")
+        # The script's follower stops at the refusal, as it would on a real machine.
+        try:
+            link_update.follow(link, 120, say=lambda line: None, before=before)
+            raise AssertionError("the channel with a changed signature was not refused")
+        except RuntimeError as refused:
+            require(str(refused), "[UPDATER] CHECK: REFUSED: Signature")
+        log = link.log()
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         assert "[UPDATER] RECORD" not in log and "[UPDATER] FETCH: VERSION 6" not in log, log
-        link("put", str(server / "channels/stable"), "rel/channels/stable")
+        before = link.log()
+        link.put(server / "channels/stable", "channels/stable")
         vm.collect(); vm.output = ""
         out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
         vm.send("\n")
@@ -5128,9 +5161,9 @@ def linkupdate_suite(args):
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
-        # After the restart link serves again on the same line: the new boot's log, read from the other end.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 120)
-        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # After the restart link serves again on the same line: the script's follower reads the new boot's log.
+        require(link_update.follow(link, 120, say=lambda line: None, before=before), "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
+        require(link.log(), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
@@ -9514,6 +9547,9 @@ def main():
             continue
         if suite == "linkupdate":
             linkupdate_suite(args)
+            continue
+        if suite == "modes":
+            modes_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)
