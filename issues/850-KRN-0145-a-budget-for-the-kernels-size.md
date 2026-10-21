@@ -1,6 +1,6 @@
 # 850-KRN-0145 — A budget for the kernel's size, checked in CI
 
-**Type:** CI, scripts · **Owner:** kernel session · **Priority:** P3 · **Status:** open (2026-10-21) · **Blocked by:** — · **Main task:** [850](850-the-cultural-code.md) (the kernel track's part) · **Constitution:** MC-1.1–1.3 (a minimal trusted kernel), MC-12.3
+**Type:** CI, scripts · **Owner:** kernel session · **Priority:** P3 · **Status:** made (2026-10-21); the landing left · **Blocked by:** — · **Main task:** [850](850-the-cultural-code.md) (the kernel track's part) · **Constitution:** MC-1.1–1.3 (a minimal trusted kernel), MC-12.3
 
 ## Problem
 
@@ -16,8 +16,21 @@
 
 ## Acceptance criteria
 
-- [ ] The check runs in `scripts/host_tests.sh` and fails above the budget.
-- [ ] The budget file states the measured size and the commit.
+- [x] The check runs in `scripts/host_tests.sh` and fails above the budget.
+- [x] The budget file states the measured size and the commit.
+
+## Progress (2026-10-21)
+
+- **The check:** `scripts/kernel_budget.py`.
+  - It counts the lines of Rust in `kernel/src` that are neither blank nor comments, in the common part and in each architecture's directory.
+  - It prints them with the budget, and exits with 1 above it.
+  - `scripts/host_tests.sh` runs it after its test, `tests/kernel_budget_test.py`. The test checks what counts as a line, the areas, a tree above and at its budget, and the kernel itself.
+- **The budget:** `kernel/size-budget.json`.
+  - Measured at `main` 3de6a4b: 6,379 lines (7,571 with blank lines and comments): common 3,556, x86_64 1,813, aarch64 1,010.
+  - The budget is 7,000, about 10% of room. Its `raised` list records each raise with the reason.
+- **Not counted:** `common/abi.rs` and `bootloader/src/elf_reloc.rs`, though both are compiled into the kernel ([docs/profile/tcb.md](../docs/profile/tcb.md) says so beside the number).
+- **For `LORE`** (850-PHI-0002): the measured number is 6,379 lines of code, or 7,571 lines with blank lines and comments. A maxim names which one it means.
+- **Left:** the landing. The issue closes when it is in `main`.
 
 ## Related
 
