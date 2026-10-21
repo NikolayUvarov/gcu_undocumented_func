@@ -4193,12 +4193,17 @@ def vfs_suite(args):
             recorder = re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command("run record -t 3 data/rec.avi &"))[1]
             vm.send("clock\n")
             vm.expect("[CLOCK] ")
-            time.sleep(1)
-            _, size_, _, during = vm.screenshot().split(b"\n", 3)
+            # The dot shows once record captures, which a loaded machine starts later than 1 s on (gate 25: i7-930, PCU).
+            deadline = time.monotonic() + 15
+            while True:
+                _, size_, _, during = vm.screenshot().split(b"\n", 3)
+                dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
+                if during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)) or time.monotonic() > deadline:
+                    break
+                time.sleep(.3)
             vm.serial(enter=False)
-            dot_at = ((18 * int(size_.split()[0])) + int(size_.split()[0]) - 24) * 3
             assert during[dot_at:dot_at + 3] == bytes((0xE0, 0x20, 0x20)), "the capture dot while recording"
-            time.sleep(3)  # clock stays in front for the rest of the recording
+            time.sleep(3.5)  # clock stays in front for the rest of the recording, which began before the dot showed
             vm.send("\x1b")
             vm.expect("SHELL RESUMED.")
             time.sleep(.2); vm.collect(); vm.output = ""
@@ -5998,6 +6003,8 @@ def ping_options_check(vm):
     took = time.monotonic() - began
     require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
     assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    # Each line names its request's place in the run (the maintainer's request, 2026-10-21).
+    assert [int(n) for n in re.findall(r"^\[(\d)/3\] REPLY FROM", out, re.M)] == [1, 2, 3], out[-1500:]
     out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
     require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
     assert "REPLY FROM" not in out, out[-1500:]
@@ -6010,8 +6017,8 @@ def ping_options_check(vm):
     require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
     require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
     vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[1] REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[2] REPLY FROM 10.0.2.2: TIME=", timeout=10)
     vm.send_bytes(b"\x03")
     out = vm.expect("MIND> ", timeout=10)
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]
@@ -6077,7 +6084,7 @@ def wifi_join_check(vm):
     # wm's network line over Wi-Fi alone (000-APP-0096): no wired card, so no card client for the shell to lend; the
     # shell gives the station's frames as the stack counts them (data/wm.conf says `show = net`, from net_suite).
     vm.send("wm\n")
-    rate = vm.expect(", THE FIRST RATE)", timeout=90)
+    rate = vm.expect(", THE FIRST RATE)", timeout=180)  # a loaded machine (gate 25: PCU at a load of 11) is slow to start wm
     assert re.search(r"\[WM\] NET IN \S+ OUT \S+ \(EVERY CARD'S FRAMES, 1 CARDS, 1 WI-FI, THE FIRST RATE\)", rate), rate[-1500:]
     since = len(vm.log)  # serial() drops what came meanwhile: wm may have gone by then
     vm.hmp("sendkey alt-q"); vm.serial(enter=False)
@@ -6123,8 +6130,9 @@ def wifi_join_check(vm):
             time.sleep(.2)
         else:
             raise AssertionError(f"{name} PID={pid} was not restarted")
-    scanned(); quit_wifi()
-    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-APP-0098: wlan restarted has heard nothing, as at a boot's start: the join scans once by itself, then joins.
+    out = run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(out + vm.command("dmesg -s wifi", raw=True), "[WIFI] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, ")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
@@ -6139,7 +6147,8 @@ def wifi_join_check(vm):
     quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
     require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
     run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
-    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, scanning once by itself first, the "
+          "gateway answering through the link; "
           "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
@@ -7091,7 +7100,7 @@ def wm_suite(vm):
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
     # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
-    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell(?: \d+)?"')
     shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
@@ -7181,7 +7190,7 @@ def wm_suite(vm):
         shows(again, "THE SHELL'S WINDOW:")
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
-        # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
+        # (idl/shell.wit 1.8 new-window), for another window each time (000-APP-0097), and wm brings it to the front.
         before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
@@ -7193,16 +7202,29 @@ def wm_suite(vm):
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
         shows(menu_shell, "THE SHELL'S WINDOW:")
+        # Asked again while it is open: a second shell, titled shell 2, a session of its own (the maintainer's report,
+        # 2026-10-21: the menu brought back the first).
+        typed("cd diag")
+        shows(menu_shell, "MIND diag> ")
         front(next(w for w in state()[2] if w != menu_shell))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down")
-        keys("ret", text=f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
-        while state()[1] != menu_shell:
+        keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
+        while not shells("".join(seen)) - before:
+            wait('"shell 2"', lines=0)
+        second = int((shells("".join(seen)) - before).pop())
+        assert second != menu_shell
+        until(f"[WM] SHELL WINDOW: The shell's window ({second})")
+        while second not in state()[2] or state()[1] != second:
             wait()
+        rows = shows(second, "THE SHELL'S WINDOW 2:")
+        assert not any(canon("MIND diag> ") in row for row in rows), rows  # the first one's directory is its own
+        close_shell(second)
         close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
-              "and opened again with Ctrl+Alt+F5 and from the menu's first item, which brings it to the front when open", flush=True)
+              "and opened again with Ctrl+Alt+F5 and from the menu's first item; asked again, a second shell of its own", flush=True)
 
     def full_screen_and_list(fm, clock, top):
         # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;
