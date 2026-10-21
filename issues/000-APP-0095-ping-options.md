@@ -52,6 +52,7 @@ Its last line gives no loss or times, and nothing stops a run.
   - un-rizen-service (aarch64): build, boot and fault containment, programs, shell and four CPUs, NVMe and 16 CPUs on a3ebd34c; files, network and TLS, RAM, ACPI and PCI above 4 GiB, and GICv2 on 2a33a71b;
   - locally: the network driver without legacy, TLC, services, scheduling and files on a3ebd34c; the build, the host tests, boot and keys on 2a33a71b.
   The commits after a3ebd34c changed the suites, the IDL fuzzer's list and `dictate`'s and `speak`'s memory request; the groups that run them ran on 2a33a71b.
+- **Each request's place in the run** (the maintainer's request, 2026-10-21): every reply's or loss's line starts `[2/3] `, or `[5] ` for `-c 0` (`ping::place`); a host test, and the `net` suite reads `[1/3]` to `[3/3]` and `[1]`, `[2]` before Ctrl+C. `-f` keeps its dots.
 - **Left:** `-s` and `-p` once the stack sends them (requests-NET.md).
 
 ## Related

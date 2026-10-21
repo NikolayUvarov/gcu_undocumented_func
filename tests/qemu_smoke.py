@@ -5939,6 +5939,8 @@ def ping_options_check(vm):
     took = time.monotonic() - began
     require(out, "PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME ")
     assert out.count("REPLY FROM 10.0.2.2: TIME=") == 3 and took >= 1.0, (took, out[-1500:])
+    # Each line names its request's place in the run (the maintainer's request, 2026-10-21).
+    assert [int(n) for n in re.findall(r"^\[(\d)/3\] REPLY FROM", out, re.M)] == [1, 2, 3], out[-1500:]
     out = vm.command("ping -f -c 50 10.0.2.2", timeout=60)
     require(out, "PING: 50 SENT, 50 RECEIVED, 0% LOST")
     assert "REPLY FROM" not in out, out[-1500:]
@@ -5951,8 +5953,8 @@ def ping_options_check(vm):
     require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
     require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
     vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
-    vm.expect("REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[1] REPLY FROM 10.0.2.2: TIME=", timeout=10)
+    vm.expect("[2] REPLY FROM 10.0.2.2: TIME=", timeout=10)
     vm.send_bytes(b"\x03")
     out = vm.expect("MIND> ", timeout=10)
     assert re.search(r"\^C\nPING: \d+ SENT, \d+ RECEIVED, \d+% LOST.*, STOPPED\n", out), out[-1500:]

@@ -278,6 +278,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 **The network's commands**, on the stack's operator client the shell holds:
 
 - `ping [-c count] [-i seconds] [-w seconds] [-f] host` (000-APP-0095): echo requests, 3 by default, a second apart from one start to the next, each waiting 1 s for its reply.
+  - Each request's line starts with its place in the run: `[2/3] REPLY FROM 10.0.2.2: TIME=812 US`; `[5]` with `-c 0`.
   - `-c 0` sends them until Esc or Ctrl+C, which stop any run.
   - `-i` and `-w` take decimals (`-i 0.2`).
   - `-f` sends the next at once, prints a dot for each one lost and no line for each reply, 100 by default.
