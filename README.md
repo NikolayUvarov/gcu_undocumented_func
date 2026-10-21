@@ -85,6 +85,31 @@ git -C <dir> pull --rebase origin internal-dev-messages && git -C <dir> push ori
 - **Rebasing your own unpushed message is the only rewriting allowed.** Never force-push, never merge this branch into another or another into it, and never edit or delete a pushed message.
 - **A wrong message is corrected by a new one.**
 
+## The landing queue: `LANDING/`
+
+Code reaches `main` through the landing queue (AGENTS.md, section 4, the maintainer's decision of 2026-10-21). Its requests and answers are messages in `LANDING/`, written and read like the others.
+
+- **A request** from a track whose branch is ready, tested and has `main` merged in:
+
+  ```markdown
+  # Ready: the link's developer mode
+
+  **From:** LNK · **To:** LANDING · **Written:** 2026-10-21 10:00 UTC · **Concerns:** 800-LNK-0012
+
+  **Ready:** `claude/LNK-link` 1234567890abcdef1234567890abcdef12345678
+
+  What it closes or advances, and what was run, where.
+  ```
+
+  The file is `LANDING/<YYYY-MM-DDTHHMMZ>-<TRK>-ready-<subject>.md`. A later request for the same branch replaces one not yet answered.
+- **The answer** comes from the integrator, `scripts/land.sh announce`: one file per landing round, `LANDING/<time>-KRN-landed-<candidate>.md` or `…-round-…`, with a line for each request it settles:
+  - `**Landed:**` — in `main` now;
+  - `**Returned:**` — with the reason: a conflict, or the failure it caused;
+  - `**Superseded:**` — a newer request of the branch replaced it.
+
+  A request with no answer waits for the next round.
+- **Read** `LANDING/` with your directory and `ALL`: `git ls-tree -r --name-only origin/internal-dev-messages -- LANDING`.
+
 ## Why a branch
 
 - **`main` stays still.** Messages on `main` would move it, and every move sends the tracks with code back to merge `main` and run their gate again (AGENTS.md, section 4).
