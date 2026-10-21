@@ -92,6 +92,7 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - It pulls `fast-test` (or builds `--commit <id>`), builds, and packs the image.
 - It opens an elevated PowerShell running `05_write_usb_windows.ps1`, which asks before it writes (`ERASE <number>`).
 - After the write it copies the proprietary files and the desktop pictures onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
+- **`--slots`** writes an image with boot slots and an `update.txt` that takes releases from `data/link/rel/`. After that one write, `scripts/link_update.py` updates the machine over the link (351-KRN-0141).
 - `--list` shows the USB disks and their numbers.
 - It builds the repository it lives in, also when it is started through a symbolic link from outside that repository.
 

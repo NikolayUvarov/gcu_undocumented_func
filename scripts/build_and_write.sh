@@ -2,12 +2,15 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number>   |   --list
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number>   |   --list
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
 #                  beside it, so the steps after the write find its volume. Proprietary files and wallpapers are
 #                  not copied then.
+#   --slots        the image with boot slots (docs/update/slots.md) and an update.txt at its root that takes releases
+#                  from data/link/rel/ (351-KRN-0141): after this one write, scripts/link_update.py updates the machine
+#                  over the link, with no rewrite. It writes link.conf as --link does unless a --link option is given.
 #   --wifitest     after the write, put data/wifitest.txt on the boot volume: bcm_wifi then runs its Wi-Fi test stages.
 #   --wifi-ofdm[=<cores off>]  after the write, put data/wifi-ofdm.txt on the boot volume: bcm_wifi then offers the
 #                  station 802.11g and counts OFDM received, good and with a bad FCS, by rate and length (550-DRV-0029).
@@ -57,11 +60,12 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
-COMMIT=""; FLAGS=(); WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; IMAGE_FILE=
+COMMIT=""; FLAGS=(); SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; IMAGE_FILE=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --commit) COMMIT="${2:?usage: $0 --commit <id> <disk number>}"; shift 2 ;;
         --image) IMAGE_FILE="$(realpath "${2:?usage: $0 --image <file> <disk number>}")"; shift 2 ;;
+        --slots) SLOTS=1; shift ;;
         --wifitest) FLAGS+=(wifitest.txt); shift ;;
         --wifi-ofdm) FLAGS+=(wifi-ofdm.txt); shift ;;
         --wifi-ofdm=*) m="${1#--wifi-ofdm=}"; [[ "$m" =~ ^[0-7]$ ]] || { echo "--wifi-ofdm=<cores off>: a mask 0 to 7" >&2; exit 1; }
@@ -76,12 +80,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Request files (data/NAME, holding TEXT) put on the volume MIND CORE that holds this build's MANIFEST, flushed and read back.
+# Request files (data/NAME, holding TEXT) put on the volume MIND CORE that holds this build's MANIFEST (at its root, or in
+# MIND/A with --slots), flushed and read back.
 read -r -d '' PS_FLAG <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "flag: $_"; exit 1 }
 for ($i = 0; $i -lt 30; $i++) {
     $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and (Test-Path "$($v.DriveLetter):\MANIFEST") -and (Get-FileHash "$($v.DriveLetter):\MANIFEST").Hash -eq '__MANIFEST__') { break }
+    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { break }
     $v = $null; Start-Sleep 2
 }
 if (-not $v) { Write-Output 'flag: no volume MIND CORE holding this build (its MANIFEST) within 60 s'; exit 1 }
@@ -107,7 +112,7 @@ read -r -d '' PS_LETTER <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'
 for ($i = 0; $i -lt 30; $i++) {
     $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and (Test-Path "$($v.DriveLetter):\MANIFEST") -and (Get-FileHash "$($v.DriveLetter):\MANIFEST").Hash -eq '__MANIFEST__') { Write-Output $v.DriveLetter; exit 0 }
+    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { Write-Output $v.DriveLetter; exit 0 }
     Start-Sleep 2
 }
 exit 1
@@ -138,7 +143,7 @@ read -r -d '' PS_LINK <<'PS' || true
 $ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; trap { Write-Output "link: $_"; exit 1 }
 for ($i = 0; $i -lt 30; $i++) {
     $v = Get-Volume | Where-Object { $_.FileSystemLabel -eq 'MIND CORE' -and $_.DriveLetter } | Select-Object -First 1
-    if ($v -and (Test-Path "$($v.DriveLetter):\MANIFEST") -and (Get-FileHash "$($v.DriveLetter):\MANIFEST").Hash -eq '__MANIFEST__') { break }
+    if ($v -and @("$($v.DriveLetter):\MANIFEST", "$($v.DriveLetter):\MIND\A\MANIFEST" | Where-Object { (Test-Path $_) -and (Get-FileHash $_).Hash -eq '__MANIFEST__' }).Count) { break }
     $v = $null; Start-Sleep 2
 }
 if (-not $v) { Write-Output 'link: no volume MIND CORE holding this build (its MANIFEST) within 60 s'; exit 1 }
@@ -241,8 +246,9 @@ if [[ "${1:-}" == "--list" ]]; then
     winps "\$ProgressPreference = 'SilentlyContinue'; & '$WRITER_WIN' -List" | tr -d '\r'
     exit 0
 fi
-[[ $LINK_RUN == 1 && -z $LINK_BAUD ]] && LINK_BAUD=460800
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number> | --list}"
+[[ ($LINK_RUN == 1 || $SLOTS == 1) && -z $LINK_BAUD ]] && LINK_BAUD=460800
+[[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number> | --list}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 
 cd "$REPO"
@@ -266,7 +272,15 @@ else
 fi
 # Build first, then pack: make_usb_image.py lists the programs when it starts, so packing inside its own build misses new ones.
 bash ./02_build.sh
-python3 scripts/make_usb_image.py --no-build --force
+# With --slots: the build in slot A and an update.txt that takes releases from data/link/rel/ (scripts/link_update.py).
+SLOT_ARGS=()
+if [[ $SLOTS == 1 ]]; then
+    UPDATE_TXT="$(mktemp)"
+    printf 'source data/link/rel\nchannel stable\nautomatic apply\nevery 20\n' > "$UPDATE_TXT"
+    SLOT_ARGS=(--slots --update "$UPDATE_TXT")
+    echo ">>> An image with slots; update.txt takes releases from data/link/rel/ (scripts/link_update.py after this write)"
+fi
+python3 scripts/make_usb_image.py --no-build --force ${SLOT_ARGS[@]+"${SLOT_ARGS[@]}"}
 
 # Proprietary files (AGENTS.md, section 3): fetched into proprietary/ and checked now, copied onto the disk after the write.
 if [[ -x scripts/proprietary.sh ]]; then scripts/proprietary.sh fetch && HAVE_PROPRIETARY=1; fi
