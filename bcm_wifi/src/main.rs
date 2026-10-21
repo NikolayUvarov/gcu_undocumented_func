@@ -64,6 +64,8 @@ const MICROCODE_MAX: usize = 64 * 1024;
 // The stages run as a test when this file exists (the maintainer's request), and the radio comes up for the station when
 // init gives bcm_wifi its service endpoint (550-DRV-0027); without either the core stays in reset.
 const STAGE2_FLAG: &str = "data/wifitest.txt";
+/// With this file, 802.11g is offered to the station (550-DRV-0037).
+const OFDM_FLAG: &str = "data/wifi-ofdm.txt";
 // Each step is logged, then waited for longer than the journal's save period, so a hang leaves its step as the last line.
 const STEP_MS: usize = 3000;
 // The wait after each step: STEP_MS in a test, none when the radio only comes up for the station.
@@ -141,6 +143,9 @@ fn main(_info: &'static BootInfo) {
     let mac = sprom(&bar, capabilities);
     if index == CORE_80211 {
         let test = mind::fs::File::open(STAGE2_FLAG).is_ok();
+        let ofdm = mind::fs::File::open(OFDM_FLAG).is_ok();
+        serve::offer_ofdm(ofdm);
+        mind::println!("[BCM] 2.4 GHZ OFFERED TO THE STATION: {}", if ofdm { "802.11G (data/wifi-ofdm.txt)" } else { "802.11B ONLY, CCK (data/wifi-ofdm.txt OFFERS 802.11G)" });
         let serving = cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT;
         if test { STEP_WAIT.store(STEP_MS, Ordering::Relaxed); }
         mind::println!("[BCM] TEST {} ({}), A STATION TO SERVE: {}", if test { "ASKED FOR" } else { "NOT ASKED FOR" }, STAGE2_FLAG, if serving { "YES" } else { "NO" });
