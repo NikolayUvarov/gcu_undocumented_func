@@ -18,7 +18,7 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 1. **A track posts a landing request.** This is a message `LANDING/<time>-<TRK>-ready-<subject>.md` on `internal-dev-messages`, with ``**Ready:** `<branch>` <commit>``.
 2. **The integrator builds a candidate.** The kernel session takes `main` and merges in every pending request, in order.
    - Merges only: commits and authorship stay.
-   - A request that conflicts is returned at once.
+   - A request that conflicts in code is returned at once. A conflict in text only the integrator resolves, keeping both sides (`resolve`, recorded by git's `rerere`).
 3. **One gate on the candidate.**
    - Every group of `scripts/ci_local.sh --list` runs, spread over the Effector machines.
    - A group that failed runs once more, alone.
@@ -28,7 +28,7 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 5. **The answer:** one file in `LANDING/` names each request landed, returned or superseded.
 
 **The tools:**
-- **`scripts/land.sh`** (an entry to `scripts/land.py`) with `queue`, `candidate`, `gate`, `push` and `announce`.
+- **`scripts/land.sh`** (an entry to `scripts/land.py`) with `queue`, `candidate`, `resolve`, `gate`, `push` and `announce`.
   - The gate's presets are the measured splits of g0141 (`full`) and g0142 (`no-i9`).
   - The Effector key is read only from `$EFFECTOR_KEY_FILE` and sent only in the `X-API-Key` header.
   - `push` merges a text-only move of `main` without another gate, and refuses when `main` moved with code.
@@ -62,6 +62,11 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
   - The conflict was resolved by hand, keeping both rows. The merge changes `issues/` only.
   - `main` = a67ca61. The answer is `LANDING/2026-10-21T1211Z-KRN-landed-48ff4b28.md`.
 - **What it changed in the script.** `push` stopped with git's error on that conflict. It now leaves the merge in the candidate's tree to be resolved by hand, and on the next run pushes the hand merge only if it adds text alone (the next commit; `tests/land_test.py` covers it).
+
+**The second round, 2026-10-21.** Its first `candidate` returned LNK's request for a conflict in one line of `issues/README.md` (the list of requests, changed on both sides). Such a conflict in an index file would come back in most rounds, and returning it costs the track a whole round.
+- **Now** a conflict in text only stays in the round for the integrator: `resolve REQUEST` opens it, `resolve --done REQUEST` records the resolution with git's `rerere`, and the next `candidate` reuses it.
+- **A conflict in code** is still returned at once.
+- `tests/land_test.py` covers both.
 
 ## Related
 

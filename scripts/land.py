@@ -3,12 +3,16 @@
 
   scripts/land.sh queue                       the landing requests not answered yet, oldest first
   scripts/land.sh candidate [--exclude BRANCH]... [--push]
-                                              origin/main merged with each pending request in order; a conflict is left
-                                              out; --push publishes it on the integrator's branch for the machines
+                                              origin/main merged with each pending request in order; a conflict in code
+                                              returns the request, one in text only waits for `resolve`; --push
+                                              publishes it on the integrator's branch for the machines
+  scripts/land.sh resolve [--done] REQUEST    the request's text conflict opened in $LAND_WORK/resolve; --done records
+                                              the integrator's resolution (git rerere) for the next `candidate`
   scripts/land.sh gate [--preset P] [--lanes L,...] [--rerun-lane L] [--dry-run]
                                               every group of scripts/ci_local.sh on the candidate, spread over the
                                               Effector machines; a group that failed runs once more at the end
-  scripts/land.sh push                        main := the candidate, after a green gate of that very commit
+  scripts/land.sh push                        main := the candidate, after a green gate of that very commit; text that
+                                              main gained meanwhile is merged in, by hand where it conflicts
   scripts/land.sh announce [--return REQUEST=REASON]...
                                               one answer in LANDING/ naming each request landed, returned or superseded
 
@@ -98,6 +102,39 @@ def worktree(name, ref):
     return path
 
 
+RERERE = ("-c", "rerere.enabled=true", "-c", "rerere.autoUpdate=true")
+MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( |$)|^=======$", re.M)
+
+
+def conflicts(commit, tree):
+    """The paths a merge of commit into the tree's HEAD leaves conflicted, found without touching the tree."""
+    run = git("merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD", commit, cwd=tree, check=False)
+    if run.returncode not in (0, 1):
+        raise SystemExit(f"git merge-tree: {run.stderr.strip()}")
+    return [path for path in run.stdout.splitlines()[1:] if path]
+
+
+def cmd_resolve(args):
+    state = load_state()
+    entry = next((e for e in state["skipped"] if e["request"] == args.request and "at" in e), None)
+    if not entry:
+        raise SystemExit(f"{args.request} waits for no resolution in this candidate")
+    if not args.done:
+        tree = worktree("resolve", entry["at"])
+        git(*RERERE, "merge", "--no-ff", "-q", "-m", "resolve", entry["commit"], cwd=tree, check=False)
+        left = git("diff", "--name-only", "--diff-filter=U", cwd=tree).split()
+        print(f"resolve {', '.join(left)} in {tree}, keeping both sides, then run `scripts/land.sh resolve --done {args.request}`")
+        return
+    tree = WORK / "resolve"
+    paths = conflicts(entry["commit"], tree)
+    if any(not text_only(path) for path in paths) or any(MARKER.search((tree / path).read_text()) for path in paths):
+        raise SystemExit(f"{tree}: code, or conflict markers left, in {', '.join(paths)}")
+    # Recorded once (git rerere), the resolution is reused by every candidate that meets the same conflict.
+    git(*RERERE, "rerere", cwd=tree)
+    git("merge", "--abort", cwd=tree)
+    print("recorded: run `scripts/land.sh candidate` again")
+
+
 def cmd_candidate(args):
     requests, superseded = pending(queue_files())
     git("fetch", "-q", "origin", "main")
@@ -115,13 +152,27 @@ def cmd_candidate(args):
         commit = full.stdout.strip()
         if git("merge-base", "--is-ancestor", commit, "HEAD", cwd=tree, check=False).returncode == 0:
             skipped.append({"request": name, "branch": branch, "commit": commit, "why": "already in main or the candidate"}); continue
-        message = f"Land {branch} ({commit[:12]}) through the landing queue\n\nRequest: LANDING/{name}" + (f"\n\n{TRAILER}" if TRAILER else "")
+        message = f"Land {branch} ({commit[:12]}) through the landing queue\n\nRequest: LANDING/{name}"
         # The first request that already holds main is taken as it is: no merge commit, and it is on origin already.
         fast = not landed and git("merge-base", "--is-ancestor", "HEAD", commit, cwd=tree, check=False).returncode == 0
-        merged = git("merge", "--ff-only", "-q", commit, cwd=tree, check=False) if fast else git("merge", "--no-ff", "-q", "-m", message, commit, cwd=tree, check=False)
+        paths = [] if fast else conflicts(commit, tree)
+        if any(not text_only(path) for path in paths):
+            returned.append({"request": name, "branch": branch, "commit": commit,
+                             "why": f"merge conflict with main and the requests before it ({', '.join(paths[:5])})"}); continue
+        if paths:
+            message += f"\n\nThe conflict in {', '.join(paths)} (text only) is resolved as the integrator recorded it."
+        message += f"\n\n{TRAILER}" if TRAILER else ""
+        at = git("rev-parse", "HEAD", cwd=tree)
+        merged = git("merge", "--ff-only", "-q", commit, cwd=tree, check=False) if fast else git(*RERERE, "merge", "--no-ff", "-q", "-m", message, commit, cwd=tree, check=False)
         if merged.returncode != 0:
-            git("merge", "--abort", cwd=tree, check=False)
-            returned.append({"request": name, "branch": branch, "commit": commit, "why": "merge conflict with main and the requests before it"}); continue
+            if not paths or git("diff", "--name-only", "--diff-filter=U", cwd=tree):
+                git("merge", "--abort", cwd=tree, check=False)
+                if not paths:
+                    returned.append({"request": name, "branch": branch, "commit": commit, "why": "merge failed: " + merged.stderr.strip()[:200]}); continue
+                # A conflict in text only is the integrator's to resolve, keeping both sides: the request stays queued.
+                skipped.append({"request": name, "branch": branch, "commit": commit, "at": at,
+                                "why": f"a conflict in text only ({', '.join(paths)}): `scripts/land.sh resolve {name}`"}); continue
+            git("commit", "-q", "-m", message, cwd=tree)
         landed.append({"request": name, "branch": branch, "commit": commit})
     head = git("rev-parse", "HEAD", cwd=tree)
     # Published already when the candidate is one request's own commit, taken as it is.
@@ -454,10 +505,19 @@ def cmd_push(_args):
         code = [path for path in changed if not text_only(path)]
         if code:
             raise SystemExit(f"main moved with code since the candidate ({', '.join(code[:5])}): build and gate a new one")
-        # Text only: merged in without a gate (AGENTS.md, section 4).
-        message = f"Merge main ({main[:12]}, text only) into the landing candidate" + (f"\n\n{TRAILER}" if TRAILER else "")
-        git("merge", "--no-ff", "-q", "-m", message, main, cwd=tree)
-        commit = git("rev-parse", "HEAD", cwd=tree)
+        if git("merge-base", "--is-ancestor", main, "HEAD", cwd=tree, check=False).returncode != 0:
+            # Text only: merged in without a gate (AGENTS.md, section 4).
+            message = f"Merge main ({main[:12]}, text only) into the landing candidate" + (f"\n\n{TRAILER}" if TRAILER else "")
+            if git("merge", "--no-ff", "-q", "-m", message, main, cwd=tree, check=False).returncode != 0:
+                raise SystemExit(f"main's text conflicts with the candidate: resolve the merge in {tree}, commit it and run push again")
+        head = git("rev-parse", "HEAD", cwd=tree)
+        # The gated tree may gain text only, from the merge or from the integrator's hand after a conflict.
+        if git("merge-base", "--is-ancestor", commit, head, cwd=tree, check=False).returncode != 0:
+            raise SystemExit(f"{tree} no longer holds the candidate {commit[:12]}: build a new one")
+        code = [path for path in git("diff", "--name-only", commit, head, cwd=tree).splitlines() if not text_only(path)]
+        if code:
+            raise SystemExit(f"the merge in {tree} changes code ({', '.join(code[:5])}): build and gate a new candidate")
+        commit = head
     git("push", "origin", f"{commit}:refs/heads/main")
     state["landed_as"] = commit
     state_path().write_text(json.dumps(state, indent=1))
@@ -510,11 +570,15 @@ def main(argv=None):
     gate.add_argument("--rerun-lane", help="where a failed group runs again (default: where it failed)")
     gate.add_argument("--tag")
     gate.add_argument("--dry-run", action="store_true")
+    resolve = sub.add_parser("resolve")
+    resolve.add_argument("--done", action="store_true")
+    resolve.add_argument("request")
     sub.add_parser("push")
     announce = sub.add_parser("announce")
     announce.add_argument("--return", dest="ret", action="append", default=[], metavar="REQUEST=REASON")
     args = parser.parse_args(argv)
-    {"queue": cmd_queue, "candidate": cmd_candidate, "gate": cmd_gate, "push": cmd_push, "announce": cmd_announce}[args.command](args)
+    {"queue": cmd_queue, "candidate": cmd_candidate, "resolve": cmd_resolve, "gate": cmd_gate, "push": cmd_push,
+     "announce": cmd_announce}[args.command](args)
 
 
 if __name__ == "__main__":
