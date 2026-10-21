@@ -8,7 +8,8 @@
   scripts/land.sh gate [--preset P] [--lanes L,...] [--rerun-lane L] [--dry-run]
                                               every group of scripts/ci_local.sh on the candidate, spread over the
                                               Effector machines; a group that failed runs once more at the end
-  scripts/land.sh push                        main := the candidate, after a green gate of that very commit
+  scripts/land.sh push                        main := the candidate, after a green gate of that very commit; text that
+                                              main gained meanwhile is merged in, by hand where it conflicts
   scripts/land.sh announce [--return REQUEST=REASON]...
                                               one answer in LANDING/ naming each request landed, returned or superseded
 
@@ -454,10 +455,19 @@ def cmd_push(_args):
         code = [path for path in changed if not text_only(path)]
         if code:
             raise SystemExit(f"main moved with code since the candidate ({', '.join(code[:5])}): build and gate a new one")
-        # Text only: merged in without a gate (AGENTS.md, section 4).
-        message = f"Merge main ({main[:12]}, text only) into the landing candidate" + (f"\n\n{TRAILER}" if TRAILER else "")
-        git("merge", "--no-ff", "-q", "-m", message, main, cwd=tree)
-        commit = git("rev-parse", "HEAD", cwd=tree)
+        if git("merge-base", "--is-ancestor", main, "HEAD", cwd=tree, check=False).returncode != 0:
+            # Text only: merged in without a gate (AGENTS.md, section 4).
+            message = f"Merge main ({main[:12]}, text only) into the landing candidate" + (f"\n\n{TRAILER}" if TRAILER else "")
+            if git("merge", "--no-ff", "-q", "-m", message, main, cwd=tree, check=False).returncode != 0:
+                raise SystemExit(f"main's text conflicts with the candidate: resolve the merge in {tree}, commit it and run push again")
+        head = git("rev-parse", "HEAD", cwd=tree)
+        # The gated tree may gain text only, from the merge or from the integrator's hand after a conflict.
+        if git("merge-base", "--is-ancestor", commit, head, cwd=tree, check=False).returncode != 0:
+            raise SystemExit(f"{tree} no longer holds the candidate {commit[:12]}: build a new one")
+        code = [path for path in git("diff", "--name-only", commit, head, cwd=tree).splitlines() if not text_only(path)]
+        if code:
+            raise SystemExit(f"the merge in {tree} changes code ({', '.join(code[:5])}): build and gate a new candidate")
+        commit = head
     git("push", "origin", f"{commit}:refs/heads/main")
     state["landed_as"] = commit
     state_path().write_text(json.dumps(state, indent=1))
