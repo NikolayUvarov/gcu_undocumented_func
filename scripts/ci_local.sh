@@ -73,7 +73,7 @@ X86_GROUPS=(
     "x86: services, storage, audio|$X86 --suites services,ahci,audio,tts,listen,hda,link"
     "x86: scheduling, isolation, heap|$X86 --suites busy,smp,isolation,heap"
     "x86: keys, shell, tools|$X86 --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci"
-    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater"
+    "x86: files and block writes|$X86 --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate"
     "x86: NVMe boot disk|$X86 --disk nvme --suites vfs"
     "x86: 16 CPUs|$X86 --cpus 16 --suites normal"
     "x86: RAM above 4 GiB|$X86 --memory 6G --suites normal,display,net,vfs"
