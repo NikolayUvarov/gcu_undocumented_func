@@ -7673,10 +7673,26 @@ def wm_suite(vm):
     # screen took. Under emulation it says how long, not how fast a real machine is.
     frame = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE, (\d+) MS AT MOST, (\d+) FRAMES IN \d+ S \((\d+)X(\d+) BLOCKS OF \d PX\)", "".join(seen))
     assert frame and int(frame[1]) <= int(frame[2]) and int(frame[3]) >= 1, "".join(seen)[-2000:]
+    # The image under the pattern (000-APP-0100): each half keeps its colour's shares, lit and dimmed where the
+    # curtains are, and the light moves; its first frame's time too.
+    mark = len(seen)
+    out, screen, colour = desktop_alone("background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60", again=.5)
+    require(out, "[WM] BACKGROUND background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60;")
+    points = [(px, py) for py in range(48, 400, 8) for px in range(0, 1280, 8) if not 600 <= px < 680]
+    shares = lambda c, px: c[0] > c[1] > c[2] if px < 640 else c[2] > c[1] > c[0]
+    kept = sum(shares(colour(px, py), px) for px, py in points)
+    assert kept >= len(points) * 95 // 100, (kept, len(points))
+    reds = {colour(px, py)[0] for px, py in points if px < 600}
+    assert max(reds) - min(reds) > 40, sorted(reds)  # lit and dimmed, not the picture as it is
+    lit = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for px, py in points)
+    assert lit > 16, lit
+    both = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE", "".join(seen[mark:]))
+    assert both, "".join(seen[mark:])[-2000:]
     require(vm.command("rm data/wm.conf"), "OK")
     require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
-          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms", flush=True)
+          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms; combined, the "
+          f"picture keeps its colours under the moving light ({kept} of {len(points)} points), its frame in {both[1]} ms", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
     read[0] = len(vm.log)
 
@@ -8521,6 +8537,7 @@ def wm_suite(vm):
     assert last_state().endswith("SETTINGS=Background"), last_state()
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
+    keys("right", text="[WM] SETTINGS background = combined data/background.bmp")  # the image under the pattern (000-APP-0100)
     keys("right", text="[WM] SETTINGS background = none")
     require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")

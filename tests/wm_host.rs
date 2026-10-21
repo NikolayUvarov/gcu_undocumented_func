@@ -814,7 +814,7 @@ fn full_screen_placement_overlays_a_frame_without_resizing_content() {
     }
 }
 
-use background::{colours, cover, ink, layout, overlay, pattern, used_percent, Backdrop, Config, Face, Info, Pattern, Picture, Place};
+use background::{colours, combined, cover, gains, ink, layout, overlay, pattern, used_percent, Backdrop, Config, Face, Info, Pattern, Picture, Place};
 
 fn glyph(ch: char) -> [u8; 16] { *font16::glyph(ch) }
 
@@ -829,6 +829,12 @@ fn the_background_configuration_is_read_and_written() {
     assert_eq!(c.picture, Picture::Image("data/sky.bmp".into()));
     assert_eq!((c.time, c.date, c.cpu, c.net, c.place), (true, false, true, false, Place::TopLeft));
     assert_eq!(Config::parse("background = none").0.picture, Picture::None);
+    // The image under the pattern (000-APP-0100), read back as it was written.
+    let both = Config::parse("background = combined data/sky.png").0;
+    assert_eq!((both.picture.clone(), both.picture.file()), (Picture::Combined("data/sky.png".into()), Some("data/sky.png")));
+    assert_eq!(Config::parse(&both.format()).0, both);
+    assert!(both.format().contains("background = combined data/sky.png\n"), "{}", both.format());
+    assert_eq!(Config::parse("background = combined").1.len(), 1, "a file is named");
     assert_eq!(Config::parse("show = none").0.time, false);
     // The free memory (000-APP-0064): `memory` among `show`'s words; a file that never names it, written before it
     // could be chosen, shows it; `none` hides it too.
@@ -1192,12 +1198,58 @@ fn the_backdrop_keeps_its_frame() {
     assert_eq!(b.pixel(0, 0), 0x203040);
     assert!(b.change(Config { picture: Picture::Abstract, ..b.config.clone() }, &mut count).is_none() && b.moving());
     assert!(b.change(Config { picture: Picture::Image("sky.bmp".into()), ..b.config.clone() }, &mut count).is_none() && !b.moving());
+    // The same picture under the pattern (000-APP-0100): kept, not read again, and moving.
+    assert!(b.change(Config { picture: Picture::Combined("sky.bmp".into()), ..b.config.clone() }, &mut count).is_none() && b.moving());
+    assert!(b.change(Config { picture: Picture::Image("sky.bmp".into()), ..b.config.clone() }, &mut count).is_none() && !b.moving());
     assert_eq!(reads, 1);
     // None draws nothing; samples are kept for a minute.
     let (mut b, _) = Backdrop::new(Config::parse("background = none").0, (64, 32), read_nothing);
     assert!(!b.shown() && b.frame.is_empty());
     for i in 0..100 { b.sample(i as u8 * 2); }
     assert_eq!((b.cpu.len(), b.cpu[0], *b.cpu.last().unwrap()), (60, 80, 100));
+}
+
+#[test]
+fn the_combined_background_lights_the_image_as_the_pattern_moves() {
+    // 000-APP-0100. The gain at the pattern's darkest and lightest levels: 100 - contrast to 100 + contrast percent.
+    let (low, high) = (gains(20), gains(100));
+    assert_eq!((low[0], low[255], high[0], high[255], gains(0).iter().all(|&g| g == 256)), (205, 307, 0, 512, true));
+    assert!(low.windows(2).all(|w| w[0] <= w[1]), "lighter levels, more light");
+    // A picture of one colour under the pattern: where the pattern is lighter, the picture is, channel by channel,
+    // and no lighter than the gain allows; its colour's shares stay (a red picture stays red).
+    let (w, h) = (96, 64);
+    let base = vec![0x80_40_20u32; w * h];
+    let config = Config { pattern: Pattern::Rings, contrast: 60, complexity: 3, ..Config::default() };
+    let (mut lit, mut abstract_) = (vec![0u32; w * h], vec![0u32; w * h]);
+    combined(&mut lit, &base, w, h, &config, 1234);
+    pattern(&mut abstract_, w, h, &config, 1234);
+    let channel = |c: u32, s: u32| c >> s & 0xFF;
+    for i in 0..w * h {
+        let (r, g, b) = (channel(lit[i], 16), channel(lit[i], 8), channel(lit[i], 0));
+        assert!(r >= g && g >= b && r <= 0xCC && r >= 0x33, "{:06x}", lit[i]);
+        for j in [(i + 7) % (w * h), (i + w * 5 + 3) % (w * h)] {
+            if channel(abstract_[i], 0) < channel(abstract_[j], 0) { assert!(lit[i] >> 16 <= lit[j] >> 16, "{} {}: {:06x} {:06x}", i, j, lit[i], lit[j]); }
+        }
+    }
+    assert!(lit.iter().any(|&p| p >> 16 > 0x90) && lit.iter().any(|&p| p >> 16 < 0x70), "lit and dimmed both");
+    // At contrast 0 the picture as it is; the frame moves with the phase.
+    combined(&mut lit, &base, w, h, &Config { contrast: 0, ..config.clone() }, 99);
+    assert_eq!(lit, base);
+    let file = bmp(2, 1, false, |x, _| if x == 0 { 0x606060 } else { 0x203040 });
+    let (mut b, problem) = Backdrop::new(Config::parse("background = combined sky.bmp\npattern = blobs\nspeed = 50\ncontrast = 50\nshow = none").0, (64, 32), &mut |_| Some(file.clone()));
+    assert!(problem.is_none() && b.moving() && b.shown());
+    b.render(&Info::default(), &glyph);
+    let before = b.frame.clone();
+    b.advance(4000);
+    b.render(&Info::default(), &glyph);
+    assert_ne!(before, b.frame, "the pattern moved the light");
+    // Grey stays grey, the right half's blue stays bluer than red.
+    assert!((0..32).all(|y| { let p = b.pixel(5, y); p >> 16 == p >> 8 & 0xFF && p >> 8 & 0xFF == p & 0xFF }));
+    assert!((0..32).all(|y| { let p = b.pixel(50, y); p & 0xFF > p >> 16 }));
+    // A picture that cannot be read: the pattern, moving, and the choice kept.
+    let (b, problem) = Backdrop::new(Config::parse("background = combined data/missing.bmp").0, (64, 32), &mut |_| None);
+    assert!(problem.is_some_and(|p| p.ends_with("; the pattern instead")) && b.moving());
+    assert_eq!(b.config.picture, Picture::Combined("data/missing.bmp".into()));
 }
 
 // Settings (000-APP-0048).
@@ -1224,10 +1276,14 @@ fn settings_open_from_the_top_bar_and_change_the_background() {
     assert!(wm.status().starts_with("MODE=NORMAL"));
     assert_eq!(wm.key(alt_char('s')), Action::Redraw);
     assert!(wm.status().starts_with("MODE=SETTINGS"));
-    // Into the page: the picture cycles abstract → image → none → abstract.
+    // Into the page: the picture cycles abstract → image → combined (000-APP-0100) → none → abstract.
     wm.key(key(KEY_ENTER));
     assert!(wm.status().ends_with("SETTINGS=Background:Picture"), "{}", wm.status());
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Image("data/background.bmp".into())), other => panic!("{:?}", other) }
+    match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::Combined("data/background.bmp".into())), other => panic!("{:?}", other) }
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("combined (the image, lit by the pattern)")));
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("< 20% >  the image's brightness, up and down")));
+    assert!(draw_wm(&mut wm).iter().any(|row| row.contains("[ ]  every card's frames a second, in and out")), "the net row (000-APP-0096)");
     match wm.key(key(KEY_RIGHT)) { Action::Settings(c) => assert_eq!(c.picture, Picture::None), other => panic!("{:?}", other) }
     match wm.key(chr(' ')) { Action::Settings(c) => assert_eq!(c.picture, Picture::Abstract), other => panic!("{:?}", other) }
     // The pattern's kind cycles; the speed, contrast, complexity and brightness step and stop at their ends.
@@ -1999,6 +2055,11 @@ fn the_picture_is_chosen_by_browsing() {
     assert_eq!(s.browser.as_ref().unwrap().dir, "data/pics", "the second entry, pics, opened");
     assert_eq!(s.click(0, 0, &config), Outcome::Stay);
     assert!(s.browser.is_none());
+    // Under the pattern (000-APP-0100), a picture taken stays under it.
+    let both = Config { picture: Picture::Combined("data/sky.bmp".into()), ..config.clone() };
+    s.key(key(KEY_F1 + 2), &both);
+    s.key(key(KEY_DOWN), &both);
+    match s.key(key(KEY_ENTER), &both) { Outcome::Changed(c) => assert_eq!(c.picture, Picture::Combined("data/sky.bmp".into())), other => panic!("{:?}", other) }
     s.file = tui::widgets::InputLine::new();
     assert_eq!(s.click(inner.x + 20, inner.y + 2, &config), Outcome::Stay);
     assert_eq!(s.browser.as_ref().unwrap().dir, "data");
