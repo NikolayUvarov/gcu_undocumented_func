@@ -89,22 +89,3 @@ The plan's other key, Ctrl+Alt+S, cannot be listened for either: `INPUT_LISTEN` 
 ### Acceptance criteria
 
 A host test of the decoder gives `KEY_PRINT_SCREEN` for `E0 2A E0 37` and nothing more for the fake shifts around it. The tools track then listens for it beside Ctrl+Alt+F6.
-
-## The link's network policy client, badged to launch only (800-NET-0038)
-
-**Recorded by:** the network track (NET), 2026-10-21, for [800-NET-0038](800-NET-0038-a-policy-client-that-may-only-launch.md) and [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md).
-
-### Problem
-
-- In developer mode `init` lends `link` the network policy broker's client as it is (`self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")`).
-- That client may also add and remove policy lines and revoke other programs' grants. The shell does those only after the user agrees (108). `link` has no user to ask.
-
-### Plan (a proposal; the kernel track decides)
-
-- In developer mode, `init` mints `link`'s client from `netpolicy`'s keeper with `mind::network::BADGE_LAUNCH`, as it mints the updater's lifecycle client with `BADGE_REBOOT`.
-- The network track adds the badge and the broker's refusals in 800-NET-0038, and says when it is in `main`.
-
-### Acceptance criteria
-
-`stat caps` of `link` in developer mode shows `SLOT_NETPOLICY` with `BADGE_LAUNCH`; `link` starts a program with a flow grant; its policy change is refused and logged.
-
