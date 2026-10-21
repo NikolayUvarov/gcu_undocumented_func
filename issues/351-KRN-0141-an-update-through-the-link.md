@@ -48,7 +48,7 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 
 ## Progress (2026-10-21)
 
-**The `linkupdate` suite is written** (`tests/qemu_smoke.py`, in the groups "x86: files and block writes" and "aarch64: files, network and TLS").
+**The `linkupdate` suite is written** (`tests/qemu_smoke.py`, in the group "x86: files and block writes"; on aarch64 it joins "aarch64: files, network and TLS" once the agent track's `effector` suite, added to the same line, is in `main`).
 - **The image:** the update suite's, with `link.conf` (`baud=115200`, no `dev`) and `update.txt` naming `data/link/rel`, no network card. The release building moved into `update_releases()`, shared with the update suite.
 - **What goes through the link:** only what the updater reads from its source. That is the boot files' blobs, `releases/6/<arch>/MANIFEST` and `MANIFEST.SIG`, then `channels/stable`. Each is put by its own `mindlink mkdir` and `put`.
 - **What it checks:**
