@@ -76,14 +76,14 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 | A screenshot | [086](../issues-done/086-screenshot.done), done |
 | Updates | slots, boot records, the trial and the fallback ([351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-KRN-0014](../issues-done/351-KRN-0014-trial-boot-and-confirmation.done)); the `updater` service, done: `idl/update.wit` 1.0 `check`, `fetch`, `apply`, `rollback`, `status`, its channel in `update.txt` ([351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done)) |
 | The network on the MacBook Pro | [550](550-network-on-real-hardware.md), open; the USB Ethernet adapter first ([550-DRV-0005](550-DRV-0005-usb-ethernet.md)) |
-| JSON | nothing in the tree; [750-EFF-0004](750-EFF-0004-json.md) |
+| JSON | the reader `mind::json`, run by `parse` ([750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done)); the agent's writer ([750-EFF-0004](../issues-done/750-EFF-0004-json.done)) |
 | The agent itself | nothing yet; [750](750-effector-agent.md) |
 
 ## Plan: tasks
 
 | Task | Track | What |
 |---|---|---|
-| 501-ASR-0007 | `ASR` (open) | **Moved to 750 (2026-10-09), not written.** The profile of the protocol is [750-EFF-0001](750-EFF-0001-protocol-contract.md), its test server [750-EFF-0002](750-EFF-0002-test-server.md), JSON [750-EFF-0004](750-EFF-0004-json.md). The run against Effector's own server is [750-EFF-0012](750-EFF-0012-run-against-the-effector-server.md); Effector is a private project, so that run is made on the maintainer's machine, not in CI |
+| 501-ASR-0007 | `ASR` (open) | **Moved to 750 (2026-10-09), not written.** The profile of the protocol is [750-EFF-0001](750-EFF-0001-protocol-contract.md), its test server [750-EFF-0002](750-EFF-0002-test-server.md), JSON [750-EFF-0004](../issues-done/750-EFF-0004-json.done). The run against Effector's own server is [750-EFF-0012](750-EFF-0012-run-against-the-effector-server.md); Effector is a private project, so that run is made on the maintainer's machine, not in CI |
 | 501-ASR-0008 | `ASR` (open) | **Moved to 750, not written.** The agent service is [750-EFF-0006](750-EFF-0006-session-service.md) and [750-EFF-0007](750-EFF-0007-gateway-service.md) |
 | 501-ASR-0009 | `ASR` (open) | Test runs: `msh` scripts in a test account in `effector_gw`, under the policy. Also a host driver that queues the QEMU suites' checks through Effector's operator API and records each run with its configuration. Written when 750-EFF-0007 lands |
 | `init`'s grants for the test account (not numbered yet) | `KRN` | Spawn rights for the test account in `effector_gw`, numbered by the kernel track when 501-ASR-0009 needs them. The agent's own grants are 750's request in [requests-KRN.md](requests-KRN.md) |

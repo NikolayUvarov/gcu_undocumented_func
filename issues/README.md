@@ -190,7 +190,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [750](750-effector-agent.md) | The Effector agent: MIND Core managed by the maintainer's Effector fleet server (software, updates, diagnostics, services), through a session adapter and a policy-bound gateway | main task, `EFF` (open) | P1 | phase 2 on: `NET`, `KRN`, `UPD`, `APP` requests; the Effector server's `mindcore` support | stage V, tracks C, D |
 | [750-EFF-0001](750-EFF-0001-protocol-contract.md) | The Effector protocol subset the agent implements, as a versioned contract (`docs/effector/protocol.md`) | `EFF` (open) | P1 | — | stage V |
 | [750-EFF-0002](750-EFF-0002-test-server.md) | A test server on the host for that contract, with fault hooks (`tests/effector_server.py`) | `EFF` (open) | P1 | 0001 | stage V |
-| [750-EFF-0004](750-EFF-0004-json.md) | `mind::json`: a bounded JSON reader and writer | `EFF` (open) | P1 | — | track D |
 | [750-EFF-0005](750-EFF-0005-zip-reader.md) | `mind::zip`: a bounded ZIP reader (stored, deflate) | `EFF` (open) | P2 | — | track D |
 | [750-EFF-0006](750-EFF-0006-session-service.md) | Bounded session core implemented; transport, durable gateway and boot/live acceptance remain | `EFF` / ASTRA auditor-fixer | P1 | 0001–0004; `NET`, `KRN`, `APP` requests | track D |
 | [750-EFF-0007](750-EFF-0007-gateway-service.md) | `effector_gw`: the policy-bound gateway (services, logs, files, audit) | `EFF` (open) | P1 | 0003; `KRN` requests | stage V |
@@ -222,6 +221,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [750-EFF-0004](../issues-done/750-EFF-0004-json.done) | JSON for the Effector agent: reading through `parse`, writing in the agent | the reader is `mind::json` in `parse` (750-NET-0021); the bounded writer `effector/src/json.rs`, 6 host tests that read every text back; done (2026-10-21) |
 | [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done) | The interface between the Effector agent's two services, the owner's policy and the audit record | `idl/effector.wit` 1.0 and its `libmind` bindings; the policy grammar ([docs/effector/policy.md](../docs/effector/policy.md)) and decision table in `effector_gw/src/policy.rs`, the audit line in `effector_gw/src/audit.rs`, 12 host tests; the threat analysis in `docs/effector/README.md`; done (2026-10-21) |
 | [800-KRN-0128](../issues-done/800-KRN-0128-init-starts-usb-serial-and-link.done) | `init` starts `usb_serial` and `link` when the boot volume holds `link.conf` (ABI 13); the system log from the kernel's first line | ABI 13 in `common/abi.rs`, `link.conf` read by the bootloader, `init`'s arms and `link_scope`, the kernel's lines in `logd`'s 2048-record ring; gate g0138, `main` 8def173 |
 | [000-KRN-0134](../issues-done/000-KRN-0134-a-memory-request-above-the-loaders-quota.done) | A program that asks for more memory than the loader has still starts | `loader` retries with its whole quota and logs it; gate g0138 |
