@@ -20,6 +20,11 @@ From the tools track's request in [requests-KRN.md](requests-KRN.md) (2026-10-21
 - [ ] The bench suite passes in the gate on x86 and aarch64 with the new wait.
 - [ ] It passes on `DESKTOP-i7-930-wsl-u24` (the tools track's next run there).
 
+## Progress (2026-10-21)
+
+- **Local runs,** this session's machine (QEMU, 4 CPUs), branch 3a960da: the `bench` suite passed on x86 and on aarch64, `check kernel` included.
+- **Left:** the gate, and the tools track's run on `DESKTOP-i7-930-wsl-u24`.
+
 ## Related
 
 [176](176-test-and-performance-utilities.md), [176-KRN-0103](../issues-done/176-KRN-0103-the-tools-stop-when-their-console-is-gone.done).
