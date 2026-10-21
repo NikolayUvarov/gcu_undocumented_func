@@ -7252,6 +7252,7 @@ def wm_suite(vm):
         rows = shows(second, "THE SHELL'S WINDOW 2:")
         assert not any(canon("MIND ram:> ") in row for row in rows), rows  # the first one's directory is its own
         close_shell(second)
+        front(menu_shell)  # the focus goes to the window under the closed one, not back to the first shell
         close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
