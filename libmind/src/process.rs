@@ -184,6 +184,10 @@ pub const REQUEST_FIRMWARE: u32 = 65536; // the firmware variable privilege in S
 pub const BADGE_REBOOT: u16 = 1;
 /// The badge of the shell's lifecycle client: set, so no copy of it can be badged for `reboot` (a badge is set once).
 pub const BADGE_LIFECYCLE: u16 = 2;
+/// The badge of init's client that may turn either mode on or off (`init.wit` 1.5 `set-mode`): the shell's, in SLOT_MODE.
+pub const BADGE_MODE: u16 = 3;
+/// The badge of init's client that may only turn the maintenance mode on, with a reason: the Mind's, once it exists.
+pub const BADGE_MIND: u16 = 4;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)
