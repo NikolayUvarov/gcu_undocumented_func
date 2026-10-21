@@ -14,7 +14,11 @@ const POLL_MS: u32 = 2;
 const WAITERS: usize = 4;
 // 2.4 GHz with OFDM there too (idl/wlanhw.wit 1.1, 550-NET-0028): OFDM is received up to 54 Mbit/s with core 2's front
 // end off (550-DRV-0029), so the station offers 802.11g's rates.
-const BANDS: u8 = BAND_2GHZ | BAND_2GHZ_OFDM;
+// 802.11g is offered to the station only when asked (data/wifi-ofdm.txt, 550-DRV-0037): OFDM from the MacBook Pro's
+// access point did not come through (550-DRV-0036), so the station keeps to 802.11b's rates and the access point to CCK.
+static OFDM: AtomicBool = AtomicBool::new(false);
+pub fn offer_ofdm(on: bool) { OFDM.store(on, Ordering::Relaxed); }
+fn bands() -> u8 { BAND_2GHZ | if OFDM.load(Ordering::Relaxed) { BAND_2GHZ_OFDM } else { 0 } }
 // The radio's own channels.
 const CHANNELS: core::ops::RangeInclusive<u8> = 1..=13;
 const PROBE_REQUEST: u8 = 0x40;
@@ -86,9 +90,12 @@ impl Tally {
                 let _ = core::fmt::Write::write_fmt(&mut w, format_args!(" {}{}:{}/{}", r.0 / 2, if r.0 % 2 == 1 { ".5" } else { "" }, r.1, r.2));
             }
             let rates = core::str::from_utf8(&w.buf[..w.len]).unwrap_or("");
-            mind::println!("[BCM] {} S: SENT {} DATA FRAMES, {} ACKED ({} AFTER A RETRY), {} LOST, {} TRIES; MBIT/S SENT/ACKED{}; RECEIVED CCK {} OK {} BAD FCS {} BAD PLCP, OFDM {} OK {} BAD FCS {} BAD PLCP, HT {} OK {} BAD FCS {} BAD PLCP; QUEUED {}, FILTERED {}, BAD {}, ACKS TO US CCK {} OFDM {}, DMA ERRORS {}",
-                           (mind::time::uptime_ms() as u64 - self.start) / 1000, self.sent, self.acked, self.retried, self.sent - self.acked, self.tries, rates,
-                           f(0, 0), f(0, 1), f(0, 2), f(1, 0), f(1, 1), f(1, 2), f(2, 0), f(2, 1), f(2, 2),
+            // Two lines: a log record keeps 200 bytes.
+            let seconds = (mind::time::uptime_ms() as u64 - self.start) / 1000;
+            mind::println!("[BCM] {} S SENT: {} DATA, {} ACKED ({} RETRIED), {} LOST, {} TRIES; MBIT/S SENT/ACKED{}",
+                           seconds, self.sent, self.acked, self.retried, self.sent - self.acked, self.tries, rates);
+            mind::println!("[BCM] {} S RECEIVED (OK/FCS/PLCP): CCK {}/{}/{} OFDM {}/{}/{} HT {}/{}/{}; QUEUED {}, FILTERED {}, BAD {}; ACKS TO US CCK {} OFDM {}; DMA ERRORS {}",
+                           seconds, f(0, 0), f(0, 1), f(0, 2), f(1, 0), f(1, 1), f(1, 2), f(2, 0), f(2, 1), f(2, 2),
                            k.queued.wrapping_sub(b.queued), k.filtered.wrapping_sub(b.filtered), k.bad.wrapping_sub(b.bad),
                            k.acks_cck.wrapping_sub(b.acks_cck), k.acks_ofdm.wrapping_sub(b.acks_ofdm), k.dma_errors.wrapping_sub(b.dma_errors));
         }
@@ -189,7 +196,7 @@ pub fn run(radio: &mut Radio) -> ! {
 }
 
 fn info(radio: &Radio, country: Option<Country>) -> wlanhw::Info {
-    wlanhw::Info { mac: mac64(&radio.mac), bands: BANDS, channels: Country::list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
+    wlanhw::Info { mac: mac64(&radio.mac), bands: bands(), channels: Country::list(country), frame_max: FRAME_MAX as u16, channel: radio.channel() }
 }
 
 // No radio to serve (it did not come up): every request answered no-device, `wait` with none, so the station is not
@@ -247,7 +254,7 @@ fn busy(request: &mind::ipc::Received, scratch: &mut [u8; wlanhw::REQUEST_MAX]) 
         wlanhw::Request::Info => {
             let mut channels = List::default();
             for c in 1..=13 { channels.push(c); }
-            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: BANDS, channels, frame_max: FRAME_MAX as u16, channel: 0 }))
+            wlanhw::reply_info(call, Ok(&wlanhw::Info { mac: HOLD_MAC.load(Ordering::Relaxed), bands: bands(), channels, frame_max: FRAME_MAX as u16, channel: 0 }))
         }
         wlanhw::Request::SetChannel { .. } => wlanhw::reply_set_channel(call, Err(busy)),
         wlanhw::Request::SetFilter { .. } => wlanhw::reply_set_filter(call, Err(busy)),

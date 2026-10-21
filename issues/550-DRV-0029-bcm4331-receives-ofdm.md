@@ -60,6 +60,11 @@ Evidence for this machine only (MC-12.1).
 - **The same boot: `wlan` got the radio's `info` 2 s after it started** (`[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`), during the test, and `bcm_wifi` served it after the test. No scan was asked of the station afterwards: no program holds its configuration client yet (the tools track's part, `SLOT_WIFI`).
 - **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request, now taken from `requests-DRV.md`. Since `main` 3be9671 brought 1.1, it is written with `mind::network`'s constants.
 
+- **2026-10-21: CoolNet2's OFDM is not received at all,** with core 2's front end off ([550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md)).
+  - Over seven periods of 10 s on channel 8, the radio received 210 to 428 good CCK frames each period, no good OFDM frame, and 2 to 8 OFDM frames with a bad PLCP header.
+  - This network's signal was not measured in that run.
+  - Until OFDM comes through, the station is offered 802.11b only ([550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.md)). So this task's criterion "802.11g for the station" is met only with `data/wifi-ofdm.txt`.
+
 ## Related
 
 [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), requests-NET.md (the station's rates; the stack's wait), `bcm_wifi/`.
