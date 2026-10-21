@@ -78,6 +78,21 @@ fn the_passphrase_follows_the_protection() {
 }
 
 #[test]
+fn a_window_is_not_titled_wifi_twice() {
+    // wm's title bar names the program: in a window the frame names only the demo (the maintainer's report, 2026-10-21).
+    let mut demo = Demo::new();
+    let mut w = Wifi::new(false);
+    w.refresh(&mut demo);
+    assert!(screen(&w)[0].contains(" wifi "), "on a screen of its own");
+    w.windowed = true;
+    assert!(!screen(&w)[0].contains("wifi"), "{}", screen(&w)[0]);
+    let mut shown = Wifi::new(true);
+    shown.windowed = true;
+    shown.refresh(&mut demo);
+    assert!(screen(&shown)[0].contains("DEMO") && !screen(&shown)[0].contains("wifi"), "{}", screen(&shown)[0]);
+}
+
+#[test]
 fn a_protected_network_is_joined_with_its_passphrase_unseen() {
     let mut demo = Demo::new();
     let mut w = Wifi::new(true);
