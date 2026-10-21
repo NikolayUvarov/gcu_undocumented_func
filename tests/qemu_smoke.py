@@ -38,6 +38,7 @@ import boot_slots_check  # noqa: E402
 import boot_slots  # noqa: E402
 import serve_release  # noqa: E402
 import release as release_tool  # noqa: E402
+import link_update  # noqa: E402
 sys.path.insert(0, str(ROOT / "scripts" / "voice_dictate"))
 from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
@@ -5048,33 +5049,17 @@ def linkupdate_suite(args):
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
                                        "automatic apply\nevery 20\ntries 3\n")
     image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
-    # What the updater reads from its source, and nothing more: the boot files' blobs, the manifest and its signature.
-    release = f"releases/6/{arch}"
-    files = [f"blobs/{digest}" for _, digest in boot_files] + [f"{release}/MANIFEST", f"{release}/MANIFEST.SIG"]
+    # What the updater reads from its source, and nothing more, as scripts/link_update.py puts it on a real machine.
+    files = link_update.release_files(manifest6, arch, 6)
     cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
     vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
             extra=[*cpu, "-nic", "none", "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link",
                    "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
 
-    def link(*command, ok=True, timeout=300):
-        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
-                           capture_output=True, text=True, timeout=timeout)
-        out = r.stdout + r.stderr
-        assert (r.returncode == 0) == ok, (command, r.returncode, out)
-        return out
-
-    def logged(line, timeout):
-        # The log as the agent at the other end reads it.
-        deadline, log = time.monotonic() + timeout, ""
-        while time.monotonic() < deadline:
-            log = link("log")
-            if line in log:
-                return log
-            time.sleep(5)
-        raise AssertionError((line, log[-3000:]))
     try:
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
-        require(link("hello"), '"MIND Core link"')
+        link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
+        require(link.run("hello").stdout, '"MIND Core link"')
         # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
@@ -5083,18 +5068,24 @@ def linkupdate_suite(args):
         assert {2, 3, 12} <= granted <= {2, 3, 5, 12}, caps
         started = time.monotonic()
         for path in files:
-            link("mkdir", f"rel/{path.rpartition('/')[0]}")
-            link("put", str(server / path), f"rel/{path}")
+            link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
-        link("mkdir", "rel/channels")
         bad = temp / "forged"
         bad.write_bytes(forged)
-        link("put", str(bad), "rel/channels/stable")
-        log = logged("[UPDATER] CHECK: REFUSED: Signature", 120)
+        before = link.log()
+        link.put(bad, "channels/stable")
+        # The script's follower stops at the refusal, as it would on a real machine.
+        try:
+            link_update.follow(link, 120, say=lambda line: None, before=before)
+            raise AssertionError("the channel with a changed signature was not refused")
+        except RuntimeError as refused:
+            require(str(refused), "[UPDATER] CHECK: REFUSED: Signature")
+        log = link.log()
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         assert "[UPDATER] RECORD" not in log and "[UPDATER] FETCH: VERSION 6" not in log, log
-        link("put", str(server / "channels/stable"), "rel/channels/stable")
+        before = link.log()
+        link.put(server / "channels/stable", "channels/stable")
         vm.collect(); vm.output = ""
         out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
         vm.send("\n")
@@ -5102,9 +5093,9 @@ def linkupdate_suite(args):
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
                      f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
-        # After the restart link serves again on the same line: the new boot's log, read from the other end.
-        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 120)
-        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # After the restart link serves again on the same line: the script's follower reads the new boot's log.
+        require(link_update.follow(link, 120, say=lambda line: None, before=before), "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
+        require(link.log(), "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
         vm.close()
