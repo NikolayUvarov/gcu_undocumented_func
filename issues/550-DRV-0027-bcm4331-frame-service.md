@@ -60,6 +60,8 @@ On the MacBook Pro, `wlan` (or, until it exists, a test client) sets a channel, 
   - **Not exercised:** no station calls `set-country` yet, so it has run on no machine.
   - **The busy path** (during the test) answers `busy`, and the radio-less path `no-device`.
 
+- **2026-10-20: a WPA2 join on the MacBook Pro through this service** (`fast-test` 832c9080, wlanhw 1.2): `wlan` joined CoolNet2 on channel 8 by hand from `wm`, and DHCP gave 192.168.2.236/24 3.6 s later. `bcm_wifi` logged no transmit fault (550-ASR-0007 has the lines).
+
 ## Related
 
 [550-DRV-0006](550-DRV-0006-broadcom-wifi.md), [550-DRV-0026](../issues-done/550-DRV-0026-bcm4331-transmits.done), [requests-NET.md](requests-NET.md) (the station), [550-APP-0033](550-APP-0033-wifi-setup-program.md) (`wifi`), `bcm_wifi/`.

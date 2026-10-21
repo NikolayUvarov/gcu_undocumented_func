@@ -178,10 +178,19 @@ impl Ac97 {
 
 // The device behind the gateway: HDA when init granted memory-mapped registers, AC97 when it granted ports.
 enum Device { Ac97(Ac97), Hda(hda::Hda) }
+// A second HD Audio function's interrupt line, where init puts it (its SLOT_AUDIO_IRQ1, 213-KRN-0127).
+const SECOND_IRQ: usize = 7;
 impl Device {
-    fn open() -> Option<Self> {
-        if mind::dev::cap_info(SLOT_DEV0).0 == CAP_KIND_MMIO { return hda::Hda::init(SLOT_DEV0, SLOT_MEM).map(Device::Hda); }
-        Ac97::init().map(Device::Ac97)
+    // The device and the slot of its interrupt line. A second HD Audio function (SLOT_DEV1, 213-KRN-0127: the Ryzen's
+    // analog one beside its GPU's HDMI audio) is driven when the first has no output path; both share the DMA region.
+    fn open() -> Option<(Self, usize)> {
+        if mind::dev::cap_info(SLOT_DEV0).0 != CAP_KIND_MMIO { return Ac97::init().map(|d| (Device::Ac97(d), SLOT_IRQ)); }
+        if let Some(d) = hda::Hda::init(SLOT_DEV0, SLOT_MEM) { return Some((Device::Hda(d), SLOT_IRQ)); }
+        if mind::dev::cap_info(SLOT_DEV1).0 != CAP_KIND_MMIO { return None; }
+        mind::println!("[AUDIO] HDA: THE FIRST FUNCTION IS NOT USED; TRYING THE SECOND");
+        let d = hda::Hda::init(SLOT_DEV1, SLOT_MEM)?;
+        mind::println!("[AUDIO] HDA: DRIVING THE SECOND FUNCTION");
+        Some((Device::Hda(d), SECOND_IRQ))
     }
     fn free(&mut self) -> usize { match self { Device::Ac97(d) => d.free(), Device::Hda(d) => d.free() } }
     fn active(&self) -> bool { matches!(self, Device::Hda(d) if d.active()) }
@@ -231,8 +240,7 @@ impl Session {
 }
 
 fn main(_info: &'static BootInfo) {
-    let mut device = Device::open();
-    let irq = Irq(SLOT_IRQ);
+    let (mut device, irq) = match Device::open() { Some((d, line)) => (Some(d), Irq(line)), None => (None, Irq(SLOT_IRQ)) };
     let mut waiters: [Option<(Call, u8)>; WAITERS] = [const { None }; WAITERS];
     let mut overflows = 0u32;
     let mut owner: Option<u64> = None; // the task that owns the microphone capture

@@ -3894,9 +3894,11 @@ def raw_fat_image(temp, replace=None, extra=None):
 def link_suite(args):
     """800-LNK-0003, 800-KRN-0128: MIND Core's end of MIND Link through QEMU's emulated FT232 (`-device usb-serial` on a
     pseudo-terminal), with `link.conf` at the root, against the host's `mindlink`: a file each way checked by SHA-256,
-    the system log read, a name outside data/link/ refused. 256-byte frames: the emulated chip keeps 384 bytes and is
-    filled again from the pseudo-terminal only when QEMU's main loop wakes (docs/link/mindlink.md). Skipped until init
-    starts `link` (it is in BOOT_SERVICES)."""
+    the system log read, a name outside data/link/ refused. 800-LNK-0010: a tree made, filled, moved and removed, `ls`
+    showing each step, names that climb out refused. 800-LNK-0009 (`run` in link.conf): a program put into a directory
+    of data/link/ started with arguments, its output and its end read, a path the loader cannot take refused. 256-byte
+    frames: the emulated chip keeps 384 bytes and is filled again from the pseudo-terminal only when QEMU's main loop
+    wakes (docs/link/mindlink.md). Skipped until init starts `link` (it is in BOOT_SERVICES)."""
     services = re.search(r"BOOT_SERVICES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1]
     if '"link"' not in services:
         print("SKIP: link: not a boot service yet (800-KRN-0128)", flush=True)
@@ -3917,7 +3919,7 @@ def link_suite(args):
         return out
 
     with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
-        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200\n"})
+        image, _, _ = raw_fat_image(Path(temp), extra={"link.conf": b"baud=115200 run\n"})
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True,
                 extra=("-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link", "-device", "usb-serial,bus=linkxhci.0,chardev=link"))
         try:
@@ -3943,11 +3945,60 @@ def link_suite(args):
             caps = vm.command(f"stat caps {pids['link']}", raw=True)
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
             held = sorted((int(slot), servers.get(int(ep))) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M))
-            assert "COUNT=4 " in caps and held == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
+            # With `run` in link.conf, link also holds an endpoint of its own for its programs' output, and the send copy
+            # it lends them (800-LNK-0009): nothing granted.
+            granted = [h for h in held if h[1] != pids["link"]]
+            own = [h for h in held if h[1] == pids["link"]]
+            count = int(re.search(r"COUNT=(\d+)", caps)[1])
+            assert count == len(held) and len(own) <= 2 and granted == [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])], caps
+
+            # 800-LNK-0010: a tree in data/link/.
+            require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
+            link(port, "mkdir", "a/b")
+            require(link(port, "ls"), "-  a/")
+            link(port, "put", str(sent), "a/b/s.bin")
+            require(link(port, "ls", "a/b"), "65536  s.bin")
+            require(link(port, "mv", "a/b/s.bin", "c/s.bin", ok=False), "no such file")
+            link(port, "mkdir", "c")
+            link(port, "mv", "a/b/s.bin", "c/s.bin")
+            assert "s.bin" not in link(port, "ls", "a/b")
+            require(link(port, "get", "c/s.bin", str(back)), "got c/s.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the moved file came back changed"
+            require(link(port, "rmdir", "a", ok=False), "not empty")
+            link(port, "rmdir", "a", "-r")
+            top = link(port, "ls")
+            assert "c/" in top and "a/" not in top, top
+            for bad in ("../x", "a/../../x", "/x"):
+                require(link(port, "mkdir", bad, ok=False), "not allowed")
+
+            # 800-LNK-0009: a program from data/link/ started for the master, its output read to its end.
+            program = Path(temp) / "mt.elf"
+            shutil.copyfile(ROOT / IMAGE / "memtest.elf", program)
+            link(port, "mkdir", "t")
+            link(port, "put", str(program), "t/mt.elf")
+            logged = vm.command("dmesg -s link", raw=True)
+            require(logged, "[LINK] MOVED a/b/s.bin TO c/s.bin")
+            programs = "NO ENDPOINT FOR PROGRAMS' OUTPUT" not in logged
+            if not programs:
+                # init gives link no endpoint of its own yet (LNK's request to KRN of 2026-10-20): RUN is refused.
+                require(link(port, "run", "t/mt.elf", ok=False), "does not serve this")
+                print("SKIP: link: programs: init gives link no endpoint for their output yet (requested of KRN, 800-LNK-0009)", flush=True)
+            else:
+                require(logged, "[LINK] PROGRAMS IN data/link/ MAY BE STARTED")
+                require(link(port, "run", "t/mt.elf"), "USAGE: MEMTEST ALLOC")
+                require(link(port, "run", "t/mt.elf", "--help"), "memtest — test program of task memory")
+                require(link(port, "runs"), "ended\tdata/link/t/mt.elf")
+                require(link(port, "run", "t/missing.elf", ok=False), "no such file")
+                require(link(port, "run", "t/" + "m" * 60 + ".elf", ok=False), "not allowed")
+                # Ending a program needs a grant init does not give yet (800-KRN-0132, point 3).
+                run_id = link(port, "runs").splitlines()[1].split("\t")[0]
+                require(link(port, "stop", run_id, ok=False), "does not serve this")
+                assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", vm.command("dmesg -s link", raw=True)), "the start is logged"
         finally:
             vm.close()
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
-          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants", flush=True)
+          "the system log with the kernel's lines, and was refused a name outside data/link/; link holds only its four grants; "
+          "a tree made, moved and removed" + ("; a program put into data/link/t/ started twice with its output read to its end" if programs else ""), flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):

@@ -7,6 +7,7 @@ extern crate alloc;
 // class its badge names and moves data through the buffer it lends. Ports are scanned every SCAN_MS, so devices may
 // come and go. Events are polled (no interrupt line); while an isochronous stream runs, every STREAM_MS.
 mod ehci;
+mod hub;
 mod iso_ring;
 mod xhci;
 
@@ -166,12 +167,21 @@ impl Host {
         self.control(index, 0x00, 9, config[5] as u16, 0, 0).ok()?; // SET_CONFIGURATION
         let hub = class == CLASS_HUB || interfaces[..count].iter().any(|i| i.info.class == CLASS_HUB);
         mind::println!("[USB] {:04X}:{:04X} ON PORT {} ({} SPEED){}", vendor, product, Path(device.root, device.route), speed_name(device.speed), if hub { " HUB" } else { "" });
-        // A USB 2 hub: its ports, think time and power-on delay (a SuperSpeed hub's USB 2 side is used instead).
-        let hub = if !hub || device.speed == 4 || device.depth >= MAX_DEPTH { None } else {
+        // A hub: its ports, think time and power-on delay. A USB 3 hub is two: its USB 2 side on a USB 2 port, and its
+        // SuperSpeed side, which is told its depth first and has a descriptor of its own (211-DRV-0035).
+        if hub && device.depth >= MAX_DEPTH { mind::println!("[USB] HUB ON PORT {}: {} HUBS DEEP, ITS PORTS NOT WALKED", Path(device.root, device.route), device.depth + 1); }
+        let hub = if !hub || device.depth >= MAX_DEPTH { None } else if device.speed == 4 {
+            self.step = "SET HUB DEPTH";
+            self.control(index, 0x20, hub::SET_HUB_DEPTH, device.depth as u16, 0, 0).ok()?;
+            self.step = "SUPERSPEED HUB DESCRIPTOR";
+            self.control(index, 0xA0, 6, hub::SUPERSPEED_HUB_DESCRIPTOR, 0, 12).ok()?;
+            let h = hub::superspeed(self.small(12))?;
+            Some((h.ports, h.think, h.power_ms))
+        } else {
             self.step = "HUB DESCRIPTOR";
-            self.control(index, 0xA0, 6, 0x2900, 0, 9).ok()?;
-            let descriptor: [u8; 9] = self.small(9).try_into().ok()?;
-            Some((descriptor[2].min(15), ((descriptor[3] >> 5) & 3) as u8, descriptor[5] as u64 * 2))
+            self.control(index, 0xA0, 6, hub::HUB_DESCRIPTOR, 0, 9).ok()?;
+            let h = hub::usb2(self.small(9))?;
+            Some((h.ports, h.think, h.power_ms))
         };
         // The endpoints of the interfaces a class driver serves, a USB-serial converter's included (800-DRV-0034), and a
         // hub's status endpoint, in one Configure Endpoint.
@@ -208,7 +218,7 @@ impl Host {
             self.xhci.configure(slot)?;
         }
         if let Some((ports, _, power)) = hub {
-            for port in 1..=ports { let _ = self.control(index, 0x23, 3, 8, port as u16, 0); } // SET_FEATURE PORT_POWER
+            for port in 1..=ports { let _ = self.control(index, 0x23, 3, hub::PORT_POWER, port as u16, 0); } // SET_FEATURE
             mind::time::sleep(power.clamp(20, 500) as usize);
             // Every port is looked at once; after that only those the status endpoint reports (all, without one).
             let armed = status.is_some_and(|(target, ring, packet)| self.xhci.arm(slot, target, ring, packet, false));
@@ -267,11 +277,13 @@ impl Host {
             if let Some(d) = self.devices[hub].as_mut() { d.pending = 0; }
             for port in (1..=device.hub_ports).filter(|&p| pending & 1 << p != 0) {
                 let Some((status, change)) = self.hub_port(hub, port) else { break };
-                if change & 1 != 0 { let _ = self.control(hub, 0x23, 1, 16, port as u16, 0); } // CLEAR_FEATURE C_PORT_CONNECTION
+                if change & hub::CHANGED_CONNECTION != 0 { let _ = self.control(hub, 0x23, 1, hub::C_PORT_CONNECTION, port as u16, 0); } // CLEAR_FEATURE
+                // The other changes (a SuperSpeed hub's link state among them) cleared, so the hub stops reporting them.
+                for feature in hub::other_changes(device.speed == 4, change) { let _ = self.control(hub, 0x23, 1, feature, port as u16, 0); }
                 let bit = 1u16 << port;
                 if change & 1 != 0 { if let Some(d) = self.devices[hub].as_mut() { d.failed &= !bit; } }
                 let child = (0..MAX_DEVICES).find(|&i| self.devices[i].is_some_and(|d| d.parent == Some((hub, port))));
-                let connected = status & 1 != 0;
+                let connected = status & hub::CONNECTED != 0;
                 if let Some(index) = child { if !connected || change & 1 != 0 { self.remove(index); } else { continue; } }
                 if !connected || self.devices[hub].is_none_or(|d| d.failed & bit != 0) { continue; }
                 self.step = "HUB PORT RESET"; self.xhci.last = 0;
@@ -286,19 +298,32 @@ impl Host {
         }
     }
 
-    // Resets a hub port; the speed of the device on it once enabled.
+    // Resets a hub port; the speed of the device on it once enabled. A SuperSpeed hub's port that does not come up
+    // from a hot reset gets a warm one (BH_PORT_RESET, 211-DRV-0035).
     fn reset_hub_port(&mut self, hub: usize, port: u8) -> Option<u8> {
-        self.control(hub, 0x23, 3, 4, port as u16, 0).ok()?; // SET_FEATURE PORT_RESET
+        let superspeed = self.devices[hub]?.speed == 4;
+        let mut status = self.hub_reset(hub, port, hub::PORT_RESET, hub::CHANGED_RESET)?;
+        if status & hub::ENABLED == 0 && superspeed {
+            mind::println!("[USB] HUB PORT {}: NOT ENABLED AFTER A RESET (STATUS {:04X}); A WARM RESET", port, status);
+            status = self.hub_reset(hub, port, hub::BH_PORT_RESET, hub::CHANGED_WARM_RESET)?;
+        }
+        if status & hub::ENABLED == 0 { return None; }
+        mind::time::sleep(10); // reset recovery
+        Some(hub::speed_after_reset(superspeed, status))
+    }
+
+    // One reset of a hub port (`feature`), waited for by its change bit; the port's status after it.
+    fn hub_reset(&mut self, hub: usize, port: u8, feature: u16, done: u16) -> Option<u16> {
+        self.control(hub, 0x23, 3, feature, port as u16, 0).ok()?; // SET_FEATURE
         let mut status = 0;
         for _ in 0..50 {
             mind::time::sleep(10);
             let (s, change) = self.hub_port(hub, port)?;
-            if change & 0x10 != 0 { status = s; break; }
+            if change & done != 0 { status = s; break; }
         }
-        let _ = self.control(hub, 0x23, 1, 20, port as u16, 0); // CLEAR_FEATURE C_PORT_RESET
-        if status & 2 == 0 { return None; }
-        mind::time::sleep(10); // reset recovery
-        Some(if status & 0x200 != 0 { 2 } else if status & 0x400 != 0 { 3 } else { 1 })
+        let _ = self.control(hub, 0x23, 1, hub::C_PORT_RESET, port as u16, 0); // CLEAR_FEATURE
+        if done == hub::CHANGED_WARM_RESET { let _ = self.control(hub, 0x23, 1, hub::C_BH_PORT_RESET, port as u16, 0); }
+        Some(status)
     }
 
     // The device and interface a handle names, if the client with `badge` holds it.
