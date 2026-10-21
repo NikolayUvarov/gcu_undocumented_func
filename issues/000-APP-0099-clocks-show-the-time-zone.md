@@ -56,6 +56,26 @@
 - **The `wm` suite** (x86): the date page's zone row sets UTC+00:30 and UTC through the shell, at once, and the page names it.
 - **The MacBook Pro:** with `date zone` set to the maintainer's zone, the clocks show local time. This is QEMU's RTC until then (MC-12.1).
 
+## Progress (2026-10-21)
+
+- **Done:**
+  - `rtc.wit` 1.3: the zone kept by `rtc`;
+  - `mind::rtc::Zone` and the local time;
+  - `date zone`, kept in `data/clock.conf`;
+  - `shell.wit` 1.9 `set-zone`;
+  - the date page's zone row;
+  - every clock face in the zone's time.
+- **Test runs:**
+  - On ac7103cb, i9 and un-rizen-service each timed out once:
+    - i9: at the second `run clock &` of the four clocks;
+    - un-rizen-service: at `check kernel` in the bench suite.
+  - a4e091ea made a face read the zone once a resynchronization, not each second.
+  - Since then, every run passed but one:
+    - locally, "x86: keys, shell, tools" on a4e091ea and on 543ea7ea;
+    - on `DESKTOP-i7-930-wsl-u24`, "aarch64: programs, shell and four CPUs" on 2761c834;
+    - also on the i7-930, "x86: keys, shell, tools" on 2761c834: the keys, shell and tools suites, the four clocks among them, then the bench suite's `check kernel` ran past its 8 s. That wait is the kernel track's, recorded in `requests-KRN.md` (6c062390).
+- **Left:** the MacBook Pro.
+
 ## Related
 
 [211-KRN-0051](211-KRN-0051-setting-the-clock.md) (`rtc.wit` 1.2 `set`), [211-APP-0042](../issues-done/211-APP-0042-date-set-in-the-shell.done) (`date set`), [000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) and [000-APP-0060](../issues-done/000-APP-0060-the-clock-from-wms-settings-at-once.done) (the date page), [000-APP-0012](../issues-done/000-APP-0012-clocks-read-the-rtc-once-a-minute.done) (`Clock`).

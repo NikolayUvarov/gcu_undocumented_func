@@ -36,6 +36,15 @@
   - Settings' Picture row passes through `combined`.
 - **Docs:** `docs/tools/README.md` and `README_RU.md`.
 
+## Progress (2026-10-21)
+
+- **Done:** `background = combined <file>`, Settings' cycle, docs. The host tests pass.
+- **Locally,** "x86: keys, shell, tools" passed on 543ea7ea:
+  - the `wm` suite's combined desktop: 6600 of 6600 points kept their half's colour order, the light moved, the first frame in 134 ms;
+  - Settings passed through `combined`.
+- **Found in the first run** (1f143a06): `settings_react` stepped the Picture row from image straight to none. It now steps through combined.
+- **Left:** a real screen. These were QEMU's 1280 × 800 (MC-12.1).
+
 ## Related
 
 [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done), [000-APP-0050](../issues-done/000-APP-0050-wm-background-pictures-and-pattern-settings.done), [000-APP-0091](000-APP-0091-wms-background-by-rows.md) (the frame time), [000-APP-0048](000-APP-0048-wm-settings.md) (Settings).
