@@ -1,6 +1,6 @@
 //! A copy of the tool itself that it starts and talks to: an echo for IPC (`--child`), the memory probes of `check`
-//! (`--probe kernel|code|null`), which must be stopped by a fault, a reader of its text input (`--reader`), and one that
-//! says which launch slots it holds (`--slots`).
+//! (`--probe kernel|code|null`), which must be stopped by a fault, a reader of its text input (`--reader`), one that
+//! says which launch slots it holds (`--slots`), and one that ends at once with a code (`--exit N`).
 use alloc::format;
 use alloc::string::String;
 use core::hint::black_box;
@@ -47,6 +47,29 @@ fn session(program: &str, args: &str, endpoint: Endpoint) -> Result<u32, String>
 pub fn start(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
     let session = session(program, args, endpoint)?;
     loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// `start` with the program's exit notice sent to `endpoint` as well (loader 1.11 `watch`, 800-KRN-0138).
+pub fn start_watched(program: &str, args: &str, endpoint: Endpoint) -> Result<u64, String> {
+    let session = session(program, args, endpoint)?;
+    let watched = ipc::mint(endpoint.0, CAP_READ, 0, 0).map(|notices| {
+        let watched = loader::watch(Endpoint::LOADER, session, notices);
+        let _ = ipc::drop_cap(notices);
+        watched
+    });
+    if !matches!(watched, Ok(Ok(Ok(())))) { let _ = loader::abort(Endpoint::LOADER, session); return Err(format!("watch: {:?}", watched)); }
+    loader::commit(Endpoint::LOADER, session).map_err(|e| format!("loader: {:?}", e))?.map_err(|e| format!("loader: {:?}", e))
+}
+
+/// How `pid` ended, from its exit notice on `endpoint` (up to 10 s); other messages before it are passed over.
+pub fn exit_notice(endpoint: Endpoint, pid: u64) -> Result<mind::process::Exit, String> {
+    for _ in 0..4 {
+        match endpoint.recv_timeout(0, 10_000) {
+            Ok(m) => if let Some(exit) = m.exit.filter(|e| e.pid == pid) { return Ok(mind::process::Exit::from_reason(exit.reason)); },
+            Err(e) => return Err(format!("no exit notice of PID {}: {:?}", pid, e)),
+        }
+    }
+    Err(format!("no exit notice of PID {} among 4 messages", pid))
 }
 
 /// `start` with a send-only copy of `endpoint` lent in every other launch slot as well, in one session (000-KRN-0101).

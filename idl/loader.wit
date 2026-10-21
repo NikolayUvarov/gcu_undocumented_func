@@ -1,8 +1,9 @@
 /// Program loader: lists and starts application programs from the boot disk. A launch with capabilities is a session
 /// (1.1): the caller names the program, lends the capabilities it decides to give (MC-3.11: the program only requests
 /// them, see `inspect`), then commits. A client badged `BADGE_HELPERS_ONLY` (`mind::process`, 1.10) may only list,
-/// inspect and start helpers: every call that starts a program or opens a session is refused with `rights`.
-package mind:loader@1.10.0;
+/// inspect and start helpers: every call that starts a program or opens a session is refused with `rights`. A caller
+/// may end the programs the loader started for it and learn how they ended (1.11).
+package mind:loader@1.11.0;
 
 interface loader {
     /// Why a launch session failed; `unreadable` (1.7): the program's file could not be read, its drive does not answer.
@@ -53,4 +54,11 @@ interface loader {
     /// the writer of that input (`mind::io::Writer`), whose `CAP_INFO` names the program's PID. The program reads it with
     /// `mind::io` to its end, which comes when the writer closes it or no copy of the writer is left.
     commit-with-input: func(session: u32, front: bool) -> result<own<text>, error>;
+    /// The exit notice of the program this session starts goes to `notices`, an endpoint that must carry the right to
+    /// receive (`rights`): when it ends, a receive there gets msg[1] = MSG_FLAG_EXIT, data = [PID, reason] (TASK_WATCH,
+    /// sender PID 0). The loader keeps the copy until the commit or `abort` (1.11, 800-KRN-0138).
+    watch: func(session: u32, notices: borrow<endpoint>) -> result<_, error>;
+    /// Ends program `pid`, which the loader started for the caller (`run` or a commit); `not-found` for any other task
+    /// or one that has ended (1.11, 800-KRN-0138).
+    stop: func(pid: u64) -> result<_, error>;
 }
