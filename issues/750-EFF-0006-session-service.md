@@ -100,3 +100,15 @@ synchronous: separate connections alone do not make heartbeat independent.
 The transport executor, JSON adapter, 0007 durable store, existing KRN grants
 and APP configuration requests, SSE/pins and all QEMU/live/hardware acceptance
 remain open. No agent registration or remote operation was performed.
+
+## First slice — 2026-10-21
+
+The service runs as a program started from the shell (`effector data/effector/effector.conf [--for SECONDS]`), with what the shell lends: its flow grant, the TLS client, the parser and a file client confined to `data/effector/` ([docs/effector/README.md](../docs/effector/README.md), "Running the session").
+
+- **Built:** `effector/src/main.rs` on the session core, `wire.rs` (the contract's heartbeat and ACK bodies; poll and `{"status":"ok"}` answers read from `parse.json`'s values with fields, types and duplicate keys checked, unknown fields skipped, Go's zero time as no expiry), `config.rs`, `journal.rs`, and 750-EFF-0004's writer. One loop, heartbeat first, every request bounded by 3 s of silence over one pinned HTTPS connection.
+- **Found and fixed on the way:**
+  - the core refused the real server's command IDs, which carry `.`; command IDs now accept it, agent IDs keep the contract's grammar (a host test added);
+  - polling while an answer waited for its ACK made the server hand over commands the agent then refused as busy, and the server delivers each command once: the agent now polls with `at_capacity=1` while busy;
+  - the program's first build overflowed its 64 KiB stack at entry (a 69 KiB frame in `main`, a page fault shown by `faults`): the agent, its connection and the session are on the heap, and the large steps run in frames of their own.
+- **Tested** in QEMU, x86_64 and aarch64 (`tests/qemu_smoke.py --suites effector`, now in CI's network groups), against `tests/effector_server.py`: online for 30 s with 21 heartbeats at most 1.6 s apart; three commands answered `denied` after journaling; an ACK the server answered with 500 retried and accepted; a `shutting_down` heartbeat; restarted, three saved answers read back and sent again, and a redelivered command answered from the journal without a second entry; a server with another certificate refused before any request; the token absent from the whole log. Host tests: `tests/effector_{session,wire,config,journal,json}_host.rs`.
+- **Against the acceptance criteria:** met for the fixture in QEMU: online, a shell action denied, a wrong pin refused, a repeated command ID not run twice, an ACK failure retried. Open: ten minutes online and readiness for operations; a cut stream (no stream yet: polling only) and a cut connection; the boot service with only its grants (750-KRN-0119) and its row in the `isolation` suite; the token in a private directory; journal retention.
