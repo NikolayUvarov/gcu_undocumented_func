@@ -4077,14 +4077,16 @@ def modes_suite(args):
                 state = "development, as set by disk" if words else "normal, as set by disk"
                 assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
-                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE CHANGE REFUSED: PID ")
+                # The refusal names its caller and the clause it enforces (850-KRN-0146).
+                refusal = vm.command("dmesg -s init", raw=True)
+                assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 0\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
-          "the modes and is refused a change, which init logs", flush=True)
+          "the modes and is refused a change, which init logs with its clause (MC-12.6)", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):

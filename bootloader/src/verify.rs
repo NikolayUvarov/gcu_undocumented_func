@@ -25,9 +25,9 @@ impl<'a> Manifest<'a> {
     /// The manifest, if `signature` is the built-in key's over exactly `text` and the text is of format 1.
     pub fn verified(text: &'a [u8], signature: &[u8]) -> Result<Self, &'static str> {
         let key = VerifyingKey::from_bytes(&KEY).map_err(|_| "the built-in key is not a key")?;
-        let signature: [u8; 64] = signature.try_into().map_err(|_| "a signature is 64 bytes")?;
-        key.verify_strict(text, &Signature::from_bytes(&signature)).map_err(|_| "bad signature")?;
-        if !text.starts_with(b"MIND-MANIFEST 1\n") { return Err("another manifest format"); }
+        let signature: [u8; 64] = signature.try_into().map_err(|_| "a signature is 64 bytes (MC-9.1)")?;
+        key.verify_strict(text, &Signature::from_bytes(&signature)).map_err(|_| "bad signature (MC-9.1)")?;
+        if !text.starts_with(b"MIND-MANIFEST 1\n") { return Err("another manifest format (MC-4.13)"); }
         Ok(Manifest { text })
     }
 
@@ -35,10 +35,10 @@ impl<'a> Manifest<'a> {
 
     /// Whether `data` is the file `name` as the manifest lists it.
     pub fn check(&self, name: &str, data: &[u8]) -> Result<(), &'static str> {
-        let line = self.lines().find(|l| field(l, 0) == Some(b"file") && field(l, 1) == Some(name.as_bytes())).ok_or("not in the manifest")?;
+        let line = self.lines().find(|l| field(l, 0) == Some(b"file") && field(l, 1) == Some(name.as_bytes())).ok_or("not in the manifest (MC-9.1)")?;
         let size = core::str::from_utf8(field(line, 2).unwrap_or(b"")).ok().and_then(|s| s.parse::<usize>().ok());
         let digest = field(line, 3).and_then(hex);
-        if size != Some(data.len()) || digest.as_ref() != Some(Sha256::digest(data).as_ref()) { return Err("not as the manifest says"); }
+        if size != Some(data.len()) || digest.as_ref() != Some(Sha256::digest(data).as_ref()) { return Err("not as the manifest says (MC-9.1)"); }
         Ok(())
     }
 

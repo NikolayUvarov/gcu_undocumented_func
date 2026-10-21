@@ -843,8 +843,11 @@ impl Init {
         }
     }
 
+    // init and the shell are the last recovery boundary: no client stops them (MC-6.8).
+    fn kept(index: usize) -> bool { index == 0 || unit_name(index) == "shell" }
+
     fn stop_service(&mut self, index: usize) -> core::result::Result<(), idl_init::Error> {
-        if index == 0 || unit_name(index) == "shell" { return Err(idl_init::Error::Denied); }
+        if Self::kept(index) { return Err(idl_init::Error::Denied); }
         if !self.running(index) { return Err(idl_init::Error::Stopped); }
         let pid = self.pids[index];
         self.stopped[index] = true;
@@ -871,10 +874,16 @@ impl Init {
                 idl_init::reply_run(call, result)
             }
             Request::List => idl_init::reply_list(call, Ok(&self.list()[..])),
-            Request::Stop { name } => { let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| self.stop_service(i)); idl_init::reply_stop(call, result) }
+            Request::Stop { name } => {
+                let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
+                    if Self::kept(i) { return Err(refused(sender, badge, "STOP", format_args!("STOP {}", unit_name(i)), "MC-6.8")); }
+                    self.stop_service(i)
+                });
+                idl_init::reply_stop(call, result)
+            }
             Request::Restart { name } => {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
-                    if i == 0 || unit_name(i) == "shell" { return Err(E::Denied); }
+                    if Self::kept(i) { return Err(refused(sender, badge, "RESTART", format_args!("RESTART {}", unit_name(i)), "MC-6.8")); }
                     if self.running(i) { self.stop_service(i)?; }
                     self.start_service(i)
                 });
@@ -882,11 +891,14 @@ impl Init {
             }
             Request::StopTask { pid } => {
                 let service = pid == INIT_PID || (1..UNITS).any(|i| self.pids[i] == pid && self.running(i));
-                let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
+                // A service stops through `stop`, by init, which keeps its lifecycle and quiets its device (MC-6.8).
+                let result = if service { Err(refused(sender, badge, "STOP", format_args!("STOP PID {}, A SERVICE", pid), "MC-6.8")) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
             // Only the updater's badged client may restart the machine (351-KRN-0022).
-            Request::Reboot if badge != mind::process::BADGE_REBOOT => idl_init::reply_reboot(call, Err(E::Denied)),
+            Request::Reboot if badge != mind::process::BADGE_REBOOT => {
+                idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
+            }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
             // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
@@ -907,8 +919,7 @@ impl Init {
             mind::process::BADGE_MODE => "operator",
             mind::process::BADGE_MIND if on && which == Mode::Maintenance => "mind",
             _ => {
-                mind::println!("[INIT] MODE CHANGE REFUSED: PID {} (BADGE {}) MAY NOT TURN {} {}", sender, badge, name, if on { "ON" } else { "OFF" });
-                return Err(idl_init::Error::Denied);
+                return Err(refused(sender, badge, "MODE CHANGE", format_args!("TURN {} {}", name, if on { "ON" } else { "OFF" }), "MC-12.6"));
             }
         };
         let mut modes = self.modes;
@@ -1041,6 +1052,12 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
     let mut end = text.len().min(N);
     while !text.is_char_boundary(end) { end -= 1; }
     mind::idl::codec::Text::new(&text[..end]).unwrap_or_default()
+}
+
+// A client's request refused: one log line that names the caller and the clause it enforces (850-KRN-0146).
+fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, clause: &str) -> idl_init::Error {
+    mind::println!("[INIT] {} REFUSED: PID {} (BADGE {}) MAY NOT {} ({})", what, sender, badge, action, clause);
+    idl_init::Error::Denied
 }
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
