@@ -4987,7 +4987,7 @@ def linkupdate_suite(args):
     out: the boot files' blobs and the signed manifest, then a channel whose signature was changed, refused with no
     boot record written, then the channel as published. The updater takes version 6 from that directory into slot B,
     boots it on trial through init's restart and confirms it on the disk; mindlink's `log` reads each step from the
-    other end."""
+    other end. Without `dev` in link.conf, link holds none of the developer mode's grants (800-KRN-0139)."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: linkupdate suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
@@ -5029,6 +5029,12 @@ def linkupdate_suite(args):
     try:
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         require(link("hello"), '"MIND Core link"')
+        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33).
+        pids = vm.services()
+        caps = vm.command(f"stat caps {pids['link']}", raw=True)
+        servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+        granted = {int(slot) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M) if servers.get(int(ep)) != pids["link"]}
+        assert {2, 3, 12} <= granted <= {2, 3, 5, 12}, caps
         started = time.monotonic()
         for path in files:
             link("mkdir", f"rel/{path.rpartition('/')[0]}")
