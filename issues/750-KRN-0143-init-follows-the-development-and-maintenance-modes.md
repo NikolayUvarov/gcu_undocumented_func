@@ -57,12 +57,12 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
   - `set-mode` writes the file whole, then logs `[INIT] MODE <which> ON|OFF BY operator|mind (PID, BADGE): <reason>`; a refusal logs the caller's PID and badge;
   - the Effector services follow the modes once they exist; this build says it has none.
 - **`check services`:** "the modes" reads them; "a mode change refused" asks with its lifecycle client and must be denied (both in the bench suite's `CHECKS_PASS`).
-- **The `modes` QEMU suite** (x86): the development mode and an unknown word from `data/mode.conf`, the shell's `SLOT_MODE` badged 3 and no other client of `init` so badged, `check services`' two rows, the refusal logged; a second boot with no file in the normal mode.
+- **The `modes` QEMU suite**, in "x86: services, storage, audio" and "aarch64: files, network and TLS" (both passed locally): the development mode and an unknown word from `data/mode.conf`, the shell's `SLOT_MODE` badged 3 and no other client of `init` so badged, `check services`' two rows, the refusal logged; a second boot with no file in the normal mode.
 - **Left:**
   - the services' part, with 750-KRN-0119;
   - `set-mode` through `BADGE_MODE`, once the shell's `mode` command (APP) calls it;
   - `BADGE_MIND`'s holder, the Mind;
-  - aarch64, and the three-reboot criterion.
+  - the three-reboot criterion.
 
 ## Settled
 
