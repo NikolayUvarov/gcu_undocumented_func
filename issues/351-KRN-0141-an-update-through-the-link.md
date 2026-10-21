@@ -46,6 +46,27 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 - [ ] The directory source's checks are the HTTPS source's, said by the update track (or fixed).
 - [ ] On the maintainer's MacBook Pro, a release put over RS-485 is installed and confirmed (the maintainer's run, recorded here with its configuration).
 
+## Progress (2026-10-21)
+
+**The `linkupdate` suite is written** (`tests/qemu_smoke.py`, in the groups "x86: files and block writes" and "aarch64: files, network and TLS").
+- **The image:** the update suite's, with `link.conf` (`baud=115200`, no `dev`) and `update.txt` naming `data/link/rel`, no network card. The release building moved into `update_releases()`, shared with the update suite.
+- **What goes through the link:** only what the updater reads from its source. That is the boot files' blobs, `releases/6/<arch>/MANIFEST` and `MANIFEST.SIG`, then `channels/stable`. Each is put by its own `mindlink mkdir` and `put`.
+- **What it checks:**
+  - a channel whose signature was changed is refused (`CHECK: REFUSED: Signature`, read with `mindlink log`), and nothing is fetched or recorded;
+  - the channel as published is fetched from the directory into slot B and booted on trial; init confirms it;
+  - the updater confirms slot B on the disk, read again with `mindlink log` after the restart;
+  - the records, slot B's files and the file system are as the update suite finds them;
+  - without `dev`, `link` holds none of the developer mode's grants (for 800-KRN-0139).
+- **Local runs, this machine's QEMU, 4 CPUs, two each, all passed:**
+
+  | Architecture | Files | Bytes | Time to put them through the link |
+  |---|---|---|---|
+  | x86 | 43 | 9 643 243 | 185 s and 186 s (about 52 KB/s) |
+  | aarch64 | 37 | 8 590 656 | 294 s and 289 s |
+
+- **Left for criterion 1:** the gate. The suite is on `claude/youthful-mendel-mf1soy` 7361af5 and goes to `main` through the landing queue.
+- **For criterion 2:** the suite shows that the directory source refuses a bad signature and that its release passes the manifest's digests, through the same `stage()` as HTTPS. Whether it checks all that HTTPS checks (an expired or older channel, a changed blob, a resumed file) is still the update track's to say.
+
 ## Related
 
 [351](351-self-update.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater), [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done) (images with slots), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md) (directories over the link), [800-LNK-0011](800-LNK-0011-effector485.md) (`effector485`).
