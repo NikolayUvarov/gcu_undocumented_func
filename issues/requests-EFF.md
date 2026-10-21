@@ -6,7 +6,7 @@
 
 The maintainer explicitly assigns native-agent implementation to MIND Core,
 not to the Effector server project. Continue the existing tasks
-[0003](750-EFF-0003-interface-and-policy.md),
+[0003](../issues-done/750-EFF-0003-interface-and-policy.done),
 [0006](750-EFF-0006-session-service.md),
 [0007](750-EFF-0007-gateway-service.md),
 [0008](750-EFF-0008-application-packages.md) and

@@ -155,12 +155,16 @@ pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
         match socket::ping(STACK, target, asked.wait_ms) {
             Ok(Ok(us)) => {
                 tally.reply(us);
-                if !asked.fast { let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us); }
+                if !asked.fast {
+                    crate::ping::place(out, tally.sent, asked.count);
+                    let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us);
+                }
             }
             Ok(Err(Error::Timeout)) if asked.fast => { tally.lost(); dots = true; let _ = write!(out, "."); }
             Ok(Err(error)) => {
                 tally.lost();
                 if core::mem::take(&mut dots) { let _ = writeln!(out); }
+                crate::ping::place(out, tally.sent, asked.count);
                 failed(out, "PING", error);
                 if matches!(error, Error::Denied | Error::Invalid) { break; }
             }

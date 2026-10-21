@@ -8,8 +8,8 @@ Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `l
 
 Numbered on 2026-10-20:
 
-- the shell lending a TLS client without the device certificate, for 351-NET-0022: [351-APP-0083](351-APP-0083-tls-without-the-device-certificate.md);
-- the shell lending the SSH service's client, for 351-NET-0027: [351-APP-0084](351-APP-0084-the-shell-lends-the-ssh-client.md);
+- the shell lending a TLS client without the device certificate, for 351-NET-0022: [351-APP-0083](../issues-done/351-APP-0083-tls-without-the-device-certificate.done);
+- the shell lending the SSH service's client, for 351-NET-0027: [351-APP-0084](../issues-done/351-APP-0084-the-shell-lends-the-ssh-client.done);
 - `ip` showing each card's kind and the default card, for 550-NET-0025: [550-APP-0085](../issues-done/550-APP-0085-ip-shows-each-cards-kind.done);
 - the safe start shown by the shell and `wm`, for 000-KRN-0076: [000-APP-0086](../issues-done/000-APP-0086-the-safe-start-shown.done);
 - `app`, `app2` and `dzen-clock` cleaned, from the critique of 2026-10-14: [000-APP-0087](../issues-done/000-APP-0087-app-app2-and-dzen-cleaned.done);

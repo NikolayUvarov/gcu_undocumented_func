@@ -88,22 +88,57 @@ The tracks — codes, ranges, directories, owners, branches, statuses and starti
    - fix the relative links and update both tables in `issues/README.md`.
 
    If only part is done, the issue stays open with a progress section. If the remainder is large, split it into a new issue.
-8. **Push your branch, then get the work into `main`** (section 4).
+8. **Push your branch, then post a landing request** (section 4).
 
 ## 4. Getting to `main`
 
-**Agents of the maintainer** push a fast-forward to `main` after a green gate:
+**Code reaches `main` through the landing queue** (the maintainer's decision, 2026-10-21). One integrator gates the tree that becomes `main`, so no track gates against a `main` that another track is about to move.
 
-```bash
-git fetch origin && git merge-base --is-ancestor origin/main HEAD && git push origin HEAD:main
-```
+- **Why.** When every track gated its own branch against `main` and pushed after a green gate, the first push made every other gate in flight stale. Each one had to merge the new `main` and gate again for one to two hours, and the gates loaded the same machines until their timing checks failed.
+- **The integrator** is the kernel track's session, the orchestration track (2026-10-21). The maintainer may name another.
+  - It alone pushes code to `main`, with `scripts/land.sh`.
+  - It does not change a track's code. A candidate that fails returns the failing request to its track (section 5).
 
-If `main` has moved, merge it into your branch first, run the gate again and retry.
+**A track that has code ready:**
 
-The gate is one of the following:
+1. **Brings in `main`** and resolves any conflict on its own branch.
+2. **Runs the tests its change touches** there (section 3, step 4), and pushes the branch.
+3. **Posts a landing request.** This is a message on `internal-dev-messages` (section 5), `LANDING/<YYYY-MM-DDTHHMMZ>-<TRK>-ready-<subject>.md`. Its line ``**Ready:** `<branch>` <commit>`` names what to land. The message also says:
+   - which issues it closes or advances;
+   - what was tested, and where.
 
-- **GitHub CI is green** on the pushed commit.
-- **Or a full local run** when GitHub's hosted runners do not take the jobs. Run `scripts/ci_local.sh --ref <your-branch>`, which tests the branch merged with the current `main` in a temporary worktree. Every group must pass, and the commit or report must say that the gate was local.
+   A later request for the same branch replaces an earlier one that was not answered yet.
+4. **Waits for the answer** in `LANDING/`: `**Landed:**` or `**Returned:**` with the reason. It never pushes code to `main` itself, and never gates for `main` having moved.
+
+**A landing round** (`scripts/land.sh`):
+
+1. **`queue`:** the requests not answered yet, oldest first.
+2. **`candidate --push`:** `main` with each pending request merged in, in order.
+   - The merges are not rebased and not squashed, so each track's commits and authorship stay.
+   - A request whose merge with `main` and the requests before it conflicts in code is returned at once.
+   - A conflict in text only (the files of the text-only rule below, such as `issues/README.md`) the integrator resolves with `resolve`, keeping both sides, and the request stays in the round. Git records the resolution (`rerere`), and the next `candidate` reuses it.
+   - The candidate is published on the integrator's branch (`claude/KRN-landing`) for the machines.
+3. **`gate`:** every group of `scripts/ci_local.sh --list`, once, on the candidate's exact tree.
+   - The groups run in parallel over the Effector machines (presets `full`, and `no-i9` while another gate loads i9).
+   - A group that failed runs once more, alone, before the gate is called red ([docs/effector.md](docs/effector.md), section 1).
+   - GitHub CI green on the candidate's commit is a gate too.
+4. **`push`:** `main` fast-forwards to the candidate, after a green gate of that very commit.
+   - If `main` moved meanwhile by text-only commits, they are merged in without another gate.
+   - If it moved with code, the round starts again.
+5. **`announce`:** one answer in `LANDING/` names each request landed, returned or superseded.
+
+**A candidate that fails** costs one round, not one per track:
+- The integrator finds the request that broke it: the failing group's area, or a candidate without the suspect (`candidate --exclude <branch>`).
+- That request is returned with the failure, and the others land in the next round without new requests.
+- A request that arrives while a candidate is gated waits for the next round.
+
+**While a candidate is gated** on the machines the integrator names in `ALL`, the tracks run nothing heavy of their own there.
+
+**If no round has run for 24 hours** while requests wait, or the maintainer says so, a track may land its own request as before:
+- it merges `main`;
+- it gates that tree in full (`scripts/ci_local.sh --ref <branch>` or every group through Effector);
+- it pushes a fast-forward: `git fetch origin && git merge-base --is-ancestor origin/main HEAD && git push origin HEAD:main`;
+- it says so in `LANDING/`.
 
 **A text-only commit needs no gate** (the maintainer's decision, 2026-10-09).
 
@@ -112,11 +147,11 @@ The gate is one of the following:
   - the root's AGENTS.md, CONTRIBUTING.md, TRACKS.md, README.md, ROADMAP.md, ROADMAP_RU.md, SECURITY.md and CODE_OF_CONDUCT.md;
   - the Constitution's and RFCs' texts.
 - **Why.** A test run says nothing about such files.
-- **How.** Such a commit goes to `main` as a fast-forward, as above, without waiting for CI or a local run. Its message says the gate was not needed.
+- **How.** Anyone pushes such a commit to `main` as a fast-forward (`git fetch origin && git merge-base --is-ancestor origin/main HEAD && git push origin HEAD:main`), without the queue, CI or a local run. Its message says the gate was not needed.
 - **Everything else is code for this rule** and passes the gate:
   - source, scripts, build and CI files, IDL, tests and their data, `.gitignore`;
   - the files the build copies into images: THIRD_PARTY.md, the LICENSE files, `LICENSES/`, `hwdocs/`.
-- **A commit that mixes both** passes the gate.
+- **A commit that mixes both** goes through the landing queue.
 - **Messages between tracks** do not go to `main` at all. They go to `internal-dev-messages` (section 5), which needs no gate.
 
 **Everyone else** opens a pull request from a fork or branch. The pull request:
@@ -124,14 +159,14 @@ The gate is one of the following:
 - states its issue and the Constitution clauses it touches;
 - shows the result of `scripts/ci_local.sh` if CI could not run.
 
-The maintainer or the owning track reviews and merges it.
+The maintainer or the owning track reviews it, and the integrator lands it through the queue like a track's request.
 
 **`fast-test`: raw commits for tests on hardware.** This branch is `main` plus commits that have not passed the gate yet. Only the maintainer builds it, to try a fix on a real machine at once, without waiting for the tests.
 
 - **An agent never builds, tests or gates `fast-test`** (a strict rule): no build, no test suite, no `scripts/ci_local.sh` on it or on a worktree of it. Builds, tests and gates run only on the agent's own branch.
 - **The order:** an agent of the maintainer commits on its own branch and makes sure it builds there; then merges its branch into `fast-test` (or fast-forwards it), resolves any conflict in the merge, and pushes the merge as it is; only then runs the tests and the gate, on its own branch. Never force-push `fast-test`.
 - When `main` moves, it is merged into `fast-test`.
-- Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the gate.
+- Nothing goes from `fast-test` to `main`. The same commits reach `main` from the agent's own branch, through the landing queue.
 - A build from `fast-test` is not evidence of anything (section 1) until its commits pass the gate.
 
 **A maintainer's machine can run the gate continuously.** `scripts/ci_watch.sh` fetches `origin` every 10 minutes. It tests each new commit of `main`, and of every other branch merged with `main`, and keeps a history in `~/.cache/mind-ci-watch/history.log`. Run it with `--once` for a single pass.
@@ -160,10 +195,11 @@ The maintainer or the owning track reviews and merges it.
     - questions and their answers;
     - notices ("the change is in `fast-test`", "the request is recorded");
     - remarks on another track's text or code;
-    - claims of tracks, agreements to join one and track proposals (section 2).
-  - **Who they go to:** a track, `ALL` (every track, or several named in the header) or the maintainer (`HUMAN`).
+    - claims of tracks, agreements to join one and track proposals (section 2);
+    - landing requests and the integrator's answers, in `LANDING/` (section 4).
+  - **Who they go to:** a track, `ALL` (every track, or several named in the header), the maintainer (`HUMAN`), or `LANDING` for the landing queue.
   - **One file per message:** `<TO>/<YYYY-MM-DDTHHMMZ>-<FROM>-<subject>.md`, in English. It is never edited once pushed. An answer is a new file in the asker's directory that names the question.
-  - **Read** your track's directory and `ALL` at the start of every session and before each task (section 3, step 2).
+  - **Read** your track's directory, `ALL` and the answers to your requests in `LANDING/` at the start of every session and before each task (section 3, step 2).
   - **Write** from a worktree of that branch, never from your track's branch. Push one message per commit. If the branch moved, rebase only your unpushed message and push again. Never force-push it, and never merge it into another branch or another branch into it.
   - **Nothing binding lives there.** The message points to the record on `main`:
     - a request is still recorded in `issues/requests-<TRK>.md`;
@@ -177,7 +213,7 @@ The maintainer or the owning track reviews and merges it.
 
 ## 6. What an agent must not do
 
-- Push to `main` without a green gate, except a text-only commit (section 4), or push to another track's branch.
+- Push code to `main` itself (only the integrator does, through the landing queue; a text-only commit goes directly, section 4), or push to another track's branch.
 - Build, test or run a gate on `fast-test`: it only receives merges of the agents' branches (section 4).
 - Put code, secrets or vulnerability details on `internal-dev-messages`, force-push it, edit a pushed message, or merge it with another branch (section 5).
 - Skip, disable or weaken a test to get a green result, or push an empty commit to re-trigger CI.
@@ -197,7 +233,7 @@ You work on MIND Core (github.com/NikolayUvarov/gcu_undocumented_func) in the <n
 Read AGENTS.md, CONTRIBUTING.md, issues/README.md and the issue you are given before changing anything.
 Your branch: <tool>/<TRK>-<name>. Your tasks: NNN-<TRK>-MMMM (your counter starts at <MMMM>); main tasks from <range>.
 Your directories: <list>. Requests to a track with an owner go to issues/requests-<THEIR TRK>.md; a change your task needs in an open track (no owner) you may make yourself as that track's task (AGENTS.md section 5).
-Never push to other branches but fast-test and internal-dev-messages; reach main only through the gate in AGENTS.md section 4.
+Never push to other branches but fast-test and internal-dev-messages; code reaches main only through the landing queue (AGENTS.md section 4): post a landing request in LANDING/ on internal-dev-messages and read the answer there.
 Messages to and from other tracks and the maintainer: the branch internal-dev-messages (its README.md; AGENTS.md section 5). Read <TRK>/ and ALL/ there at the start of every session and before each task; write one file per message, from a worktree of that branch.
 Remote build machines (Effector): read docs/effector.md first; before each batch of work see which machines are free and choose the one that suits best (docs/effector.md, section 3); long work runs one operation at a time in a machine's queues, in your track's own directory and TMPDIR.
 Build, test and gate only your own branch: once a commit builds, merge it into fast-test and push, then run the tests on your branch. Never build or test fast-test.

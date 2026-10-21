@@ -1,0 +1,51 @@
+# 750-EFF-0005 — `mind::zip`: a bounded ZIP reader — done
+
+**Type:** library (`libmind`) · **Owner:** `EFF` track · **Priority:** P2 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-11.5, MC-11.11, MC-5.1
+
+## Problem
+
+- **Format.** Effector delivers a deployment package as a ZIP archive with `manifest.json` at its root. MIND Core has no ZIP reader.
+- **Hostile input.** An archive from the network can be a zip bomb, hold paths that escape the target directory, or lie about its sizes.
+
+## Plan
+
+- **`libmind/src/zip.rs`, `no_std`.**
+- **Reading:**
+  - the central directory;
+  - the stored and deflate methods, with deflate from `miniz_oxide` (`no_std`; its licence goes in `THIRD_PARTY.md`);
+  - CRC-32 checked;
+  - ZIP64 refused unless needed.
+- **Limits:**
+  - number of entries;
+  - name length;
+  - uncompressed size per entry and in total;
+  - compression ratio.
+- **Names:**
+  - relative, `/`-separated, no `..`, no absolute paths, no drive letters, no duplicates;
+  - a name the target volume cannot hold is refused.
+- **Encrypted entries are refused.** The agent accepts only packages whose authenticity rests on a MIND Core signature (0008), not on an archive password.
+- **Host tests:**
+  - archives made by `zip` and by 7-Zip;
+  - stored and deflate entries;
+  - bombs, traversal names, bad CRCs and truncated files refused.
+
+## Acceptance criteria
+
+- The host tests pass in `scripts/ci_local.sh`.
+- `THIRD_PARTY.md` records `miniz_oxide`.
+- A fuzz target is listed for 500.
+
+## Related
+
+[750](../issues/750-effector-agent.md), [750-EFF-0008](../issues/750-EFF-0008-application-packages.md), [500](../issues/500-fuzzing-abi-and-idl.md).
+
+## Resolution
+
+Done on 2026-10-21 by the `EFF` track.
+
+- **`libmind/src/zip.rs`** (`mind::zip`, behind `alloc`): the central directory read and checked whole before any entry is read; entries handed to a sink a piece at a time, stored or deflated, through `libmind`'s own `inflate` (000-APP-0050), so **no third-party crate** was needed (`miniz_oxide` was the plan; `THIRD_PARTY.md` is unchanged).
+  - Limits (`Limits`): entries, name length, the largest entry, the total, and the compression ratio, each checked from the directory before decompression, and the output counted while it is produced: more bytes than announced stop the read.
+  - Refused: encrypted entries (`Encrypted`: a package's authenticity rests on its signature), ZIP64 and several disks (`Unsupported`), methods other than stored and deflate, names that are empty, absolute or hold `..`, `.`, an empty part, `\`, `:` or a control character, and repeated names (`Name`), a local header that disagrees with the directory, structures past the data (`Malformed`), a wrong size or CRC-32 (`Corrupt`), a sink that cannot keep a piece (`Sink`).
+- **Tests:** `tests/zip_host.rs`, 9 host tests on archives made by zip, 7-Zip and Python (`tests/data/zip/make.sh`, the archives committed): both tools' deflate read back to the same bytes; stored entries and directories; traversal, absolute, backslash, drive-letter, dot and duplicate names; an 8 MiB bomb in 8 KiB; an encrypted entry; every limit; a wrong CRC; a size the directory understates; cut, ZIP64 and multi-disk archives; an unknown method; the CRC-32 check value; and seeded fuzzing of 4000 mutated archives (`MIND_FUZZ_SEED`, `MIND_FUZZ_ITERATIONS`, as 500-ASR-0001's fuzzer takes them), which never panics. In `scripts/host_tests.sh`.
+
+**Changed from the plan:** deflate from `libmind/src/inflate.rs` instead of `miniz_oxide`; the fuzz target is this test's seeded loop, named to the assurance track for 500.
