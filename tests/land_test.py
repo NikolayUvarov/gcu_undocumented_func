@@ -174,6 +174,46 @@ def test_candidate_push_and_announce():
         assert "**Returned:** `2026-10-21T1020Z-T2-ready-x.md`" in text, text
 
 
+def test_a_text_conflict_waits_for_a_hand_merge():
+    with tempfile.TemporaryDirectory() as temp:
+        temp = pathlib.Path(temp)
+        origin, repo, work = temp / "origin.git", temp / "repo", temp / "work"
+        git("init", "-q", "--bare", str(origin), cwd=temp)
+        git("init", "-q", "-b", "main", str(repo), cwd=temp)
+        git("remote", "add", "origin", str(origin), cwd=repo)
+        commit(repo, "issues/README.md", "| base |\n", "base")
+        git("push", "-q", "origin", "main", cwd=repo)
+        git("checkout", "-q", "-b", "claude/A", cwd=repo)
+        commit(repo, "src.rs", "fn a() {}\n", "code")
+        a = commit(repo, "issues/README.md", "| base |\n| A |\n", "claude/A")
+        git("push", "-q", "origin", "claude/A", cwd=repo)
+        git("checkout", "-q", "--orphan", "internal-dev-messages", cwd=repo)
+        git("rm", "-q", "-rf", ".", cwd=repo)
+        commit(repo, "LANDING/2026-10-21T1000Z-T0-ready-a.md", f"**Ready:** `claude/A` {a}\n", "request")
+        git("push", "-q", "origin", "internal-dev-messages", cwd=repo)
+        git("checkout", "-q", "main", cwd=repo)
+        run_land(repo, work, "candidate")
+        (work / f"gate-{a[:12]}.json").write_text(json.dumps({"commit": a, "green": True}))
+        commit(repo, "issues/README.md", "| base |\n| main |\n", "text only, the same lines")
+        git("push", "-q", "origin", "main", cwd=repo)
+
+        tree = work / "candidate"
+        assert "resolve the merge in" in run_land(repo, work, "push", ok=False)
+        assert git("rev-parse", "main", cwd=origin) != a
+        # A hand merge that brings code is refused.
+        (tree / "issues/README.md").write_text("| base |\n| A |\n| main |\n")
+        (tree / "src.rs").write_text("fn b() {}\n")
+        git("commit", "-q", "-am", "merge", cwd=tree)
+        assert "changes code (src.rs)" in run_land(repo, work, "push", ok=False)
+        git("reset", "-q", "--hard", a, cwd=tree)
+        subprocess.run(["git", "merge", "-q", "origin/main"], cwd=tree, env=ENV, capture_output=True)
+        (tree / "issues/README.md").write_text("| base |\n| A |\n| main |\n")
+        git("commit", "-q", "-am", "merge", cwd=tree)
+        run_land(repo, work, "push")
+        assert git("show", "main:issues/README.md", cwd=origin) == "| base |\n| A |\n| main |"
+        assert json.loads((work / "candidate.json").read_text())["landed_as"] == git("rev-parse", "main", cwd=origin)
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):
