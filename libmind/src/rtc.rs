@@ -12,23 +12,22 @@ pub fn seconds_since_midnight() -> Option<usize> {
 
 /// The local time of day for a program that shows it often (a clock face): the RTC service is read about once a minute
 /// and the seconds in between counted from the monotonic clock; the date is read again after local midnight
-/// (000-APP-0012). The zone is read with the RTC, so a new one shows within a minute (000-APP-0099).
+/// (000-APP-0012). The zone is read once as each resynchronization begins, so a new one shows within a minute
+/// (000-APP-0099); its reads that wait for the RTC's second to change use it.
 pub struct Clock { wall: crate::wallclock::WallClock, date: Option<(u32, u32, u32)>, zone: Zone }
 
 impl Clock {
     pub const fn new() -> Self { Self { wall: crate::wallclock::WallClock::new(), date: None, zone: Zone::UTC } }
     /// Seconds since local midnight.
     pub fn seconds_since_midnight(&mut self) -> Option<usize> {
-        let shown = &mut self.zone;
-        self.wall.seconds(crate::time::monotonic_ns(), || {
-            let utc = seconds_since_midnight()?;
-            *shown = zone();
-            Some(shown.local_seconds(utc as u32) as usize)
-        })
+        let now = crate::time::monotonic_ns();
+        if self.wall.due(now) { self.zone = zone(); }
+        let shown = self.zone;
+        self.wall.seconds(now, || seconds_since_midnight().map(|utc| shown.local_seconds(utc as u32) as usize))
     }
-    /// Today's local date.
+    /// Today's local date, in the zone the seconds are shown in.
     pub fn date(&mut self) -> Option<(u32, u32, u32)> {
-        if self.wall.date_due() || self.date.is_none() { self.date = local_now().map(|(days, _)| civil_from_days(days)); }
+        if self.wall.date_due() || self.date.is_none() { self.date = local_now_in(self.zone).map(|(days, _)| civil_from_days(days)); }
         self.date
     }
     /// The zone the time is shown in, as last read.
@@ -105,12 +104,15 @@ pub fn set_zone(zone: Zone) -> Result<(), crate::idl::rtc::Error> {
 
 /// The local date and time from one reading of the RTC: days since 2000-01-01 and seconds since midnight in the zone.
 /// A UTC midnight between the reads is read again.
-pub fn local_now() -> Option<(u32, u32)> {
+pub fn local_now() -> Option<(u32, u32)> { local_now_in(zone()) }
+
+/// The same in `zone`.
+pub fn local_now_in(zone: Zone) -> Option<(u32, u32)> {
     let first = crate::idl::rtc::now(Endpoint::RTC).ok()??;
     let days = crate::idl::rtc::date(Endpoint::RTC).ok()??;
     let seconds = crate::idl::rtc::now(Endpoint::RTC).ok()??;
     let days = if seconds < first { crate::idl::rtc::date(Endpoint::RTC).ok()?? } else { days };
-    (seconds < 86_400).then(|| zone().local(days, seconds))
+    (seconds < 86_400).then(|| zone.local(days, seconds))
 }
 
 /// Today's local date (year, month 1-12, day 1-31) and seconds since local midnight.
