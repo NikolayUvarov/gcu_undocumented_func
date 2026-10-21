@@ -115,7 +115,8 @@ The tracks — codes, ranges, directories, owners, branches, statuses and starti
 1. **`queue`:** the requests not answered yet, oldest first.
 2. **`candidate --push`:** `main` with each pending request merged in, in order.
    - The merges are not rebased and not squashed, so each track's commits and authorship stay.
-   - A request that conflicts with `main` and the requests before it is returned at once.
+   - A request whose merge with `main` and the requests before it conflicts in code is returned at once.
+   - A conflict in text only (the files of the text-only rule below, such as `issues/README.md`) the integrator resolves with `resolve`, keeping both sides, and the request stays in the round. Git records the resolution (`rerere`), and the next `candidate` reuses it.
    - The candidate is published on the integrator's branch (`claude/KRN-landing`) for the machines.
 3. **`gate`:** every group of `scripts/ci_local.sh --list`, once, on the candidate's exact tree.
    - The groups run in parallel over the Effector machines (presets `full`, and `no-i9` while another gate loads i9).

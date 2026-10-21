@@ -214,6 +214,53 @@ def test_a_text_conflict_waits_for_a_hand_merge():
         assert json.loads((work / "candidate.json").read_text())["landed_as"] == git("rev-parse", "main", cwd=origin)
 
 
+def test_a_text_conflict_is_resolved_once_and_code_returns():
+    with tempfile.TemporaryDirectory() as temp:
+        temp = pathlib.Path(temp)
+        origin, repo, work = temp / "origin.git", temp / "repo", temp / "work"
+        git("init", "-q", "--bare", str(origin), cwd=temp)
+        git("init", "-q", "-b", "main", str(repo), cwd=temp)
+        git("remote", "add", "origin", str(origin), cwd=repo)
+        commit(repo, "issues/README.md", "| base |\n\nRequests: none.\n", "base")
+        commit(repo, "src.rs", "fn base() {}\n", "base code")
+        git("push", "-q", "origin", "main", cwd=repo)
+        shas = {}
+        for branch, path, text in (("claude/A", "issues/README.md", "| base |\n| A |\n\nRequests: from A.\n"), ("claude/B", "src.rs", "fn b() {}\n")):
+            git("checkout", "-q", "-b", branch, "main", cwd=repo)
+            commit(repo, f"{branch[-1]}.rs", "fn x() {}\n", "code")
+            shas[branch] = commit(repo, path, text, branch)
+            git("push", "-q", "origin", branch, cwd=repo)
+        git("checkout", "-q", "main", cwd=repo)
+        commit(repo, "issues/README.md", "| base |\n\nRequests: from main.\n", "text")
+        commit(repo, "src.rs", "fn main_moved() {}\n", "code")
+        git("push", "-q", "origin", "main", cwd=repo)
+        git("checkout", "-q", "--orphan", "internal-dev-messages", cwd=repo)
+        git("rm", "-q", "-rf", ".", cwd=repo)
+        for n, branch in enumerate(shas):
+            commit(repo, f"LANDING/2026-10-21T10{n}0Z-T{n}-ready-x.md", f"**Ready:** `{branch}` {shas[branch]}\n", f"request {n}")
+        git("push", "-q", "origin", "internal-dev-messages", cwd=repo)
+        git("checkout", "-q", "main", cwd=repo)
+
+        run_land(repo, work, "candidate")
+        state = json.loads((work / "candidate.json").read_text())
+        assert not state["landed"] and [e["branch"] for e in state["skipped"]] == ["claude/A"], state
+        assert [e["branch"] for e in state["returned"]] == ["claude/B"] and "(src.rs)" in state["returned"][0]["why"], state
+        request = state["skipped"][0]["request"]
+        assert "issues/README.md" in run_land(repo, work, "resolve", request)
+        resolve = work / "resolve"
+        assert "<<<<<<<" in (resolve / "issues/README.md").read_text()
+        assert "markers left" in run_land(repo, work, "resolve", "--done", request, ok=False)
+        (resolve / "issues/README.md").write_text("| base |\n| A |\n\nRequests: from main; from A.\n")
+        run_land(repo, work, "resolve", "--done", request)
+
+        run_land(repo, work, "candidate", "--exclude", "claude/B")
+        state = json.loads((work / "candidate.json").read_text())
+        assert [e["branch"] for e in state["landed"]] == ["claude/A"], state
+        tree = work / "candidate"
+        assert (tree / "issues/README.md").read_text() == "| base |\n| A |\n\nRequests: from main; from A.\n"
+        assert (tree / "A.rs").exists() and "resolved as the integrator recorded it" in git("log", "-1", "--format=%B", cwd=tree)
+
+
 if __name__ == "__main__":
     for name, test in list(globals().items()):
         if name.startswith("test_"):
