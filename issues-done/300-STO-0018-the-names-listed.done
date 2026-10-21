@@ -1,6 +1,6 @@
-# 300-STO-0018 — The current names listed by prefix, page by page (`blockstore.wit` 1.4)
+# 300-STO-0018 — The current names listed by prefix, page by page (`blockstore.wit` 1.4) — done
 
-**Type:** storage (service, interface, tool, tests) · **Owner:** `STO` track · **Priority:** P2 · **Status:** in progress (built; host tests pass; the store suite's check written) · **Blocked by:** — · **Main task:** [300](../issues-done/300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.3, MC-4.7
+**Type:** storage (service, interface, tool, tests) · **Owner:** `STO` track · **Priority:** P2 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** [300](../issues-done/300-checksummed-block-store.done) · **Roadmap:** track B · **Constitution:** MC-4.3, MC-4.7
 
 From the request "A list of the published names (for `fm`'s `store:` panel)" in requests-STO.md (recorded by the tools track, 2026-10-09, for [300-APP-0038](../issues-done/300-APP-0038-block-store-panel-in-fm.done)), which this task takes from that file.
 
@@ -25,9 +25,30 @@ From the request "A list of the published names (for `fm`'s `store:` panel)" in 
 ## Acceptance criteria
 
 - [x] Host tests: names by prefix in byte order whatever the order of publishing, pages of 16, a removed name left out, a start that is not a name, `invalid` for a bad prefix or start, the same list after a mount (`names_are_listed_by_prefix_in_pages`); the right is `BADGE_GET`'s (`rights_come_from_the_badge`).
-- [ ] The store suite lists 18 names by prefix in 2 pages and in order, every current name without the removed ones, and a prefix through the client that may only read (x86 and aarch64).
+- [x] The store suite lists 18 names by prefix in 2 pages and in order, every current name without the removed ones, and a prefix through the client that may only read (x86 and aarch64).
 
 The request's other criterion, `fm`'s `store:` panel showing a name that `blocks` published, is the tools track's part (300-APP-0038's remainder); the tools track is told when `blockstore.wit` 1.4 is in `main`.
+
+## Resolution
+
+- **Commit `8cc81dad`:**
+  - `idl/blockstore.wit` 1.4: `names` and the record `named`;
+  - `Store::names` in `blockstore/src/store.rs`, served in `blockstore/src/main.rs`;
+  - `Operation::Names` with `BADGE_GET` in `libmind/src/blockstore.rs`;
+  - `blocks names [prefix]`;
+  - the host test `names_are_listed_by_prefix_in_pages` and the `store` suite's check;
+  - `docs/storage` ("Names") and `docs/idl`.
+- **The host tests** passed: `tests/blockstore_host.rs`, and the IDL fuzzer with the new record.
+- **The `store` suite's check** passed:
+  - x86: alone in this container, and in gate 25 ("x86: files and block writes" on i9);
+  - aarch64: in gate 25 ("aarch64: files, network and TLS" on un-rizen).
+  - Gate 25 ran on `7dc99fed`, the branch with `main` bd7fd447.
+- **What the check covers:**
+  - 18 names in 2 pages and in byte order;
+  - every current name, without the removed ones;
+  - a prefix listed through the client that may only read;
+  - `invalid` for a byte no name has.
+- **Left to the tools track:** `fm`'s `store:` panel listing the names (300-APP-0038's remainder). The tools track is told that `blockstore.wit` 1.4 is in `main`.
 
 ## Related
 
