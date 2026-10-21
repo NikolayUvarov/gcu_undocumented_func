@@ -38,4 +38,4 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
 
 ## Related
 
-[750](750-effector-agent.md), [requests-EFF.md](requests-EFF.md), [750-EFF-0003](750-EFF-0003-interface-and-policy.md), [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md), [750-EFF-0008](750-EFF-0008-application-packages.md), [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md).
+[750](750-effector-agent.md), [requests-EFF.md](requests-EFF.md), [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md), [750-EFF-0008](750-EFF-0008-application-packages.md), [351-KRN-0116](351-KRN-0116-the-shells-client-of-the-updater.md).

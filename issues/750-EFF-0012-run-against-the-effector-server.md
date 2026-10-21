@@ -1,6 +1,6 @@
 # 750-EFF-0012 — A run against the real Effector server, recorded per configuration
 
-**Type:** evidence · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; deployment and agent/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md`, and its `issues/81-mindcore-02-package-metadata.task.md` for the signed-package checks; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
+**Type:** evidence · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** 0006–0008; deployment and agent/live acceptance in `sst-test-deploy: issues/81-mindcore-01-agent-and-live-acceptance.task.md`, and its `issues/81-mindcore-02-package-metadata.task.md` for the signed-package checks; [issues-human](../issues-human/README.md#7-an-effector-server-for-mind-core) (a server to run against); [550](550-network-on-real-hardware.md) for the real-hardware part · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-12.1, MC-12.2, MC-12.9
 
 ## Problem
 

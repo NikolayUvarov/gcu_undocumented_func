@@ -1,6 +1,6 @@
 # 750-EFF-0010 — Reboot on the server's request, through the gateway
 
-**Type:** service feature · **Owner:** `EFF` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-KRN.md](requests-KRN.md) (the reboot badge for the gateway); the unverified server reboot-action/return-to-online contract retained as an open requirement in this issue · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.7, MC-6.9, MC-7.1, MC-3.7
+**Type:** service feature · **Owner:** `EFF` track · **Priority:** P2 · **Status:** open · **Blocked by:** [750-EFF-0007](750-EFF-0007-gateway-service.md); [requests-KRN.md](requests-KRN.md) (the reboot badge for the gateway); the unverified server reboot-action/return-to-online contract retained as an open requirement in this issue · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-6.7, MC-6.9, MC-7.1, MC-3.7
 
 ## Problem
 
