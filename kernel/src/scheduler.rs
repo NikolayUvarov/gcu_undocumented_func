@@ -605,6 +605,7 @@ impl Scheduler {
         for b in self.irq_bind.iter().flatten().flatten() { used[b.ep] = true; }
         for (ep, owner) in self.endpoint_owner.iter_mut().enumerate() { if !used[ep] { *owner = None; } }
         self.exits.retain(|e| used[e.0]); // notices for an endpoint nobody holds any more
+        if self.exits.is_empty() && self.exits.capacity() != 0 { self.exits = Vec::new(); }
         // Unused endpoints at the end of a grown table go, back to its first size at least (issue 171).
         let keep = used.iter().rposition(|&u| u).map_or(0, |last| last + 1).max(ENDPOINTS);
         if keep < used.len() {
@@ -1024,7 +1025,8 @@ impl Scheduler {
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
         if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
-        if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); self.notify_exit(slot, pid, reason); return Ok(None); }
+        // An emptied queue of exit notices holds no heap memory (800-KRN-0138).
+        if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); if self.exits.is_empty() { self.exits = Vec::new(); } self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
         if let Some(sender) = sender { self.deliver(sender, slot); return Ok(None); }
         let deadline = self.deadline(request.arg2);

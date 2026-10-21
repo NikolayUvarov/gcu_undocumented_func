@@ -4,7 +4,7 @@
 
 ## Problem
 
-The maintainer asked on 2026-10-20 to test programs on MIND Core without a reboot and without a person at the machine. The request was recorded by `KRN` in `requests-LNK.md` ("Starting a program for the master"), with [800-KRN-0132](800-KRN-0132-link-starts-programs-for-the-master.md).
+The maintainer asked on 2026-10-20 to test programs on MIND Core without a reboot and without a person at the machine. The request was recorded by `KRN` in `requests-LNK.md` ("Starting a program for the master"), with [800-KRN-0132](../issues-done/800-KRN-0132-link-starts-programs-for-the-master.done).
 - **What already worked:** the agent could put a program into `data/link/` (`mindlink put`).
 - **What was missing:** only someone at the keyboard could start it (`run data/link/<name>.elf`).
 
@@ -74,4 +74,4 @@ Evidence for the configurations named only (MC-12.1).
 
 ## Related
 
-[800-KRN-0132](800-KRN-0132-link-starts-programs-for-the-master.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/link/protocol.md](../docs/link/protocol.md), [docs/link/mindlink.md](../docs/link/mindlink.md).
+[800-KRN-0132](../issues-done/800-KRN-0132-link-starts-programs-for-the-master.done), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/link/protocol.md](../docs/link/protocol.md), [docs/link/mindlink.md](../docs/link/mindlink.md).
