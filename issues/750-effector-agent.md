@@ -127,7 +127,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 | [750-EFF-0002](750-EFF-0002-test-server.md) | `EFF` | A test server on the host (`tests/effector_server.py`) that serves that contract over HTTPS, with fault hooks |
 | [750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done) | `EFF` | `idl/effector.wit` 1.0 between the two services, the policy file, the audit record, the threat analysis |
 | [750-EFF-0004](../issues-done/750-EFF-0004-json.done) | `EFF` | `mind::json`: a bounded JSON reader and writer for `no_std` with `alloc` |
-| [750-EFF-0005](750-EFF-0005-zip-reader.md) | `EFF` | `mind::zip`: a bounded ZIP reader (stored and deflate) |
+| [750-EFF-0005](../issues-done/750-EFF-0005-zip-reader.done) | `EFF` | `mind::zip`: a bounded ZIP reader (stored and deflate) |
 
 **Phase 2 — the agent online (needs NET and KRN):**
 
