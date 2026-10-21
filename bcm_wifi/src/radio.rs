@@ -95,6 +95,12 @@ fn rate_code(rate: u8) -> Option<(bool, u8, u16)> {
     })
 }
 
+// The rate a frame's retries go at, one step below `rate` (500 kb/s units), as b43 picks it: the header's fallback
+// fields (550-DRV-0038). On the MacBook Pro 11 Mbit/s lost half its frames where 5.5 lost one in fifteen.
+fn fallback(rate: u8) -> u8 {
+    match rate { 4 => 2, 11 => 4, 22 => 11, 12 => 11, 18 => 12, 24 => 18, 36 => 24, 48 => 36, 72 => 48, 96 => 72, 108 => 96, other => other }
+}
+
 // The received rate in 500 kb/s units from the frame type and the PLCP's first byte; 0 for HT or an unknown code.
 fn rx_rate(ofdm: bool, plcp0: u8) -> u8 {
     if ofdm {
@@ -360,10 +366,13 @@ impl<'a> Radio<'a> {
         header[0x00..0x04].copy_from_slice(&(TXC_START | if unicast { TXC_ACK } else { 0 }).to_le_bytes());
         header[0x04..0x06].copy_from_slice(&frame[0..2]);
         header[0x08..0x0A].copy_from_slice(&(TX_CORES | ofdm as u16).to_le_bytes()); // no per-frame power
-        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&control1.to_le_bytes());
-        header[0x12] = code; header[0x14] = ofdm as u8; header[0x15] = self.channel;
+        // The retries at the fallback rate: its PHY control word, its encoding (0x14) and its PLCP header (0x36).
+        let fb = fallback(rate);
+        let (fb_ofdm, fb_code, fb_control1) = rate_code(fb).unwrap_or((ofdm, code, control1));
+        header[0x0A..0x0C].copy_from_slice(&control1.to_le_bytes()); header[0x0C..0x0E].copy_from_slice(&fb_control1.to_le_bytes());
+        header[0x12] = code; header[0x14] = fb_ofdm as u8; header[0x15] = self.channel;
         header[0x26..0x2C].copy_from_slice(&frame[4..10]);
-        header[0x36..0x3C].copy_from_slice(&p);
+        header[0x36..0x3C].copy_from_slice(&plcp(fb_ofdm, fb_code, fb, frame.len()));
         header[0x3C..0x3E].copy_from_slice(&frame[2..4]);
         let cookie = txwait::cookie(self.tx_generation, slot);
         self.tx_generation = self.tx_generation.wrapping_add(1);
