@@ -110,10 +110,16 @@ fn malformed_polls_are_refused() {
 }
 
 #[test]
-fn too_many_values_are_refused() {
-    let items: Vec<String> = (0..VALUES_MAX).map(|i| i.to_string()).collect();
+fn the_contracts_value_bound_is_kept() {
+    // The root, "status" and "x" are three values: the array fills the answer to exactly the bound.
+    let items: Vec<String> = (0..VALUES_MAX - 3).map(|i| i.to_string()).collect();
     let text = format!(r#"{{"status":"ok","x":[{}]}}"#, items.join(","));
-    assert_eq!(with_values(&text, |v| ok_answer(v)), Err(Error::Bounds));
+    assert_eq!(VALUES_MAX, 1024, "contract 1.0");
+    assert_eq!(with_values(&text, |v| { assert_eq!(v.len(), VALUES_MAX); ok_answer(v) }), Ok(()));
+    // One more is refused (parse refuses it too, so the values are built by hand).
+    let mut over = vec![Value { kind: Kind::Object, parent: None, key: "", text: "" }];
+    over.extend((0..VALUES_MAX).map(|_| Value { kind: Kind::Null, parent: Some(0), key: "k", text: "" }));
+    assert_eq!(ok_answer(&over), Err(Error::Bounds));
 }
 
 #[test]

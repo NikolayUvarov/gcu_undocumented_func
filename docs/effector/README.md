@@ -166,6 +166,9 @@ runs until it is stopped. It prints one line per event (`CONNECTED`, `DENIED`,
 - the gateway and any action (750-EFF-0007 and on): every command is denied;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
 - journal retention: the journal keeps 64 answers and then refuses new commands;
+- a `cancel_command` the server sends while an answer waits for its ACK (it
+  may, even with `at_capacity=1`) is not answered and expires on the server;
+  the command it names was already answered `denied`;
 - the ten-minute online check beside stalled cards (550-NET-0032), and the
   device key as a client certificate (`connect-pins` cannot send one).
 

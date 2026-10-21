@@ -4,8 +4,8 @@
 use crate::json::Writer;
 use crate::session::Command;
 
-/// The largest answer the agent reads, in values; more is refused (the parser itself allows 1024).
-pub const VALUES_MAX: usize = 256;
+/// The largest answer the agent reads, in values: contract 1.0's bound (docs/effector/protocol.md), which `parse` keeps too.
+pub const VALUES_MAX: usize = 1024;
 pub const COMMANDS_MAX: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
