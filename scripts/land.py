@@ -341,12 +341,14 @@ class Gate:
         logs = f"/home/un/mind-core/{TRACK}/logs/{self.tag}/{name}-{n:02d}"
         command = self.prelude(name) + (
             f"cd {clone} || exit 3\n[ \"$(git rev-parse HEAD)\" = \"{self.commit}\" ] || {{ echo \"TREE MOVED\"; exit 5; }}\n"
-            f"scripts/ci_local.sh --only {part} --group \"{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
+            # Only the SSH client's host tests need sshd; a machine without it (i9) still runs the host part's other groups.
+            + (f"[ -x \"${{MIND_SSHD:-/usr/sbin/sshd}}\" ] || export MIND_SSHD=/bin/true\n" if part == "host" and group != "host tests" else "")
+            + f"scripts/ci_local.sh --only {part} --group \"{group}\" > \"$TMPDIR/land-group.out\" 2>&1\n"
             f"grep -E '^(PASS|FAIL) +[0-9]+s ' \"$TMPDIR/land-group.out\"\n"
             f"mkdir -p {logs}; cp \"$TMPDIR/land-group.out\" \"$TMPDIR\"/mind-ci-local/*.log {logs}/ 2>/dev/null\n"
             f"if grep -q '^FAIL ' \"$TMPDIR/land-group.out\"; then f=$(ls \"$TMPDIR\"/mind-ci-local/01-*.log 2>/dev/null | head -1);"
             f" echo \"--- {logs}\"; tail -n 20 \"$f\" 2>/dev/null | cut -c1-300; fi\ntrue\n")
-        key = f"land-{self.tag}-{name}-{n:02d}-" + hashlib.sha256(group.encode()).hexdigest()[:8]
+        key = f"land-{self.tag}-{name}-{n:02d}-" + hashlib.sha256(command.encode()).hexdigest()[:12]  # a changed command is a new operation
         status, code, output = self.submit(machine, command, 3500, f"{TRACK} landing gate {self.tag}: {group} on {name}", key)
         rows = parse_summary(output)
         if not rows:
@@ -364,8 +366,17 @@ class Gate:
             with self.lock:
                 self.results.extend({"group": g, "state": "ERROR", "seconds": 0, "lane": name} for _, g in entries)
             return
+        broken = set()  # parts whose build failed here: their groups would test the clone's previous image
+        builds = {b: part for part, names in BUILDS.items() for b in names}
         for n, (part, group) in enumerate(runs_for(entries), start):
-            self.group(name, part, group, n)
+            if part in broken or (group in builds and builds[group] in broken):
+                with self.lock:
+                    self.results.append({"group": group, "state": "ERROR", "seconds": 0, "lane": name})
+                self.log(f"{name}: not run, its build failed here: {group}")
+                continue
+            rows = self.group(name, part, group, n)
+            if group in builds and any(state != "PASS" for state, _, _ in rows):
+                broken.add(builds[group])
 
     def save(self, expected, problems):
         self.out.write_text(json.dumps({"commit": self.commit, "tag": self.tag, "green": not problems, "problems": problems,

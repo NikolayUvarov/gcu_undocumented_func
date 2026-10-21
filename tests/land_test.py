@@ -65,6 +65,22 @@ def test_summary_and_verdict():
     assert land.verdict(["a"], [r("a", "PASS"), r("a", "ERROR")])[1] == ["a: ERROR"]
 
 
+
+def test_a_failed_build_stops_its_lane():
+    class Effector:
+        def __init__(self): self.commands = []
+        def run(self, machine, command, timeout, reason, key):
+            self.commands.append(command)
+            group = command.split('--group "')[1].split('"')[0]
+            return ("completed", 0, "") if group == "build (x86)" else ("completed", 0, f"PASS   5s       {group}\n")
+    gate = land.Gate("a" * 40, "t", Effector(), pathlib.Path(os.devnull))
+    gate.trees.add("i9")
+    gate.lane_run("i9", [("host", "build (x86)"), ("x86", "build (x86 test programs)"), ("x86", "x86: keys, shell, tools"), ("host", "host tests")])
+    states = {r["group"]: r["state"] for r in gate.results}
+    assert states == {"build (x86)": "ERROR", "build (x86 test programs)": "ERROR", "x86: keys, shell, tools": "ERROR", "host tests": "PASS"}, states
+    assert "MIND_SSHD=/bin/true" in gate.effector.commands[0] and "MIND_SSHD" not in gate.effector.commands[-1]
+
+
 def git(*args, cwd):
     return subprocess.run(["git", *args], cwd=cwd, env=ENV, capture_output=True, text=True, check=True).stdout.strip()
 
