@@ -1,6 +1,6 @@
 # 000-KRN-0140 — The landing queue: one integrator gates the candidate that becomes `main`
 
-**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): the first round landed; a round with two tracks' requests is left · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
+**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): rounds 1 and 2 landed · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
 
 ## Problem
 
@@ -49,7 +49,7 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 
 - [x] `tests/land_test.py` passes in the host tests.
 - [x] The first landing round: a candidate with this task, gated by `scripts/land.sh gate`, pushed and announced (below).
-- [ ] A round with requests from two tracks lands both at once.
+- [x] A round with requests from two tracks lands both at once (round 2: four tracks).
 
 ## Progress
 
@@ -67,6 +67,13 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 - **Now** a conflict in text only stays in the round for the integrator: `resolve REQUEST` opens it, `resolve --done REQUEST` records the resolution with git's `rerere`, and the next `candidate` reuses it.
 - **A conflict in code** is still returned at once.
 - `tests/land_test.py` covers both.
+
+**The second round landed.** Gate `land-97c4a4c1` on candidate 97c4a4c: every group green, on i9, un-rizen (two lanes) and PCU, preset `full`, with no group run again.
+- **Its four requests:** LNK (`claude/LNK-link` eeacc4a), DRV (`claude/550-DRV-0036-radio-counts` b468541), KRN (fb89097, the script above) and APP (`claude/wizardly-franklin-kec1a9` 893ef48).
+- **Two text conflicts,** both in `issues/README.md`, were resolved by hand, keeping both sides:
+  - LNK's merge, recorded with `resolve` and reused by the next `candidate`;
+  - `main`'s later text, by `push`'s hand merge.
+- **`main` = 1d84162.** The answer is `LANDING/2026-10-21T1350Z-KRN-landed-97c4a4c1.md`.
 
 ## Related
 
