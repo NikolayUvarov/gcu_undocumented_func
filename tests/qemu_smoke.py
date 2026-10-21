@@ -6130,9 +6130,8 @@ def wifi_join_check(vm):
             time.sleep(.2)
         else:
             raise AssertionError(f"{name} PID={pid} was not restarted")
-    # 550-APP-0098: wlan restarted has heard nothing, as at a boot's start: the join scans once by itself, then joins.
-    out = run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
-    require(out + vm.command("dmesg -s wifi", raw=True), "[WIFI] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, ")
+    scanned(); quit_wifi()
+    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
@@ -6147,8 +6146,7 @@ def wifi_join_check(vm):
     quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
     require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
     run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
-    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, scanning once by itself first, the "
-          "gateway answering through the link; "
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
           "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
@@ -6542,15 +6540,15 @@ def slow_radio_check(args):
             else:
                 raise AssertionError(("the radio never answered", radio))
             require(vm.service_logs("wlan", "[WLAN] RADIO "), "[WLAN] RADIO 02:00:00:57:4C:01")
-            # The station's last scan was made while the radio was silent: wifi scans again, as a user's first look does.
-            vm.send("wifi\n")
-            vm.expect("AT=MIND-TEST LINK=OFF", timeout=30, after="[WIFI] READY")
-            vm.send_bytes(b"q")
-            vm.expect("SHELL RESUMED.")
-            time.sleep(.2); vm.collect(); vm.output = ""
+            # The station's last scan was made while the radio was silent, as on the MacBook Pro at a boot's start: the join
+            # scans once by itself, then joins (550-APP-0098; before it, wifi's window scanned first).
             join = "wifi join MIND-TEST --passphrase-file data/wifijoin.txt"
             vm.send(join + "\n")  # as vm.command, with a join's wait (60 s at most in wifi)
-            require(vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n"), "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            joined = vm.expect("MIND> ", timeout=90, after=to_ordinal(to_real(join)) + "\n")
+            require(joined, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+            scan = re.search(r"\[WIFI\] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, \d+ ACCESS POINTS, (IT AMONG THEM|NOT IT)",
+                             joined + vm.command("dmesg -s wifi", raw=True))
+            assert scan and scan.group(1) == "IT AMONG THEM", joined
             require(vm.service_logs("netstack", "[NETSTACK] DHCP 10.0.4.15"), "[NETSTACK] DHCP 10.0.4.15/24 GATEWAY 10.0.4.1")
             # The station's radio goes silent: the station's card stops answering, and the wired card keeps working.
             vm.command("ping 10.0.4.99")
@@ -6562,7 +6560,7 @@ def slow_radio_check(args):
             vm.close()
             web.shutdown()
     print(f"PASS: a radio that answers late: the wired card's pings answered within {silent} ms and a page fetched while it was "
-          f"silent, the station joined once it answered; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
+          f"silent, the station joined once it answered, scanning by itself first; with the joined station's radio silent, within {stalled} ms and a page fetched", flush=True)
 
 
 def _certificates(directory):
