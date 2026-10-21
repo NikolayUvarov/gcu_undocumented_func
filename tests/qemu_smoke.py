@@ -4818,20 +4818,10 @@ def updater_suite(args, updater_elf):
     print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
-def update_suite(args):
-    """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
-    and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
-    20 s. Between runs the host changes what the server holds: an expired channel, one with a bad signature, one naming
-    an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
-    version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
-    booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
-    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
-    if not raw_tools() or not shutil.which("openssl"):
-        print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
-        return
-    temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
-    arch = args.arch
-    # The build as release 5; the same files signed again with other build inputs as release 6.
+def update_releases(temp, arch):
+    """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
+    TEMP/server as the release tool lays a server out. Returns the volumes, the server, release 5's channel, release 6's
+    and that one with its signature changed, release 6's manifest, its boot files (name, digest) and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
@@ -4848,13 +4838,30 @@ def update_suite(args):
     good = (server / "channels/stable").read_bytes()
     manifest6 = (newer / "MANIFEST").read_bytes()
     boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
-    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
 
     def channel(version, minimum, expires):
         body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
         return body + b"ed25519 " + sign_manifest.sign(release_tool.TEST_RELEASE_SEED, body).hex().encode() + b"\n"
     signature = good.index(b"ed25519 ") + 8
     forged = good[:signature] + (b"1" if good[signature:signature + 1] == b"0" else b"0") + good[signature + 1:]
+    return volume, newer, server, kept, good, forged, manifest6, boot_files, channel
+
+
+def update_suite(args):
+    """The updater (351-UPD-0007): a raw image with release 5 in slot A, confirmed, the channel it came with kept there,
+    and update.txt naming the test release server over HTTPS, trusted by its pinned key, with `automatic apply` every
+    20 s. Between runs the host changes what the server holds: an expired channel, one with a bad signature, one naming
+    an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
+    version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
+    booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
+    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
+    arch = args.arch
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
+    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
     certificates = temp / "tls"
     certificates.mkdir()
     _certificates(certificates)
@@ -4963,6 +4970,103 @@ def update_suite(args):
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and confirmed on the disk by the updater as soon as init confirmed it; the file system is consistent", flush=True)
+
+
+def mindlink_tool():
+    """The host's end of MIND Link (tools/mindlink), built for the suites that speak to `link`."""
+    target = Path(tempfile.gettempdir()) / "mind-mindlink-target"
+    subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", str(ROOT / "tools/mindlink/Cargo.toml"),
+                    "--target-dir", str(target)], check=True)
+    return target / "release/mindlink"
+
+
+def linkupdate_suite(args):
+    """An update through the link (351-KRN-0141): the update suite's image (release 5 in slot A, confirmed, its channel
+    kept there) with link.conf at the root and update.txt naming data/link/rel, `automatic apply` every 20 s, and no
+    network. Through QEMU's emulated FT232 the host's mindlink puts release 6 there as the release tool lays a server
+    out: the boot files' blobs and the signed manifest, then a channel whose signature was changed, refused with no
+    boot record written, then the channel as published. The updater takes version 6 from that directory into slot B,
+    boots it on trial through init's restart and confirms it on the disk; mindlink's `log` reads each step from the
+    other end."""
+    if not raw_tools() or not shutil.which("openssl"):
+        print("SKIP: linkupdate suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
+        return
+    mindlink = mindlink_tool()
+    temp = Path(tempfile.mkdtemp(prefix="mind-linkupdate-"))
+    arch = args.arch
+    volume, _, server, kept, good, forged, manifest6, boot_files, _ = update_releases(temp, arch)
+    layout = temp / "layout"
+    boot_slots.layout(volume, layout)
+    (layout / "MIND/A/CHANNEL").write_bytes(kept)
+    (layout / "link.conf").write_text("baud=115200\n")
+    (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
+                                       "automatic apply\nevery 20\ntries 3\n")
+    image = boot_slots.Image.create(temp / "linkupdate.img", layout, megabytes=128)
+    # What the updater reads from its source, and nothing more: the boot files' blobs, the manifest and its signature.
+    release = f"releases/6/{arch}"
+    files = [f"blobs/{digest}" for _, digest in boot_files] + [f"{release}/MANIFEST", f"{release}/MANIFEST.SIG"]
+    cpu = ["-cpu", "qemu64,+rdrand"] if arch == "x86_64" else []
+    vm = VM(args, str(image.path), raw=True, snapshot=False, reboot=True, rtc="utc", ahci=arch == "x86_64",
+            extra=[*cpu, "-nic", "none", "-device", "qemu-xhci,id=linkxhci", "-chardev", "pty,id=link",
+                   "-device", "usb-serial,bus=linkxhci.0,chardev=link"])
+
+    def link(*command, ok=True, timeout=300):
+        r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
+                           capture_output=True, text=True, timeout=timeout)
+        out = r.stdout + r.stderr
+        assert (r.returncode == 0) == ok, (command, r.returncode, out)
+        return out
+
+    def logged(line, timeout):
+        # The log as the agent at the other end reads it.
+        deadline, log = time.monotonic() + timeout, ""
+        while time.monotonic() < deadline:
+            log = link("log")
+            if line in log:
+                return log
+            time.sleep(5)
+        raise AssertionError((line, log[-3000:]))
+    try:
+        port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
+        require(link("hello"), '"MIND Core link"')
+        started = time.monotonic()
+        for path in files:
+            link("mkdir", f"rel/{path.rpartition('/')[0]}")
+            link("put", str(server / path), f"rel/{path}")
+        print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
+              f"{time.monotonic() - started:.0f} s", flush=True)
+        link("mkdir", "rel/channels")
+        bad = temp / "forged"
+        bad.write_bytes(forged)
+        link("put", str(bad), "rel/channels/stable")
+        log = logged("[UPDATER] CHECK: REFUSED: Signature", 120)
+        require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        assert "[UPDATER] RECORD" not in log and "[UPDATER] FETCH: VERSION 6" not in log, log
+        link("put", str(server / "channels/stable"), "rel/channels/stable")
+        vm.collect(); vm.output = ""
+        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
+        vm.send("\n")
+        vm.expect("MIND> ", timeout=60)
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
+                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+            require(out, line)
+        # After the restart link serves again on the same line: the new boot's log, read from the other end.
+        log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 120)
+        require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-linkupdate-{args.cpus}cpu.log").write_text(vm.log)
+    records = boot_slots.records(image.path)
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    for name, digest in boot_files:
+        assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
+    assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    boot_slots_check.fsck(image)
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; a channel with a changed signature is "
+          "refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
+          "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -9194,6 +9298,9 @@ def main():
             continue
         if suite == "link":
             link_suite(args)
+            continue
+        if suite == "linkupdate":
+            linkupdate_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)

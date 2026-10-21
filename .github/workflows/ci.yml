@@ -58,7 +58,7 @@ jobs:
           - name: keys, shell, tools
             args: --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults,updater
+            args: --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
