@@ -7,10 +7,10 @@
 // words as arguments: `baud=<rate>`, and `run`, without which it starts no program (800-LNK-0009). Files may lie in
 // directories below data/link/ (800-LNK-0010). Everything from the line is checked by linkproto before use (MC-11.4);
 // hellos, files, programs and refusals are logged (MC-10.2).
-use linkproto::app::{FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_RUNNING};
+use linkproto::app::{FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_VFS};
 use mind::fs::{self, File};
 use mind::idl::{loader, serial};
 use mind::ipc::{self, Endpoint};
@@ -102,12 +102,16 @@ fn remove_tree(top: &str) -> Result<(), u8> {
 }
 
 /// The programs link started for the master (800-LNK-0009): their output arrives at `inbox` (each holds a send copy in
-/// SLOT_CONSOLE, `mind::output`'s 15-byte messages) and the last KEEP bytes of each are kept for OUTPUT.
-struct Programs { inbox: Option<Endpoint>, output: usize, allowed: bool, next: u32, runs: [Run; RUNS], checked: u64 }
-struct Run { id: u32, pid: u64, state: u8, name: [u8; LOADER_PATH_MAX], name_len: usize, total: u64, kept: [u8; KEEP] }
+/// SLOT_CONSOLE, `mind::output`'s 15-byte messages) and the last KEEP bytes of each are kept for OUTPUT. Their exit
+/// notices arrive there too, through the loader's watch (`notices`, a receiving copy; 800-KRN-0138), and the loader
+/// ends them on STOP. With a loader that cannot, the end is seen by `alive` and its reason stays unknown.
+struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowed: bool, next: u32, runs: [Run; RUNS], checked: u64 }
+struct Run { id: u32, pid: u64, state: u8, exit: u32, watched: bool, gone: u64, name: [u8; LOADER_PATH_MAX], name_len: usize, total: u64, kept: [u8; KEEP] }
 const RUNS: usize = 8;
 const KEEP: usize = 16 * 1024;
-const NO_RUN: Run = Run { id: 0, pid: 0, state: RUN_ENDED, name: [0; LOADER_PATH_MAX], name_len: 0, total: 0, kept: [0; KEEP] };
+/// How long a watched program may be gone before its notice is given up on.
+const NOTICE_WAIT_MS: u64 = 1000;
+const NO_RUN: Run = Run { id: 0, pid: 0, state: RUN_ENDED, exit: EXIT_UNKNOWN, watched: false, gone: 0, name: [0; LOADER_PATH_MAX], name_len: 0, total: 0, kept: [0; KEEP] };
 
 fn loader_code(error: loader::Error) -> u8 {
     match error {
@@ -124,6 +128,14 @@ impl Run {
     fn print(&mut self, bytes: &[u8]) {
         for &b in bytes { self.kept[(self.total % KEEP as u64) as usize] = b; self.total += 1; }
     }
+
+    fn end(&mut self, state: u8, exit: u32) {
+        let first = self.state == RUN_RUNNING;
+        (self.state, self.exit) = (state, exit);
+        if !first { return; }
+        let how = match state { RUN_STOPPED => "STOPPED", RUN_FAULTED => "FAULTED", _ => "ENDED" };
+        mind::println!("[LINK] RUN {} {}: {} (PID {}, EXIT {}, {} BYTES OF OUTPUT)", self.id, how, self.name(), self.pid, self.exit as i32, self.total);
+    }
 }
 
 impl Programs {
@@ -132,6 +144,16 @@ impl Programs {
         let Some(inbox) = self.inbox else { return false };
         let mut chunk = [0u8; mind::output::CHUNK];
         while let Ok(m) = inbox.recv_timeout(0, 1) {
+            // A program's exit notice: it printed all it did before, since each piece waits for link to take it.
+            if let Some(e) = m.exit {
+                let Some(run) = self.runs.iter_mut().find(|r| r.id != 0 && r.pid == e.pid) else { continue };
+                match mind::process::Exit::from_reason(e.reason) {
+                    mind::process::Exit::Code(code) => run.end(if run.state == RUN_STOPPED { RUN_STOPPED } else { RUN_ENDED }, code),
+                    mind::process::Exit::Killed => run.end(RUN_STOPPED, EXIT_UNKNOWN),
+                    mind::process::Exit::Fault(vector) => run.end(RUN_FAULTED, vector as u32),
+                }
+                continue;
+            }
             let n = mind::output::unpack(m.data, &mut chunk);
             if let Some(run) = self.runs.iter_mut().find(|r| r.id != 0 && r.pid == m.sender) { run.print(&chunk[..n]); }
         }
@@ -139,8 +161,10 @@ impl Programs {
         if now >= self.checked + 200 {
             self.checked = now;
             for run in self.runs.iter_mut().filter(|r| r.id != 0 && r.state == RUN_RUNNING && !mind::process::alive(r.pid)) {
-                run.state = RUN_ENDED;
-                mind::println!("[LINK] RUN {} ENDED: {} (PID {}, {} BYTES OF OUTPUT)", run.id, run.name(), run.pid, run.total);
+                // A watched program's notice may still be on its way.
+                if run.watched && run.gone == 0 { run.gone = now; continue; }
+                if run.watched && now < run.gone + NOTICE_WAIT_MS { continue; }
+                run.end(RUN_ENDED, EXIT_UNKNOWN);
             }
         }
         self.runs.iter().any(|r| r.id != 0 && r.state == RUN_RUNNING)
@@ -163,11 +187,13 @@ impl Programs {
             let _ = loader::abort(Endpoint::LOADER, session);
             return Err(code::IO);
         }
+        // Its exit notice to the same endpoint (loader.wit 1.11); an older loader leaves the end to `alive`.
+        let watched = matches!(loader::watch(Endpoint::LOADER, session, self.notices), Ok(Ok(())));
         let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(loader_code)?;
         let id = self.next;
         self.next = self.next.wrapping_add(1).max(1);
         let run = &mut self.runs[index];
-        (run.id, run.pid, run.state, run.total, run.name_len) = (id, pid, RUN_RUNNING, 0, full.len());
+        (run.id, run.pid, run.state, run.exit, run.watched, run.gone, run.total, run.name_len) = (id, pid, RUN_RUNNING, EXIT_UNKNOWN, watched, 0, 0, full.len());
         run.name[..full.len()].copy_from_slice(full.as_bytes());
         mind::println!("[LINK] RUN {}: STARTED {} AS PID {}", id, full, pid);
         Ok((id, pid))
@@ -180,7 +206,7 @@ impl Programs {
         let from = cursor.clamp(first, run.total);
         let n = ((run.total - from) as usize).min(out.len());
         for (i, b) in out[..n].iter_mut().enumerate() { *b = run.kept[((from + i as u64) % KEEP as u64) as usize]; }
-        Ok(RunOutput { state: run.state, exit: EXIT_UNKNOWN, from, len: n })
+        Ok(RunOutput { state: run.state, exit: run.exit, from, len: n })
     }
 
     fn list(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
@@ -191,16 +217,31 @@ impl Programs {
             if index - 1 < cursor { continue; }
             let mut line = Text::<160>::new();
             line.number(run.id as u64); line.push("\t"); line.number(run.pid); line.push("\t");
-            line.push(if run.state == RUN_RUNNING { "running" } else { "ended" }); line.push("\t"); line.push(run.name()); line.push("\n");
+            line.push(match run.state { RUN_RUNNING => "running", RUN_STOPPED => "stopped", RUN_FAULTED => "faulted", _ => "ended" });
+            line.push("\t"); line.push(run.name()); line.push("\n");
             if used + line.len > out.len() { return Ok((used, Some(index - 1))); }
             out[used..used + line.len].copy_from_slice(line.bytes());
             used += line.len;
         }
         Ok((used, None))
     }
+
+    /// Ends a run's program through the loader, which ends only those it started for link (800-KRN-0138).
+    fn stop(&mut self, id: u32) -> Result<(), u8> {
+        self.pump();
+        let run = self.find(id)?;
+        if run.state != RUN_RUNNING { return Ok(()); }
+        match loader::stop(Endpoint::LOADER, run.pid) {
+            Ok(Ok(())) => { mind::println!("[LINK] RUN {}: STOP ASKED BY THE MASTER", run.id); run.end(RUN_STOPPED, EXIT_UNKNOWN); Ok(()) }
+            // It ended meanwhile.
+            Ok(Err(loader::Error::NotFound)) => Ok(()),
+            Ok(Err(e)) => Err(loader_code(e)),
+            Err(_) => Err(code::UNSUPPORTED),
+        }
+    }
 }
 
-static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, allowed: false, next: 1, runs: [NO_RUN; RUNS], checked: 0 };
+static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, allowed: false, next: 1, runs: [NO_RUN; RUNS], checked: 0 };
 fn programs() -> &'static mut Programs { unsafe { &mut *core::ptr::addr_of_mut!(PROGRAMS) } }
 
 /// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
@@ -417,8 +458,7 @@ impl Files for Store {
 
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { programs().output(run, cursor, out) }
 
-    /// Ending a program needs a grant init does not give yet (800-KRN-0132's point 3).
-    fn stop(&mut self, run: u32) -> Result<(), u8> { programs().find(run).map(|_| ())?; Err(code::UNSUPPORTED) }
+    fn stop(&mut self, run: u32) -> Result<(), u8> { programs().stop(run) }
 
     fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { programs().list(cursor, out) }
 
@@ -489,8 +529,12 @@ fn prepare_programs() {
     p.allowed = mind::process::args_str().split_ascii_whitespace().any(|w| w == "run");
     p.next = (mind::time::rdtsc() as u32 & 0xFFFF_0000) | 1;
     if !p.allowed { return; }
-    match Endpoint::create().and_then(|inbox| Ok((inbox, ipc::mint(inbox.0, CAP_WRITE, 0, 0)?))) {
-        Ok((inbox, output)) => { (p.inbox, p.output) = (Some(inbox), output); mind::println!("[LINK] PROGRAMS IN data/link/ MAY BE STARTED (link.conf: run)"); }
+    // One endpoint (init's quota, 800-KRN-0137): a send copy for the programs' output, a receiving one for the loader's watch.
+    match Endpoint::create().and_then(|inbox| Ok((inbox, ipc::mint(inbox.0, CAP_WRITE, 0, 0)?, ipc::mint(inbox.0, CAP_READ, 0, 0)?))) {
+        Ok((inbox, output, notices)) => {
+            (p.inbox, p.output, p.notices) = (Some(inbox), output, notices);
+            mind::println!("[LINK] PROGRAMS IN data/link/ MAY BE STARTED (link.conf: run)");
+        }
         Err(e) => mind::println!("[LINK] NO ENDPOINT FOR PROGRAMS' OUTPUT ({:?}): NONE WILL BE STARTED", e),
     }
 }
