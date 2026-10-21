@@ -110,6 +110,17 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
 - **Starting it.** Attach the disk by USB, hold Option (⌥) at power-on and choose its `EFI Boot` entry.
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
+- **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
+  - **To make the disk the default startup disk,** run this once in macOS's Terminal, with the disk attached:
+
+    ```bash
+    sudo bless --mount "/Volumes/MIND CORE" --setBoot --file "/Volumes/MIND CORE/EFI/BOOT/BOOTX64.EFI" --shortform
+    ```
+
+    `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
+  - **Not tried yet.** macOS's System Integrity Protection (from 10.11) may refuse it. Then the same command from macOS Recovery (Command-R at power-on, Utilities, Terminal) may work; that is not tried either.
+  - **If a rewritten disk is not started,** run the command again.
+  - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
   - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
