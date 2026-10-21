@@ -171,7 +171,7 @@ The agent must not turn the server into an unchecked remote administrator. Every
 | An `updater` client for the gateway | `UPD` | 0009 |
 | Signed application packages: format, key role, verification | `UPD` | 0008 |
 | The shell's `effector` command | `APP` | 0006, 0011 |
-| `init` follows the mode: both services only with `development` or `maintenance`, started and stopped when it changes (request of 2026-10-21 on `internal-dev-messages`) | `KRN` | 0013 |
+| `init` follows the mode: both services only with `development` or `maintenance`, started and stopped when it changes: [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (`init.wit` 1.5 `set-mode`, `BADGE_MODE`, `BADGE_MIND`) | `KRN` | 0013 |
 | The `mode` command in the shell and `msh`, confirmed at the console (request of 2026-10-21 on `internal-dev-messages`) | `APP` | 0013 |
 
 ### Order
