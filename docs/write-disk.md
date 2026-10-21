@@ -111,7 +111,7 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
 - **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
-  - **To make the disk the default startup disk,** run this once in macOS's Terminal, with the disk attached.
+  - **To make the disk the default startup disk,** run this once in the Terminal of macOS Recovery, with the disk attached. macOS itself refuses it (below).
     - macOS mounts only the log partition, `MIND LOG`. The boot partition is marked as the EFI system partition (type `0xEF`), which macOS leaves unmounted, so it is mounted by hand first.
     - `MIND LOG`'s disk is the stick: `disk2`, say, and the boot partition is its first, `disk2s1`.
 
@@ -125,8 +125,10 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
     ```
 
     `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
-  - **From macOS it is refused.** On the MacBook Pro on 2026-10-21, with the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
-  - **From macOS Recovery** the same commands may work: Command-R at power-on, then Utilities, Terminal, no `sudo`. Not tried yet.
+  - **Where it works: macOS Recovery.** Hold Command-R at power-on, then Utilities, Terminal. It runs as root, so no `sudo`. The disk numbers there may differ: find the stick with `diskutil list`.
+    - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
+    - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
+  - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
   - **If a rewritten disk is not started,** run the command again.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:

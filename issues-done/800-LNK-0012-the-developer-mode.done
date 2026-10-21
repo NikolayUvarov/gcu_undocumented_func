@@ -87,6 +87,9 @@ Evidence for the configurations named only (MC-12.1). The mode widens what the c
 - **Two steps needed a person:**
   - **a policy line** for each program and address that reaches the network. It is added once at the machine's keyboard (`netpolicy add`), kept across restarts, and since 2026-10-21 carried across a rewritten image by the maintainer's `build-and-write.sh --keep-wifi`;
   - **the way back into MIND Core after a restart.** The Mac's firmware starts macOS unless the USB disk is its default startup disk. Tests without a person need that, and new builds that reach the Mac over the link. [351-LNK-0013](../issues/351-LNK-0013-staging-a-release-through-the-link.md) and 351-KRN-0141 carry the second.
+- **The first of these is settled, 2026-10-21.** The maintainer ran `bless --setBoot` for the stick from macOS Recovery (`docs/write-disk.md`, section 6). macOS itself refuses it.
+  - Then `mindlink reboot` (`fast-test` a96b1f0) came back into MIND Core about 9 s later, with no one at the Mac.
+  - `autorun.msh` rejoined CoolNet2, DHCP followed, and 3 of 3 pings were answered.
 - **NET was asked** whether the link's flows want a rule or a badge of their own. That is not a criterion here.
 
 ## Related
