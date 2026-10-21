@@ -26,6 +26,13 @@ From the kernel track's request "A parser session ends before its helper does (1
 - [ ] Booted from slot B, the updater logs no `PARSER: THE SHARED SERVICE`. The `update` suite's check of that boot comes back (x86 and aarch64).
 - [ ] `updater_parser_check` passes in the `update` suite (109-UPD-0017's criterion).
 
+## Progress (2026-10-21)
+
+- **The `update` suite passed** in this session's container (x86, QEMU, 4 CPUs) on `f7cab643`:
+  - `updater_parser_check`: while the server held a check's request, one helper ran beside the shared `parse`, holding only its endpoint, and it was gone with the check;
+  - booted from slot B after the trial, the updater's log had no `PARSER: THE SHARED SERVICE`.
+- **Left:** the same on aarch64, and the landing gate.
+
 ## Related
 
 - [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md), [109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md).
