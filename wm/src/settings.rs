@@ -134,7 +134,7 @@ impl Settings {
     /// For a screen of `screen` cells; the image file starts as the configuration names it.
     pub fn new(config: &Config, screen: (usize, usize)) -> Self {
         let mut file = InputLine::new();
-        if let Picture::Image(name) = &config.picture { for ch in name.chars() { file.insert(ch); } }
+        if let Some(name) = config.picture.file() { for ch in name.chars() { file.insert(ch); } }
         Self { page: 0, row: 0, on_pages: true, file, screen, now: None, fields: [2026, 1, 1, 0, 0, 0], edited: false, typed: None, clock_row: 0, zone: 0, message: None, shell: false,
                screen_row: 0, pixels: (screen.0 * 8, screen.1 * 16), scale: 100, net_row: 0, browser: None, lister: no_files }
     }
@@ -262,12 +262,12 @@ impl Settings {
         let complexities: Vec<u8> = (COMPLEXITY.0..=COMPLEXITY.1).collect();
         match row {
             0 => {
-                let kinds = [Picture::None, Picture::Abstract, Picture::Image(file.clone())];
-                let at = match c.picture { Picture::None => 0, Picture::Abstract => 1, Picture::Image(_) => 2 };
-                c.picture = kinds[cycle(at, 3)].clone();
-                if matches!(c.picture, Picture::Image(ref f) if f.is_empty()) { c.picture = Picture::Image(String::from("data/background.bmp")); }
+                let file = if file.is_empty() { String::from("data/background.bmp") } else { file };
+                let kinds = [Picture::None, Picture::Abstract, Picture::Image(file.clone()), Picture::Combined(file)];
+                let at = match c.picture { Picture::None => 0, Picture::Abstract => 1, Picture::Image(_) => 2, Picture::Combined(_) => 3 };
+                c.picture = kinds[cycle(at, kinds.len())].clone();
             }
-            FILE => { if file.is_empty() { return None; } c.picture = Picture::Image(file); }
+            FILE => { if file.is_empty() { return None; } c.picture = c.picture.with_file(file); }
             2 => c.pattern = PATTERNS[cycle(PATTERNS.iter().position(|p| p.1 == c.pattern).unwrap_or(0), PATTERNS.len())].1,
             3 => c.speed = next(&SPEEDS, c.speed, step),
             4 => c.contrast = next(&fives, c.contrast, step),
@@ -394,7 +394,7 @@ impl Settings {
         self.file = InputLine::new();
         for ch in path.chars() { self.file.insert(ch); }
         self.row = FILE;
-        let config = Config { picture: Picture::Image(String::from("")), ..config.clone() };
+        let config = Config { picture: config.picture.with_file(String::new()), ..config.clone() };
         self.changed(&config, FILE, 0)
     }
 
@@ -496,11 +496,12 @@ impl Settings {
     /// The background page's lines as shown: each row's name and value.
     pub fn rows(&self, config: &Config) -> Vec<(&'static str, String)> {
         let check = |on: bool| String::from(if on { "[x]" } else { "[ ]" });
-        let picture = match config.picture { Picture::None => "none (the ░ desktop)", Picture::Abstract => "abstract (a moving pattern)", Picture::Image(_) => "image (BMP, PNG or JPEG)" };
+        let picture = match config.picture { Picture::None => "none (the ░ desktop)", Picture::Abstract => "abstract (a moving pattern)", Picture::Image(_) => "image (BMP, PNG or JPEG)",
+                                             Picture::Combined(_) => "combined (the image, lit by the pattern)" };
         let pattern = PATTERNS.iter().find(|p| p.1 == config.pattern).map_or("waves", |p| p.0);
         let place = match config.place { Place::TopLeft => "top left", Place::TopRight => "top right", Place::Center => "centre", Place::BottomLeft => "bottom left", Place::BottomRight => "bottom right" };
         Vec::from([(ROWS[0], format!("< {} >", picture)), (ROWS[1], if self.file.as_str().is_empty() { String::from("(type it, or Enter or F3: browse)") } else { String::from(self.file.as_str()) }), (ROWS[2], format!("< {} >", pattern)),
-                   (ROWS[3], format!("< {} >  1 slow (for work) to 50 fast (for a show)", config.speed)), (ROWS[4], format!("< {}% >", config.contrast)),
+                   (ROWS[3], format!("< {} >  1 slow (for work) to 50 fast (for a show)", config.speed)), (ROWS[4], format!("< {}% >{}", config.contrast, if matches!(config.picture, Picture::Combined(_)) { "  the image's brightness, up and down" } else { "" })),
                    (ROWS[5], format!("< {} >  1 to 5: more waves, rings, curtains, blobs", config.complexity)),
                    (ROWS[6], format!("< {}% >  of what is shown over the picture", config.info)),
                    (ROWS[7], check(config.time)), (ROWS[8], format!("{} of the time", check(config.seconds))),
