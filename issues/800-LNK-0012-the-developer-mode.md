@@ -1,6 +1,6 @@
 # 800-LNK-0012 — The developer mode: `dev` in `link.conf`, for debugging a machine over the link
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress · **Blocked by:** `KRN`: the grants `init` gives `link` with `dev` (LNK's request of 2026-10-21 on `internal-dev-messages`); `NET`: how the policy broker treats the link's flows (asked the same day) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-12.1, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — (`init`'s grants are [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), in `main`; `NET` was asked on 2026-10-21 whether the link's flows want a rule or a badge) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-3.11, MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -26,7 +26,7 @@ The test at hand is the MacBook Pro's Wi-Fi: joining, pinging the gateway, resta
 
 ## Acceptance criteria
 
-- [ ] **The `link` suite in QEMU with `dev`:**
+- [x] **The `link` suite in QEMU with `dev`** (2026-10-21, below):
   - `memtest` by name;
   - `netcheck ping:10.0.2.2` answered;
   - `wifi status` from the station;
@@ -56,6 +56,11 @@ Evidence for the configurations named only (MC-12.1). The mode widens what the c
     - REBOOT restarted the machine (QEMU exited, `-no-reboot`).
   - **Without them,** the suite started `memtest` by name, had REBOOT refused with UNSUPPORTED, and said SKIP for the rest.
   - The VM has a network card now, for `netcheck`.
+- **2026-10-21, with `init`'s own grants** (800-KRN-0139, `main` 98586f1 merged into `claude/LNK-link`), the committed `link` suite on x86, 4 CPUs, a local run:
+  - `stat caps` of `link`: the four base grants and the developer mode's four (10 `sysmon`, 11 `init`, 19 `netpolicy`, 33 the station's keeper);
+  - no part said SKIP: `memtest` by name, `netcheck ping:10.0.2.2` answered, `wifi status` ("the station does not answer": no radio), `uptime`, and REBOOT restarted the machine.
+
+  The MacBook Pro's run is left: an image written with `--link-dev`.
 
 ## Related
 
