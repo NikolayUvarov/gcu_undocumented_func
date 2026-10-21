@@ -34,7 +34,7 @@ The maintainer asked on 2026-10-20: "link has to be like a small Effector … le
   - a restarted daemon that keeps its results and keys.
 - [ ] **The same batch against MIND Core in QEMU,** through the `link` suite. It needs 800-LNK-0009's endpoint from `KRN`.
 - [x] **Against the MacBook Pro over the RS-485 cable**, from Windows (2026-10-21, below).
-- [ ] **`cancel` stops a program on MIND Core.** `link` now stops programs through the loader (800-KRN-0138, `mindlink stop` in the QEMU `link` suite); a cancel through `effector485` is still to be run against it.
+- [x] **`cancel` stops a program on MIND Core:** on the MacBook Pro, 2026-10-21 (below).
 
 Evidence for the configurations named only (MC-12.1). The tool claims nothing of Effector's guarantees beyond what its tests show (MC-12.3).
 
@@ -48,6 +48,10 @@ Evidence for the configurations named only (MC-12.1). The tool claims nothing of
   - `install` of `memtest`, then `run` with `alloc 2`: its output in the operation, completed;
   - **the same idempotency key again** answered the same completed operation, and the program did not run again;
   - `log` from 0, and `list` of `apps/`.
+- **2026-10-21, a cancel on the MacBook Pro** (`fast-test` d2daa430, with `link`'s stop through the loader, 800-KRN-0138):
+  - a `run` of `t/mt.elf hold` was running, with `[MEMTEST] HELD 16 MiB INTACT=true` in its output;
+  - `effector485 cancel` took it to `cancelled`, with `stopped_by: cancel` and no exit code; it had run 14 s;
+  - the Mac's log, read by a `log` operation: `RUN 1554972676: STOP ASKED BY THE MASTER`, then `STOPPED … (PID 40, EXIT -1, 34 BYTES OF OUTPUT)`.
 
 ## Related
 
