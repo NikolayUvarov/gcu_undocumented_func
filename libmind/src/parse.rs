@@ -70,7 +70,7 @@ impl Session {
     pub fn own(loader: Endpoint) -> Result<Self, NotOwn> {
         let created = loop {
             match Endpoint::create() {
-                // A helper this program just ended may hold its last endpoint until the kernel reaps it (109-KRN-0133).
+                // A helper this program just ended may hold its endpoint in the quota until the kernel reaps it.
                 Err(crate::sys::Error::Other(crate::abi::ERR_LIMIT)) if recently_ended() => { crate::time::sleep(2); }
                 other => break other.map_err(NotOwn::Endpoint)?,
             }
@@ -111,16 +111,19 @@ pub fn end_session(endpoint: Endpoint) {
 
 /// When this program last ended a parser of its own (uptime in ms; 0: never).
 static ENDED_AT: AtomicUsize = AtomicUsize::new(0);
-/// How long an ended helper is waited for, and how long after it its endpoint may still count in this program's quota.
+/// How long an ended helper's task is waited for.
 const ENDING_MS: usize = 1000;
+/// How long after that its endpoint may still count in this program's quota: the kernel frees an endpoint nobody holds
+/// on its reap pass, when the boot CPU is idle (109-KRN-0133).
+const REAP_MS: usize = 3000;
 
 fn recently_ended() -> bool {
     let at = ENDED_AT.load(Ordering::Relaxed);
-    at != 0 && crate::time::uptime_ms().saturating_sub(at) < ENDING_MS
+    at != 0 && crate::time::uptime_ms().saturating_sub(at) < REAP_MS
 }
 
-// Ends the session's own parser and waits, within ENDING_MS, until its task has ended, so that the next session finds
-// the endpoint's quota free again once the kernel has reaped it (109-KRN-0133).
+// Ends the session's own parser and waits, within ENDING_MS, until its task has ended; the next session then waits for
+// the kernel to free the endpoint (`own`).
 fn end_own(endpoint: Endpoint, pid: u64) {
     end_session(endpoint);
     let started = crate::time::uptime_ms();

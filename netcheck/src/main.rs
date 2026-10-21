@@ -79,12 +79,18 @@ fn sessions() -> mind::sys::Result<Result<(), socket::Error>> {
     if count == 0 { mind::println!("NETCHECK sessions: NO ENDPOINT IN THE QUOTA"); return Ok(Err(socket::Error::Invalid)); }
     count -= 1;
     let _ = mind::ipc::drop_cap(held[count]);
+    // The kernel frees that endpoint on its next reap pass: the first session waits for it, at most 2 s; each one after
+    // must get its parser at once after the last one's end.
+    let started = mind::time::uptime_ms();
     let mut own = 0;
     for round in 1..=10 {
-        let mut session = match Session::own(Endpoint::LOADER) {
-            Ok(session) => session,
-            Err(why) => { mind::println!("NETCHECK sessions: SESSION {}: NO PARSER OF ITS OWN ({:?})", round, why); break }
-        };
+        let Some(mut session) = (loop {
+            match Session::own(Endpoint::LOADER) {
+                Ok(session) => break Some(session),
+                Err(_) if round == 1 && mind::time::uptime_ms() - started < 2000 => { mind::time::sleep(10); }
+                Err(why) => { mind::println!("NETCHECK sessions: SESSION {}: NO PARSER OF ITS OWN ({:?})", round, why); break None }
+            }
+        }) else { break };
         match session.head(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n") {
             Ok(head) if head.status == 200 && head.length == Some(5) => own += 1,
             other => { mind::println!("NETCHECK sessions: SESSION {}: {:?}", round, other.map(|h| h.status)); break }
