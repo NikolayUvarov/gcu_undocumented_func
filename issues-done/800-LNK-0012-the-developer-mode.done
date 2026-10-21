@@ -69,8 +69,9 @@ Evidence for the configurations named only (MC-12.1). The mode widens what the c
     - The maintainer added `netcheck 192.168.2.1 icmp` at the Mac's keyboard with `netpolicy add`. That line can only be confirmed there, by design.
     - Then `link` lent NETWORK, the broker granted the flow, and the gateway answered 19 of 20 and 39 of 40 pings (550-DRV-0038);
   - **`wifi join CoolNet2`** (lent WIFI): `wlan` joined again with `keystore`'s keys, and 5 of 5 pings followed;
-  - **`mindlink reboot`:** `restarting`, and the Mac came back on the same build;
-    - `autorun.msh` rejoined CoolNet2;
+  - **`mindlink reboot`:** `restarting`, and the Mac restarted.
+    - **Its firmware then started macOS, its default startup disk.** The maintainer brought it back to MIND Core by hand: power off, the boot picker at power on, the USB disk.
+    - On that boot `autorun.msh` rejoined CoolNet2;
     - the policy line was still there, kept in `system/netpolicy/`, and the gateway answered 20 of 20 pings.
 
 ## Resolution
@@ -83,7 +84,9 @@ Evidence for the configurations named only (MC-12.1). The mode widens what the c
 - **Shown:**
   - in QEMU on x86 with no part skipped;
   - on the MacBook Pro over RS-485: the Wi-Fi station, the network and a restart driven from the development machine.
-- **One step needed a person:** a policy line for each program and address that reaches the network. It is added once at the machine's keyboard (`netpolicy add`) and kept across restarts, not across a rewritten image.
+- **Two steps needed a person:**
+  - **a policy line** for each program and address that reaches the network. It is added once at the machine's keyboard (`netpolicy add`), kept across restarts, and since 2026-10-21 carried across a rewritten image by the maintainer's `build-and-write.sh --keep-wifi`;
+  - **the way back into MIND Core after a restart.** The Mac's firmware starts macOS unless the USB disk is its default startup disk. Tests without a person need that, and new builds that reach the Mac over the link. [351-LNK-0013](../issues/351-LNK-0013-staging-a-release-through-the-link.md) and 351-KRN-0141 carry the second.
 - **NET was asked** whether the link's flows want a rule or a badge of their own. That is not a criterion here.
 
 ## Related
