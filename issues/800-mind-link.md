@@ -31,7 +31,7 @@ Two transports, one protocol:
    - [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md) programs started for the master, and their output;
    - [800-LNK-0010](800-LNK-0010-directories-in-data-link.md) directories below `data/link/`;
    - [800-LNK-0011](800-LNK-0011-effector485.md) `effector485`, a small Effector over the link;
-   - [800-LNK-0012](800-LNK-0012-the-developer-mode.md) the developer mode, `dev` in `link.conf`.
+   - [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done) the developer mode, `dev` in `link.conf`.
 
 The protocol runs between the two machines' ends. The converters and the boards only carry its bytes.
 

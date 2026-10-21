@@ -1,6 +1,6 @@
 # 750-KRN-0119 — Boot images and `init`'s grants for `effector` and `effector_gw`
 
-**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md) (off unless enabled); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the gateway's client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
+**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (started only in a mode); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the gateway's client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
 
 ## Problem
 
@@ -9,7 +9,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
 ## Plan
 
 1. **Two boot images** in `BOOT_SERVICES` and `BOOT_FILES`, with the build, the signed manifest and the suites' service list. The ABI version goes up once, with whichever other kernel task changes the list at the same time.
-2. **Both are off** unless the owner enables them in `data/services.txt` (173-KRN-0035). Until 0035 is done, they start only in a test image.
+2. **Both run only in the development or the maintenance mode** ([750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), the maintainer's decision of 2026-10-21, 750-EFF-0013). This replaces "off unless enabled in `data/services.txt`".
 3. **`effector` gets, and nothing else:**
    - `rtc`;
    - `tls` (`SLOT_TLS`);
@@ -34,7 +34,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
 ## Acceptance criteria
 
 - [ ] In QEMU, with both enabled, each service holds exactly the listed grants (the `isolation` suite's checks, x86 and aarch64).
-- [ ] With them disabled, neither starts, and every other suite passes as before.
+- [ ] Without a mode, neither starts, and every other suite passes as before.
 
 ## Related
 
