@@ -29,7 +29,13 @@ Evidence for this machine and network only (MC-12.1). That the microcode uses th
 ## Progress
 
 - **The baseline,** before this change (`fast-test` ffd5dcc, 802.11b): `ping -c 20` to the gateway answered 15 of 20.
-- **2026-10-21, written** (`bcm_wifi/src/radio.rs`, `fallback`). It builds. The Mac's run is left.
+- **2026-10-21, written** (`bcm_wifi/src/radio.rs`, `fallback`). It builds.
+- **2026-10-21, the MacBook Pro** (`fast-test` d2daa430), joined by `autorun.msh`, with no traffic but its own over 78 minutes:
+  - **data frames at 11 Mbit/s: 12 sent, 11 acknowledged, 1 lost** after its tries, where the baseline lost 7 of 14;
+  - by period: 9 of 9 in the first 10 s (1 retried, 11 tries), 1 of 1 at 823 s (3 tries), 1 of 2 at 4424 s (5 tries);
+  - the join, DHCP and the script's three pings as in 550-DRV-0037.
+
+  **Not yet shown.** 12 frames are too few for a rate of loss, and `ping -c 20` on this build is left. The counts are kept by the frame's first rate, so which rate each retry went at is not measured (MC-12.3).
 
 ## Related
 
