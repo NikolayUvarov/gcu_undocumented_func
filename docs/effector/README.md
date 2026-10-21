@@ -15,6 +15,18 @@ The grants below are the ones planned in
 neither service runs yet, so this section is the design the code must keep,
 not a description of running code (MC-12.3).
 
+**Only in the development and maintenance modes** (the maintainer's decision
+of 2026-10-21, [750-EFF-0013](../../issues/750-EFF-0013-development-and-maintenance-modes.md)).
+The agent exists to manage every aspect of the OS during development. Its
+authorities are therefore the widest any remote party gets. Outside these two
+modes, `init` starts neither service and makes none of the grants below, so
+there is no session, no flow and no gateway to attack. A mode is turned on
+explicitly: by the operator, by a word written with the disk or by a command
+confirmed at the local console, or by the Mind through the same switch when it
+needs help from outside (MC-8.1, MC-12.6). It holds across reboots until it is
+turned off. Inside a mode, the policy and the gateway's audit below still bound
+every request. This is the design, not yet running code.
+
 | Service | Holds | Parses | Never holds |
 |---|---|---|---|
 | `effector`, the session | one `netpolicy` flow to the configured server; a `tls` client (`connect-pins`); a `parse` client; `rtc`; a read-only `vfs` view of `data/effector/` (the owner's configuration); its private directory `system/effector/` (the AgentToken, the agent ID, the ACK journal); the gateway's endpoint with the session badge | only HTTP framing: heads and JSON bodies go to `parse` (MC-11.11, [airlock](../network/airlock.md)) | any local authority: lifecycle, the log read badge, writable files outside its private directory, the updater, the reboot badge, the screen |
