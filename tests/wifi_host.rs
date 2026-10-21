@@ -249,8 +249,11 @@ fn a_join_without_a_screen_reports_its_end_and_never_the_passphrase() {
     let (code, line, _) = join_with(&mut Demo::new(), b"MIND-Lab", "wrong horse", false);
     assert_eq!(code, headless::REFUSED);
     assert!(line.starts_with("[WIFI] REFUSED MIND-Lab: the passphrase is wrong") && !line.contains("horse"), "{line}");
-    let (code, line, _) = join_with(&mut Demo::new(), b"Nowhere", DEMO_PASSPHRASE, false);
-    assert_eq!((code, line.starts_with("[WIFI] REFUSED Nowhere:")), (headless::REFUSED, true));
+    // A network no scan hears: one scan, then the refusal.
+    let mut demo = Demo::new();
+    let (code, line, _) = join_with(&mut demo, b"Nowhere", DEMO_PASSPHRASE, false);
+    assert_eq!((code, line.as_str()), (headless::REFUSED, "[WIFI] THE LAST SCAN DID NOT HEAR Nowhere: SCANNED, 10 ACCESS POINTS, NOT IT\n[WIFI] REFUSED Nowhere: no network of that name was heard"));
+    assert_eq!(demo.scans, 1);
     // A station that does not remember networks is asked again without.
     let mut forgetful = Demo::new();
     forgetful.remembers = false;
@@ -270,6 +273,34 @@ impl Station for Stuck {
     fn status(&mut self) -> Result<Link, Refusal> { Ok(Link::Joining { ssid: b"Slow".to_vec() }) }
     fn leave(&mut self) -> Result<(), Refusal> { Ok(()) }
     fn forget(&mut self, _: &[u8]) -> Result<bool, Refusal> { Ok(false) }
+}
+
+// The station as it is after a boot (550-APP-0098): it joins only what its last scan heard, and nothing has scanned.
+// `late`: it takes the join and fails it in `status`, as the MacBook Pro's did; else it refuses the join.
+struct Unscanned { demo: Demo, scanned: bool, late: bool, failed: Option<Vec<u8>> }
+impl Station for Unscanned {
+    fn scan(&mut self) -> Result<Vec<Network>, Refusal> { self.scanned = true; self.demo.scan() }
+    fn join(&mut self, ssid: &[u8], passphrase: &str, remember: bool) -> Result<(), Refusal> {
+        if self.scanned { return self.demo.join(ssid, passphrase, remember); }
+        if !self.late { return Err(Refusal::NotFound); }
+        self.failed = Some(ssid.to_vec());
+        Ok(())
+    }
+    fn status(&mut self) -> Result<Link, Refusal> {
+        match &self.failed { Some(ssid) if !self.scanned => Ok(Link::Failed { ssid: ssid.clone(), reason: Reason::NotFound }), _ => self.demo.status() }
+    }
+    fn leave(&mut self) -> Result<(), Refusal> { self.demo.leave() }
+    fn forget(&mut self, ssid: &[u8]) -> Result<bool, Refusal> { self.demo.forget(ssid) }
+}
+
+#[test]
+fn a_join_before_any_scan_scans_once_then_joins() {
+    for late in [false, true] {
+        let mut station = Unscanned { demo: Demo::new(), scanned: false, late, failed: None };
+        let (code, line, _) = join_with(&mut station, b"Home", "", false);
+        assert_eq!((code, line.as_str()), (headless::JOINED, "[WIFI] THE LAST SCAN DID NOT HEAR Home: SCANNED, 10 ACCESS POINTS, IT AMONG THEM\n[WIFI] JOINED Home 02:48:4F:4D:45:03 CHANNEL 1 5.5 MB/S"), "late: {late}");
+        assert_eq!(station.demo.scans, 1, "late: {late}");
+    }
 }
 
 #[test]

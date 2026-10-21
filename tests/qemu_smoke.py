@@ -6071,8 +6071,9 @@ def wifi_join_check(vm):
             time.sleep(.2)
         else:
             raise AssertionError(f"{name} PID={pid} was not restarted")
-    scanned(); quit_wifi()
-    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-APP-0098: wlan restarted has heard nothing, as at a boot's start: the join scans once by itself, then joins.
+    out = run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    require(out + vm.command("dmesg -s wifi", raw=True), "[WIFI] THE LAST SCAN DID NOT HEAR MIND-TEST: SCANNED, ")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
@@ -6087,7 +6088,8 @@ def wifi_join_check(vm):
     quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
     require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
     run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
-    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
+    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, scanning once by itself first, the "
+          "gateway answering through the link; "
           "forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
