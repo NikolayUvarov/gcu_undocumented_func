@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 7, 0);
+pub const VERSION: (u8, u8, u8) = (1, 8, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -139,6 +139,17 @@ pub fn net_counters(endpoint: Endpoint) -> Result<core::result::Result<List<Card
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<CardCounters, 4> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// Opens another window of the shell beside those open, each a session of its own (1.8, 000-APP-0097: a second
+/// shell from the window manager's menu), and answers its id, as `window` does for the first. `busy` with 32 open;
+/// `no-memory` or `unavailable` sooner when the shell's memory or the window broker has no room.
+pub fn new_window(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>> {
+    let words = [8 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -149,6 +160,7 @@ pub enum Request {
     Wifi,
     BootNotice,
     NetCounters,
+    NewWindow,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -196,6 +208,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::NetCounters, call))
         }
+        8 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::NewWindow, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -229,4 +245,8 @@ pub fn reply_boot_notice(call: Call, value: core::result::Result<&str, Error>) -
 pub fn reply_net_counters(call: Call, value: core::result::Result<&[CardCounters], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<CardCounters, 4>(value, w))
+}
+pub fn reply_new_window(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

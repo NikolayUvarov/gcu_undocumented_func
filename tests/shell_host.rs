@@ -239,6 +239,14 @@ fn ping_takes_its_count_interval_wait_and_fast_mode() {
 }
 
 #[test]
+fn each_request_says_its_place_in_the_run() {
+    let place = |n, count| { let mut out = String::new(); ping::place(&mut out, n, count); out };
+    assert_eq!((place(1, 3), place(3, 3), place(12, 100)), ("[1/3] ".to_string(), "[3/3] ".to_string(), "[12/100] ".to_string()));
+    // -c 0 runs until Esc: no end to name.
+    assert_eq!(place(5, 0), "[5] ");
+}
+
+#[test]
 fn ping_ends_with_its_tally() {
     let line = |tally: &ping::Tally, stopped| { let mut out = String::new(); tally.line(&mut out, stopped); out };
     let mut tally = ping::Tally::default();
