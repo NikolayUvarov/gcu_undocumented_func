@@ -22,8 +22,16 @@ From the kernel track's request "A parser session ends before its helper does (1
 ## Acceptance criteria
 
 - [ ] A program with one endpoint free opens and drops ten parser sessions in a row, each with a helper of its own (`netcheck sessions` in the `net` suite, x86 and aarch64).
-- [ ] The same check fails without the change (shown once, then not kept as a check).
+- [x] The same check fails without the change (shown once, then not kept as a check).
 - [ ] The `net` suite's other parser checks pass as before: `session_parsers_check`, `parser_restart_check`.
+
+## Progress (2026-10-21)
+
+- **Commits:** `76ba1635` (the fix, the checks), `f7cab643` (the reap window, the check's setup), `9989cc7d` (the check's head).
+- **Why the reap matters.** The kernel frees an endpoint nobody holds on its reap pass, when the boot CPU is idle (`kernel/src/scheduler.rs`, `reap`), not when its last capability goes. `mind::process::alive` turns false before that, when the task has exited. So the drop alone cannot make the endpoint free, and `Session::own` waits for it within 3 s of an end of its own.
+- **Without the change** (`parse.rs` as on `main` 98586f1e, with the check), in this session's container (x86, QEMU, 4 CPUs): `NETCHECK sessions: SESSION 2: NO PARSER OF ITS OWN (Endpoint(Other(18446744073709551608)))`, 1 of 10. The check was run once that way and is not kept so.
+- **With it,** same machine: `10 OF 10 WITH A PARSER OF THEIR OWN, 3 ENDPOINTS HELD`.
+- **The check's own setup** drops an endpoint before the first session, so the first session waits for that reap too, at most 2 s. Each of the nine after it must get a parser at once.
 
 ## Related
 

@@ -91,7 +91,8 @@ fn sessions() -> mind::sys::Result<Result<(), socket::Error>> {
                 Err(why) => { mind::println!("NETCHECK sessions: SESSION {}: NO PARSER OF ITS OWN ({:?})", round, why); break None }
             }
         }) else { break };
-        match session.head(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n") {
+        // A head as mind::http hands it over: without the blank line that ends it.
+        match session.head(b"HTTP/1.1 200 OK\r\nContent-Length: 5") {
             Ok(head) if head.status == 200 && head.length == Some(5) => own += 1,
             other => { mind::println!("NETCHECK sessions: SESSION {}: {:?}", round, other.map(|h| h.status)); break }
         }
