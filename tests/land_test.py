@@ -140,6 +140,18 @@ def test_candidate_push_and_announce():
         assert "main moved with code" in run_land(repo, work, "push", ok=False)
 
         run_land(repo, work, "announce", "--return", "2026-10-21T1020Z-T2-ready-x.md=conflicts with main")
+
+        # One request that holds main already is the candidate as it is, published on its own branch.
+        git("checkout", "-q", "-b", "claude/D", "origin/main", cwd=repo)
+        d = commit(repo, "d.txt", "d\n", "claude/D")
+        git("push", "-q", "origin", "claude/D", cwd=repo)
+        git("fetch", "-q", "origin", "internal-dev-messages", cwd=repo)
+        git("checkout", "-q", "--detach", "origin/internal-dev-messages", cwd=repo)
+        commit(repo, "LANDING/2026-10-21T1100Z-T3-ready-d.md", f"**Ready:** `claude/D` {d}\n", "request d")
+        git("push", "-q", "origin", "HEAD:internal-dev-messages", cwd=repo)
+        out = run_land(repo, work, "candidate", "--exclude", "claude/C")
+        state = json.loads((work / "candidate.json").read_text())
+        assert state["candidate"] == d and state["published"] == "claude/D", (state, out)
         files = git("ls-tree", "--name-only", "internal-dev-messages", "LANDING/", cwd=origin).splitlines()
         answer = next(f for f in files if "-KRN-" in f)
         text = git("show", f"internal-dev-messages:{answer}", cwd=origin)

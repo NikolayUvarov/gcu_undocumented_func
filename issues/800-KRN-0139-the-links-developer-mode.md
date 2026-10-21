@@ -1,6 +1,6 @@
 # 800-KRN-0139 — The link's developer mode: with `dev` in `link.conf`, `init` lends `link` what the shell lends its programs
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** made, in `fast-test` (2026-10-21); the gate is left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-2.3, MC-3.11, MC-10.2
+**Type:** `init` · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (4e96ad8, 2026-10-21); the link track's suite is left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-2.3, MC-3.11, MC-10.2
 
 ## Problem
 
@@ -35,7 +35,18 @@ The maintainer asked on 2026-10-21: "Can we add debug developer mode to allow fu
   - 19 → `netpolicy`;
   - 33 → the station's keeper, no server in QEMU.
 - [ ] The link track's `link` suite checks them with `dev`, and their absence without it (800-LNK-0012).
-- [ ] The gate passes.
+- [x] The gate passes.
+
+## Progress (2026-10-21, gate g0142)
+
+- **Where it ran.** Gate g0142 on c8fedc1 (`main` bdc3ce8 merged). i9 was loaded by another track's gate (load average 35–43), so the x86 groups ran on un-rizen's two lanes and four aarch64 groups on PCU.
+- **The result.** Every group passed.
+  - Two of them first failed short waits while the other lane ran beside them:
+    - "x86: USB image", whose first prompt came late during the reproducible build;
+    - "aarch64: programs, shell and four CPUs", where kbench's call-and-reply took 2.6 ms against 1 ms.
+  - Each passed when run again alone (docs/effector.md, section 1).
+- **`main` = 4e96ad8.** That is c8fedc1 with `main`'s text-only f786daa merged in.
+- **Left:** the link track's `link` suite with `dev` (800-LNK-0012).
 
 ## Related
 
