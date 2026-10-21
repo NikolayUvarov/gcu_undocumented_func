@@ -6244,11 +6244,6 @@ def net_suite(args, disk):
         for line in ("NETCHECK card INFO MAC 525400123456 MTU 1500 LINK UP", "NETCHECK card COUNTERS SENT ", "NETCHECK card SEND Denied",
                      "NETCHECK card RECEIVE Denied", "NETCHECK card ATTACH Denied", "NETCHECK card OK"):
             require(out, line)
-        # 109-KRN-0133: with one endpoint left in its quota, as the updater has, a program opens ten parser sessions in a
-        # row, each with a helper of its own: each session's end frees the endpoint for the next.
-        out = vm.command("netcheck sessions", timeout=120)
-        require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
-        require(out, "NETCHECK sessions OK")
         require(vm.command(f"nslookup www.mind.test 10.0.2.2:{dns_port}"), "NAME www.mind.test ADDRESS 10.0.2.2")
         require(vm.command(f"nslookup missing.example 10.0.2.2:{dns_port}"), "missing.example: NotFound")
         page = vm.command(f"fetch 10.0.2.2:{web_port} /mind")
@@ -6301,6 +6296,12 @@ def net_suite(args, disk):
         require(listed, "NETCHECK 1 SOCKETS")
         require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
         flow_bounds_check(vm, web_port)
+        # 109-KRN-0133: with one endpoint left in its quota, as the updater has, a program opens ten parser sessions in a
+        # row, each with a helper of its own: each session's end frees the endpoint for the next. After the checks that
+        # count grants, as it takes one of its own.
+        out = vm.command("netcheck sessions", timeout=120)
+        require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
+        require(out, "NETCHECK sessions OK")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
