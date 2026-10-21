@@ -13,6 +13,8 @@ use mind::ipc::Endpoint;
 const SECONDS: u8 = 0x00; const MINUTES: u8 = 0x02; const HOURS: u8 = 0x04; const DAY: u8 = 0x07; const MONTH: u8 = 0x08; const YEAR: u8 = 0x09;
 const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80; const SET: u8 = 0x80;
 const WEEKDAY: u8 = 0x06;
+// Where a caller's lent page comes, for the calls that carry a record (rtc.wit 1.3's zone).
+const RECEIVED: usize = 9;
 
 // The update window (UIP, up to about 2 ms once a second) can cover several quick tries: after QUICK of them the
 // reads wait a tick, so a later try lands after the update.
@@ -89,8 +91,8 @@ fn main(_info: &'static BootInfo) {
     let clock = match cap_info(SLOT_DEV0).0 { CAP_KIND_MMIO => Mmio::map(SLOT_DEV0).map(Clock::Pl031).unwrap_or(Clock::Cmos(Ports(SLOT_DEV0))), _ => Clock::Cmos(Ports(SLOT_DEV0)) };
     loop {
         // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
-        let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
-        let _ = match rtc::decode(&request, 0) {
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        let _ = match rtc::decode(&request, RECEIVED) {
             Ok((rtc::Request::Now, call)) => rtc::reply_now(call, clock.time().map(|seconds| seconds as u32)),
             Ok((rtc::Request::Date, call)) => rtc::reply_date(call, clock.date()),
             Ok((rtc::Request::Set { date, seconds }, call)) => {
