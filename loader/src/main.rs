@@ -126,13 +126,24 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
     let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
-    let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
     let image = Image::Memory { cap, len: size };
-    let result = match (front.filter(|_| screen != 0), fed) {
-        (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
-        (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
-        (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+    let spawn = |memory_mib: u16| {
+        let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
+        match (front.filter(|_| screen != 0), fed) {
+            (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
+            (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
+            (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+        }
     };
+    let mut result = spawn(memory_mib);
+    // More than loader's quota (the frame pool) asked: the kernel refuses before it moves a grant, and the program gets
+    // all of loader's quota instead, which the frame pool limits further anyway (000-KRN-0134).
+    if memory_mib as usize > HEAP_MAX_BYTES >> 20 && matches!(result, Err(Error::Other(ERR_LIMIT))) {
+        if let Ok(started) = spawn(SPAWN_MEMORY_ALL as u16) {
+            mind::println!("[LOADER] {}: {} MiB ASKED, MORE THAN LOADER'S QUOTA: GIVEN ALL OF IT", core::str::from_utf8(task.as_bytes()).unwrap_or("?"), memory_mib);
+            result = Ok(started);
+        }
+    }
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
 }
@@ -148,8 +159,15 @@ fn read_image(file: &File) -> Result<(Pages, usize), Error> {
 
 // Starts helper `name` (1.8, 109-KRN-0096) with the endpoint in RECEIVED_CAP moved into its SLOT_INIT and nothing else:
 // no standard clients, no screen, no log even in debug mode, no tasks or endpoints of its own. `--session` tells it so.
+// A helper is a boot service: on a disk with boot slots its file is the booted slot's, the copy the bootloader verified
+// against the manifest (109-KRN-0133).
 fn spawn_helper(name: &str) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
+    match BOOT_SLOT.load(core::sync::atomic::Ordering::Relaxed) {
+        BOOT_SLOT_A => { let _ = write!(path, "MIND/A/"); }
+        BOOT_SLOT_B => { let _ = write!(path, "MIND/B/"); }
+        _ => {}
+    }
     path_for(name.as_bytes(), &mut path)?;
     let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?;
     let (image, size) = read_image(&file)?;
@@ -292,7 +310,11 @@ fn programs() -> List<loader::Program, 128> {
 }
 
 mind::entry!(main);
-fn main(_info: &'static BootInfo) {
+// The slot this boot runs from (BootInfo.boot_slot), for the helpers' files.
+static BOOT_SLOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(BOOT_SLOT_ROOT);
+
+fn main(info: &'static BootInfo) {
+    BOOT_SLOT.store(info.boot_slot.slot, core::sync::atomic::Ordering::Relaxed);
     let _ = fs::prepare();
     mind::println!("[LOADER] READY");
     let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS] };

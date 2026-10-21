@@ -418,7 +418,7 @@ macro_rules! types {
 }
 types! {
     battery: Error Status;
-    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update;
+    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
     display: Error Mode;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot;
@@ -431,7 +431,7 @@ types! {
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error;
     serial: Error Info;
-    shell: Error;
+    shell: Error CardCounters;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;

@@ -1,6 +1,6 @@
 # 000-APP-0049 — The network traffic on `wm`'s background
 
-**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs is not checked yet · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](000-NET-0015-a-card-read-only-client.md), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`wm`, `shell`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the line moving while `ping` runs is not checked yet · **Blocked by:** — (`REQUEST_NET_COUNTERS` and `SLOT_NET` with `CAP_BADGE`: ABI 10, 000-KRN-0109; the client: [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), `net.wit` 1.3) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 Split from [000-APP-0047](../issues-done/000-APP-0047-wm-desktop-background.done) on 2026-10-10: the background's `show = net` is there and says "NET: NO COUNTERS".
 
@@ -27,6 +27,7 @@ A card's counters (`net.wit` `counters`) are reached only through a full client 
 - **Host test:** `tests/wm_host.rs`, the rate from two samples, `K`, a driver that counts from 0 again.
 - **The `net` suite** (x86, aarch64, virtio-net): with `data/wm.conf` saying `show = net`, `wm` logs `[WM] NET IN … (THE CARD'S COUNTERS, THE FIRST RATE)` after `ping`. Its `wm` suite has no card, so the check is there.
 - **In `main`** since 835c31c8 (2026-10-20). The gate: every x86 group on i9 and every aarch64 group on un-rizen-service (Effector); the host tests, TLC and the x86 groups boot, services, scheduling, files and keys locally. The batch's later commits changed only the suites, and each group ran on a commit that has the suites it runs.
+- **Over Wi-Fi the card client has nothing to read** (the maintainer's report, 2026-10-20: `NET: NO COUNTERS` while the network works): the line now comes from every card the stack counts, through the shell, in [000-APP-0096](000-APP-0096-wms-net-line-from-every-card.md); the card client stays its second source.
 - **Left:** the line moving while `ping` runs is not checked in QEMU; a graph over the last minute.
 
 ## Related

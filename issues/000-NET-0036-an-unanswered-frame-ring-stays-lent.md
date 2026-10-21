@@ -45,6 +45,11 @@ From the kernel track's request "The stack revokes a frame ring the driver may a
   The idle check failed in each again (0.86 to 0.96). The race did not happen in these boots: it needs a slow turn, which the x86 check makes every time.
 - **Left:** the third criterion waits for the idle check (the kernel track's), which this task does not change.
 
+## Progress (2026-10-21): gate 25
+
+- **"aarch64: 16 CPUs" passed once on PCU**, its idle check too. This was gate 25 on `7dc99fed`, the branch with `main` bd7fd447.
+- **One pass of the five the criterion asks for,** so the criterion stays open. The kernel track's idle check has not been changed to say why it passed this time.
+
 ## Related
 
 - [000-KRN-0129](000-KRN-0129-virtio-net-faults-on-aarch64-with-16-cpus.md): the fault, its record and the proposed patch (the kernel track).

@@ -26,6 +26,10 @@ Plan steps 1 and 2 are made for one service, `link` (800-KRN-0128): at each star
 - [ ] A new `isolation` case (x86 and aarch64): a test service with a writable scope creates, renames and flushes files under its directory, and is refused everywhere else, a rename out of the scope included.
 - [ ] After `init` restarts it, the service writes through its new scopes, and the old ones are refused.
 
+## Progress (2026-10-21)
+
+800-KRN-0128 is done (`main` 8def173). Its last point, a name outside `data/link/` refused by `vfs_server` and not only by `link`, moves here: the `isolation` case above shows it for a scope.
+
 ## Related
 
 [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750](750-effector-agent.md), `idl/vfs.wit` 2.2 (`scope`), 351-KRN-0040 (a private directory for `keystore`).
