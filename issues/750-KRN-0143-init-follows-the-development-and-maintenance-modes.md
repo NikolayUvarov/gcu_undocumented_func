@@ -1,6 +1,6 @@
 # 750-KRN-0143 — `init` follows the development and maintenance modes: Effector's services only in a mode
 
-**Type:** `init`, IDL (`init.wit`, a new minor version) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
+**Type:** `init`, IDL (`init.wit` 1.5), ABI (`SLOT_MODE`, ABI 14) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
 
 From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026-10-21T1135Z-EFF-…`). The design is 750-EFF-0013's, on the agent track's branch.
 
@@ -30,7 +30,7 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
      - **`init` writes the file itself,** so the file and the running services cannot disagree, and no other holder needs to write it.
      - Turning a mode on starts both services at once; turning it off stops both, which ends the session. No reboot.
    - **Who may call it:**
-     - an `init` client badged `BADGE_MODE`, lent to the shell. The shell asks the operator at the local console before it turns a mode on (`APP`, the `mode` command);
+     - an `init` client badged `BADGE_MODE`, the shell's alone, in a slot of its own: `SLOT_MODE` (36), so ABI 14 moves `SLOT_DYNAMIC` to 37. Not `SLOT_INIT`: the shell lends that client to programs as `SLOT_LIFECYCLE`. The shell asks the operator at the local console before it turns a mode on (`APP`, the `mode` command);
      - an `init` client badged `BADGE_MIND`, which may only turn the maintenance mode on, with a reason. No component holds it yet; the Mind gets it when it exists (MC-8.1, MC-12.6);
      - any other caller is refused (`denied`).
 4. **Audit.** Each change is one line in the system log: who (the badge and the caller's PID), which mode, on or off, the reason (MC-10.2). The agent track's audit record reads it from there or from `mode`.
@@ -45,6 +45,24 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 - [ ] `BADGE_MIND` turns the maintenance mode on with a reason, and cannot turn a mode off or set the development mode; a holder without either badge is refused.
 - [ ] Every change is logged with its badge, PID and reason.
 - [ ] A safe start with the maintenance mode on starts both services.
+
+## Progress (2026-10-21)
+
+**The mode itself is made** (`claude/youthful-mendel-mf1soy`); the Effector services' part waits for their boot images (750-KRN-0119).
+- **ABI 14:** `SLOT_MODE` (36), the shell's alone and no launch slot; `SLOT_DYNAMIC` 37. `BADGE_MODE` (3) and `BADGE_MIND` (4) in `mind::process`. `tests/runtime.rs` checks the slots.
+- **`init.wit` 1.5:** `enum mode`, `record mode-state`, `mode()` and `set-mode(which, on, reason)`; `libmind/src/idl/init.rs` regenerated.
+- **`init`:**
+  - it reads `data/mode.conf` once the boot volume is mounted, through a client with the user's rights that it drops at once;
+  - it logs `[INIT] MODE: …` and each word it leaves out;
+  - `set-mode` writes the file whole, then logs `[INIT] MODE <which> ON|OFF BY operator|mind (PID, BADGE): <reason>`; a refusal logs the caller's PID and badge;
+  - the Effector services follow the modes once they exist; this build says it has none.
+- **`check services`:** "the modes" reads them; "a mode change refused" asks with its lifecycle client and must be denied (both in the bench suite's `CHECKS_PASS`).
+- **The `modes` QEMU suite**, in "x86: services, storage, audio" and "aarch64: files, network and TLS" (both passed locally): the development mode and an unknown word from `data/mode.conf`, the shell's `SLOT_MODE` badged 3 and no other client of `init` so badged, `check services`' two rows, the refusal logged; a second boot with no file in the normal mode.
+- **Left:**
+  - the services' part, with 750-KRN-0119;
+  - `set-mode` through `BADGE_MODE`, once the shell's `mode` command (APP) calls it;
+  - `BADGE_MIND`'s holder, the Mind;
+  - the three-reboot criterion.
 
 ## Settled
 

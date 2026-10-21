@@ -2,7 +2,7 @@
 /// services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
 /// SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
 /// the shell cannot be stopped.
-package mind:init@1.4.0;
+package mind:init@1.5.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -35,4 +35,17 @@ interface init {
     /// trial boot not confirmed is one it refused: the kernel restarts the machine at the deadline. Any client may ask.
     record boot { slot: u8, trial: bool, confirmed: bool }
     boot: func() -> result<boot, error>;
+    /// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
+    /// Effector agent's services (750-EFF-0013); in neither, the normal mode, it runs none and grants them nothing.
+    enum mode { development, maintenance }
+    /// Which modes are on, as data/mode.conf keeps them across restarts, and who made the last change and why: `disk`
+    /// (the file as the disk was written), `operator` (a client badged `BADGE_MODE`, the shell's) or `mind` (one badged
+    /// `BADGE_MIND`).
+    record mode-state { development: bool, maintenance: bool, by: string<16>, reason: string<120> }
+    /// The modes; any client may ask (1.5).
+    mode: func() -> result<mode-state, error>;
+    /// Turns a mode on or off (1.5): init writes data/mode.conf, starts or stops the Effector services at once with no
+    /// restart, and logs the change with the caller's badge, PID and `reason`. A client badged `BADGE_MODE` may turn
+    /// either mode on or off; one badged `BADGE_MIND` may only turn the maintenance mode on; others get `denied`.
+    set-mode: func(which: mode, on: bool, reason: string<120>) -> result<_, error>;
 }
