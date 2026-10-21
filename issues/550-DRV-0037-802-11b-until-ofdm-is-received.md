@@ -32,6 +32,7 @@ Evidence for this machine and network only (MC-12.1). 802.11b's rates bound the 
   - **Receiving:** 483 to 523 good CCK frames each 10 s, and no OFDM frame at all, good or bad. The access point kept to CCK.
   - **DHCP took 15 s** after the join, where it had taken 50 s.
   - **Sending is now where frames are lost.** At 11 Mbit/s 7 of 14 data frames were lost after 4 tries; at 5.5 Mbit/s 1 of 15. The next task is [550-DRV-0038](550-DRV-0038-retries-at-a-lower-rate.md).
+  - **`ping -c 20` to the gateway: 15 of 20 answered,** where pings had answered about 2 of 3 with 802.11g. The criterion of 19 is not met, so it stays open for 550-DRV-0038.
 
 ## Related
 

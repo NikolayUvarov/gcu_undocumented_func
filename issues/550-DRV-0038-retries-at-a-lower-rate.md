@@ -28,6 +28,7 @@ Evidence for this machine and network only (MC-12.1). That the microcode uses th
 
 ## Progress
 
+- **The baseline,** before this change (`fast-test` ffd5dcc, 802.11b): `ping -c 20` to the gateway answered 15 of 20.
 - **2026-10-21, written** (`bcm_wifi/src/radio.rs`, `fallback`). It builds. The Mac's run is left.
 
 ## Related
