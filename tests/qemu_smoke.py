@@ -7143,8 +7143,8 @@ def wm_suite(vm):
         shows(menu_shell, "THE SHELL'S WINDOW:")
         # Asked again while it is open: a second shell, titled shell 2, a session of its own (the maintainer's report,
         # 2026-10-21: the menu brought back the first).
-        typed("cd diag")
-        shows(menu_shell, "MIND diag> ")
+        typed("cd ram:")  # ram: is on every disk the suite boots; diag/ is not on the wm suite's
+        shows(menu_shell, "MIND ram:> ")
         front(next(w for w in state()[2] if w != menu_shell))
         before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
@@ -7158,7 +7158,7 @@ def wm_suite(vm):
         while second not in state()[2] or state()[1] != second:
             wait()
         rows = shows(second, "THE SHELL'S WINDOW 2:")
-        assert not any(canon("MIND diag> ") in row for row in rows), rows  # the first one's directory is its own
+        assert not any(canon("MIND ram:> ") in row for row in rows), rows  # the first one's directory is its own
         close_shell(second)
         close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
