@@ -1,6 +1,6 @@
 # 000-KRN-0140 — The landing queue: one integrator gates the candidate that becomes `main`
 
-**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): rounds 1 and 2 landed · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
+**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): rounds 1, 2, 3 and 5 landed, round 4 returned · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
 
 ## Problem
 
@@ -74,6 +74,16 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
   - LNK's merge, recorded with `resolve` and reused by the next `candidate`;
   - `main`'s later text, by `push`'s hand merge.
 - **`main` = 1d84162.** The answer is `LANDING/2026-10-21T1350Z-KRN-landed-97c4a4c1.md`.
+
+**Rounds 3 to 5 (2026-10-21):**
+- **Round 3** landed EFF and KRN: `main` e4fd3b3.
+  - KRN's first request changed the same aarch64 group line as EFF's. That conflict in code would have returned EFF's request, so KRN posted a narrower request.
+- **Round 4** (KRN alone) was returned. The host tests failed twice: the IDL fuzzer must list every generated type, and `init.wit` 1.5's two new types were missing.
+- **Round 5** landed DRV, LNK and KRN, with ABI 14: `main` 3bdd026.
+- **A container restart** stopped the gate script with one group left running on i9.
+  - `gate` run again with the same tag found every group's operation by its idempotency key and read the results back from Effector, the last one completed meanwhile.
+  - It was green within a minute, and no group ran twice.
+  - The keys are `land-<tag>-<lane>-<n>-<hash of the command>`, so a gate can be taken up again after any interruption.
 
 ## Related
 

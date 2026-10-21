@@ -1,6 +1,6 @@
 # 750-KRN-0143 — `init` follows the development and maintenance modes: Effector's services only in a mode
 
-**Type:** `init`, IDL (`init.wit` 1.5), ABI (`SLOT_MODE`, ABI 14) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
+**Type:** `init`, IDL (`init.wit` 1.5), ABI (`SLOT_MODE`, ABI 14) · **Owner:** kernel session · **Priority:** P1 · **Status:** the mode in `main` (3bdd026, ABI 14, 2026-10-21); the services' part and the shell's command left · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
 
 From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026-10-21T1135Z-EFF-…`). The design is 750-EFF-0013's, on the agent track's branch.
 
@@ -48,7 +48,7 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 
 ## Progress (2026-10-21)
 
-**The mode itself is made** (`claude/youthful-mendel-mf1soy`); the Effector services' part waits for their boot images (750-KRN-0119).
+**The mode itself is in `main`** (landing round 5, gate `land-4f67455f`, `main` 3bdd026); the Effector services' part waits for their boot images (750-KRN-0119).
 - **ABI 14:** `SLOT_MODE` (36), the shell's alone and no launch slot; `SLOT_DYNAMIC` 37. `BADGE_MODE` (3) and `BADGE_MIND` (4) in `mind::process`. `tests/runtime.rs` checks the slots.
 - **`init.wit` 1.5:** `enum mode`, `record mode-state`, `mode()` and `set-mode(which, on, reason)`; `libmind/src/idl/init.rs` regenerated.
 - **`init`:**
