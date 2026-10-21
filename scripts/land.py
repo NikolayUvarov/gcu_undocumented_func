@@ -116,21 +116,30 @@ def cmd_candidate(args):
         if git("merge-base", "--is-ancestor", commit, "HEAD", cwd=tree, check=False).returncode == 0:
             skipped.append({"request": name, "branch": branch, "commit": commit, "why": "already in main or the candidate"}); continue
         message = f"Land {branch} ({commit[:12]}) through the landing queue\n\nRequest: LANDING/{name}" + (f"\n\n{TRAILER}" if TRAILER else "")
-        merged = git("merge", "--no-ff", "-q", "-m", message, commit, cwd=tree, check=False)
+        # The first request that already holds main is taken as it is: no merge commit, and it is on origin already.
+        fast = not landed and git("merge-base", "--is-ancestor", "HEAD", commit, cwd=tree, check=False).returncode == 0
+        merged = git("merge", "--ff-only", "-q", commit, cwd=tree, check=False) if fast else git("merge", "--no-ff", "-q", "-m", message, commit, cwd=tree, check=False)
         if merged.returncode != 0:
             git("merge", "--abort", cwd=tree, check=False)
             returned.append({"request": name, "branch": branch, "commit": commit, "why": "merge conflict with main and the requests before it"}); continue
         landed.append({"request": name, "branch": branch, "commit": commit})
-    state = {"base": base, "candidate": git("rev-parse", "HEAD", cwd=tree), "landed": landed, "returned": returned,
+    head = git("rev-parse", "HEAD", cwd=tree)
+    # Published already when the candidate is one request's own commit, taken as it is.
+    published = next((e["branch"] for e in landed if e["commit"] == head), None)
+    state = {"base": base, "candidate": head, "published": published, "landed": landed, "returned": returned,
              "skipped": skipped, "superseded": superseded, "built": datetime.datetime.now(datetime.timezone.utc).isoformat()}
     state_path().write_text(json.dumps(state, indent=1))
     print(f"candidate {state['candidate'][:12]} on main {base[:12]}")
     for entry in landed: print(f"  merged    {entry['branch']} {entry['commit'][:12]} ({entry['request']})")
     for entry in returned: print(f"  returned  {entry['branch']}: {entry['why']} ({entry['request']})")
     for entry in skipped: print(f"  skipped   {entry['branch']}: {entry['why']} ({entry['request']})")
-    if args.push and landed:
+    if published:
+        print(f"the candidate is {published} as it is, on origin already")
+    elif args.push and landed:
         # The integrator's own branch, rebuilt from main each round: only it uses this branch, so it is replaced.
         git("push", "-q", "-f", "origin", f"{state['candidate']}:refs/heads/{CANDIDATE_BRANCH}")
+        state["published"] = CANDIDATE_BRANCH
+        state_path().write_text(json.dumps(state, indent=1))
         print(f"pushed to {CANDIDATE_BRANCH}")
 
 
@@ -378,8 +387,9 @@ def cmd_gate(args):
         print(f"{lane}: " + "; ".join(g for _, g in runs_for(entries)))
     if args.dry_run:
         return
-    if git("ls-remote", "origin", CANDIDATE_BRANCH).split()[:1] != [commit]:
-        raise SystemExit(f"origin/{CANDIDATE_BRANCH} is not the candidate: run `scripts/land.sh candidate --push`")
+    published = state.get("published")
+    if not published or git("ls-remote", "origin", published).split()[:1] != [commit]:
+        raise SystemExit(f"the candidate {commit[:12]} is not on origin: run `scripts/land.sh candidate --push`")
     tag = args.tag or "land-" + commit[:8]
     out = WORK / f"gate-{commit[:12]}.json"
     gate = Gate(commit, tag, Effector(), out)
