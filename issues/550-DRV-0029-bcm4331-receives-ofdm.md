@@ -60,6 +60,36 @@ Evidence for this machine only (MC-12.1).
 - **The same boot: `wlan` got the radio's `info` 2 s after it started** (`[WLAN] RADIO B8:F6:B1:1B:0F:07, 13 CHANNELS, 2.4 GHZ 802.11B`), during the test, and `bcm_wifi` served it after the test. No scan was asked of the station afterwards: no program holds its configuration client yet (the tools track's part, `SLOT_WIFI`).
 - **2026-10-14: plan item 2, `bands` = 5** (`BAND_2GHZ | BAND_2GHZ_OFDM`, `idl/wlanhw.wit` 1.1's bit 2, whose wire is 1.0's), in both `info` answers. The answer during the test counts too, because `wlan` asks once, when it starts. This answers the network track's request, now taken from `requests-DRV.md`. Since `main` 3be9671 brought 1.1, it is written with `mind::network`'s constants.
 
+- **2026-10-21: CoolNet2's OFDM is not received at all,** with core 2's front end off ([550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md)).
+  - Over seven periods of 10 s on channel 8, the radio received 210 to 428 good CCK frames each period, no good OFDM frame, and 2 to 8 OFDM frames with a bad PLCP header.
+  - This network's signal was not measured in that run.
+  - Until OFDM comes through, the station is offered 802.11b only ([550-DRV-0037](550-DRV-0037-802-11b-until-ofdm-is-received.md)). So this task's criterion "802.11g for the station" is met only with `data/wifi-ofdm.txt`.
+
+- **2026-10-21: what the next run with `data/wifi-ofdm.txt` will tell.** Two things differ from the runs of 2026-10-14, where OFDM came through:
+  - **the channel:** CoolNet2 is on channel 8, and those runs probed networks on channels 1, 3 and 6 only. Channel 8's values in the radio's and the PHY's tables follow the same steps as the channels around it, so a slip in one entry is not likely, though not ruled out;
+  - **the frames:** those runs counted acknowledgements, 14 bytes; the access point's data to the station is longer. A receiver that keeps the start of a frame and loses its later symbols decodes the one and not the other.
+
+  Until now a frame with a bad FCS never reached `bcm_wifi` outside the test, so "no good OFDM" could not be told apart from "no OFDM heard". Now, with `data/wifi-ofdm.txt` (`bcm_wifi/src/serve.rs` `ofdm_lines`, `radio.rs` `Counts`):
+  - frames with a bad FCS or PLCP are kept and counted, not queued for the station;
+  - every period that logs traffic adds two lines: OFDM frames good and with a bad FCS by rate (6 to 54 Mbit/s) and by length (up to 64 bytes, 65 to 256, longer), and the mean power by core of each, with how many were clipped;
+  - **`cores-off=<0 to 7>` in the file** switches off the front ends of the cores in that mask (core 0 is bit 0) in place of core 2's alone: `cores-off=6` leaves core 0 alone, `cores-off=0` every core on. The boot logs the cores it switched off.
+
+  What each outcome would mean:
+  - **long frames with a bad FCS, short ones good:** the frame's start is received and its later symbols are not. Next: the receive gain held through a frame, IQ balance, frequency tracking;
+  - **almost nothing at OFDM, good or bad, at a power that should be received:** the receiver does not detect OFDM on channel 8. Next: `--wifitest`'s probes there, and channel 8's tables against b43's source;
+  - **good frames with another core set:** the cores, as on 2026-10-14.
+
+- **2026-10-21, the first run with the counts heard nothing** (`fast-test` 5a28fe6, `data/wifi-ofdm.txt`, developer mode):
+  - with frames with a bad FCS and a bad PLCP header kept, the station's scans heard no access point at all ("SCANNED, 0 ACCESS POINTS"), on the boot and twice more over the link;
+  - `bcm_wifi` did not fault. Nothing was sent, so no traffic line showed what came in;
+  - the boot before, the same radio in 802.11b without the kept frames had heard 15 access points.
+
+  **What follows.** A frame whose PLCP header failed is mostly noise the receiver took for a frame's start. Kept, such frames seem to crowd out the rest; the cause is not measured.
+  - **Now `bcm_wifi` keeps only frames with a bad FCS,** whose header held.
+  - **A frame with a bad FCS weaker than -75 dBm on every core** is counted apart, as noise, not by rate.
+  - **If no good frame comes for 5 s** while they are kept, it stops keeping them and says so, so the station keeps its network.
+  - **In this test the receiving side is logged every 10 s,** sent or not.
+
 ## Related
 
 [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), requests-NET.md (the station's rates; the stack's wait), `bcm_wifi/`.

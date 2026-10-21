@@ -4,6 +4,7 @@ requires: file wifi network log
 # logs the address DHCP gave and a ping of the gateway. build-and-write.sh --wifijoin puts it at the boot volume's root
 # as autorun.msh, which the shell runs once at start (000-APP-0079), with data/wifijoin.txt: the network's name, then
 # its passphrase. The passphrase is read only by `wifi join` (550-APP-0078): this script prints and logs only the name.
+# A file with the name alone (build-and-write.sh --keep-wifi) joins a network keystore remembers, with no passphrase.
 
 # A line on the screen and in the system log.
 fn note(text) {
@@ -35,7 +36,14 @@ try {
     let name = ""
     if len(lines(file)) > 0 { name = trim(lines(file)[0]) }
     if name == "" { fail("no network named in data/wifijoin.txt") }
-    note("WIFI JOIN: THE NETWORK \"{name}\"")
+    let second = ""
+    if len(lines(file)) > 1 { second = trim(lines(file)[1]) }
+    let remembered = second == ""
+    let join = "wifi join \"{name}\" --passphrase-file data/wifijoin.txt"
+    if remembered { join = "wifi join \"{name}\"" }
+    let mark = ""
+    if remembered { mark = " (REMEMBERED BY KEYSTORE)" }
+    note("WIFI JOIN: THE NETWORK \"{name}\"{mark}")
 
     # The station: up to 60 s after the shell's start for wlan and its radio.
     let begun = now()
@@ -45,7 +53,7 @@ try {
     }
 
     begun = now()
-    let joined = run("wifi join \"{name}\" --passphrase-file data/wifijoin.txt")
+    let joined = run(join)
     note("WIFI JOIN: {upper(str(joined))} AFTER {now() - begun} MS")
     if joined {
         # The address DHCP gives: up to 30 s.

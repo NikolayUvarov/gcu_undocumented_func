@@ -64,6 +64,10 @@ const MICROCODE_MAX: usize = 64 * 1024;
 // The stages run as a test when this file exists (the maintainer's request), and the radio comes up for the station when
 // init gives bcm_wifi its service endpoint (550-DRV-0027); without either the core stays in reset.
 const STAGE2_FLAG: &str = "data/wifitest.txt";
+/// With this file, 802.11g is offered to the station (550-DRV-0037). `cores-off=<0 to 7>` in it switches off the front
+/// ends of the cores in that mask (core 0 is bit 0) instead of core 2's alone, for a test (550-DRV-0029).
+const OFDM_FLAG: &str = "data/wifi-ofdm.txt";
+const CORES_OFF_WORD: &[u8] = b"cores-off=";
 // Each step is logged, then waited for longer than the journal's save period, so a hang leaves its step as the last line.
 const STEP_MS: usize = 3000;
 // The wait after each step: STEP_MS in a test, none when the radio only comes up for the station.
@@ -141,6 +145,10 @@ fn main(_info: &'static BootInfo) {
     let mac = sprom(&bar, capabilities);
     if index == CORE_80211 {
         let test = mind::fs::File::open(STAGE2_FLAG).is_ok();
+        let ofdm = mind::fs::File::open(OFDM_FLAG).ok();
+        serve::offer_ofdm(ofdm.is_some());
+        mind::println!("[BCM] 2.4 GHZ OFFERED TO THE STATION: {}", if ofdm.is_some() { "802.11G (data/wifi-ofdm.txt)" } else { "802.11B ONLY, CCK (data/wifi-ofdm.txt OFFERS 802.11G)" });
+        if let Some(mask) = ofdm.and_then(|f| cores_off(&f)) { radio::set_cores_off_at_up(mask); }
         let serving = cap_info(SLOT_SERVICE).0 == CAP_KIND_ENDPOINT;
         if test { STEP_WAIT.store(STEP_MS, Ordering::Relaxed); }
         mind::println!("[BCM] TEST {} ({}), A STATION TO SERVE: {}", if test { "ASKED FOR" } else { "NOT ASKED FOR" }, STAGE2_FLAG, if serving { "YES" } else { "NO" });
@@ -151,6 +159,15 @@ fn main(_info: &'static BootInfo) {
         if serving { serve::absent(); }
     }
     idle()
+}
+
+// The mask after `cores-off=` in the OFDM flag file, a digit 0 to 7, if it holds one.
+fn cores_off(file: &mind::fs::File) -> Option<u8> {
+    let mut text = [0u8; 128];
+    let n = file.read_at(0, &mut text).ok()?;
+    let text = &text[..n];
+    let at = text.windows(CORES_OFF_WORD.len()).position(|w| w == CORES_OFF_WORD)? + CORES_OFF_WORD.len();
+    match text.get(at) { Some(&d @ b'0'..=b'7') => Some(d - b'0'), _ => None }
 }
 
 // The SPROM, read where it may appear, its revision, CRC and MAC address logged.
