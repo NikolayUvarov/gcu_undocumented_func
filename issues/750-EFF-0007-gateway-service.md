@@ -1,6 +1,6 @@
 # 750-EFF-0007 — `effector_gw`: the gateway that acts on the machine
 
-**Type:** service · **Owner:** `EFF` track (open) · **Priority:** P1 · **Status:** open · **Blocked by:** [750-EFF-0003](750-EFF-0003-interface-and-policy.md); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants, a writable scoped `vfs` client, a lifecycle client limited to named services) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-10.2, MC-10.3, MC-10.7, MC-6.8, MC-6.9
+**Type:** service · **Owner:** `EFF` track · **Priority:** P1 · **Status:** open · **Blocked by:** ([750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), the interface and the policy, done); [requests-KRN.md](requests-KRN.md) (boot images and `init`'s grants, a writable scoped `vfs` client, a lifecycle client limited to named services) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.1, MC-3.4, MC-3.7, MC-3.8, MC-10.2, MC-10.3, MC-10.7, MC-6.8, MC-6.9
 
 ## Problem
 
@@ -48,4 +48,4 @@
 
 ## Related
 
-[750-EFF-0003](750-EFF-0003-interface-and-policy.md), [750-EFF-0006](750-EFF-0006-session-service.md), `idl/init.wit`, `idl/log.wit`, `idl/sysinfo.wit`, `idl/vfs.wit`.
+[750-EFF-0003](../issues-done/750-EFF-0003-interface-and-policy.done), [750-EFF-0006](750-EFF-0006-session-service.md), `idl/init.wit`, `idl/log.wit`, `idl/sysinfo.wit`, `idl/vfs.wit`.

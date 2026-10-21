@@ -5,6 +5,55 @@ the exact source/live server revisions reviewed. MIND's runtime agent is
 still [750](../../issues/750-effector-agent.md); these files are not evidence
 that a MIND machine is remotely manageable yet.
 
+## The two services and what each holds
+
+The agent is two boot services on the network path of Appendix B.6
+([750](../../issues/750-effector-agent.md)). They talk only through
+[`idl/effector.wit`](../../idl/effector.wit) 1.0, which `effector_gw` serves.
+The grants below are the ones planned in
+[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md);
+neither service runs yet, so this section is the design the code must keep,
+not a description of running code (MC-12.3).
+
+| Service | Holds | Parses | Never holds |
+|---|---|---|---|
+| `effector`, the session | one `netpolicy` flow to the configured server; a `tls` client (`connect-pins`); a `parse` client; `rtc`; a read-only `vfs` view of `data/effector/` (the owner's configuration); its private directory `system/effector/` (the AgentToken, the agent ID, the ACK journal); the gateway's endpoint with the session badge | only HTTP framing: heads and JSON bodies go to `parse` (MC-11.11, [airlock](../network/airlock.md)) | any local authority: lifecycle, the log read badge, writable files outside its private directory, the updater, the reboot badge, the screen |
+| `effector_gw`, the gateway | a lifecycle client limited to named services ([750-KRN-0121](../../issues/750-KRN-0121-a-lifecycle-client-for-named-services.md)); the log read badge; `sysinfo`; a `vfs` client writable in `data/effector/` (the audit) and `data/apps/` ([750-KRN-0120](../../issues/750-KRN-0120-writable-scopes-for-a-service.md)) and in the delivery root; read-only clients for the policy's roots and `log:`; a client of `updater` without the channel ([750-UPD-0020](../../issues/750-UPD-0020-the-gateways-client-of-the-updater.md)); `init`'s reboot badge; screen capture; later the test account's spawn right (501); its private directory `system/effector_gw/` | nothing from the network: only typed requests, checked by the generated decoder (MC-2.4), and the owner's [policy](policy.md) | the network, `tls`, `parse`, the device key, the AgentToken |
+| the shell (the owner) | the gateway's endpoint with the owner badge: `reload-policy`, `audit`, `status` | — | — |
+
+**If `effector` is taken over** (a parser or framing bug, a hostile answer it
+mishandles): it can send the gateway any typed request with any origin. The
+gateway still allows only what the policy names, audits it, and holds the
+rest. What it gains is what the policy lets leave the machine, the session's
+own token (so it can speak to the server as this agent) and the network flow
+the policy line gives it.
+
+**If the server, or whoever holds its key and the token, is hostile:** the
+same as a taken-over `effector`, within the policy. The pinned certificate
+keeps another server from posing as it; it does not make the server's
+requests safe. Every request names its command, initiator and reason in the
+audit before it runs.
+
+**If `effector_gw` is taken over:** it holds the local authorities above, so
+it is the agent's trusted part. Its exposure is small on purpose: no network,
+no parser of outside bytes beyond the generated IDL decoder and the policy
+file the owner wrote.
+
+**What leaves the machine:**
+
+- the heartbeat: release version, uptime, memory, the boot services' states,
+  whether a request is running;
+- each request's result, bounded and without credentials;
+- files, logs and screens the policy names, up to `max-bytes`.
+
+The AgentToken, the device key, the journals, the policy and the audit never
+leave it: the gateway refuses `data/effector/`, `data/apps/` and `system/` as
+sources, and the session never reads them for the server.
+
+**Recorded locally:** one audit line per request in `logd` and in a bounded
+`data/effector/audit` (`effector_gw/src/audit.rs`), written before the reply;
+if it cannot be written, the request is refused (MC-10.6).
+
 ## Local protocol fixture
 
 Run its host tests from the repository root:
@@ -72,7 +121,7 @@ as-yet-unwritten MIND client. No real endpoint is registered by these tests.
 ## Next persistent agent slice
 
 Use existing [750-EFF-0006](../../issues/750-EFF-0006-session-service.md),
-[0003](../../issues/750-EFF-0003-interface-and-policy.md) and
+[0003](../../issues-done/750-EFF-0003-interface-and-policy.done) and
 [0007](../../issues/750-EFF-0007-gateway-service.md), not another protocol:
 
 - `effector/src/main.rs` and `Cargo.toml`: an opt-in, persistent outbound
@@ -84,9 +133,10 @@ Use existing [750-EFF-0006](../../issues/750-EFF-0006-session-service.md),
   string-valued ACK. Refuse payloads beyond the current parser bounds.
 - `effector/src/journal.rs`: persist command/result before ACK and recover
   pending ACKs after restart. No local side effects in this service.
-- `idl/effector.wit`, `effector_gw/src/main.rs`: versioned typed boundary to
-  the policy-owning gateway. Start with status and explicit denial; enable
-  named logs and test-account msh scripts only with their own grants/tests.
+- `effector_gw/src/main.rs`: the gateway serving [`idl/effector.wit`](../../idl/effector.wit)
+  1.0 with the [policy](policy.md) and audit line of 750-EFF-0003. Start with
+  status and explicit denial; enable named logs and test-account msh scripts
+  only with their own grants/tests.
 - Kernel-owned boot image entries and `init` grants, plus the tools-owned
   `effector setup/status/enable/disable`, remain tracked in their existing
   requests. AgentToken must be provisioned privately; an operator API key
