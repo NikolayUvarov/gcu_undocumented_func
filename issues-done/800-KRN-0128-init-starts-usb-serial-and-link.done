@@ -1,11 +1,11 @@
-# 800-KRN-0128 — `init` starts `usb_serial` and `link` when the boot volume holds `link.conf`
+# 800-KRN-0128 — `init` starts `usb_serial` and `link` when the boot volume holds `link.conf` — done
 
-**Type:** `init`, ABI (`common/abi.rs`: two boot images) · **Owner:** kernel session · **Priority:** P2 · **Status:** made on the kernel branch with `claude/LNK-link` merged, in `fast-test` (2026-10-20); the gate is left · **Blocked by:** the link track's `usb_serial` and `link` in `main` (`claude/LNK-link`) · **Main task:** 800 (the link track's) · **Constitution:** MC-2.3, MC-3.4, MC-3.7
+**Type:** `init`, ABI (`common/abi.rs`: two boot images) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-21) · **Blocked by:** the link track's `usb_serial` and `link` in `main` (`claude/LNK-link`) · **Main task:** 800 (the link track's) · **Constitution:** MC-2.3, MC-3.4, MC-3.7
 
 ## Problem
 
 The link track's requests of 2026-10-20 (`internal-dev-messages`, `KRN/2026-10-20T0706Z-LNK-…` and `KRN/2026-10-20T0845Z-LNK-…`):
-- `usb_serial` ([800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md)) and `link` ([800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md)) build. They ran in QEMU with a local patch of `init`.
+- `usb_serial` ([800-LNK-0002](../issues/800-LNK-0002-usb-serial-ftdi-and-ch340.md)) and `link` ([800-LNK-0003](../issues/800-LNK-0003-the-link-service-on-mind-core.md)) build. They ran in QEMU with a local patch of `init`.
 - The drivers track's part is done (800-DRV-0034): `usb_host` gives a converter to a client badged `mind::usb::BADGE_SERIAL`.
 - Only `init` can start the two services and hand out their clients, and neither is a boot image.
 
@@ -34,12 +34,22 @@ The link track asked for this part at once, on its branch and into `fast-test`, 
 
 ## Acceptance criteria
 
-- [ ] A QEMU suite with `-device usb-serial` on a pseudo-terminal and `link.conf` on the test disk, written by the link track:
+- [x] A QEMU suite with `-device usb-serial` on a pseudo-terminal and `link.conf` on the test disk, written by the link track:
   - `mindlink` moves a file each way and reads the log;
   - a name outside `data/link/` is refused by `vfs_server`, not only by `link`.
-- [ ] Without `link.conf`, neither service starts, and every other suite passes as before.
-- [ ] `stat caps` of `link` shows exactly the grants above.
+- [x] Without `link.conf`, neither service starts, and every other suite passes as before.
+- [x] `stat caps` of `link` shows exactly the grants above.
 
 ## Related
 
-[800-LNK-0002](800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](../issues-done/351-KRN-0115-the-ssh-service-in-the-boot-services.done) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
+[800-LNK-0002](../issues/800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](../issues/800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](../issues/750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.done) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
+
+## Resolution
+
+- **Where.** ABI 13 in `common/abi.rs` (`usb_serial` and `link` after `vfs_server`, `BootInfo.link_present`/`link_words`), `bootloader/src/main.rs` (`link_conf`), `init/src/main.rs` (the two arms, `link_scope`, `kernel_lines`), `logd/src/ring.rs` (2048 records, `init` not limited), `02_build.sh`.
+- **Shown:**
+  - the link track's `link` suite: a file each way, the log with the kernel's lines, `stat caps` of `link`;
+  - without `link.conf`, every other suite passed in the gate;
+  - on the maintainer's MacBook Pro over RS-485 (the link track's record).
+- **Moved to 750-KRN-0120.** A name outside `data/link/` is refused by `link` in the suite. The refusal by `vfs_server`'s scope itself is the `isolation` case of [750-KRN-0120](../issues/750-KRN-0120-writable-scopes-for-a-service.md).
+- **Gate.** Gate g0138 on 8def173 (`main` f8d50ac merged): every group passed — host tests, models (TLC), the x86 builds and 24 x86 groups (un-rizen and i9), the aarch64 builds and 9 aarch64 groups (un-rizen and PCU). The x86 groups that had timed out on an overloaded un-rizen (load average 40 on 16 threads) in gates g0132–g0137 ran on i9. `main` = 8def173.

@@ -1,6 +1,6 @@
 # 109-KRN-0133 — The loader starts its helpers from the booted slot's copy
 
-**Type:** `loader` · **Owner:** kernel session · **Priority:** P2 · **Status:** made, in `fast-test` (2026-10-20); slot A shown; slot B waits for the parser sessions' race · **Blocked by:** [requests-NET.md](requests-NET.md) and [requests-UPD.md](requests-UPD.md) ("A parser session ends before its helper does") · **Main task:** 109 (parsers) · **Constitution:** MC-3.11, MC-11.11, Appendix B.6
+**Type:** `loader` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (8def173, 2026-10-21); slot A shown; slot B waits for the parser sessions' race · **Blocked by:** [requests-NET.md](requests-NET.md) and [requests-UPD.md](requests-UPD.md) ("A parser session ends before its helper does") · **Main task:** 109 (parsers) · **Constitution:** MC-3.11, MC-11.11, Appendix B.6
 
 ## Problem
 
@@ -36,6 +36,10 @@ The update track recorded this on 2026-10-20 ([requests-KRN.md](requests-KRN.md)
   - NET: a session's drop waits until its helper has ended;
   - UPD: the updater reads both channels in one session.
 - **The suite.** Its check of the slot B boot is not part of this task's change until then. The slot A check stays.
+
+## Progress (2026-10-21)
+
+In `main` (8def173, gate g0138): the updater gets a parser of its own when booted from slot A. Slot B waits for the network or update track's fix of the sessions' race.
 
 ## Related
 

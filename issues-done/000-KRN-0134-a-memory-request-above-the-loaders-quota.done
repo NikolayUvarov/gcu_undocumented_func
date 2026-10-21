@@ -1,6 +1,6 @@
-# 000-KRN-0134 — A program that asks for more memory than the loader has still starts
+# 000-KRN-0134 — A program that asks for more memory than the loader has still starts — done
 
-**Type:** `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** made, in `fast-test` (2026-10-20); the gate is left · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.13
+**Type:** `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-21) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.13
 
 ## Problem
 
@@ -25,9 +25,16 @@ The tools track recorded the same failure as a request on 2026-10-20, from its g
 
 ## Acceptance criteria
 
-- [ ] The tools suite's `dictate` checks pass on QEMU's 512 MB x86 machine with ABI 13's images.
-- [ ] The whole gate passes on the tree with this change.
+- [x] The tools suite's `dictate` checks pass on QEMU's 512 MB x86 machine with ABI 13's images.
+- [x] The whole gate passes on the tree with this change.
 
 ## Related
 
-[800-KRN-0128](800-KRN-0128-init-starts-usb-serial-and-link.md) (the two boot images), issue 150 (memory quotas), `loader/src/main.rs` (`load`).
+[800-KRN-0128](800-KRN-0128-init-starts-usb-serial-and-link.done) (the two boot images), issue 150 (memory quotas), `loader/src/main.rs` (`load`).
+
+## Resolution
+
+- **Where.** `loader/src/main.rs` (`load`): on `ERR_LIMIT` for a request above the default, one retry with `SPAWN_MEMORY_ALL`, logged.
+- **Shown.** On the kernel session's machine, before the tools track lowered `dictate` to 320 MiB, "x86: keys, shell, tools" passed with `dictate` still asking for 384 MiB from a 383 MiB pool: it could only have started through the retry.
+- **Since 2a33a71.** `dictate` and `speak` ask for 320 MiB, so no suite exercises the retry now.
+- **Gate.** Gate g0138 on 8def173 (`main` f8d50ac merged): every group passed — host tests, models (TLC), the x86 builds and 24 x86 groups (un-rizen and i9), the aarch64 builds and 9 aarch64 groups (un-rizen and PCU). The x86 groups that had timed out on an overloaded un-rizen (load average 40 on 16 threads) in gates g0132–g0137 ran on i9. `main` = 8def173.
