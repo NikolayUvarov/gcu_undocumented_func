@@ -7467,7 +7467,8 @@ def wm_suite(vm):
         mode, focus, rects = state()
         assert focus == shell and rects[shell][2:] == (80, 24), rects
         typed("ps", "TASK(S); SHELL PID=")
-        typed("date", "(RTC, NO TIME ZONE)")
+        rows = typed("date", "DATE: ")  # in the zone, UTC here (000-APP-0099)
+        assert any(re.search(r"DATE: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", row) for row in rows), rows
         clock_pid = int(started["clock"]) + BASE
         typed(f"logs {clock_pid}", f"LOGS PID={clock_pid}")
         # A program started there opens a window of its own in wm, and the session goes on.
