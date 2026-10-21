@@ -88,6 +88,13 @@ The rest of a disk larger than the image stays unused.
 
 On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the image from Linux or Windows").
 
+**From WSL on Windows, in one step:** `scripts/build_and_write.sh <disk number>`.
+- It pulls `fast-test` (or builds `--commit <id>`), builds, and packs the image.
+- It opens an elevated PowerShell running `05_write_usb_windows.ps1`, which asks before it writes (`ERASE <number>`).
+- After the write it copies the proprietary files and the desktop pictures onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
+- `--list` shows the USB disks and their numbers.
+- It builds the repository it lives in, also when it is started through a symbolic link from outside that repository.
+
 ## 6. Boot the PC
 
 **Firmware settings** (in the setup screen, usually Del, F2 or F10 at power-on):
@@ -110,6 +117,27 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
 - **Starting it.** Attach the disk by USB, hold Option (⌥) at power-on and choose its `EFI Boot` entry.
   - Macs before the T2 chip have nothing to change in the firmware.
   - A Mac with T2 (from 2018) needs, in Startup Security Utility, "No Security" and "Allow booting from external media".
+- **Restarting into MIND Core.** The choice made with Option holds for that boot only. Any restart starts macOS again, `mindlink reboot` included: seen on the MacBook Pro on 2026-10-21.
+  - **To make the disk the default startup disk,** run this once in the Terminal of macOS Recovery, with the disk attached. macOS itself refuses it (below).
+    - macOS mounts only the log partition, `MIND LOG`. The boot partition is marked as the EFI system partition (type `0xEF`), which macOS leaves unmounted, so it is mounted by hand first.
+    - `MIND LOG`'s disk is the stick: `disk2`, say, and the boot partition is its first, `disk2s1`.
+
+    ```bash
+    diskutil info "/Volumes/MIND LOG" | grep "Part of Whole"     # the stick, e.g. disk2
+    sudo mkdir -p /Volumes/MINDCORE
+    sudo mount -t msdos /dev/disk2s1 /Volumes/MINDCORE           # its boot partition
+    sudo bless --mount /Volumes/MINDCORE --setBoot --file /Volumes/MINDCORE/EFI/BOOT/BOOTX64.EFI --shortform
+    bless --getBoot                                              # the device the firmware starts now
+    sudo umount /Volumes/MINDCORE
+    ```
+
+    `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
+  - **Where it works: macOS Recovery.** Hold Command-R at power-on, then Utilities, Terminal. It runs as root, so no `sudo`. The disk numbers there may differ: find the stick with `diskutil list`.
+    - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
+    - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
+  - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
+  - **If a rewritten disk is not started,** run the command again.
+  - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));
   - `vfs_server` mounts only FAT volumes in an MBR partition table, so it skips the internal disk's GPT.
