@@ -125,7 +125,8 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
     ```
 
     `bless` records the disk in the firmware's settings (NVRAM). The Mac should then start it at every power-on and restart while it is attached, and macOS when it is not.
-  - **Not working yet.** On 2026-10-21 the first try failed only because the boot partition was not mounted. With it mounted, `bless` is not tried yet. macOS's System Integrity Protection (from 10.11) may refuse it. Then the same command from macOS Recovery (Command-R at power-on, Utilities, Terminal) may work; that is not tried either.
+  - **From macOS it is refused.** On the MacBook Pro on 2026-10-21, with the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
+  - **From macOS Recovery** the same commands may work: Command-R at power-on, then Utilities, Terminal, no `sudo`. Not tried yet.
   - **If a rewritten disk is not started,** run the command again.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
