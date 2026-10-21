@@ -1,6 +1,6 @@
 # 800-LNK-0011 — `effector485`: a small Effector over the link, for local use
 
-**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress · **Blocked by:** for `cancel` of a program on MIND Core, `KRN`'s grant to end the programs `link` started (asked 2026-10-20) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.1, MC-12.3
+**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress · **Blocked by:** — · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -33,8 +33,8 @@ The maintainer asked on 2026-10-20: "link has to be like a small Effector … le
   - a cancel that stops a running program;
   - a restarted daemon that keeps its results and keys.
 - [ ] **The same batch against MIND Core in QEMU,** through the `link` suite. It needs 800-LNK-0009's endpoint from `KRN`.
-- [ ] **Against the MacBook Pro over the RS-485 cable**, from Windows.
-- [ ] **`cancel` stops a program on MIND Core.** It needs `KRN`'s grant.
+- [x] **Against the MacBook Pro over the RS-485 cable**, from Windows (2026-10-21, below).
+- [ ] **`cancel` stops a program on MIND Core.** `link` now stops programs through the loader (800-KRN-0138, `mindlink stop` in the QEMU `link` suite); a cancel through `effector485` is still to be run against it.
 
 Evidence for the configurations named only (MC-12.1). The tool claims nothing of Effector's guarantees beyond what its tests show (MC-12.3).
 
@@ -42,7 +42,12 @@ Evidence for the configurations named only (MC-12.1). The tool claims nothing of
 
 **2026-10-20, written; the host test passes.**
 - **`effector485.exe`** is built and placed beside `mindlink.exe` on the maintainer's Windows machine.
-- **Not run yet:** against the Mac, whose image predates 800-LNK-0009 and 0010.
+- **2026-10-21, the MacBook Pro** (`fast-test` b09b7bb), `effector485.exe daemon COM22 --baud 460800` on Windows:
+  - `endpoints` showed the Mac online;
+  - **a `put` into `apps/`, missing there, was refused** (NOT_FOUND, as the protocol says). `put` now makes the parent directories first, and the host test checks it;
+  - `install` of `memtest`, then `run` with `alloc 2`: its output in the operation, completed;
+  - **the same idempotency key again** answered the same completed operation, and the program did not run again;
+  - `log` from 0, and `list` of `apps/`.
 
 ## Related
 

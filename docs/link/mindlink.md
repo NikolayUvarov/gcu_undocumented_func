@@ -52,11 +52,11 @@ Options come before the command; what follows the command is its own, a program'
 | `mkdir <dir>` | makes a directory and its missing parents |
 | `mv <from> <to> [--force]` | moves or renames a file or a whole directory; `--force` replaces a file at `<to>` |
 | `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
-| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it. On MIND Core, `link.conf` must hold the word `run` |
+| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it, and 1 after a fault. On MIND Core, `link.conf` must hold the word `run` |
 | `start <program> [<argument>...]` | the same, printing only the run's number and the program's PID |
 | `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
 | `runs` | the runs the other end knows: number, PID, state, program |
-| `stop <run>` | ends a run's program. MIND Core's `link` cannot yet (800-KRN-0132) |
+| `stop <run>` | ends a run's program |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |

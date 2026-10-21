@@ -267,6 +267,10 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     let (run, pid) = c.run(program, args)?;
     eprintln!("run {run}: {program} started as PID {pid}");
     let (state, exit) = out(c, run, true)?;
+    if state == linkproto::app::RUN_FAULTED {
+        eprintln!("run {run}: faulted (vector {exit})");
+        std::process::exit(1);
+    }
     let code = (exit != linkproto::app::EXIT_UNKNOWN).then_some(exit as i32);
     eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
               code.map_or(String::new(), |c| format!(", exit code {c}")));

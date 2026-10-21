@@ -16,6 +16,8 @@ const DATA_HEAD: usize = 8;
 pub const RUN_RUNNING: u8 = 0;
 pub const RUN_ENDED: u8 = 1;
 pub const RUN_STOPPED: u8 = 2;
+/// Ended by a fault: `exit` holds the vector.
+pub const RUN_FAULTED: u8 = 3;
 pub const EXIT_UNKNOWN: u32 = u32::MAX;
 /// The bytes an OUTPUT answer carries before the output: state, exit code, the output's offset.
 const OUTPUT_HEAD: usize = 13;

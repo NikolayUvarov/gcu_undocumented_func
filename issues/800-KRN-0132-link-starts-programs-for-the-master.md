@@ -28,8 +28,8 @@ The maintainer asked on 2026-10-20 that the agent on the other end of the RS-485
 
 ## Progress (2026-10-21)
 
-In `main` (8def173, gate g0138). The `link` suite checks `link`'s four grants in the gate. The second criterion waits for the link track's RUN ([requests-LNK.md](requests-LNK.md)).
+In `main` (8def173, gate g0138). The `link` suite checks `link`'s four grants in the gate. The second criterion waits for the link track's RUN ([800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md)).
 
 ## Related
 
-[800-KRN-0128](../issues-done/800-KRN-0128-init-starts-usb-serial-and-link.done) (`link`'s other grants), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [requests-LNK.md](requests-LNK.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md).
+[800-KRN-0128](../issues-done/800-KRN-0128-init-starts-usb-serial-and-link.done) (`link`'s other grants), [800-LNK-0003](800-LNK-0003-the-link-service-on-mind-core.md), [800-LNK-0009](800-LNK-0009-programs-started-for-the-master.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md).
