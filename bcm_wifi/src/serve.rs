@@ -1,7 +1,7 @@
 // The radio as a service (550-DRV-0027): idl/wlanhw.wit 1.2 served on the service endpoint, which init lends to the
 // station `wlan` alone (MC-2.3). Received frames are polled from the ring every few milliseconds; `wait` answers when
 // one is queued. No shared ring yet: frames go by `receive`, as the station takes them.
-use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, RADIO_HEADER};
+use crate::radio::{Counts, Error, Filter, Radio, Sent, FRAME_MAX, OFDM_RATES, RADIO_HEADER};
 use mind::idl::codec::List;
 use mind::idl::{wire, wlanhw};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,6 +16,7 @@ const WAITERS: usize = 4;
 // end off (550-DRV-0029), so the station offers 802.11g's rates.
 // 802.11g is offered to the station only when asked (data/wifi-ofdm.txt, 550-DRV-0037): OFDM from the MacBook Pro's
 // access point did not come through (550-DRV-0036), so the station keeps to 802.11b's rates and the access point to CCK.
+// With 802.11g, frames with a bad FCS reach bcm_wifi too, to be counted by rate and length (550-DRV-0029).
 static OFDM: AtomicBool = AtomicBool::new(false);
 pub fn offer_ofdm(on: bool) { OFDM.store(on, Ordering::Relaxed); }
 fn bands() -> u8 { BAND_2GHZ | if OFDM.load(Ordering::Relaxed) { BAND_2GHZ_OFDM } else { 0 } }
@@ -98,9 +99,31 @@ impl Tally {
                            seconds, f(0, 0), f(0, 1), f(0, 2), f(1, 0), f(1, 1), f(1, 2), f(2, 0), f(2, 1), f(2, 2),
                            k.queued.wrapping_sub(b.queued), k.filtered.wrapping_sub(b.filtered), k.bad.wrapping_sub(b.bad),
                            k.acks_cck.wrapping_sub(b.acks_cck), k.acks_ofdm.wrapping_sub(b.acks_ofdm), k.dma_errors.wrapping_sub(b.dma_errors));
+            if OFDM.load(Ordering::Relaxed) && f(1, 0) + f(1, 1) > 0 { ofdm_lines(seconds, &k, &b); }
         }
         *self = Tally::new(radio);
     }
+}
+
+/// OFDM received over a period, good and with a bad FCS, by rate and by length, and the mean powers of each by core: a
+/// frame received badly is told from one not heard at all (550-DRV-0029). Two lines, as a log record keeps 200 bytes.
+fn ofdm_lines(seconds: u64, k: &Counts, b: &Counts) {
+    let mut buf = [0u8; 160];
+    let mut w = Text { buf: &mut buf, len: 0 };
+    for (i, rate) in OFDM_RATES.iter().enumerate() {
+        let n = |o: usize| k.ofdm_rates[i][o].wrapping_sub(b.ofdm_rates[i][o]);
+        let _ = core::fmt::Write::write_fmt(&mut w, format_args!(" {}:{}/{}", rate / 2, n(0), n(1)));
+    }
+    let rates = core::str::from_utf8(&w.buf[..w.len]).unwrap_or("");
+    mind::println!("[BCM] {} S OFDM BY MBIT/S (OK/BAD FCS):{}", seconds, rates);
+    let l = |i: usize, o: usize| k.ofdm_lengths[i][o].wrapping_sub(b.ofdm_lengths[i][o]);
+    let (good, bad) = (k.frames[1][0].wrapping_sub(b.frames[1][0]), k.frames[1][1].wrapping_sub(b.frames[1][1]));
+    let mean = |sum: i32, base: i32, n: u32| if n == 0 { 0 } else { sum.wrapping_sub(base) / n as i32 };
+    let g: [i32; 3] = core::array::from_fn(|c| mean(k.ofdm_power[c], b.ofdm_power[c], good));
+    let x: [i32; 3] = core::array::from_fn(|c| mean(k.bad_fcs_power[c], b.bad_fcs_power[c], bad));
+    mind::println!("[BCM] {} S OFDM BY BYTES (OK/BAD FCS): <=64 {}/{}, 65-256 {}/{}, MORE {}/{}; MEAN DBM BY CORE OK {}/{}/{}, BAD FCS {}/{}/{}; CLIPPED {}/{}",
+                   seconds, l(0, 0), l(0, 1), l(1, 0), l(1, 1), l(2, 0), l(2, 1), g[0], g[1], g[2], x[0], x[1], x[2],
+                   k.ofdm_clipped.wrapping_sub(b.ofdm_clipped), k.bad_fcs_clipped.wrapping_sub(b.bad_fcs_clipped));
 }
 
 /// A line built without a heap.
@@ -130,6 +153,7 @@ pub fn run(radio: &mut Radio) -> ! {
     let mut out = [0u8; RADIO_HEADER + FRAME_MAX];
     let mut waiters: [Option<wire::Call>; WAITERS] = [const { None }; WAITERS];
     let mut country: Option<Country> = None;
+    if OFDM.load(Ordering::Relaxed) { radio.keep(false, true); mind::println!("[BCM] FRAMES WITH A BAD FCS OR PLCP KEPT, TO COUNT OFDM BY RATE AND LENGTH"); }
     let mut tally = Tally::new(radio);
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
