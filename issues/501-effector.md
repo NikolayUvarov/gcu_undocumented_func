@@ -87,7 +87,7 @@ The agent routes are not in the OpenAPI file. The subset MIND Core implements is
 | 501-ASR-0008 | `ASR` (open) | **Moved to 750, not written.** The agent service is [750-EFF-0006](750-EFF-0006-session-service.md) and [750-EFF-0007](750-EFF-0007-gateway-service.md) |
 | 501-ASR-0009 | `ASR` (open) | Test runs: `msh` scripts in a test account in `effector_gw`, under the policy. Also a host driver that queues the QEMU suites' checks through Effector's operator API and records each run with its configuration. Written when 750-EFF-0007 lands |
 | `init`'s grants for the test account (not numbered yet) | `KRN` | Spawn rights for the test account in `effector_gw`, numbered by the kernel track when 501-ASR-0009 needs them. The agent's own grants are 750's request in [requests-KRN.md](requests-KRN.md) |
-| Effector's side | Effector | Its task 75: MIND Core as a platform of agents; agents accepted by device key, from a list; the actions MIND Core performs |
+| Effector's side | Effector | Its task 81 (`sst-test-deploy`): the MIND platform boundary is done in its source, not yet published; `81-mindcore-01` (a real agent's live acceptance) and `81-mindcore-02` (signed-package metadata) are open. Agents accepted by device key, from a list, are not planned there yet |
 
 501-ASR-0007 and 501-ASR-0008 were numbered on 2026-10-08 and moved to 750 on 2026-10-09 without files; their numbers are not reused.
 
