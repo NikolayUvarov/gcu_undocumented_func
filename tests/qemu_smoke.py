@@ -7039,7 +7039,7 @@ def wm_suite(vm):
         return [row[x + 1:x + w - 1] for row in screen[y + 1:y + h - 1]]
 
     # The shell's window: adopted with its title, or before it (then wm logs the title when it comes).
-    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell"')
+    shell_re = re.compile(r'\[WM\] (?:WINDOW (\d+) PID \d+ TEXT \d+X\d+|TITLE (\d+)) "shell(?: \d+)?"')
     shells = lambda text: {a or b for a, b in shell_re.findall(text)}  # the shell's windows' ids, as strings
 
     def open_shell():
@@ -7129,7 +7129,7 @@ def wm_suite(vm):
         shows(again, "THE SHELL'S WINDOW:")
         close_shell(again)
         # From the menu (211-APP-0044): its first item asks the shell, through the shell's commands wm holds
-        # (idl/shell.wit), for its window, and wm brings it to the front; asked again while it is open, the same one.
+        # (idl/shell.wit 1.8 new-window), for another window each time (000-APP-0097), and wm brings it to the front.
         before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down", text="MENU=Shell")
@@ -7141,16 +7141,28 @@ def wm_suite(vm):
         while menu_shell not in state()[2] or state()[1] != menu_shell:
             wait()
         shows(menu_shell, "THE SHELL'S WINDOW:")
+        # Asked again while it is open: a second shell, titled shell 2, a session of its own (the maintainer's report,
+        # 2026-10-21: the menu brought back the first).
+        typed("cd diag", "MIND diag> ")
         front(next(w for w in state()[2] if w != menu_shell))
+        before = shells("".join(seen))
         keys("alt-p", text="MODE=MENU")
         keys("down")
-        keys("ret", text=f"[WM] SHELL WINDOW: The shell's window ({menu_shell})")
-        while state()[1] != menu_shell:
+        keys("ret", text="[WM] SHELL WINDOW: The shell's window (")
+        while not shells("".join(seen)) - before:
+            wait('"shell 2"', lines=0)
+        second = int((shells("".join(seen)) - before).pop())
+        assert second != menu_shell
+        until(f"[WM] SHELL WINDOW: The shell's window ({second})")
+        while second not in state()[2] or state()[1] != second:
             wait()
+        rows = shows(second, "THE SHELL'S WINDOW 2:")
+        assert not any(canon("MIND diag> ") in row for row in rows), rows  # the first one's directory is its own
+        close_shell(second)
         close_shell(menu_shell)
         print("PASS: wm: the shell's window: ps, date and logs typed there; top started there in a window of its own; "
               "resized to the whole screen, a 113-character line on one row; reboot asks; fg refused; closed with wm going on, "
-              "and opened again with Ctrl+Alt+F5 and from the menu's first item, which brings it to the front when open", flush=True)
+              "and opened again with Ctrl+Alt+F5 and from the menu's first item; asked again, a second shell of its own", flush=True)
 
     def full_screen_and_list(fm, clock, top):
         # Full screen (211-APP-0014): Alt+F gives the window in front the whole screen, without its frame or the bars;

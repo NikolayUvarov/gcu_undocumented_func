@@ -626,10 +626,13 @@ fn main(info: &'static BootInfo) {
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
                 Action::Run(command) if command == menu::SHELL && holds(SLOT_SHELL) => {
-                    // The shell opens its own window (211-APP-0044); it may be busy with a command for a while.
-                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL)));
+                    // The shell opens another window of its own each time (211-APP-0044, shell.wit 1.8, 000-APP-0097);
+                    // it may be busy with a command for a while.
+                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::new_window(Endpoint(SLOT_SHELL)));
                     let text = match answer {
                         Ok(Ok(id)) => { shell_window = Some(id); format!("The shell's window ({})", id) }
+                        Ok(Err(mind::idl::shell::Error::Busy)) => String::from("The shell has 32 windows open: close one to open another"),
+                        Ok(Err(mind::idl::shell::Error::NoMemory)) => String::from("The shell has no memory for another window: close one"),
                         Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
                         Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
                     };
