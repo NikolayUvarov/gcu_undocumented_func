@@ -19,7 +19,7 @@ The policy says what the Effector server may make this machine do. The owner wri
 
 | Rule | Allows | Bounds |
 |---|---|---|
-| `agent on` \| `off` | Anything at all; `off` (the default) denies every request | once |
+| `agent on` \| `off` | Anything at all; `off` (the default) denies every request. The agent runs only in the development or maintenance mode anyway ([750-EFF-0013](../../issues/750-EFF-0013-development-and-maintenance-modes.md)); this key goes in the grammar's next version | once |
 | `service <name> <action>[,<action>…]` | `start`, `stop` or `restart` of that boot service | 16 services; never `init`, `shell`, `effector`, `effector_gw` |
 | `log ring` \| `log boot` | The system log (`ring`) or the last boot's log on `log:` (`boot`) leaving the machine | each once |
 | `collect <root>` | Files under `<root>` leaving the machine | 8 roots; `data/…/` or `log:` (`log:/…/`); never under `data/effector/` or `data/apps/` |
