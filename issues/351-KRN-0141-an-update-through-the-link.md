@@ -1,6 +1,6 @@
 # 351-KRN-0141 — An update through the link: a release put into `data/link/` installed by the updater
 
-**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** — for the suite; the requests in [requests-UPD.md](requests-UPD.md) and [requests-LNK.md](requests-LNK.md) ("An update through the link") for the rest · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
+**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** — for the suite; the request in [requests-UPD.md](requests-UPD.md) ("An update through the link") and [351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md) for the rest · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -32,7 +32,7 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 2. **The update track** ([requests-UPD.md](requests-UPD.md)):
    - the directory source's checks equal to the HTTPS source's, and a fix for whatever the suite finds;
    - a way for a holder of the updater's client to start a run now.
-3. **The link track** ([requests-LNK.md](requests-LNK.md)):
+3. **The link track** ([351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md)):
    - `mindlink put -r` of a directory tree in one command;
    - in `effector485`, an operation that stages a release and reports the updater's state from the log.
 4. **The maintainer's image for the Mac.** The image needs slots and an `update.txt` naming `data/link/rel`.

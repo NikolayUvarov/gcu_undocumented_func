@@ -5,14 +5,16 @@
 // confined there, SLOT_VFS), the system log through a reading log client (SLOT_LOG), an application's loader client
 // (SLOT_LOADER) and no console. init starts it when the boot volume holds link.conf at its root and passes that file's
 // words as arguments: `baud=<rate>`, and `run`, without which it starts no program (800-LNK-0009). Files may lie in
-// directories below data/link/ (800-LNK-0010). Everything from the line is checked by linkproto before use (MC-11.4);
+// directories below data/link/ (800-LNK-0010). With `dev`, the developer mode (800-LNK-0012, the maintainer's decision
+// of 2026-10-21): it also starts the built-in programs by name, lends them the network, the Wi-Fi station and the
+// system monitor where init granted it those, and restarts the machine on REBOOT. Everything from the line is checked by linkproto before use (MC-11.4);
 // hellos, files, programs and refusals are logged (MC-10.2).
-use linkproto::app::{FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_RUNNING};
+use linkproto::app::{FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_VFS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
 use mind::fs::{self, File};
-use mind::idl::{loader, serial};
+use mind::idl::{init as lifecycle, loader, netpolicy, serial};
 use mind::ipc::{self, Endpoint};
 
 const DIR: &str = "data/link";
@@ -102,12 +104,19 @@ fn remove_tree(top: &str) -> Result<(), u8> {
 }
 
 /// The programs link started for the master (800-LNK-0009): their output arrives at `inbox` (each holds a send copy in
-/// SLOT_CONSOLE, `mind::output`'s 15-byte messages) and the last KEEP bytes of each are kept for OUTPUT.
-struct Programs { inbox: Option<Endpoint>, output: usize, allowed: bool, next: u32, runs: [Run; RUNS], checked: u64 }
-struct Run { id: u32, pid: u64, state: u8, name: [u8; LOADER_PATH_MAX], name_len: usize, total: u64, kept: [u8; KEEP] }
+/// SLOT_CONSOLE, `mind::output`'s 15-byte messages) and the last KEEP bytes of each are kept for OUTPUT. Their exit
+/// notices arrive there too, through the loader's watch (`notices`, a receiving copy; 800-KRN-0138), and the loader
+/// ends them on STOP. With a loader that cannot, the end is seen by `alive` and its reason stays unknown.
+struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowed: bool, dev: bool, reboot_at: u64, next: u32, runs: [Run; RUNS], checked: u64 }
+
+/// Whether init granted link an endpoint in `slot` (the developer mode's clients, 800-LNK-0012).
+fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
+struct Run { id: u32, pid: u64, state: u8, exit: u32, watched: bool, gone: u64, name: [u8; LOADER_PATH_MAX], name_len: usize, total: u64, kept: [u8; KEEP] }
 const RUNS: usize = 8;
 const KEEP: usize = 16 * 1024;
-const NO_RUN: Run = Run { id: 0, pid: 0, state: RUN_ENDED, name: [0; LOADER_PATH_MAX], name_len: 0, total: 0, kept: [0; KEEP] };
+/// How long a watched program may be gone before its notice is given up on.
+const NOTICE_WAIT_MS: u64 = 1000;
+const NO_RUN: Run = Run { id: 0, pid: 0, state: RUN_ENDED, exit: EXIT_UNKNOWN, watched: false, gone: 0, name: [0; LOADER_PATH_MAX], name_len: 0, total: 0, kept: [0; KEEP] };
 
 fn loader_code(error: loader::Error) -> u8 {
     match error {
@@ -124,6 +133,14 @@ impl Run {
     fn print(&mut self, bytes: &[u8]) {
         for &b in bytes { self.kept[(self.total % KEEP as u64) as usize] = b; self.total += 1; }
     }
+
+    fn end(&mut self, state: u8, exit: u32) {
+        let first = self.state == RUN_RUNNING;
+        (self.state, self.exit) = (state, exit);
+        if !first { return; }
+        let how = match state { RUN_STOPPED => "STOPPED", RUN_FAULTED => "FAULTED", _ => "ENDED" };
+        mind::println!("[LINK] RUN {} {}: {} (PID {}, EXIT {}, {} BYTES OF OUTPUT)", self.id, how, self.name(), self.pid, self.exit as i32, self.total);
+    }
 }
 
 impl Programs {
@@ -132,6 +149,16 @@ impl Programs {
         let Some(inbox) = self.inbox else { return false };
         let mut chunk = [0u8; mind::output::CHUNK];
         while let Ok(m) = inbox.recv_timeout(0, 1) {
+            // A program's exit notice: it printed all it did before, since each piece waits for link to take it.
+            if let Some(e) = m.exit {
+                let Some(run) = self.runs.iter_mut().find(|r| r.id != 0 && r.pid == e.pid) else { continue };
+                match mind::process::Exit::from_reason(e.reason) {
+                    mind::process::Exit::Code(code) => run.end(if run.state == RUN_STOPPED { RUN_STOPPED } else { RUN_ENDED }, code),
+                    mind::process::Exit::Killed => run.end(RUN_STOPPED, EXIT_UNKNOWN),
+                    mind::process::Exit::Fault(vector) => run.end(RUN_FAULTED, vector as u32),
+                }
+                continue;
+            }
             let n = mind::output::unpack(m.data, &mut chunk);
             if let Some(run) = self.runs.iter_mut().find(|r| r.id != 0 && r.pid == m.sender) { run.print(&chunk[..n]); }
         }
@@ -139,8 +166,10 @@ impl Programs {
         if now >= self.checked + 200 {
             self.checked = now;
             for run in self.runs.iter_mut().filter(|r| r.id != 0 && r.state == RUN_RUNNING && !mind::process::alive(r.pid)) {
-                run.state = RUN_ENDED;
-                mind::println!("[LINK] RUN {} ENDED: {} (PID {}, {} BYTES OF OUTPUT)", run.id, run.name(), run.pid, run.total);
+                // A watched program's notice may still be on its way.
+                if run.watched && run.gone == 0 { run.gone = now; continue; }
+                if run.watched && now < run.gone + NOTICE_WAIT_MS { continue; }
+                run.end(RUN_ENDED, EXIT_UNKNOWN);
             }
         }
         self.runs.iter().any(|r| r.id != 0 && r.state == RUN_RUNNING)
@@ -163,14 +192,56 @@ impl Programs {
             let _ = loader::abort(Endpoint::LOADER, session);
             return Err(code::IO);
         }
+        // Its exit notice to the same endpoint (loader.wit 1.11); an older loader leaves the end to `alive`.
+        let watched = matches!(loader::watch(Endpoint::LOADER, session, self.notices), Ok(Ok(())));
+        let (lent, flow) = if self.dev { self.lend(session, full) } else { ([""; 3], None) };
         let pid = loader::commit(Endpoint::LOADER, session).map_err(lost)?.map_err(loader_code)?;
+        // The network grant ends with the program (as the shell binds its own).
+        if let Some(badge) = flow { let _ = netpolicy::bind(Endpoint(SLOT_NETPOLICY), badge, pid); }
         let id = self.next;
         self.next = self.next.wrapping_add(1).max(1);
         let run = &mut self.runs[index];
-        (run.id, run.pid, run.state, run.total, run.name_len) = (id, pid, RUN_RUNNING, 0, full.len());
+        (run.id, run.pid, run.state, run.exit, run.watched, run.gone, run.total, run.name_len) = (id, pid, RUN_RUNNING, EXIT_UNKNOWN, watched, 0, 0, full.len());
         run.name[..full.len()].copy_from_slice(full.as_bytes());
-        mind::println!("[LINK] RUN {}: STARTED {} AS PID {}", id, full, pid);
+        mind::println!("[LINK] RUN {}: STARTED {} AS PID {}{}{}{}{}", id, full, pid, if lent.iter().any(|l| !l.is_empty()) { ", LENT" } else { "" }, lent[0], lent[1], lent[2]);
         Ok((id, pid))
+    }
+
+    /// The developer mode's clients a program asks for (`mind::request!`) and init granted link, lent in its slots as
+    /// the shell lends them: the station's (REQUEST_WIFI), the system monitor's (REQUEST_SYSINFO) and a network grant
+    /// from the policy broker (REQUEST_NETWORK), which `start` binds to the program. What was lent, and the grant's badge.
+    fn lend(&self, session: u32, full: &str) -> ([&'static str; 3], Option<u16>) {
+        let requests = match loader::inspect_requests(Endpoint::LOADER, full) { Ok(Ok(r)) => r, _ => 0 };
+        let give = |slot: usize, cap: usize| matches!(loader::grant(Endpoint::LOADER, session, slot as u8, cap), Ok(Ok(())));
+        let mut lent = [""; 3];
+        if requests & mind::process::REQUEST_WIFI != 0 && holds(SLOT_WIFI) && give(SLOT_WIFI, SLOT_WIFI) { lent[0] = " WIFI"; }
+        if requests & mind::process::REQUEST_SYSINFO != 0 && holds(SLOT_SYSINFO) && give(SLOT_SYSINFO, SLOT_SYSINFO) { lent[1] = " SYSINFO"; }
+        let mut flow = None;
+        if requests & mind::process::REQUEST_NETWORK != 0 && holds(SLOT_NETPOLICY) {
+            let file = full.rsplit('/').next().unwrap_or(full);
+            let program = file.strip_suffix(".elf").unwrap_or(file);
+            let broker = Endpoint(SLOT_NETPOLICY);
+            match netpolicy::prepare(broker, program) {
+                // Taken into SLOT_NETWORK, which link holds nothing in, lent from there and dropped: the loader keeps its copy.
+                Ok(Ok(badge)) if matches!(netpolicy::take(broker, badge, SLOT_NETWORK), Ok(Ok(()))) => {
+                    if give(SLOT_NETWORK, SLOT_NETWORK) { (lent[2], flow) = (" NETWORK", Some(badge)); }
+                    let _ = ipc::drop_cap(SLOT_NETWORK);
+                }
+                Ok(Err(e)) => mind::println!("[LINK] NO NETWORK FOR {}: {:?}", program, e),
+                _ => mind::println!("[LINK] NO NETWORK FOR {}: THE POLICY BROKER DID NOT ANSWER", program),
+            }
+        }
+        (lent, flow)
+    }
+
+    /// A REBOOT from the master: the machine restarts once the answer is out (`main`), through init's lifecycle client
+    /// badged for it, which init grants only with `dev`.
+    fn reboot(&mut self) -> Result<(), u8> {
+        if !self.dev { mind::println!("[LINK] REBOOT REFUSED: link.conf HAS NO \"dev\""); return Err(code::DENIED); }
+        if !holds(SLOT_LIFECYCLE) { return Err(code::UNSUPPORTED); }
+        mind::println!("[LINK] REBOOT ASKED BY THE MASTER");
+        self.reboot_at = mind::time::uptime_ms() as u64 + 500;
+        Ok(())
     }
 
     fn output(&mut self, id: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> {
@@ -180,7 +251,7 @@ impl Programs {
         let from = cursor.clamp(first, run.total);
         let n = ((run.total - from) as usize).min(out.len());
         for (i, b) in out[..n].iter_mut().enumerate() { *b = run.kept[((from + i as u64) % KEEP as u64) as usize]; }
-        Ok(RunOutput { state: run.state, exit: EXIT_UNKNOWN, from, len: n })
+        Ok(RunOutput { state: run.state, exit: run.exit, from, len: n })
     }
 
     fn list(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
@@ -191,16 +262,31 @@ impl Programs {
             if index - 1 < cursor { continue; }
             let mut line = Text::<160>::new();
             line.number(run.id as u64); line.push("\t"); line.number(run.pid); line.push("\t");
-            line.push(if run.state == RUN_RUNNING { "running" } else { "ended" }); line.push("\t"); line.push(run.name()); line.push("\n");
+            line.push(match run.state { RUN_RUNNING => "running", RUN_STOPPED => "stopped", RUN_FAULTED => "faulted", _ => "ended" });
+            line.push("\t"); line.push(run.name()); line.push("\n");
             if used + line.len > out.len() { return Ok((used, Some(index - 1))); }
             out[used..used + line.len].copy_from_slice(line.bytes());
             used += line.len;
         }
         Ok((used, None))
     }
+
+    /// Ends a run's program through the loader, which ends only those it started for link (800-KRN-0138).
+    fn stop(&mut self, id: u32) -> Result<(), u8> {
+        self.pump();
+        let run = self.find(id)?;
+        if run.state != RUN_RUNNING { return Ok(()); }
+        match loader::stop(Endpoint::LOADER, run.pid) {
+            Ok(Ok(())) => { mind::println!("[LINK] RUN {}: STOP ASKED BY THE MASTER", run.id); run.end(RUN_STOPPED, EXIT_UNKNOWN); Ok(()) }
+            // It ended meanwhile.
+            Ok(Err(loader::Error::NotFound)) => Ok(()),
+            Ok(Err(e)) => Err(loader_code(e)),
+            Err(_) => Err(code::UNSUPPORTED),
+        }
+    }
 }
 
-static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, allowed: false, next: 1, runs: [NO_RUN; RUNS], checked: 0 };
+static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, allowed: false, dev: false, reboot_at: 0, next: 1, runs: [NO_RUN; RUNS], checked: 0 };
 fn programs() -> &'static mut Programs { unsafe { &mut *core::ptr::addr_of_mut!(PROGRAMS) } }
 
 /// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
@@ -412,13 +498,16 @@ impl Files for Store {
 
     fn run(&mut self, name: &str, args: &str) -> Result<(u32, u64), u8> {
         let mut buf = [0u8; 320];
+        // In the developer mode a plain name (`wifi`, `netcheck`) is a built-in program, which the loader finds by name.
+        if programs().dev && !name.contains('/') && !name.contains('.') { return programs().start(name, args); }
         programs().start(path(name, &mut buf), args)
     }
 
+    fn reboot(&mut self) -> Result<(), u8> { programs().reboot() }
+
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { programs().output(run, cursor, out) }
 
-    /// Ending a program needs a grant init does not give yet (800-KRN-0132's point 3).
-    fn stop(&mut self, run: u32) -> Result<(), u8> { programs().find(run).map(|_| ())?; Err(code::UNSUPPORTED) }
+    fn stop(&mut self, run: u32) -> Result<(), u8> { programs().stop(run) }
 
     fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { programs().list(cursor, out) }
 
@@ -486,11 +575,22 @@ fn baud() -> u32 {
 /// Programs may be started only with the word `run` in link.conf; their output comes to an endpoint of link's.
 fn prepare_programs() {
     let p = programs();
-    p.allowed = mind::process::args_str().split_ascii_whitespace().any(|w| w == "run");
+    p.dev = mind::process::args_str().split_ascii_whitespace().any(|w| w == "dev");
+    // The developer mode starts programs too.
+    p.allowed = p.dev || mind::process::args_str().split_ascii_whitespace().any(|w| w == "run");
+    if p.dev {
+        let has = |slot: usize, what: &'static str| if holds(slot) { what } else { "" };
+        mind::println!("[LINK] DEVELOPER MODE (link.conf: dev): BUILT-IN PROGRAMS BY NAME; FROM INIT:{}{}{}{}", has(SLOT_NETPOLICY, " NETWORK"),
+                       has(SLOT_WIFI, " WIFI"), has(SLOT_SYSINFO, " SYSINFO"), has(SLOT_LIFECYCLE, " REBOOT"));
+    }
     p.next = (mind::time::rdtsc() as u32 & 0xFFFF_0000) | 1;
     if !p.allowed { return; }
-    match Endpoint::create().and_then(|inbox| Ok((inbox, ipc::mint(inbox.0, CAP_WRITE, 0, 0)?))) {
-        Ok((inbox, output)) => { (p.inbox, p.output) = (Some(inbox), output); mind::println!("[LINK] PROGRAMS IN data/link/ MAY BE STARTED (link.conf: run)"); }
+    // One endpoint (init's quota, 800-KRN-0137): a send copy for the programs' output, a receiving one for the loader's watch.
+    match Endpoint::create().and_then(|inbox| Ok((inbox, ipc::mint(inbox.0, CAP_WRITE, 0, 0)?, ipc::mint(inbox.0, CAP_READ, 0, 0)?))) {
+        Ok((inbox, output, notices)) => {
+            (p.inbox, p.output, p.notices) = (Some(inbox), output, notices);
+            mind::println!("[LINK] PROGRAMS IN data/link/ MAY BE STARTED (link.conf: run)");
+        }
         Err(e) => mind::println!("[LINK] NO ENDPOINT FOR PROGRAMS' OUTPUT ({:?}): NONE WILL BE STARTED", e),
     }
 }
@@ -519,6 +619,15 @@ fn main(_info: &'static BootInfo) {
     let mut dropped = 0;
     loop {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
+        // A REBOOT is carried out once its answer has gone; the line has had time to turn round.
+        let p = programs();
+        if p.reboot_at != 0 && mind::time::uptime_ms() as u64 >= p.reboot_at {
+            p.reboot_at = 0;
+            match lifecycle::reboot(Endpoint(SLOT_LIFECYCLE)) {
+                Ok(Ok(())) => {}
+                other => mind::println!("[LINK] REBOOT NOT DONE: {:?}", other.map(|r| r.is_ok())),
+            }
+        }
         // Damaged frames say the line is noisy or the rates differ.
         if slave.stats.dropped != dropped {
             dropped = slave.stats.dropped;

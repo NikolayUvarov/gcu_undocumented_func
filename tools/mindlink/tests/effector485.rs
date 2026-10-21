@@ -52,6 +52,9 @@ fn a_batch_idempotency_cancel_and_a_restart() {
 
     ok(&["submit", "put", &file("hello.sh"), "--key", "T-put", "--reason", "test: put", "--wait"]);
     assert!(d.join("srv/hello.sh").exists());
+    // A put into directories that are missing makes them.
+    ok(&["submit", "put", &file("hello.sh"), "name=deep/er/h.sh", "--key", "T-put-deep", "--reason", "test: put into a new directory", "--wait"]);
+    assert!(d.join("srv/deep/er/h.sh").exists());
     ok(&["submit", "mkdir", "name=apps/x", "--key", "T-mkdir", "--reason", "test: mkdir", "--wait"]);
     ok(&["submit", "move", "from=hello.sh", "to=apps/x/hello.sh", "--key", "T-move", "--reason", "test: move", "--wait"]);
     assert!(ok(&["submit", "list", "name=apps/x", "--key", "T-list", "--reason", "test: list", "--wait"]).contains("hello.sh\t"));
@@ -86,7 +89,7 @@ fn a_batch_idempotency_cancel_and_a_restart() {
     assert!(code == 0 && out.contains("\"status\":\"completed\"") && out.contains("hello a b"), "{out}");
     assert_eq!(std::fs::read_to_string(d.join("srv/runs.txt")).unwrap(), "ran\n");
     let listed = e485(&at2, &["list"]).1;
-    assert_eq!(listed.lines().count(), 8, "{listed}");
+    assert_eq!(listed.lines().count(), 9, "{listed}");
     std::fs::remove_dir_all(&d).ok();
 }
 

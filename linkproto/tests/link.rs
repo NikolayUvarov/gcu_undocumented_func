@@ -78,7 +78,7 @@ fn take(q: &mut VecDeque<u8>, out: &mut [u8]) -> usize {
 /// Files in memory, counting writes: a repeated request must not write twice.
 #[derive(Default)]
 struct Disk { files: BTreeMap<String, Vec<u8>>, dirs: BTreeSet<String>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>,
-              console: Vec<u8>, runs: Vec<Run>, starts: u32 }
+              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32 }
 
 /// A program of the simulated end: `echo.elf` prints its arguments and ends; `loop.elf` prints a line a poll until stopped.
 struct Run { name: String, output: Vec<u8>, dropped: u64, state: u8 }
@@ -223,6 +223,7 @@ impl Files for Disk {
         if r.state == RUN_RUNNING { r.state = RUN_STOPPED; }
         Ok(())
     }
+    fn reboot(&mut self) -> Result<(), u8> { self.reboots += 1; Ok(()) }
     fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> {
         let mut used = 0;
         for (i, r) in self.runs.iter().enumerate().skip(cursor as usize) {
@@ -457,6 +458,9 @@ fn programs_over_a_lossy_line() {
     c.stop(run).unwrap();
     assert_eq!(c.output(run, 0, &mut out).unwrap().state, RUN_STOPPED);
     assert_eq!(c.stop(99), Err(Error::Refused(code::NOT_FOUND)));
+    // A restart asked once, though its request is repeated by the line.
+    c.reboot().unwrap();
+    assert_eq!(c.master.line.service.files.reboots, 1);
     let (n, next) = c.runs(19, &mut out).unwrap();
     assert_eq!((std::str::from_utf8(&out[..n]).unwrap(), next), ("20\t120\tended\tapps/echo.elf\n21\t121\tstopped\tloop.elf\n", None));
 }
@@ -612,7 +616,7 @@ fn fuzz_decoder_and_service() {
     assert!(accepted > 20_000, "only {accepted} frames came through");
 
     let mut service = FileService::new(Disk::default());
-    let kinds = [kind::HELLO, kind::POLL, kind::PUT_OPEN, kind::PUT_DATA, kind::PUT_CLOSE, kind::GET_OPEN, kind::GET_DATA,
+    let kinds = [kind::HELLO, kind::POLL, kind::REBOOT, kind::PUT_OPEN, kind::PUT_DATA, kind::PUT_CLOSE, kind::GET_OPEN, kind::GET_DATA,
                  kind::GET_CLOSE, kind::LIST, kind::STAT, kind::DELETE, kind::CONSOLE, kind::LOG, kind::INPUT, kind::MKDIR, kind::MOVE,
                  kind::RMDIR, kind::LIST_DIR, kind::RUN, kind::OUTPUT, kind::STOP, kind::RUNS, 0x55];
     let mut reply = [0u8; MAX_PAYLOAD];
