@@ -3286,13 +3286,20 @@ def fm_store_check(vm):
     keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
     vm.send_bytes(b"\r")
     status_line(vm, "JOB=NONE", whole=True)
+    # 300-APP-0101: the panel lists every name the store has (blockstore.wit 1.4), those blocks published too: copy, and
+    # list/n00 to list/n17 in two pages of the store's list.
+    to("copy")
+    to("list")
+    keys(b"\r", "RIGHT=/store:list ")
+    to("n17")
     vm.send_bytes(b"\x1b[21~")  # F10
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
     require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
     require(log, "REMOVED fmnote.txt VERSION")
-    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8; the "
+          "names blocks published are listed, 18 of them in a directory", flush=True)
 
 
 def free_port():
