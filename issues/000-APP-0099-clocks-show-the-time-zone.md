@@ -78,16 +78,18 @@
 
 ## Progress (2026-10-22): "shell did not answer" on the MacBook Pro
 
-- **The maintainer's report:** after an update, setting the zone from `wm`'s Settings says the shell does not answer.
-- **How that comes about:**
-  - `wm` waited 2 s for `set-zone`.
-  - The shell answered only after the rtc service took the zone and after `data/clock.conf` was written.
-  - It answers nothing at all while a command or the cards' counters hold it.
-  - A slow disk, or a slow network stack behind `net-counters`, can take longer than that.
-- **The change:**
-  - the shell answers `set-zone` once the rtc service took the zone, and writes the file after its answer, logging `[SHELL] ZONE …, KEPT IN data/clock.conf`;
-  - `wm` waits 8 s for `set-clock` and `set-zone`, and says when it was a timeout.
-- **What the Mac's log should show next time:** `[RTC] ZONE`, `[SHELL] TIME ZONE … SET`, `[SHELL] ZONE … KEPT`, `[WM] SET ZONE`. Asked of LNK.
+- **The maintainer's report:** after an update, setting the zone from `wm`'s Settings says the shell does not answer. Setting the time works.
+- **The cause,** found by LNK (`ALL/2026-10-22T0428Z-LNK-an-update-through-the-link-leaves-the-applications-behind.md`):
+  - the update through the link replaced the boot services, the shell among them, with a release's older ones (`shell.wit` 1.8, `rtc.wit` 1.2);
+  - `wm`, an application at the volume's root, stayed at 1.9.
+  - The older shell rejected `set-zone` as a call it does not know: it answers a rejected request since 211-APP-0044.
+  - `wm` called every failure of the call "does not answer".
+  - The gap between releases is UPD's and KRN's to close.
+- **What changed here:**
+  - `wm` tells a rejection from a timeout: "the shell does not know set-zone, so it is older than this wm (shell.wit 1.9)". The same goes for `set-clock` (1.2) and `new-window` (1.8). It waits 8 s for `set-clock` and `set-zone`.
+  - The shell answers `set-zone` once the rtc service has the zone, and writes `data/clock.conf` after its answer, logging `[SHELL] ZONE …, KEPT IN data/clock.conf`. So a slow disk does not hold `wm`.
+  - The `wm` suite checks the kept line.
+- **On the Mac:** LNK puts a release with the 1.9 shell and the 1.3 rtc; the zone is to be set again there.
 
 ## Related
 

@@ -422,6 +422,16 @@ fn save(config: &Config) -> bool {
     mind::fs::File::create(background::FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len())
 }
 
+// Why a call of the shell's got no answer, after `what`: no answer in time (a command holds the shell), or a call the
+// shell rejected as unknown, which a shell older than `since` (shell.wit) does, so wm and the shell are of two builds.
+fn shell_failed(what: &str, call: &str, since: &str, waited_ms: u32, error: mind::sys::Error) -> String {
+    match error {
+        mind::sys::Error::Other(mind::abi::ERR_TIMEOUT) => format!("{}: the shell did not answer in {} s (a command running in its window?)", what, waited_ms / 1000),
+        mind::sys::Error::Invalid => format!("{}: the shell does not know {}, so it is older than this wm (shell.wit {}): the two come from different builds", what, call, since),
+        error => format!("{}: the shell does not answer ({:?})", what, error),
+    }
+}
+
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
 // Why the net line has no new frames: the shell did not answer in time (the line stays), or no source gives them.
 enum NetMissing { Slow, Why(&'static str) }
@@ -644,7 +654,7 @@ fn main(info: &'static BootInfo) {
                         Ok(Err(mind::idl::shell::Error::Busy)) => String::from("The shell has 32 windows open: close one to open another"),
                         Ok(Err(mind::idl::shell::Error::NoMemory)) => String::from("The shell has no memory for another window: close one"),
                         Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
-                        Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
+                        Err(error) => shell_failed("No shell window", "new-window", "1.8", SHELL_MS, error) + " (Ctrl+Alt+F5 opens one too)",
                     };
                     mind::println!("[WM] SHELL WINDOW: {}", text);
                     manager.wm.notice = Some(text);
@@ -675,8 +685,7 @@ fn main(info: &'static BootInfo) {
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
                             Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
                             Ok(Err(error)) => format!("The clock is not set ({:?})", error),
-                            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => format!("The clock is not set: the shell did not answer in {} s (a command running in its window?)", SETTING_MS / 1000),
-                            Err(error) => format!("The clock is not set: the shell does not answer ({:?})", error),
+                            Err(error) => shell_failed("The clock is not set", "set-clock", "1.2", SETTING_MS, error),
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
@@ -698,8 +707,7 @@ fn main(info: &'static BootInfo) {
                             Ok(Ok(())) => format!("The clocks show {} now, kept in data/clock.conf", zone),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", zone),
                             Ok(Err(error)) => format!("The zone is not set ({:?})", error),
-                            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => format!("The zone is not set: the shell did not answer in {} s (a command running in its window?)", SETTING_MS / 1000),
-                            Err(error) => format!("The zone is not set: the shell does not answer ({:?})", error),
+                            Err(error) => shell_failed("The zone is not set", "set-zone", "1.9", SETTING_MS, error),
                         }
                     };
                     mind::println!("[WM] SET ZONE {}: {}", zone, text);
