@@ -140,3 +140,66 @@ fn rfc3339_times() {
         assert_eq!(rfc3339(&s), Some(Some(t)), "{s}");
     }
 }
+
+#[test]
+fn a_collect_file_payload() {
+    let c = with_values(r#"{"kind":"collect_file","path":"log:/boot0001.log","max_bytes":1024,"timeout_seconds":60}"#, |v| collect(v).map(|c| (c.path.to_string(), c.max_bytes)).unwrap());
+    assert_eq!(c, ("log:/boot0001.log".to_string(), Some(1024)));
+    assert_eq!(with_values(r#"{"path":"data/reports/r.txt"}"#, |v| collect(v).unwrap().max_bytes), None);
+    assert_eq!(with_values(r#"{"max_bytes":5}"#, |v| collect(v).err()), Some(Error::Missing));
+    assert_eq!(with_values(r#"{"path":"a","max_bytes":"5"}"#, |v| collect(v).err()), Some(Error::Type));
+    assert_eq!(with_values(r#"{"path":"","max_bytes":5}"#, |v| collect(v).err()), Some(Error::Bounds));
+    assert_eq!(with_values(r#"{"path":"a","path":"b"}"#, |v| collect(v).err()), Some(Error::Duplicate));
+}
+
+#[test]
+fn an_artifact_goes_inline_as_base64() {
+    let mut buf = [0u8; 2048];
+    let a = Artifact { name: "screenshot.png", content_type: "image/png", size: 5, sha256: &"0f".repeat(32), truncated: false, picture: Some((1280, 800)) };
+    let prefix = artifact_ack(&mut buf, "20261022180615.107104433_000178", &a).unwrap().to_vec();
+    let mut data = [0u8; 8];
+    let n = base64(b"\x89PNG!", &mut data);
+    assert_eq!((&data[..n], base64_len(5)), (&b"iVBORyE="[..], 8));
+    let body = [&prefix[..], &data[..n], ARTIFACT_SUFFIX].concat();
+    let body = String::from_utf8(body).unwrap();
+    // The result is a string holding the JSON, as every other result (contract 1.0); the data is the artifact's last member.
+    assert_eq!(body, format!(r#"{{"command_id":"20261022180615.107104433_000178","result":"{{\"status\":\"completed\",\"exit_code\":0,\"stdout\":\"\",\"stderr\":\"\",\"truncated\":false,\"run_as\":\"effector\",\"artifact\":{{\"name\":\"screenshot.png\",\"content_type\":\"image/png\",\"encoding\":\"base64\",\"size\":5,\"sha256\":\"{}\",\"metadata\":{{\"width\":1280,\"height\":800}},\"data\":\"iVBORyE=\"}}}}"}}"#, "0f".repeat(32)));
+    parsed(&body);
+    // A log: no picture, cut to the policy's bound.
+    let log = Artifact { name: "boot.log", content_type: "text/plain; charset=utf-8", truncated: true, picture: None, ..a };
+    let prefix = String::from_utf8(artifact_ack(&mut buf, "c1", &log).unwrap().to_vec()).unwrap();
+    assert!(prefix.contains(r#"\"truncated\":true,"#) && !prefix.contains("metadata") && prefix.ends_with(r#"\"data\":\""#), "{prefix}");
+    let mut small = [0u8; 64];
+    assert!(artifact_ack(&mut small, "c1", &a).is_err(), "a body that does not fit is an error, never cut");
+}
+
+#[test]
+fn base64_of_every_tail() {
+    let mut out = [0u8; 16];
+    for (input, expected) in [(&b""[..], ""), (b"f", "Zg=="), (b"fo", "Zm8="), (b"foo", "Zm9v"), (b"foob", "Zm9vYg=="), (b"\xff\xfe\xfd\x00", "//79AA==")] {
+        let n = base64(input, &mut out);
+        assert_eq!((std::str::from_utf8(&out[..n]).unwrap(), base64_len(input.len() as u64)), (expected, n as u64));
+    }
+}
+
+#[test]
+fn a_delivery_and_a_log_source_are_read() {
+    let sha = "ab".repeat(32);
+    let text = format!(r#"{{"path":"data/inbox/a.bin","allowed_directories":["data/inbox"],"max_bytes":100,"timeout_seconds":60,"artifact_id":"x","size":5,"sha256":"{sha}","overwrite":true}}"#);
+    let owned = |v: &[Value<'_>]| deliver(v).map(|d| (d.path.to_owned(), d.size, d.sha256.to_owned(), d.overwrite));
+    assert_eq!(with_values(&text, owned), Ok(("data/inbox/a.bin".to_owned(), 5, sha.clone(), true)));
+    let plain = format!(r#"{{"path":"data/a","size":0,"sha256":"{sha}"}}"#);
+    assert_eq!(with_values(&plain, |v| deliver(v).map(|d| d.overwrite)), Ok(false));
+    for (bad, why) in [
+        (text.replace(r#""size":5"#, r#""size":500"#), Error::Bounds),
+        (text.replace(r#""size":5,"#, ""), Error::Missing),
+        (text.replace(r#""size":5"#, r#""size":"5""#), Error::Type),
+        (text.replace(&sha, &"AB".repeat(32)), Error::Type),
+        (text.replace(r#""overwrite":true"#, r#""overwrite":1"#), Error::Type),
+        (text.replace(r#""path":"data/inbox/a.bin""#, r#""path":"""#), Error::Bounds),
+    ] {
+        assert_eq!(with_values(&bad, |v| deliver(v).err()), Some(why), "{bad}");
+    }
+    assert_eq!(with_values(r#"{"path":"boot","timeout_seconds":30}"#, |v| log_path(v).map(str::to_owned)), Ok("boot".to_owned()));
+    assert_eq!(with_values(r#"{"path":5}"#, |v| log_path(v).err()), Some(Error::Type));
+}

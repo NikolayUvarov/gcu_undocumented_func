@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 import wave
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
@@ -44,7 +45,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -1999,7 +2000,8 @@ def fm_check(vm):
     vm.serial()  # Enter: into docs
     assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
     assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
-    assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
+    # A file's row, its size and date: the first file, as the root's files grow with the boot images (750-KRN-0119).
+    assert table_row(screen, r"║ahci\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
     assert "CURRENT=.." in poke("[FM] LEFT=/docs FULL")
     # F3 views notes.txt in the built-in viewer; Esc comes back.
     keys(b"\x1b[B", "CURRENT=notes.txt")
@@ -2432,12 +2434,10 @@ def isolation_suite(vm):
              ("c", 13, 0), ("o", 13, 0), ("u", 6, 0), ("g", 14, 4), ("s", 6, 0),
              # AMD forbids SYSENTER in long mode (#UD); Intel checks CS=0 (#GP).
              ("y", 6, 0), ("e", "(?:6|13)", 0), ("h", 13, 0x102),
-             # Read-only memory mint written to; a revoked lease read afterwards.
-             ("m", 14, 7), ("v", 14, 4),
+             # Read-only memory mint written to.
+             ("m", 14, 7),
              # Address of a detached block.
-             ("d", 14, 4),
-             # Lease dropped after mapping, then revoked by the owner.
-             ("l", 14, 4)]
+             ("d", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")
@@ -2469,6 +2469,15 @@ def isolation_suite(vm):
     time.sleep(.5); vm.collect(); vm.output = ""
     assert parent + 1 not in task_rows(vm), "the child must not wait for a future instance"
     assert f"FAULT PID={parent + 1} " not in vm.command("faults")
+    # 000-KRN-0152: a revoked lease, its capability held or dropped, leaves one zeroed page of the task's own in its place:
+    # reads give zeros, writes land there, the owner's page keeps its data, and nothing faults.
+    for key, line in (("v", "REVOKED LEASE: ZEROS OF ITS OWN, THE OWNER'S PAGE UNCHANGED"), ("l", "DROPPED LEASE REVOKED: ZEROS OF ITS OWN")):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send(key + "\n")
+        require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED."), line)
+        time.sleep(.1); vm.collect(); vm.output = ""
+        assert f"FAULT PID={pid} " not in vm.command("faults"), key
 
     # Cases with children started through loader (they get the parent's endpoint in their INIT slot).
     def family(key, children, done):
@@ -2483,9 +2492,10 @@ def isolation_suite(vm):
     for key, children, done in [("q", 5, "QUEUE ORDER OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK"), ("a", 1, "BADGE RIGHT OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
-    # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).
-    pid, faults = family("x", 1, "LEASE REVOKED")
-    assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
+    # The child keeps reading a lease when the parent revokes it: it then reads zeros of its own and goes on, never the
+    # owner's page (CAP_REVOKE waits for its CPU; 000-KRN-0152).
+    pid, faults = family("x", 1, "LEASE REVOKED: THE CHILD READS ZEROS OF ITS OWN")
+    assert f"FAULT PID={pid + 1} " not in faults, faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
     # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
@@ -2523,7 +2533,7 @@ def isolation_suite(vm):
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
 
 
 def protection_check(vm):
@@ -4079,6 +4089,8 @@ def link_suite(args):
             require(link(port, "runs"), "stopped\tdata/link/t/mt.elf")
             logged = vm.command("dmesg -s link", raw=True)
             assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", logged), "the start is logged"
+            # A run's arguments are logged whole after its start (the maintainer's word, 2026-10-22).
+            assert re.search(r"\[LINK\] RUN \d+: ARGUMENTS --help", logged), "the arguments are logged"
             require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
             assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
 
@@ -4109,7 +4121,12 @@ def link_suite(args):
                 require(link(port, "sh", "ps"), "link")
                 # Never from the link, whatever the developer mode allows (800-NET-0038).
                 require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
-                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy", vm.command("dmesg -s link", raw=True)), "the word alone is logged"
+                # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
+                link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
+                logged = vm.command("dmesg -s link", raw=True)
+                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
+                assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
+                assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4141,23 +4158,28 @@ def link_suite(args):
 
 def modes_suite(args):
     """750-KRN-0143: the machine's modes. A raw image whose data/mode.conf names the development mode and a word init does
-    not know: init reads it once the boot volume is there, says so and leaves the word out; with no Effector service in
-    this build it says that too. The shell holds init's mode client in SLOT_MODE (36), badged BADGE_MODE (3), and no
-    other. `check services` reads the modes through its lifecycle client and is refused a change. A second boot with no
-    data/mode.conf is in the normal mode."""
+    not know: init reads it once the boot volume is there, says so and leaves the word out, and starts the Effector agent's
+    two services with exactly their grants (750-KRN-0119). The shell holds init's mode client in SLOT_MODE (36), badged
+    BADGE_MODE (3), and no other. `check services` reads the modes through its lifecycle client and is refused a change.
+    A second boot with no data/mode.conf is in the normal mode: neither Effector service runs, and init refuses to start
+    one."""
     if not raw_tools():
         print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
         return
     for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
-            image, _, _ = raw_fat_image(Path(temp), extra={"data/mode.conf": words} if words else None)
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            # The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
+            extra = {"data/mode.conf": words, "netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
+                     "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
+                     "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY} if words else None
+            image, _, _ = raw_fat_image(Path(temp), extra=extra)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
             try:
                 log = vm.command("dmesg -s init", raw=True)
                 require(log, f"[INIT] MODE: {expected}")
                 if words:
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
-                    require(log, "[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES")
+                    effector_grants_check(vm)
                     pids = vm.services()
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
                     shell = vm.command(f"stat caps {pids['shell']}", raw=True)
@@ -4189,14 +4211,109 @@ def modes_suite(args):
                     require(vm.command("mode development off", raw=True), "MODE: MAINTENANCE, SET BY operator: operator")
                     require(vm.command("cat data/mode.conf", raw=True), "maintenance")
                     require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
+                if not words:
+                    # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
+                    assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
+                    vm.command("run effector_gw")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
+                    assert "effector_gw" not in vm.services(), vm.services()
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    if args.gateway_elf:
+        gateway_stub_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
-          "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
-          "the modes and is refused a change, which init logs with its clause (MC-12.6); the shell's mode turns one on "
-          "after the operator agrees and off at once (750-EFF-0013)", flush=True)
+          "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
+          "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
+          "init's mode client, in SLOT_MODE; check reads the modes and is refused a change, which init logs with its clause "
+          "(MC-12.6); the shell's mode turns one on after the operator agrees and off at once (750-EFF-0013)", flush=True)
+
+
+# The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
+GATEWAY_POLICY = b"effector-policy 1\nagent on\nservice sysmon restart\ndeliver data/inbox/\n"
+
+
+def gateway_stub_check(args):
+    """750-KRN-0121, 0120: tests/gateway_stub in effector_gw's place, in the development mode, under GATEWAY_POLICY. init's
+    client badged BADGE_NAMED restarts sysmon, which the policy names, and nothing else: not a stop or a run of it, not
+    logd, init or the gateway itself, no stop-task, no reboot; each refusal logged with MC-3.4. The writable scope of
+    data/inbox/ takes a file written, flushed, renamed and read back, and refuses a name and a rename that climb out.
+    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends."""
+    with tempfile.TemporaryDirectory(prefix="smoke-gateway-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            def stub(line, timeout=60):
+                for _ in range(timeout):
+                    out = vm.command("dmesg -s effector_gw", raw=True)
+                    if line in out:
+                        return out
+                    time.sleep(1)
+                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+            stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
+                 "RESTART effector_gw DENIED; STOP-TASK DENIED; REBOOT DENIED")
+            stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            refusals = vm.command("dmesg -s init", raw=True)
+            for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)"):
+                assert re.search(line, refusals), (line, refusals[-2000:])
+            require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
+            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            files = vm.command("dmesg -s vfs_server", raw=True)
+            scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
+            assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
+            for _ in range(70):  # a scope whose task ended is revoked when the next one is made, or a minute on
+                if f"[VFS] SCOPE {scopes[0]} ENDED" in files:
+                    break
+                time.sleep(1)
+                files = vm.command("dmesg -s vfs_server", raw=True)
+            require(files, f"[VFS] SCOPE {scopes[0]} ENDED")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121): its lifecycle client restarts what the owner's policy names "
+          "and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
+          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends", flush=True)
+
+
+def effector_grants_check(vm):
+    """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
+    table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
+    read, and the compositor to capture the screen (750-KRN-0153); the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
+    the parser and the gateway badged as its session. The session keeps the owner's token in its private directory."""
+    for name in ("effector_gw", "effector"):
+        for _ in range(60):
+            if name in vm.services():
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError((name, vm.command("dmesg -s init", raw=True)[-1500:], vm.command(f"dmesg -s {name}", raw=True)[-1500:]))
+    pids = vm.services()
+    started = vm.command("dmesg -s init", raw=True)
+    assert started.index("[INIT] STARTED effector_gw PID") < started.index("[INIT] STARTED effector PID"), started[-2000:]
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+
+    def held(name):  # slot -> (badge, the server's service name) of each endpoint the service holds of another
+        caps = vm.command(f"stat caps {pids[name]}", raw=True)
+        named = {pid: n for n, pid in pids.items()}
+        return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+                if servers.get(int(ep)) != pids[name]}
+    gw, session = held("effector_gw"), held("effector")
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (0, "compositor"), gw
+    # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
+    assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
+    assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
+    assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
+    assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
+    assert session[18][1] == "netstack", session
+    require(vm.command("dmesg -s effector", raw=True), "EFFECTOR: THE TOKEN IS KEPT IN system/effector")
 
 
 def fsck_volume(image, start, fs_sectors):
@@ -7128,12 +7245,63 @@ def _https_server(directory, certificate):
     return server, context
 
 
+def effector_live_suite(args, disk):
+    """750-EFF-0012: the agent against a real Effector server, not the fixture, as init starts it in the maintenance mode
+    (750-KRN-0119). MIND_EFFECTOR_LIVE names a directory with the owner's `effector.conf`, and `token` unless the
+    configuration says `token none`; MIND_EFFECTOR_LIVE_SECONDS is how long it is watched (default 120). Not in CI: it
+    needs the network and a server. The token, if any, goes only onto the guest's disk and is checked absent from the
+    log."""
+    live = Path(os.environ["MIND_EFFECTOR_LIVE"])
+    seconds = int(os.environ.get("MIND_EFFECTOR_LIVE_SECONDS", "120"))
+    conf = (live / "effector.conf").read_text()
+    server = re.search(r"^server https://([^/:\s]+)(?::(\d+))?", conf, re.M)
+    address = re.search(r"^address (\S+)$", conf, re.M)
+    host, port = (address.group(1) if address else server.group(1)), int(server.group(2) or 443)
+    (disk / "netpolicy.txt").write_text(f"effector {host} tcp {port} {seconds + 600} 100000000\n")
+    (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "mode.conf").write_text("maintenance\n")
+    for name in ("effector.conf", "token"):
+        if (live / name).exists():
+            shutil.copyfile(live / name, disk / "data" / "effector" / name)
+    if (live / "agent_id").exists():
+        (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(live / "agent_id", disk / "system" / "effector" / "agent_id")
+    token = (live / "token").read_text().strip() if (live / "token").exists() else None
+    entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: MAINTENANCE (data/mode.conf)")
+        started = time.monotonic()
+        time.sleep(seconds)
+        events = [line for line in vm.command("dmesg -s effector", raw=True).splitlines() if "EFFECTOR:" in line]
+        for line in events:
+            print(f"  {line}", flush=True)
+        if token:
+            assert token not in vm.log, "the token reached the log"
+        assert any("EFFECTOR: CONNECTED TO" in line for line in events), events
+        # The service starts before DHCP: refusals before the first connection are the network coming up.
+        first = next(i for i, line in enumerate(events) if "EFFECTOR: CONNECTED TO" in line)
+        refused = [line for line in events[first:] if "Transport" in line or "ANSWERED" in line or "REFUSED" in line]
+        print(f"{'PASS' if not refused else 'FAIL'}: the Effector agent in the maintenance mode against {server.group(1)} for "
+              f"{time.monotonic() - started:.0f} s: connected, {len([e for e in events if 'DENIED' in e])} commands denied, "
+              f"{len(refused)} requests failed", flush=True)
+        assert not refused, refused
+    finally:
+        vm.close()
+
+
 def effector_suite(args, disk):
-    """750-EFF-0006, first slice: the Effector agent started from the shell against the contract's fixture
-    (tests/effector_server.py) over HTTPS with a pinned leaf: it stays online with heartbeats less than five seconds
-    apart, answers every command `denied` after journaling it, retries an ACK the server failed, sends a shutdown
-    heartbeat; restarted, it reads its journal back and answers a redelivered command with the saved answer, not a new
-    one; a server with another certificate is refused; the token never reaches the log."""
+    """750-EFF-0006 and 750-KRN-0119: the Effector agent as init starts it in a mode, against the contract's fixture
+    (tests/effector_server.py) over HTTPS with a pinned leaf. With `development` in data/mode.conf init starts
+    effector_gw, then `effector --service`, which reads data/effector/ and keeps the token, agent_id and journal in its
+    private system/effector. It stays online with heartbeats less than five seconds apart, answers a command the gateway
+    does not serve `denied` after journaling it and retries an ACK the server failed; the gateway's actions run as the
+    owner's policy allows (collect_file, screenshot, collect_logs, deliver_file, restart_service) and their artifacts
+    come back inline; telemetry is sent every 30 s as the server checks it; restarted by `svc`, it reads its journal back
+    without acknowledging done answers again and answers a redelivered command with the saved answer, not a new one;
+    with the configuration of a server whose certificate is not the pinned one, it is refused before any request; the
+    token never reaches the log."""
     sys.path.insert(0, str(ROOT / "tests"))
     import effector_server  # noqa: E402
     agent, token = "mind-test", "mind-effector-test-token"
@@ -7155,60 +7323,109 @@ def effector_suite(args, disk):
                 seen = n
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
-    (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 600 100000\n")
-    for name, port in (("effector", server.port), ("rogue", rogue.port)):
-        directory = disk / "data" / name
-        directory.mkdir(parents=True, exist_ok=True)
-        # The rogue directory names the good server's pin for the rogue server: its certificate must be refused.
-        (directory / "effector.conf").write_text(f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n")
-        (directory / "token").write_text(token + "\n")
-        (directory / "agent_id").write_text(agent + "\n")
+    # The broker grants a program the smallest term and volume of its lines, and init keeps that grant across restarts:
+    # both lines alike, so the rogue's does not shrink the session's budget.
+    (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 86400 1000000000\n")
+    (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "mode.conf").write_text("development\n")
+    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
+    (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
+    (disk / "data" / "effector" / "token").write_text(token + "\n")
+    # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
+    # the screen; deliveries go to data/inbox/; sysmon may be restarted. Nothing else.
+    (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
+                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
+    (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
+    report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
+    (disk / "data" / "reports").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "reports" / "r.bin").write_bytes(report)
+    (disk / "data" / "secret").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
+    # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
+    (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
+    # The agent's ID, as an earlier start would have left it in the session's private directory.
+    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+
+    def session():
+        return vm.command("dmesg -s effector", raw=True)
+
+    def until(line, seconds=90):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            out = session()
+            if line in out:
+                return out
+            time.sleep(1)
+        raise AssertionError((line, session()[-3000:], vm.command("dmesg -s effector_gw", raw=True)[-1500:], vm.command("dmesg -s tls", raw=True)[-1000:],
+                              vm.command("dmesg -s netpolicy", raw=True)[-1000:]))
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
         exec_id = server.queue(agent, "exec_v1", {"command": "echo forbidden", "run_as": "service", "session": "service", "timeout_seconds": 5})
-        restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
+        restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="logd")
         unknown_id = server.queue(agent, "powershell_v1", {"command": "Get-Date"})
         server.inject("/api/commands/ack", "ack_500")  # the first ACK fails once: it is retried, not dropped
-        vm.send("effector data/effector/effector.conf --for 30\n")
-        out = vm.expect("MIND> ", timeout=120, after="EFFECTOR: STOPPED")
-        for line in ("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS)", "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)",
-                     f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: DENIED {restart_id} restart_service", f"EFFECTOR: DENIED {unknown_id} powershell_v1",
-                     f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED", "EFFECTOR: STOPPING", "EFFECTOR: STOPPED\n"):
+        out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
+        time.sleep(20)  # heartbeats to measure, beside the commands
+        out = session()
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+                     "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
+                     f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
-        for command in (exec_id, restart_id, unknown_id):
+        for command in (exec_id, unknown_id):
             result = server.operation(command)
             assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
+        result = server.operation(restart_id)
+        assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
-        assert record["system_state"] == "shutting_down", record
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
-        print(f"PASS: the Effector agent online against the fixture: {len(beats)} heartbeats, at most {max(gaps):.1f} s apart; "
-              "three commands answered denied after journaling, a failed ACK retried, a shutdown heartbeat", flush=True)
-        # Restarted: the journal read back; a redelivered command gets its saved answer again, not a new one.
-        vm.send("effector data/effector/effector.conf --for 16\n")
-        # The saved answers are acknowledged again first (never run again); then the server hands cmd-2 over again.
-        first = vm.expect(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED", timeout=60)
-        require(first, "(3 SAVED RESULTS)")
+        print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
+              f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
+              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
+        # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
+        # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
+        collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
+        until(f"EFFECTOR: ACK {collect_id} completed ACCEPTED")
+        outside_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/secret/s.txt", "max_bytes": 1048576})
+        out = until(f"EFFECTOR: ACK {outside_id} failed ACCEPTED")
+        require(out, f"EFFECTOR: COMPLETED {collect_id} collect_file")
+        require(out, f"EFFECTOR: FAILED {outside_id} collect_file: denied")
+        assert server.uploads.get(collect_id) == report, len(server.uploads.get(collect_id, b""))
+        assert outside_id not in server.uploads, "a refused file was sent"
+        assert server.operation(collect_id)["status"] == "completed", server.operation(collect_id)
+        result = server.operation(outside_id)
+        assert result["status"] == "failed" and result["result"]["error"] == "denied", result
+        audit = vm.command("dmesg -s effector_gw", raw=True)
+        assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
+        print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
+              "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
+        effector_actions_check(vm, server, agent, until)
+        # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
+        # answer again, not a new one.
+        require(vm.command("svc restart effector"), "effector")
+        until("(10 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
-        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
-        for line in (f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", f"EFFECTOR: ACK {restart_id} denied ACCEPTED"):
-            require(out, line)
-        assert f"EFFECTOR: DENIED {restart_id}" not in out, out
-        journal = vm.command("cat data/effector/journal")
-        require(journal, "effector-journal 1")
-        assert journal.count(" denied -") == 3, journal
-        print("PASS: restarted, the agent reads its journal back (3 saved results) and answers a redelivered command with "
-              "the saved answer, journaled once", flush=True)
-        # A server with another certificate: refused, nothing sent to it.
-        vm.send("effector data/rogue/effector.conf --for 6\n")
-        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
-        require(out, "EFFECTOR: TLS CONNECT REFUSED")
+        out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
+        assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
+        until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
+        print("PASS: restarted by svc, the agent reads its journal back (10 saved results, none to acknowledge again) and "
+              "answers a redelivered command with the saved answer, journaled once", flush=True)
+        # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
+        require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
+        require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
+        require(vm.command("svc restart effector"), "effector")
+        until(f"EFFECTOR: AGENT mind-test TO 10.0.2.2/effector", 30)
+        deadline = time.monotonic() + 30
+        while "REFUSED: NOT A PINNED KEY OR CERTIFICATE" not in vm.command("dmesg -s tls", raw=True) and time.monotonic() < deadline:
+            time.sleep(1)
+        require(vm.command("dmesg -s tls", raw=True), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
         assert not any(r["path"].endswith("/api/heartbeat") for r in list(rogue.requests)), list(rogue.requests)
-        require(vm.command("dmesg -s tls"), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
-        assert token not in vm.log, "the token reached the log"
+        assert token not in vm.log and token not in session(), "the token reached the log"
         print("PASS: a server with another certificate refused before any request; the token never in the log", flush=True)
     finally:
         stop_watch.set()
@@ -7216,6 +7433,73 @@ def effector_suite(args, disk):
         server.close()
         rogue.close()
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def effector_actions_check(vm, server, agent, until):
+    """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
+    # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
+    shot_id = server.queue(agent, "screenshot")
+    until(f"EFFECTOR: ACK {shot_id} completed WITH screenshot.png")
+    result = server.operation(shot_id)
+    artifact = result["result"]["artifact"]
+    png = base64.b64decode(artifact["data"], validate=True)
+    assert result["status"] == "completed" and artifact["content_type"] == "image/png" and artifact["encoding"] == "base64", result["result"].keys()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and artifact["size"] == len(png) and artifact["sha256"] == hashlib.sha256(png).hexdigest(), artifact["size"]
+    width, height = struct.unpack(">II", png[16:24])
+    assert (artifact["metadata"]["width"], artifact["metadata"]["height"]) == (width, height) and 0 < width <= 1280 and 0 < height <= 800, (width, height)
+    raw = zlib.decompress(b"".join(png[at + 8:at + 8 + struct.unpack(">I", png[at:at + 4])[0]] for at in _png_chunks(png, b"IDAT")))
+    assert len(raw) == height * (1 + 3 * width), (len(raw), width, height)
+    require(vm.command("dmesg -s effector_gw", raw=True), f"{shot_id} open-screen done")
+    print(f"PASS: screenshot: a {width}x{height} PNG of {len(png)} bytes from the gateway's capture, inline in the ACK with its "
+          "SHA-256, which zlib reads whole; the capture audited", flush=True)
+    # The system log as text, the same way.
+    log_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 30}, program="mind")
+    until(f"EFFECTOR: ACK {log_id} completed WITH ring.log")
+    text = base64.b64decode(server.operation(log_id)["result"]["artifact"]["data"]).decode()
+    assert "[INIT] MODE: DEVELOPMENT" in text and f"{shot_id} open-screen" in text, text[-1500:]
+    # A file delivered under the policy's root, checked by size and SHA-256 before it takes its name; one outside refused.
+    delivery = b"delivered by the Effector fixture\n" * 2000
+    published = server.publish(delivery, command_id="deliver-1")
+    server.queue(agent, "deliver_file", {"path": "data/inbox/d.txt", "max_bytes": 1048576, "timeout_seconds": 60, **published}, command_id="deliver-1")
+    until("EFFECTOR: ACK deliver-1 completed ACCEPTED")
+    listing = vm.command("ls data/inbox", raw=True)
+    assert re.search(rf"d\.txt +{len(delivery)}\b", listing) and "d.txt.part" not in listing, listing
+    server.publish(b"x", command_id="deliver-2")
+    server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
+    until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
+    assert server.operation("deliver-2")["result"]["error"] == "denied", server.operation("deliver-2")
+    # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
+    sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
+    until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
+    print(f"PASS: collect_logs sent the system log inline; deliver_file wrote {len(delivery)} bytes under the policy's root and "
+          "refused a path outside it; restart_service restarted sysmon, which the policy names", flush=True)
+    # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.
+    deadline = time.monotonic() + 75
+    while time.monotonic() < deadline and sum(1 for t in list(server.telemetry) if "cpu_percent" in t["sample"]["system"]) < 1:
+        time.sleep(1)
+    samples = [t["sample"] for t in list(server.telemetry)]
+    assert samples and all(t["agent_id"] == agent for t in list(server.telemetry)), samples
+    latest = next(t for t in reversed(samples) if "cpu_percent" in t["system"])
+    system = latest["system"]
+    assert system["logical_cpus"] >= 1 and 0 <= system["cpu_percent"] <= 100 and system["memory_total"] > system["memory_used"] > 0, system
+    assert system["executed_requests"] >= 5 and system["executed_requests_total"] >= system["executed_requests"], system
+    components = {c["name"]: c for c in latest["components"]}
+    for name in ("effector", "effector_gw", "netstack"):
+        assert components[name]["state"] == "running" and len(components[name]["pids"]) == 1 and components[name]["working_set_bytes"] > 0, components.get(name)
+    assert any(d["name"] == "boot" and d["total_bytes"] > d["free_bytes"] > 0 for d in latest["disks"]), latest["disks"]
+    assert any("10.0.2.15" in i.get("ip_addresses", []) and i["state"] == "up" for i in latest["interfaces"]), latest["interfaces"]
+    require(until("EFFECTOR: TELEMETRY SENT"), "EFFECTOR: TELEMETRY SENT")
+    print(f"PASS: telemetry: {len(samples)} schema 1 samples the server's checks accept, {system['logical_cpus']} CPUs at "
+          f"{system['cpu_percent']}%, {len(components)} services with their processes, the boot volume and 10.0.2.15", flush=True)
+
+
+def _png_chunks(png, kind):
+    at = 8
+    while at < len(png):
+        length = struct.unpack(">I", png[at:at + 4])[0]
+        if png[at + 4:at + 8] == kind:
+            yield at
+        at += 12 + length
 
 
 def tls_suite(args, disk):
@@ -9752,6 +10036,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
     parser.add_argument("--slow-radio-elf", help="test-only wlansim built with --features slow (550-NET-0030, x86); found where scripts/x86_fixtures.sh puts it")
@@ -9782,6 +10067,9 @@ def main():
     radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
     args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
+    gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
+        Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
+    args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"
@@ -9944,6 +10232,9 @@ def main():
                 continue
             if suite == "effector":
                 effector_suite(args, disk)
+                continue
+            if suite == "effector-live":
+                effector_live_suite(args, disk)
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)

@@ -112,3 +112,26 @@ The service runs as a program started from the shell (`effector data/effector/ef
   - the program's first build overflowed its 64 KiB stack at entry (a 69 KiB frame in `main`, a page fault shown by `faults`): the agent, its connection and the session are on the heap, and the large steps run in frames of their own.
 - **Tested** in QEMU, x86_64 and aarch64 (`tests/qemu_smoke.py --suites effector`, now in CI's network groups), against `tests/effector_server.py`: online for 30 s with 21 heartbeats at most 1.6 s apart; three commands answered `denied` after journaling; an ACK the server answered with 500 retried and accepted; a `shutting_down` heartbeat; restarted, three saved answers read back and sent again, and a redelivered command answered from the journal without a second entry; a server with another certificate refused before any request; the token absent from the whole log. Host tests: `tests/effector_{session,wire,config,journal,json}_host.rs`.
 - **Against the acceptance criteria:** met for the fixture in QEMU: online, a shell action denied, a wrong pin refused, a repeated command ID not run twice, an ACK failure retried. Open: ten minutes online and readiness for operations; a cut stream (no stream yet: polling only) and a cut connection; the boot service with only its grants (750-KRN-0119) and its row in the `isolation` suite; the token in a private directory; journal retention.
+
+## Progress — 2026-10-22
+
+- **The session's service mode.** `effector --service` is how `init` starts it in a mode (750-KRN-0119, 0143). Its sources:
+  - `data/effector/effector.conf` and the owner's token, through `SLOT_FILE`;
+  - the token, moved at the first start, `agent_id` and the journal, in its private `system/effector` (`SLOT_VFS`).
+- **The program form is unchanged:** `effector CONFIG [--for SECONDS]`. The QEMU suite passes on x86_64 and aarch64.
+- **The slots,** including `SLOT_GATEWAY` for its client of `effector_gw`, are in `mind::effector`.
+- **Still open:**
+  - `init` starting it (750-KRN-0119);
+  - handing commands to the gateway instead of denying them;
+  - the remaining criteria above.
+- **Later the same day,** with KRN's 750-KRN-0119 merged (e06a59de, ABI 16):
+  - The program form ended: no program runs by a boot service's name.
+  - The `effector` QEMU suite now starts the session in the development mode and restarts it with `svc`. It passes on x86_64 and aarch64.
+  - A stop by `init` sends no `shutting_down` heartbeat yet; that criterion stays open for the service form.
+
+## Progress — 2026-10-22, the actions and telemetry
+
+- **The session hands the gateway** `screenshot`, `collect_logs`, `deliver_file` and the three service actions, besides `collect_file`. Screenshots and logs go back inline in the ACK as base64, kept in `system/effector/artifact` until acknowledged (contract 1.2).
+- **Telemetry** every 30 s ([750-EFF-0014](750-EFF-0014-telemetry.md)); `X-Effector-Agent-ID` on every request.
+- **The journal no longer stops at 64 answers.** A `done` line marks an answer that needs no more ACK, so a restart does not acknowledge it again. A full journal drops its oldest acknowledged, expired record. An action runs only for a new command in time whose answer has room.
+- **Tested:** the `effector` QEMU suite on x86_64, all of it (`docs/effector/README.md`, "Tested").

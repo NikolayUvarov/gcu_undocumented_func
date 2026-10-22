@@ -22,6 +22,7 @@ pub mod dag;
 pub mod debug;
 pub mod deadline;
 pub mod dev;
+pub mod effector;
 pub mod fs;
 pub mod firmware;
 pub mod gfx;

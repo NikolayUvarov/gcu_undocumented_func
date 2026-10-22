@@ -113,6 +113,38 @@ struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowe
 
 /// Whether init granted link an endpoint in `slot` (the developer mode's clients, 800-LNK-0012).
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
+
+/// The bytes of a command or arguments on one log line: libmind's line holds 200 with the head.
+const LOGGED_PIECE: usize = 140;
+const SECRET_NOT_LOGGED: &str = " [THE SECRET IS NOT LOGGED]";
+
+/// A shell line as logged: whole, but for the secret `tpm seal` takes (shell/src/tpm.rs), which stays out of the log.
+fn logged(line: &str) -> (&str, &str) {
+    let first = line.trim_start();
+    let w1 = first.find(char::is_whitespace).unwrap_or(first.len());
+    let rest = first[w1..].trim_start();
+    let w2 = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    if first[..w1].eq_ignore_ascii_case("tpm") && rest[..w2].eq_ignore_ascii_case("seal") {
+        return (&line[..line.len() - rest.len() + w2], SECRET_NOT_LOGGED);
+    }
+    (line, "")
+}
+
+/// Logs `text` whole after `[LINK] <head> <id>: <label>`, in pieces a log line holds; the pieces after the first are
+/// marked `…`, and `tail` ends the last.
+fn log_whole(head: &str, id: u32, label: &str, text: &str, tail: &str) {
+    let mut rest = text;
+    let mut first = true;
+    while first || !rest.is_empty() {
+        let mut end = rest.len().min(LOGGED_PIECE);
+        while !rest.is_char_boundary(end) { end -= 1; }
+        let last = end == rest.len();
+        if first { mind::println!("[LINK] {} {}: {}{}{}", head, id, label, &rest[..end], if last { tail } else { "" }); }
+        else { mind::println!("[LINK] {} {} …: {}{}", head, id, &rest[..end], if last { tail } else { "" }); }
+        rest = &rest[end..];
+        first = false;
+    }
+}
 struct Run { id: u32, pid: u64, state: u8, exit: u32, watched: bool, gone: u64, name: [u8; LOADER_PATH_MAX], name_len: usize, total: u64, kept: [u8; KEEP] }
 const RUNS: usize = 8;
 const KEEP: usize = 16 * 1024;
@@ -208,6 +240,7 @@ impl Programs {
         (run.id, run.pid, run.state, run.exit, run.watched, run.gone, run.total, run.name_len) = (id, pid, RUN_RUNNING, EXIT_UNKNOWN, watched, 0, 0, full.len());
         run.name[..full.len()].copy_from_slice(full.as_bytes());
         mind::println!("[LINK] RUN {}: STARTED {} AS PID {}{}{}{}{}", id, full, pid, if lent.iter().any(|l| !l.is_empty()) { ", LENT" } else { "" }, lent[0], lent[1], lent[2]);
+        if !args.is_empty() { log_whole("RUN", id, "ARGUMENTS ", args, ""); }
         Ok((id, pid))
     }
 
@@ -246,11 +279,13 @@ impl Programs {
 
     /// COMMAND (800-LNK-0015): a run for `line`, handed to the shell's `run` by `main` once this answer is out, so that a
     /// long command does not hold it. The shell takes the link's lines by its own rule (800-APP-0102), through the client
-    /// init grants with `dev` (800-KRN-0148). Only the command's word is logged.
+    /// init grants with `dev` (800-KRN-0148). The whole line is logged (the maintainer's word, 2026-10-22), but for a
+    /// secret `tpm seal` takes.
     fn command(&mut self, line: &str) -> Result<u32, u8> {
         let word = line.split_whitespace().next().unwrap_or("");
         let word = &word[..word.len().min(LOADER_PATH_MAX - 4)];
-        if !self.dev { mind::println!("[LINK] COMMAND {} REFUSED: link.conf HAS NO \"dev\"", word); return Err(code::DENIED); }
+        let (shown, tail) = logged(line);
+        if !self.dev { log_whole("COMMAND", 0, "REFUSED, link.conf HAS NO \"dev\": ", shown, tail); return Err(code::DENIED); }
         if !holds(SLOT_SHELL) { return Err(code::UNSUPPORTED); }
         if self.pending.is_some() { return Err(code::BUSY); }
         self.pump();
@@ -264,7 +299,7 @@ impl Programs {
         let mut copy = [0u8; COMMAND_MAX];
         copy[..line.len()].copy_from_slice(line.as_bytes());
         self.pending = Some((id, copy, line.len()));
-        mind::println!("[LINK] COMMAND {}: {}", id, word);
+        log_whole("COMMAND", id, "", shown, tail);
         Ok(id)
     }
 
