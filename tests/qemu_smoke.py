@@ -1113,10 +1113,13 @@ def shell_suite(vm):
     vm.collect()
     assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
     vm.output = ""
-    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Three helps push it off
-    # every screen and keep it within the 400 lines kept, with the boot log's last lines below it (211-PRT-0004).
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Helps until it is off,
+    # at most three, keep it within the 400 lines kept on every screen (help is 92 lines at aarch64's 100 columns), with
+    # the boot log's last lines below it (211-PRT-0004).
     for _ in range(3):
         vm.command("help")
+        if not any(canon("MIND CORE v1.6") in row for row in screen_text(vm)):
+            break
     assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
     for _ in range(12):
         vm.hmp("sendkey shift-pgup")
