@@ -23,6 +23,7 @@ header h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 13px; color: var(--dim); }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
 .dot.on { background: var(--ok); } .dot.off { background: var(--bad); } .dot.wait { background: var(--warn); }
+#traffic b { color: var(--text); font-weight: 600; } #traffic.moving b { color: var(--run); }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
 .cmds { overflow: auto; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
@@ -63,6 +64,7 @@ small { color: var(--dim); }
   <span class="pill" title="the cable's other end"><span id="linkdot" class="dot"></span><span id="linktext">…</span></span>
   <span class="pill" id="queue"></span>
   <span class="pill" id="seen"></span>
+  <span class="pill" id="traffic" title="the cable since the daemon started: sent ↑ and received ↓, the speed over the last seconds, how busy the line is"></span>
   <span class="pill" title="this page's live feed (WebSocket)"><span id="feeddot" class="dot wait"></span><span id="feedtext">connecting</span></span>
 </header>
 <main>
@@ -134,12 +136,17 @@ small { color: var(--dim); }
 // The page reads the daemon's state through its WebSocket feed and acts through the same JSON API the command line uses.
 const $ = s => document.querySelector(s);
 const OUT_KEPT = 1 << 20;
-let ws = null, key = "", ops = [], link = null, following = null, outAt = 0, outText = "", lastLogNext = null;
+let ws = null, key = "", ops = [], link = null, following = null, outAt = 0, outText = "", lastLogNext = null, samples = [];
 try { key = sessionStorage.getItem("effector485-key") || ""; } catch (e) {}
 
 function toast(text) {
   const t = $("#toast"); t.textContent = text; t.style.display = "block";
   clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 6000);
+}
+function size(b) {
+  const u = ["B", "KiB", "MiB", "GiB"]; let i = 0;
+  while (b >= 1024 && i < 3) { b /= 1024; i++; }
+  return i ? `${b.toFixed(1)} ${u[i]}` : `${Math.round(b)} B`;
 }
 function setFeed(state, text) { $("#feeddot").className = "dot " + state; $("#feedtext").textContent = text; }
 function clock(t) { return t ? new Date(t * 1000).toLocaleTimeString([], { hour12: false }) : ""; }
@@ -168,6 +175,20 @@ const on = {
     showSeen();
   },
   ops(m) { ops = m.ops; render(); },
+  traffic(m) {
+    // The speed over the last few seconds of the daemon's own clock; a restarted daemon starts the samples again.
+    if (samples.length && m.ms < samples[samples.length - 1].ms) samples = [];
+    samples.push(m);
+    while (samples.length > 2 && m.ms - samples[0].ms > 4000) samples.shift();
+    const first = samples[0], span = (m.ms - first.ms) / 1000;
+    const up = span > 0 ? (m.sent - first.sent) / span : 0, down = span > 0 ? (m.received - first.received) / span : 0;
+    const t = $("#traffic");
+    t.className = "pill" + (up + down > 0 ? " moving" : "");
+    const busy = m.baud > 0 && span > 0 ? ` · line ${Math.round((up + down) * 10 / m.baud * 100)}%` : "";
+    t.replaceChildren();
+    const part = (arrow, total, rate) => { const b = document.createElement("b"); b.textContent = size(rate) + "/s"; return [`${arrow} ${size(total)} `, b, "  "]; };
+    t.append(...part("↑", m.sent, up), ...part("↓", m.received, down), busy);
+  },
   output(m) {
     if (m.id !== following) return;
     if (m.from > outAt) outText += `\n[${m.from - outAt} bytes of output were no longer held]\n`;

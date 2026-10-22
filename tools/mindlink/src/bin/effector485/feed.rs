@@ -19,6 +19,8 @@ const TICK: Duration = Duration::from_millis(250);
 const WRITE_WAIT: Duration = Duration::from_secs(2);
 /// The cable's state is sent this often even when nothing changed, so the page sees the feed alive.
 const BEAT: Duration = Duration::from_secs(2);
+/// The traffic's totals, read with no lock, this often: the page reckons the speed from them.
+const TRAFFIC_EVERY: Duration = Duration::from_secs(1);
 /// The newest operations listed, and the output sent in one message.
 const LISTED: usize = 200;
 const CHUNK: usize = 48 * 1024;
@@ -89,6 +91,7 @@ pub fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>, changes: Arc<Atomi
     // The operation followed and the byte its output reached; the change counter last sent; the list last sent.
     let mut follow: Option<(String, u64)> = None;
     let (mut seen, mut listed, mut beat, mut more) = (u64::MAX, String::new(), Instant::now() - BEAT, false);
+    let mut counted = Instant::now() - TRAFFIC_EVERY;
     loop {
         match stream.read(&mut chunk) {
             Ok(0) => return,
@@ -125,6 +128,10 @@ pub fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>, changes: Arc<Atomi
         if !keyed {
             if opened.elapsed() > KEY_WAIT { return; }
             continue;
+        }
+        if counted.elapsed() >= TRAFFIC_EVERY {
+            if !say(&mut stream, crate::traffic::message()) { return; }
+            counted = Instant::now();
         }
         let now = changes.load(Ordering::Acquire);
         if now == seen && !more && beat.elapsed() < BEAT { continue; }

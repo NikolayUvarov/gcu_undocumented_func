@@ -24,7 +24,7 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 | `--state <dir>` | `.effector485` in the home directory: the queue and the results, kept across restarts |
 | `--key-file <file>` | none. With it, every call must carry the file's text in the `X-API-Key` header. An address other machines reach is refused without it |
 
-**Its first line** says where it listens. It then names each operation it starts, with its whole command (only the secret a shell line's `tpm seal` takes is left out), and says when the cable's other end comes or goes.
+**Its first line** says where it listens. It then names each operation it starts, with its whole command (only the secret a shell line's `tpm seal` takes is left out), and says when the cable's other end comes or goes. While bytes move, it says every 5 s what the cable carried since it started, the speed each way, and how busy the line was: `the cable: sent 2.9 MiB (41.2 KiB/s), received 40.5 KiB (1.1 KiB/s); the line 92% busy` (800-LNK-0018). The line's share is reckoned at ten bits a byte at `--baud`.
 
 **A restarted daemon:**
 - finds its queue and its results, and keeps the idempotency keys;
@@ -82,7 +82,7 @@ JSON over HTTP, as Effector's:
 | `GET /api/v1/operations`, `?status=active` | all, or those not ended, without their output |
 | `GET /api/v1/operations/output?id=<id>&from=<n>` | the output from byte `n`: `text`, `from`, `next`, `status` |
 | `POST /api/v1/operations/cancel` with `operation_id`, `idempotency_key`, `reason` | the operation. A queued one is cancelled at once; a running one when the daemon next reaches it |
-| `GET /api/v1/endpoints` | the cable's other end: `online`, `name`, `last_seen`, `error`, `queued`, `running` |
+| `GET /api/v1/endpoints` | the cable's other end: `online`, `name`, `last_seen`, `error`, `queued`, `running`; the bytes since the daemon started, `sent_bytes` and `received_bytes` |
 | `GET /api/v1/api-key` | `valid`: the key is right |
 | `GET /` | the page (below) |
 | `GET /api/v1/stream` | the page's live feed, a WebSocket (below) |
@@ -113,9 +113,9 @@ effector485 cancel e485-6ad7cdb8-7 --key LNK-cancel-1 --reason "LNK: wrong build
 
 Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same machine. Task: [800-LNK-0017](../../issues/800-LNK-0017-effector485-page.md).
 
-- **What it shows, live:** the cable's other end (online, its name, when it last answered), the queue, the newest 200 operations, and the output of the one clicked as it comes. The address keeps the operation followed (`#<id>`), so a reload or a link shows it again.
+- **What it shows, live:** the cable's other end (online, its name, when it last answered), the bytes sent ↑ and received ↓ since the daemon started with the speed each way over the last seconds and how busy the line is, the queue, the newest 200 operations, and the output of the one clicked as it comes. The address keeps the operation followed (`#<id>`), so a reload or a link shows it again.
 - **Its buttons:** `hello`, the log (new since the last read, or all of it), the shell's `ip`, `netstat -i` and `ps`, a shell line, a program with arguments, a directory's list, a service replaced or put back, and a reboot. Each is an operation like any other, with its own idempotency key and the reason typed on the page. Those that change the machine ask first.
-- **The feed** is a WebSocket at `/api/v1/stream`. Its messages are JSON: `hello` (whether the key is needed), `link` (at least every 2 s), `ops` (when the list changes) and `output` (for the operation the page follows with `{"follow": "<id>", "from": <byte>}`).
+- **The feed** is a WebSocket at `/api/v1/stream`. Its messages are JSON: `hello` (whether the key is needed), `traffic` (every second: `sent`, `received`, the daemon's clock `ms` and `baud`; read with no lock), `link` (at least every 2 s), `ops` (when the list changes) and `output` (for the operation the page follows with `{"follow": "<id>", "from": <byte>}`).
 - **The cable comes first.** A feed never waits for the daemon's state: when the queue's worker holds it, the feed skips that turn. The feed holds it only to copy a few fields and at most 48 KiB of output, and writes to the browser afterwards. A browser that stops reading for 2 s is dropped, and at most 8 pages are served at once.
 - **The key.** With `--key-file`, the page asks for the key once. It keeps it for the tab (`sessionStorage`), sends it in `X-API-Key` with each call, and as the feed's first message.
 - **Other sites are refused.** A call whose `Origin` is not the daemon's own address gets 403. So does a call on a loopback address whose `Host` is not a loopback name with the daemon's port. Another site open in the same browser therefore cannot start operations or read the feed.

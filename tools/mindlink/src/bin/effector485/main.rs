@@ -6,6 +6,7 @@ mod feed;
 mod http;
 mod json;
 mod ops;
+mod traffic;
 mod worker;
 mod ws;
 #[cfg(unix)]
@@ -106,6 +107,7 @@ fn daemon(spec: String, o: worker::Options, listen: &str, dir: &std::path::Path,
     if !bound.starts_with("127.") && !bound.starts_with("[::1]") && key.is_none() { die(format!("{bound} is reachable from other machines: give --key-file")); }
     // The first line says where it listens (the tests read it).
     println!("effector485 listening on {bound}, the cable on {spec}, the state in {}", dir.display());
+    traffic::start(if spec.contains(':') { 0 } else { o.baud });
     let changes = state.changes.clone();
     let state = Arc::new(Mutex::new(state));
     let worker_state = state.clone();
@@ -165,6 +167,7 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
                 ("agent_id", s("link")), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("name", s(&l.name)),
                 ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
                 ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
+                ("sent_bytes", Value::Num(traffic::sample().sent as f64)), ("received_bytes", Value::Num(traffic::sample().received as f64)),
             ]);
             (200, Value::Arr(vec![link]))
         }

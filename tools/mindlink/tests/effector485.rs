@@ -193,6 +193,14 @@ fn the_page_its_feed_and_other_sites() {
     }
     let lines: String = (0..30).map(|i| format!("line {i}\n")).collect();
     assert_eq!(text, lines);
+    // 800-LNK-0018: the cable's totals, each second, for the speed; the endpoint answers them too.
+    let traffic = feed_until(&mut s, "\"type\":\"traffic\"").expect("the traffic");
+    let number = |m: &str, name: &str| -> u64 {
+        let at = m.find(&format!("\"{name}\":")).unwrap() + name.len() + 3;
+        m[at..].split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap()
+    };
+    assert!(number(&traffic, "sent") > 0 && number(&traffic, "received") > 0, "{traffic}");
+    assert!(ok(&["endpoints"]).contains("\"sent_bytes\":"));
 
     // 800-LNK-0016: a replace from a file and one back to the boot image both end; the second stayed running before.
     let done = |key: &str, args: &[&str]| {
