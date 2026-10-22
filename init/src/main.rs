@@ -419,7 +419,9 @@ impl Init {
                     grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT);
                     // Init's lifecycle client that may only reboot, as the updater's (351-KRN-0022).
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, NETWORK POLICY, WI-FI AND REBOOT CLIENTS");
+                    // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
+                    grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
                 }
             }
             "virtio_blk" => {
@@ -713,6 +715,8 @@ impl Init {
                 if self.running(service_index("updater")) { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
+                // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148).
+                grants.add(SLOT_COMMANDS, self.server(&mut minted, "shell")?, ALL);
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.running(service_index("blockstore")) {
@@ -760,10 +764,12 @@ impl Init {
     fn spawn(&mut self, index: usize, plan: Plan) -> Result<u64> {
         let name = unit_name(index);
         let mut grants = plan.grants; let mut receiver = None;
+        // The shell serves its commands in SLOT_COMMANDS: its slot 1 is its client of init (800-KRN-0148).
+        let serves = if name == "shell" { SLOT_COMMANDS } else { SLOT_SERVICE };
         if let Some(keeper) = self.keepers[index] {
-            for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == SLOT_SERVICE) {
+            for g in grants.list[..grants.count].iter_mut().filter(|g| g.own as usize == keeper && g.child as usize == serves) {
                 let rights = g.rights; // ALL, with CAP_BADGE for a server that badges its own clients
-                let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(SLOT_SERVICE, slot, rights); receiver = Some(slot);
+                let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(serves, slot, rights); receiver = Some(slot);
             }
         }
         // link's files: a scope ends with the task that took it up, so each start gets a new one (750-KRN-0120).
