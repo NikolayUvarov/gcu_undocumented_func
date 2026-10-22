@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../libmind/src/sha256.rs"] mod sha256;
-#[path = "../effector_gw/src/policy.rs"] mod policy;
+#[path = "../libmind/src/effector/policy.rs"] mod policy;
 #[path = "../effector_gw/src/audit.rs"] mod audit;
 #[path = "../effector_gw/src/gateway.rs"] mod gateway;
 use gateway::*;

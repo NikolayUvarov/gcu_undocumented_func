@@ -17,3 +17,9 @@ pub const SESSION_DIR: &str = "system/effector";
 pub const GATEWAY_DIR: &str = "system/effector_gw";
 /// The owner's directory, which both read: `effector.conf`, `policy`, and the token the shell leaves for the session.
 pub const OWNER_DIR: &str = "data/effector";
+/// The owner's policy, which the gateway and `init` both read (750-KRN-0121).
+pub const POLICY_FILE: &str = "data/effector/policy";
+
+/// The owner's policy (750-EFF-0003): `effector_gw` decides each request with it, and `init` the gateway's lifecycle
+/// requests and its delivery scope (750-KRN-0120, 0121), so both read it with one parser.
+pub mod policy;

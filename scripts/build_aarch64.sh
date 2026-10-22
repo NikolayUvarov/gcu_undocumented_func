@@ -62,6 +62,9 @@ if [[ "${1:-}" == --fixtures ]]; then
     # The updater's stand-in for the updater suite (351-KRN-0022).
     (cd "$ROOT/tests/updater_stub" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/updater_stub/target/$TARGET/release/updater_stub" "$OUT/fixture-updater.elf"
+    # The Effector gateway's stand-in for the modes suite (750-KRN-0120, 0121).
+    (cd "$ROOT/tests/gateway_stub" && cargo build --release --target "$TARGET")
+    cp "$ROOT/tests/gateway_stub/target/$TARGET/release/gateway_stub" "$OUT/fixture-gateway.elf"
     # The stand-in radio for the station (550-NET-0018).
     (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"

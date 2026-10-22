@@ -1,6 +1,6 @@
 # 750-KRN-0121 — A lifecycle client limited to named services
 
-**Type:** `init` (`init.wit` 1.5) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
+**Type:** `init` (`init.wit` 1.7) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
 
 ## Problem
 
@@ -15,8 +15,21 @@
 
 ## Acceptance criteria
 
-- [ ] In the `isolation` suite (x86 and aarch64), a client with a set restarts a service in it and is refused for one outside it, for `init` and for itself; `stop-task` and `reboot` are refused.
-- [ ] The shell's `BADGE_LIFECYCLE` client works as before (`svc`).
+- [x] In the `modes` suite (x86 and aarch64), a client with a set restarts a service in it and is refused for one outside it, for `init` and for itself; `stop-task` and `reboot` are refused. (The `isolation` suite at first: the gateway runs only in a mode, which the `modes` suite boots on both architectures, and `isolation`'s adversary program is x86 only.)
+- [x] The shell's `BADGE_LIFECYCLE` client works as before (`svc`).
+
+## Progress (2026-10-22)
+
+Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb), with EFF's agreement (`KRN/2026-10-22T1650Z-EFF-…`):
+
+- **The set is the owner's policy.** Plan step 2's "fixed at first" gives way to the file the gateway reads: `init` reads `data/effector/policy` at each `run`, `stop` or `restart` from a client badged `BADGE_NAMED` (6, `mind::process`) and serves only what `Policy::decide` allows, so the gateway's own check is never the only one (MC-3.4).
+  - **One parser.** `effector_gw/src/policy.rs` moved unchanged to `libmind` as `mind::effector::policy`; `effector_gw` re-exports it, and its host tests read it there.
+  - **Always refused:** `init` and the shell (kept by `init`), the Effector services (the policy's protected names), `stop-task` and `reboot`. Each refusal names its reason and MC-3.4 in the log.
+- **`init.wit` 1.7** says so; the bindings are regenerated.
+- **The grant:** `effector_gw`'s slot 11, only in a mode.
+- **The check:** `tests/gateway_stub` in the gateway's place, in the `modes` suite, under `service sysmon restart`: the restart of `sysmon` passes; its stop and run, `logd`, `init`, the gateway itself, `stop-task` and `reboot` are refused, each with its log line. Passed on x86 and aarch64 in this session's container (QEMU TCG).
+- **The shell's `svc`** works as before: the `services` suite passed on x86 with this change, in this session's container.
+- **Left:** the gate, with EFF's joint landing request.
 
 ## Related
 

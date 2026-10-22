@@ -2,7 +2,9 @@
 //! init: starts boot services by name (the operator's RUN <service> &) and, since 1.1, serves their lifecycle: which
 //! services run, stopping and restarting them, stopping an application (roadmap C6). The shell holds a client in
 //! SLOT_INIT and lends it in SLOT_LIFECYCLE to programs that ask for lifecycle control (`svc`, `top`). init itself and
-//! the shell cannot be stopped.
+//! the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
+//! may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
+//! Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -12,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 6, 0);
+pub const VERSION: (u8, u8, u8) = (1, 7, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its

@@ -47,7 +47,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
   - **`effector --service`:** `rtc` (2); `BADGE_EFFECTOR` (6, slot 3, `system/effector`); a read-only scope of `data/effector/` made at each start (slot 7); the flow for program `effector` (18); `tls` badged `BADGE_TLS_NO_DEVICE` (20); `parse` (28); `effector_gw` badged `BADGE_SESSION` (slot 4).
   - **In `vfs_server`.** The two private directories, each its own badge's alone (`PRIVATE` in `vfs_server/src/zone.rs`; `tests/vfs_zone_host.rs`).
   - **`init`'s scope helper is general now** (`scope`, `scopes_of`), as 750-KRN-0120's first step: `link` and `effector` use it.
-- **The `modes` suite** (x86, passed on this session's machine):
+- **The `modes` suite** (x86 and aarch64, passed in this session's container, QEMU TCG):
   - **In the development mode:** both run, the gateway first; each holds exactly the slots above, with their badges and servers; the session keeps the owner's token in `system/effector`.
   - **Without a mode:** neither runs, and `run effector_gw` is refused.
 - **What this changes for EFF.**
@@ -58,7 +58,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
   - 0121's lifecycle client (slot 11) and 0120's scope for deliveries (the gateway's slot 7);
   - the updater's client, `BADGE_REBOOT` and screen capture, with their tasks;
   - the shell's client badged `BADGE_OWNER` (APP, 750-APP-0093);
-  - the aarch64 run.
+  - the gate on the maintainer's machines, with EFF's suite in a mode.
 
 ## Related
 
