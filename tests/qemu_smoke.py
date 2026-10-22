@@ -5080,6 +5080,8 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
         assert "PARSER: THE SHARED SERVICE" not in log, log
+        # 351-KRN-0151: slot A, laid out without applications, runs the root's.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE")
         (server / "channels/stable").write_bytes(forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
@@ -5143,6 +5145,9 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
+        # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
+        require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
@@ -5163,7 +5168,8 @@ def update_suite(args):
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
-          "the one it changed fetched and the others copied from the volume; the file system is consistent", flush=True)
+          "the one it changed fetched and the others copied from the volume, and the trial runs them from there; the file "
+          "system is consistent", flush=True)
 
 
 def mindlink_tool():
