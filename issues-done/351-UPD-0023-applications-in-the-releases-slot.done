@@ -1,6 +1,6 @@
-# 351-UPD-0023 — A release carries its applications in its slot, so its services and applications move and fall back together
+# 351-UPD-0023 — A release carries its applications in its slot, so its services and applications move and fall back together — done
 
-**Type:** update (service, images) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** in progress (the updater's part built and tested on x86 in this session's container; the loader's part waits for `KRN`) · **Blocked by:** [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) (`KRN`: the loader's and `scripts/link_update.py`'s parts) · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.2, MC-9.3, MC-12.4
+**Type:** update (service, images) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.2, MC-9.3, MC-12.4
 
 From the link track's report and request "An update through the link replaces the boot services but not the applications, and they drift apart" (`internal-dev-messages`, `ALL/2026-10-22T0428Z-LNK-…`), which asked `UPD` for a decision.
 
@@ -54,12 +54,28 @@ The link track builds every release it puts through the link from a tree at leas
 ## Acceptance criteria
 
 - [x] The updater stages, verifies and copies the applications as above; host tests pass.
-- [ ] With the loader's part (`KRN`), the `update` suite shows the trial running release 6's application and the rollback release 5's, on x86 and aarch64.
-- [ ] The images and `scripts/link_update.py` carry the applications in the slot.
-- [ ] slots.md and updater.md (EN and RU) say where the applications are and what a fallback returns.
+- [x] With the loader's part (`KRN`), the `update` suite shows the trial running release 6's application and the rollback release 5's, on x86 and aarch64.
+- [x] The images and `scripts/link_update.py` carry the applications in the slot.
+- [x] slots.md and updater.md (EN and RU) say where the applications are and what a fallback returns.
+
+## Resolution
+
+- **The updater** (main 57028737, landing round 12) stages every application a release's manifest lists into the slot. An application the volume holds as listed, in the running slot or at the root, is copied whole. `apply` and `rollback` refuse a slot holding some applications but not all, or one the manifest does not list. `verify_other` reads the kept channel before hashing the slot, so a session parser's 30 s idle limit cannot fail it on a slow machine.
+- **The loader** opens applications from the booted slot when it holds any ([351-KRN-0151](../issues/351-KRN-0151-applications-from-the-booted-slot.md), landing round 9). `scripts/link_update.py` puts their blobs too.
+- **The images** (295433c3): `boot_slots.py layout` and `make_usb_image.py --slots` move the applications into slot A with the services (into B too with `--both`). `layout(with_applications=False)` keeps a slot without them for 351-KRN-0151's check.
+- **The `update` suite** shows:
+  - slot A running release 5's applications;
+  - release 6 fetching only the application it changed and copying the rest from slot A;
+  - the trial running release 6's from slot B;
+  - slot A, booted again from the record a fallback or a rollback leaves (written by the host: no program holds the updater's client to ask for a rollback), running release 5's own, its `uptime` among them.
+- **Runs:**
+  - x86, in this session's container, on 295433c3: `update`, `linkupdate`, `boot` (the slot checks and the trial) and the USB image with slots;
+  - aarch64: `update` on the maintainer's i7 through Effector, and `linkupdate` in this container. On the i7 the group "aarch64: files, network and TLS" passed `update` and was then cut by the operation's 3600 s limit during `linkupdate`. "aarch64: boot and fault containment" passed there whole;
+  - the MacBook Pro (LNK, 2026-10-22): a release through the link staged 43 boot files and 53 applications into slot B, and the trial was confirmed in 4.2 s.
+- **Docs:** `docs/update/slots.md` 0.7, `updater.md` 0.4, `write-disk.md`, EN and RU.
 
 ## Related
 
 - [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done): slots A and B.
-- [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md): helpers from the booted slot, the loader's rule this extends to applications.
-- [750-UPD-0019](750-UPD-0019-signed-application-packages.md): applications installed apart from a release; this task covers only those a release carries.
+- [109-KRN-0133](../issues/109-KRN-0133-helpers-from-the-booted-slot.md): helpers from the booted slot, the loader's rule this extends to applications.
+- [750-UPD-0019](../issues/750-UPD-0019-signed-application-packages.md): applications installed apart from a release; this task covers only those a release carries.
