@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 import wave
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 # Every boot volume the harness builds is signed as the build signs usb_root (350-UPD-0002): the bootloader loads
@@ -7124,10 +7125,13 @@ def effector_suite(args, disk):
     """750-EFF-0006 and 750-KRN-0119: the Effector agent as init starts it in a mode, against the contract's fixture
     (tests/effector_server.py) over HTTPS with a pinned leaf. With `development` in data/mode.conf init starts
     effector_gw, then `effector --service`, which reads data/effector/ and keeps the token, agent_id and journal in its
-    private system/effector. It stays online with heartbeats less than five seconds apart, answers every command
-    `denied` after journaling it and retries an ACK the server failed; restarted by `svc`, it reads its journal back and
-    answers a redelivered command with the saved answer, not a new one; with the configuration of a server whose
-    certificate is not the pinned one, it is refused before any request; the token never reaches the log."""
+    private system/effector. It stays online with heartbeats less than five seconds apart, answers a command the gateway
+    does not serve `denied` after journaling it and retries an ACK the server failed; the gateway's actions run as the
+    owner's policy allows (collect_file, screenshot, collect_logs, deliver_file, restart_service) and their artifacts
+    come back inline; telemetry is sent every 30 s as the server checks it; restarted by `svc`, it reads its journal back
+    without acknowledging done answers again and answers a redelivered command with the saved answer, not a new one;
+    with the configuration of a server whose certificate is not the pinned one, it is refused before any request; the
+    token never reaches the log."""
     sys.path.insert(0, str(ROOT / "tests"))
     import effector_server  # noqa: E402
     agent, token = "mind-test", "mind-effector-test-token"
@@ -7157,8 +7161,11 @@ def effector_suite(args, disk):
     conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
     (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
     (disk / "data" / "effector" / "token").write_text(token + "\n")
-    # The owner's policy: files under data/reports/ may leave the machine, nothing else (750-EFF-0003, 0007).
-    (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nmax-bytes 1048576\n")
+    # The owner's policy (750-EFF-0003, 0007): files under data/reports/ and the system log may leave the machine, and
+    # the screen; deliveries go to data/inbox/; sysmon may be restarted. Nothing else.
+    (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nlog ring\nscreen on\n"
+                                                       "deliver data/inbox/\nservice sysmon restart\nmax-bytes 1048576\n")
+    (disk / "data" / "inbox").mkdir(parents=True, exist_ok=True)
     report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
     (disk / "data" / "reports").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "reports" / "r.bin").write_bytes(report)
@@ -7187,26 +7194,28 @@ def effector_suite(args, disk):
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
         exec_id = server.queue(agent, "exec_v1", {"command": "echo forbidden", "run_as": "service", "session": "service", "timeout_seconds": 5})
-        restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
+        restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="logd")
         unknown_id = server.queue(agent, "powershell_v1", {"command": "Get-Date"})
         server.inject("/api/commands/ack", "ack_500")  # the first ACK fails once: it is retried, not dropped
         out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
         time.sleep(20)  # heartbeats to measure, beside the commands
         out = session()
-        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS)",
-                     "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: DENIED {restart_id} restart_service",
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+                     "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
-        for command in (exec_id, restart_id, unknown_id):
+        for command in (exec_id, unknown_id):
             result = server.operation(command)
             assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
+        result = server.operation(restart_id)
+        assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
-              f"at most {max(gaps):.1f} s apart; three commands answered denied after journaling, a failed ACK retried; the token "
-              "kept in its private directory", flush=True)
+              f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
+              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
         # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
         # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
         collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
@@ -7224,14 +7233,17 @@ def effector_suite(args, disk):
         assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
-        # Restarted: the journal read back; a redelivered command gets its saved answer again, not a new one.
+        effector_actions_check(vm, server, agent, until)
+        # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
+        # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(5 SAVED RESULTS)", 60)
+        until("(9 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
-        assert out.count(f"EFFECTOR: DENIED {restart_id}") == 1, out[-3000:]
-        print("PASS: restarted by svc, the agent reads its journal back (5 saved results) and answers a redelivered command "
-              "with the saved answer, journaled once", flush=True)
+        assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
+        until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
+        print("PASS: restarted by svc, the agent reads its journal back (9 saved results, none to acknowledge again) and "
+              "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
         require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
@@ -7250,6 +7262,73 @@ def effector_suite(args, disk):
         server.close()
         rogue.close()
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
+
+
+def effector_actions_check(vm, server, agent, until):
+    """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
+    # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
+    shot_id = server.queue(agent, "screenshot")
+    until(f"EFFECTOR: ACK {shot_id} completed WITH screenshot.png")
+    result = server.operation(shot_id)
+    artifact = result["result"]["artifact"]
+    png = base64.b64decode(artifact["data"], validate=True)
+    assert result["status"] == "completed" and artifact["content_type"] == "image/png" and artifact["encoding"] == "base64", result["result"].keys()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and artifact["size"] == len(png) and artifact["sha256"] == hashlib.sha256(png).hexdigest(), artifact["size"]
+    width, height = struct.unpack(">II", png[16:24])
+    assert (artifact["metadata"]["width"], artifact["metadata"]["height"]) == (width, height) and 0 < width <= 1280 and 0 < height <= 800, (width, height)
+    raw = zlib.decompress(b"".join(png[at + 8:at + 8 + struct.unpack(">I", png[at:at + 4])[0]] for at in _png_chunks(png, b"IDAT")))
+    assert len(raw) == height * (1 + 3 * width), (len(raw), width, height)
+    require(vm.command("dmesg -s effector_gw", raw=True), f"{shot_id} open-screen done")
+    print(f"PASS: screenshot: a {width}x{height} PNG of {len(png)} bytes from the gateway's capture, inline in the ACK with its "
+          "SHA-256, which zlib reads whole; the capture audited", flush=True)
+    # The system log as text, the same way.
+    log_id = server.queue(agent, "collect_logs", {"path": "ring", "timeout_seconds": 30}, program="mind")
+    until(f"EFFECTOR: ACK {log_id} completed WITH ring.log")
+    text = base64.b64decode(server.operation(log_id)["result"]["artifact"]["data"]).decode()
+    assert "[INIT] MODE: DEVELOPMENT" in text and f"{shot_id} open-screen" in text, text[-1500:]
+    # A file delivered under the policy's root, checked by size and SHA-256 before it takes its name; one outside refused.
+    delivery = b"delivered by the Effector fixture\n" * 2000
+    published = server.publish(delivery, command_id="deliver-1")
+    server.queue(agent, "deliver_file", {"path": "data/inbox/d.txt", "max_bytes": 1048576, "timeout_seconds": 60, **published}, command_id="deliver-1")
+    until("EFFECTOR: ACK deliver-1 completed ACCEPTED")
+    listing = vm.command("ls data/inbox", raw=True)
+    assert re.search(rf"d\.txt +{len(delivery)}\b", listing) and "d.txt.part" not in listing, listing
+    server.publish(b"x", command_id="deliver-2")
+    server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
+    until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
+    assert server.operation("deliver-2")["result"]["error"] == "denied", server.operation("deliver-2")
+    # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
+    sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
+    until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
+    print(f"PASS: collect_logs sent the system log inline; deliver_file wrote {len(delivery)} bytes under the policy's root and "
+          "refused a path outside it; restart_service restarted sysmon, which the policy names", flush=True)
+    # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.
+    deadline = time.monotonic() + 75
+    while time.monotonic() < deadline and sum(1 for t in list(server.telemetry) if "cpu_percent" in t["sample"]["system"]) < 1:
+        time.sleep(1)
+    samples = [t["sample"] for t in list(server.telemetry)]
+    assert samples and all(t["agent_id"] == agent for t in list(server.telemetry)), samples
+    latest = next(t for t in reversed(samples) if "cpu_percent" in t["system"])
+    system = latest["system"]
+    assert system["logical_cpus"] >= 1 and 0 <= system["cpu_percent"] <= 100 and system["memory_total"] > system["memory_used"] > 0, system
+    assert system["executed_requests"] >= 5 and system["executed_requests_total"] >= system["executed_requests"], system
+    components = {c["name"]: c for c in latest["components"]}
+    for name in ("effector", "effector_gw", "netstack"):
+        assert components[name]["state"] == "running" and len(components[name]["pids"]) == 1 and components[name]["working_set_bytes"] > 0, components.get(name)
+    assert any(d["name"] == "boot" and d["total_bytes"] > d["free_bytes"] > 0 for d in latest["disks"]), latest["disks"]
+    assert any("10.0.2.15" in i.get("ip_addresses", []) and i["state"] == "up" for i in latest["interfaces"]), latest["interfaces"]
+    require(until("EFFECTOR: TELEMETRY SENT"), "EFFECTOR: TELEMETRY SENT")
+    print(f"PASS: telemetry: {len(samples)} schema 1 samples the server's checks accept, {system['logical_cpus']} CPUs at "
+          f"{system['cpu_percent']}%, {len(components)} services with their processes, the boot volume and 10.0.2.15", flush=True)
+
+
+def _png_chunks(png, kind):
+    at = 8
+    while at < len(png):
+        length = struct.unpack(">I", png[at:at + 4])[0]
+        if png[at + 4:at + 8] == kind:
+            yield at
+        at += 12 + length
 
 
 def tls_suite(args, disk):

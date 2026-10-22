@@ -197,6 +197,35 @@ fn fixed_journal_capacity_never_evicts_a_completed_or_unacknowledged_record() {
 }
 
 #[test]
+fn a_full_journal_drops_only_its_oldest_acknowledged_expired_record() {
+    let mut s = online(&[]);
+    // id-0 and id-1 expire at 1010, the rest never; id-1 is left unacknowledged at first.
+    for i in 0..RECORDS_MAX {
+        let id = format!("id-{i}");
+        let c = Command { expires_unix: if i < 2 { Some(1010) } else { None }, ..command(&id) };
+        store(&mut s, c, time(0));
+        if i != 1 { acknowledge(&mut s, time(0)); } else { let ack = s.next_ack(time(0)).unwrap().unwrap(); s.ack_done(ack, Outcome::Permanent, 0, 0).unwrap(); }
+    }
+    assert!(!s.runnable(&command("early"), time(5000)), "no room: an action would not run");
+    assert_eq!(s.receive(command("early"), time(5000)), Err(Error::Full), "nothing has expired yet");
+    assert!(s.runnable(&command("late"), time(20_000)));
+    assert!(!s.runnable(&Command { expires_unix: Some(1015), ..command("late") }, time(20_000)), "expired: answered, never run");
+    let Accepted::Store(write) = s.receive(command("late"), time(20_000)).unwrap() else { panic!() };
+    assert!(write.rewrite);
+    assert_eq!(write.slot, 0, "id-0 was the oldest");
+    s.stored(write, true).unwrap();
+    let entries: Vec<(Record, bool)> = s.journal().collect();
+    assert_eq!(entries.len(), RECORDS_MAX);
+    assert_eq!(entries[0].0.id.as_str(), "id-1");
+    assert_eq!(entries[RECORDS_MAX - 1].0.id.as_str(), "late");
+    assert!(!entries[RECORDS_MAX - 1].1, "the new answer still waits for its ACK");
+    // A redelivered id-0 is a new command now, and it has expired: answered `expired`, never run.
+    acknowledge(&mut s, time(20_000));
+    let Accepted::Store(again) = s.receive_with(Command { expires_unix: Some(1010), ..command("id-0") }, time(21_000), Final::Completed).unwrap() else { panic!() };
+    assert_eq!((again.slot, again.record.result, again.rewrite), (1, Final::Expired, true), "id-1's slot, the next oldest");
+}
+
+#[test]
 fn malformed_or_foreign_commands_do_not_allocate_a_journal_slot() {
     let mut s = online(&[]);
     assert_eq!(s.receive(command("a&agent_id=other"), time(0)), Err(Error::Identifier));

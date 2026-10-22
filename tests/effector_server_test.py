@@ -224,6 +224,21 @@ class EffectorServerTests(unittest.TestCase):
             self.fixture.publish(b"x" * (FILE_LIMIT + 1), package_id="large")
         self.assertEqual(self.request("GET", "/api/commands/poll?agent_id=x&agent_id=y")[0], 400)
 
+    def test_telemetry_is_checked_as_the_server_checks_it(self):
+        sample = {"schema": 1, "sample_id": "s1792566386-65200", "sampled_at": "2026-10-22T18:06:26Z", "interval_seconds": 30.0,
+                  "system": {"logical_cpus": 2, "cpu_percent": 12.5}, "disks": [],
+                  "interfaces": [{"name": "card0", "mac_address": "52:54:00:12:34:56", "ip_addresses": ["10.0.2.15"]}],
+                  "components": [{"id": "effector", "pids": [38], "cpu_percent": 1.0}]}
+        header = {"X-Effector-Agent-ID": "agent-1"}
+        self.assertEqual(self.request("POST", "/api/telemetry", sample, headers=header)[0], 404, "registered first")
+        self.assertEqual(self.request("POST", "/api/heartbeat", {"agent_id": "agent-1"})[0], 200)
+        self.assertEqual(self.request("POST", "/api/telemetry", sample, headers=header)[0], 204)
+        self.assertEqual(list(self.fixture.telemetry), [{"agent_id": "agent-1", "sample": sample}])
+        for change in ({"schema": 2}, {"interval_seconds": 0}, {"sample_id": "a/b"}, {"system": {"logical_cpus": 0}},
+                       {"components": [{"cpu_percent": 100.5}]}, {"interfaces": [{"mac_address": "52-54"}]}):
+            self.assertEqual(self.request("POST", "/api/telemetry", {**sample, **change}, headers=header)[0], 400, change)
+        self.assertEqual(len(self.fixture.telemetry), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
