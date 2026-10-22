@@ -19,7 +19,7 @@
   - epistemology: "Without a mandate, the object does not exist for you" (endpoints have no global names, `common/abi.rs`);
   - ethics: "A service's death is its own event, not the end of the world" (restart budgets, quarantine, 000-KRN-0075);
   - praxeology: "No telepathy through global state: only an explicit, typed dialogue" (IPC and `idl/*.wit`);
-  - aesthetics: "The kernel is 7,600 lines of Rust for two architectures; everything else, drivers included, is outside it" (a number, measured, held by [850-KRN-0145](850-KRN-0145-a-budget-for-the-kernels-size.md)).
+  - aesthetics: "The kernel is 7,600 lines of Rust for two architectures; everything else, drivers included, is outside it" (a number, measured, held by [850-KRN-0145](../issues-done/850-KRN-0145-a-budget-for-the-kernels-size.done)).
 - **Two columns:**
   - "enforced today", with the clause and its evidence: a suite, a profile row;
   - "not yet", what the code does not do.

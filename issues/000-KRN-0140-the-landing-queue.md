@@ -85,6 +85,12 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
   - It was green within a minute, and no group ran twice.
   - The keys are `land-<tag>-<lane>-<n>-<hash of the command>`, so a gate can be taken up again after any interruption.
 
+**Round 6 (2026-10-21/22)** landed KRN alone: 176-KRN-0147, 850-KRN-0145 and 850-KRN-0146.
+- The candidate was the branch itself, a fast-forward of `main`.
+- Gate `land-b05bfb22`: every group green, none run again, in 1 h 35 min on i9, un-rizen (two lanes) and PCU.
+- **`main` = b05bfb2.** The answer is `LANDING/2026-10-22T0043Z-KRN-landed-b05bfb22.md`.
+- GitHub CI on b05bfb2 was still queued: its runs finish about a day after their push.
+
 ## Related
 
 AGENTS.md section 4; [docs/effector.md](../docs/effector.md) sections 1 and 4; [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (its gate g0142, still run the old way).
