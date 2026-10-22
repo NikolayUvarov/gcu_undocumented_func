@@ -17,7 +17,9 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
 2. **`APP`:** what `run` takes from that client.
    - Today, from any client, the information commands (`ps`, `ip`, `net`, …) run at once.
    - The rest waits for the user in the shell's window, and over the cable no one answers there.
-   - The proposal: the commands that only read run at once for the link's client, and those that change the machine are decided with the maintainer.
+   - The proposal: the commands that only read run at once for the link's client.
+   - **The maintainer's choice, 2026-10-22, (a):** the commands that change the machine run at once too.
+   - `netpolicy` with a change, `netrevoke` and `mode` stay refused over the link.
 3. **`LNK`, this task:**
    - **`linkproto`:** COMMAND (54) on the programs channel. It carries a line of up to 240 bytes. The answer is a run whose output and end are read with OUTPUT (51) as a program's are: state ENDED with exit 0, or exit 1 with the shell's reason (`refused`, `declined`, `busy`, `unavailable`).
    - **`link`:** COMMAND calls the shell's `run` and keeps the answer as a run's output. It is logged as `[LINK] COMMAND <word>` with the command's word, not its line, so that no argument reaches the log.
