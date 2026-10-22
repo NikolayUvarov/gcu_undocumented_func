@@ -302,7 +302,9 @@ impl Shell {
                     let applied = manager && result.is_ok();
                     let _ = commands::reply_set_zone(call, result);
                     if let (true, Some(zone)) = (applied, zone) {
+                        // On the serial line, as the notes before it, and in the system log, which the link reads.
                         let kept = clockzone::keep(zone);
+                        self.note(format_args!("{}", kept));
                         mind::println!("[SHELL] {}", kept);
                     }
                 }
