@@ -4004,6 +4004,9 @@ def link_suite(args):
             shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
             assert commands and servers.get(int(commands[1])) == pids["shell"], commands
             assert shell_client and shell_client[1] == "1" and shell_client[2] == commands[1], (shell_client, caps)
+            # 800-KRN-0142: link's policy client (slot 19) is badged BADGE_LAUNCH (1), so the broker refuses it any change.
+            policy_client = re.search(r"^SLOT=19 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            assert policy_client and policy_client[1] == "1" and servers.get(int(policy_client[2])) == pids.get("netpolicy"), (policy_client, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -4068,6 +4071,9 @@ def link_suite(args):
                 if power in powers:
                     require(link(port, "run", *command, ok=power != "WIFI" or "wlan" in pids), wanted)
                     assert re.search(rf"\[LINK\] RUN \d+: STARTED {command[0]} AS PID \d+, LENT.* {power}", vm.command("dmesg -s link", raw=True)), power
+                    if power == "NETWORK":
+                        # 800-KRN-0142: the broker made netcheck's grant for a launch-only client.
+                        assert re.search(r"\[NETPOLICY\] GRANT \d+ TO netcheck: .*, ASKED BY A LAUNCH-ONLY CLIENT", vm.command("dmesg -s netpolicy", raw=True)), "launch-only"
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)

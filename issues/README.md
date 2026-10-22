@@ -75,8 +75,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) | `init` follows the development and maintenance modes (`data/mode.conf`, `init.wit` 1.5 `set-mode`): Effector's services only in a mode (750-EFF-0013) | `KRN` | P1 | the services, for their part | 750 |
 | [800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md) | In developer mode `init` replaces a service with an image from `data/link/` until the next boot, said NOT VERIFIED (LNK's request, for DRV on the MacBook Pro); `init.wit` 1.6 `replace` made, the link track's command left | `KRN` | P2 | — | track D |
 | [800-KRN-0148](800-KRN-0148-a-shell-client-for-link-in-developer-mode.md) | With `dev`, `link` holds a client of the shell's commands badged `BADGE_SHELL_LINK`; ABI 15 `SLOT_COMMANDS`, the shell's endpoint made by `init` (LNK's request, for 800-LNK-0015) | `KRN` | P1 | — | A |
-| [000-KRN-0149](000-KRN-0149-a-key-code-for-print-screen.md) | `KEY_PRINT_SCREEN` (33) for `E0 37`, in ABI 15 (APP's request, for 000-APP-0089); made, the gate left | `KRN` | P3 | — | A |
-| [211-KRN-0150](211-KRN-0150-an-across-field-in-absolute-pointer-events.md) | Horizontal wheel steps in absolute pointer events, in ABI 15 (APP's request, for 211-APP-0090); made, the gate left | `KRN` | P3 | — | A |
 | [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) | The loader opens applications from the booted slot; `link_update.py` puts their blobs (UPD's request, for 351-UPD-0023) | `KRN` | P1 | — | C |
 | [850](850-the-cultural-code.md) | The cultural code: a manifesto, the canon's maxims and a lexicon that the code bears out (the maintainer's request) | main task, `PHI` | P2 | the maintainer's questions: the hero, the adversary, Banks's names | — |
 | [850-PHI-0001](850-PHI-0001-the-manifesto.md) | The manifesto: one page, English and Russian, every claim with its evidence or marked a goal | `PHI` | P2 | 850's questions | — |
@@ -247,6 +245,8 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [211-KRN-0150](../issues-done/211-KRN-0150-an-across-field-in-absolute-pointer-events.done) | Horizontal wheel steps in absolute pointer events | `pointer_absolute_scroll`, `pointer_across`, `READ_KEY` skipping pointer events; ABI 15, landing round 8, `main` aa50204 |
+| [000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done) | A key code for PrintScreen | `KEY_PRINT_SCREEN` (33) from `E0 37`; ABI 15, landing round 8, `main` aa50204 |
 | [850-KRN-0146](../issues-done/850-KRN-0146-refusals-name-the-clause.done) | A refusal names the clause it enforces | `init`'s refusals (MC-12.6, MC-3.8, MC-6.8) and the boot loader's (MC-9.1, MC-4.13); the rule in CONTRIBUTING.md; landing round 6, `main` b05bfb2 |
 | [850-KRN-0145](../issues-done/850-KRN-0145-a-budget-for-the-kernels-size.done) | A budget for the kernel's size, checked in the host tests | `scripts/kernel_budget.py`, `kernel/size-budget.json`: 6,379 lines, budget 7,000; landing round 6, `main` b05bfb2 |
 | [000-APP-0097](../issues-done/000-APP-0097-several-shell-windows.done) | Several windows of the shell, `shell`, `shell 2`… up to 32, each a session of its own, from `wm`'s menu and Ctrl+Alt+F5 (the maintainer's report) | `shell.wit` 1.8 `new-window`; the `wm` suite opens a second shell of its own; landing round 2, `main` 1d841622 |

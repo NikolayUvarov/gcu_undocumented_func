@@ -1,6 +1,6 @@
 # 800-KRN-0148 — With `dev`, `link` holds a client of the shell's commands, badged as the link's
 
-**Type:** `init`, ABI (`SLOT_COMMANDS`, ABI 15) · **Owner:** kernel session · **Priority:** P1 · **Status:** made (2026-10-22); the shell's side (APP) and the gate left · **Blocked by:** — for this part; the shell serving `SLOT_COMMANDS` with the link's rule is the tools track's · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-2.3, MC-3.1, MC-3.8, MC-10.2
+**Type:** `init`, ABI (`SLOT_COMMANDS`, ABI 15) · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (aa50204, landing round 8); the shell's side (APP) left · **Blocked by:** — for this part; the shell serving `SLOT_COMMANDS` with the link's rule is the tools track's · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-2.3, MC-3.1, MC-3.8, MC-10.2
 
 From the link track's request (`internal-dev-messages`, `KRN/2026-10-22T0356Z-LNK-a-shell-client-for-link-in-developer-mode.md`), for 800-LNK-0015.
 
@@ -31,7 +31,7 @@ From the link track's request (`internal-dev-messages`, `KRN/2026-10-22T0356Z-LN
 - [ ] `tests/runtime.rs` checks `SLOT_COMMANDS` (37), `SLOT_DYNAMIC` (38) and ABI 15.
 - [ ] With `dev`, `stat caps` of `link` shows slot 30 on the shell's endpoint (the `link` suite's set of developer grants); without `dev`, nothing more (`linkupdate`).
 - [ ] The shell holds slot 37, an endpoint it serves.
-- [ ] The gate passes.
+- [x] The gate passes (`land-aa50204e`, landing round 8).
 - [ ] Once the tools track's side is in: `mindlink sh ip` returns the shell's `ip` (the link track's suite, 800-LNK-0015).
 
 ## Related
