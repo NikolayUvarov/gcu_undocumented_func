@@ -1584,6 +1584,8 @@ fn every_page_and_row_of_settings_reacts() {
         assert!(s.on_pages && s.page == settings::NETWORK);
     }
     assert_eq!(settings::NETWORK_ROWS[0].1, "wifi");
+    // The country beside Wi-Fi (550-APP-0082): wifi opened at its country list.
+    assert_eq!(settings::NETWORK_ROWS[1], ("Country", "wifi --countries", "the radio's country, its channels"));
     // Each row of the background page: Enter changes it, or a line says why not.
     for row in 0..ROWS.len() {
         let mut s = Settings::new(&config, (160, 50));

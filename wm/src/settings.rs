@@ -28,8 +28,9 @@ pub const SCREEN: usize = 5;
 pub const SCREEN_ROWS: [&str; 3] = ["Scale", "Pointer", "Colour"];
 /// The network page (550-APP-0033) and its rows: a name, what Enter starts, and what it is for.
 pub const NETWORK: usize = 3;
-pub const NETWORK_ROWS: [(&str, &str, &str); 5] = [
+pub const NETWORK_ROWS: [(&str, &str, &str); 6] = [
     ("Wi-Fi", "wifi", "the networks around; join one"),
+    ("Country", "wifi --countries", "the radio's country, its channels"),
     ("Addresses", "console ip", "address, gateway, DNS server"),
     ("Cards", "console net", "MAC address, link, counters"),
     ("Flow grants", "console netgrants", "what each program may reach"),

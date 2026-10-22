@@ -65,9 +65,10 @@ Against the agreed interface, and its stand-in in the tools suite:
   - a station without a catalogue says so and stays in the list.
 
   Tested by a host test, and by the tools suite's `wifi --demo`: UZ found and applied.
-- **Left:**
-  - `wm`'s Settings row;
-  - the real catalogue (stage B) and the MacBook Pro.
+- **`wm`'s Settings, Network** (stage 3, the same day): a `Country` row beside `Wi-Fi` starts `wifi --countries`, the screen opened at the country list.
+  - `wifi --countries` alone, or with `--demo`; with a command it is a usage error.
+  - Tested by host tests (`tests/wm_host.rs`: the row and what Enter and a click start; `tests/wifi_host.rs`: the option and the list at start).
+- **Left:** the real catalogue (stage B) and the MacBook Pro.
 
 ## Related
 

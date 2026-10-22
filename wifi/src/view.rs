@@ -119,7 +119,7 @@ impl Wifi {
     }
 
     // The catalogue, every page, for the country list; why not as the line under the list.
-    fn open_countries(&mut self, station: &mut dyn Station) {
+    pub fn open_countries(&mut self, station: &mut dyn Station) {
         let (mut all, mut from) = (Vec::new(), 0u16);
         for _ in 0..PAGES {
             match station.countries(from) {

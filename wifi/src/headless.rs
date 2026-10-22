@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 pub const JOIN_MS: u64 = 60_000;
 pub const POLL_MS: u64 = 250;
 
-pub const USAGE: &str = "usage: wifi [--demo] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave\n\
+pub const USAGE: &str = "usage: wifi [--demo] [--countries] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave\n\
                          | wifi country [<code>] | wifi countries [<text>] | wifi channels [<code>]";
 
 /// The most pages of 32 countries `countries` reads: the catalogue has about 250.
@@ -52,11 +52,11 @@ fn words(args: &str) -> Vec<&str> {
     out
 }
 
-/// The command `args` asks for, `--demo` aside; None: the screen.
+/// The command `args` asks for, `--demo` aside; None: the screen, at its country list with `--countries` alone.
 pub fn parse(args: &str) -> Result<Option<Command>, &'static str> {
     let words: Vec<&str> = words(args).into_iter().filter(|w| *w != "--demo").collect();
     match words.as_slice() {
-        [] => Ok(None),
+        [] | ["--countries"] => Ok(None),
         ["status"] => Ok(Some(Command::Status)),
         ["leave"] => Ok(Some(Command::Leave)),
         ["country"] => Ok(Some(Command::Country(None))),

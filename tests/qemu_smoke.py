@@ -8320,6 +8320,7 @@ def wm_suite(vm):
         keys("up", text="SETTINGS=Network")
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
+        screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
