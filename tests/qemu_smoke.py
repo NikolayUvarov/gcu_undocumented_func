@@ -5070,7 +5070,15 @@ def update_suite(args):
         fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
         # init's confirmation is a kernel line that can land inside the shell's first prompt (M…IND>): the suite waits for
         # the line, whole, then for a fresh prompt (000-KRN-0136).
-        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        try:
+            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        except AssertionError:
+            # What the updater did after staging: its lines are in the log service, not on the serial line.
+            try:
+                print(vm.command("dmesg -s updater", raw=True)[-4000:], flush=True)
+            except AssertionError:
+                pass
+            raise
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
