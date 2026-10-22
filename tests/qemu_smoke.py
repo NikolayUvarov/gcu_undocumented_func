@@ -6299,9 +6299,13 @@ def wifi_join_check(vm):
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
+    # 550-APP-0082: wlan answers wifi.wit 1.1's country calls; built without a catalogue (550-NET-0035 stage A), it says so.
+    run("wifi country", 30, "[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION")
+    run("wifi country uz", 30, "[WIFI] COUNTRY UZ NOT SET: NO CATALOGUE IN THIS STATION")
+    run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))

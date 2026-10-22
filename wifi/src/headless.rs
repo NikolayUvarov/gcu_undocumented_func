@@ -1,7 +1,7 @@
 //! `wifi join`, `wifi status` and `wifi leave` without a screen (550-APP-0078), for scripts and the hardware tests of
-//! 550-ASR-0007. The passphrase comes from a file whose first line names the network, never from the command line, and
+//! 550-ASR-0007; `wifi country`, `countries` and `channels`, the country the station runs under (550-APP-0082). The passphrase comes from a file whose first line names the network, never from the command line, and
 //! no line made here holds it. No system calls: tests/wifi_host.rs.
-use crate::station::{mac, rate, shown, Link, Reason, Refusal, Station};
+use crate::station::{mac, rate, shown, CountryState, CountryStatus, Link, Reason, Refusal, Station};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -10,7 +10,11 @@ use alloc::vec::Vec;
 pub const JOIN_MS: u64 = 60_000;
 pub const POLL_MS: u64 = 250;
 
-pub const USAGE: &str = "usage: wifi [--demo] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave";
+pub const USAGE: &str = "usage: wifi [--demo] | wifi join <name> [--passphrase-file <file>] [--remember] | wifi status | wifi leave\n\
+                         | wifi country [<code>] | wifi countries [<text>] | wifi channels [<code>]";
+
+/// The most pages of 32 countries `countries` reads: the catalogue has about 250.
+const PAGES: u16 = 16;
 
 /// Exit statuses: joined (or done), refused, no answer in time, no station or a wrong command line.
 pub const JOINED: u32 = 0;
@@ -20,7 +24,18 @@ pub const NO_STATION: u32 = 3;
 
 /// What the command line asks for without a screen.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Command { Join { ssid: Vec<u8>, file: Option<String>, remember: bool }, Status, Leave }
+pub enum Command {
+    Join { ssid: Vec<u8>, file: Option<String>, remember: bool }, Status, Leave,
+    /// The country, or a change to `code` (two letters, either case).
+    Country(Option<String>),
+    /// The catalogue, its codes and names that hold `text` (any case).
+    Countries(Option<String>),
+    /// The channels under `code`, or under the country applied.
+    Channels(Option<String>),
+}
+
+// Two letters, as the catalogue writes them.
+fn code(word: &str) -> Option<String> { (word.len() == 2 && word.bytes().all(|b| b.is_ascii_alphanumeric())).then(|| word.to_ascii_uppercase()) }
 
 /// The words of `args`; a word in double quotes may hold spaces (a network's name).
 fn words(args: &str) -> Vec<&str> {
@@ -44,6 +59,12 @@ pub fn parse(args: &str) -> Result<Option<Command>, &'static str> {
         [] => Ok(None),
         ["status"] => Ok(Some(Command::Status)),
         ["leave"] => Ok(Some(Command::Leave)),
+        ["country"] => Ok(Some(Command::Country(None))),
+        ["country", word] => code(word).map(|c| Some(Command::Country(Some(c)))).ok_or(USAGE),
+        ["countries"] => Ok(Some(Command::Countries(None))),
+        ["countries", text] => Ok(Some(Command::Countries(Some(text.to_ascii_lowercase())))),
+        ["channels"] => Ok(Some(Command::Channels(None))),
+        ["channels", word] => code(word).map(|c| Some(Command::Channels(Some(c)))).ok_or(USAGE),
         ["join", name, options @ ..] if !name.starts_with("--") && !name.is_empty() => {
             let (mut file, mut remember, mut rest) = (None, false, options);
             while let [option, more @ ..] = rest {
@@ -159,4 +180,93 @@ pub fn leave(station: &mut dyn Station) -> (u32, String) {
         Err(Refusal::NoStation(why)) => (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
         Err(refusal) => (REFUSED, format!("[WIFI] NOT LEFT: {}", refusal.text())),
     }
+}
+
+// A country's code with its name: `UZ (Uzbekistan)`, `00 (the world domain)`.
+fn named(code: &str) -> String {
+    match code {
+        "" => String::from("none"),
+        "00" => String::from("00 (the world domain)"),
+        _ => match crate::countries::name(code) { Some(name) => format!("{} ({})", code, name), None => String::from(code) },
+    }
+}
+
+// Why a country call was not answered, as a line.
+fn country_refused(what: &str, refusal: Refusal) -> (u32, String) {
+    match refusal {
+        Refusal::NoStation(why) => (NO_STATION, format!("[WIFI] NO STATION: {}", why)),
+        Refusal::Unsupported => (REFUSED, format!("[WIFI] {}: NO CATALOGUE IN THIS STATION (IT RUNS AS WIFI.WIT 1.0 DID)", what)),
+        Refusal::Denied => (REFUSED, format!("[WIFI] {}: WIFI'S CLIENT OF THE STATION ONLY READS: THE COUNTRY NEEDS THE CHANGE BADGE", what)),
+        Refusal::NotFound => (REFUSED, format!("[WIFI] {}: NOT A COUNTRY OF THE CATALOGUE", what)),
+        refusal => (REFUSED, format!("[WIFI] {}: {}", what, refusal.text())),
+    }
+}
+
+/// The country's state as one line: asked for and applied apart, whether the radio confirmed its limits and `keystore`
+/// keeps it, the catalogue.
+pub fn country_line(status: &CountryStatus) -> String {
+    if status.catalogue.is_empty() { return String::from("[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION (IT RUNS AS WIFI.WIT 1.0 DID)"); }
+    let state = match status.state {
+        CountryState::None => String::from("NONE ASKED: THE STATION PROBES NOWHERE AND JOINS NOTHING UNTIL ONE IS (WIFI COUNTRY <CODE>)"),
+        CountryState::Applied if status.asked == status.applied => format!("{} APPLIED", named(&status.applied)),
+        CountryState::Applied => format!("{} APPLIED, {} ASKED", named(&status.applied), named(&status.asked)),
+        CountryState::Failed => format!("{} ASKED, FAILED: THE RADIO REFUSED ITS LIMITS, NONE APPLIED", named(&status.asked)),
+    };
+    let radio = if status.state != CountryState::Applied { "" } else if status.radio { ", THE RADIO CONFIRMED ITS LIMITS" } else { ", THE STATION ALONE KEEPS TO THE CHANNELS" };
+    let kept = if status.state == CountryState::None { "" } else if status.kept { ", KEPT" } else { ", NOT KEPT ACROSS RESTARTS" };
+    format!("[WIFI] COUNTRY {}{}{}; CATALOGUE {}", state, radio, kept, status.catalogue)
+}
+
+/// `wifi country [<code>]`: the country, or a change to `code` (the station leaves the network first).
+pub fn country(station: &mut dyn Station, code: Option<&str>) -> (u32, String) {
+    match code {
+        None => match station.country() { Ok(status) => (JOINED, country_line(&status)), Err(refusal) => country_refused("COUNTRY", refusal) },
+        Some(code) => match station.set_country(code) {
+            Ok(status) if status.state == CountryState::Applied => (JOINED, country_line(&status)),
+            Ok(status) => (REFUSED, country_line(&status)),
+            Err(refusal) => country_refused(&format!("COUNTRY {} NOT SET", code), refusal),
+        },
+    }
+}
+
+/// `wifi countries [<text>]`: every country of the catalogue, a line each, with how many channels it lets the station
+/// send on and only listen on; `text` keeps those whose code or name holds it.
+pub fn countries(station: &mut dyn Station, text: Option<&str>) -> (u32, String) {
+    let (mut lines, mut from, mut total) = (Vec::new(), 0u16, 0u16);
+    for _ in 0..PAGES {
+        let (all, page) = match station.countries(from) { Ok(answer) => answer, Err(refusal) => return country_refused("COUNTRIES", refusal) };
+        total = all;
+        for c in &page {
+            let name = crate::countries::name(&c.code).unwrap_or("");
+            if text.is_some_and(|t| !c.code.to_ascii_lowercase().contains(t) && !name.to_ascii_lowercase().contains(t)) { continue; }
+            let note = if c.send == 0 && c.listen == 0 { ": NO CHANNEL OF THIS RADIO" } else { "" };
+            lines.push(format!("{} {:<34} SEND {:>2} LISTEN {:>2}{}", c.code, name, c.send, c.listen, note));
+        }
+        from += page.len() as u16;
+        if page.is_empty() || from >= all { break; }
+    }
+    let shown = lines.len();
+    lines.push(format!("[WIFI] {} OF {} COUNTRIES{}", shown, total, text.map_or(String::new(), |t| format!(" HOLD \"{}\"", t))));
+    (JOINED, lines.join("\n"))
+}
+
+/// `wifi channels [<code>]`: the radio's channels under `code`, or under the country applied, with their standing and
+/// the most power allowed.
+pub fn channels(station: &mut dyn Station, code: Option<&str>) -> (u32, String) {
+    let code = match code {
+        Some(code) => String::from(code),
+        None => match station.country() {
+            Ok(status) if status.state == CountryState::Applied => status.applied,
+            Ok(status) if status.catalogue.is_empty() => return country_refused("CHANNELS", Refusal::Unsupported),
+            Ok(_) => String::from("00"),
+            Err(refusal) => return country_refused("CHANNELS", refusal),
+        },
+    };
+    let list = match station.channels(&code) { Ok(list) => list, Err(refusal) => return country_refused(&format!("CHANNELS OF {}", code), refusal) };
+    let mut lines: Vec<String> = list.iter().map(|c| {
+        let band = if c.number <= 14 { "2.4 GHZ" } else { "5 GHZ" };
+        if c.eirp == 0 { format!("CHANNEL {:>3} {} {}", c.number, band, c.standing.name()) } else { format!("CHANNEL {:>3} {} {} {} DBM", c.number, band, c.standing.name(), c.eirp) }
+    }).collect();
+    lines.push(format!("[WIFI] {} CHANNELS UNDER {}", list.len(), named(&code)));
+    (JOINED, lines.join("\n"))
 }
