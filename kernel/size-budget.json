@@ -1,0 +1,20 @@
+{
+  "budget": 7000,
+  "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
+  "measured": {
+    "date": "2026-10-21",
+    "commit": "3de6a4b",
+    "lines": 6379,
+    "with blank lines and comments": 7571,
+    "common": 3556,
+    "x86_64": 1813,
+    "aarch64": 1010
+  },
+  "raised": [
+    {
+      "date": "2026-10-21",
+      "to": 7000,
+      "why": "the first budget (850-KRN-0145): the measured size and about 10% of room; a raise is a commit of its own that names the mechanism and why it cannot live in user space (MC-1.2)"
+    }
+  ]
+}

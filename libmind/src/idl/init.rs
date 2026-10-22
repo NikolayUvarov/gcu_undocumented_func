@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
+pub const VERSION: (u8, u8, u8) = (1, 5, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -49,6 +49,32 @@ impl Wire for Boot {
     const MAX: usize = <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.slot.encode(w)?; self.trial.encode(w)?; self.confirmed.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, confirmed: Wire::decode(r)? }) }
+}
+
+/// The machine's modes (1.5, 750-KRN-0143): in the development mode and in the maintenance mode init runs the
+/// Effector agent's services (750-EFF-0013); in neither, the normal mode, it runs none and grants them nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Mode { #[default] Development = 0, Maintenance = 1 }
+impl Mode {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Development), 1 => Some(Self::Maintenance), _ => None } }
+}
+impl Wire for Mode {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// Which modes are on, as data/mode.conf keeps them across restarts, and who made the last change and why: `disk`
+/// (the file as the disk was written), `operator` (a client badged `BADGE_MODE`, the shell's) or `mind` (one badged
+/// `BADGE_MIND`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModeState { pub development: bool, pub maintenance: bool, pub by: Text<16>, pub reason: Text<120> }
+impl Wire for ModeState {
+    const MAX: usize = <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<120> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.development.encode(w)?; self.maintenance.encode(w)?; self.by.encode(w)?; self.reason.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { development: Wire::decode(r)?, maintenance: Wire::decode(r)?, by: Wire::decode(r)?, reason: Wire::decode(r)? }) }
 }
 
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
@@ -145,6 +171,39 @@ pub fn boot(endpoint: Endpoint) -> Result<core::result::Result<Boot, Error>> {
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Boot as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The modes; any client may ask (1.5).
+pub fn mode(endpoint: Endpoint) -> Result<core::result::Result<ModeState, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 142, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <ModeState as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
+/// Turns a mode on or off (1.5): init writes data/mode.conf, starts or stops the Effector services at once with no
+/// restart, and logs the change with the caller's badge, PID and `reason`. A client badged `BADGE_MODE` may turn
+/// either mode on or off; one badged `BADGE_MIND` may only turn the maintenance mode on; others get `denied`.
+pub fn set_mode(endpoint: Endpoint, which: Mode, on: bool, reason: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        which.encode(&mut w).ok_or(SysError::Invalid)?;
+        on.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<120>(reason, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -155,6 +214,8 @@ pub enum Request {
     StopTask { pid: u64 },
     Reboot,
     Boot,
+    Mode,
+    SetMode { which: Mode, on: bool, reason: Text<120> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -210,6 +271,23 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Boot, call))
         }
+        8 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 142, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Mode, call))
+        }
+        9 => {
+            let mut copy = [0u8; 124];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let which = <Mode as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let on = <bool as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let reason = <Text<120> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::SetMode { which, on, reason }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -241,4 +319,12 @@ pub fn reply_reboot(call: Call, value: core::result::Result<(), Error>) -> Resul
 pub fn reply_boot(call: Call, value: core::result::Result<&Boot, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_mode(call: Call, value: core::result::Result<&ModeState, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_set_mode(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
 }

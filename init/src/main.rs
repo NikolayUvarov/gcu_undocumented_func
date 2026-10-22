@@ -62,6 +62,8 @@ const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and thei
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
+const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
+const MODE_SERVICES: [&str; 2] = ["effector", "effector_gw"]; // run only in a mode (750-EFF-0013), once they are boot images
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -106,7 +108,7 @@ const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
-              boot: idl_init::Boot }
+              boot: idl_init::Boot, modes: idl_init::ModeState }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -709,6 +711,8 @@ impl Init {
                 // shell's own `update` command and no program (351-KRN-0116).
                 if self.running(service_index("ssh")) { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
                 if self.running(service_index("updater")) { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
+                // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
+                grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
                 if self.running(service_index("blockstore")) {
@@ -839,8 +843,11 @@ impl Init {
         }
     }
 
+    // init and the shell are the last recovery boundary: no client stops them (MC-6.8).
+    fn kept(index: usize) -> bool { index == 0 || unit_name(index) == "shell" }
+
     fn stop_service(&mut self, index: usize) -> core::result::Result<(), idl_init::Error> {
-        if index == 0 || unit_name(index) == "shell" { return Err(idl_init::Error::Denied); }
+        if Self::kept(index) { return Err(idl_init::Error::Denied); }
         if !self.running(index) { return Err(idl_init::Error::Stopped); }
         let pid = self.pids[index];
         self.stopped[index] = true;
@@ -859,7 +866,7 @@ impl Init {
         })
     }
 
-    fn serve(&mut self, request: idl_init::Request, call: wire::Call, badge: u16) -> Result<()> {
+    fn serve(&mut self, request: idl_init::Request, call: wire::Call, badge: u16, sender: u64) -> Result<()> {
         use idl_init::{Error as E, Request};
         match request {
             Request::Run { name } => {
@@ -867,10 +874,16 @@ impl Init {
                 idl_init::reply_run(call, result)
             }
             Request::List => idl_init::reply_list(call, Ok(&self.list()[..])),
-            Request::Stop { name } => { let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| self.stop_service(i)); idl_init::reply_stop(call, result) }
+            Request::Stop { name } => {
+                let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
+                    if Self::kept(i) { return Err(refused(sender, badge, "STOP", format_args!("STOP {}", unit_name(i)), "MC-6.8")); }
+                    self.stop_service(i)
+                });
+                idl_init::reply_stop(call, result)
+            }
             Request::Restart { name } => {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
-                    if i == 0 || unit_name(i) == "shell" { return Err(E::Denied); }
+                    if Self::kept(i) { return Err(refused(sender, badge, "RESTART", format_args!("RESTART {}", unit_name(i)), "MC-6.8")); }
                     if self.running(i) { self.stop_service(i)?; }
                     self.start_service(i)
                 });
@@ -878,15 +891,119 @@ impl Init {
             }
             Request::StopTask { pid } => {
                 let service = pid == INIT_PID || (1..UNITS).any(|i| self.pids[i] == pid && self.running(i));
-                let result = if service { Err(E::Denied) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
+                // A service stops through `stop`, by init, which keeps its lifecycle and quiets its device (MC-6.8).
+                let result = if service { Err(refused(sender, badge, "STOP", format_args!("STOP PID {}, A SERVICE", pid), "MC-6.8")) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
             // Only the updater's badged client may restart the machine (351-KRN-0022).
-            Request::Reboot if badge != mind::process::BADGE_REBOOT => idl_init::reply_reboot(call, Err(E::Denied)),
+            Request::Reboot if badge != mind::process::BADGE_REBOOT => {
+                idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
+            }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
             // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
+            Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
+            Request::SetMode { which, on, reason } => {
+                let result = self.set_mode(which, on, reason.as_str(), badge, sender);
+                idl_init::reply_set_mode(call, result)
+            }
         }
+    }
+
+    // A mode turned on or off (750-KRN-0143): the shell's client may do either, the Mind's only turn the maintenance mode
+    // on. The file first, so that a restart keeps what the services follow; one log line, the audit record (MC-10.2).
+    fn set_mode(&mut self, which: idl_init::Mode, on: bool, reason: &str, badge: u16, sender: u64) -> core::result::Result<(), idl_init::Error> {
+        use idl_init::Mode;
+        let name = match which { Mode::Development => "DEVELOPMENT", Mode::Maintenance => "MAINTENANCE" };
+        let by = match badge {
+            mind::process::BADGE_MODE => "operator",
+            mind::process::BADGE_MIND if on && which == Mode::Maintenance => "mind",
+            _ => {
+                return Err(refused(sender, badge, "MODE CHANGE", format_args!("TURN {} {}", name, if on { "ON" } else { "OFF" }), "MC-12.6"));
+            }
+        };
+        let mut modes = self.modes;
+        match which { Mode::Development => modes.development = on, Mode::Maintenance => modes.maintenance = on }
+        (modes.by, modes.reason) = (wire_text(by), wire_text(reason));
+        self.write_modes(&modes).map_err(|_| idl_init::Error::Failed)?;
+        self.modes = modes;
+        mind::println!("[INIT] MODE {} {} BY {} (PID {}, BADGE {}): {}", name, if on { "ON" } else { "OFF" }, by, sender, badge, reason);
+        self.follow_modes();
+        Ok(())
+    }
+
+    // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
+    fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
+
+    // The modes data/mode.conf names (750-KRN-0143): `development` and `maintenance`; other words are logged and left out.
+    fn read_modes(&mut self) {
+        let mut text = [0u8; 256];
+        let mut length = 0;
+        if let Ok(client) = self.user_files() {
+            let files = Endpoint(client);
+            if let Ok(Ok(root)) = vfs::root(files, "") {
+                if let Ok(Ok(file)) = vfs::open(files, root, MODE_FILE, 0) {
+                    length = vfs::read(files, file, 0, text.len() as u32, &mut text).ok().and_then(|r| r.ok()).unwrap_or(0);
+                    let _ = vfs::close(files, file);
+                }
+                let _ = vfs::close(files, root);
+            }
+            let _ = ipc::drop_cap(client);
+        }
+        let mut modes = idl_init::ModeState { by: wire_text("disk"), ..Default::default() };
+        for word in core::str::from_utf8(&text[..length]).unwrap_or("").lines().map(|l| l.split('#').next().unwrap_or("")).flat_map(str::split_whitespace) {
+            match word {
+                "development" => modes.development = true,
+                "maintenance" => modes.maintenance = true,
+                other => mind::println!("[INIT] {}: WORD LEFT OUT: {}", MODE_FILE, other),
+            }
+        }
+        self.modes = modes;
+        let name = match (modes.development, modes.maintenance) { (true, true) => "DEVELOPMENT AND MAINTENANCE", (true, false) => "DEVELOPMENT", (false, true) => "MAINTENANCE", _ => "NORMAL" };
+        mind::println!("[INIT] MODE: {} ({})", name, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+    }
+
+    // data/mode.conf rewritten whole: one word a line, and who changed it last.
+    fn write_modes(&mut self, modes: &idl_init::ModeState) -> Result<()> {
+        let mut text = mind::util::FixedBuf::<256>::new();
+        let _ = core::fmt::Write::write_fmt(&mut text, format_args!("# the machine's modes, written by init (750-KRN-0143); last changed by {}\n", modes.by.as_str()));
+        if modes.development { let _ = core::fmt::Write::write_str(&mut text, "development\n"); }
+        if modes.maintenance { let _ = core::fmt::Write::write_str(&mut text, "maintenance\n"); }
+        let client = self.user_files()?;
+        let files = Endpoint(client);
+        let written = (|| -> Result<()> {
+            let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
+            let file = vfs::open(files, root, MODE_FILE, mind::fs::MODE_CREATE | mind::fs::MODE_WRITE | mind::fs::MODE_TRUNCATE);
+            let file = file.map(|r| r.map_err(|_| Error::Rights));
+            let result = match file {
+                Ok(Ok(file)) => {
+                    let wrote = vfs::write(files, file, 0, text.as_bytes()).map(|r| r.is_ok()).unwrap_or(false) && vfs::flush(files, file).map(|r| r.is_ok()).unwrap_or(false);
+                    let _ = vfs::close(files, file);
+                    if wrote { Ok(()) } else { Err(Error::Rights) }
+                }
+                Ok(Err(error)) | Err(error) => Err(error),
+            };
+            let _ = vfs::close(files, root);
+            result
+        })();
+        let _ = ipc::drop_cap(client);
+        written
+    }
+
+    // The Effector services run while a mode is on and stop when none is (750-EFF-0013); a build without them logs that.
+    fn follow_modes(&mut self) {
+        let on = self.modes.development || self.modes.maintenance;
+        let mut present = 0;
+        for name in MODE_SERVICES {
+            let Some(index) = Self::index(name) else { continue };
+            present += 1;
+            if on && !self.running(index) {
+                if let Err(error) = self.start_service(index) { mind::println!("[INIT] {} NOT STARTED FOR THE MODE: {:?}", name, error); }
+            } else if !on && self.running(index) {
+                let _ = self.stop_service(index);
+            }
+        }
+        if on && present == 0 { mind::println!("[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES (750-KRN-0119)"); }
     }
 
     // A restart of the machine the updater asked for: what the volumes cache is written, the services stop in reverse
@@ -937,6 +1054,12 @@ fn wire_text<const N: usize>(text: &str) -> mind::idl::codec::Text<N> {
     mind::idl::codec::Text::new(&text[..end]).unwrap_or_default()
 }
 
+// A client's request refused: one log line that names the caller and the clause it enforces (850-KRN-0146).
+fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, clause: &str) -> idl_init::Error {
+    mind::println!("[INIT] {} REFUSED: PID {} (BADGE {}) MAY NOT {} ({})", what, sender, badge, action, clause);
+    idl_init::Error::Denied
+}
+
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
 // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
@@ -966,7 +1089,8 @@ fn boot(info: &'static BootInfo) {
     let screen_mib = (info.stride * info.height * 4).div_ceil(1 << 20) as u16;
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          link: (info.link_present != 0).then_some(info.link_words),
-                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false } };
+                         boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
+                         modes: idl_init::ModeState::default() };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
@@ -1038,6 +1162,8 @@ fn boot(info: &'static BootInfo) {
     // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
     if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
     let mounted = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
+    // The machine's modes, once the boot volume is there; the Effector services follow them (750-KRN-0143).
+    if mounted { init.read_modes(); init.follow_modes(); }
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
     } else if info.boot_slot.trial != 0 {
@@ -1062,7 +1188,7 @@ fn boot(info: &'static BootInfo) {
         let Ok(request) = received else { continue };
         if let Some(exit) = request.exit { init.ended(exit); continue; }
         if !request.is_call { continue; }
-        let badge = request.badge;
-        let _ = match idl_init::decode(&request, RECEIVED) { Ok((decoded, call)) => init.serve(decoded, call, badge), Err(reason) => wire::reject(reason) };
+        let (badge, sender) = (request.badge, request.sender);
+        let _ = match idl_init::decode(&request, RECEIVED) { Ok((decoded, call)) => init.serve(decoded, call, badge, sender), Err(reason) => wire::reject(reason) };
     }
 }

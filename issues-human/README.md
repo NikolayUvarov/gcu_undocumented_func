@@ -175,3 +175,10 @@ The maintainer's offer (2026-10-14): Effector drives a device that emulates a ke
 - [ ] **Wanted: the boot medium.** A USB disk the rig writes with the image under test and switches to the machine.
 - [ ] **Wanted: the serial line,** where the machine has COM1 or a USB-UART.
 - [ ] **Say that this machine may be rebooted and powered off by agents.** The work machines' "no reboots" rule stays as it is.
+
+## 11. Iain M. Banks's names in the project's identity
+
+MIND Core's story borrows from Iain M. Banks's Culture novels: the README's "Why MIND Core", the Minds, the language name Marain (RFC 001), and the repository's own name (`gcu_…`, a General Contact Unit). As a homage in a story this is common. As the core of a brand and a lexicon, which main task [850](../issues/850-the-cultural-code.md) considers, it is a question for a person, and perhaps a lawyer: the names belong to the author's estate.
+
+- [ ] Decide whether the project's public names (Marain, Mind, the ship classes, the Culture) stay, change, or stay only as acknowledged homage, and record the decision in [850](../issues/850-the-cultural-code.md).
+- [ ] If they change: RFC 001's name changes in a new revision, in both languages (`constitution/README.md`'s rules).

@@ -1,6 +1,6 @@
 # 000-KRN-0140 — The landing queue: one integrator gates the candidate that becomes `main`
 
-**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): rounds 1 and 2 landed · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
+**Type:** process, scripts · **Owner:** kernel session (the orchestration track) · **Priority:** P1 · **Status:** in use (2026-10-21): rounds 1, 2, 3 and 5 landed, round 4 returned · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.1, MC-12.9 (evidence names its configuration: `main`'s exact tree is gated)
 
 ## Problem
 
@@ -74,6 +74,33 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
   - LNK's merge, recorded with `resolve` and reused by the next `candidate`;
   - `main`'s later text, by `push`'s hand merge.
 - **`main` = 1d84162.** The answer is `LANDING/2026-10-21T1350Z-KRN-landed-97c4a4c1.md`.
+
+**Rounds 3 to 5 (2026-10-21):**
+- **Round 3** landed EFF and KRN: `main` e4fd3b3.
+  - KRN's first request changed the same aarch64 group line as EFF's. That conflict in code would have returned EFF's request, so KRN posted a narrower request.
+- **Round 4** (KRN alone) was returned. The host tests failed twice: the IDL fuzzer must list every generated type, and `init.wit` 1.5's two new types were missing.
+- **Round 5** landed DRV, LNK and KRN, with ABI 14: `main` 3bdd026.
+- **A container restart** stopped the gate script with one group left running on i9.
+  - `gate` run again with the same tag found every group's operation by its idempotency key and read the results back from Effector, the last one completed meanwhile.
+  - It was green within a minute, and no group ran twice.
+  - The keys are `land-<tag>-<lane>-<n>-<hash of the command>`, so a gate can be taken up again after any interruption.
+
+**Round 6 (2026-10-21/22)** landed KRN alone: 176-KRN-0147, 850-KRN-0145 and 850-KRN-0146.
+- The candidate was the branch itself, a fast-forward of `main`.
+- Gate `land-b05bfb22`: every group green, none run again, in 1 h 35 min on i9, un-rizen (two lanes) and PCU.
+- **`main` = b05bfb2.** The answer is `LANDING/2026-10-22T0043Z-KRN-landed-b05bfb22.md`.
+- GitHub CI on b05bfb2 was still queued: its runs finish about a day after their push.
+
+**Round 7 (2026-10-22)** returned APP's request (`claude/wizardly-franklin-kec1a9` df433ce, time zones).
+- **Gate `land-803dd2f8`** on 803dd2f, on `main` 4bb89de: red.
+- **The cause:** `services_suite` still expects the old `date -h` line, and APP's shell changed it. It failed in "x86: services, storage, audio" and "x86: one CPU", twice each, the second time alone.
+- **Two first-run failures on i9** passed alone, so they were not the request's:
+  - in "x86: boot, display, network…", `download`'s read-back stopped after 16 of 30 MiB;
+  - "x86: files and block writes" ran past its hour, and its log was lost with the operation.
+
+  The cause is not established. If it recurs, it gets an issue of its own.
+- **The gate script was stopped** at its 2-hour background limit, with two i9 groups left. Run again with the same tag, it took up every finished operation by its key, ran the rest and the failed groups alone, and called it red.
+- **The answer** is `LANDING/2026-10-22T0346Z-KRN-round-803dd2f8.md`, with the details in APP's directory.
 
 ## Related
 
