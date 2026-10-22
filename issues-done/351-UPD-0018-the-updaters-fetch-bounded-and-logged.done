@@ -48,4 +48,4 @@ Gate 22's runs printed `TIME: the updater fetched 0 boot files`: the updater's l
 
 ## Related
 
-[351-NET-0029](351-NET-0029-download-calls-with-a-deadline.done) (the same for `download`), [109-UPD-0017](../issues/109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [351-UPD-0007](351-UPD-0007-updater-service.done).
+[351-NET-0029](351-NET-0029-download-calls-with-a-deadline.done) (the same for `download`), [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.done), [351-UPD-0007](351-UPD-0007-updater-service.done).
