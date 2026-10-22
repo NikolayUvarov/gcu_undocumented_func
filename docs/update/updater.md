@@ -88,7 +88,7 @@ tries 3                                   # tries of a trial boot for an automat
 ## Not provided yet
 
 - **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback` and `status` run only through the automatic policy in the tests, and `rollback` and `status` have not run on the platform.
-- **A directory source** is built but not tested in QEMU.
+- **The directory source's other refusals, in QEMU.** The `linkupdate` suite (351-KRN-0141) fetches a release from `data/link/rel/`, boots it on trial and confirms it, and refuses a channel with a changed signature. An expired or older channel, a changed boot file and a resumed file go through the same `stage()` as over HTTPS, where the `update` suite shows each, but none of them has run from a directory.
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).

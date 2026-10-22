@@ -1645,7 +1645,9 @@ def check_tool_check(vm):
           f"of {width} columns, log {path}; skipped: {', '.join(f'{n} ({d})' for n, d in list(skipped.items())[:6])}", flush=True)
     texts = [name for name in rows if name.startswith("text input: ")]
     print(f"PASS: check: text input (000-KRN-0094): {'; '.join(f'{n[12:]}: {rows[n][1]}' for n in texts)}", flush=True)
-    output = vm.command("check kernel")
+    # The kernel group waits for kbench in "a tool's console closes": up to 10 s for each of its outputs, 30 s for its end
+    # (176-KRN-0147).
+    output = vm.command("check kernel", timeout=90)
     assert "Boot services" not in output and "│ ✓ │ a program ends" in output, output[-2000:]
     require(vm.command("check nosuch"), "check: no group nosuch")
     print("PASS: check kernel runs one group; an unknown group is refused", flush=True)
@@ -4101,14 +4103,16 @@ def modes_suite(args):
                 state = "development, as set by disk" if words else "normal, as set by disk"
                 assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
-                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE CHANGE REFUSED: PID ")
+                # The refusal names its caller and the clause it enforces (850-KRN-0146).
+                refusal = vm.command("dmesg -s init", raw=True)
+                assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
-          "the modes and is refused a change, which init logs", flush=True)
+          "the modes and is refused a change, which init logs with its clause (MC-12.6)", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):

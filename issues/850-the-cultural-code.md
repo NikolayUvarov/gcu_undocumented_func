@@ -20,8 +20,8 @@ The maintainer proposed on 2026-10-21 to use the structure of an "iconic IP guid
 1. **The manifesto** ([850-PHI-0001](850-PHI-0001-the-manifesto.md)): one page, English and Russian, non-normative, outside the Constitution's articles.
 2. **The canon's maxims** ([850-PHI-0002](850-PHI-0002-the-canons-maxims-in-lore-1-6.md)): `LORE` 1.6, aligned with the Constitution 1.6. Each discipline gets one maxim, with what enforces it today and what does not yet.
 3. **Philosophy compiled into checks, the kernel track's part:**
-   - [850-KRN-0145](850-KRN-0145-a-budget-for-the-kernels-size.md): a budget for the kernel's size, checked in CI;
-   - [850-KRN-0146](850-KRN-0146-refusals-name-the-clause.md): refusals name the clause they enforce.
+   - [850-KRN-0145](../issues-done/850-KRN-0145-a-budget-for-the-kernels-size.done): a budget for the kernel's size, checked in CI;
+   - [850-KRN-0146](../issues-done/850-KRN-0146-refusals-name-the-clause.done): refusals name the clause they enforce.
 4. **A lexicon** (a later task): the entities' names, each mapped to an identifier in the code. A word the code does not use is not introduced.
 5. **The sensory code** (later, with `APP`): the first boot, the system's voice, one visual anchor. These are designs for the tools track, not promises in the manifesto.
 6. **The Constitution itself.** It changes only by a new edition with the contents MC-12.5 asks, in both languages, and only if the analysis finds a requirement to add. Rhetoric does not go into the articles.

@@ -39,6 +39,7 @@ A change is ready when the suites it touches pass; a kernel change runs all QEMU
   - a text-only commit goes to `main` directly;
   - a pull request from a fork is reviewed, then landed the same way.
 - **Comments:** English, one line, the essence only. Match the style of the surrounding code.
+- **Refusals name their clause** (850-KRN-0146). A log line that refuses a request because a Constitution requirement forbids it ends with that clause, for example `[INIT] MODE CHANGE REFUSED: PID 42 (BADGE 2) MAY NOT TURN MAINTENANCE ON (MC-12.6)`. Name a clause only where the link is exact; a refusal that enforces none names none. Adopt the rule as you touch your own refusals; a refused system call is answered with its error and logs nothing.
 - **ABI:** system call numbers, records and capability rules live in `common/abi.rs` and change only together with the kernel, `libmind`, [docs/api](docs/api/README.md) and the tests. Service interfaces change through `idl/*.wit` and `scripts/mind_idl.py` (generated files are committed).
 - **Profile:** a change that alters a statement in `docs/profile` updates it in the same commit.
 - **Issues:** a finished task moves from `issues/` to `issues-done/` with a Resolution section (rules in [issues/README.md](issues/README.md)).
