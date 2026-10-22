@@ -194,6 +194,25 @@ fn the_page_its_feed_and_other_sites() {
     let lines: String = (0..30).map(|i| format!("line {i}\n")).collect();
     assert_eq!(text, lines);
 
+    // 800-LNK-0016: a replace from a file and one back to the boot image both end; the second stayed running before.
+    let done = |key: &str, args: &[&str]| {
+        let mut call = vec!["submit"];
+        call.extend_from_slice(args);
+        call.extend_from_slice(&["--key", key, "--reason", "test: replace"]);
+        let id = field(&ok(&call), "id").to_string();
+        for _ in 0..100 {
+            let status = ok(&["status", &id]);
+            if !status.contains("\"status\":\"queued\"") && !status.contains("\"status\":\"running\"") { return status; }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("{id} did not end");
+    };
+    let file = format!("file={}", d.join("cli/count.sh").display());
+    assert!(done("P-replace", &["replace", "unit=rtc", &file]).contains("\"status\":\"completed\""));
+    assert!(done("P-back", &["replace", "unit=rtc", "back=true"]).contains("\"status\":\"completed\""));
+    let log = std::fs::read_to_string(d.join("srv.log")).unwrap();
+    assert!(log.contains("[SERVE] REPLACE rtc FROM replace/count.sh\n") && log.contains("[SERVE] REPLACE rtc FROM ITS BOOT IMAGE\n"), "{log}");
+
     // Pages that never read take no time from the cable's work, and a ninth page is refused.
     let silent: Vec<_> = (0..7).map(|_| feed(&at, &own).0).collect();
     let started = std::time::Instant::now();
