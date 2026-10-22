@@ -1,6 +1,6 @@
-# 550-NET-0041 — `wlan` joins a remembered network by itself, at start and after the network is lost
+# 550-NET-0041 — `wlan` joins a remembered network by itself, at start and after the network is lost — done
 
-**Type:** network (service) · **Owner:** `NET` track: the kernel session, its owner (the maintainer, 2026-10-22) · **Priority:** P1 · **Status:** made and tested (2026-10-22); the gate left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Type:** network (service) · **Owner:** `NET` track: the kernel session, its owner (the maintainer, 2026-10-22) · **Priority:** P1 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 From the request "`wlan` joins a remembered network by itself, at start and after the network is lost (550)" in requests-NET.md (2026-10-22). The kernel track recorded it at the maintainer's word of that day ("a NET task"), taking up the link track's request (`internal-dev-messages`, `NET/2026-10-22T1038Z-LNK-…`). This task takes it from that file.
 
@@ -40,6 +40,17 @@ From the request "`wlan` joins a remembered network by itself, at start and afte
   - a lost network is joined again, each attempt in the log.
 - [x] Host tests for the retry schedule and the choice of network (`tests/wlan_auto_host.rs`).
 
+## Resolution
+
+`wlan` joins a remembered network by itself at start and after a loss. It tries every 10 s for two minutes, then every minute, and logs each try. `wifi leave` and `forget` hold.
+- **Where.** `wlan/src/auto.rs` and `wlan/src/main.rs`; the lost access point in `tests/wlansim`.
+- **Tests.**
+  - `tests/wlan_auto_host.rs`;
+  - the `net` suite on x86 and aarch64;
+  - every group of gate `land-0ab4ca90`, landing round 10, `main` 0ab4ca9.
+- **Docs.** [docs/network/station.md](../docs/network/station.md).
+- **What is not evidence.** These are QEMU runs over a stand-in radio. The MacBook Pro's BCM4331 has not run it yet (MC-12.1).
+
 ## Progress (2026-10-22)
 
 - **`wlan/src/auto.rs`** holds the schedule and the choice, with no I/O:
@@ -61,11 +72,11 @@ From the request "`wlan` joins a remembered network by itself, at start and afte
 - **Docs.**
   - [docs/network/station.md](../docs/network/station.md) is new;
   - `wlan`'s row in [docs/profile/bootstrap.md](../docs/profile/bootstrap.md) says what it joins by itself;
-  - the `wifi` guide is the tools track's ([requests-APP.md](requests-APP.md)).
+  - the `wifi` guide is the tools track's ([requests-APP.md](../issues/requests-APP.md)).
 - **The first try's place.** The most recently joined network across restarts needs a field in `keystore`'s record. Until then, "last joined" means since `wlan` started.
 
 ## Related
 
-- [550-NET-0018](550-NET-0018-the-station-service.md): the station service.
-- [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md): remembered networks kept by `keystore`.
+- [550-NET-0018](../issues/550-NET-0018-the-station-service.md): the station service.
+- [550-NET-0024](../issues/550-NET-0024-remembered-wi-fi-networks.md): remembered networks kept by `keystore`.
 - 550-ASR-0007 and 000-APP-0079: the start script on the MacBook Pro, which ASR keeps for its pings and end marker.
