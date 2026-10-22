@@ -9,12 +9,12 @@
 // of 2026-10-21): it also starts the built-in programs by name, lends them the network, the Wi-Fi station and the
 // system monitor where init granted it those, and restarts the machine on REBOOT. Everything from the line is checked by linkproto before use (MC-11.4);
 // hellos, files, programs and refusals are logged (MC-10.2).
-use linkproto::app::{FileService, Files, RunOutput, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
+use linkproto::app::{FileService, Files, RunOutput, COMMAND_MAX, EXIT_UNKNOWN, RUN_ENDED, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::{Line, Service, Slave};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, CAP_READ, CAP_WRITE, SLOT_CONSOLE, SLOT_DEV0, SLOT_LIFECYCLE, SLOT_NETPOLICY, SLOT_NETWORK, SLOT_SHELL, SLOT_SYSINFO, SLOT_VFS, SLOT_WIFI};
 use mind::fs::{self, File};
-use mind::idl::{init as lifecycle, loader, netpolicy, serial};
+use mind::idl::{init as lifecycle, loader, netpolicy, serial, shell};
 use mind::ipc::{self, Endpoint};
 
 const DIR: &str = "data/link";
@@ -107,7 +107,9 @@ fn remove_tree(top: &str) -> Result<(), u8> {
 /// SLOT_CONSOLE, `mind::output`'s 15-byte messages) and the last KEEP bytes of each are kept for OUTPUT. Their exit
 /// notices arrive there too, through the loader's watch (`notices`, a receiving copy; 800-KRN-0138), and the loader
 /// ends them on STOP. With a loader that cannot, the end is seen by `alive` and its reason stays unknown.
-struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowed: bool, dev: bool, reboot_at: u64, next: u32, runs: [Run; RUNS], checked: u64 }
+/// A COMMAND's line waits in `pending` for the shell until its answer is out (800-LNK-0015).
+struct Programs { inbox: Option<Endpoint>, output: usize, notices: usize, allowed: bool, dev: bool, reboot_at: u64, next: u32, runs: [Run; RUNS], checked: u64,
+                  pending: Option<(u32, [u8; COMMAND_MAX], usize)> }
 
 /// Whether init granted link an endpoint in `slot` (the developer mode's clients, 800-LNK-0012).
 fn holds(slot: usize) -> bool { mind::dev::cap_info(slot).0 == CAP_KIND_ENDPOINT }
@@ -116,6 +118,11 @@ const RUNS: usize = 8;
 const KEEP: usize = 16 * 1024;
 /// How long a watched program may be gone before its notice is given up on.
 const NOTICE_WAIT_MS: u64 = 1000;
+/// How long the shell may take over one line: a `ping` waits for its answers.
+const COMMAND_WAIT_MS: u32 = 60_000;
+/// What the shell's `run` answers at most (`idl/shell.wit`).
+const COMMAND_OUTPUT: usize = 7000;
+static mut COMMAND_OUT: [u8; COMMAND_OUTPUT] = [0; COMMAND_OUTPUT];
 const NO_RUN: Run = Run { id: 0, pid: 0, state: RUN_ENDED, exit: EXIT_UNKNOWN, watched: false, gone: 0, name: [0; LOADER_PATH_MAX], name_len: 0, total: 0, kept: [0; KEEP] };
 
 fn loader_code(error: loader::Error) -> u8 {
@@ -182,10 +189,7 @@ impl Programs {
         if self.inbox.is_none() { return Err(code::UNSUPPORTED); }
         if full.len() > LOADER_PATH_MAX { return Err(code::DENIED); }
         self.pump();
-        // A free entry, else the one that ended longest ago.
-        let index = self.runs.iter().position(|r| r.id == 0)
-            .or_else(|| self.runs.iter().enumerate().filter(|(_, r)| r.state != RUN_RUNNING).min_by_key(|(_, r)| r.id.wrapping_sub(self.next)).map(|(i, _)| i))
-            .ok_or(code::BUSY)?;
+        let index = self.entry().ok_or(code::BUSY)?;
         let lost = |_| code::BUSY;
         let session = loader::begin(Endpoint::LOADER, full, args).map_err(lost)?.map_err(loader_code)?;
         if !matches!(loader::grant(Endpoint::LOADER, session, SLOT_CONSOLE as u8, self.output), Ok(Ok(()))) {
@@ -232,6 +236,76 @@ impl Programs {
             }
         }
         (lent, flow)
+    }
+
+    /// A free run entry, else the one that ended longest ago.
+    fn entry(&self) -> Option<usize> {
+        self.runs.iter().position(|r| r.id == 0)
+            .or_else(|| self.runs.iter().enumerate().filter(|(_, r)| r.state != RUN_RUNNING).min_by_key(|(_, r)| r.id.wrapping_sub(self.next)).map(|(i, _)| i))
+    }
+
+    /// COMMAND (800-LNK-0015): a run for `line`, handed to the shell's `run` by `main` once this answer is out, so that a
+    /// long command does not hold it. The shell takes the link's lines by its own rule (800-APP-0102), through the client
+    /// init grants with `dev` (800-KRN-0148). Only the command's word is logged.
+    fn command(&mut self, line: &str) -> Result<u32, u8> {
+        let word = line.split_whitespace().next().unwrap_or("");
+        let word = &word[..word.len().min(LOADER_PATH_MAX - 4)];
+        if !self.dev { mind::println!("[LINK] COMMAND {} REFUSED: link.conf HAS NO \"dev\"", word); return Err(code::DENIED); }
+        if !holds(SLOT_SHELL) { return Err(code::UNSUPPORTED); }
+        if self.pending.is_some() { return Err(code::BUSY); }
+        self.pump();
+        let index = self.entry().ok_or(code::BUSY)?;
+        let id = self.next;
+        self.next = self.next.wrapping_add(1).max(1);
+        let run = &mut self.runs[index];
+        (run.id, run.pid, run.state, run.exit, run.watched, run.gone, run.total, run.name_len) = (id, 0, RUN_RUNNING, EXIT_UNKNOWN, false, 0, 0, 4 + word.len());
+        run.name[..4].copy_from_slice(b"sh: ");
+        run.name[4..4 + word.len()].copy_from_slice(word.as_bytes());
+        let mut copy = [0u8; COMMAND_MAX];
+        copy[..line.len()].copy_from_slice(line.as_bytes());
+        self.pending = Some((id, copy, line.len()));
+        mind::println!("[LINK] COMMAND {}: {}", id, word);
+        Ok(id)
+    }
+
+    /// The line waiting for the shell, run now: its answer is the run's output with exit 0, a refusal exit 1.
+    fn run_pending(&mut self) {
+        let Some((id, line, len)) = self.pending.take() else { return };
+        let line = core::str::from_utf8(&line[..len]).unwrap_or("");
+        let out: &'static mut [u8; COMMAND_OUTPUT] = unsafe { &mut *core::ptr::addr_of_mut!(COMMAND_OUT) };
+        let answer = mind::idl::wire::with_timeout(COMMAND_WAIT_MS, || shell::run(Endpoint(SLOT_SHELL), line, &mut out[..]));
+        let Ok(run) = self.find(id) else { return };
+        match answer {
+            Ok(Ok(n)) => { run.print(&out[..n]); run.end(RUN_ENDED, 0); }
+            Ok(Err(e)) => {
+                let why: &[u8] = match e {
+                    shell::Error::Refused => b"the shell refused this line from the link\n",
+                    shell::Error::Declined => b"the shell's user declined it\n",
+                    shell::Error::Busy => b"the shell's window is busy with a program\n",
+                    shell::Error::Unavailable => b"the shell cannot run it now\n",
+                    shell::Error::NoMemory => b"the shell has no memory for it\n",
+                    _ => b"the shell did not take this line\n",
+                };
+                run.print(why);
+                run.end(RUN_ENDED, 1);
+            }
+            Err(_) => { run.print(b"the shell did not answer\n"); run.end(RUN_ENDED, 1); }
+        }
+    }
+
+    /// REPLACE (800-LNK-0016): init starts `unit` again from `data/link/<path>`, or from its boot image for "", through the
+    /// lifecycle client it grants with `dev` (800-KRN-0144); init logs the image NOT VERIFIED.
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
+        if !self.dev { mind::println!("[LINK] REPLACE {} REFUSED: link.conf HAS NO \"dev\"", unit); return Err(code::DENIED); }
+        if !holds(SLOT_LIFECYCLE) { return Err(code::UNSUPPORTED); }
+        mind::println!("[LINK] REPLACE {} FROM {} ASKED BY THE MASTER", unit, if path.is_empty() { "ITS BOOT IMAGE" } else { path });
+        match lifecycle::replace(Endpoint(SLOT_LIFECYCLE), unit, path) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(lifecycle::Error::Denied)) => Err(code::DENIED),
+            Ok(Err(lifecycle::Error::NotFound)) => Err(code::NOT_FOUND),
+            Ok(Err(_)) => Err(code::IO),
+            Err(_) => Err(code::BUSY),
+        }
     }
 
     /// A REBOOT from the master: the machine restarts once the answer is out (`main`), through init's lifecycle client
@@ -286,7 +360,7 @@ impl Programs {
     }
 }
 
-static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, allowed: false, dev: false, reboot_at: 0, next: 1, runs: [NO_RUN; RUNS], checked: 0 };
+static mut PROGRAMS: Programs = Programs { inbox: None, output: 0, notices: 0, allowed: false, dev: false, reboot_at: 0, next: 1, runs: [NO_RUN; RUNS], checked: 0, pending: None };
 fn programs() -> &'static mut Programs { unsafe { &mut *core::ptr::addr_of_mut!(PROGRAMS) } }
 
 /// The files of data/link/ and the system log. A put's data is gathered and written 16 KiB at a time, a get's read 16
@@ -505,6 +579,10 @@ impl Files for Store {
 
     fn reboot(&mut self) -> Result<(), u8> { programs().reboot() }
 
+    fn command(&mut self, line: &str) -> Result<u32, u8> { programs().command(line) }
+
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> { programs().replace(unit, path) }
+
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { programs().output(run, cursor, out) }
 
     fn stop(&mut self, run: u32) -> Result<(), u8> { programs().stop(run) }
@@ -621,6 +699,8 @@ fn main(_info: &'static BootInfo) {
         if slave.serve(&mut service, 1000).is_err() { mind::time::sleep(100); }
         // A REBOOT is carried out once its answer has gone; the line has had time to turn round.
         let p = programs();
+        // So is a COMMAND's line, whose output the master then reads.
+        p.run_pending();
         if p.reboot_at != 0 && mind::time::uptime_ms() as u64 >= p.reboot_at {
             p.reboot_at = 0;
             match lifecycle::reboot(Endpoint(SLOT_LIFECYCLE)) {
