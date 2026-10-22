@@ -1600,7 +1600,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -3959,11 +3959,17 @@ def link_suite(args):
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
-            # init's reboot client, the policy broker and the Wi-Fi station.
+            # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
-            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0))}  # 0: no station runs
+            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
+                         (30, pids.get("shell"))}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
+            # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
+            commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
+            shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            assert commands and servers.get(int(commands[1])) == pids["shell"], commands
+            assert shell_client and shell_client[1] == "1" and shell_client[2] == commands[1], (shell_client, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -4077,6 +4083,7 @@ def modes_suite(args):
                 state = "development, as set by disk" if words else "normal, as set by disk"
                 assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
+                assert rows.get("a replace refused", ("",))[0] == "✓", out[-2000:]  # 800-KRN-0144
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
