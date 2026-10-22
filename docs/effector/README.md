@@ -142,14 +142,16 @@ makes it a boot service. It heartbeats, polls and answers **every** command
 
 | File | Written by | Contents |
 |---|---|---|
-| `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`). Any other line refuses the file (`effector/src/config.rs`) |
-| `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token |
+| `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), and `token none` for a server that asks no agent token. Any other line refuses the file (`effector/src/config.rs`) |
+| `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
 | `agent_id` | the agent, once | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
 | `journal` | the agent | `effector-journal 1`, then one line per answer, appended and flushed before its ACK (`effector/src/journal.rs`) |
 
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
 a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
+
+**Against a real server** (750-EFF-0012): `MIND_EFFECTOR_LIVE=DIR tests/qemu_smoke.py --suites effector-live` copies `DIR`'s `effector.conf`, `agent_id` and `token` (if any) onto the guest's disk, adds the network policy line for the configured address, and runs the agent for `MIND_EFFECTOR_LIVE_SECONDS` (default 120). It is not in CI.
 
 **Run:** `effector data/effector/effector.conf [--for SECONDS]`. With `--for`
 it stops after that long and sends a `shutting_down` heartbeat; without it, it
