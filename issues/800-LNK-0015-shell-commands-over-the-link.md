@@ -22,7 +22,7 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
    - `netpolicy` with a change, `netrevoke` and `mode` stay refused over the link.
 3. **`LNK`, this task:**
    - **`linkproto`:** COMMAND (54) on the programs channel. It carries a line of up to 240 bytes. The answer is a run whose output and end are read with OUTPUT (51) as a program's are: state ENDED with exit 0, or exit 1 with the shell's reason (`refused`, `declined`, `busy`, `unavailable`).
-   - **`link`:** COMMAND calls the shell's `run` and keeps the answer as a run's output. It is logged as `[LINK] COMMAND <word>` with the command's word, not its line, so that no argument reaches the log.
+   - **`link`:** COMMAND calls the shell's `run` and keeps the answer as a run's output. It is logged as `[LINK] COMMAND <run>: <line>`, the whole line. Since 2026-10-22 (below) only a secret that `tpm seal` takes stays out of the log.
    - **`mindlink sh "<line>"`:** prints the output, exits 0 or 1. **`effector485`:** a kind `shell`.
    - **`mindlink serve --run`** answers COMMAND with `sh -c`, for the host tests.
 
@@ -60,6 +60,13 @@ Evidence for the configurations named only (MC-12.1). What the link's client may
   - The release put through the link (b509a30: this branch with APP's, KRN's and NET/UPD's, ABI 16) brought the shell's rule for the link.
   - `mindlink sh ip` and `sh netstat -i` showed `CARD 2 … WI-FI DEFAULT` with its counters. `sh ps` listed the services, `link` among them.
   - `sh dmesg -s netstack` was refused, by the shell's rule for every client.
+
+- **2026-10-22, the whole line in the log, at the maintainer's word:** "the log must have the full command, not only its first word".
+  - `link` logs a shell line whole. A line longer than a log line holds is split over lines marked `…`.
+  - A program's arguments follow its start, as `[LINK] RUN <run>: ARGUMENTS …`.
+  - The one secret a command line can carry, what `tpm seal` takes, is logged as `[THE SECRET IS NOT LOGGED]`. `wifi` reads a passphrase from a file only, never from its arguments.
+  - `effector485`'s own log names each operation's whole command, under the same rule.
+  - **The `link` suite** checks the whole `netpolicy add …` line, a run's arguments, and that `tpm seal`'s secret is not in the log.
 
 ## Related
 

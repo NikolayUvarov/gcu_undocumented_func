@@ -109,7 +109,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
             };
             match next {
                 Some((id, kind, params)) => {
-                    eprintln!("effector485: {id}: {kind}");
+                    eprintln!("effector485: {id}: {}", crate::ops::command(&kind, &params));
                     if let Err(e) = execute(c, &state, &id, &kind, &params) {
                         with(&state, &id, |op| if !op.ended() { op.fail(&explain(e)) });
                         if line_lost(e) || c.master.line.failed() { lost = Some(e); }

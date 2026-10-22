@@ -24,7 +24,7 @@ effector485 daemon /dev/ttyUSB0 --baud 460800             # Linux
 | `--state <dir>` | `.effector485` in the home directory: the queue and the results, kept across restarts |
 | `--key-file <file>` | none. With it, every call must carry the file's text in the `X-API-Key` header. An address other machines reach is refused without it |
 
-**Its first line** says where it listens. It then says each operation it starts, and when the cable's other end comes or goes.
+**Its first line** says where it listens. It then names each operation it starts, with its whole command (only the secret a shell line's `tpm seal` takes is left out), and says when the cable's other end comes or goes.
 
 **A restarted daemon:**
 - finds its queue and its results, and keeps the idempotency keys;

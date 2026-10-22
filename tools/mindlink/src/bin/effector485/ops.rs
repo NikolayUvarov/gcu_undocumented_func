@@ -111,6 +111,28 @@ impl Op {
     }
 }
 
+/// An operation as a command, for the daemon's log: its kind and fields whole, but for the secret a shell line's
+/// `tpm seal` takes, which stays out of the log as it does in MIND Core's (link/src/main.rs).
+pub fn command(kind: &str, params: &Value) -> String {
+    let mut out = kind.to_string();
+    if let Value::Obj(fields) = params {
+        for (name, value) in fields {
+            let text = match value { Value::Str(v) => v.clone(), v => v.text() };
+            let text = if kind == "shell" && name == "line" { sealed(&text) } else { text };
+            out.push_str(&format!(" {name}={text}"));
+        }
+    }
+    out
+}
+
+fn sealed(line: &str) -> String {
+    let mut words = line.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(a), Some(b)) if a.eq_ignore_ascii_case("tpm") && b.eq_ignore_ascii_case("seal") => format!("{a} {b} [THE SECRET IS NOT LOGGED]"),
+        _ => line.to_string(),
+    }
+}
+
 /// The last `max` bytes of `text`, cut at a character's start.
 pub fn tail(text: &str, max: usize) -> &str {
     let mut from = text.len().saturating_sub(max);
@@ -218,4 +240,19 @@ impl State {
 
     pub fn queued(&self) -> usize { self.ops.iter().filter(|o| o.status == "queued").count() }
     pub fn running(&self) -> usize { self.ops.iter().filter(|o| o.status == "running").count() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command;
+    use crate::json::parse;
+
+    #[test]
+    fn a_command_whole_but_a_seal() {
+        let c = |kind, json| command(kind, &parse(json).unwrap());
+        assert_eq!(c("shell", r#"{"line":"netpolicy add netcheck 10.0.2.9 icmp"}"#), "shell line=netpolicy add netcheck 10.0.2.9 icmp");
+        assert_eq!(c("shell", r#"{"line":"TPM  seal hunter2 more"}"#), "shell line=TPM seal [THE SECRET IS NOT LOGGED]");
+        assert_eq!(c("run", r#"{"name":"netcheck","args":"ping:1.2.3.4","timeout_seconds":30}"#), "run name=netcheck args=ping:1.2.3.4 timeout_seconds=30");
+        assert_eq!(c("replace", r#"{"unit":"rtc","back":true}"#), "replace unit=rtc back=true");
+    }
 }

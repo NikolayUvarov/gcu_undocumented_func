@@ -217,6 +217,7 @@ The slave starts a program from its directory for the master, keeps its output a
 - **COMMAND** runs a line in the slave's shell.
   - The shell's answer is the run's output, and its end is the run's end: exit 0, or 1 with the shell's reason when it refused or failed the line.
   - `mindlink serve --run` runs the line with `sh -c`.
+  - MIND Core's `link` logs the whole line, as `[LINK] COMMAND <run>: <line>`. The one exception is the secret `tpm seal` takes, which is never logged.
   - MIND Core's `link` will pass it to the shell's `run` (`idl/shell.wit`) with `dev` in `link.conf`, once `init` gives it a client of the shell. Until then it answers UNSUPPORTED.
 - **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` asks the loader, which ends only the programs it started for `link` (800-KRN-0138).
 
