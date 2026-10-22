@@ -434,7 +434,7 @@ types! {
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
