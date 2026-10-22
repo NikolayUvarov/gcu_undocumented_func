@@ -4306,6 +4306,15 @@ def vfs_suite(args):
                     break
                 time.sleep(1)
             require(keyed, "[SHELL] SCREENSHOT data/media/screen-003.bmp: ")
+            # PrintScreen (KEY_PRINT_SCREEN, decoded from PS/2's E0 37; the aarch64 VirtIO keyboard passes none): the same.
+            if args.arch == "x86_64":
+                vm.hmp("sendkey print")
+                for _ in range(60):
+                    keyed = vm.command("dmesg -s shell", raw=True)
+                    if "(PRINTSCREEN)" in keyed:
+                        break
+                    time.sleep(1)
+                require(keyed, "[SHELL] SCREENSHOT data/media/screen-004.bmp: ")
             # record -s 2: frames half the screen's size; without a file, data/media/record-001.avi.
             for command, line in (("run record -s 2 -t 2 data/half.avi &", "[RECORD] data/half.avi THE SCREEN"), ("run record -r 1 -t 1 &", "[RECORD] data/media/record-001.avi THE SCREEN")):
                 pid = int(re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command(command))[1])
@@ -4408,7 +4417,9 @@ def vfs_suite(args):
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
             require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
-            require(vm.command("ls data/media"), "4 ENTRIES, 4 FILES, ")
+            # Three screenshots and a recording, and PrintScreen's on x86.
+            shots = 5 if args.arch == "x86_64" else 4
+            require(vm.command("ls data/media"), f"{shots} ENTRIES, {shots} FILES, ")
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
