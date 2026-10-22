@@ -2430,12 +2430,10 @@ def isolation_suite(vm):
              ("c", 13, 0), ("o", 13, 0), ("u", 6, 0), ("g", 14, 4), ("s", 6, 0),
              # AMD forbids SYSENTER in long mode (#UD); Intel checks CS=0 (#GP).
              ("y", 6, 0), ("e", "(?:6|13)", 0), ("h", 13, 0x102),
-             # Read-only memory mint written to; a revoked lease read afterwards.
-             ("m", 14, 7), ("v", 14, 4),
+             # Read-only memory mint written to.
+             ("m", 14, 7),
              # Address of a detached block.
-             ("d", 14, 4),
-             # Lease dropped after mapping, then revoked by the owner.
-             ("l", 14, 4)]
+             ("d", 14, 4)]
     for pid, (key, vector, error) in enumerate(cases, 2):
         vm.send("run app2\n")
         vm.expect("RING3 IOPL0 READY")
@@ -2467,6 +2465,15 @@ def isolation_suite(vm):
     time.sleep(.5); vm.collect(); vm.output = ""
     assert parent + 1 not in task_rows(vm), "the child must not wait for a future instance"
     assert f"FAULT PID={parent + 1} " not in vm.command("faults")
+    # 000-KRN-0152: a revoked lease, its capability held or dropped, leaves one zeroed page of the task's own in its place:
+    # reads give zeros, writes land there, the owner's page keeps its data, and nothing faults.
+    for key, line in (("v", "REVOKED LEASE: ZEROS OF ITS OWN, THE OWNER'S PAGE UNCHANGED"), ("l", "DROPPED LEASE REVOKED: ZEROS OF ITS OWN")):
+        vm.send("run app2\n")
+        pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+        vm.send(key + "\n")
+        require(vm.expect(f"PID={pid} EXITED. SHELL RESUMED."), line)
+        time.sleep(.1); vm.collect(); vm.output = ""
+        assert f"FAULT PID={pid} " not in vm.command("faults"), key
 
     # Cases with children started through loader (they get the parent's endpoint in their INIT slot).
     def family(key, children, done):
@@ -2481,9 +2488,10 @@ def isolation_suite(vm):
     for key, children, done in [("q", 5, "QUEUE ORDER OK"), ("j", 1, "LATE REPLY OK"), ("z", 2, "MOVE OK"), ("b", 1, "REVOKE PENDING OK"), ("i", 1, "BADGE OK"), ("a", 1, "BADGE RIGHT OK")]:
         pid, faults = family(key, children, done)
         assert not any(f"FAULT PID={pid + n} " in faults for n in range(children + 1)), (key, faults)
-    # The child keeps reading a lease when the parent revokes it: its next access faults (CAP_REVOKE waits for its CPU).
-    pid, faults = family("x", 1, "LEASE REVOKED")
-    assert re.search(fr"FAULT PID={pid + 1} CPU=\d+ VECTOR=14 ", faults), faults
+    # The child keeps reading a lease when the parent revokes it: it then reads zeros of its own and goes on, never the
+    # owner's page (CAP_REVOKE waits for its CPU; 000-KRN-0152).
+    pid, faults = family("x", 1, "LEASE REVOKED: THE CHILD READS ZEROS OF ITS OWN")
+    assert f"FAULT PID={pid + 1} " not in faults, faults
     assert int(task_rows(vm)[1][-1]) > int(before[-1])
     # 000-KRN-0086: the compositor copies whole frames only. app2 numbers its frames in their colour and draws the bottom
     # half 3 ms before the top: a frame copied mid-drawing shows a bottom half newer than the top. The compositor's own
@@ -2521,7 +2529,7 @@ def isolation_suite(vm):
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
 
 
 def protection_check(vm):
