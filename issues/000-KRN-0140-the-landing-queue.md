@@ -109,6 +109,10 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 - **The cost of carrying the applications.** "aarch64: files, network and TLS" took 1810 s, against 1436 s in round 8. "x86: files and block writes" took 1141 s, against 896 s.
 - **Mis-stamped messages.** KRN's request and messages of this round were named 0812Z, 0814Z and 0820Z. They were written at about 07:40 UTC.
 
+**Round 10 (2026-10-22)** landed KRN's request (`claude/youthful-mendel-mf1soy` 0ab4ca90), 550-NET-0041, made by the kernel session as NET's owner.
+- **Gate `land-0ab4ca90`** on 0ab4ca90, a fast-forward of `main` c045eaa: every group green, none run again, in 1 h 43 min.
+- **`main` = 0ab4ca9.** The answer is `LANDING/2026-10-22T1312Z-KRN-landed-0ab4ca90.md`.
+
   The cause is not established. If it recurs, it gets an issue of its own.
 - **The gate script was stopped** at its 2-hour background limit, with two i9 groups left. Run again with the same tag, it took up every finished operation by its key, ran the rest and the failed groups alone, and called it red.
 - **The answer** is `LANDING/2026-10-22T0346Z-KRN-round-803dd2f8.md`, with the details in APP's directory.

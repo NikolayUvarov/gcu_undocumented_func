@@ -1,8 +1,8 @@
-# 800-KRN-0142 — The link's network policy client, badged to launch only
+# 800-KRN-0142 — The link's network policy client, badged to launch only — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (f8d76dd, landing round 9); the second criterion's QEMU run left (NET's `net` suite, 800-NET-0038) · **Blocked by:** — · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
 
-From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-21), numbered here.
+From the network track's request in [requests-KRN.md](../issues/requests-KRN.md) (2026-10-21), numbered here.
 
 ## Problem
 
@@ -20,7 +20,15 @@ From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-
 ## Acceptance criteria
 
 - [x] In QEMU (x86), `link` in developer mode holds `SLOT_NETPOLICY` badged `BADGE_LAUNCH` (`stat caps`), and starts `netcheck` with a flow grant the policy names.
-- [ ] A policy change through that client is refused and logged by the broker; the policy is unchanged.
+- [x] A policy change through that client is refused and logged by the broker; the policy is unchanged. Checked by the host tests (`tests/netpolicy_host.rs`) and, in QEMU, by the badge of link's slot 19 and the broker's launch-only grant line. The maintainer waived a QEMU run of the refusal itself on 2026-10-22 (800-NET-0038): only `link` holds such a client, and it has no command that changes the policy.
+
+## Resolution
+
+`init` mints link's `SLOT_NETPOLICY` client with `BADGE_LAUNCH` in developer mode, in place of a copy of the shell's client.
+- **Checked by:**
+  - the `link` suite;
+  - every group of gate `land-f8d76dd9`, landing round 9, `main` f8d76dd.
+- **The refusal of a change.** It rests on NET's host tests and on the badge, under the maintainer's waiver recorded in 800-NET-0038.
 
 ## Progress (2026-10-22)
 
@@ -34,4 +42,4 @@ From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-
 
 ## Related
 
-[800-NET-0038](800-NET-0038-a-policy-client-that-may-only-launch.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done).
+[800-NET-0038](../issues-done/800-NET-0038-a-policy-client-that-may-only-launch.done), [800-KRN-0139](../issues/800-KRN-0139-the-links-developer-mode.md), [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done).
