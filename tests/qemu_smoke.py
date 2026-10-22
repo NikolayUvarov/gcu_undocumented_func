@@ -4160,7 +4160,7 @@ def gateway_stub_check(args):
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
             stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             files = vm.command("dmesg -s vfs_server", raw=True)
-            scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/data/inbox \(WRITABLE\)", files)
+            scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
             assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
             for _ in range(70):  # a scope whose task ended is revoked when the next one is made, or a minute on
                 if f"[VFS] SCOPE {scopes[0]} ENDED" in files:
@@ -4204,7 +4204,7 @@ def effector_grants_check(vm):
     assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (0, "compositor"), gw
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
-    require(vm.command("dmesg -s vfs_server", raw=True), ":/data/inbox (WRITABLE)")
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
     assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
     assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
     assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
