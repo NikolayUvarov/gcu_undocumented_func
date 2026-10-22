@@ -24,6 +24,8 @@ mod ping;
 mod modes;
 #[path = "../shell/src/pick.rs"]
 mod pick;
+#[path = "../shell/src/pipe.rs"]
+mod pipe;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -323,4 +325,16 @@ fn fg_takes_a_programs_name_and_lists_several() {
     assert_eq!(found("nosuch"), vec![]);
     let picked = |text| pick::picked(pick::matching(text, tasks.iter().copied()));
     assert_eq!((picked("wm"), picked("clock"), picked("nosuch")), (pick::Picked::One(5), pick::Picked::Several, pick::Picked::None));
+}
+
+#[test]
+fn a_pipe_splits_a_line_between_the_command_and_the_program() {
+    // 000-APP-0074: `command | program`, the command's output the program's text input.
+    assert_eq!(pipe::split("ps | grep wm"), Ok(Some(pipe::Split { writer: "ps", reader: "grep wm" })));
+    assert_eq!(pipe::split("ps"), Ok(None));
+    assert_eq!(pipe::split("write ram:x \"a | b\""), Ok(None), "a | inside quotes is text");
+    for wrong in ["| grep x", "ps |", "ps || grep x", "ps | grep a | grep b", "ps | grep x &", "run clock & | grep x"] {
+        assert!(pipe::split(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(pipe::split("ps | grep a | grep b").unwrap_err().contains("ONE |"));
 }

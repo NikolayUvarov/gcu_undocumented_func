@@ -2255,11 +2255,23 @@ def search_check(vm):
     assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
     require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
     require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
+    # `|` (000-APP-0074): what a shell command prints is grep's text input (the maintainer: `ps | grep wm`).
+    assert lines(vm.command("cat ram:a.txt | grep hello")) == ["hello world"], vm.output[-1500:]
+    found = lines(vm.command("ps | grep shell"))
+    assert found and all("shell" in row for row in found), found
+    assert lines(vm.command("ls ram:docs | grep -c md")) == ["1"]
+    assert lines(vm.command("cat ram:a.txt | grep zzz")) == [], "no line matched"
+    require(vm.command("ps | grep"), "USAGE: GREP")
+    require(vm.command("grep hello"), "USAGE: GREP")  # no path and no input
+    require(vm.command("ps | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
+    require(vm.command("ps |"), "A COMMAND COMES ON EACH SIDE OF |")
+    require(vm.command("ps | grep a | grep b"), "ONE | A LINE")
     for path in ("ram:docs/b.md", "ram:a.txt"):
         require(vm.command(f"rm {path}"), "OK")
     require(utf8("rm ram:docs/заметки.txt"), "OK")
     require(vm.command("rm ram:docs"), "OK")
-    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file", flush=True)
+    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file; "
+          "a shell command's output piped into grep", flush=True)
 
 
 def busy_suite(vm):

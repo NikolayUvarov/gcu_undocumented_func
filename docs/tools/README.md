@@ -267,7 +267,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A line that starts `ERROR: ` stays on the screen, and so does the shell's `STARTED` line. The shell says how many bytes went in (`312 BYTES WRITTEN TO ram:list.txt`).
 - The file is written through the shell's file client: `ram:`, `log:` and `data/`.
 - A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
-- `|` and `<` wait for the kernel's text input for programs ([000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)).
+- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen. One `|` a line; `grep` without a path reads its input. `<` is left.
 
 **Its start in the system log** (213-APP-0075): `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S` once the shell has drawn its first frame, and `[SHELL] <STEP> TOOK <N> MS BEFORE THE FIRST FRAME` for a step before it that took longer than 5 s, naming what it called (the kernel, `logd`, the serial line, the keys and the commands typed, the drawing). With the compositor's `SCREEN IN FRONT` lines, `dmesg -s shell` tells a shell that never drew from one that waited (213-KRN-0098). A step that never returns leaves no line.
 
