@@ -6453,6 +6453,10 @@ def net_suite(args, disk):
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         ping_options_check(vm)
+        # 000-NET-0039: echo requests to an address on the card's network that no host has (slirp answers ARP only for its
+        # own) are lost, and the gateway's answer still comes: each request has a socket of its own, not the card's queue.
+        require(vm.command("ping -c 3 10.0.2.200", timeout=30), "PING: 3 SENT, 0 RECEIVED")
+        require(vm.command("ping -c 3 10.0.2.2", timeout=30), "PING: 3 SENT, 3 RECEIVED")
         # wm's `show = net` line gives the frames a second (000-APP-0049): every card's as the stack counts them, the
         # Wi-Fi station's too, from the shell (shell.wit 1.7, 000-APP-0096); the card client badged BADGE_COUNTERS the
         # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
