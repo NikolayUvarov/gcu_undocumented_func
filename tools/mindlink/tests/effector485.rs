@@ -88,8 +88,11 @@ fn a_batch_idempotency_cancel_and_a_restart() {
     let (code, out) = e485(&at2, &["submit", "run", "name=apps/x/hello.sh", "--key", "T-run", "--reason", "test: run"]);
     assert!(code == 0 && out.contains("\"status\":\"completed\"") && out.contains("hello a b"), "{out}");
     assert_eq!(std::fs::read_to_string(d.join("srv/runs.txt")).unwrap(), "ran\n");
+    // 800-LNK-0015: a line for the other end's shell, followed as a program is.
+    let (code, out) = e485(&at2, &["submit", "shell", "line=echo shell $((6*7))", "--key", "T-shell", "--reason", "test: shell", "--wait"]);
+    assert!(code == 0 && out.contains(": completed, exit code 0") && out.contains("shell 42"), "{out}");
     let listed = e485(&at2, &["list"]).1;
-    assert_eq!(listed.lines().count(), 9, "{listed}");
+    assert_eq!(listed.lines().count(), 10, "{listed}");
     std::fs::remove_dir_all(&d).ok();
 }
 
