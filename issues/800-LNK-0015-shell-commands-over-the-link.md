@@ -49,6 +49,13 @@ Evidence for the configurations named only (MC-12.1). What the link's client may
   - **`effector485`'s kind `shell`:** followed as a program is, in the batch test.
   - **Docs:** `docs/link/protocol.md`, `mindlink.md` and `effector485.md`, English and Russian.
 - **`link` on MIND Core** answers COMMAND with UNSUPPORTED until `init` gives it a client of the shell (`KRN`) and the shell takes the link's lines (`APP`).
+- **2026-10-22, `link`'s side.**
+  - A COMMAND is answered at once with a run.
+  - `main` then hands the line to `shell::run` on slot 30 (800-KRN-0148), 60 s at most. The answer is the run's output, exit 0, or exit 1 with the shell's reason.
+  - `mindlink sh` waits up to two minutes for a silent other end.
+  - **The `link` suite's checks:** `sh ip` shows a `CARD` line, `sh ps` shows `link`, `sh netpolicy add …` is refused, and the log holds the command's word alone.
+    - With APP's `claude/wizardly-franklin-kec1a9` (800-APP-0102) merged locally, they passed (x86, QEMU).
+    - Without it the shell does not answer the link, and the suite says SKIP.
 
 ## Related
 
