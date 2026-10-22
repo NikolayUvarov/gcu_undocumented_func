@@ -36,6 +36,8 @@ fn scope() {
     let _ = core::fmt::Write::write_fmt(&mut text, format_args!("{}", start));
     let kept = write(files, root, "starts", text.as_bytes());
     let written = write(files, root, "parcel.part", b"delivered");
+    // A file is renamed onto a name that is free: the one the start before left goes first, as the gateway does.
+    let _ = vfs::remove(files, root, "parcel.txt");
     let renamed = matches!(vfs::rename(files, root, "parcel.part", root, "parcel.txt"), Ok(Ok(())));
     let mut back = [0u8; 16];
     let read = match vfs::open(files, root, "parcel.txt", 0) {
