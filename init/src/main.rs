@@ -419,14 +419,15 @@ impl Init {
                 // The servers start after link: their keepers are made now and reached once they run.
                 if words.split_ascii_whitespace().any(|word| word == "dev") {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
-                    self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
+                    // The policy broker's client that may only launch (800-KRN-0142): link has no user to ask before a change.
+                    grants.add(SLOT_NETPOLICY, self.badged(&mut minted, "netpolicy", mind::network::BADGE_LAUNCH)?, CLIENT);
                     grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT);
                     // Init's lifecycle client that may reboot, as the updater's (351-KRN-0022), and replace a service with an
                     // image from data/link/ (800-KRN-0144).
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
                 }
             }
             "virtio_blk" => {

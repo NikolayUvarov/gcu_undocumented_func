@@ -1,6 +1,6 @@
 # 800-KRN-0142 — The link's network policy client, badged to launch only
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-10-21) · **Blocked by:** [800-NET-0038](800-NET-0038-a-policy-client-that-may-only-launch.md) (`BADGE_LAUNCH` and the broker's refusals in `main`) · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (f8d76dd, landing round 9); the second criterion's QEMU run left (NET's `net` suite, 800-NET-0038) · **Blocked by:** — · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
 
 From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-21), numbered here.
 
@@ -19,8 +19,18 @@ From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-
 
 ## Acceptance criteria
 
-- [ ] In QEMU (x86), `link` in developer mode holds `SLOT_NETPOLICY` badged `BADGE_LAUNCH` (`stat caps`), and starts `netcheck` with a flow grant the policy names.
+- [x] In QEMU (x86), `link` in developer mode holds `SLOT_NETPOLICY` badged `BADGE_LAUNCH` (`stat caps`), and starts `netcheck` with a flow grant the policy names.
 - [ ] A policy change through that client is refused and logged by the broker; the policy is unchanged.
+
+## Progress (2026-10-22)
+
+- **`init`.** With `dev`, link's slot 19 is minted from `netpolicy`'s keeper with `mind::network::BADGE_LAUNCH`, as `wlan`'s is with `BADGE_WIFI_CHANGE`. The developer mode's line names it: `… SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS`.
+- **The `link` suite** (x86, passed on this session's machine):
+  - slot 19 of `link` is badged 1, on `netpolicy`'s endpoint;
+  - `link run netcheck ping:10.0.2.2` answers OK;
+  - the broker logs that grant `, ASKED BY A LAUNCH-ONLY CLIENT`.
+- **The second criterion.** The broker refuses `add`, `remove` and `revoke` from any client whose badge is not 0 (`may_change_policy`, `tests/netpolicy_host.rs`), and this client's badge is 1. No QEMU run has sent such a change through it: `link` has no command that changes the policy, and a test needs a program that holds this client. That run is left to NET's `net` suite (800-NET-0038).
+- [docs/profile/bootstrap.md](../docs/profile/bootstrap.md): `link`'s row names the badge.
 
 ## Related
 
