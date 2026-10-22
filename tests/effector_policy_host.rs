@@ -1,6 +1,6 @@
 //! The Effector owner policy's grammar and decision table, and the gateway's audit line (750-EFF-0003).
 #![allow(dead_code)]
-#[path = "../effector_gw/src/policy.rs"] mod policy;
+#[path = "../libmind/src/effector/policy.rs"] mod policy;
 #[path = "../effector_gw/src/audit.rs"] mod audit;
 use policy::*;
 
@@ -24,6 +24,14 @@ fn a_valid_policy_parses_and_counts_its_rules() {
     assert_eq!(p.max_bytes(), 1048576);
     assert_eq!(p.keys_for("demo").count(), 1);
     assert_eq!(p.keys_for("other").count(), 0);
+}
+
+#[test]
+fn the_delivery_root_is_read_for_init() {
+    // init makes the gateway's writable scope of this root (750-KRN-0120).
+    assert_eq!(full().deliver(), Some("data/inbox/"));
+    assert_eq!(Policy::parse(b"effector-policy 1\nagent on\n").unwrap().deliver(), None);
+    assert_eq!(Policy::default().deliver(), None);
 }
 
 #[test]

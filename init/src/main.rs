@@ -13,6 +13,7 @@ use mind::dev::cap_info;
 use mind::idl::{init as idl_init, netpolicy, vfs, wire};
 use mind::ipc::{self, Endpoint};
 use mind::platform;
+use mind::effector::policy::{Action, Ask, Deny, Policy};
 use mind::process::{grant, grant_moved, Image, Quota};
 use mind::sys::{Error, Result};
 
@@ -664,15 +665,16 @@ impl Init {
                 grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
             // The Effector agent's gateway (750-KRN-0119, `mind::effector`), only in a mode: the memory and the log to read,
-            // the volumes to read, its private directory (`private_dir_of`) and the screen to capture, as the shell's
-            // `screenshot` (750-KRN-0153; the compositor shows its red dot meanwhile). Its lifecycle client (750-KRN-0121)
-            // and the scope for deliveries (750-KRN-0120) come with their tasks.
+            // the volumes to read, its private directory (`private_dir_of`), the screen to capture, as the shell's
+            // `screenshot` (750-KRN-0153; the compositor shows its red dot meanwhile), a lifecycle client limited to what the
+            // owner's policy names (BADGE_NAMED, 750-KRN-0121) and a writable scope of its delivery root (`spawn`, 0120).
             "effector_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "effector_gw")?, ALL);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
                 grants.add(mind::effector::SLOT_READER, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                 self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
+                grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NAMED)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
@@ -834,6 +836,17 @@ impl Init {
             match self.scope(badge, dir, writable) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
+            }
+        }
+        // The Effector gateway's deliveries: a writable scope of the root the owner's policy names, read at each start
+        // (750-KRN-0120); none without one. The policy's parser refuses a root outside data/ or in a protected tree.
+        if let Some(policy) = (name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX).then(|| self.effector_policy()).flatten() {
+            if let Some(root) = policy.deliver() {
+                let dir = root.trim_end_matches('/');
+                match self.scope(mind::fs::BADGE_USER, dir, true) {
+                    Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
+                    Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
+                }
             }
         }
         // `name\0arguments` where the plan has arguments.
@@ -1013,13 +1026,18 @@ impl Init {
         use idl_init::{Error as E, Request};
         match request {
             Request::Run { name } => {
-                let result = match Self::index(name.as_str()) { None | Some(0) => Err(Error::NotFound), Some(index) => self.run(index) };
+                let result = match Self::index(name.as_str()) {
+                    None | Some(0) => Err(Error::NotFound),
+                    Some(index) if !self.named(badge, sender, index, Action::Start) => Err(Error::Rights),
+                    Some(index) => self.run(index),
+                };
                 idl_init::reply_run(call, result)
             }
             Request::List => idl_init::reply_list(call, Ok(&self.list()[..])),
             Request::Stop { name } => {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
                     if Self::kept(i) { return Err(refused(sender, badge, "STOP", format_args!("STOP {}", unit_name(i)), "MC-6.8")); }
+                    if !self.named(badge, sender, i, Action::Stop) { return Err(E::Denied); }
                     self.stop_service(i)
                 });
                 idl_init::reply_stop(call, result)
@@ -1027,10 +1045,15 @@ impl Init {
             Request::Restart { name } => {
                 let result = Self::index(name.as_str()).ok_or(E::NotFound).and_then(|i| {
                     if Self::kept(i) { return Err(refused(sender, badge, "RESTART", format_args!("RESTART {}", unit_name(i)), "MC-6.8")); }
+                    if !self.named(badge, sender, i, Action::Restart) { return Err(E::Denied); }
                     if self.running(i) { self.stop_service(i)?; }
                     self.start_service(i)
                 });
                 idl_init::reply_restart(call, result)
+            }
+            // The gateway's named client stops services only, by name (750-KRN-0121).
+            Request::StopTask { pid } if badge == mind::process::BADGE_NAMED => {
+                idl_init::reply_stop_task(call, Err(refused(sender, badge, "STOP", format_args!("STOP PID {}", pid), "MC-3.4")))
             }
             Request::StopTask { pid } => {
                 let service = pid == INIT_PID || (1..UNITS).any(|i| self.pids[i] == pid && self.running(i));
@@ -1078,6 +1101,50 @@ impl Init {
 
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
+
+    // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
+    // too large or refused, which allows nothing.
+    fn effector_policy(&mut self) -> Option<Policy> {
+        let mut text = [0u8; mind::effector::policy::FILE_MAX + 1];
+        let mut length = 0;
+        let client = self.user_files().ok()?;
+        let files = Endpoint(client);
+        if let Ok(Ok(root)) = vfs::root(files, "") {
+            if let Ok(Ok(file)) = vfs::open(files, root, mind::effector::POLICY_FILE, 0) {
+                while length < text.len() {
+                    match vfs::read(files, file, length as u32, (text.len() - length) as u32, &mut text[length..]) {
+                        Ok(Ok(n)) if n > 0 => length += n,
+                        _ => break,
+                    }
+                }
+                let _ = vfs::close(files, file);
+            }
+            let _ = vfs::close(files, root);
+        }
+        let _ = ipc::drop_cap(client);
+        Policy::parse(&text[..length]).ok()
+    }
+
+    // A client badged BADGE_NAMED (the Effector gateway's, 750-KRN-0121) may run, stop or restart only what the owner's
+    // policy allows; init reads the policy itself, so the gateway's own check is never the only one (MC-3.4).
+    fn named(&mut self, badge: u16, sender: u64, index: usize, action: Action) -> bool {
+        if badge != mind::process::BADGE_NAMED { return true; }
+        let name = unit_name(index);
+        let why = match self.effector_policy() {
+            _ if Self::kept(index) => Some("KEPT BY INIT"),
+            None => Some("NO OWNER'S POLICY"),
+            Some(policy) => match policy.decide(Ask::Service(name, action)) {
+                Ok(()) => None,
+                Err(Deny::Protected) => Some("NEVER THE GATEWAY'S"),
+                Err(_) => Some("NOT IN THE OWNER'S POLICY"),
+            },
+        };
+        if let Some(why) = why {
+            let word = match action { Action::Start => "RUN", Action::Stop => "STOP", Action::Restart => "RESTART" };
+            refused(sender, badge, word, format_args!("{} {}: {}", word, name, why), "MC-3.4");
+        }
+        why.is_none()
+    }
 
     // The modes data/mode.conf names (750-KRN-0143): `development` and `maintenance`; other words are logged and left out.
     fn read_modes(&mut self) {

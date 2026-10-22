@@ -11,6 +11,7 @@ for fixture in busy_app isolation_app heap_app block_app; do
         "tests/$fixture.rs" -o "$OUT/mind-core-$fixture.elf"
 done
 (cd tests/updater_stub && cargo build --release --target-dir "$OUT/mind-updater-target")
+(cd tests/gateway_stub && cargo build --release --target-dir "$OUT/mind-gateway-target") # the Effector gateway's stand-in (750-KRN-0121)
 (cd tests/wlansim && cargo build --release --target-dir "$OUT/mind-wlansim-target") # the stand-in radio (550-NET-0018)
 (cd virtio_net && cargo build --release --features late-attach --target-dir "$OUT/mind-late-attach-target") # 000-NET-0036
 (cd tests/wlansim && cargo build --release --features slow --target-dir "$OUT/mind-wlansim-slow-target") # 550-NET-0030
