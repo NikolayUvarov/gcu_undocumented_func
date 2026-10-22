@@ -1,0 +1,39 @@
+# 800-APP-0102 — What the shell's `run` takes from the link's client, in developer mode
+
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "you must be able to run commands there", 2026-10-22) · **Status:** open · **Blocked by:** `KRN`: `init` minting the shell's client for `link` with `dev` (LNK → KRN, 2026-10-22 03:56 UTC) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware (as 800) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+
+**Recorded by:** the tools track, 2026-10-22, from LNK's request (LNK → APP, 2026-10-22 03:56 UTC, for 800-LNK-0015) and the maintainer's choice (a) that LNK passed on at 03:58: "да, режим а".
+
+## Problem
+
+- **What LNK needs:** with `dev` in `link.conf`, an agent at the other end of the cable must run the shell's own commands, such as `ip`, `ps`, `netstat` and `dmesg`. These are not programs, so `link`'s run by name does not reach them.
+- **What exists:** `link` will call the shell's `run(line)` (`idl/shell.wit` 1.1) with a client badged as the link's (800-LNK-0015, KRN's part).
+- **What does not fit:** `shell/src/clients.rs` asks the user in the shell's window before what changes the machine or reaches beyond it, and over the cable no one is at that window.
+
+## Plan
+
+- **The badge:** `mind::process::BADGE_SHELL_LINK` (1) on the shell's commands endpoint. The clients the shell lends carry no badge and no right to set one, so no program can pass for the link.
+- **`clients::taken_by(line, Client::Link)`:**
+  - the commands any client gets at once, as before;
+  - what a program's client is asked runs at once: the commands that only read (`netstat`, `ping`, `nslookup`, `logs`, `stat`, `pmap`, `caps <pid>`), and, by the maintainer's choice (a), those that change the machine (`kill`, `stop`, `reboot`, `poweroff`, `shutdown`, `budget`, `date set`, `logger`, `tpm`, `fetch`, `https`, a `>` into a file);
+  - refused:
+    - `netpolicy` with a change and `netrevoke` (800-NET-0038: the link does not change the policy);
+    - `mode`;
+    - scripts (`msh`);
+    - and what is refused to every client: the screen's own commands, programs and statements.
+- **No question:** the shell runs the link's line without asking in its window. `reboot`, `poweroff`, `shutdown` and `stop` skip their own question too.
+- **The log:** the system log names each command from the link by its word alone, `[SHELL] FOR THE LINK THE SHELL RAN PS`, as `link` logs it, so no argument reaches the log.
+- **The answer:** the last 7000 bytes of what the command printed, as for every client. `refused` when the rule refuses.
+- **`dmesg` is a program,** not a shell command. The developer mode already runs it by name (800-LNK-0012).
+
+## Acceptance criteria
+
+- **A host test** (`tests/shell_host.rs`): the link's client gets at once what a program's client is asked, and is refused the policy's changes, `mode` and scripts. A program's client is still asked.
+- **The QEMU `link` suite with `dev`** (LNK's, once KRN's client exists): `sh ip`, `sh ps` and a refusal.
+- **Docs:** `docs/tools/README.md` and `README_RU.md`.
+
+What runs over the link is evidence for the configurations tested only (MC-12.1). The shell decides what the link's client may run. This task claims nothing for a client that `init` does not mint (MC-12.3).
+
+## Related
+
+[800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (`run`), 800-LNK-0015 (on LNK's branch).
