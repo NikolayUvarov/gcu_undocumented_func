@@ -20,7 +20,10 @@
    - The shell logs it: the first time, then at each power of two.
 2. **A restarted shell finds the `wm` that runs.** With exactly one program called `wm` at its start, it gives that `wm` the screen (`fg`). At a boot none runs yet.
    - It does not make that `wm` its manager. The clock, the zone, the radio and the counters stay for the `wm` the shell itself starts, because a name proves nothing.
-3. **Left to `KRN`'s rule.**
+3. **The start script once a boot** (EFF's second report, `APP/2026-10-22T1803Z-…`: a restarted shell ran `autorun.msh` again, and its Wi-Fi join left the machine without a default route for 16 s).
+   - The shell asks `init` how often it started the shell this boot (`init.wit` `starts`).
+   - From the second start on it runs no `autorun.msh` and says so. It also gives `wm` the screen only then.
+4. **Left to `KRN`'s rule.**
    - The moment between the check and the write.
    - Every other server.
    - Whether `wm` keeps its buffer until the answer (ASR's item 2). `wm` lends it through the generated `net_counters`, and keeping it needs `wire`'s help.
@@ -30,7 +33,8 @@
 - **The `wm` suite:**
   - the shell is killed while `wm` runs;
   - `init` starts it again, and the new shell logs that `wm` has the screen again;
-  - `wm`'s close-all key works.
+  - `wm`'s close-all key works;
+  - the second start ran no start script.
 - **The caller that gives up:** ASR's `giveup` suite (500-ASR-0012) checks the server goes on, once `KRN`'s rule lands.
 - **Docs:** `docs/tools/README.md` and `README_RU.md`.
 

@@ -1391,6 +1391,15 @@ fn given_commands() -> Option<Endpoint> {
     (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_COMMANDS))
 }
 
+// How many times init started the shell this boot (`init.wit` `starts`): more than once after a fault, a kill or `svc
+// restart`; 1 when init does not say.
+fn starts() -> u32 {
+    match mind::idl::init::list(Endpoint::INIT) {
+        Ok(Ok(services)) => services.as_slice().iter().find(|s| s.name.as_str() == "shell").map_or(1, |s| s.starts.max(1)),
+        _ => 1,
+    }
+}
+
 // The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
 #[inline(never)]
 fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box<Shell> {
@@ -1434,12 +1443,14 @@ fn main(info: &'static BootInfo) {
     shell.beat.0 = shell.term.position().line;
     shell.prompt();
     // A shell init restarted gives the screen back to the window manager still running (the maintainer: "wm must not fall
-    // in such cases", 2026-10-22). At a boot none runs yet.
-    shell.give_back_wm();
+    // in such cases", 2026-10-22), and does not run the start script again (EFF's report: its Wi-Fi join, a second time).
+    let starts = starts();
+    if starts > 1 { shell.give_back_wm(); }
     let mut vt = Vt::new();
     let mut events = Events::new();
-    // The start script: tried once a second after the first frame, for a minute at most (000-APP-0079).
-    let (mut autorun, autorun_until) = (Some(0u64), mind::time::uptime_ms() as u64 + 60_000);
+    // The start script: tried once a second after the first frame, for a minute at most (000-APP-0079); once a boot.
+    let (mut autorun, autorun_until) = (Some(0u64).filter(|_| starts <= 1), mind::time::uptime_ms() as u64 + 60_000);
+    if starts > 1 { mind::println!("[SHELL] START {} OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN", starts); }
     // The time zone from data/clock.conf, tried as the start script is, before it (000-APP-0099).
     let mut zone_next = Some(0u64);
     loop {

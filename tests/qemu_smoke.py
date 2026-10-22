@@ -8770,7 +8770,10 @@ def wm_suite(vm):
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
-    print("PASS: wm: the shell killed while wm runs comes back and gives wm the screen again; wm's close all works", flush=True)
+    # The start script runs once a boot (EFF's report of 2026-10-22): the second start of the shell says so.
+    require(vm.command("dmesg -s shell", raw=True), "START 2 OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN")
+    print("PASS: wm: the shell killed while wm runs comes back, gives wm the screen again and runs no start script; wm's "
+          "close all works", flush=True)
     # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
     # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
     seen.clear()
