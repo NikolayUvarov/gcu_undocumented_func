@@ -98,6 +98,10 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
   - in "x86: boot, display, network…", `download`'s read-back stopped after 16 of 30 MiB;
   - "x86: files and block writes" ran past its hour, and its log was lost with the operation.
 
+**Round 8 (2026-10-22)** landed all three requests: LNK's COMMAND (`claude/LNK-link` 97d48a3), NET's parser sessions and `BADGE_LAUNCH` (`claude/relaxed-meitner-5bmhpz` a1488f4) and KRN's ABI 15 and `init.wit` 1.6 (`claude/youthful-mendel-mf1soy` 1ea50b9).
+- **Gate `land-aa50204e`** on candidate aa50204, on `main` 28202e1: every group green, none run again, in 1 h 43 min on i9, un-rizen (two lanes) and PCU.
+- **`main` = aa50204.** The answer is `LANDING/2026-10-22T0729Z-KRN-landed-aa50204e.md`.
+
   The cause is not established. If it recurs, it gets an issue of its own.
 - **The gate script was stopped** at its 2-hour background limit, with two i9 groups left. Run again with the same tag, it took up every finished operation by its key, ran the rest and the failed groups alone, and called it red.
 - **The answer** is `LANDING/2026-10-22T0346Z-KRN-round-803dd2f8.md`, with the details in APP's directory.

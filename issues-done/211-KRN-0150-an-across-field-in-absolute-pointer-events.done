@@ -1,8 +1,8 @@
-# 211-KRN-0150 — Horizontal wheel steps in absolute pointer events
+# 211-KRN-0150 — Horizontal wheel steps in absolute pointer events — done
 
-**Type:** ABI (`pointer_absolute_scroll`, ABI 15) · **Owner:** kernel session · **Priority:** P3 · **Status:** made (2026-10-22); the gate left · **Blocked by:** — · **Main task:** — (for [211-APP-0090](211-APP-0090-horizontal-scrolling.md)) · **Constitution:** MC-12.4, MC-12.7
+**Type:** ABI (`pointer_absolute_scroll`, ABI 15) · **Owner:** kernel session · **Priority:** P3 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [211-APP-0090](../issues/211-APP-0090-horizontal-scrolling.md)) · **Constitution:** MC-12.4, MC-12.7
 
-From the tools track's request in [requests-KRN.md](requests-KRN.md) (2026-10-20), numbered here and taken into ABI 15 with [800-KRN-0148](800-KRN-0148-a-shell-client-for-link-in-developer-mode.md).
+From the tools track's request in [requests-KRN.md](../issues/requests-KRN.md) (2026-10-20), numbered here and taken into ABI 15 with [800-KRN-0148](../issues/800-KRN-0148-a-shell-client-for-link-in-developer-mode.md).
 
 ## Problem
 
@@ -20,13 +20,19 @@ From the tools track's request in [requests-KRN.md](requests-KRN.md) (2026-10-20
 ## Acceptance criteria
 
 - [x] A host test round-trips an absolute event with across steps from −8 to 7, with its position, buttons and wheel unchanged. An event from `pointer_absolute` reads 0.
-- [ ] The gate passes. `wm` and `mind::window::pointer_at` passing the steps on are the tools track's (211-APP-0090).
+- [x] The gate passes. `wm` and `mind::window::pointer_at` passing the steps on are the tools track's (211-APP-0090).
 
 ## Progress (2026-10-22)
 
 - `pointer_absolute_scroll` and `pointer_across` for both kinds of event in `common/abi.rs`; `tests/runtime.rs` `absolute_pointer_events_carry_horizontal_steps`.
 - **`READ_KEY` skips pointer events** (`kernel/src/scheduler.rs`). It returned the next event with a nonzero byte, and an absolute event's byte may now be its horizontal steps: without this, a legacy reader that also asked for the pointer would have read them as a key.
 
+## Resolution
+
+- `pointer_absolute_scroll` and `pointer_across` in `common/abi.rs`; `READ_KEY` skips pointer events (`kernel/src/scheduler.rs`); `tests/runtime.rs` `absolute_pointer_events_carry_horizontal_steps`.
+- In ABI 15 with 800-KRN-0148; every group of gate `land-aa50204e`, landing round 8, `main` aa50204, passed.
+- `wm` and `mind::window::pointer_at` passing the steps on are the tools track's (211-APP-0090).
+
 ## Related
 
-[211-APP-0090](211-APP-0090-horizontal-scrolling.md), 211-DRV-0018 (the trackpad's swipes), [800-KRN-0148](800-KRN-0148-a-shell-client-for-link-in-developer-mode.md) (ABI 15).
+[211-APP-0090](../issues/211-APP-0090-horizontal-scrolling.md), 211-DRV-0018 (the trackpad's swipes), [800-KRN-0148](../issues/800-KRN-0148-a-shell-client-for-link-in-developer-mode.md) (ABI 15).
