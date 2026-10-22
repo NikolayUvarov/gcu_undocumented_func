@@ -101,6 +101,7 @@ USER_CRATES=(
     "netcheck:netcheck:netcheck.elf"
     "webcheck:webcheck:webcheck.elf"
     "effector:effector:effector.elf"
+    "effector_gw:effector_gw:effector_gw.elf"
     "download:download:download.elf"
     "windows:windows:windows.elf"
     "wintest:wintest:wintest.elf"

@@ -170,12 +170,35 @@ runs until it is stopped. It prints one line per event (`CONNECTED`, `DENIED`,
   server failed is retried with back-off; after a restart the saved answers are
   sent again, never run again, and a redelivered command gets its saved answer.
 
+**As boot services** (2026-10-22, built, not yet started by `init`): `init`
+starts both with `--service` in the development or maintenance mode
+(750-KRN-0119, 0143). Started any other way, `effector_gw` serves nothing and
+says so. The slots and badges are one table in `libmind/src/effector.rs`
+(`mind::effector`):
+
+| Service | Slot | Holds |
+|---|---|---|
+| `effector --service` | `SLOT_RTC` (2), `SLOT_TLS` (20), `SLOT_PARSE` (28), `SLOT_NETWORK` (18) | as the program |
+| | `SLOT_FILE` (7) | a reading client scoped to `data/effector/`: `effector.conf` and the token the owner leaves |
+| | `SLOT_VFS` (3) | its private `system/effector`: the token (moved there at the first start), `agent_id`, `journal` |
+| | `SLOT_GATEWAY` (4) | its client of `effector_gw`, badged `BADGE_SESSION` (1) |
+| `effector_gw --service` | `SLOT_SERVICE` (1) | its endpoint: `BADGE_SESSION` for actions, `BADGE_OWNER` (2) for the shell's `status`, `reload-policy`, `audit`; any other badge is refused |
+| | `SLOT_READER` (5) | a reading client of the volumes: `data/effector/policy`, the policy's file roots, `log:` |
+| | `SLOT_FILE` (7) | the writable scopes of 750-KRN-0120, for deliveries |
+| | `SLOT_VFS` (3) | its private `system/effector_gw`: the audit file (`audit`, then `audit.old` beyond 256 KiB) |
+| | `SLOT_SYSINFO` (10), `SLOT_LIFECYCLE` (11), `SLOT_LOG` (12) | memory, the services (750-KRN-0121's limited client), the log ring |
+
+A grant `init` does not give makes the requests that need it fail; without
+its private directory the gateway cannot write an audit line, so it refuses
+every request (MC-10.6).
+
 **Not done in this slice** (each stays in its task):
 
-- the boot service, its private directory for the token and `init`'s grants
-  (750-KRN-0119, 0120, 0121): the token sits in `data/effector/`, which the
-  shell can read;
-- the gateway and any action (750-EFF-0007 and on): every command is denied;
+- `init` starting the two services, their grants and private directories
+  (750-KRN-0119, 0120, 0121): until then the session runs from the shell and the
+  token sits in `data/effector/`, which the shell can read;
+- the session handing commands to the gateway (750-EFF-0006, 0007): every
+  command is still denied;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
 - journal retention: the journal keeps 64 answers and then refuses new commands;
 - a `cancel_command` the server sends while an answer waits for its ACK (it
