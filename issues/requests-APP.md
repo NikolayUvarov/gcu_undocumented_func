@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (one waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (two waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -42,3 +42,11 @@ Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md).
 - **What changed.** On a disk booted from a slot that holds applications, `loader` opens an application, and lists one in `LIST`, from that slot (`MIND/A/` or `MIND/B/`), not the root.
 - **What is left in the shell.** `programs::about` (`help <name>`, `list -l`) still opens `<name>.elf` at the root. There it reads another build's text, or none once a release drops a program.
 - **Asked.** Read the booted slot's copy when the slot holds applications, as `files` reads the booted slot's kernel (351-APP-0088), or ask `loader` for the text.
+
+## The `wifi` guide names the station's automatic join
+
+**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](550-NET-0041-wlan-joins-a-remembered-network-by-itself.md) · **Constitution:** MC-12.3
+
+- **What changed.** `wlan` joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
+- **What stops it.** `wifi leave` (`d` in `wifi`'s window) stops it until the station next joins; `forget` (`f`) takes the network out of it.
+- **Asked.** One line in the `wifi` guide (docs/tools/README.md and README_RU.md) that says so, beside `d` and `f`. A word in `wifi` to turn it off for good can follow if the network track adds one to `wifi.wit`.

@@ -6440,6 +6440,15 @@ def wifi_join_check(vm):
         vm.expect("SHELL RESUMED.")
         time.sleep(.2); vm.collect(); vm.output = ""
 
+    def wlan_until(line, timeout):  # wlan's log, read until `line` is in it
+        text, deadline = "", time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            text += vm.command(f"logs {vm.services()['wlan']}", raw=True)
+            if line in text:
+                return text
+            time.sleep(1)
+        raise AssertionError((line, text[-3000:]))
+
     # 550-NET-0024: the remembered network outlives a restart of keystore and of wlan; the link carries traffic.
     for name in ("keystore", "wlan"):
         pid = vm.services()[name]
@@ -6450,15 +6459,32 @@ def wifi_join_check(vm):
             time.sleep(.2)
         else:
             raise AssertionError(f"{name} PID={pid} was not restarted")
-    scanned(); quit_wifi()
-    run("wifi join MIND-TEST", 90, "[WIFI] JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
+    # 550-NET-0041: the restarted station joins the remembered network by itself, with no command.
+    require(wlan_until("[WLAN] AUTO-JOIN MIND-TEST: JOINED", 120), "[WLAN] AUTO-JOIN MIND-TEST: JOINED (TRY ")
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST 02:00:00:57:4C:A0 CHANNEL 6")
     require(vm.service_logs("keystore", "WI-FI KEYS FOR MIND-TEST FOR PID"), "[KEYSTORE] WI-FI KEYS FOR MIND-TEST FOR PID")
     for _ in range(3):
         pinged = vm.command("wifiping ping:10.0.4.1")
         if "NETCHECK ping:10.0.4.1 OK" in pinged:
             break
     require(pinged, "NETCHECK ping:10.0.4.1 OK")
+    # The network lost: the access point sends a deauthentication and is away for 25 s. The station's own rejoin finds no
+    # answer; the automatic join tries until it hears the network again, each try one line.
+    vm.command("ping 10.0.4.98", timeout=30)
+    require(vm.service_logs("wlansim", "GOES AWAY"), "[WLANSIM] THE ACCESS POINT GOES AWAY FOR 25 S")
+    lost = wlan_until("[WLAN] AUTO-JOIN MIND-TEST: JOINED", 150)
+    require(lost, "[WLAN] Joining: LOST")
+    failed = re.findall(r"\[WLAN\] AUTO-JOIN[^\n]*\(TRY (\d+)\), AGAIN IN 10 S", lost)
+    rejoined = re.search(r"\[WLAN\] AUTO-JOIN MIND-TEST: JOINED \(TRY (\d+)\)", lost)
+    assert failed and [int(n) for n in failed] == list(range(1, len(failed) + 1)) and int(rejoined[1]) == len(failed) + 1, lost[-3000:]
+    run("wifi status", 30, "[WIFI] STATUS JOINED MIND-TEST")
     run("wifi leave", 30, "[WIFI] LEFT")
+    # After wifi leave the station joins nothing by itself: past two tries' waits it is still off.
+    time.sleep(25)
+    quiet = vm.command(f"logs {vm.services()['wlan']}", raw=True)
+    require(quiet, "[WLAN] LEFT THE NETWORK: NO AUTOMATIC JOIN UNTIL THE NEXT ONE")
+    assert "AUTO-JOIN" not in quiet, quiet[-2000:]
+    run("wifi status", 30, "[WIFI] STATUS OFF")
     # Forgotten through wifi's screen (f): keystore drops it, and a join with no passphrase is refused.
     scanned()
     vm.send_bytes(b"f")
@@ -6466,8 +6492,9 @@ def wifi_join_check(vm):
     quit_wifi()  # before any shell command: while wifi runs, the console's keys are its
     require(vm.service_logs("keystore", "FORGOTTEN FOR PID"), "[KEYSTORE] WI-FI NETWORK MIND-TEST FORGOTTEN FOR PID")
     run("wifi join MIND-TEST", 90, "[WIFI] REFUSED MIND-TEST: the station does not take that passphrase")
-    print("PASS: MIND-TEST joined with no passphrase after keystore and wlan restarted, the gateway answering through the link; "
-          "forgotten through wifi's screen, then refused without a passphrase", flush=True)
+    print("PASS: after keystore and wlan restarted the station joined MIND-TEST by itself (550-NET-0041), the gateway "
+          f"answering through the link; the access point away 25 s, the station joined it again by itself after {len(failed)} "
+          "logged tries; after wifi leave no join by itself; forgotten through wifi's screen, then refused without a passphrase", flush=True)
 
 def shell_badge_rights_check(vm):
     """000-NET-0015, 351-NET-0022: the shell's virtio_net client (SLOT_NET, 16) and its tls client (SLOT_TLS, 20) carry
@@ -6778,9 +6805,10 @@ def net_suite(args, disk):
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
     rdrand = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" and args.wlansim_elf else []
     if args.wlansim_elf:
-        # wifi_join_check pings the station's gateway: a rule beside the policy the download checks left (550-NET-0018).
+        # wifi_join_check pings the station's gateway: a rule beside the policy the download checks left (550-NET-0018);
+        # the shell's ping of 10.0.4.98 sends the access point away (550-NET-0041).
         with open(disk / "netpolicy.txt", "a") as policy:
-            policy.write("wifiping 10.0.4.1 icmp\n")
+            policy.write("wifiping 10.0.4.1 icmp\nconsole 10.0.4.98 icmp\n")
     vm = VM(args, disk.relative_to(ROOT).as_posix(), extra=["-nic", "user,model=e1000"] if args.arch == "aarch64" else rdrand)
     try:
         assert "virtio_net" not in vm.services()
