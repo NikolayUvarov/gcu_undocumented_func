@@ -8,6 +8,7 @@ use crate::idl::codec::{List, Text};
 use crate::idl::parse::{self, HttpHead, HttpResponse};
 use crate::ipc::{Endpoint, Message};
 use crate::release;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub fn to_record(head: &Head) -> HttpHead {
     let (has_range, range_unsatisfied, range_start, range_end, range_total) = match head.range {
@@ -67,7 +68,13 @@ pub enum NotOwn { Endpoint(crate::sys::Error), Loader(crate::idl::loader::Error)
 impl Session {
     /// A parser of the session's own, which the loader starts as a helper.
     pub fn own(loader: Endpoint) -> Result<Self, NotOwn> {
-        let created = Endpoint::create().map_err(NotOwn::Endpoint)?;
+        let created = loop {
+            match Endpoint::create() {
+                // A helper this program just ended may hold its endpoint in the quota until the kernel reaps it.
+                Err(crate::sys::Error::Other(crate::abi::ERR_LIMIT)) if recently_ended() => { crate::time::sleep(2); }
+                other => break other.map_err(NotOwn::Endpoint)?,
+            }
+        };
         // The helper's copy alone can receive; this program keeps one that calls and lends its head's pages, so that with
         // the helper gone the kernel finds no receiver and fails the call (ERR_PEER) instead of letting it wait for ever.
         let calls = crate::ipc::mint(created.0, crate::abi::CAP_WRITE | crate::abi::CAP_GRANT, 0, 0).map_err(NotOwn::Endpoint);
@@ -102,8 +109,30 @@ pub fn end_session(endpoint: Endpoint) {
     let _ = crate::ipc::drop_cap(endpoint.0);
 }
 
+/// When this program last ended a parser of its own (uptime in ms; 0: never).
+static ENDED_AT: AtomicUsize = AtomicUsize::new(0);
+/// How long an ended helper's task is waited for.
+const ENDING_MS: usize = 1000;
+/// How long after that its endpoint may still count in this program's quota: the kernel frees an endpoint nobody holds
+/// on its reap pass, when the boot CPU is idle (109-KRN-0133).
+const REAP_MS: usize = 3000;
+
+fn recently_ended() -> bool {
+    let at = ENDED_AT.load(Ordering::Relaxed);
+    at != 0 && crate::time::uptime_ms().saturating_sub(at) < REAP_MS
+}
+
+// Ends the session's own parser and waits, within ENDING_MS, until its task has ended; the next session then waits for
+// the kernel to free the endpoint (`own`).
+fn end_own(endpoint: Endpoint, pid: u64) {
+    end_session(endpoint);
+    let started = crate::time::uptime_ms();
+    while crate::process::alive(pid) && crate::time::uptime_ms().saturating_sub(started) < ENDING_MS { crate::time::sleep(2); }
+    ENDED_AT.store(crate::time::uptime_ms().max(1), Ordering::Relaxed);
+}
+
 impl Drop for Session {
-    fn drop(&mut self) { if self.pid.take().is_some() { end_session(self.endpoint); } }
+    fn drop(&mut self) { if let Some(pid) = self.pid.take() { end_own(self.endpoint, pid); } }
 }
 
 impl http::Parser for Session {
@@ -111,8 +140,7 @@ impl http::Parser for Session {
         match (Service(self.endpoint).head(head), self.loader) {
             // Its own parser could not be reached, as when it ended after 30 s idle: another one, asked once more.
             (Err(http::Error::Parser), Some(loader)) if self.pid.is_some() => {
-                end_session(self.endpoint);
-                self.pid = None;
+                if let Some(pid) = self.pid.take() { end_own(self.endpoint, pid); }
                 let restarts = self.restarts + 1;
                 *self = Self::own(loader).map_err(|_| http::Error::Parser)?;
                 self.restarts = restarts;

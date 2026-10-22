@@ -160,12 +160,13 @@ impl Updater {
     fn other(&self) -> &'static str { slot_name(plan::other(self.slot)) }
 
     /// The version a slot holds as the channel kept there shows it: signed with the release key and naming, for this
-    /// architecture, the manifest `digest` (None: read the slot's MANIFEST). 0 when it shows none.
-    fn kept_version(&self, slot: &str, digest: Option<[u8; 32]>) -> (u64, u64) {
+    /// architecture, the manifest `digest` (None: read the slot's MANIFEST). 0 when it shows none. The caller's parser
+    /// reads it, so that one session serves several reads (109-KRN-0133).
+    fn kept_version(&self, slot: &str, digest: Option<[u8; 32]>, parser: Endpoint) -> (u64, u64) {
         let Ok(file) = File::open(&format!("MIND/{}/CHANNEL", slot)) else { return (0, 0) };
         let mut bytes = alloc::vec![0u8; file.size().min(CHANNEL_MAX)];
         if file.read_at(0, &mut bytes) != Ok(bytes.len()) { return (0, 0); }
-        let Ok(channel) = channel_of(&bytes, parser().endpoint()) else { return (0, 0) };
+        let Ok(channel) = channel_of(&bytes, parser) else { return (0, 0) };
         let digest = digest.or_else(|| {
             let manifest = File::open(&format!("MIND/{}/MANIFEST", slot)).ok()?;
             (manifest.size() <= MANIFEST_MAX).then(|| sha256(&manifest)).flatten()
@@ -292,7 +293,8 @@ impl Updater {
         };
         let (manifest, signature) = (read("MANIFEST", MANIFEST_MAX)?, read("MANIFEST.SIG", 64)?);
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
-        let files = boot_files(&manifest, parser().endpoint())?;
+        let parser = parser();
+        let files = boot_files(&manifest, parser.endpoint())?;
         for name in BOOT_FILES.iter().chain(["kernel.elf"].iter()) {
             let path = format!("MIND/{}/{}", slot, name);
             match (files.iter().find(|f| f.path.as_str() == *name), File::open(&path)) {
@@ -302,7 +304,7 @@ impl Updater {
                 _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, name); return Err(Error::Digest); }
             }
         }
-        match self.kept_version(slot, Some(mind::sha256::digest(&manifest))) { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
+        match self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint()) { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
     }
 
     // Asks init to restart the machine; init answers first.
@@ -378,9 +380,13 @@ fn main(info: &'static BootInfo) {
     if slot == 0 {
         mind::println!("[UPDATER] BOOTED FROM THE VOLUME'S ROOT: NO SLOT TO FILL");
     } else {
-        let (running, minimum) = updater.kept_version(slot_name(slot), Some(updater.manifest));
+        // Both slots' channels through one parser: a session's helper may hold the updater's one endpoint for a moment
+        // after it ends (109-KRN-0133).
+        let parser = parser();
+        let (running, minimum) = updater.kept_version(slot_name(slot), Some(updater.manifest), parser.endpoint());
         updater.running = running; updater.minimum = minimum;
-        let (staged, _) = updater.kept_version(updater.other(), None);
+        let (staged, _) = updater.kept_version(updater.other(), None, parser.endpoint());
+        drop(parser);
         updater.staged = if staged > running { staged } else { 0 };
         let recorded = plan::newest(updater.records());
         mind::println!("[UPDATER] SLOT {}{}, VERSION {}; THE NEWER RECORD: {}", slot_name(slot), if updater.trial { " ON TRIAL" } else { "" },

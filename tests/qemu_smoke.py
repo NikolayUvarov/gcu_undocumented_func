@@ -4911,6 +4911,37 @@ def updater_suite(args, updater_elf):
     print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
+def updater_parser_check(vm, https):
+    """109-UPD-0017: a check's channel and heads are parsed in a helper of the check's own, which the loader starts
+    through the updater's helpers-only client (109-KRN-0117): while the server holds the channel's request, the helper
+    holds only its endpoint (stat caps); it is gone when the check ends."""
+    parsers = lambda: sorted(int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M))
+    service = parsers()[0]  # the shared service, started at boot before any helper
+    hold, asked = threading.Event(), len(https.requests)
+    https.holds["/channels/stable"] = hold
+    try:
+        for _ in range(160):  # the next check (every 20 s) asks for the channel, and the server holds the answer
+            if ("/channels/stable", None) in https.requests[asked:]:
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError(("no check asked for the channel", https.requests[asked:]))
+        helpers = [pid for pid in parsers() if pid != service]
+        assert len(helpers) == 1, (helpers, vm.command("ps", raw=True))
+        text = vm.command(f"stat caps {helpers[0]}", raw=True)
+        require(text, "STAT CAPS VERSION=2 COUNT=1 ")
+        assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    finally:
+        hold.set()
+    for _ in range(120):  # the check ends, and its helper with it
+        if helpers[0] not in parsers():
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the check's parser outlived it", vm.command("ps", raw=True)))
+    print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
+
+
 def update_releases(temp, arch):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out. Returns the volumes, the server, release 5's channel, release 6's
@@ -4998,6 +5029,7 @@ def update_suite(args):
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        updater_parser_check(vm, https)
         # Version 6 as published, but the first of its boot files changed on the server.
         (server / "channels/stable").write_bytes(good)
         blob = server / "blobs" / boot_files[0][1]
@@ -5046,6 +5078,8 @@ def update_suite(args):
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
         log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
+        assert "PARSER: THE SHARED SERVICE" not in log, log
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
@@ -6457,6 +6491,12 @@ def net_suite(args, disk):
         require(listed, "NETCHECK 1 SOCKETS")
         require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
         flow_bounds_check(vm, web_port)
+        # 109-KRN-0133: with one endpoint left in its quota, as the updater has, a program opens ten parser sessions in a
+        # row, each with a helper of its own: each session's end frees the endpoint for the next. After the checks that
+        # count grants, as it takes one of its own.
+        out = vm.command("netcheck sessions", timeout=120)
+        require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
+        require(out, "NETCHECK sessions OK")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)
