@@ -6501,6 +6501,12 @@ def net_suite(args, disk):
         out = vm.command("netcheck sessions", timeout=120)
         require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
         require(out, "NETCHECK sessions OK")
+        # 000-NET-0040 (socket.wit 2.6): an echo of 1000 bytes of a pattern comes back whole and the same; one of none
+        # with the stack's own pattern; one over 1472 bytes is refused.
+        out = vm.command("netcheck echo:10.0.2.2:1000:a55a0f echo:10.0.2.2:0: echo:10.0.2.2:1473:00", timeout=60)
+        for line in ("NETCHECK echo: 1000 BYTES BACK IN", "NETCHECK echo:10.0.2.2:1000:a55a0f OK", "NETCHECK echo: 0 BYTES BACK IN",
+                     "NETCHECK echo:10.0.2.2:0: OK", "NETCHECK echo:10.0.2.2:1473:00 Invalid"):
+            require(out, line)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)

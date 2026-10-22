@@ -25,7 +25,12 @@
 /// station (slot 4); the default is the preferred card while its link is up and it has an address and a gateway, else
 /// the first card in that order that has. `prefer` names the preferred card (operator and policy badges: the broker
 /// applies the policy's `default card N` line); `cards` tells every card's kind and state.
-package mind:socket@2.5.0;
+///
+/// 2.6 (000-NET-0040): `ping-with` sends an echo request of `size` data bytes (0 to 1472, one frame on a 1500-byte MTU),
+/// `pattern` repeated over them (1 to 16 bytes; empty: `MINDCORE`). Its answer gives the round trip, the reply's data
+/// size, and whether its data are what was sent. A grant's echo is counted in its volume, the request's bytes and as
+/// many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
+package mind:socket@2.6.0;
 
 interface socket {
     /// Why a request failed.
@@ -44,6 +49,9 @@ interface socket {
     /// What a grant used: bytes sent and received, sockets open, milliseconds left (0: expired).
     record usage { sent: u64, received: u64, sockets: u32, left-ms: u32 }
 
+    /// An echo's answer: the round trip in microseconds, the reply's data bytes, whether they are what was sent (2.6).
+    record echo { time-us: u32, size: u16, matched: bool }
+
     /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
     /// configured it (or the static fallback did).
     record config { address: u32, prefix: u8, gateway: u32, dns: u32, mac: u64, dhcp: bool }
@@ -61,6 +69,9 @@ interface socket {
     config: func() -> result<config, error>;
     /// ICMP echo to `address`; returns the round trip in microseconds.
     ping: func(address: u32, timeout-ms: u32) -> result<u32, error>;
+    /// ICMP echo to `address` with `size` data bytes of `pattern` (2.6). Errors: `invalid` (a size over 1472, a pattern
+    /// longer than 16), and those of `ping`.
+    ping-with: func(address: u32, timeout-ms: u32, size: u16, pattern: list<u8, 16>) -> result<echo, error>;
     /// IPv4 address of `name` from DNS server `server` (0: the configured one) on `port` (0: 53).
     resolve: func(name: string<253>, server: u32, port: u16, timeout-ms: u32) -> result<u32, error>;
     /// A UDP socket on local `port` (0: any free port).
