@@ -8764,8 +8764,8 @@ def wm_suite(vm):
     vm.background(survivor)
     shell_pid = vm.services()["shell"]
     vm.send(f"kill {shell_pid}\n", raw=True)
-    vm.expect("[INIT] shell RESTARTED", timeout=60)
-    back = vm.expect("RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", timeout=60)
+    # init's lines go to the system log; the new shell's banner and its note come on the serial line.
+    back = vm.expect("THE SCREEN IS ITS AGAIN", timeout=60, after="MIND CORE v1.6")
     assert re.search(r"\[SHELL\] WM \(PID \d+\) RAN BEFORE THIS SHELL STARTED", back), back[-1500:]
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
