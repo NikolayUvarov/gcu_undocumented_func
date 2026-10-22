@@ -50,6 +50,8 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **The key code** is in `main` with ABI 15 ([000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done)): `KEY_PRINT_SCREEN`, decoded from PS/2's `E0 37`.
 - **The shell** listens for PrintScreen alone, as for Ctrl+Alt+F6, and takes the screen in front at once: `[SHELL] SCREENSHOT <file>: … (PRINTSCREEN)`.
 - **The `vfs` suite** on x86: PrintScreen writes `data/media/screen-004.bmp`.
+  - The shell in front writes the file before it reads the next line, so the suite waits for its line first (26a14215).
+  - Passed locally on 26a14215 ("x86: files and block writes"), and the x86 build and the host tests on 15d4025e.
   - Not on aarch64: QEMU's VirtIO keyboard sends `KEY_SYSRQ` (99), which `virtio_input` does not pass.
   - A USB keyboard's PrintScreen (usage 0x46) becomes `E0 37` too (`libmind/src/hid.rs`), untested here. The MacBook Pro's keyboard has none; it keeps Ctrl+Alt+F6.
 
