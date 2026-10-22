@@ -1,6 +1,6 @@
 # 211-KRN-0150 — Horizontal wheel steps in absolute pointer events
 
-**Type:** ABI (`pointer_absolute_scroll`, ABI 15) · **Owner:** kernel session · **Priority:** P3 · **Status:** open (2026-10-22): taken into ABI 15 with 800-KRN-0148, the code next · **Blocked by:** — · **Main task:** — (for [211-APP-0090](211-APP-0090-horizontal-scrolling.md)) · **Constitution:** MC-12.4, MC-12.7
+**Type:** ABI (`pointer_absolute_scroll`, ABI 15) · **Owner:** kernel session · **Priority:** P3 · **Status:** made (2026-10-22); the gate left · **Blocked by:** — · **Main task:** — (for [211-APP-0090](211-APP-0090-horizontal-scrolling.md)) · **Constitution:** MC-12.4, MC-12.7
 
 From the tools track's request in [requests-KRN.md](requests-KRN.md) (2026-10-20), numbered here and taken into ABI 15 with [800-KRN-0148](800-KRN-0148-a-shell-client-for-link-in-developer-mode.md).
 
@@ -19,8 +19,13 @@ From the tools track's request in [requests-KRN.md](requests-KRN.md) (2026-10-20
 
 ## Acceptance criteria
 
-- [ ] A host test round-trips an absolute event with across steps from −8 to 7, with its position, buttons and wheel unchanged. An event from `pointer_absolute` reads 0.
+- [x] A host test round-trips an absolute event with across steps from −8 to 7, with its position, buttons and wheel unchanged. An event from `pointer_absolute` reads 0.
 - [ ] The gate passes. `wm` and `mind::window::pointer_at` passing the steps on are the tools track's (211-APP-0090).
+
+## Progress (2026-10-22)
+
+- `pointer_absolute_scroll` and `pointer_across` for both kinds of event in `common/abi.rs`; `tests/runtime.rs` `absolute_pointer_events_carry_horizontal_steps`.
+- **`READ_KEY` skips pointer events** (`kernel/src/scheduler.rs`). It returned the next event with a nonzero byte, and an absolute event's byte may now be its horizontal steps: without this, a legacy reader that also asked for the pointer would have read them as a key.
 
 ## Related
 

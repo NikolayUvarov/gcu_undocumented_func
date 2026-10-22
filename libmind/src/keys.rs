@@ -185,6 +185,7 @@ impl Ps2 {
                 0x52 => key(KEY_INSERT), 0x53 => key(KEY_DELETE),
                 0x1C => Some(Event::Key(event(KEY_ENTER, '\n' as u32, mods))),
                 0x35 => Some(Event::Key(event(0, '/' as u32, mods))),
+                0x37 => key(KEY_PRINT_SCREEN), // after the fake shift E0 2A, which says nothing (000-KRN-0149)
                 _ => None,
             };
         }

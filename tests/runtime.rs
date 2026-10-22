@@ -342,6 +342,20 @@ fn a_task_slot_kept_across_a_shrink_reads_as_empty() {
 }
 
 #[test]
+fn absolute_pointer_events_carry_horizontal_steps() {
+    // 211-KRN-0150: across steps from -8 to 7 in an absolute event, the rest unchanged; an older event reads 0.
+    use abi::*;
+    for across in -8..=7 {
+        let event = pointer_absolute_scroll(POINTER_LEFT, 4095, 17, -3, across);
+        assert_eq!((pointer_absolute_fields(event), pointer_across(event)), (Some((POINTER_LEFT, 4095, 17, -3)), across));
+    }
+    assert_eq!(pointer_absolute_scroll(0, 1, 2, 0, 99), pointer_absolute_scroll(0, 1, 2, 0, 7), "clamped");
+    let older = pointer_absolute(POINTER_RIGHT, 100, 200, 5);
+    assert_eq!((pointer_across(older), event_byte(older)), (0, 0));
+    assert_eq!(pointer_across(pointer_scroll(0, 1, 1, 0, -4)), -4, "a relative event as before");
+}
+
+#[test]
 fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     // 211-KRN-0058: SLOT_SHELL and SLOT_CLIPBOARD below SLOT_DYNAMIC, each named slot once, the loader's own kept.
     use abi::*;
