@@ -15,7 +15,7 @@ use alloc::vec::Vec;
 use effector_gw::gateway::{self, Badge, Fail, Gateway, Machine, Origin, ServiceState};
 use effector_gw::policy::{self, Ask};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_VFS};
-use mind::effector::{BADGE_OWNER, BADGE_SESSION, GATEWAY_DIR, OWNER_DIR, SLOT_READER};
+use mind::effector::{BADGE_OWNER, BADGE_SESSION, GATEWAY_DIR, POLICY_FILE, SLOT_READER};
 use mind::idl::codec::{List, Text};
 use mind::idl::effector as wit;
 use mind::idl::{init, log, sysinfo, vfs};
@@ -130,10 +130,19 @@ impl Client {
     }
 }
 
-/// The machine as `init`'s grants show it to the gateway.
-struct Host { reader: Client, writer: Client, private: Client }
+/// The machine as `init`'s grants show it to the gateway. `writer` is the scope `init` made of the policy's `deliver`
+/// root at this start (750-KRN-0120): its root is that directory, so paths are named below it.
+struct Host { reader: Client, writer: Client, private: Client, deliver: Option<String> }
 
 fn temporary(path: &str) -> String { format!("{}.part", path) }
+
+impl Host {
+    /// `path` below the delivery scope's root, or `None` outside it.
+    fn below<'p>(&self, path: &'p str) -> Option<&'p str> {
+        let root = self.deliver.as_deref()?;
+        path.strip_prefix(root).filter(|rest| !rest.is_empty())
+    }
+}
 
 impl Machine for Host {
     fn uptime_ms(&mut self) -> u64 { mind::time::uptime_ms() as u64 }
@@ -212,22 +221,29 @@ impl Machine for Host {
 
     fn size(&mut self, path: &str) -> Result<u64, Fail> { self.reader.size(path) }
     fn read(&mut self, path: &str, offset: u64, out: &mut [u8]) -> Result<usize, Fail> { self.reader.read(path, offset, out) }
-    fn exists(&mut self, path: &str) -> bool { self.writer.size(path).is_ok() || self.reader.size(path).is_ok() }
+    fn exists(&mut self, path: &str) -> bool {
+        let below = self.below(path).map(String::from);
+        below.is_some_and(|b| self.writer.size(&b).is_ok()) || self.reader.size(path).is_ok()
+    }
 
     fn write_temporary(&mut self, path: &str, offset: u64, data: &[u8]) -> Result<(), Fail> {
+        let below = String::from(self.below(path).ok_or(Fail::Denied)?);
         let mode = mind::fs::MODE_WRITE | mind::fs::MODE_CREATE | if offset == 0 { mind::fs::MODE_TRUNCATE } else { 0 };
-        self.writer.write_at(&temporary(path), offset, data, mode)
+        self.writer.write_at(&temporary(&below), offset, data, mode)
     }
 
     fn publish(&mut self, path: &str, replace: bool) -> Result<(), Fail> {
-        if self.writer.size(path).is_ok() {
+        let below = String::from(self.below(path).ok_or(Fail::Denied)?);
+        if self.writer.size(&below).is_ok() {
             if !replace { return Err(Fail::Exists); }
-            self.writer.remove(path)?;
+            self.writer.remove(&below)?;
         }
-        self.writer.rename(&temporary(path), path)
+        self.writer.rename(&temporary(&below), &below)
     }
 
-    fn discard_temporary(&mut self, path: &str) { let _ = self.writer.remove(&temporary(path)); }
+    fn discard_temporary(&mut self, path: &str) {
+        if let Some(below) = self.below(path).map(String::from) { let _ = self.writer.remove(&temporary(&below)); }
+    }
 
     fn audit(&mut self, line: &str) -> bool {
         mind::println!("[EFFECTOR_GW] {}", line);
@@ -243,7 +259,7 @@ impl Machine for Host {
         self.private.write_at(&file, at, text.as_bytes(), mind::fs::MODE_WRITE | mind::fs::MODE_CREATE).is_ok()
     }
 
-    fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.reader.read_whole(&format!("{}/policy", OWNER_DIR), policy::FILE_MAX + 1) }
+    fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.reader.read_whole(POLICY_FILE, policy::FILE_MAX + 1) }
 }
 
 fn error(f: Fail) -> wit::Error {
@@ -279,7 +295,9 @@ fn main(_info: &'static BootInfo) {
     // init starts it with `--service` in a mode (750-KRN-0119, 0143); started any other way it serves nothing.
     let service = mind::process::args_str().split_whitespace().any(|a| a == "--service");
     if !service || !present(mind::abi::SLOT_SERVICE) { mind::println!("[EFFECTOR_GW] NOT A SERVICE: init starts it with --service in a mode (750-KRN-0119)"); return; }
-    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS) };
+    let mut host = Host { reader: Client::new(SLOT_READER), writer: Client::new(SLOT_FILE), private: Client::new(SLOT_VFS), deliver: None };
+    // The delivery root `init` made the scope of at this start; a later policy's root takes effect at the next start.
+    if let Ok(bytes) = host.policy_file() { host.deliver = policy::Policy::parse(&bytes).ok().and_then(|p| p.deliver().map(String::from)); }
     let mut gw = Gateway::new();
     let held = |slot: usize, name: &'static str| if present(slot) { name } else { "-" };
     mind::println!("[EFFECTOR_GW] READY; GRANTS: {} {} {} {} {} {}", held(SLOT_SYSINFO, "SYSINFO"), held(SLOT_LIFECYCLE, "LIFECYCLE"), held(SLOT_LOG, "LOG"),

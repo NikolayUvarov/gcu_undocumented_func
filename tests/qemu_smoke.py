@@ -7180,7 +7180,7 @@ def effector_suite(args, disk):
             if line in out:
                 return out
             time.sleep(1)
-        raise AssertionError((line, session()[-3000:]))
+        raise AssertionError((line, session()[-3000:], vm.command("dmesg -s tls", raw=True)[-1500:], vm.command("dmesg -s netpolicy", raw=True)[-1500:]))
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
