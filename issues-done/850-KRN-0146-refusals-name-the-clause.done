@@ -1,6 +1,6 @@
-# 850-KRN-0146 — A refusal names the clause it enforces
+# 850-KRN-0146 — A refusal names the clause it enforces — done
 
-**Type:** `init`, `loader`, kernel log lines · **Owner:** kernel session · **Priority:** P3 · **Status:** made (2026-10-21); the landing left · **Blocked by:** — · **Main task:** [850](850-the-cultural-code.md) (the kernel track's part) · **Constitution:** MC-10.2, MC-12.3
+**Type:** `init`, `loader`, kernel log lines · **Owner:** kernel session · **Priority:** P3 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [850](../issues/850-the-cultural-code.md) (the kernel track's part) · **Constitution:** MC-10.2, MC-12.3
 
 ## Problem
 
@@ -54,6 +54,17 @@ None of these says which requirement it enforces. A reader of a log, or of a scr
 
 **Tested** on this session's machine, with `scripts/ci_local.sh` on the working tree: the host tests, "x86: boot, display, network, TLS, shell, memory, clock", "x86: services, storage, audio" (`modes`), "x86: files and block writes" (`update`, `linkupdate`), "aarch64: boot and fault containment" and "aarch64: files, network and TLS". The `modes` suite first expected badge 0 and failed on both architectures, though the line was right; with badge 2 it passed on both, alone.
 
+## Resolution
+
+- **`init`:** `refused()` logs `[INIT] <WHAT> REFUSED: PID … (BADGE …) MAY NOT … (<clause>)`.
+  - It covers `set-mode` (MC-12.6), `reboot` (MC-3.8), and `stop`/`restart` of init or the shell and `stop-task` of a service (MC-6.8).
+  - The `modes` suite reads the mode refusal's whole line on x86 and aarch64.
+- **The boot loader** (`bootloader/src/verify.rs`): MC-9.1 for a bad or malformed signature, a file the manifest does not list or a file not as the manifest says, MC-4.13 for an unknown manifest format.
+- **The kernel and the program loader** log no refusals, on purpose (MC-10.2).
+- **CONTRIBUTING.md** has the rule.
+- **Landed** in landing round 6: gate `land-b05bfb22`, every group green, `main` b05bfb2.
+- **Not tested on a machine:** the `reboot`, `stop` and `stop-task` lines.
+
 ## Related
 
-[850](850-the-cultural-code.md), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (the mode refusals).
+[850](../issues/850-the-cultural-code.md), [750-KRN-0143](../issues/750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (the mode refusals).
