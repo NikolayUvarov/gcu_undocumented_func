@@ -4051,6 +4051,18 @@ def link_suite(args):
                 # Never from the link, whatever the developer mode allows (800-NET-0038).
                 require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
                 assert re.search(r"\[LINK\] COMMAND \d+: netpolicy", vm.command("dmesg -s link", raw=True)), "the word alone is logged"
+            # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
+            # image; logd is never replaced.
+            if "REBOOT" in powers:
+                rtc = ROOT / "usb_root" / "rtc.elf"
+                require(link(port, "replace", "rtc", str(rtc)), "started again from replace/rtc.elf")
+                digest = hashlib.sha256(rtc.read_bytes()).hexdigest()
+                replaced = vm.command("dmesg -s init", raw=True)
+                assert re.search(rf"rtc REPLACED FROM data/link/replace/rtc\.elf: SHA-256 {digest[:16]}", replaced, re.I), replaced[-2000:]
+                require(vm.command("date", raw=True), "20")
+                require(link(port, "replace", "rtc", "--back"), "from its boot image")
+                assert "BACK TO ITS BOOT IMAGE" in vm.command("dmesg -s init", raw=True).upper()
+                require(link(port, "replace", "logd", str(rtc), ok=False), "not allowed")
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
