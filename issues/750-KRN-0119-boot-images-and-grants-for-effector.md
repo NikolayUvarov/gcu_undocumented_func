@@ -53,6 +53,7 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
 - **What this changes for EFF.**
   - `loader` runs no boot service's name as a program, so `effector CONFIG` from the shell is no longer a program. That holds to the maintainer's decision that Effector runs only in a mode.
   - The `effector` suite starts it from the shell, so it has to move to a mode. That is EFF's (`EFF/2026-10-22T…-KRN-750-krn-0119-starts-…`), and the two land together.
+- **`fm`'s check in the `tools` suite** reads the root's first file row, `ahci.elf`, for a file's size and date. With `effector_gw.elf` at the root, `kernel.elf` is one row below the panel (landing round 11).
 - **Left:**
   - 0121's lifecycle client (slot 11) and 0120's scope for deliveries (the gateway's slot 7);
   - the updater's client, `BADGE_REBOOT` and screen capture, with their tasks;
