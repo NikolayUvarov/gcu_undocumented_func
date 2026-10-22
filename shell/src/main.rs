@@ -371,7 +371,10 @@ impl Shell {
         let (list, count) = tasks();
         let mut found = list[..count].iter().filter(|t| t.service == 0 && label(&t.name) == "wm").map(|t| t.pid);
         let (Some(pid), None) = (found.next(), found.next()) else { return };
-        if self.focus(pid, false).is_ok() { mind::println!("[SHELL] WM (PID {}) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", pid); }
+        match self.focus(pid, false) {
+            Ok(()) => { mind::println!("[SHELL] WM (PID {}) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", pid); self.note(format_args!("WM (PID {}) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", pid)); }
+            Err(error) => self.note(format_args!("WM (PID {}) RUNS, BUT THE SCREEN DID NOT GO BACK TO IT: {:?}", pid, error)),
+        }
     }
 
     // The program `text` names for fg: its PID when one is called so (or holds the text in its name); with none or several
@@ -1051,11 +1054,13 @@ impl Shell {
             let Some(pid) = pid_arg(args) else { return self.report("EXPECTED ONE POSITIVE PID") };
             if is(b"pmap") { observe::pmap(&mut self.term, pid) } else if is(b"caps") { observe::caps(&mut self.term, pid) } else { observe::task_details(&mut self.term, pid) }
         } else if is(b"fg") || is(b"kill") || is(b"logs") {
-            // fg also takes a program's name (the maintainer's request, 2026-10-22); several of that name are listed.
-            let named = if is(b"fg") && !args.is_empty() && pid_arg(args).is_none() { self.named(core::str::from_utf8(args).unwrap_or("").trim()) } else { None };
+            // fg also takes a program's name (the maintainer's request, 2026-10-22): one word that is no number; several
+            // of that name are listed.
+            let name = is(b"fg") && !args.is_empty() && !args.starts_with(b"-") && !args.iter().all(u8::is_ascii_digit) && !args.iter().any(u8::is_ascii_whitespace);
+            let named = if name { self.named(core::str::from_utf8(args).unwrap_or("")) } else { None };
             let Some(pid) = pid_arg(args).or(named) else {
                 // A name that picks none or several was answered by `named`.
-                if !is(b"fg") || args.is_empty() { self.report("EXPECTED ONE POSITIVE PID"); }
+                if !name { self.report("EXPECTED ONE POSITIVE PID"); }
                 return;
             };
             let missing = |error: Error| if error == Error::NotFound { "NO SUCH PID" } else { "SERVICE HAS NO SCREEN" };
