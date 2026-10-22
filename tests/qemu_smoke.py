@@ -2255,12 +2255,15 @@ def search_check(vm):
     assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
     require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
     require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
-    # `|` (000-APP-0074): what a shell command prints is grep's text input (the maintainer: `ps | grep wm`).
-    assert lines(vm.command("cat ram:a.txt | grep hello")) == ["hello world"], vm.output[-1500:]
-    found = lines(vm.command("ps | grep shell"))
+    # `|` (000-APP-0074): what a shell command prints is grep's text input (the maintainer: `ps | grep wm`). The line's
+    # echo starts with the command before `|`, so it is left out here.
+    def piped(line):
+        return [row for row in lines(vm.command(line, timeout=30)) if row != line]
+    assert piped("cat ram:a.txt | grep hello") == ["hello world"]
+    found = piped("ps | grep shell")
     assert found and all("shell" in row for row in found), found
-    assert lines(vm.command("ls ram:docs | grep -c md")) == ["1"]
-    assert lines(vm.command("cat ram:a.txt | grep zzz")) == [], "no line matched"
+    assert piped("ls ram:docs | grep -c md") == ["1"]
+    assert piped("cat ram:a.txt | grep zzz") == [], "no line matched"
     require(vm.command("ps | grep"), "USAGE: GREP")
     require(vm.command("grep hello"), "USAGE: GREP")  # no path and no input
     require(vm.command("ps | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
