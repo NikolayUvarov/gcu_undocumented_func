@@ -267,7 +267,7 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 - A line that starts `ERROR: ` stays on the screen, and so does the shell's `STARTED` line. The shell says how many bytes went in (`312 BYTES WRITTEN TO ram:list.txt`).
 - The file is written through the shell's file client: `ram:`, `log:` and `data/`.
 - A client of the shell's commands (`console` in `wm`) is asked in the shell's window first, and a script needs `requires: files`.
-- `|` and `<` wait for the kernel's text input for programs ([000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)).
+- `command | program` (`ps | grep wm`) gives what the command prints to the program as its text input (`loader.wit` 1.9 `commit-with-input`, [000-KRN-0094](../../issues/000-KRN-0094-a-text-input-for-programs.md)). The command before it may be the shell's or a console program, which runs to its end first; the one after it is a program of the disk's, started in front, and the shell fills its input as it reads. `ERROR: ` lines of the command stay on the screen. One `|` a line; `grep` without a path reads its input. `<` is left.
 
 **Its start in the system log** (213-APP-0075): `[SHELL] FIRST FRAME 2560X1440 AT 7.9 S` once the shell has drawn its first frame, and `[SHELL] <STEP> TOOK <N> MS BEFORE THE FIRST FRAME` for a step before it that took longer than 5 s, naming what it called (the kernel, `logd`, the serial line, the keys and the commands typed, the drawing). With the compositor's `SCREEN IN FRONT` lines, `dmesg -s shell` tells a shell that never drew from one that waited (213-KRN-0098). A step that never returns leaves no line.
 
@@ -286,6 +286,13 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
   - A request's size and payload (`-s`, `-p`) wait for the stack to send them: its requests carry 8 bytes (requests-NET.md).
 - `ip` (550-APP-0085): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED` and `DEFAULT`.
 - `netstat [-i]` (000-APP-0031): every socket of the stack with its protocol, ports, remote end, TCP state, bytes each way and program, then the cards; `-i` the cards alone.
+- `mode [development|maintenance on|off [reason]]` (750-EFF-0013, `init.wit` 1.5): the machine's modes, in which `init` runs the Effector agent's services and keeps the choice in `data/mode.conf` across reboots.
+  - `mode` alone: which are on, who set them last (`disk`, `operator`, `mind`) and why: `MODE: MAINTENANCE, SET BY operator: the Mac's Wi-Fi tests`.
+  - `on` asks first at this console, saying what the agent may then do; `off` needs no question. The reason goes to `init`'s log line (`operator` without one).
+  - Through `init`'s client badged `BADGE_MODE` in `SLOT_MODE`, the shell's alone. No client the shell lends may run it, the link's neither; a script run at this console may, and is asked the same.
+  - While a mode is on, the shell says so above its first prompt and in the system log.
+- `fg <id|name>` (000-APP-0107): a program by its PID, or by its name in any case: the one called so, or else the one whose name holds the text (`fg wm`, `fg dzen`). With several, none is taken and they are listed: `SEVERAL PROGRAMS ANSWER TO clock: PID 1 clock, PID 2 clock, FG <PID> TAKES ONE`. Services and the shell are not among them.
+- **A shell `init` restarted** (000-APP-0106): it gives the screen back to the `wm` still running, `[SHELL] WM (PID n) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN`. What only the `wm` the shell itself started may ask (the clock, the zone, the radio, the cards' counters) stays refused or asked for that one, since a name proves nothing. A caller that gave up on a call before the shell's answer revoked the buffer it lent: the shell then drops the call unanswered and logs it, `[SHELL] A CALLER GAVE UP ON NET-COUNTERS BEFORE ITS ANSWER: NOT WRITTEN (1 SO FAR)`, rather than write there and fault (the MacBook Pro, 2026-10-22).
 
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.

@@ -35,10 +35,8 @@ pub fn parse(args: &str) -> Result<Options, String> {
     let text = words.next().ok_or_else(|| String::from(USAGE))?;
     let pattern = Pattern::new(text, ignore_case).map_err(|error| format!("GREP: BAD PATTERN ({:?})", error))?;
     let mut paths: Vec<String> = words.map(find::normalize).collect();
-    if paths.is_empty() {
-        if !recursive { return Err(String::from(USAGE)); }
-        paths.push(String::new()); // -r without a path: the boot disk
-    }
+    // Without a path: -r the boot disk, else the text input (`ps | grep wm`, 000-APP-0074), which the program checks.
+    if paths.is_empty() && recursive { paths.push(String::new()); }
     Ok(Options { pattern, ignore_case, numbers, recursive, names_only, count, paths })
 }
 

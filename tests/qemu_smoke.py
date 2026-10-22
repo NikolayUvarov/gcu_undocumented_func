@@ -714,6 +714,13 @@ def normal_suite(vm):
                  "fg 9999999999999999999999999", "run missing"]:
         require(vm.command(text), "ERROR:")
     require(vm.command("run"), "USAGE:")
+    # fg by name (the maintainer's request, 2026-10-22): the one called so is taken; several are listed by PID.
+    require(vm.command("fg clock"), "SEVERAL PROGRAMS ANSWER TO clock: PID 1 clock, PID 2 clock, FG <PID> TAKES ONE")
+    require(vm.command("fg app"), "SEVERAL PROGRAMS ANSWER TO app: PID 3 app, PID 4 app, FG <PID> TAKES ONE")
+    require(vm.command("fg nosuch"), "ERROR: NO PROGRAM CALLED nosuch RUNS")
+    vm.send("fg app2\n")
+    vm.expect("FOREGROUND PID=5")
+    vm.background(5)
     vm.send("fg 1\n")
     vm.expect("FOREGROUND PID=1")
     vm.background(1)
@@ -2249,11 +2256,26 @@ def search_check(vm):
     assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
     require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
     require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
+    # `|` (000-APP-0074): what a shell command prints is grep's text input (the maintainer: `ps | grep wm`). The line's
+    # echo starts with the command before `|`, so it is left out here.
+    def piped(line):
+        return [row for row in lines(vm.command(line, timeout=30)) if row != line]
+    assert piped("cat ram:a.txt | grep hello") == ["hello world"]
+    found = piped("ps | grep shell")
+    assert found and all("shell" in row for row in found), found
+    assert piped("ls ram:docs | grep -c md") == ["1"]
+    assert piped("cat ram:a.txt | grep zzz") == [], "no line matched"
+    require(vm.command("ps | grep"), "USAGE: GREP")
+    require(vm.command("grep hello"), "USAGE: GREP")  # no path and no input
+    require(vm.command("ps | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
+    require(vm.command("ps |"), "A COMMAND COMES ON EACH SIDE OF |")
+    require(vm.command("ps | grep a | grep b"), "ONE | A LINE")
     for path in ("ram:docs/b.md", "ram:a.txt"):
         require(vm.command(f"rm {path}"), "OK")
     require(utf8("rm ram:docs/заметки.txt"), "OK")
     require(vm.command("rm ram:docs"), "OK")
-    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file", flush=True)
+    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file; "
+          "a shell command's output piped into grep", flush=True)
 
 
 def busy_suite(vm):
@@ -4192,6 +4214,20 @@ def modes_suite(args):
                     vm.command("run effector_gw")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
                     assert "effector_gw" not in vm.services(), vm.services()
+                # The shell's `mode` (750-EFF-0013): the modes and who set them, said above the first prompt while one is on;
+                # a mode goes on after the operator agrees, which init logs with the shell's BADGE_MODE (3), and off at once.
+                if words:
+                    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE DEVELOPMENT MODE IS ON (SET BY disk)")
+                    require(vm.command("mode", raw=True), "MODE: DEVELOPMENT, SET BY disk")
+                    for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")):
+                        vm.send("mode maintenance on the modes suite\n")
+                        require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
+                        vm.send_bytes(answer)
+                        require(vm.expect("MIND> ", timeout=30), said)
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE MAINTENANCE ON BY operator (PID ")
+                    require(vm.command("mode development off", raw=True), "MODE: MAINTENANCE, SET BY operator: operator")
+                    require(vm.command("cat data/mode.conf", raw=True), "maintenance")
+                    require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
@@ -4202,7 +4238,7 @@ def modes_suite(args):
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
           "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
           "init's mode client, in SLOT_MODE; check reads the modes and is refused a change, which init logs with its clause "
-          "(MC-12.6)", flush=True)
+          "(MC-12.6); the shell's mode turns one on after the operator agrees and off at once (750-EFF-0013)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
@@ -8995,6 +9031,24 @@ def wm_suite(vm):
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+    # The shell killed while wm runs (ASR's request; the maintainer, 2026-10-22: "wm must not fall in such cases"): init
+    # starts it again, and the new shell gives the wm still running the screen; wm's keys then work as before.
+    seen.clear()
+    read[0] = len(vm.log)
+    vm.send("wm clock\n")
+    out = wait("[WM] READY", lines=0)
+    survivor = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
+    time.sleep(.5)
+    vm.background(survivor)
+    shell_pid = vm.services()["shell"]
+    vm.send(f"kill {shell_pid}\n", raw=True)
+    vm.expect("[INIT] shell RESTARTED", timeout=60)
+    back = vm.expect("RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", timeout=60)
+    assert re.search(r"\[SHELL\] WM \(PID \d+\) RAN BEFORE THIS SHELL STARTED", back), back[-1500:]
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    print("PASS: wm: the shell killed while wm runs comes back and gives wm the screen again; wm's close all works", flush=True)
     # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
     # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
     seen.clear()
