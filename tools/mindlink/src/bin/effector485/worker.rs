@@ -3,7 +3,7 @@
 use crate::json::{s, Value};
 use crate::ops::{now, State, RUN_TIMEOUT};
 use crate::port::Port;
-use linkproto::app::{Client, EXIT_UNKNOWN, RUN_RUNNING, RUN_STOPPED};
+use linkproto::app::{Client, EXIT_UNKNOWN, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::code;
 use linkproto::frame::{MAX_PAYLOAD, MAX_WIRE};
 use linkproto::Error;
@@ -160,7 +160,10 @@ fn follow(c: &mut Client<Port>, state: &Shared, id: &str) -> Result<(), Error> {
             if o.from > cursor { op.print(format!("\n[{} bytes of output were no longer held]\n", o.from - cursor).as_bytes()); }
             op.print(&buf[..o.len]);
             op.cursor = o.from + o.len as u64;
-            if o.len == 0 && o.state != RUN_RUNNING {
+            if o.len == 0 && o.state == RUN_FAULTED {
+                op.result.set("exit_code", Value::Null);
+                op.fail(&format!("the program ended by a fault, vector {}", o.exit));
+            } else if o.len == 0 && o.state != RUN_RUNNING {
                 op.result.set("exit_code", if o.exit == EXIT_UNKNOWN { Value::Null } else { Value::Num(o.exit as i32 as f64) });
                 let stopped_by = op.result.str("stopped_by").map(str::to_string);
                 op.finish(match (o.state, stopped_by.as_deref()) { (RUN_STOPPED, Some("timeout")) => "timeout", (RUN_STOPPED, _) => "cancelled", _ => "completed" });
@@ -218,10 +221,11 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
         "put" | "install" => {
             let file = file.unwrap();
             let base = file.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
-            let target = if kind == "install" {
-                c.mkdir("apps")?;
-                format!("apps/{}", if name.is_empty() { &base } else { name })
-            } else if name.is_empty() { base } else { name.to_string() };
+            let target = if kind == "install" { format!("apps/{}", if name.is_empty() { &base } else { name }) } else if name.is_empty() { base } else { name.to_string() };
+            // A put into a directory makes it first; an end without directories (before 800-LNK-0010) has none to make.
+            if let Some((parent, _)) = target.rsplit_once('/') {
+                match c.mkdir(parent) { Ok(()) | Err(Error::Refused(code::UNSUPPORTED)) => {}, Err(e) => return Err(e) }
+            }
             if let Err(e) = put(c, state, id, &file, &target, kind == "install" || p.bool("force") == Some(true))? { with(state, id, |op| op.fail(&e)); return Ok(()); }
             set("name", s(&target));
             if kind == "install" { note(format!("installed as {target}: run it with {{\"kind\":\"run\",\"name\":\"{target}\"}}\n")); }
@@ -264,6 +268,8 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
         "move" => c.rename(p.str("from").unwrap(), p.str("to").unwrap(), p.bool("replace") == Some(true))?,
         "delete" => c.delete(name)?,
         "uninstall" => c.delete(&format!("apps/{name}"))?,
+        // The other end answers, then restarts: the daemon says hello again once it is back.
+        "reboot" => c.reboot()?,
         "rmdir" => c.rmdir(name, p.bool("recursive") == Some(true))?,
         "run" => {
             let (run, pid) = c.run(name, p.str("args").unwrap_or(""))?;

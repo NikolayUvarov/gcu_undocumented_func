@@ -27,7 +27,7 @@ commands: hello                       the other end's name and version
           get <name> [<file>]         fetch a file
           ls [<dir>]                  the other end's files; a directory's name ends in /
           stat <name>                 a file's size and SHA-256
-          rm <name>                   delete a file
+          rm <name>                   delete a file (also: delete <name>, as effector485 names it)
           mkdir <dir>                 make a directory and its missing parents
           mv <from> <to> [--force]    move or rename a file or directory; --force replaces a file at <to>
           rmdir <dir> [-r]            remove an empty directory; -r: and everything in it
@@ -37,6 +37,7 @@ commands: hello                       the other end's name and version
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
           runs                        the runs the other end knows
           stop <run>                  stop a run's program
+          reboot                      restart the other end's machine (MIND Core: link.conf must hold the word dev)
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
@@ -154,7 +155,7 @@ fn main() {
         ("ls", []) => ls(&mut c, ""),
         ("ls", [dir]) => ls(&mut c, dir.trim_end_matches('/')),
         ("stat", [name]) => stat(&mut c, name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
-        ("rm", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
+        ("rm" | "delete", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
         ("mkdir", [dir]) => c.mkdir(dir.trim_end_matches('/')).map(|_| println!("made {dir}")),
         ("mv", [from, to]) => c.rename(from, to, false).map(|_| println!("moved {from} to {to}")),
         ("mv", [from, to, "--force"]) | ("mv", ["--force", from, to]) => c.rename(from, to, true).map(|_| println!("moved {from} to {to}")),
@@ -166,6 +167,7 @@ fn main() {
         ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
         ("runs", []) => runs(&mut c),
         ("stop", [run]) => c.stop(number(run)).map(|_| println!("stopped run {run}")),
+        ("reboot", []) => c.reboot().map(|_| println!("{spec}: restarting")),
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
         ("console", []) => console(&mut c),
@@ -267,6 +269,10 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     let (run, pid) = c.run(program, args)?;
     eprintln!("run {run}: {program} started as PID {pid}");
     let (state, exit) = out(c, run, true)?;
+    if state == linkproto::app::RUN_FAULTED {
+        eprintln!("run {run}: faulted (vector {exit})");
+        std::process::exit(1);
+    }
     let code = (exit != linkproto::app::EXIT_UNKNOWN).then_some(exit as i32);
     eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
               code.map_or(String::new(), |c| format!(", exit code {c}")));

@@ -33,6 +33,15 @@ Evidence for this machine only (MC-12.1). The line counts what the driver sees; 
 ## Progress
 
 - **2026-10-20, written** (`bcm_wifi/src/serve.rs`, `Tally`). It builds. Only a real BCM4331 runs it: QEMU has no such device.
+- **2026-10-21, the MacBook Pro** (`fast-test` b09b7bb, core 2's front end off), joined to CoolNet2 on channel 8. The lines were read over MIND Link. Seven periods of 10 s, from the join to the DHCP lease and after:
+  - **Sent:** 1 to 6 data frames each period, at 24 and 36 Mbit/s, 16 of 19 acknowledged. 3 were lost after their 4 tries, 2 of them at 36 Mbit/s.
+  - **Received:** 210 to 428 good CCK frames each period, and **not one good OFDM frame**. 2 to 8 OFDM frames came with a bad PLCP header each period. No HT frame came at all.
+  - **DHCP took 50 s** from the join (911 s to 961 s).
+- **What it shows:**
+  - The radio does not receive OFDM from this access point. The answers it sends at OFDM rates are lost, and only those it retries at CCK rates arrive. That fits a ping answering 2 of 3.
+  - Sending works.
+  - Next: [550-DRV-0037](../issues-done/550-DRV-0037-802-11b-until-ofdm-is-received.done) offers the station 802.11b only, so the access point keeps to CCK. [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) goes on looking for why OFDM fails.
+- **The line was cut:** a log record keeps 200 bytes, so the counts after `HT … BAD` were lost. They are now two lines, `SENT` and `RECEIVED`.
 
 ## Related
 

@@ -9,7 +9,7 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 name = "effector"
 
 [dependencies]
-libmind = { path = "../libmind" }
+libmind = { path = "../libmind", features = ["alloc"] }
 
 [profile.release]
 panic = "abort"

@@ -1,6 +1,6 @@
 # 800-NET-0038 — A network policy client that may only launch, for the link's developer mode
 
-**Type:** network (service) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the broker's part built and host-tested; its QEMU check waits for `init`'s part) · **Blocked by:** for `link`'s client, `init` minting it with the badge (`KRN`, [requests-KRN.md](requests-KRN.md), "The link's network policy client, badged to launch only") · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Roadmap:** track D · **Constitution:** MC-11.3, MC-11.6, Appendix B.6
+**Type:** network (service) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the broker's part built and host-tested; its QEMU check waits for `init`'s part) · **Blocked by:** for `link`'s client, `init` minting it with the badge ([800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.md)) · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Roadmap:** track D · **Constitution:** MC-11.3, MC-11.6, Appendix B.6
 
 From LNK's question "flow grants for the programs `link` starts, in its developer mode" (internal-dev-messages, NET/, 2026-10-21 06:00 UTC).
 
@@ -38,7 +38,7 @@ From LNK's question "flow grants for the programs `link` starts, in its develope
   - `netpolicy` refuses `revoke`, `add` and `remove` from any other client and logs each refusal (`[NETPOLICY] ADD REFUSED FOR PID n: A LAUNCH-ONLY CLIENT`); a grant such a client asks for is logged `, ASKED BY A LAUNCH-ONLY CLIENT`;
   - `docs/network/policy.md` 0.4, `docs/idl`.
 - **Tested on the host:** `tests/netpolicy_host.rs`.
-- **Left:** the QEMU check needs a program with a launcher's client. `link` in developer mode will hold one once `init` mints it (requests-KRN.md). No program holds one before that.
+- **Left:** the QEMU check needs a program with a launcher's client. `link` in developer mode will hold one once `init` mints it (800-KRN-0142). No program holds one before that.
 
 ## Related
 

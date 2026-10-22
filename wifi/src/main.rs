@@ -39,6 +39,7 @@ fn main(info: &'static mind::BootInfo) {
     if let Some(command) = command { mind::process::exit_with(without_screen(command, station)) }
     let Some(mut term) = Terminal::open(info, "wifi") else { return };
     let mut view = Wifi::new(demo);
+    view.windowed = term.screen().is_none();
     view.refresh(station);
     view.poll(station);
     let mut scanned = mind::time::uptime_ms();

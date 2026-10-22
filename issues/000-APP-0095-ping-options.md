@@ -1,6 +1,6 @@
 # 000-APP-0095 — `ping`: the number of requests, their interval and wait, a fast mode; the size and the payload next
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20); `-s` and `-p` wait for the network track · **Blocked by:** — for `-c`, `-i`, `-w` and `-f`; the network track for `-s` and `-p` ([requests-NET.md](requests-NET.md), "An echo request's size and payload") · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20), each line's place since 1d841622 (2026-10-21); `-s` and `-p` wait for the network track · **Blocked by:** — for `-c`, `-i`, `-w` and `-f`; the network track for `-s` and `-p` ([requests-NET.md](requests-NET.md), "An echo request's size and payload") · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
 
 **Recorded by:** the tools track, 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode. Add them.").
 
@@ -52,6 +52,7 @@ Its last line gives no loss or times, and nothing stops a run.
   - un-rizen-service (aarch64): build, boot and fault containment, programs, shell and four CPUs, NVMe and 16 CPUs on a3ebd34c; files, network and TLS, RAM, ACPI and PCI above 4 GiB, and GICv2 on 2a33a71b;
   - locally: the network driver without legacy, TLC, services, scheduling and files on a3ebd34c; the build, the host tests, boot and keys on 2a33a71b.
   The commits after a3ebd34c changed the suites, the IDL fuzzer's list and `dictate`'s and `speak`'s memory request; the groups that run them ran on 2a33a71b.
+- **Each request's place in the run** (the maintainer's request, 2026-10-21): every reply's or loss's line starts `[2/3] `, or `[5] ` for `-c 0` (`ping::place`); a host test, and the `net` suite reads `[1/3]` to `[3/3]` and `[1]`, `[2]` before Ctrl+C. `-f` keeps its dots. In `main` with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1. On the branch before it: every group of `ci_local.sh --list` on fe83e221 (i9, un-rizen-service and locally; five x86 groups passed again alone after a load of 53 on i9, and `files and block writes` after the parser sessions' race of 109-KRN-0133), and the `net` and `wm` groups locally on 893ef487.
 - **Left:** `-s` and `-p` once the stack sends them (requests-NET.md).
 
 ## Related

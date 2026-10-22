@@ -47,18 +47,18 @@ jobs:
       matrix:
         include:
           - name: boot, display, network, TLS, shell, memory, clock
-            args: --suites boot,display,net,tls,normal,memory,dzen
+            args: --suites boot,display,net,tls,effector,normal,memory,dzen
           - name: network benchmark (user networking and tap)
             args: --suites netbench
             tap: true
           - name: services, storage, audio
-            args: --suites services,ahci,audio,tts,listen,hda,link
+            args: --suites services,ahci,audio,tts,listen,hda,link,modes
           - name: scheduling, isolation, heap
             args: --suites busy,smp,isolation,heap
           - name: keys, shell, tools
             args: --suites keys,shell,tools,bench,windows,wm,tablet,usb,ehci
           - name: files and block writes
-            args: --suites vfs,edit,disk,block,store,storefaults,updater
+            args: --suites vfs,edit,disk,block,store,storefaults,updater,linkupdate
           - name: NVMe boot disk
             args: --disk nvme --suites vfs
           # Every CPU the machine has, beyond the former 8 (issue 171).
@@ -158,7 +158,7 @@ jobs:
             # devicetree: virt without ACPI (210-KRN-0029); efivar: UEFI variables through AAVMF (351-KRN-0028)
             suites: normal,shell,bench,smp,busy,usb,devicetree,efivar
           - group: files, network and TLS
-            suites: vfs,store,storefaults,net,tls,updater
+            suites: vfs,store,storefaults,net,tls,effector,updater,linkupdate,modes
           - group: RAM, ACPI and PCI above 4 GiB
             suites: normal,net
             machine: virt,gic-version=3,highmem=on

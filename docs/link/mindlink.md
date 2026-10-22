@@ -48,15 +48,16 @@ Options come before the command; what follows the command is its own, a program'
 | `get <name> [<file>]` | fetches a file into `<file>.part`, renamed once its SHA-256 matches |
 | `ls [<dir>]` | a directory's files with their sizes, and its directories, ending in `/`; the top without `<dir>` |
 | `stat <name>` | a file's size and SHA-256 |
-| `rm <name>` | deletes a file |
+| `rm <name>`, `delete <name>` | deletes a file |
 | `mkdir <dir>` | makes a directory and its missing parents |
 | `mv <from> <to> [--force]` | moves or renames a file or a whole directory; `--force` replaces a file at `<to>` |
 | `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
-| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it. On MIND Core, `link.conf` must hold the word `run` |
+| `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it, and 1 after a fault. On MIND Core, `link.conf` must hold the word `run` |
 | `start <program> [<argument>...]` | the same, printing only the run's number and the program's PID |
 | `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
 | `runs` | the runs the other end knows: number, PID, state, program |
-| `stop <run>` | ends a run's program. MIND Core's `link` cannot yet (800-KRN-0132) |
+| `stop <run>` | ends a run's program |
+| `reboot` | restarts the other end's machine. On MIND Core, `link.conf` must hold the word `dev` |
 | `log [-f]` | the other end's log; `-f` follows it |
 | `console` | lines from standard input to the other end's console, its output back; Ctrl-D ends |
 | `sniff [<seconds>]` | the line's raw bytes in hex as they come (default 10 s): on an RS-485 pair, listen on one converter while the other sends, to check the wiring and the rate |
@@ -87,6 +88,14 @@ mindlink.exe --baud 921600 COM10 put build.img
 - **Device Manager** shows each converter's COM number.
 - **An FTDI port's latency timer** is the port's Advanced property, 16 ms by default; 1 ms speeds up every answer.
 - **A port in WSL is not in Windows.** A converter attached to WSL through usbipd is gone from Windows until it is detached.
+- **From WSL, through a Windows port:** `tools/mindlink/mindlink-exe.sh` runs `mindlink.exe` (`MINDLINK_EXE`, or the one on the PATH). It passes each argument that names a file here as its Windows path. `mindlink.exe` reads WSL's files as `\\wsl.localhost\…`.
+  - Scripts that call `mindlink` use it so.
+  - An update through the link (351-KRN-0141) on the MacBook Pro, 2026-10-21:
+
+    ```bash
+    MINDLINK_EXE=/mnt/c/…/mindlink.exe scripts/link_update.py COM22 --mindlink tools/mindlink/mindlink-exe.sh \
+        --mindlink-option=--baud --mindlink-option=460800
+    ```
 
 ## The converters on WSL
 

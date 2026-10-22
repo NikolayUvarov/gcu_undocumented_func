@@ -73,6 +73,13 @@ fn session(spec: &str, tag: &str) {
     assert!(ok && !d.join("srv/copy.bin").exists(), "{out}");
     let (ok, out) = run(p, &["get", "copy.bin"], b"");
     assert!(!ok && out.contains("no such file"), "{out}");
+    // `delete`, as effector485 names it, is `rm`.
+    let small = d.join("small.txt");
+    std::fs::write(&small, b"to be deleted").unwrap();
+    let (ok, out) = run(p, &["put", small.to_str().unwrap(), "small.txt"], b"");
+    assert!(ok && d.join("srv/small.txt").exists(), "{out}");
+    let (ok, out) = run(p, &["delete", "small.txt"], b"");
+    assert!(ok && !d.join("srv/small.txt").exists(), "{out}");
     let (ok, out) = run(p, &["put", big.to_str().unwrap(), "../escape"], b"");
     assert!(!ok && out.contains("not allowed"), "{out}");
     drop(s);

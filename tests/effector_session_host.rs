@@ -258,3 +258,14 @@ fn http_classification_requires_valid_success_and_never_follows_redirects() {
     for status in [429, 500, 502, 599] { assert_eq!(outcome(status, false), Outcome::Retry); }
     for status in [204, 301, 302, 307, 400, 401, 403, 404, 405, 409] { assert_eq!(outcome(status, true), Outcome::Permanent); }
 }
+
+#[test]
+fn server_command_ids_with_a_dot_are_accepted_agent_ids_are_not() {
+    let mut s = online(&[]);
+    // The Effector server's IDs: `<UTC yyyymmddHHMMSS.nanoseconds>_<counter>` (server/commands.go).
+    assert!(matches!(s.receive(command("20261021064900.000000001_000042"), time(0)), Ok(Accepted::Store(_))));
+    assert_eq!(s.receive(command(".hidden"), time(0)), Err(Error::Identifier));
+    assert_eq!(Id::command("a.b").map(|i| i.as_str().to_owned()), Ok("a.b".to_owned()));
+    assert_eq!(Id::new("mind.test"), Err(Error::Identifier), "an agent ID keeps the contract's narrower grammar");
+    assert!(matches!(Session::new("mind.test", &[], 0), Err(Error::Identifier)));
+}
