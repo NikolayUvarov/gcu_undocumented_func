@@ -284,9 +284,18 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
 }
 
 /// One line for the other end's shell: its output; a refusal or failure exits 1 (800-LNK-0015).
+/// MIND Core's `link` answers nothing while its shell runs the line (a `ping` waits), so a silent other end is waited
+/// for, up to two minutes, before the line counts as lost.
 fn sh(c: &mut Client<port::Port>, line: &str) -> Result<(), Error> {
     let run = c.command(line)?;
-    let (_, exit) = out(c, run, true)?;
+    let started = std::time::Instant::now();
+    let exit = loop {
+        match out(c, run, true) {
+            Ok((_, exit)) => break exit,
+            Err(Error::Timeout) if started.elapsed() < Duration::from_secs(130) => continue,
+            Err(e) => return Err(e),
+        }
+    };
     if exit != 0 && exit != linkproto::app::EXIT_UNKNOWN { std::process::exit((exit as i32).clamp(1, 255)); }
     Ok(())
 }

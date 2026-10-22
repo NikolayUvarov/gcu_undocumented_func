@@ -3953,7 +3953,7 @@ def link_suite(args):
         r = subprocess.run([str(mindlink), "--tries", "10", "--timeout", "2000", "--payload", "256", port, *command],
                            capture_output=True, text=True, timeout=timeout)
         out = r.stdout + r.stderr
-        assert (r.returncode == 0) == ok, (command, r.returncode, out)
+        assert ok is None or (r.returncode == 0) == ok, (command, r.returncode, out)
         return out
 
     with tempfile.TemporaryDirectory(prefix="smoke-link-", dir=ROOT / IMAGE) as temp:
@@ -4074,6 +4074,17 @@ def link_suite(args):
                     if power == "NETWORK":
                         # 800-KRN-0142: the broker made netcheck's grant for a launch-only client.
                         assert re.search(r"\[NETPOLICY\] GRANT \d+ TO netcheck: .*, ASKED BY A LAUNCH-ONLY CLIENT", vm.command("dmesg -s netpolicy", raw=True)), "launch-only"
+            # 800-LNK-0015: the shell's lines over the link, through the client init grants with dev (800-KRN-0148). Until
+            # the shell takes the link's lines (800-APP-0102), a line is not answered within link's minute: SKIP.
+            ip = link(port, "sh", "ip", ok=None, timeout=200)
+            if "did not answer" in ip:
+                print("SKIP: link: sh: the shell does not take the link's lines yet (800-APP-0102)", flush=True)
+            else:
+                assert re.search(r"^CARD \d", ip, re.M), ip
+                require(link(port, "sh", "ps"), "link")
+                # Never from the link, whatever the developer mode allows (800-NET-0038).
+                require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
+                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy", vm.command("dmesg -s link", raw=True)), "the word alone is logged"
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
