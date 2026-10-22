@@ -33,6 +33,9 @@ From the kernel track's request "A parser session ends before its helper does (1
 - **With it,** same machine: `10 OF 10 WITH A PARSER OF THEIR OWN, 3 ENDPOINTS HELD`.
 - **The check's own setup** drops an endpoint before the first session, so the first session waits for that reap too, at most 2 s. Each of the nine after it must get a parser at once.
 
+- **The `net` suite passed whole** (x86, this session's container) on `9b87803d`, and again on `628be403`, the branch with `main` 61e3d1d (ABI 14): `NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN`, with `session_parsers_check` and `parser_restart_check`.
+- **aarch64:** "aarch64: files, network and TLS" passed on i7-930 on `6cbcdfe0` (Effector, exit 0).
+
 ## Related
 
 - [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md): the loader starts helpers from the booted slot's copy, which made the race possible.
