@@ -34,7 +34,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
-    "the log to read, sysinfo and the volumes to read; its private directory; only in a mode",
+    "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -664,13 +664,15 @@ impl Init {
                 grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
             // The Effector agent's gateway (750-KRN-0119, `mind::effector`), only in a mode: the memory and the log to read,
-            // the volumes to read, and its private directory (`private_dir_of`). Its lifecycle client
-            // (750-KRN-0121) and the scope for deliveries (750-KRN-0120) come with their tasks.
+            // the volumes to read, its private directory (`private_dir_of`) and the screen to capture, as the shell's
+            // `screenshot` (750-KRN-0153; the compositor shows its red dot meanwhile). Its lifecycle client (750-KRN-0121)
+            // and the scope for deliveries (750-KRN-0120) come with their tasks.
             "effector_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "effector_gw")?, ALL);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
                 grants.add(mind::effector::SLOT_READER, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
+                self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
             // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
