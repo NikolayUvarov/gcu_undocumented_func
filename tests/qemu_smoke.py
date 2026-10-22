@@ -44,7 +44,7 @@ from fbank_reference import signal as fbank_signal  # noqa: E402
 FBANK_SIGNAL = fbank_signal()  # the integer test signal of tests/fbank_reference.txt (250)
 ANSI = re.compile(r"\x1b\[[0-9;?=]*[A-Za-z]")
 # System services (PID 1..N, started by init); ahci/usb_storage/virtio_blk/virtio_net/virtio_input exist only when their device is present.
-SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell")
+SERVICES = ("init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "ramdisk#1", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "virtio_net#1", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell")
 RECOVERY_RESERVE = 32 * 1024 * 1024  # init's RECOVERY_RESERVE_MIB: frames applications may not take (issue 169)
 # The built image the suites boot (usb_root, or aarch64_root with --arch aarch64) and its UEFI boot file.
 IMAGE = "usb_root"
@@ -4059,23 +4059,28 @@ def link_suite(args):
 
 def modes_suite(args):
     """750-KRN-0143: the machine's modes. A raw image whose data/mode.conf names the development mode and a word init does
-    not know: init reads it once the boot volume is there, says so and leaves the word out; with no Effector service in
-    this build it says that too. The shell holds init's mode client in SLOT_MODE (36), badged BADGE_MODE (3), and no
-    other. `check services` reads the modes through its lifecycle client and is refused a change. A second boot with no
-    data/mode.conf is in the normal mode."""
+    not know: init reads it once the boot volume is there, says so and leaves the word out, and starts the Effector agent's
+    two services with exactly their grants (750-KRN-0119). The shell holds init's mode client in SLOT_MODE (36), badged
+    BADGE_MODE (3), and no other. `check services` reads the modes through its lifecycle client and is refused a change.
+    A second boot with no data/mode.conf is in the normal mode: neither Effector service runs, and init refuses to start
+    one."""
     if not raw_tools():
         print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
         return
     for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
-            image, _, _ = raw_fat_image(Path(temp), extra={"data/mode.conf": words} if words else None)
-            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+            # The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
+            extra = {"data/mode.conf": words, "netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
+                     "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
+                     "data/effector/token": b"mind-effector-test-token\n"} if words else None
+            image, _, _ = raw_fat_image(Path(temp), extra=extra)
+            vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
             try:
                 log = vm.command("dmesg -s init", raw=True)
                 require(log, f"[INIT] MODE: {expected}")
                 if words:
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
-                    require(log, "[INIT] A MODE IS ON, BUT THIS BUILD HAS NO EFFECTOR SERVICES")
+                    effector_grants_check(vm)
                     pids = vm.services()
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
                     shell = vm.command(f"stat caps {pids['shell']}", raw=True)
@@ -4093,13 +4098,53 @@ def modes_suite(args):
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
+                if not words:
+                    # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
+                    assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
+                    vm.command("run effector_gw")
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
+                    assert "effector_gw" not in vm.services(), vm.services()
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
-          "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
-          "the modes and is refused a change, which init logs with its clause (MC-12.6)", flush=True)
+          "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
+          "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
+          "init's mode client, in SLOT_MODE; check reads the modes and is refused a change, which init logs with its clause "
+          "(MC-12.6)", flush=True)
+
+
+def effector_grants_check(vm):
+    """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
+    table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
+    read; the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
+    the parser and the gateway badged as its session. The session keeps the owner's token in its private directory."""
+    for name in ("effector_gw", "effector"):
+        for _ in range(60):
+            if name in vm.services():
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError((name, vm.command("dmesg -s init", raw=True)[-1500:], vm.command(f"dmesg -s {name}", raw=True)[-1500:]))
+    pids = vm.services()
+    started = vm.command("dmesg -s init", raw=True)
+    assert started.index("[INIT] STARTED effector_gw PID") < started.index("[INIT] STARTED effector PID"), started[-2000:]
+    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+
+    def held(name):  # slot -> (badge, the server's service name) of each endpoint the service holds of another
+        caps = vm.command(f"stat caps {pids[name]}", raw=True)
+        named = {pid: n for n, pid in pids.items()}
+        return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+                if servers.get(int(ep)) != pids[name]}
+    gw, session = held("effector_gw"), held("effector")
+    assert set(gw) == {3, 5, 10, 12} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd"), gw
+    assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
+    assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
+    assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
+    assert session[18][1] == "netstack", session
+    require(vm.command("dmesg -s effector", raw=True), "EFFECTOR: THE TOKEN IS KEPT IN system/effector")
 
 
 def fsck_volume(image, start, fs_sectors):
