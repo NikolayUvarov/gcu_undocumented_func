@@ -1,6 +1,6 @@
 # 800-LNK-0016 — A service replaced over the link: `mindlink replace`, in developer mode
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-22) · **Blocked by:** — (`init`'s side is [800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md), in `main`) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.12, MC-12.1, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** — (`init`'s side is [800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md), in `main`) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.12, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -22,8 +22,8 @@ The link has no request for it yet.
 
 ## Acceptance criteria
 
-- [ ] **Host tests:** REPLACE through the lossy line; `mindlink replace` against a test slave.
-- [ ] **The QEMU `link` suite with `dev`**, which meets 800-KRN-0144's first criterion:
+- [x] **Host tests:** REPLACE through the lossy line (`replace_over_a_lossy_line`); `mindlink`'s tests pass with `replace`.
+- [x] **The QEMU `link` suite with `dev`** (2026-10-22, x86, local), which meets 800-KRN-0144's first criterion:
   - `rtc` replaced with a copy of `rtc.elf`, the `NOT VERIFIED` line with its SHA-256, `date` still answered;
   - back with `--back`;
   - `logd` refused.

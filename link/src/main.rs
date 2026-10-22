@@ -293,6 +293,21 @@ impl Programs {
         }
     }
 
+    /// REPLACE (800-LNK-0016): init starts `unit` again from `data/link/<path>`, or from its boot image for "", through the
+    /// lifecycle client it grants with `dev` (800-KRN-0144); init logs the image NOT VERIFIED.
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
+        if !self.dev { mind::println!("[LINK] REPLACE {} REFUSED: link.conf HAS NO \"dev\"", unit); return Err(code::DENIED); }
+        if !holds(SLOT_LIFECYCLE) { return Err(code::UNSUPPORTED); }
+        mind::println!("[LINK] REPLACE {} FROM {} ASKED BY THE MASTER", unit, if path.is_empty() { "ITS BOOT IMAGE" } else { path });
+        match lifecycle::replace(Endpoint(SLOT_LIFECYCLE), unit, path) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(lifecycle::Error::Denied)) => Err(code::DENIED),
+            Ok(Err(lifecycle::Error::NotFound)) => Err(code::NOT_FOUND),
+            Ok(Err(_)) => Err(code::IO),
+            Err(_) => Err(code::BUSY),
+        }
+    }
+
     /// A REBOOT from the master: the machine restarts once the answer is out (`main`), through init's lifecycle client
     /// badged for it, which init grants only with `dev`.
     fn reboot(&mut self) -> Result<(), u8> {
@@ -565,6 +580,8 @@ impl Files for Store {
     fn reboot(&mut self) -> Result<(), u8> { programs().reboot() }
 
     fn command(&mut self, line: &str) -> Result<u32, u8> { programs().command(line) }
+
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> { programs().replace(unit, path) }
 
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { programs().output(run, cursor, out) }
 
