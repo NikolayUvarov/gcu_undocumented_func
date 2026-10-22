@@ -13,6 +13,11 @@
 ## Plan
 
 - **The badge:** `mind::process::BADGE_SHELL_LINK` (1) on the shell's commands endpoint. The clients the shell lends carry no badge and no right to set one, so no program can pass for the link.
+- **The endpoint:** the shell makes its commands endpoint itself at its first lend, which `init` cannot hand to `link`, started before the shell. So the shell serves on an endpoint `init` gives it, if it gives one:
+  - the receive side of the shell's keeper, in the shell's own `SLOT_SHELL` (30, unused in the shell itself);
+  - `link`'s client is minted from that keeper with `BADGE_SHELL_LINK`, in a slot of `link`'s;
+  - without it, nothing changes.
+  - The proposal is KRN's to take or change.
 - **`clients::taken_by(line, Client::Link)`:**
   - the commands any client gets at once, as before;
   - what a program's client is asked runs at once: the commands that only read (`netstat`, `ping`, `nslookup`, `logs`, `stat`, `pmap`, `caps <pid>`), and, by the maintainer's choice (a), those that change the machine (`kill`, `stop`, `reboot`, `poweroff`, `shutdown`, `budget`, `date set`, `logger`, `tpm`, `fetch`, `https`, a `>` into a file);
