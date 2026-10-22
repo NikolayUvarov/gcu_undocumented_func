@@ -100,7 +100,7 @@ struct Shell {
     active: usize, shown: usize, // the console the shell works in now, and the one on the screen
     windows: [Option<mind::windowed::Window>; WINDOWS], room: (usize, usize), // the shell's windows, and the cells each has memory for (the screen's)
     windowed: Option<u64>, // the program the window's session last started in a window of its own
-    commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044), made at the first lend
+    commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044): init's, else made at the first lend
     managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
     unasked: bool, // while a line from the link's client runs (800-APP-0102): no question in the shell's window
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
@@ -1256,11 +1256,19 @@ impl Events {
 
 // The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
 #[inline(never)]
+// The commands endpoint init made for the shell, if it did (800-APP-0102): the receive side of its keeper in the
+// shell's own SLOT_SHELL, whose client badged BADGE_SHELL_LINK `link` holds in developer mode. Else the shell makes one
+// at its first lend, as before.
+fn given_commands() -> Option<Endpoint> {
+    let (kind, _, rights) = mind::dev::cap_info(SLOT_SHELL);
+    (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_SHELL))
+}
+
 fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box<Shell> {
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), unasked: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), managers: alloc::vec::Vec::new(), unasked: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, safe: safe::Safe::default(), shot: None })
 }
 
