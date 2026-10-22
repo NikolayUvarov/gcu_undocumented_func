@@ -9,9 +9,10 @@ use crate::sha256::Sha256;
 pub const CHUNK: usize = 32768;
 pub const AUDIT_KEPT: usize = 16;
 
-/// Who asks: the session (`BADGE_EFFECTOR_SESSION`) or the shell for the owner (`BADGE_EFFECTOR_OWNER`).
+/// Who asks: the session (`mind::effector::BADGE_SESSION`), the shell for the owner (`BADGE_OWNER`), or a client with
+/// any other badge, which every request refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Badge { Session, Owner }
+pub enum Badge { Session, Owner, Other }
 
 /// Why a request was not done; the IDL's `error`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

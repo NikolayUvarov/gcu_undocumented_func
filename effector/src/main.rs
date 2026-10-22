@@ -1,16 +1,19 @@
 #![no_std]
 #![no_main]
-// effector CONFIG [--for SECONDS]: the Effector agent's session (750-EFF-0006, first slice), started from the shell
-// until 750-KRN-0119 makes it a boot service. CONFIG is the owner's `effector.conf`; its directory, the only one the
-// shell lends (REQUEST_FILE), also holds `token`, `agent_id` and `journal`. It heartbeats, polls and answers every
-// command `denied` after journaling the answer, over one HTTPS connection to the pinned server. Heads and JSON bodies
-// are read by the parser service (MC-11.11); the token is never printed. One line per event.
+// effector CONFIG [--for SECONDS]: the Effector agent's session (750-EFF-0006, first slice), started from the shell.
+// CONFIG is the owner's `effector.conf`; its directory, the only one the shell lends (REQUEST_FILE), also holds
+// `token`, `agent_id` and `journal`. As a boot service in a mode, `init` starts it with `--service` (750-KRN-0119,
+// 0143): it reads `data/effector/effector.conf` and the owner's token through SLOT_FILE and keeps the token,
+// `agent_id` and `journal` in its private `system/effector` (SLOT_VFS, `mind::effector`). It heartbeats, polls and
+// answers every command `denied` after journaling the answer, over one HTTPS connection to the pinned server. Heads
+// and JSON bodies are read by the parser service (MC-11.11); the token is never printed. One line per event.
 extern crate alloc;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 use effector::session::{self, Accepted, Outcome, Session, Time};
 use effector::{config, journal, wire};
-use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
+use mind::effector::{OWNER_DIR, SESSION_DIR};
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Connection, Method, Transport, Url};
 use mind::idl::{parse, tls};
@@ -281,7 +284,14 @@ fn recover(agent: &Agent) -> Vec<session::Record> {
 #[inline(never)]
 fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let mut words = mind::process::args_str().split_whitespace();
-    let Some(conf) = words.next() else { fail(format_args!("USAGE: effector CONFIG [--for SECONDS]")) };
+    // Started by init in a mode with `--service` (750-KRN-0119): the owner's directory and its own private one.
+    let service_conf = alloc::format!("{}/effector.conf", OWNER_DIR);
+    let (service, conf) = match words.next() {
+        Some("--service") => (true, service_conf.as_str()),
+        Some(c) => (false, c),
+        None => fail(format_args!("USAGE: effector CONFIG [--for SECONDS]")),
+    };
+    if service && mind::dev::cap_info(SLOT_VFS).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PRIVATE DIRECTORY ({})", SESSION_DIR)); }
     let mut run_for = None;
     while let Some(w) = words.next() {
         match w {
@@ -298,16 +308,25 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     if !volume.is_empty() { dir.push_str(volume); dir.push(':'); }
     dir.push_str(dir_rest);
     fs::use_scope(Endpoint(SLOT_FILE), &dir);
+    // The owner's token, read while the owner's directory is in reach; a service keeps it in its private directory.
+    let owner_token = read_file(&alloc::format!("{}/token", dir), config::TOKEN_MAX + 2);
 
     let config = match read_file(conf, config::FILE_MAX).map(|b| config::Config::parse(&b)) {
         Some(Ok(c)) => c,
         Some(Err(e)) => fail(format_args!("CONFIGURATION REFUSED AT LINE {}: {:?}", e.line, e.kind)),
         None => fail(format_args!("CANNOT READ {}", conf)),
     };
+    let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false });
-    match read_file(&agent.path("token"), config::TOKEN_MAX + 2).as_deref().and_then(config::token) {
+    let kept = if service { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
+    match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         Some(t) => agent.token = String::from(t),
         None => fail(format_args!("NO VALID TOKEN FILE BESIDE THE CONFIGURATION")),
+    }
+    if service && kept.as_deref().and_then(config::token).is_none() {
+        let written = File::open_mode(&agent.path("token"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).and_then(|mut f| { f.write_at(0, agent.token.as_bytes())?; f.write_at(agent.token.len(), b"\n")?; f.flush() });
+        if written.is_err() { fail(format_args!("CANNOT KEEP THE TOKEN IN {}", SESSION_DIR)); }
+        mind::println!("EFFECTOR: THE TOKEN IS KEPT IN {}; THE OWNER MAY REMOVE {}/token", SESSION_DIR, OWNER_DIR);
     }
     let id_path = agent.path("agent_id");
     match read_file(&id_path, 80) {

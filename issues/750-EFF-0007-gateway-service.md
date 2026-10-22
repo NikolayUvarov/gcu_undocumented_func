@@ -59,3 +59,19 @@ The gateway's decisions and effects are built as a library, apart from IPC, so t
   - **Answered `unsupported` when the policy allows them:** packages (0008), updates (0009), reboot (0010), the screen, test scripts (501).
 - **Tests:** `tests/effector_gateway_host.rs`, 9 host tests against a fake machine, in `scripts/host_tests.sh`.
 - **Still open:** the service binary (`decode`, the generated replies, `Machine` over `init`'s grants), which needs 750-KRN-0119's boot image, badges and slots, 0120's writable scope and 0121's lifecycle client; the session's use of it in place of its own denial; the `effector` suite's gateway checks and the `isolation` row.
+## Progress — 2026-10-22
+
+- **The service binary, `effector_gw/src/main.rs`.** It serves `idl/effector.wit` through `decode` and the generated replies. Its `Machine` acts over `init`'s grants:
+  - `sysinfo` for memory;
+  - `init`'s lifecycle client for the services and `start`/`stop`/`restart`;
+  - the log ring, and the newest `log:bootNNNN.log`;
+  - a reading client for the policy and the file roots;
+  - the writable scope for deliveries, written to `<path>.part` and renamed;
+  - its private directory for the audit file.
+- **How it starts.** It serves only when `init` starts it with `--service`; from the shell it says so and ends (the `effector` QEMU suite checks that).
+- **A missing grant fails its requests.** Without the private directory, no audit line can be written, so every request is refused (MC-10.6).
+- **The badges and slots** are one table in `libmind/src/effector.rs` (`mind::effector`), for `init` (750-KRN-0119) and the shell (750-APP-0093). A client with any other badge gets nothing (`Badge::Other`, a tenth host test).
+- **Built** for x86_64 and aarch64 (`02_build.sh`). It is not run as a service yet: that needs 750-KRN-0119's boot image and arms, 0120's writable scope, 0121's lifecycle client, and `vfs_server`'s badges for `system/effector_gw`.
+- **Still open:**
+  - the session handing commands to it, instead of denying them;
+  - the QEMU check of each request in a mode.

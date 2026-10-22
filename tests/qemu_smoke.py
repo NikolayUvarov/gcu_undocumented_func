@@ -7118,6 +7118,8 @@ def effector_suite(args, disk):
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+        # The gateway is in the image; from the shell it serves nothing and ends at once (750-EFF-0007).
+        require(vm.command("run effector_gw"), "[EFFECTOR_GW] NOT A SERVICE")
         exec_id = server.queue(agent, "exec_v1", {"command": "echo forbidden", "run_as": "service", "session": "service", "timeout_seconds": 5})
         restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
         unknown_id = server.queue(agent, "powershell_v1", {"command": "Get-Date"})
