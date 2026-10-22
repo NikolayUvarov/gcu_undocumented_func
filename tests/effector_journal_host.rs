@@ -60,3 +60,15 @@ fn corruption_is_refused() {
     assert_eq!(journal::read(file(&full).as_bytes(), "mind-test").err(), Some(Error::Full));
     assert_eq!(journal::read(good.as_bytes(), "bad.agent").err(), Some(Error::Identifier));
 }
+
+#[test]
+fn an_action_s_results_are_read_back_and_an_unknown_one_refused() {
+    let records = [record("a", Final::Completed, None), record("b", Final::Failed(Failure::NoPolicy), Some(5)), record("c", Final::Failed(Failure::Unsupported), None)];
+    let text = file(&records);
+    assert!(text.contains(" completed -\n") && text.contains(" failed-no-policy 5\n") && text.contains(" failed-unsupported -\n"), "{text}");
+    let (read, n) = journal::read(text.as_bytes(), "mind-test").unwrap();
+    assert_eq!(n, 3);
+    for (r, w) in read.iter().flatten().zip(records.iter()) { assert_eq!(r, w); }
+    let bad = text.replace("failed-no-policy", "failed-gremlins");
+    assert_eq!(journal::read(bad.as_bytes(), "mind-test").err(), Some(Error::Journal));
+}

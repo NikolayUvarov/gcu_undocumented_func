@@ -13,7 +13,9 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use effector::session::{self, Accepted, Outcome, Session, Time};
 use effector::{config, journal, wire};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
-use mind::effector::{OWNER_DIR, SESSION_DIR};
+use mind::effector::{OWNER_DIR, SESSION_DIR, SLOT_GATEWAY};
+use mind::idl::codec::Text;
+use mind::idl::effector as gateway;
 use mind::fs::{self, File, MODE_CREATE, MODE_WRITE};
 use mind::http::{self, Connection, Method, Transport, Url};
 use mind::idl::{parse, tls};
@@ -23,6 +25,8 @@ mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS |
 
 const TLS: Endpoint = Endpoint(SLOT_TLS);
 const PARSER: Endpoint = Endpoint(SLOT_PARSE);
+const GATEWAY: Endpoint = Endpoint(SLOT_GATEWAY);
+const ACTION_MS: u64 = 120_000; // a gateway request's deadline, from when it is handed over
 const BODY_MAX: usize = 16384;
 const REQUEST_MS: usize = 3000;
 const CONNECT_MS: u32 = 10_000;
@@ -68,6 +72,45 @@ impl Transport for Link {
     }
 }
 impl Drop for Link { fn drop(&mut self) { let _ = tls::close(TLS, self.session); } }
+
+/// A file the gateway opened, read in its pieces as an upload's body.
+struct Pieces { handle: u32, offset: u64, size: u64, piece: Vec<u8>, at: usize, end: usize, failed: Option<session::Failure> }
+impl http::Source for Pieces {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, http::Error> {
+        if self.at == self.end {
+            if self.offset >= self.size { return Ok(0); }
+            match gateway::read(GATEWAY, self.handle, self.offset, &mut self.piece) {
+                Ok(Ok(0)) | Err(_) => { self.failed = Some(session::Failure::Io); return Err(http::Error::Transport); }
+                Ok(Ok(n)) => { self.at = 0; self.end = n; self.offset += n as u64; }
+                Ok(Err(e)) => { self.failed = Some(failure(e)); return Err(http::Error::Transport); }
+            }
+        }
+        let n = buffer.len().min(self.end - self.at);
+        buffer[..n].copy_from_slice(&self.piece[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+fn failure(e: gateway::Error) -> session::Failure {
+    use session::Failure as F;
+    match e {
+        gateway::Error::Denied => F::Denied, gateway::Error::NoPolicy => F::NoPolicy, gateway::Error::NotFound => F::NotFound,
+        gateway::Error::Bounds => F::Bounds, gateway::Error::Digest => F::Digest, gateway::Error::Busy => F::Busy,
+        gateway::Error::Expired => F::Expired, gateway::Error::Audit => F::Audit, gateway::Error::Malformed => F::Malformed,
+        gateway::Error::Unsupported => F::Unsupported, _ => F::Io,
+    }
+}
+
+/// The command's origin as the gateway audits it; a field cut to fit says so.
+fn origin(id: &str, initiator: &str, reason: &str) -> gateway::Origin {
+    fn cut(s: &str, n: usize) -> &str { let mut e = s.len().min(n); while !s.is_char_boundary(e) { e -= 1; } &s[..e] }
+    gateway::Origin {
+        command: Text::new(cut(id, 64)).unwrap_or_default(), initiator: Text::new(cut(initiator, 128)).unwrap_or_default(),
+        reason: Text::new(cut(reason, 512)).unwrap_or_default(), truncated: initiator.len() > 128 || reason.len() > 512,
+        deadline_ms: now() as u64 + ACTION_MS,
+    }
+}
 
 struct Agent {
     config: config::Config,
@@ -117,6 +160,13 @@ impl Agent {
     /// One request; the body read into `self.body`. A transport or framing failure drops the connection.
     #[inline(never)]
     fn request(&mut self, method: Method, route: &str, query: &str, body: Option<&[u8]>) -> Option<u16> {
+        let mut source = body.unwrap_or(&[]);
+        let length = body.map(|b| b.len() as u64);
+        self.send(method, route, query, "application/json", length.map(|n| (n, &mut source as &mut dyn http::Source)))
+    }
+
+    /// One request, its body (if any) read from `body` up to its announced length; the answer's body is in `self.body`.
+    fn send(&mut self, method: Method, route: &str, query: &str, content_type: &str, body: Option<(u64, &mut dyn http::Source)>) -> Option<u16> {
         let mut text = String::new();
         text.push_str("https://"); text.push_str(self.config.host());
         if self.config.port() != 443 { let _ = core::fmt::write(&mut text, format_args!(":{}", self.config.port())); }
@@ -131,12 +181,10 @@ impl Agent {
             let connection = self.connect()?;
             let mut parser = mind::parse::Service(PARSER);
             // `token none`: the server asks no agent token, so none is sent.
-            let all = [("Content-Type", "application/json"), ("Authorization", authorization.as_str())];
+            let all = [("Content-Type", content_type), ("Authorization", authorization.as_str())];
             let headers = if send_token { &all[..] } else { &all[..1] };
-            let mut source = body.unwrap_or(&[]);
-            let length = body.map(|b| b.len() as u64);
-            let sent = connection.request(method, &url, headers, length.map(|n| (n, &mut source as &mut dyn http::Source)), &mut parser, false);
-            let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", if body.is_some() { "POST" } else { "GET" }, route, e); return None; } };
+            let sent = connection.request(method, &url, headers, body, &mut parser, false);
+            let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", match method { Method::Get => "GET", Method::Post => "POST", Method::Put => "PUT" }, route, e); return None; } };
             let status = response.status;
             let mut chunk = [0u8; 2048];
             loop {
@@ -158,10 +206,16 @@ impl Agent {
     /// The body as `parse.json` reads it, checked by `check`.
     #[inline(never)]
     fn answer<T>(&self, check: impl FnOnce(&[wire::Value<'_>]) -> Result<T, wire::Error>) -> Result<T, wire::Error> {
+        self.parsed(&self.body, check)
+    }
+
+    /// The values `parse.json` reads in `text` (an answer's body, or a command's payload), checked by `check`.
+    #[inline(never)]
+    fn parsed<T>(&self, text: &[u8], check: impl FnOnce(&[wire::Value<'_>]) -> Result<T, wire::Error>) -> Result<T, wire::Error> {
         let mut owned: Vec<(wire::Kind, Option<u16>, String, String)> = Vec::new();
         let mut start = 0u32;
         loop {
-            let (total, got) = self.page(start, &mut owned)?;
+            let (total, got) = self.page(text, start, &mut owned)?;
             start += got;
             if start >= total || got == 0 { break; }
         }
@@ -171,8 +225,8 @@ impl Agent {
 
     // One page of `parse.json`'s answer into `owned`: the page lives in this frame only (the stack is 64 KiB).
     #[inline(never)]
-    fn page(&self, start: u32, owned: &mut Vec<(wire::Kind, Option<u16>, String, String)>) -> Result<(u32, u32), wire::Error> {
-        let result = parse::json(PARSER, &self.body, start);
+    fn page(&self, text: &[u8], start: u32, owned: &mut Vec<(wire::Kind, Option<u16>, String, String)>) -> Result<(u32, u32), wire::Error> {
+        let result = parse::json(PARSER, text, start);
         let Ok(Ok(page)) = &result else { return Err(wire::Error::Shape) };
         if page.values as usize > wire::VALUES_MAX { return Err(wire::Error::Bounds); }
         for v in page.page.as_slice() {
@@ -232,16 +286,25 @@ impl Agent {
         let query = alloc::format!("?agent_id={}{}", self.agent_id, if session.busy() { "&at_capacity=1" } else { "" });
         let outcome = match self.request(Method::Get, "/api/commands/poll", &query, None) {
             None => Outcome::Retry,
-            Some(200) => match self.answer(|v| wire::commands(v).map(|c| (c.count, c.activation_required, c.list.map(|d| d.map(|d| (String::from(d.command.id), String::from(d.command.agent_id), String::from(d.command.action), String::from(d.command.program), String::from(d.command.payload), d.command.expires_unix)))))) {
+            Some(200) => match self.answer(|v| wire::commands(v).map(|c| (c.count, c.activation_required, c.list.map(|d| d.map(|d| (String::from(d.command.id), String::from(d.command.agent_id), String::from(d.command.action), String::from(d.command.program), String::from(d.command.payload), d.command.expires_unix, String::from(d.initiator), String::from(d.reason))))))) {
                 Ok((count, activation, list)) => {
                     if activation && !self.activation_noted { mind::println!("EFFECTOR: THE SERVER WAITS FOR THE OWNER TO ACTIVATE THIS AGENT"); self.activation_noted = true; }
                     took_command = count > 0;
-                    for (id, agent_id, action, program, payload, expires_unix) in list.iter().take(count).flatten() {
+                    for (id, agent_id, action, program, payload, expires_unix, initiator, reason) in list.iter().take(count).flatten() {
                         let command = session::Command { id, agent_id, action, program, payload, expires_unix: *expires_unix };
-                        match session.receive(command, time()) {
+                        // An action the gateway serves runs once, for a command not saved before; any other is denied.
+                        let gateway_ok = mind::dev::cap_info(SLOT_GATEWAY).0 == CAP_KIND_ENDPOINT;
+                        let run = action == "collect_file" && gateway_ok && !session.busy() && session.fresh(&command) == Ok(true);
+                        let received = if run {
+                            let done = self.collect_file(id, payload, initiator, reason);
+                            session.receive_with(command, time(), done)
+                        } else { session.receive(command, time()) };
+                        match received {
                             Ok(Accepted::Store(store)) => {
                                 let durable = self.append_journal(&store.record);
-                                mind::println!("EFFECTOR: {} {} {}{}", store.record.result.status().to_ascii_uppercase(), id, action, if durable { "" } else { " (JOURNAL WRITE FAILED)" });
+                                let result = store.record.result;
+                                let why = if let session::Final::Failed(f) = result { f.name() } else { "" };
+                                mind::println!("EFFECTOR: {} {} {}{}{}{}", result.status().to_ascii_uppercase(), id, action, if why.is_empty() { "" } else { ": " }, why, if durable { "" } else { " (JOURNAL WRITE FAILED)" });
                                 let _ = session.stored(store, durable);
                             }
                             Ok(Accepted::Replay) => mind::println!("EFFECTOR: REPEATED {}: THE SAVED ANSWER AGAIN", id),
@@ -256,6 +319,33 @@ impl Agent {
             Some(status) => { mind::println!("EFFECTOR: POLL ANSWERED {}", status); session::outcome(status, false) }
         };
         (outcome, took_command)
+    }
+
+    /// `collect_file` through the gateway (750-EFF-0007): opened there (the owner's policy decides, the gateway audits),
+    /// then its bytes uploaded with their SHA-256 as the server's `/api/commands/file` takes them.
+    #[inline(never)]
+    fn collect_file(&mut self, id: &str, payload: &str, initiator: &str, reason: &str) -> session::Final {
+        use session::{Failure, Final};
+        let Ok((path, max)) = self.parsed(payload.as_bytes(), |v| wire::collect(v).map(|c| (String::from(c.path), c.max_bytes))) else {
+            return Final::Failed(Failure::Malformed);
+        };
+        let opened = match gateway::open_file(GATEWAY, &origin(id, initiator, reason), &path) {
+            Ok(Ok(t)) => t,
+            Ok(Err(e)) => return Final::Failed(failure(e)),
+            Err(_) => return Final::Failed(Failure::Unsupported),
+        };
+        let result = if opened.truncated || max.is_some_and(|m| opened.size > m) { Final::Failed(Failure::Bounds) } else {
+            let query = alloc::format!("?agent_id={}&command_id={}&sha256={}", self.agent_id, id, opened.sha256.as_str());
+            let mut body = Pieces { handle: opened.handle, offset: 0, size: opened.size, piece: alloc::vec![0; 32768], at: 0, end: 0, failed: None };
+            let status = self.send(Method::Post, "/api/commands/file", &query, "application/octet-stream", Some((opened.size, &mut body)));
+            match (status, body.failed) {
+                (_, Some(f)) => Final::Failed(f),
+                (Some(201), None) => Final::Completed,
+                _ => Final::Failed(Failure::Upload),
+            }
+        };
+        let _ = gateway::close(GATEWAY, opened.handle);
+        result
     }
 
     fn path(&self, name: &str) -> String { let mut p = self.dir.clone(); p.push('/'); p.push_str(name); p }

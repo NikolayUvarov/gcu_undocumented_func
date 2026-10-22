@@ -1,11 +1,12 @@
 //! The session journal's file form (750-EFF-0006): one line per saved result, appended and flushed before the result
 //! is acknowledged. A last line cut by a crash is dropped (its result was never acknowledged); anything else
 //! malformed refuses the journal, so a result is never acknowledged twice differently or forgotten silently.
-use crate::session::{Error, Final, Id, Record, RECORDS_MAX};
+use crate::session::{Error, Failure, Final, Id, Record, RECORDS_MAX};
 
 pub const HEADER: &str = "effector-journal 1\n";
-/// `<id> <identity> <result> <expires>\n`: id ≤ 64, identity 64 hex, result `denied`/`expired`, expires ≤ 20 or `-`.
-pub const LINE_MAX: usize = 64 + 1 + 64 + 1 + 7 + 1 + 20 + 1;
+/// `<id> <identity> <result> <expires>\n`: id ≤ 64, identity 64 hex, result `denied`, `expired`, `completed` or
+/// `failed-<name>` (`session::Failure`, ≤ 18), expires ≤ 20 or `-`.
+pub const LINE_MAX: usize = 64 + 1 + 64 + 1 + 18 + 1 + 20 + 1;
 
 fn hex(bytes: &[u8; 32], out: &mut [u8]) {
     for (i, b) in bytes.iter().enumerate() {
@@ -25,6 +26,7 @@ pub fn line(r: &Record, out: &mut [u8; LINE_MAX]) -> usize {
     put(&h, &mut n);
     put(b" ", &mut n);
     put(r.result.status().as_bytes(), &mut n);
+    if let Final::Failed(f) = r.result { put(b"-", &mut n); put(f.name().as_bytes(), &mut n); }
     put(b" ", &mut n);
     match r.expires_unix {
         None => put(b"-", &mut n),
@@ -68,7 +70,11 @@ pub fn read(text: &[u8], agent: &str) -> Result<([Option<Record>; RECORDS_MAX], 
         if w.next().is_some() { return Err(Error::Journal); }
         let id = Id::command(id.ok_or(Error::Journal)?).map_err(|_| Error::Journal)?;
         let identity = unhex(identity.ok_or(Error::Journal)?).ok_or(Error::Journal)?;
-        let result = match result { Some("denied") => Final::Denied, Some("expired") => Final::Expired, _ => return Err(Error::Journal) };
+        let result = match result {
+            Some("denied") => Final::Denied, Some("expired") => Final::Expired, Some("completed") => Final::Completed,
+            Some(w) => Final::Failed(w.strip_prefix("failed-").and_then(Failure::from_name).ok_or(Error::Journal)?),
+            None => return Err(Error::Journal),
+        };
         let expires_unix = match expires.ok_or(Error::Journal)? {
             "-" => None,
             e if !e.is_empty() && e.len() <= 20 && e.bytes().all(|c| c.is_ascii_digit()) && (e == "0" || !e.starts_with('0')) => Some(e.parse().map_err(|_| Error::Journal)?),
