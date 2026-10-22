@@ -2415,10 +2415,11 @@ def giveup_suite(vm):
         time.sleep(.1); vm.collect(); vm.output = ""
         faults = vm.command("faults")
         fault = pid and re.search(fr"FAULT PID={pid[1]} CPU=\d+ VECTOR=(\d+) ERROR=(0x[0-9a-f]+) ", faults)
+        assert "THE CALLER'S PAGE HOLDS THE LATE WRITE" not in out, f"try {attempt + 1}: the server's late write reached the caller's page"
         assert "GIVEN-UP BUFFER OK" in out and not fault, \
             f"try {attempt + 1}: the server faulted writing a buffer its caller gave up ({fault and fault.group(0)})"
     print("PASS: giveup: a server wrote a buffer its caller had given up and revoked, had its reply refused and served "
-          "the next message, three times (500-ASR-0012)", flush=True)
+          "the next message, and the caller's page kept nothing of it, three times (500-ASR-0012)", flush=True)
 
 
 def isolation_suite(vm):
