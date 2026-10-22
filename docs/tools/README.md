@@ -277,13 +277,15 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
 
 **The network's commands**, on the stack's operator client the shell holds:
 
-- `ping [-c count] [-i seconds] [-w seconds] [-f] host` (000-APP-0095): echo requests, 3 by default, a second apart from one start to the next, each waiting 1 s for its reply.
+- `ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] host` (000-APP-0095): echo requests, 3 by default, a second apart from one start to the next, each waiting 1 s for its reply.
   - Each request's line starts with its place in the run: `[2/3] REPLY FROM 10.0.2.2: TIME=812 US`; `[5]` with `-c 0`.
   - `-c 0` sends them until Esc or Ctrl+C, which stop any run.
   - `-i` and `-w` take decimals (`-i 0.2`).
   - `-f` sends the next at once, prints a dot for each one lost and no line for each reply, 100 by default.
   - It ends with `PING: 3 SENT, 3 RECEIVED, 0% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST)`.
-  - A request's size and payload (`-s`, `-p`) wait for the stack to send them: its requests carry 8 bytes (requests-NET.md).
+  - `-s` sets each request's data bytes, 0 to 1472 (one frame on a 1500-byte MTU); `-p` the bytes repeated over them, 1 to 16 in hexadecimal (`-p a55a0f`), 56 bytes with `-p` alone. Without them a request carries the stack's 8 bytes, `MINDCORE`.
+  - With either, each line names the reply's size, `[1/3] REPLY FROM 10.0.2.2: 1000 BYTES, TIME=812 US`, and `BAD DATA` when its data are not what was sent; the last line counts those (`, 1 WITH BAD DATA`). They go through `socket.wit` 2.6 `ping-with` (000-NET-0040); an older stack is named so.
+  - The TTL is not shown: the stack's ICMP socket does not hand it over.
 - `ip` (550-APP-0085): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED` and `DEFAULT`.
 - `netstat [-i]` (000-APP-0031): every socket of the stack with its protocol, ports, remote end, TCP state, bytes each way and program, then the cards; `-i` the cards alone.
 - `mode [development|maintenance on|off [reason]]` (750-EFF-0013, `init.wit` 1.5): the machine's modes, in which `init` runs the Effector agent's services and keeps the choice in `data/mode.conf` across reboots.

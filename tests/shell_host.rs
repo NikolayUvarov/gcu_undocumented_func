@@ -250,7 +250,7 @@ fn netstat_rows_line_up_under_the_header() {
 #[test]
 fn ping_takes_its_count_interval_wait_and_fast_mode() {
     let plain = ping::parse("10.0.2.2").unwrap();
-    assert_eq!(plain, ping::Asked { host: "10.0.2.2", count: 3, interval_ms: 1000, wait_ms: 1000, fast: false });
+    assert_eq!(plain, ping::Asked { host: "10.0.2.2", count: 3, interval_ms: 1000, wait_ms: 1000, fast: false, size: None, pattern: [0; 16], pattern_len: 0 });
     let asked = ping::parse("-c 5 -i 0.2 -w 1.5 ya.ru").unwrap();
     assert_eq!((asked.host, asked.count, asked.interval_ms, asked.wait_ms), ("ya.ru", 5, 200, 1500));
     assert_eq!(ping::parse("10.0.2.2 -C 0 -I .05").map(|a| (a.count, a.interval_ms)), Ok((0, 50)));
@@ -261,8 +261,17 @@ fn ping_takes_its_count_interval_wait_and_fast_mode() {
                   "-x h", "a b"] {
         assert!(ping::parse(wrong).is_err(), "{:?}", wrong);
     }
-    assert!(ping::parse("-s 64 h").unwrap_err().contains("NETWORK STACK"));
-    assert!(ping::parse("-p ff h").unwrap_err().contains("NETWORK STACK"));
+    // -s and -p (socket.wit 2.6 ping-with): 0 to 1472 data bytes, 1 to 16 pattern bytes in pairs of hex digits.
+    let sized = ping::parse("-f -c 1000 -s 1472 -p a55a0f 10.0.2.2").unwrap();
+    assert_eq!((sized.size, sized.pattern(), sized.sized(), sized.fast), (Some(1472), &[0xa5, 0x5a, 0x0f][..], true, true));
+    assert_eq!(ping::parse("-s 0 h").map(|a| (a.size, a.pattern_len)), Ok((Some(0), 0)));
+    assert_eq!(ping::parse("-p 0xFF h").map(|a| (a.size, a.pattern().to_vec())), Ok((Some(56), vec![0xff])), "-p alone: 56 bytes");
+    assert_eq!(ping::parse("-P 00112233445566778899aabbccddeeff h").map(|a| a.pattern_len), Ok(16));
+    for wrong in ["-s 1473 h", "-s -1 h", "-s h", "-p abc h", "-p zz h", "-p 00112233445566778899aabbccddeeff00 h", "-p h", "-p 0x h"] {
+        assert!(ping::parse(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(ping::parse("-s 1473 h").unwrap_err().contains("1472"));
+    assert!(!ping::parse("h").unwrap().sized());
 }
 
 #[test]
@@ -286,6 +295,9 @@ fn ping_ends_with_its_tally() {
     let mut lost = ping::Tally::default();
     for _ in 0..3 { lost.lost(); }
     assert_eq!(line(&lost, false), "PING: 3 SENT, 0 RECEIVED, 100% LOST\n");
+    // A reply whose data are not what was sent (-s, -p) is received, and named apart.
+    tally.bad_data();
+    assert_eq!(line(&tally, false), "PING: 4 SENT, 3 RECEIVED, 25% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST), 1 WITH BAD DATA\n");
 }
 
 #[test]

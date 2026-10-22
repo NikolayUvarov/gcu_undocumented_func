@@ -1,6 +1,6 @@
 # 000-APP-0095 — `ping`: the number of requests, their interval and wait, a fast mode; the size and the payload next
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20), each line's place since 1d841622 (2026-10-21); `-s` and `-p` wait for the network track · **Blocked by:** — for `-c`, `-i`, `-w` and `-f`; the network track for `-s` and `-p` ([requests-NET.md](requests-NET.md), "An echo request's size and payload") · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20), each line's place since 1d841622 (2026-10-21); `-s` and `-p` on the tools branch since 2026-10-22, over the network track's `ping-with` (000-NET-0040, in `main` since ffe91c55) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
 
 **Recorded by:** the tools track, 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode. Add them.").
 
@@ -55,6 +55,19 @@ Its last line gives no loss or times, and nothing stops a run.
 - **Each request's place in the run** (the maintainer's request, 2026-10-21): every reply's or loss's line starts `[2/3] `, or `[5] ` for `-c 0` (`ping::place`); a host test, and the `net` suite reads `[1/3]` to `[3/3]` and `[1]`, `[2]` before Ctrl+C. `-f` keeps its dots. In `main` with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1. On the branch before it: every group of `ci_local.sh --list` on fe83e221 (i9, un-rizen-service and locally; five x86 groups passed again alone after a load of 53 on i9, and `files and block writes` after the parser sessions' race of 109-KRN-0133), and the `net` and `wm` groups locally on 893ef487.
 - **Left:** `-s` and `-p` once the stack sends them (requests-NET.md).
 
+## Progress (2026-10-22): `-s` and `-p`
+
+- **The stack.** The network track's 000-NET-0040 gives `socket.wit` 2.6 `ping-with`: 0 to 1472 data bytes, a pattern of up to 16 bytes repeated over them, and an answer with the reply's size and whether its data are what was sent. It is in `main` since ffe91c55 (the landing round of 2026-10-22 18:23 UTC, candidate 57028737).
+- **`ping` (`shell/src/ping.rs`, `shell/src/net.rs`):**
+  - `-s <0-1472>` the data bytes; `-p <hex>` 1 to 16 bytes in pairs of digits (`a55a0f`, `0xff`); `-p` alone sends 56 bytes, as `ping` does elsewhere;
+  - each line names the reply's size, `REPLY FROM 10.0.2.2: 1000 BYTES, TIME=812 US`, and `BAD DATA` when its data differ; the tally counts those (`, 1 WITH BAD DATA`);
+  - with `-f` they go out back to back, as before;
+  - a stack older than 2.6 rejects the call, and `ping` says so;
+  - without `-s` or `-p`, `ping` sends as before.
+- **Not shown: the TTL.** The stack's ICMP socket does not hand it over (NET's answer).
+- **Tests:** host tests (`tests/shell_host.rs`: the options, their limits, the tally); the `net` suite: 2 requests of 1000 bytes of `a55a0f`, 20 of 1472 bytes with `-f`, one of 0 bytes, `-s 1473` and `-p abc` refused.
+- **Where:** made on `claude/000-APP-0095-ping-size` (the tools branch with NET's branch merged in), and brought onto the tools branch once 000-NET-0040 was in `main`.
+
 ## Related
 
-[requests-NET.md](requests-NET.md) (the size and payload), [000-APP-0031](../issues-done/000-APP-0031-netstat.done) (`netstat`).
+[000-NET-0040](../issues-done/000-NET-0040-an-echo-of-a-chosen-size-and-pattern.done) (the size and payload, from requests-NET.md), [000-APP-0031](../issues-done/000-APP-0031-netstat.done) (`netstat`).
