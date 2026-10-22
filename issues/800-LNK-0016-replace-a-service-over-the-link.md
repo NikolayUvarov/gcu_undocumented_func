@@ -31,6 +31,15 @@ The link has no request for it yet.
 
 Evidence for the configurations named only (MC-12.1). A replaced service runs unverified until the next boot, as the log says (MC-3.12, MC-12.3).
 
+## Progress
+
+- **2026-10-22, written; the host tests and the QEMU `link` suite pass** (x86, local, the case above).
+- **2026-10-22, the MacBook Pro** (`fast-test` 85fefd4, ABI 16, written with `--slots --link-dev --keep-wifi`), from Windows over RS-485:
+  - `mindlink replace rtc` put a copy of `rtc.elf` (104 352 bytes) as `replace/rtc.elf`;
+  - `init` logged `rtc REPLACED FROM data/link/replace/rtc.elf: SHA-256 bfaacc73…, NOT VERIFIED`;
+  - `mindlink replace rtc --back` returned it to its boot image.
+  - `bcm_wifi`'s replacement, the third criterion, follows the release that brings the shell's rule.
+
 ## Related
 
 [800-KRN-0144](800-KRN-0144-a-service-replaced-from-data-link.md), [800-LNK-0015](800-LNK-0015-shell-commands-over-the-link.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [docs/link/protocol.md](../docs/link/protocol.md).
