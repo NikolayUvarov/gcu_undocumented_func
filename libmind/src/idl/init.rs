@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 5, 0);
+pub const VERSION: (u8, u8, u8) = (1, 6, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -31,13 +31,14 @@ impl Wire for Error {
 }
 
 /// A boot service: its PID (0 if it does not run), how often init started it, whether it runs or is quarantined
-/// (it failed too often; `run` lifts that), what it holds.
+/// (it failed too often; `run` lifts that), what it holds, and whether it runs an image from data/link/ in place of
+/// its verified boot image (1.6, `replace`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Service { pub name: Text<16>, pub pid: u64, pub starts: u32, pub running: bool, pub quarantined: bool, pub holds: Text<48> }
+pub struct Service { pub name: Text<16>, pub pid: u64, pub starts: u32, pub running: bool, pub quarantined: bool, pub holds: Text<48>, pub replaced: bool }
 impl Wire for Service {
-    const MAX: usize = <Text<16> as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<48> as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.pid.encode(w)?; self.starts.encode(w)?; self.running.encode(w)?; self.quarantined.encode(w)?; self.holds.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, pid: Wire::decode(r)?, starts: Wire::decode(r)?, running: Wire::decode(r)?, quarantined: Wire::decode(r)?, holds: Wire::decode(r)? }) }
+    const MAX: usize = <Text<16> as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<48> as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.pid.encode(w)?; self.starts.encode(w)?; self.running.encode(w)?; self.quarantined.encode(w)?; self.holds.encode(w)?; self.replaced.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, pid: Wire::decode(r)?, starts: Wire::decode(r)?, running: Wire::decode(r)?, quarantined: Wire::decode(r)?, holds: Wire::decode(r)?, replaced: Wire::decode(r)? }) }
 }
 
 /// How this boot went (1.4, 000-KRN-0102): the slot it came from (`BOOT_SLOT_*`: 0 the volume's root, 1 A, 2 B),
@@ -102,7 +103,7 @@ pub fn list(endpoint: Endpoint) -> Result<core::result::Result<List<Service, 64>
     };
     let reply = wire::call_buffer(endpoint, 2 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 5250, false, false)?;
+    let length = wire::buffer_reply(&reply, 5314, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Service, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -148,8 +149,8 @@ pub fn stop_task(endpoint: Endpoint, pid: u64) -> Result<core::result::Result<()
 }
 
 /// Writes what the volumes cache, stops the services in reverse start order and resets the machine; the reply comes
-/// first. Only a client badged `BADGE_REBOOT` (`mind::process`: the updater's) may ask; others get `denied` (1.3,
-/// 351-KRN-0022).
+/// first. Only a client badged `BADGE_REBOOT` (`mind::process`: the updater's) or `BADGE_DEVELOPER` (link's in
+/// developer mode, 1.6) may ask; others get `denied` (1.3, 351-KRN-0022).
 pub fn reboot(endpoint: Endpoint) -> Result<core::result::Result<(), Error>> {
     let words = [6 | MAJOR << 8, 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -204,6 +205,27 @@ pub fn set_mode(endpoint: Endpoint, which: Mode, on: bool, reason: &str) -> Resu
     Ok(Ok(()))
 }
 
+/// Starts service `name` from the ELF at `path` inside data/link/, in place of its boot image, until the next boot
+/// (1.6, 800-KRN-0144): init stops it, logs the image's SHA-256 as NOT VERIFIED, and starts it with the grants of its
+/// plan; a restart after a fault starts that image again. An empty `path` brings the boot image back. Only a client
+/// badged `BADGE_DEVELOPER` may ask (link's, with `dev` in link.conf); others get `denied`, as does a service that
+/// carries the link or the log (vfs_server, logd, usb_serial, link) and the shell. Errors: not-found (no such
+/// service or file), failed (not an ELF, or the start failed).
+pub fn replace(endpoint: Endpoint, name: &str, path: &str) -> Result<core::result::Result<(), Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        codec::encode_str::<16>(name, &mut w).ok_or(SysError::Invalid)?;
+        codec::encode_str::<64>(path, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 0, false, false)?;
+    if length != Some(0) { return Err(SysError::Invalid); }
+    Ok(Ok(()))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -216,6 +238,7 @@ pub enum Request {
     Boot,
     Mode,
     SetMode { which: Mode, on: bool, reason: Text<120> },
+    Replace { name: Text<16>, path: Text<64> },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -235,7 +258,7 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
         }
         2 => {
             let mut copy = [0u8; 1];
-            let (call, length) = wire::take_buffer(request, cap, 5250, &mut copy)?;
+            let (call, length) = wire::take_buffer(request, cap, 5314, &mut copy)?;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::List, call))
@@ -288,6 +311,15 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::SetMode { which, on, reason }, call))
         }
+        10 => {
+            let mut copy = [0u8; 84];
+            let (call, length) = wire::take_buffer(request, cap, 0, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            let name = <Text<16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let path = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Replace { name, path }, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -325,6 +357,10 @@ pub fn reply_mode(call: Call, value: core::result::Result<&ModeState, Error>) ->
     wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_set_mode(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_replace(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
 }

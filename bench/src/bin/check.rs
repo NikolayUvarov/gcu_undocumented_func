@@ -388,6 +388,11 @@ fn services(run: &mut Run, info: &mind::BootInfo) {
         }
         other => fail(format!("not denied: {:?}", other.map(|r| r.err()))),
     });
+    // 800-KRN-0144: replacing a service is link's developer client's alone; nothing is stopped or read for another.
+    run.report("a replace refused", match lifecycle::replace(Endpoint(SLOT_LIFECYCLE), "rtc", "check.elf") {
+        Ok(Err(lifecycle::Error::Denied)) => pass(String::from("denied to a lifecycle client")),
+        other => fail(format!("not denied: {:?}", other.map(|r| r.err()))),
+    });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {
             let verdict = if s.running {

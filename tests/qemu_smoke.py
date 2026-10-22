@@ -1600,7 +1600,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -4083,6 +4083,7 @@ def modes_suite(args):
                 state = "development, as set by disk" if words else "normal, as set by disk"
                 assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
+                assert rows.get("a replace refused", ("",))[0] == "✓", out[-2000:]  # 800-KRN-0144
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]

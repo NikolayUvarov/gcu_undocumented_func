@@ -1,6 +1,6 @@
 # 800-KRN-0144 — In developer mode, `init` replaces a service with an image from `data/link/`, with no restart
 
-**Type:** `init`, IDL (`init.wit`, a new minor version) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (2026-10-21) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.4, MC-12.1, MC-12.3
+**Type:** `init`, IDL (`init.wit`, a new minor version) · **Owner:** kernel session · **Priority:** P2 · **Status:** made (2026-10-22): `init`'s side; the link track's `mindlink replace` and its suite left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.4, MC-12.1, MC-12.3
 
 From the link track's request of 2026-10-21, for the driver track's work on the MacBook Pro (`internal-dev-messages`, `KRN/2026-10-21T1233Z-LNK-…`). The maintainer asked for a debug mode in which the agents test on the Mac with no person at it.
 
@@ -41,8 +41,47 @@ From the link track's request of 2026-10-21, for the driver track's work on the 
 ## Acceptance criteria
 
 - [ ] In QEMU, with `dev`, a service replaced from `data/link/` runs with its plan's grants, the log says it is not verified, and `replace(unit, none)` brings the boot image back.
-- [ ] Without `dev`, the request is refused and nothing is minted.
-- [ ] `docs/profile/bootstrap.md` states what this mode runs unverified.
+- [x] Without `dev`, the request is refused and nothing is minted.
+- [x] `docs/profile/bootstrap.md` states what this mode runs unverified.
+
+## Progress (2026-10-22)
+
+**`init.wit` 1.6:**
+- `replace(name, path)`; an empty `path` brings the boot image back.
+- `list`'s service record gains `replaced: bool`.
+- `libmind/src/idl/init.rs` is regenerated.
+
+**The badge.**
+- `link`'s lifecycle client with `dev` is now badged `BADGE_DEVELOPER` (5, `mind::process`). Before, it was `BADGE_REBOOT`.
+- `init` takes `reboot` from it as from the updater's, and `replace` from it alone.
+- **Why not `BADGE_REBOOT`:** the updater holds it too, and the updater must not replace services.
+- **Same slot:** `link` keeps the client in slot 11, so its `reboot` is unchanged and no ABI changes.
+
+**What `init` does on `replace`** (`init/src/main.rs`, `replace` and `link_image`):
+- **The caller.** Any badge but `BADGE_DEVELOPER` is refused: `[INIT] REPLACE REFUSED: PID … (BADGE …) MAY NOT REPLACE … (MC-3.8)`.
+- **Units never replaced:** `init`, the shell, `vfs_server`, `logd`, `usb_serial` and `link`. The answer is `denied`, with the line `REPLACE REFUSED: … CARRIES THE OPERATOR, THE LOG OR THE LINK`.
+- **The path.**
+  - It must be a plain relative name under `data/link/`: no leading `/`, no `:`, no empty, `.` or `..` part.
+  - The file is read whole through a client of the user's files, dropped at once.
+  - Its size is from 64 bytes to 16 MiB, and it must start as an ELF.
+- **The image.**
+  - Its SHA-256 is taken, then the pages are detached (`Pages::detach`). `init` keeps a memory object it neither maps nor can write.
+  - Each start, a fresh one or a restart after a fault, spawns from a read-only copy of it (`Image::Memory`), with the unit's plan, so its grants are the same.
+- **The order:** the unit is stopped as `stop` does, the line `[INIT] <unit> REPLACED FROM data/link/<path>: SHA-256 <digest>, NOT VERIFIED` is logged, and the unit is started again.
+- **`replace(unit, "")`** drops the image, logs `BACK TO ITS BOOT IMAGE` and starts the boot image.
+
+**Tested.**
+- **`check services`** has a row, "a replace refused": the lifecycle client the shell lends is denied. It is in the `modes` suite's checks and the bench suite's `CHECKS_PASS`.
+- **The path through a temporary driver in `init`** (not committed), x86, QEMU:
+  - `logd` was refused;
+  - a `..` path gave `not-found`;
+  - badge 2 was refused;
+  - `rtc` was replaced from `data/link/rtc.elf` with the right SHA-256, `list` marked it replaced, and `date` answered from the new instance.
+- **Passed:** the `modes`, `link` and `bench` suites, x86.
+
+**Left:**
+- **The link track:** `mindlink replace <unit> <file>` and the `link` suite's case. Only `link` holds the badge, so nothing else can drive it.
+- **Criterion 1** is met in a suite once that exists.
 
 ## Related
 
