@@ -96,3 +96,126 @@ fn a_batch_idempotency_cancel_and_a_restart() {
     std::fs::remove_dir_all(&d).ok();
 }
 
+
+/// A raw HTTP request with the headers given; the answer's head and body.
+fn raw(at: &str, head: &str) -> (String, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(at).unwrap();
+    s.write_all(format!("{head}\r\nConnection: close\r\n\r\n").as_bytes()).unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    let (h, b) = answer.split_once("\r\n\r\n").unwrap();
+    (h.to_string(), b.to_string())
+}
+
+/// A WebSocket to the page's feed, as a browser on the daemon's own page opens it; the answer's head.
+fn feed(at: &str, origin: &str) -> (std::net::TcpStream, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(at).unwrap();
+    write!(s, "GET /api/v1/stream HTTP/1.1\r\nHost: {at}\r\nOrigin: {origin}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\
+               Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").unwrap();
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") { if s.read(&mut b).unwrap() == 0 { break; } head.push(b[0]); }
+    s.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+    (s, String::from_utf8_lossy(&head).into_owned())
+}
+
+/// A masked text frame, as a page sends one.
+fn page_says(s: &mut std::net::TcpStream, text: &str) {
+    use std::io::Write;
+    let mask = [0x37u8, 0xfa, 0x21, 0x3d];
+    let mut f = vec![0x81, 0x80 | text.len() as u8];
+    f.extend_from_slice(&mask);
+    f.extend(text.bytes().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+    s.write_all(&f).unwrap();
+}
+
+/// The feed's text messages until one has `want`; None when it closes, or after 20 s (its beat never lets a read time out).
+fn feed_until(s: &mut std::net::TcpStream, want: &str) -> Option<String> {
+    use std::io::Read;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        let mut h = [0u8; 2];
+        s.read_exact(&mut h).ok()?;
+        let len = match h[1] & 0x7f {
+            126 => { let mut l = [0u8; 2]; s.read_exact(&mut l).ok()?; u16::from_be_bytes(l) as usize }
+            127 => { let mut l = [0u8; 8]; s.read_exact(&mut l).ok()?; u64::from_be_bytes(l) as usize }
+            n => n as usize,
+        };
+        let mut payload = vec![0u8; len];
+        s.read_exact(&mut payload).ok()?;
+        if h[0] & 0x0f == 8 { return None; }
+        let text = String::from_utf8_lossy(&payload).into_owned();
+        if text.contains(want) { return Some(text); }
+    }
+    None
+}
+
+#[test]
+fn the_page_its_feed_and_other_sites() {
+    let d = std::env::temp_dir().join(format!("effector485-page-{}", std::process::id()));
+    std::fs::remove_dir_all(&d).ok();
+    for sub in ["srv", "cli", "state", "state2"] { std::fs::create_dir_all(d.join(sub)).unwrap(); }
+    std::fs::write(d.join("srv.log"), "booted\n").unwrap();
+    std::fs::write(d.join("cli/count.sh"), b"#!/bin/sh\ni=0; while [ $i -lt 30 ]; do echo line $i; i=$((i+1)); sleep 0.05; done\n").unwrap();
+    let (_serve, line) = start(MINDLINK, &["pty", "serve", d.join("srv").to_str().unwrap(), "--log", d.join("srv.log").to_str().unwrap(), "--run"]);
+    let pty = line.split_whitespace().nth(1).unwrap().to_string();
+    let (_daemon, at) = daemon(&pty, &d.join("state"));
+    let own = format!("http://{at}");
+    let ok = |args: &[&str]| { let (code, out) = e485(&at, args); assert_eq!(code, 0, "{args:?}: {out}"); out };
+
+    // The page, from its own address; another site's page and another host name are refused.
+    let (head, body) = raw(&at, &format!("GET / HTTP/1.1\r\nHost: {at}"));
+    assert!(head.starts_with("HTTP/1.1 200") && head.contains("text/html") && body.contains("<title>effector485</title>"), "{head}");
+    let (head, _) = raw(&at, &format!("POST /api/v1/operations HTTP/1.1\r\nHost: {at}\r\nOrigin: http://example.com\r\nContent-Length: 2\r\n\r\n{{}}"));
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+    let port = at.rsplit(':').next().unwrap();
+    let (head, _) = raw(&at, &format!("GET /api/v1/endpoints HTTP/1.1\r\nHost: rebound.example:{port}"));
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+    let (_, head) = feed(&at, "http://example.com");
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+
+    // The feed: the cable's state, the operations, and the output of the one followed as it comes.
+    let (mut s, head) = feed(&at, &own);
+    assert!(head.starts_with("HTTP/1.1 101") && head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "{head}");
+    assert!(feed_until(&mut s, "\"type\":\"hello\"").unwrap().contains("\"key_needed\":false"));
+    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains("\"online\":true"));
+    ok(&["submit", "install", &format!("file={}", d.join("cli/count.sh").display()), "--key", "P-install", "--reason", "test: install", "--wait"]);
+    let run = ok(&["submit", "run", "name=apps/count.sh", "--key", "P-run", "--reason", "test: a run the page follows"]);
+    let id = field(&run, "id").to_string();
+    page_says(&mut s, &format!("{{\"follow\":\"{id}\"}}"));
+    let mut text = String::new();
+    loop {
+        let m = feed_until(&mut s, "\"type\":\"output\"").expect("the run's output");
+        text.push_str(&m[m.find("\"text\":\"").unwrap() + 8..m.rfind('"').unwrap()].replace("\\n", "\n"));
+        if m.contains("\"status\":\"completed\"") { break; }
+    }
+    let lines: String = (0..30).map(|i| format!("line {i}\n")).collect();
+    assert_eq!(text, lines);
+
+    // Pages that never read take no time from the cable's work, and a ninth page is refused.
+    let silent: Vec<_> = (0..7).map(|_| feed(&at, &own).0).collect();
+    let started = std::time::Instant::now();
+    for i in 0..10 { ok(&["submit", "hello", "--key", &format!("P-hello-{i}"), "--reason", "test: work beside silent pages", "--wait"]); }
+    assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
+    let (_, head) = feed(&at, &own);
+    assert!(head.starts_with("HTTP/1.1 503"), "{head}");
+    drop(silent);
+
+    // With a key, the feed asks for it and closes on a wrong one.
+    std::fs::write(d.join("key"), "sesame\n").unwrap();
+    let (_keyed, at2) = start(EFFECTOR, &["daemon", "/nonexistent/tty", "--listen", "127.0.0.1:0", "--state", d.join("state2").to_str().unwrap(),
+                                           "--key-file", d.join("key").to_str().unwrap()]);
+    let at2 = at2.split_whitespace().nth(3).unwrap().trim_end_matches(',').to_string();
+    let (mut s, _) = feed(&at2, &format!("http://{at2}"));
+    assert!(feed_until(&mut s, "\"type\":\"hello\"").unwrap().contains("\"key_needed\":true"));
+    page_says(&mut s, "{\"key\":\"wrong\"}");
+    assert!(feed_until(&mut s, "\"type\":\"error\"").is_some());
+    assert!(feed_until(&mut s, "\"type\":\"link\"").is_none());
+    let (mut s, _) = feed(&at2, &format!("http://{at2}"));
+    feed_until(&mut s, "\"type\":\"hello\"").unwrap();
+    page_says(&mut s, "{\"key\":\"sesame\"}");
+    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains("\"online\":false"));
+    std::fs::remove_dir_all(&d).ok();
+}

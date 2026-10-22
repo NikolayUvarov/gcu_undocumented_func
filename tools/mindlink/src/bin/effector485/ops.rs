@@ -3,6 +3,8 @@
 //! so a restarted daemon finds its queue and follows the programs it had started.
 use crate::json::{obj, s, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The statuses an operation ends in.
@@ -120,7 +122,8 @@ pub fn tail(text: &str, max: usize) -> &str {
 #[derive(Default)]
 pub struct Link { pub port: String, pub online: bool, pub name: String, pub last_seen: u64, pub error: String }
 
-pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub link: Link, dirty: bool }
+/// `changes` counts the changes, so that the page's feeds see one without taking the lock.
+pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub link: Link, dirty: bool, pub changes: Arc<AtomicU64> }
 
 pub enum Submitted { New(usize), Again(usize) }
 
@@ -141,7 +144,7 @@ impl State {
             op.status = "lost".into();
         }
         let next = ops.iter().filter_map(|o| o.id.rsplit('-').next()?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
-        Ok(State { ops, next, file, link: Link { port: port.to_string(), ..Link::default() }, dirty: false })
+        Ok(State { ops, next, file, link: Link { port: port.to_string(), ..Link::default() }, dirty: false, changes: Arc::default() })
     }
 
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
@@ -159,7 +162,10 @@ impl State {
         else { eprintln!("effector485: {} could not be written", self.file.display()); }
     }
 
-    pub fn touch(&mut self) { self.dirty = true; }
+    pub fn touch(&mut self) { self.dirty = true; self.changed(); }
+
+    /// A change the state file does not keep: the cable's other end came or went.
+    pub fn changed(&self) { self.changes.fetch_add(1, Ordering::Release); }
 
     pub fn position(&self, index: usize) -> Option<usize> {
         (self.ops[index].status == "queued").then(|| self.ops[..=index].iter().filter(|o| o.status == "queued").count())
@@ -191,7 +197,7 @@ impl State {
             started: None, finished: None, output: Vec::new(), output_bytes: 0, result: Value::Obj(Vec::new()), cancel: None,
             run: None, cursor: 0, deadline: None,
         });
-        self.dirty = true;
+        self.touch();
         Ok(Submitted::New(self.ops.len() - 1))
     }
 
@@ -206,7 +212,7 @@ impl State {
         } else {
             op.cancel = Some((key.to_string(), reason.to_string()));
         }
-        self.dirty = true;
+        self.touch();
         Ok(i)
     }
 

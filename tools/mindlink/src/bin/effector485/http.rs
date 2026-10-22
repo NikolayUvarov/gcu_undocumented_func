@@ -6,7 +6,10 @@ use std::time::Duration;
 /// The largest body taken: an operation's request is small.
 const BODY_MAX: usize = 1 << 20;
 
-pub struct Request { pub method: String, pub path: String, pub query: Vec<(String, String)>, pub key: Option<String>, pub body: String }
+/// `origin` and `host` as the client sent them: a browser sends both, the command line `host` alone.
+/// `websocket`: the Sec-WebSocket-Key of a page asking for the feed.
+pub struct Request { pub method: String, pub path: String, pub query: Vec<(String, String)>, pub key: Option<String>, pub body: String,
+                    pub origin: Option<String>, pub host: Option<String>, pub websocket: Option<String> }
 
 impl Request {
     pub fn param(&self, name: &str) -> Option<&str> { self.query.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str()) }
@@ -35,7 +38,7 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
     reader.read_line(&mut line).map_err(|e| e.to_string())?;
     let mut parts = line.split_whitespace();
     let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("/").to_string());
-    let (mut length, mut key) = (0usize, None);
+    let (mut length, mut key, mut origin, mut host, mut websocket) = (0usize, None, None, None, None);
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h).map_err(|e| e.to_string())? == 0 || h.trim().is_empty() { break; }
@@ -43,6 +46,9 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         match name.trim().to_ascii_lowercase().as_str() {
             "content-length" => length = value.trim().parse().map_err(|_| "a bad Content-Length")?,
             "x-api-key" => key = Some(value.trim().to_string()),
+            "origin" => origin = Some(value.trim().to_string()),
+            "host" => host = Some(value.trim().to_ascii_lowercase()),
+            "sec-websocket-key" => websocket = Some(value.trim().to_string()),
             _ => {}
         }
     }
@@ -54,11 +60,11 @@ pub fn read_request(stream: &mut TcpStream) -> Result<Request, String> {
         let (k, v) = p.split_once('=').unwrap_or((p, ""));
         (unescape(k), unescape(v))
     }).collect();
-    Ok(Request { method, path: path.to_string(), query, key, body: String::from_utf8(body).map_err(|_| "the body is not UTF-8")? })
+    Ok(Request { method, path: path.to_string(), query, key, body: String::from_utf8(body).map_err(|_| "the body is not UTF-8")?, origin, host, websocket })
 }
 
 pub fn respond(stream: &mut TcpStream, status: u16, content_type: &str, body: &str) {
-    let reason = match status { 200 => "OK", 201 => "Created", 400 => "Bad Request", 401 => "Unauthorized", 404 => "Not Found", 409 => "Conflict", _ => "Error" };
+    let reason = match status { 200 => "OK", 201 => "Created", 400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found", 409 => "Conflict", 503 => "Service Unavailable", _ => "Error" };
     let head = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body.as_bytes())).ok();
 }

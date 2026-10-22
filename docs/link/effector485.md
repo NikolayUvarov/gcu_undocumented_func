@@ -84,6 +84,8 @@ JSON over HTTP, as Effector's:
 | `POST /api/v1/operations/cancel` with `operation_id`, `idempotency_key`, `reason` | the operation. A queued one is cancelled at once; a running one when the daemon next reaches it |
 | `GET /api/v1/endpoints` | the cable's other end: `online`, `name`, `last_seen`, `error`, `queued`, `running` |
 | `GET /api/v1/api-key` | `valid`: the key is right |
+| `GET /` | the page (below) |
+| `GET /api/v1/stream` | the page's live feed, a WebSocket (below) |
 
 **The output** keeps the last 256 KiB of each operation.
 
@@ -107,12 +109,24 @@ effector485 cancel e485-6ad7cdb8-7 --key LNK-cancel-1 --reason "LNK: wrong build
   - 1 otherwise.
 - **`--at <host:port>`** or `EFFECTOR485_AT` names the daemon, and `--key-file` or `EFFECTOR485_KEY_FILE` its key.
 
+## The page in a browser
+
+Open the daemon's address, `http://127.0.0.1:8485/`, in a browser on the same machine. Task: [800-LNK-0017](../../issues/800-LNK-0017-effector485-page.md).
+
+- **What it shows, live:** the cable's other end (online, its name, when it last answered), the queue, the newest 200 operations, and the output of the one clicked as it comes. The address keeps the operation followed (`#<id>`), so a reload or a link shows it again.
+- **Its buttons:** `hello`, the log (new since the last read, or all of it), the shell's `ip`, `netstat -i` and `ps`, a shell line, a program with arguments, a directory's list, a service replaced or put back, and a reboot. Each is an operation like any other, with its own idempotency key and the reason typed on the page. Those that change the machine ask first.
+- **The feed** is a WebSocket at `/api/v1/stream`. Its messages are JSON: `hello` (whether the key is needed), `link` (at least every 2 s), `ops` (when the list changes) and `output` (for the operation the page follows with `{"follow": "<id>", "from": <byte>}`).
+- **The cable comes first.** A feed never waits for the daemon's state: when the queue's worker holds it, the feed skips that turn. The feed holds it only to copy a few fields and at most 48 KiB of output, and writes to the browser afterwards. A browser that stops reading for 2 s is dropped, and at most 8 pages are served at once.
+- **The key.** With `--key-file`, the page asks for the key once. It keeps it for the tab (`sessionStorage`), sends it in `X-API-Key` with each call, and as the feed's first message.
+- **Other sites are refused.** A call whose `Origin` is not the daemon's own address gets 403. So does a call on a loopback address whose `Host` is not a loopback name with the daemon's port. Another site open in the same browser therefore cannot start operations or read the feed.
+
 ## Tests
 
 `tools/mindlink/tests/effector485.rs` drives a daemon against `mindlink serve --run` over a pseudo-terminal, through:
 - a batch of put, mkdir, move, list, run with its output and exit code, and log;
 - an idempotency key used twice, which runs the program once;
 - a cancel that stops a running program;
-- a restarted daemon that keeps its results and keys.
+- a restarted daemon that keeps its results and keys;
+- the page, the feed following a program's output to its end, eight pages that never read while operations go on, a ninth page refused, the key asked by the feed, and calls from another site or host name refused.
 
 `scripts/host_tests.sh` runs it. It says nothing about a real cable or a MIND Core machine (MC-12.1); [800-LNK-0011](../../issues/800-LNK-0011-effector485.md) records what has run on them.

@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>effector485</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #d9dde3; --text: #1b1f24; --dim: #5f6b7a;
+  --accent: #1f6feb; --ok: #1a7f37; --bad: #cf222e; --warn: #9a6700; --run: #0969da; --out-bg: #0d1117; --out-text: #d1d7e0;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --panel: #161b22; --line: #30363d; --text: #e6edf3; --dim: #8b949e;
+    --accent: #4493f8; --ok: #3fb950; --bad: #f85149; --warn: #d29922; --run: #58a6ff; --out-bg: #010409; --out-text: #c9d1d9;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 13px; color: var(--dim); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
+.dot.on { background: var(--ok); } .dot.off { background: var(--bad); } .dot.wait { background: var(--warn); }
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+.cmds { overflow: auto; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 4px 0 8px; }
+.cmds > div { margin-bottom: 12px; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.row + .row { margin-top: 6px; }
+input { flex: 1 1 120px; min-width: 0; padding: 5px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); font: 13px var(--mono); }
+button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); font: 13px var(--mono); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+.right { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; min-width: 0; }
+.tablewrap { max-height: 38vh; overflow: auto; }
+table { width: 100%; min-width: 640px; border-collapse: collapse; font: 12.5px var(--mono); }
+.outsec { display: flex; flex-direction: column; min-height: 0; }
+th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td.what, td.reason { white-space: normal; word-break: break-word; }
+td.reason { color: var(--dim); }
+th { position: sticky; top: 0; background: var(--panel); color: var(--dim); font-weight: 600; }
+tr.op { cursor: pointer; } tr.op:hover { background: var(--bg); } tr.op.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
+.st { padding: 1px 6px; border-radius: 9px; font-size: 11.5px; border: 1px solid currentColor; }
+.st.queued { color: var(--dim); } .st.running { color: var(--run); } .st.completed { color: var(--ok); }
+.st.failed, .st.timeout, .st.lost { color: var(--bad); } .st.cancelled { color: var(--warn); }
+.outhead { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font: 12.5px var(--mono); color: var(--dim); margin-bottom: 6px; }
+.outhead b { color: var(--text); }
+pre#out { margin: 0; flex: 1; min-height: 200px; overflow: auto; background: var(--out-bg); color: var(--out-text); padding: 8px 10px; border-radius: 6px; font: 12.5px/1.35 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.note { color: var(--warn); }
+#toast { position: fixed; right: 16px; bottom: 16px; max-width: min(480px, calc(100vw - 32px)); padding: 8px 12px; border-radius: 6px; background: var(--panel); border: 1px solid var(--bad); color: var(--bad); font: 13px var(--mono); display: none; }
+#keybox { display: none; }
+small { color: var(--dim); }
+@media (max-width: 860px) { body { height: auto; } main { grid-template-columns: minmax(0, 1fr); } pre#out { height: 60vh; flex: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>effector485</h1>
+  <span class="pill" title="the cable's other end"><span id="linkdot" class="dot"></span><span id="linktext">…</span></span>
+  <span class="pill" id="queue"></span>
+  <span class="pill" id="seen"></span>
+  <span class="pill" title="this page's live feed (WebSocket)"><span id="feeddot" class="dot wait"></span><span id="feedtext">connecting</span></span>
+</header>
+<main>
+  <section class="cmds">
+    <div id="keybox">
+      <h2>Key</h2>
+      <div class="row"><input id="key" type="password" placeholder="the daemon's --key-file text" autocomplete="off"><button id="keyset">Use</button></div>
+    </div>
+    <div>
+      <h2>Reason</h2>
+      <div class="row"><input id="reason" placeholder="why (each operation records one)"></div>
+    </div>
+    <div>
+      <h2>Read</h2>
+      <div class="row">
+        <button data-kind="hello">hello</button>
+        <button data-op="lognew" title="the log from where the last log read ended">log: new</button>
+        <button data-op="logall" title="the whole log the other end holds, up to 400 KB">log: all</button>
+      </div>
+      <div class="row">
+        <button data-shell="ip">ip</button>
+        <button data-shell="netstat -i">netstat -i</button>
+        <button data-shell="ps">ps</button>
+        <button data-kind="list">list</button>
+      </div>
+    </div>
+    <div>
+      <h2>Shell line</h2>
+      <div class="row"><input id="line" placeholder="ip, ps, netstat -i, …"><button id="shellgo">sh</button></div>
+    </div>
+    <div>
+      <h2>Program</h2>
+      <div class="row"><input id="prog" placeholder="name (netcheck, wifi, …)"></div>
+      <div class="row"><input id="args" placeholder="arguments"><input id="ptime" placeholder="limit, s" style="flex:0 1 80px"><button id="rungo">run</button></div>
+    </div>
+    <div>
+      <h2>Files</h2>
+      <div class="row"><input id="dir" placeholder="directory in data/link (empty: its root)"><button id="listgo">list</button></div>
+    </div>
+    <div>
+      <h2>Replace a service</h2>
+      <div class="row"><input id="unit" placeholder="unit (bcm_wifi, rtc, …)"></div>
+      <div class="row"><input id="rfile" placeholder="file here (absolute path)"><button id="replacego">replace</button><button id="backgo" title="back to its boot image">back</button></div>
+    </div>
+    <div>
+      <h2>Machine</h2>
+      <div class="row"><button id="rebootgo" class="danger">reboot</button><small>needs dev in link.conf</small></div>
+    </div>
+  </section>
+  <div class="right">
+    <section>
+      <h2>Operations <small id="opcount"></small></h2>
+      <div class="tablewrap"><table>
+        <thead><tr><th>time</th><th>id</th><th>kind</th><th>what</th><th>status</th><th>reason</th><th></th></tr></thead>
+        <tbody id="ops"></tbody>
+      </table></div>
+    </section>
+    <section class="outsec">
+      <div class="outhead"><span>output of <b id="outid">—</b></span><span id="outstate"></span>
+        <label><input type="checkbox" id="follow" checked style="flex:none"> follow the end</label>
+        <button id="outcopy">copy</button></div>
+      <pre id="out"></pre>
+    </section>
+  </div>
+</main>
+<div id="toast"></div>
+<script>
+"use strict";
+// The page reads the daemon's state through its WebSocket feed and acts through the same JSON API the command line uses.
+const $ = s => document.querySelector(s);
+const OUT_KEPT = 1 << 20;
+let ws = null, key = "", ops = [], link = null, following = null, outAt = 0, outText = "", lastLogNext = null;
+try { key = sessionStorage.getItem("effector485-key") || ""; } catch (e) {}
+
+function toast(text) {
+  const t = $("#toast"); t.textContent = text; t.style.display = "block";
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.style.display = "none", 6000);
+}
+function setFeed(state, text) { $("#feeddot").className = "dot " + state; $("#feedtext").textContent = text; }
+function clock(t) { return t ? new Date(t * 1000).toLocaleTimeString([], { hour12: false }) : ""; }
+function headers() { const h = { "Content-Type": "application/json" }; if (key) h["X-API-Key"] = key; return h; }
+function newKey(kind) { return `page-${kind}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`; }
+
+function connect() {
+  setFeed("wait", "connecting");
+  ws = new WebSocket(`ws://${location.host}/api/v1/stream`);
+  ws.onmessage = e => { const m = JSON.parse(e.data); (on[m.type] || (() => {}))(m); };
+  ws.onclose = () => { setFeed("off", "feed lost, reconnecting"); setTimeout(connect, 1500); };
+}
+const on = {
+  hello(m) {
+    if (m.key_needed && !key) { $("#keybox").style.display = "block"; setFeed("wait", "the key is needed"); return; }
+    if (m.key_needed) ws.send(JSON.stringify({ key }));
+    setFeed("on", "live");
+    if (following) ws.send(JSON.stringify({ follow: following, from: outAt }));
+  },
+  error(m) { toast(m.error); $("#keybox").style.display = "block"; key = ""; },
+  link(m) {
+    link = m;
+    $("#linkdot").className = "dot " + (m.online ? "on" : "off");
+    $("#linktext").textContent = `${m.port}: ${m.online ? m.name : "offline" + (m.error ? " — " + m.error : "")}`;
+    $("#queue").textContent = `queued ${m.queued} · running ${m.running}`;
+    showSeen();
+  },
+  ops(m) { ops = m.ops; render(); },
+  output(m) {
+    if (m.id !== following) return;
+    if (m.from > outAt) outText += `\n[${m.from - outAt} bytes of output were no longer held]\n`;
+    outText += m.text || "";
+    if (outText.length > OUT_KEPT) outText = outText.slice(outText.length - OUT_KEPT);
+    if (m.next !== undefined) outAt = m.next;
+    $("#out").textContent = outText;
+    if ($("#follow").checked) $("#out").scrollTop = $("#out").scrollHeight;
+    showOutState();
+  },
+};
+function showSeen() {
+  if (!link || !link.last_seen) { $("#seen").textContent = ""; return; }
+  const age = Math.max(0, Math.round(Date.now() / 1000 - link.last_seen));
+  $("#seen").textContent = `seen ${age < 5 ? "now" : age + " s ago"}`;
+}
+setInterval(showSeen, 1000);
+
+function what(o) {
+  const p = o.params || {};
+  switch (o.kind) {
+    case "shell": return p.line;
+    case "run": return [p.name, p.args].filter(Boolean).join(" ");
+    case "replace": return p.back ? `${p.unit} ← boot image` : `${p.unit} ← ${p.file || p.name}`;
+    case "put": case "install": return [p.file, p.name].filter(Boolean).join(" → ");
+    case "get": return `${p.name} → ${p.file}`;
+    case "move": return `${p.from} → ${p.to}`;
+    case "log": return p.from !== undefined ? `from ${p.from}` : "";
+    default: return Object.entries(p).map(([k, v]) => `${k}=${v}`).join(" ");
+  }
+}
+function outcome(o) {
+  const r = o.result || {};
+  if (r.error) return r.error;
+  if (r.exit_code !== undefined) return `exit ${r.exit_code}`;
+  return o.position ? `#${o.position} in queue` : "";
+}
+function render() {
+  const body = $("#ops");
+  body.replaceChildren();
+  for (const o of [...ops].reverse()) {
+    const tr = document.createElement("tr");
+    tr.className = "op" + (o.id === following ? " sel" : "");
+    tr.onclick = () => follow(o.id);
+    const cell = (text, cls) => { const td = document.createElement("td"); td.textContent = text ?? ""; if (cls) td.className = cls; tr.append(td); return td; };
+    cell(clock(o.created_at)); cell(o.id); cell(o.kind);
+    const w = what(o) || ""; cell(w.length > 120 ? w.slice(0, 117) + "…" : w, "what");
+    const st = cell(""); const chip = document.createElement("span"); chip.className = "st " + o.status;
+    chip.textContent = o.status + (o.cancelling ? " (cancelling)" : ""); chip.title = outcome(o); st.append(chip);
+    cell(o.reason, "reason");
+    const act = cell("");
+    if (o.status === "queued" || o.status === "running") {
+      const b = document.createElement("button"); b.textContent = "cancel"; b.className = "danger";
+      b.onclick = e => { e.stopPropagation(); cancel(o.id); }; act.append(b);
+    }
+    body.append(tr);
+  }
+  $("#opcount").textContent = `(${ops.length}, the newest first)`;
+  const logs = ops.filter(o => o.kind === "log" && o.status === "completed" && o.result && o.result.next !== undefined);
+  lastLogNext = logs.length ? logs[logs.length - 1].result.next : null;
+  showOutState();
+}
+function showOutState() {
+  const o = ops.find(o => o.id === following);
+  $("#outid").textContent = following ? `${following}${o ? " (" + o.kind + ")" : ""}` : "—";
+  $("#outstate").textContent = o ? `${o.status}${outcome(o) ? " · " + outcome(o) : ""} · ${o.output_bytes} bytes` : "";
+}
+// The followed operation is in the address (#<id>), so a link or a reload shows its output again.
+function follow(id) {
+  following = id; outAt = 0; outText = ""; $("#out").textContent = "";
+  if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ follow: id, from: 0 }));
+  render();
+}
+
+async function post(path, body) {
+  try {
+    const r = await fetch(path, { method: "POST", headers: headers(), body: JSON.stringify(body) });
+    const v = await r.json();
+    if (r.status === 401) $("#keybox").style.display = "block";
+    if (!r.ok) { toast(v.error || `HTTP ${r.status}`); return null; }
+    return v;
+  } catch (e) { toast(String(e)); return null; }
+}
+async function submit(kind, fields = {}, ask = null) {
+  if (ask && !confirm(ask)) return;
+  const reason = $("#reason").value.trim() || `${kind} from the effector485 page`;
+  const v = await post("/api/v1/operations", { kind, ...fields, idempotency_key: newKey(kind), reason });
+  if (v) follow(v.id);
+}
+async function cancel(id) {
+  const reason = $("#reason").value.trim() || "cancelled from the effector485 page";
+  await post("/api/v1/operations/cancel", { operation_id: id, idempotency_key: newKey("cancel"), reason });
+}
+
+document.querySelectorAll("[data-kind]").forEach(b => b.onclick = () => submit(b.dataset.kind));
+document.querySelectorAll("[data-shell]").forEach(b => b.onclick = () => submit("shell", { line: b.dataset.shell }));
+document.querySelector("[data-op=lognew]").onclick = () => submit("log", lastLogNext !== null ? { from: lastLogNext, max_bytes: 400000 } : { max_bytes: 400000 });
+document.querySelector("[data-op=logall]").onclick = () => submit("log", { max_bytes: 400000 });
+const need = (id, what) => { const v = $(id).value.trim(); if (!v) toast(`${what} is needed`); return v; };
+$("#shellgo").onclick = () => { const line = need("#line", "a line"); if (line) submit("shell", { line }); };
+$("#line").onkeydown = e => { if (e.key === "Enter") $("#shellgo").click(); };
+$("#rungo").onclick = () => {
+  const name = need("#prog", "a program's name"); if (!name) return;
+  const f = { name }; const args = $("#args").value.trim(); if (args) f.args = args;
+  const t = parseInt($("#ptime").value, 10); if (t > 0) f.timeout_seconds = t;
+  submit("run", f, `Run ${name} ${args} on the other end?`);
+};
+$("#listgo").onclick = () => { const name = $("#dir").value.trim(); submit("list", name ? { name } : {}); };
+$("#replacego").onclick = () => {
+  const unit = need("#unit", "a unit"), file = unit && need("#rfile", "a file"); if (!unit || !file) return;
+  submit("replace", { unit, file }, `Replace ${unit} on the other end with ${file}? It restarts the service.`);
+};
+$("#backgo").onclick = () => { const unit = need("#unit", "a unit"); if (unit) submit("replace", { unit, back: true }, `Put ${unit} back to its boot image?`); };
+$("#rebootgo").onclick = () => submit("reboot", {}, "Restart the machine at the other end of the cable?");
+$("#keyset").onclick = () => {
+  key = $("#key").value.trim();
+  try { sessionStorage.setItem("effector485-key", key); } catch (e) {}
+  $("#keybox").style.display = "none";
+  if (ws) ws.close();
+};
+$("#outcopy").onclick = () => navigator.clipboard && navigator.clipboard.writeText(outText);
+if (location.hash.length > 1) follow(decodeURIComponent(location.hash.slice(1)));
+connect();
+</script>
+</body>
+</html>

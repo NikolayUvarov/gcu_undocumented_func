@@ -76,11 +76,13 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     eprintln!("effector485: {spec}: {name}");
                     let mut st = state.lock().unwrap();
                     (st.link.online, st.link.name, st.link.last_seen, st.link.error) = (true, name, now(), String::new());
+                    st.changed();
                     link = Some(c);
                 }
                 Err(e) => {
                     let mut st = state.lock().unwrap();
                     if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
+                    if st.link.error != e || st.link.online { st.changed(); }
                     (st.link.online, st.link.error) = (false, e);
                     drop(st);
                     std::thread::sleep(Duration::from_secs(3));
@@ -101,7 +103,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     (op.status, op.started) = ("running".into(), Some(now()));
                     (op.id.clone(), op.kind.clone(), op.params.clone())
                 });
-                st.touch();
+                if next.is_some() { st.touch(); }
                 st.save();
                 next
             };
@@ -120,6 +122,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
         if let Some(e) = lost {
             eprintln!("effector485: {spec}: {}", explain(e));
             (st.link.online, st.link.error) = (false, explain(e));
+            st.changed();
             link = None;
         } else {
             st.link.last_seen = now();
