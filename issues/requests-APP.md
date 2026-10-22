@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (one waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -36,3 +36,11 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
+
+## The `wifi` guide names the station's automatic join
+
+**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) · **Constitution:** MC-12.3
+
+- **What changed.** `wlan` joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
+- **What stops it.** `wifi leave` (`d` in `wifi`'s window) stops it until the station next joins; `forget` (`f`) takes the network out of it.
+- **Asked.** One line in the `wifi` guide (docs/tools/README.md and README_RU.md) that says so, beside `d` and `f`. A word in `wifi` to turn it off for good can follow if the network track adds one to `wifi.wit`.
