@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 41;
+pub const BOOT_IMAGES: usize = 43;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -45,11 +45,12 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // ABI 14 moves SLOT_DYNAMIC to 37 for SLOT_MODE, the shell's client of init that sets the machine's modes (750-KRN-0143).
 // ABI 15 moves it to 38 for SLOT_COMMANDS, the shell's command endpoint made by init, so that link may hold a client (800-KRN-0148);
 // it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
+// ABI 16 adds the Effector agent's two boot images, `effector_gw` and `effector`, which run only in a mode (750-KRN-0119).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 15;
+pub const ABI_VERSION: u32 = 16;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],

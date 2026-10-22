@@ -29,6 +29,9 @@ pub const BADGE_USER: u16 = 1;
 /// the directory's badge may open, read or write `system/keystore` and `system/netpolicy`; nobody else may open them.
 pub const BADGE_KEYSTORE: u16 = 2;
 pub const BADGE_NETPOLICY: u16 = 3;
+/// The Effector agent's private directories, `system/effector` and `system/effector_gw` (750-KRN-0119), on the same rule.
+pub const BADGE_EFFECTOR: u16 = 6;
+pub const BADGE_EFFECTOR_GW: u16 = 7;
 /// Badge of the updater's client (351-UPD-0008): besides reading, it may fill the slot the system did not boot from
 /// (`MIND/A` or `MIND/B`) and write the boot records `MIND/BOOT0` and `MIND/BOOT1` whole, in place; nothing else.
 pub const BADGE_UPDATE: u16 = 4;

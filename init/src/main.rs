@@ -33,7 +33,10 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "an RTC client, a VFS client for its own directory, a TPM client that may seal; the device key in memory", "nothing but its endpoint (a test radio)",
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
-    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only", "screen; process control; input; the serial line"];
+    "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
+    "the log to read, sysinfo and the volumes to read; its private directory; only in a mode",
+    "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
+    "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
 // DMA buffer sizes of the drivers; the regions are minted once and survive driver restarts.
 const SERVICE_QUOTA: u16 = 256; // tasks and endpoints init keeps for the services and their restarts (issue 171)
@@ -64,7 +67,7 @@ const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart:
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
-const MODE_SERVICES: [&str; 2] = ["effector", "effector_gw"]; // run only in a mode (750-EFF-0013), once they are boot images
+const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
 
 // Capabilities minted for a service's first start; kept by init for restarts, or dropped if the spawn fails.
 struct Minted { slots: [usize; SPAWN_GRANTS_MAX], count: usize }
@@ -297,18 +300,33 @@ impl Init {
     // Prepared by a safe start and not started since.
     fn prepared(&self, index: usize) -> bool { self.plans[index].is_some() && self.pids[index] == 0 }
 
-    // A writable client confined to data/link/ on the boot volume, made if missing (750-KRN-0120, for 800-KRN-0128),
-    // asked of vfs_server through a client with the user's rights that init drops at once.
-    fn link_scope(&mut self) -> Result<usize> {
+    // Makes `dir` on the boot volume if it is missing, through a client with `badge` that init drops at once.
+    fn make_dir(&mut self, badge: u16, dir: &str) -> Result<()> {
+        let client = ipc::mint_badged(self.keeper("vfs_server")?, CLIENT, badge)?;
+        let files = Endpoint(client);
+        let made = (|| -> Result<()> {
+            let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
+            let dir = vfs::open_dir(files, root, dir, true);
+            let _ = vfs::close(files, root);
+            let _ = vfs::close(files, dir?.map_err(|_| Error::Rights)?);
+            Ok(())
+        })();
+        let _ = ipc::drop_cap(client);
+        made
+    }
+
+    // A client confined to `dir` on the boot volume, made if missing, writable or not (750-KRN-0120, for 800-KRN-0128
+    // and 750-KRN-0119), asked of vfs_server through a client with `badge` that init drops at once.
+    fn scope(&mut self, badge: u16, dir: &str, writable: bool) -> Result<usize> {
         let keeper = self.keeper("vfs_server")?;
-        let client = ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?;
+        let client = ipc::mint_badged(keeper, CLIENT, badge)?;
         let files = Endpoint(client);
         let scoped = (|| -> Result<usize> {
             let root = vfs::root(files, "")?.map_err(|_| Error::NotFound)?;
-            let dir = vfs::open_dir(files, root, LINK_DIR, true);
+            let dir = vfs::open_dir(files, root, dir, true);
             let _ = vfs::close(files, root);
             let dir = dir?.map_err(|_| Error::NotFound)?;
-            let made = vfs::scope(files, dir, true, RECEIVED);
+            let made = vfs::scope(files, dir, writable, RECEIVED);
             let _ = vfs::close(files, dir);
             made?.map_err(|_| Error::Rights)?;
             let slot = ipc::mint(RECEIVED, u8::MAX, 0, 0);
@@ -645,6 +663,31 @@ impl Init {
                 // A loader client that only starts helpers: each check parses in a parser of its own (109-KRN-0117).
                 grants.add(SLOT_LOADER, self.badged(&mut minted, "loader", mind::process::BADGE_HELPERS_ONLY)?, CLIENT);
             }
+            // The Effector agent's gateway (750-KRN-0119, `mind::effector`), only in a mode: the memory and the log to read,
+            // the volumes to read, and its private directory (`private_dir_of`). Its lifecycle client
+            // (750-KRN-0121) and the scope for deliveries (750-KRN-0120) come with their tasks.
+            "effector_gw" => {
+                grants.add(SLOT_SERVICE, self.server(&mut minted, "effector_gw")?, ALL);
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
+                grants.add(mind::effector::SLOT_READER, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
+                self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
+                let _ = core::fmt::Write::write_str(&mut args, "--service");
+            }
+            // The Effector agent's session, only in a mode: the clock, the flow the policy gives program `effector`, TLS
+            // without the device certificate, the parser, the gateway as its session, its private directory and the owner's
+            // data/effector/ to read (a scope made at each start). Nothing that acts on the machine: the gateway does.
+            "effector" => {
+                self.lend(&mut grants, SLOT_RTC, "rtc")?;
+                grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR)?, CLIENT);
+                match self.flow(&mut minted, "effector") {
+                    Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
+                    None => mind::println!("[INIT] effector: NO NETWORK GRANT"),
+                }
+                if self.running(service_index("tls")) { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
+                if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
+                grants.add(mind::effector::SLOT_GATEWAY, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_SESSION)?, CLIENT);
+                let _ = core::fmt::Write::write_str(&mut args, "--service");
+            }
             // The TLS service gets no network access: clients lend their flows. It alone may ask the key service to sign.
             "tls" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "tls")?, ALL);
@@ -740,7 +783,7 @@ impl Init {
         }
         // Every service writes to the system log; the shell's client may also read it (and lends it to dmesg), and
         // vfs_server's, which saves it on the boot disk's log partition (211-KRN-0019).
-        if name == "shell" || name == "vfs_server" || name == "link" { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
+        if matches!(name, "shell" | "vfs_server" | "link" | "effector_gw") { grants.add(SLOT_LOG, self.badged(&mut minted, "logd", mind::log::BADGE_READ)?, CLIENT); }
         else if name != "logd" { self.lend(&mut grants, SLOT_LOG, "logd")?; }
         // Quotas are init's policy: loader gets all of init's root quota but what the services need (issue 171: no
         // fixed count of applications; memory limits them); the shell serves voice control on one endpoint (issue 079).
@@ -778,12 +821,17 @@ impl Init {
                 let slot = ipc::mint(keeper, rights, 0, 0)?; *g = grant_moved(serves, slot, rights); receiver = Some(slot);
             }
         }
-        // link's files: a scope ends with the task that took it up, so each start gets a new one (750-KRN-0120).
-        let mut scope = None;
-        if name == "link" && grants.count < SPAWN_GRANTS_MAX {
-            match self.link_scope() {
-                Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_VFS, slot, CLIENT); grants.count += 1; scope = Some(slot); }
-                Err(error) => mind::println!("[INIT] link: NO FILES ({:?}): THE LOG ONLY", error),
+        // Files confined to a directory: a scope ends with the task that took it up, so each start gets new ones
+        // (750-KRN-0120): link's data/link/, the Effector services' private directories and the owner's data/effector/.
+        if let Some((badge, dir)) = private_dir_of(name) {
+            if let Err(error) = self.make_dir(badge, dir) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, dir, error); }
+        }
+        let (mut scopes, mut taken) = ([0usize; 2], 0);
+        for &(child, badge, dir, writable) in scopes_of(name) {
+            if grants.count >= SPAWN_GRANTS_MAX { break; }
+            match self.scope(badge, dir, writable) {
+                Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
+                Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
             }
         }
         // `name\0arguments` where the plan has arguments.
@@ -797,7 +845,7 @@ impl Init {
         let image = replaced.map_or(Image::Boot(unit_image(index).0), |(cap, len)| Image::Memory { cap, len });
         let spawned = mind::process::spawn_raw(&text[..length], image, &grants.list[..grants.count], plan.flags, plan.quota);
         if let Some((cap, _)) = replaced { let _ = ipc::drop_cap(cap); }
-        let pid = spawned.inspect_err(|_| { for slot in [receiver, scope].into_iter().flatten() { let _ = ipc::drop_cap(slot); } })?;
+        let pid = spawned.inspect_err(|_| { for slot in receiver.into_iter().chain(scopes[..taken].iter().copied()) { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         self.starts[index] += 1;
         self.stopped[index] = false;
@@ -846,6 +894,11 @@ impl Init {
     // whose device was missing at boot has nothing to start (init no longer looks for devices).
     fn run(&mut self, index: usize) -> Result<u64> {
         if self.missing[index] && self.plans[index].is_none() { return Err(Error::NotFound); }
+        // The Effector services run only in the development or the maintenance mode (750-EFF-0013).
+        if MODE_SERVICES.contains(&unit_name(index)) && !(self.modes.development || self.modes.maintenance) {
+            mind::println!("[INIT] {} NOT STARTED: NO MODE IS ON", unit_name(index));
+            return Err(Error::Rights);
+        }
         if !self.running(index) { self.quarantined[index] = false; self.restarts[index] = [0; RESTART_BUDGET]; if self.pids[index] != 0 { self.quiesce(index)?; } }
         self.start(index)
     }
@@ -855,6 +908,7 @@ impl Init {
         match self.run(index) {
             Ok(pid) => Ok(pid),
             Err(Error::NotFound) => Err(idl_init::Error::NoDevice),
+            Err(Error::Rights) => Err(idl_init::Error::Denied),
             Err(error) => { mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error); Err(idl_init::Error::Failed) }
         }
     }
@@ -1082,7 +1136,9 @@ impl Init {
     fn follow_modes(&mut self) {
         let on = self.modes.development || self.modes.maintenance;
         let mut present = 0;
-        for name in MODE_SERVICES {
+        // The gateway starts first and stops last: the session always has it.
+        let order = if on { MODE_SERVICES } else { [MODE_SERVICES[1], MODE_SERVICES[0]] };
+        for name in order {
             let Some(index) = Self::index(name) else { continue };
             present += 1;
             if on && !self.running(index) {
@@ -1150,6 +1206,26 @@ fn refused(sender: u64, badge: u16, what: &str, action: core::fmt::Arguments, cl
 
 fn service_index(name: &str) -> usize { (0..UNITS).find(|&u| unit_name(u) == name).unwrap_or(0) }
 
+// The directories a service gets confined clients of at each start (750-KRN-0120): its slot, the badge init asks with,
+// the directory on the boot volume (made if missing) and whether it may write there.
+fn scopes_of(name: &str) -> &'static [(usize, u16, &'static str, bool)] {
+    match name {
+        "link" => &[(SLOT_VFS, mind::fs::BADGE_USER, LINK_DIR, true)],
+        "effector" => &[(SLOT_FILE, mind::fs::BADGE_USER, mind::effector::OWNER_DIR, false)],
+        _ => &[],
+    }
+}
+
+// A service's private directory in the boot volume's `system/` and the badge that alone opens it (351-NET-0005): its
+// SLOT_VFS client carries the badge; init makes the directory before each start, as the service does not.
+fn private_dir_of(name: &str) -> Option<(u16, &'static str)> {
+    match name {
+        "effector" => Some((mind::fs::BADGE_EFFECTOR, mind::effector::SESSION_DIR)),
+        "effector_gw" => Some((mind::fs::BADGE_EFFECTOR_GW, mind::effector::GATEWAY_DIR)),
+        _ => None,
+    }
+}
+
 // Boot order is the BOOT_SERVICES order (logd first, drivers before vfs_server, loader before the shell); further
 // instances of an image follow its first one.
 fn boot_order() -> impl Iterator<Item = usize> {
@@ -1214,6 +1290,8 @@ fn boot(info: &'static BootInfo) {
         // An image the bootloader did not find (a service of the other architecture) is not started.
         if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
         let name = unit_name(index);
+        // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
+        if MODE_SERVICES.contains(&name) { continue; }
         // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
         if matches!(name, "usb_serial" | "link") && init.link.is_none() { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name); continue; }
         // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
