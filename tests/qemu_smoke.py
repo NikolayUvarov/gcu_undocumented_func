@@ -2372,6 +2372,27 @@ def smp_suite(vm):
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
 
 
+def giveup_suite(vm):
+    """500-ASR-0012: a server answering into a buffer its caller lent and then gave up (its timeout, the lend revoked)
+    goes on. isolation_app's case G maps the lent page as `mind::idl::wire` maps a client's buffer, writes it after the
+    revocation as a late `reply_buffer` does, has its reply refused (ERR_PEER) and serves the next message. On
+    2026-10-22 that write faulted the MacBook Pro's shell. Not in a CI group until KRN's rule for such a buffer lands."""
+    for attempt in range(3):
+        vm.send("run app2\n")
+        vm.expect("RING3 IOPL0 READY")
+        vm.send("G\n")
+        vm.expect("GIVEN-UP BUFFER MAPPED")
+        out = vm.expect("EXITED. SHELL RESUMED.", timeout=10)
+        pid = re.search(r"PID=(\d+) EXITED\. SHELL RESUMED\.", out)
+        time.sleep(.1); vm.collect(); vm.output = ""
+        faults = vm.command("faults")
+        fault = pid and re.search(fr"FAULT PID={pid[1]} CPU=\d+ VECTOR=(\d+) ERROR=(0x[0-9a-f]+) ", faults)
+        assert "GIVEN-UP BUFFER OK" in out and not fault, \
+            f"try {attempt + 1}: the server faulted writing a buffer its caller gave up ({fault and fault.group(0)})"
+    print("PASS: giveup: a server wrote a buffer its caller had given up and revoked, had its reply refused and served "
+          "the next message, three times (500-ASR-0012)", flush=True)
+
+
 def isolation_suite(vm):
     baseline = heap_used(vm)
     require(vm.command("run clock &"), "PID=1")
@@ -9543,7 +9564,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset: boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -9699,7 +9720,7 @@ def main():
                 (disk / "docs/notes.txt").write_text(NOTES, encoding="utf-8")
             if suite in ("busy", "smp"):
                 shutil.copyfile(args.busy_elf, disk / "app2.elf")
-            elif suite == "isolation":
+            elif suite in ("isolation", "giveup"):
                 shutil.copyfile(args.isolation_elf, disk / "app2.elf")
             elif suite == "heap":
                 shutil.copyfile(args.heap_elf, disk / "app2.elf")
@@ -9753,7 +9774,7 @@ def main():
                     tablet_suite(vm, wav)
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
-                     "smp": smp_suite, "isolation": isolation_suite, "heap": heap_suite,
+                     "smp": smp_suite, "isolation": isolation_suite, "giveup": giveup_suite, "heap": heap_suite,
                      "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite}[suite](vm)
             finally:
                 vm.close()

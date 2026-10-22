@@ -75,6 +75,16 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             let refused = ipc(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_INIT, abi::CAP_WRITE as usize, [0, 0, 0x44, 0]) == abi::ERR_INVALID;
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if refused { 8 } else { 9 }, 0]) != 0 { fail(); }
         }
+        // 500-ASR-0012: a buffer call given up as `wire::call_buffer` gives one up: a page lent with the call, no answer
+        // within 200 ms, the lend revoked and the page freed; then a plain message that says so.
+        9 => {
+            let page = call(mb, abi::SYSCALL_ALLOC, 4096, 0);
+            let shared = call(mb, abi::SYSCALL_MEM_SHARE, page, 0);
+            if ipc(mb, abi::SYSCALL_IPC_CALL, abi::SLOT_INIT, 200 << abi::IPC_TIMEOUT_SHIFT, [shared, 0, 10, 0]) != abi::ERR_TIMEOUT { fail(); }
+            call(mb, abi::SYSCALL_CAP_REVOKE, shared, 0); call(mb, abi::SYSCALL_CAP_DROP, shared, 0);
+            call(mb, abi::SYSCALL_FREE, page, 0);
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 11, 0]) != 0 { fail(); }
+        }
         _ => fail(),
     }
 }
@@ -449,6 +459,25 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                     if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 1 || (*mb).msg[3] != number { fail(); }
                 }
                 print(mb, b"QUEUE ORDER OK\r\n");
+                return;
+            }
+            b'G' => {
+                // 500-ASR-0012: a buffer call its caller gave up. The lent page is mapped here as `wire` maps a client's
+                // buffer, and written after the caller's timeout and revocation as a late `reply_buffer` writes it; the
+                // reply then fails with ERR_PEER and the next message is served. On 2026-10-22 that write faulted the
+                // MacBook Pro's shell: a server must go on.
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 9, 0, 0);
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 | 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 10 { fail(); }
+                let buffer = call(mb, abi::SYSCALL_MEM_MAP, 3, 0);
+                if buffer >= abi::ERR_FIRST { fail(); }
+                print(mb, b"GIVEN-UP BUFFER MAPPED\r\n");
+                sleep(mb, 400);
+                core::ptr::write_volatile(buffer as *mut u64, 42);
+                if ipc(mb, abi::SYSCALL_IPC_REPLY, 0, 0, [0, 0, 12, 0]) != abi::ERR_PEER { fail(); }
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 11 { fail(); }
+                print(mb, b"GIVEN-UP BUFFER OK\r\n");
                 return;
             }
             b'j' => {

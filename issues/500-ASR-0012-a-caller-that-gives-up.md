@@ -1,6 +1,6 @@
 # 500-ASR-0012 — A caller that gives up: the server answering into a buffer that is gone survives
 
-**Type:** test (fault injection) · **Owner:** `ASR` · **Priority:** P1 · **Status:** open (2026-10-22) · **Blocked by:** `KRN`: what the kernel does with a lent buffer its caller drops during the call (asked 2026-10-22) · **Main task:** [500](500-fuzzing-abi-and-idl.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.1
+**Type:** test (fault injection) · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** `KRN`: what the kernel does with a lent buffer its caller drops during the call (asked 2026-10-22) · **Main task:** [500](500-fuzzing-abi-and-idl.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.1
 
 ## Problem
 
@@ -33,6 +33,19 @@ The kernel's chosen behaviour, once KRN states it, is checked as stated.
 - [ ] It is in a CI group.
 
 Evidence for the configurations named only (MC-12.1).
+
+## Progress
+
+- **2026-10-22, the reproduction.**
+  - **`tests/isolation_app.rs` case `G`:**
+    - a child lends a page with a call, gives up after 200 ms and revokes the lend, as `wire::call_buffer` does;
+    - the parent maps the page as `wire` maps a client's buffer, writes it 400 ms later as a late `reply_buffer` does, has its reply refused (`ERR_PEER`), and serves the child's next message.
+  - **The QEMU suite `giveup`:**
+    - `qemu_smoke.py --suites giveup --isolation-elf …`, only when named; it is in no CI group;
+    - it runs case `G` three times and fails on a fault of the server.
+  - **Today it fails as the Mac did:** `FAULT PID=1 CPU=0 VECTOR=14 ERROR=0x6`, the shell's fault of the same afternoon (x86, QEMU, 4 CPUs).
+  - **The `isolation` suite still passes** with the new case in the program.
+  - Once KRN states its rule, the case follows it. If the reply goes through the kernel, the case's direct write becomes that call. Then the suite joins a CI group.
 
 ## Related
 
