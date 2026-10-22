@@ -124,3 +124,7 @@ The service runs as a program started from the shell (`effector data/effector/ef
   - `init` starting it (750-KRN-0119);
   - handing commands to the gateway instead of denying them;
   - the remaining criteria above.
+- **Later the same day,** with KRN's 750-KRN-0119 merged (e06a59de, ABI 16):
+  - The program form ended: no program runs by a boot service's name.
+  - The `effector` QEMU suite now starts the session in the development mode and restarts it with `svc`. It passes on x86_64 and aarch64.
+  - A stop by `init` sends no `shutting_down` heartbeat yet; that criterion stays open for the service form.
