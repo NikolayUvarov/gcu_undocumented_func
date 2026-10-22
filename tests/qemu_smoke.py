@@ -4160,7 +4160,7 @@ def modes_suite(args):
             # The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
             extra = {"data/mode.conf": words, "netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
                      "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
-                     "data/effector/token": b"mind-effector-test-token\n"} if words else None
+                     "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY} if words else None
             image, _, _ = raw_fat_image(Path(temp), extra=extra)
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
             try:
@@ -4196,6 +4196,8 @@ def modes_suite(args):
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    if args.gateway_elf:
+        gateway_stub_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
           "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
@@ -4203,10 +4205,61 @@ def modes_suite(args):
           "(MC-12.6)", flush=True)
 
 
+# The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
+GATEWAY_POLICY = b"effector-policy 1\nagent on\nservice sysmon restart\ndeliver data/inbox/\n"
+
+
+def gateway_stub_check(args):
+    """750-KRN-0121, 0120: tests/gateway_stub in effector_gw's place, in the development mode, under GATEWAY_POLICY. init's
+    client badged BADGE_NAMED restarts sysmon, which the policy names, and nothing else: not a stop or a run of it, not
+    logd, init or the gateway itself, no stop-task, no reboot; each refusal logged with MC-3.4. The writable scope of
+    data/inbox/ takes a file written, flushed, renamed and read back, and refuses a name and a rename that climb out.
+    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends."""
+    with tempfile.TemporaryDirectory(prefix="smoke-gateway-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            def stub(line, timeout=60):
+                for _ in range(timeout):
+                    out = vm.command("dmesg -s effector_gw", raw=True)
+                    if line in out:
+                        return out
+                    time.sleep(1)
+                raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
+            stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
+                 "RESTART effector_gw DENIED; STOP-TASK DENIED; REBOOT DENIED")
+            stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            refusals = vm.command("dmesg -s init", raw=True)
+            for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)"):
+                assert re.search(line, refusals), (line, refusals[-2000:])
+            require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
+            stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            files = vm.command("dmesg -s vfs_server", raw=True)
+            scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
+            assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
+            for _ in range(70):  # a scope whose task ended is revoked when the next one is made, or a minute on
+                if f"[VFS] SCOPE {scopes[0]} ENDED" in files:
+                    break
+                time.sleep(1)
+                files = vm.command("dmesg -s vfs_server", raw=True)
+            require(files, f"[VFS] SCOPE {scopes[0]} ENDED")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121): its lifecycle client restarts what the owner's policy names "
+          "and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
+          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends", flush=True)
+
+
 def effector_grants_check(vm):
     """750-KRN-0119: in a mode init starts effector_gw, then effector, each with exactly the grants of `mind::effector`'s
     table: the gateway its endpoint, its private directory (BADGE_EFFECTOR_GW), the volumes to read, sysmon and the log to
-    read; the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
+    read, and the compositor to capture the screen (750-KRN-0153); the session the clock, its private directory (BADGE_EFFECTOR), data/effector/ (a scope), its flow, TLS without the device certificate,
     the parser and the gateway badged as its session. The session keeps the owner's token in its private directory."""
     for name in ("effector_gw", "effector"):
         for _ in range(60):
@@ -4226,8 +4279,11 @@ def effector_grants_check(vm):
         return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
                 if servers.get(int(ep)) != pids[name]}
     gw, session = held("effector_gw"), held("effector")
-    assert set(gw) == {3, 5, 10, 12} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
-    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd"), gw
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (0, "compositor"), gw
+    # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
+    assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
     assert {2, 3, 4, 7, 12, 18, 20, 28} == set(session), session
     assert session[2][1] == "rtc" and session[4] == (1, "effector_gw") and session[20] == (1, "tls") and session[28][1] == "parse", session
     assert session[3] == (6, "vfs_server") and session[7][1] == "vfs_server" and session[7][0] > 7, session  # 7: a scope of data/effector/
@@ -9818,6 +9874,7 @@ def main():
     parser.add_argument("--heap-elf", help="test-only ELF built from tests/heap_app.rs")
     parser.add_argument("--block-elf", help="test-only ELF built from tests/block_app.rs (stands in for vfs_server)")
     parser.add_argument("--updater-elf", help="test-only ELF built from tests/updater_stub (stands in for the updater, 351-KRN-0022)")
+    parser.add_argument("--gateway-elf", help="test-only ELF built from tests/gateway_stub (stands in for effector_gw in the modes suite, 750-KRN-0120, 0121); found where the fixture scripts put it")
     parser.add_argument("--wlansim-elf", help="test-only ELF built from tests/wlansim (QEMU's stand-in radio, 550-NET-0018); found where the fixture scripts put it")
     parser.add_argument("--late-attach-elf", help="test-only virtio_net built with --features late-attach (000-NET-0036, x86); found where scripts/x86_fixtures.sh puts it")
     parser.add_argument("--slow-radio-elf", help="test-only wlansim built with --features slow (550-NET-0030, x86); found where scripts/x86_fixtures.sh puts it")
@@ -9848,6 +9905,9 @@ def main():
     radio = ROOT / IMAGE / "fixture-wlansim.elf" if args.arch == "aarch64" else \
         Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-target/x86_64-unknown-none/release/wlansim"
     args.wlansim_elf = args.wlansim_elf or (str(radio) if radio.exists() else None)
+    gateway = ROOT / IMAGE / "fixture-gateway.elf" if args.arch == "aarch64" else \
+        Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-gateway-target/x86_64-unknown-none/release/gateway_stub"
+    args.gateway_elf = args.gateway_elf or (str(gateway) if gateway.exists() else None)
     late = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-late-attach-target/x86_64-unknown-none/release/virtio_net"
     args.late_attach_elf = args.late_attach_elf or (str(late) if args.arch == "x86_64" and late.exists() else None)
     slow = Path(os.environ.get("MIND_TEST_OUT", tempfile.gettempdir())) / "mind-wlansim-slow-target/x86_64-unknown-none/release/wlansim"

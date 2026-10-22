@@ -260,6 +260,8 @@ impl Policy {
     }
 
     pub fn rules(&self) -> u16 { self.rules }
+    /// The root deliveries arrive under (`deliver <root>`), if the policy names one.
+    pub fn deliver(&self) -> Option<&str> { self.deliver.as_ref().map(|r| r.as_str()) }
     pub fn agent(&self) -> bool { self.agent }
     pub fn max_bytes(&self) -> u64 { self.max_bytes }
     /// The keys trusted for an application's packages: those named for it and those for every name.
