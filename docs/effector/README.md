@@ -154,6 +154,8 @@ its private `system/effector`:
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
 a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
+- **The grant lasts until the next boot.** `init` takes the grant once at the first start and keeps it for every restart (MC-3.13). When its term or volume runs out, the session is refused (`Denied`) until the machine restarts. So the line's term and volume must cover the whole time the mode is on.
+- **Several lines for `effector` share the smallest term and volume of them** (`docs/network/policy.md`).
 
 **Run.** The owner writes `development` or `maintenance` in `data/mode.conf` and restarts the machine; `init` starts
 `effector_gw`, then `effector --service`. `svc restart effector` restarts the session; `rm data/mode.conf` and a
