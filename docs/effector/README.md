@@ -206,8 +206,8 @@ every request (MC-10.6).
 - the gateway's lifecycle client and writable scope (750-KRN-0120, 0121) and
   screen capture: the requests that need them fail;
 - a `shutting_down` heartbeat when `init` stops the session;
-- the session handing commands to the gateway (750-EFF-0006, 0007): every
-  command is still denied;
+- the session hands only `collect_file` to the gateway so far (below); every
+  other command is still denied;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
 - journal retention: the journal keeps 64 answers and then refuses new commands;
 - a `cancel_command` the server sends while an answer waits for its ACK (it
@@ -216,6 +216,14 @@ every request (MC-10.6).
 - the ten-minute online check beside stalled cards (550-NET-0032), and the
   device key as a client certificate (`connect-pins` cannot send one).
 
+**`collect_file`** (2026-10-22) goes through the gateway:
+- **The order.** The session parses the command's payload (`path`, `max_bytes`) and asks `effector_gw` to open the file. The owner's `collect` roots and `max-bytes` decide, and the gateway audits.
+- **The upload.** The session uploads the bytes, read from the gateway in 32 KiB pieces, to `/api/commands/file` with their SHA-256. A 201 makes the answer `completed`.
+- **The answer.** A refusal or failure is `failed` with the gateway's reason (`denied`, `no-policy`, `bounds`, `upload`, …).
+- **Run once.** A command runs once, only if it was never saved before. A redelivery gets the saved answer.
+- **The journal** holds `completed` and `failed-<reason>` beside `denied` and `expired`.
+- **Logs** come from `log:` paths (`log:/bootNNNN.log`) through the same action, as the server's MIND boundary expects.
+
 **Tested** in QEMU (`tests/qemu_smoke.py --suites effector`, x86_64 and
 aarch64) against the fixture, the session started by `init` in the development
 mode: online with heartbeats at most 1.6 s apart; three commands denied after
@@ -223,7 +231,9 @@ journaling; an ACK the server failed retried; the token kept in
 `system/effector`; restarted by `svc`, three saved answers read back and a
 redelivered command answered from the journal; with the configuration of a
 server with another certificate, refused before any request; the token absent
-from the log. Host
+from the log; with a policy collecting `data/reports/`, a 50 000-byte file
+uploaded whole with its SHA-256 and answered `completed`, a file outside it
+answered `failed: denied` and not sent, both in the gateway's audit. Host
 tests: `tests/effector_{session,json,wire,config,journal,policy}_host.rs`. This
 is evidence for QEMU against the fixture, not for the real Effector server or a
 physical machine (750-EFF-0012).

@@ -269,3 +269,29 @@ fn server_command_ids_with_a_dot_are_accepted_agent_ids_are_not() {
     assert_eq!(Id::new("mind.test"), Err(Error::Identifier), "an agent ID keeps the contract's narrower grammar");
     assert!(matches!(Session::new("mind.test", &[], 0), Err(Error::Identifier)));
 }
+
+#[test]
+fn an_action_runs_once_and_its_result_is_what_is_saved_and_repeated() {
+    let mut s = online(&[]);
+    let c = Command { action: "collect_file", payload: "{\"path\":\"log:/boot0001.log\"}", ..command("collect-1") };
+    assert_eq!(s.fresh(&c), Ok(true), "a command never seen runs");
+    let Accepted::Store(write) = s.receive_with(c, time(1), Final::Completed).unwrap() else { panic!() };
+    s.stored(write, true).unwrap();
+    assert_eq!(write.record.result, Final::Completed);
+    assert_eq!(write.record.result.result_json(), r#"{"status":"completed","exit_code":0,"stdout":"","stderr":"","truncated":false,"run_as":"effector"}"#);
+    assert_eq!(s.fresh(&c), Ok(false), "a saved command does not run again");
+    assert_eq!(s.fresh(&Command { payload: "{\"path\":\"other\"}", ..c }), Err(Error::Conflict));
+    let ack = acknowledge(&mut s, time(2));
+    assert_eq!(ack.record.result, Final::Completed);
+    assert_eq!(s.receive_with(c, time(3), Final::Failed(Failure::Io)), Ok(Accepted::Replay), "a redelivery keeps the saved answer");
+    assert_eq!(s.next_ack(time(3)).unwrap().unwrap().record.result, Final::Completed);
+    // A failure names the gateway's reason; an expired command stays expired whatever the action did.
+    let failed = Final::Failed(Failure::NoPolicy);
+    assert_eq!((failed.status(), failed.reason()), ("failed", "no-policy"));
+    assert!(failed.result_json().ends_with(r#""error":"no-policy"}"#));
+    for f in Failure::ALL { assert_eq!(Failure::from_name(f.name()), Some(f)); }
+    let mut t = online(&[]);
+    let old = Command { expires_unix: Some(900), ..command("late") };
+    let Accepted::Store(late) = t.receive_with(old, time(0), Final::Completed).unwrap() else { panic!() };
+    assert_eq!(late.record.result, Final::Expired);
+}

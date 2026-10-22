@@ -140,3 +140,14 @@ fn rfc3339_times() {
         assert_eq!(rfc3339(&s), Some(Some(t)), "{s}");
     }
 }
+
+#[test]
+fn a_collect_file_payload() {
+    let c = with_values(r#"{"kind":"collect_file","path":"log:/boot0001.log","max_bytes":1024,"timeout_seconds":60}"#, |v| collect(v).map(|c| (c.path.to_string(), c.max_bytes)).unwrap());
+    assert_eq!(c, ("log:/boot0001.log".to_string(), Some(1024)));
+    assert_eq!(with_values(r#"{"path":"data/reports/r.txt"}"#, |v| collect(v).unwrap().max_bytes), None);
+    assert_eq!(with_values(r#"{"max_bytes":5}"#, |v| collect(v).err()), Some(Error::Missing));
+    assert_eq!(with_values(r#"{"path":"a","max_bytes":"5"}"#, |v| collect(v).err()), Some(Error::Type));
+    assert_eq!(with_values(r#"{"path":"","max_bytes":5}"#, |v| collect(v).err()), Some(Error::Bounds));
+    assert_eq!(with_values(r#"{"path":"a","path":"b"}"#, |v| collect(v).err()), Some(Error::Duplicate));
+}

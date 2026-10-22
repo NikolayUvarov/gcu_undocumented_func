@@ -141,6 +141,24 @@ pub fn commands<'a>(values: &[Value<'a>]) -> Result<Commands<'a>, Error> {
 }
 
 /// RFC 3339 time to Unix seconds: `None` inside for Go's zero time (no expiry); refused if malformed.
+/// A `collect_file` command's payload (`new_hostport`, Effector's `FileTransferOperation`): the path, and the most the
+/// server takes if it says; other fields are skipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Collect<'a> { pub path: &'a str, pub max_bytes: Option<u64> }
+
+pub fn collect<'a>(values: &[Value<'a>]) -> Result<Collect<'a>, Error> {
+    root(values)?;
+    let [path, max] = members(values, 0, ["path", "max_bytes"])?;
+    let path = string(values, path)?;
+    if path.is_empty() || path.len() > 256 { return Err(Error::Bounds); }
+    let max_bytes = match max {
+        None => None,
+        Some(i) if values[i].kind == Kind::Number => Some(values[i].text.parse::<u64>().map_err(|_| Error::Type)?),
+        Some(_) => return Err(Error::Type),
+    };
+    Ok(Collect { path, max_bytes })
+}
+
 pub fn rfc3339(t: &str) -> Option<Option<u64>> {
     let b = t.as_bytes();
     if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !(b[10] == b'T' || b[10] == b't') || b[13] != b':' || b[16] != b':' { return None; }

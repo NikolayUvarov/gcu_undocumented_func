@@ -54,16 +54,45 @@ impl Command<'_> {
     }
 }
 
-/// This initial core never executes an action; a gateway completion is a different future interface.
+/// Why an action the agent handed to its gateway failed: the gateway's errors (`idl/effector.wit`) and the agent's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Final { Denied, Expired }
+pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload }
+impl Failure {
+    pub const ALL: [Failure; 12] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
+                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Denied => "denied", Self::NoPolicy => "no-policy", Self::NotFound => "not-found", Self::Bounds => "bounds",
+            Self::Digest => "digest", Self::Busy => "busy", Self::Expired => "expired", Self::Audit => "audit", Self::Io => "io",
+            Self::Malformed => "malformed", Self::Unsupported => "unsupported", Self::Upload => "upload",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Self> { Self::ALL.iter().copied().find(|f| f.name() == name) }
+}
+
+macro_rules! failed { ($name:literal) => { concat!(r#"{"status":"failed","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":""#, $name, r#""}"#) } }
+
+/// A command's answer: denied (no gateway action for it), expired, or what the gateway did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Final { Denied, Expired, Completed, Failed(Failure) }
 impl Final {
-    pub fn status(self) -> &'static str { match self { Self::Denied => "denied", Self::Expired => "expired" } }
-    pub fn reason(self) -> &'static str { match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired" } }
+    pub fn status(self) -> &'static str {
+        match self { Self::Denied => "denied", Self::Expired => "expired", Self::Completed => "completed", Self::Failed(_) => "failed" }
+    }
+    pub fn reason(self) -> &'static str {
+        match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired", Self::Completed => "", Self::Failed(f) => f.name() }
+    }
     pub fn result_json(self) -> &'static str {
         match self {
             Self::Denied => r#"{"status":"denied","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"action_not_allowed"}"#,
             Self::Expired => r#"{"status":"expired","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"command_expired"}"#,
+            Self::Completed => r#"{"status":"completed","exit_code":0,"stdout":"","stderr":"","truncated":false,"run_as":"effector"}"#,
+            Self::Failed(f) => match f {
+                Failure::Denied => failed!("denied"), Failure::NoPolicy => failed!("no-policy"), Failure::NotFound => failed!("not-found"),
+                Failure::Bounds => failed!("bounds"), Failure::Digest => failed!("digest"), Failure::Busy => failed!("busy"),
+                Failure::Expired => failed!("expired"), Failure::Audit => failed!("audit"), Failure::Io => failed!("io"),
+                Failure::Malformed => failed!("malformed"), Failure::Unsupported => failed!("unsupported"), Failure::Upload => failed!("upload"),
+            },
         }
     }
 }
@@ -186,7 +215,20 @@ impl Session {
     pub fn poll_overdue(&self, now_ms: u64) -> Option<Attempt> { self.poll.overdue(now_ms) }
     pub fn ack_overdue(&self, now_ms: u64) -> Option<Attempt> { self.ack.overdue(now_ms) }
 
-    pub fn receive(&mut self, command: Command<'_>, now: Time) -> Result<Accepted, Error> {
+    /// Whether `command` is new (true) or the one already saved under its ID (false): an action runs only for a new one.
+    pub fn fresh(&self, command: &Command<'_>) -> Result<bool, Error> {
+        let (id, identity) = command.identity(self.agent)?;
+        match self.records.iter().flatten().find(|s| s.record.id == id) {
+            Some(saved) if saved.record.identity != identity => Err(Error::Conflict),
+            Some(_) => Ok(false),
+            None => Ok(true),
+        }
+    }
+
+    pub fn receive(&mut self, command: Command<'_>, now: Time) -> Result<Accepted, Error> { self.receive_with(command, now, Final::Denied) }
+
+    /// As `receive`, with `done` as a new command's answer (what its action did); an expired one stays `expired`.
+    pub fn receive_with(&mut self, command: Command<'_>, now: Time, done: Final) -> Result<Accepted, Error> {
         if self.stopping { return Err(Error::Busy); }
         if self.journal_failed { return Err(Error::Journal); }
         let (id, identity) = command.identity(self.agent)?;
@@ -202,7 +244,7 @@ impl Session {
             let slot = self.records.iter().position(Option::is_none).ok_or(Error::Full)?;
             let deadline_ms = deadline(command.expires_unix, now)?;
             let expired = deadline_ms.is_some_and(|d| d <= now.monotonic_ms);
-            let record = Record { agent: self.agent, id, identity, result: if expired { Final::Expired } else { Final::Denied }, expires_unix: command.expires_unix };
+            let record = Record { agent: self.agent, id, identity, result: if expired { Final::Expired } else { done }, expires_unix: command.expires_unix };
             self.store_sequence = self.store_sequence.checked_add(1).ok_or(Error::Sequence)?;
             let store = Store { sequence: self.store_sequence, slot, record };
             self.records[slot] = Some(Saved { record, durable: false, done: false });

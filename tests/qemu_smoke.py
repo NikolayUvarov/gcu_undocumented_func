@@ -7091,6 +7091,13 @@ def effector_suite(args, disk):
     conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
     (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
     (disk / "data" / "effector" / "token").write_text(token + "\n")
+    # The owner's policy: files under data/reports/ may leave the machine, nothing else (750-EFF-0003, 0007).
+    (disk / "data" / "effector" / "policy").write_text("effector-policy 1\nagent on\ncollect data/reports/\nmax-bytes 1048576\n")
+    report = bytes((i * 7 + 3) % 256 for i in range(50000))  # two of the gateway's 32 KiB pieces
+    (disk / "data" / "reports").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "reports" / "r.bin").write_bytes(report)
+    (disk / "data" / "secret").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
     # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
     (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
     # The agent's ID, as an earlier start would have left it in the session's private directory.
@@ -7134,13 +7141,30 @@ def effector_suite(args, disk):
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
               f"at most {max(gaps):.1f} s apart; three commands answered denied after journaling, a failed ACK retried; the token "
               "kept in its private directory", flush=True)
+        # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
+        # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
+        collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
+        until(f"EFFECTOR: ACK {collect_id} completed ACCEPTED")
+        outside_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/secret/s.txt", "max_bytes": 1048576})
+        out = until(f"EFFECTOR: ACK {outside_id} failed ACCEPTED")
+        require(out, f"EFFECTOR: COMPLETED {collect_id} collect_file")
+        require(out, f"EFFECTOR: FAILED {outside_id} collect_file: denied")
+        assert server.uploads.get(collect_id) == report, len(server.uploads.get(collect_id, b""))
+        assert outside_id not in server.uploads, "a refused file was sent"
+        assert server.operation(collect_id)["status"] == "completed", server.operation(collect_id)
+        result = server.operation(outside_id)
+        assert result["status"] == "failed" and result["result"]["error"] == "denied", result
+        audit = vm.command("dmesg -s effector_gw", raw=True)
+        assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
+        print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
+              "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
         # Restarted: the journal read back; a redelivered command gets its saved answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(3 SAVED RESULTS)", 60)
+        until("(5 SAVED RESULTS)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: DENIED {restart_id}") == 1, out[-3000:]
-        print("PASS: restarted by svc, the agent reads its journal back (3 saved results) and answers a redelivered command "
+        print("PASS: restarted by svc, the agent reads its journal back (5 saved results) and answers a redelivered command "
               "with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
