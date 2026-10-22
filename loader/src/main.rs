@@ -86,9 +86,11 @@ fn debug_mode() -> bool {
 // A file error as the loader reports it: a drive that does not answer stays ERR_IO, not an invalid program (211-KRN-0050).
 fn file_error(error: fs::Error) -> Error { if error == fs::Error::Io { Error::Other(ERR_IO) } else { error.into() } }
 
-// The program file of `name` and its task name; boot services and the kernel are not applications.
+// The program file of `name` and its task name; boot services and the kernel are not applications. A bare name is the
+// booted slot's when that slot holds applications (351-KRN-0151); a path names its file as it is.
 fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
     let mut path = FixedBuf::<64>::new();
+    if !name.contains(&b'/') { let _ = write!(path, "{}", apps_dir()); }
     path_for(name, &mut path)?;
     let task = task_name(path.as_bytes());
     // Services are started by init from bootloader images; the kernel itself is not runnable as a program.
@@ -165,11 +167,7 @@ fn read_image(file: &File) -> Result<(Pages, usize), Error> {
 // against the manifest (109-KRN-0133).
 fn spawn_helper(name: &str) -> Result<u64, Error> {
     let mut path = FixedBuf::<64>::new();
-    match BOOT_SLOT.load(core::sync::atomic::Ordering::Relaxed) {
-        BOOT_SLOT_A => { let _ = write!(path, "MIND/A/"); }
-        BOOT_SLOT_B => { let _ = write!(path, "MIND/B/"); }
-        _ => {}
-    }
+    let _ = write!(path, "{}", slot_dir());
     path_for(name.as_bytes(), &mut path)?;
     let file = File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?;
     let (image, size) = read_image(&file)?;
@@ -339,10 +337,10 @@ fn inspect(name: &str) -> Result<loader::Needs, loader::Error> {
     Ok(loader::Needs { console: flags & REQUEST_CONSOLE != 0, sysinfo: flags & REQUEST_SYSINFO != 0, file: flags & REQUEST_FILE != 0, lifecycle: flags & REQUEST_LIFECYCLE != 0, log: flags & REQUEST_LOG != 0, files: flags & REQUEST_FILES != 0 })
 }
 
-// The *.elf programs in the disk root, except the kernel; services are marked.
+// The *.elf programs where applications are (the disk root, or the booted slot), except the kernel; services are marked.
 fn programs() -> List<loader::Program, 128> {
     let mut list = List::default();
-    let _ = fs::list("", |entry| {
+    let _ = fs::list(apps_dir().trim_end_matches('/'), |entry| {
         if entry.is_dir || entry.name.len() < 5 || !entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf") { return; }
         let name = task_name(entry.name);
         if name.as_bytes() == b"kernel" { return; }
@@ -355,10 +353,35 @@ fn programs() -> List<loader::Program, 128> {
 mind::entry!(main);
 // The slot this boot runs from (BootInfo.boot_slot), for the helpers' files.
 static BOOT_SLOT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(BOOT_SLOT_ROOT);
+// Whether the booted slot holds applications, so that they come from it and not the root (351-KRN-0151, 351-UPD-0023).
+static SLOT_APPS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+// The booted slot's directory, with its slash; "" on a disk without slots.
+fn slot_dir() -> &'static str {
+    match BOOT_SLOT.load(core::sync::atomic::Ordering::Relaxed) { BOOT_SLOT_A => "MIND/A/", BOOT_SLOT_B => "MIND/B/", _ => "" }
+}
+// Where applications are: the booted slot when it holds any, else the disk root.
+fn apps_dir() -> &'static str { if SLOT_APPS.load(core::sync::atomic::Ordering::Relaxed) { slot_dir() } else { "" } }
+
+// A slot holds applications when it holds any *.elf that is no boot file: the updater's own test before `apply`. A slot
+// staged before 351-UPD-0023 holds none, and the root's run.
+fn find_slot_apps() {
+    let dir = slot_dir();
+    if dir.is_empty() { return; }
+    let mut found = false;
+    let _ = fs::list(dir.trim_end_matches('/'), |entry| {
+        let elf = !entry.is_dir && entry.name.len() > 4 && entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf");
+        let boot = entry.name.eq_ignore_ascii_case(b"kernel.elf") || BOOT_FILES.iter().any(|f| f.as_bytes().eq_ignore_ascii_case(entry.name));
+        found |= elf && !boot;
+    });
+    SLOT_APPS.store(found, core::sync::atomic::Ordering::Relaxed);
+    mind::println!("[LOADER] APPLICATIONS FROM {}", if found { dir } else { "THE ROOT: THE BOOTED SLOT HOLDS NONE" });
+}
 
 fn main(info: &'static BootInfo) {
     BOOT_SLOT.store(info.boot_slot.slot, core::sync::atomic::Ordering::Relaxed);
     let _ = fs::prepare();
+    find_slot_apps();
     mind::println!("[LOADER] READY");
     let mut launcher = Launcher { sessions: [const { None }; SESSIONS], next: 0, helpers: [None; HELPERS], started: [None; STARTED], oldest: 0 };
     loop {

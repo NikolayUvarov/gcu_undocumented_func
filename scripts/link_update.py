@@ -24,8 +24,8 @@ and link.conf:
 
 The release is signed as scripts/release.py signs one: the manifest with the build's boot key, the channel with
 $MIND_RELEASE_KEY, or the public test release key without it. Only what the updater reads goes over the cable: the
-boot files' blobs (mindlink skips a file the other end holds already), the manifest and its signature, then the
-channel, last. Exit status: 0 when the updater confirmed the new slot on the disk, 1 when a step was refused or the
+boot files' and the applications' blobs (mindlink skips a file the other end holds already, so an unchanged
+application costs a check), the manifest and its signature, then the channel, last. Exit status: 0 when the updater confirmed the new slot on the disk, 1 when a step was refused or the
 time ran out, 2 for a usage error.
 """
 import argparse
@@ -48,11 +48,24 @@ FAILED = re.compile(r"\[UPDATER\] [^\n]*(REFUSED|ROLLBACK)[^\n]*")
 ANCHOR = 8  # lines that mark where the last read of the log ended
 
 
+def boot_file(name):
+    """The kernel and the boot services: what a slot held before 351-UPD-0023."""
+    return name == "kernel.elf" or name in boot_slots.BOOT_FILES
+
+
+def application(name):
+    """A listed program at the volume's root that is no boot file: the updater stages it into the slot (351-UPD-0023).
+    The licences, the voice model and data stay at the root."""
+    return "/" not in name and name.endswith(".elf") and not boot_file(name)
+
+
 def release_files(manifest, arch, version):
-    """What the updater reads of a release, in the order it is put: the boot files' blobs, then the manifest and its
-    signature. The channel, `channels/stable`, goes last and is not in the list."""
-    boot = [digest for name, _, digest in release.manifest_files(manifest) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
-    return [f"blobs/{digest}" for digest in boot] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
+    """What the updater reads of a release, in the order it is put: the boot files' blobs, the applications' (351-KRN-0151),
+    then the manifest and its signature. A blob two files share goes once. The channel, `channels/stable`, goes last and
+    is not in the list."""
+    files = release.manifest_files(manifest)
+    blobs = [digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if application(name)]
+    return [f"blobs/{digest}" for digest in dict.fromkeys(blobs)] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
 
 
 def build(root, arch, version, temp):

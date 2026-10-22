@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting, 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (one waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -34,3 +34,11 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
+
+## `help <name>` reads the program from the booted slot
+
+**From:** the kernel track (KRN), 2026-10-22, for [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) and 351-UPD-0023 · **Constitution:** MC-9.3
+
+- **What changed.** On a disk booted from a slot that holds applications, `loader` opens an application, and lists one in `LIST`, from that slot (`MIND/A/` or `MIND/B/`), not the root.
+- **What is left in the shell.** `programs::about` (`help <name>`, `list -l`) still opens `<name>.elf` at the root. There it reads another build's text, or none once a release drops a program.
+- **Asked.** Read the booted slot's copy when the slot holds applications, as `files` reads the booted slot's kernel (351-APP-0088), or ask `loader` for the text.
