@@ -118,3 +118,39 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **A check first:** in the `net` suite, `ping 10.0.2.200` (slirp answers ARP only for its own addresses), then `ping 10.0.2.2`, which should still answer.
 - **If it holds the queue:** drop a request whose neighbour is not found by its deadline, for example by giving each request its own ICMP socket, or by closing and opening the card's socket when a request ends in `Timeout`.
+
+## `wlan` joins a remembered network by itself, at start and after the network is lost (550)
+
+**Recorded by:** the kernel track (KRN), 2026-10-22, at the maintainer's word of that day ("a NET task"), which takes up the link track's request (`internal-dev-messages`, `NET/2026-10-22T1038Z-LNK-wlan-joins-a-remembered-network-by-itself.md`). **Constitution:** MC-11.9 (the kept key), MC-12.3.
+
+### Problem
+
+- **Who joins Wi-Fi today.** The MacBook Pro joins at start through `tests/hardware/wifijoin.msh`, run as `autorun.msh` from the volume's root (550-ASR-0007, 000-APP-0079).
+- **Why that breaks after an update.** An update through the link (351-KRN-0141) replaces the boot services in a slot, but nothing at the root. No program may write the root.
+- **What happened.** After each of the first two updates, the boot's one scan missed the network, and the old script gave up. The link track joined by hand over the link.
+- **What exists.** No task joins by itself: 550-NET-0024 keeps the key, but a join is still `wifi join`'s.
+
+### The maintainer's decision
+
+- **Where it goes.** `wlan`, a boot service updated through the cable, joins a remembered network by itself:
+  - at start;
+  - again after the network is lost.
+- **How.** It retries, and logs each attempt.
+- **The user's word still holds.** `wifi leave` and `forget` stay in force.
+
+### Plan (the link track's proposal; the network track decides the details)
+
+- **At start,** when `keystore` remembers networks: scan, and join the best remembered network heard, with the kept key as `wifi join` uses it. For example, the most recently joined first, then the strongest.
+- **Retries.** Retry until one is joined, for example every 10 s for two minutes, then every minute.
+- **The log.** Each attempt is one line, for example `[WLAN] AUTO-JOIN <name>: <outcome>`.
+- **A lost network** (beacons gone, a deauthentication) is joined again the same way.
+- **`wifi leave`** stops the automatic join until the next join or the next boot. **`forget`** takes the network out of it. How it is turned off for good is the network track's choice: a word in `keystore`'s record, a file, or `wifi`'s.
+
+### Acceptance criteria
+
+The `net` suite over `wlansim` shows:
+- after a restart of `wlan`, a remembered `MIND-TEST` joined with no command;
+- after `wifi leave`, no join;
+- a lost network joined again, each attempt in the log.
+
+`wifi`'s word for turning it off, if any, is the tools track's.
