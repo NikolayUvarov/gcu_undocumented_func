@@ -1,6 +1,6 @@
 # 800-KRN-0142 — The link's network policy client, badged to launch only
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** made (2026-10-22); the gate and the second criterion's QEMU run left · **Blocked by:** — · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (f8d76dd, landing round 9); the second criterion's QEMU run left (NET's `net` suite, 800-NET-0038) · **Blocked by:** — · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Constitution:** MC-3.4, MC-11.3, MC-11.6
 
 From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-21), numbered here.
 

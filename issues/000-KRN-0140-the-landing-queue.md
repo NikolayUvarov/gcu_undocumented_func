@@ -102,6 +102,13 @@ The maintainer asked on 2026-10-21 why the parallel tracks keep gating again, an
 - **Gate `land-aa50204e`** on candidate aa50204, on `main` 28202e1: every group green, none run again, in 1 h 43 min on i9, un-rizen (two lanes) and PCU.
 - **`main` = aa50204.** The answer is `LANDING/2026-10-22T0729Z-KRN-landed-aa50204e.md`.
 
+**Round 9 (2026-10-22)** landed KRN's request (`claude/youthful-mendel-mf1soy` f835b53d): 351-KRN-0151 and 800-KRN-0142.
+- **Gate `land-f8d76dd9`** on candidate f8d76dd, on `main` c930067: every group green, none run again, in 1 h 38 min on i9, un-rizen (two lanes) and PCU.
+- **`main` = f8d76dd.** The answer is `LANDING/2026-10-22T0921Z-KRN-landed-f8d76dd9.md`.
+- The builds took 2 to 5 s, against minutes in round 8: the machines' trees had round 8 built, and only `init` and `loader` changed. The new checks of `slot_applications_check` and the `link` suite passed in the gate; they fail on the old `init` and `loader`.
+- **The cost of carrying the applications.** "aarch64: files, network and TLS" took 1810 s, against 1436 s in round 8. "x86: files and block writes" took 1141 s, against 896 s.
+- **Mis-stamped messages.** KRN's request and messages of this round were named 0812Z, 0814Z and 0820Z. They were written at about 07:40 UTC.
+
   The cause is not established. If it recurs, it gets an issue of its own.
 - **The gate script was stopped** at its 2-hour background limit, with two i9 groups left. Run again with the same tag, it took up every finished operation by its key, ran the rest and the failed groups alone, and called it red.
 - **The answer** is `LANDING/2026-10-22T0346Z-KRN-round-803dd2f8.md`, with the details in APP's directory.

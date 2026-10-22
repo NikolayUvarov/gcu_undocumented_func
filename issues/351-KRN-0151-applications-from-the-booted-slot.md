@@ -1,6 +1,6 @@
 # 351-KRN-0151 — Applications from the booted slot, and their blobs through the link
 
-**Type:** `loader`, `scripts/link_update.py` · **Owner:** kernel session · **Priority:** P1 · **Status:** made (2026-10-22); the gate and the update track's staging left · **Blocked by:** — for the loader; the update track's staging (351-UPD-0023) for the `update` suite's criterion · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.3, MC-9.4, MC-12.7
+**Type:** `loader`, `scripts/link_update.py` · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (f8d76dd, landing round 9); the update track's staging left for the first criterion · **Blocked by:** — for the loader; the update track's staging (351-UPD-0023) for the `update` suite's criterion · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.3, MC-9.4, MC-12.7
 
 From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-22, "The applications from the booted slot, and their blobs through the link"), numbered here, for [351-UPD-0023](351-UPD-0023-applications-in-the-releases-slot.md).
 
@@ -24,8 +24,8 @@ From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-2
 ## Acceptance criteria
 
 - [ ] The `update` suite shows the trial boot running an application from slot B and the rollback running one from slot A, with the update track's part of 351-UPD-0023.
-- [ ] `linkupdate` (or the link suite's update) carries the applications.
-- [ ] A disk whose slot holds no applications still runs the root's.
+- [x] `linkupdate` (or the link suite's update) carries the applications (gate `land-f8d76dd9`, x86 and aarch64).
+- [x] A disk whose slot holds no applications still runs the root's (`slot_applications_check`, gate `land-f8d76dd9`, x86 and aarch64).
 
 ## Progress (2026-10-22)
 
