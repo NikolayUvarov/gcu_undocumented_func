@@ -34,7 +34,7 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
   - `mindlink sh ps` shows `link`;
   - a command the link's client may not run is refused with its reason;
   - without `dev`, COMMAND answers UNSUPPORTED.
-- [ ] **On the MacBook Pro over RS-485:** `ip`, `netstat -i`, `ps` and `dmesg -s netstack` read from the development machine.
+- [x] **On the MacBook Pro over RS-485:** `ip`, `netstat -i` and `ps` read from the development machine (2026-10-22, below). `dmesg` the shell takes from no client, and the link reads the system log itself.
 
 Evidence for the configurations named only (MC-12.1). What the link's client may run is the shell's decision. This task claims no more than the shell grants it (MC-3.11, MC-12.3).
 
@@ -56,6 +56,10 @@ Evidence for the configurations named only (MC-12.1). What the link's client may
   - **The `link` suite's checks:** `sh ip` shows a `CARD` line, `sh ps` shows `link`, `sh netpolicy add …` is refused, and the log holds the command's word alone.
     - With APP's `claude/wizardly-franklin-kec1a9` (800-APP-0102) merged locally, they passed (x86, QEMU).
     - Without it the shell does not answer the link, and the suite says SKIP.
+- **2026-10-22, the MacBook Pro.**
+  - The release put through the link (b509a30: this branch with APP's, KRN's and NET/UPD's, ABI 16) brought the shell's rule for the link.
+  - `mindlink sh ip` and `sh netstat -i` showed `CARD 2 … WI-FI DEFAULT` with its counters. `sh ps` listed the services, `link` among them.
+  - `sh dmesg -s netstack` was refused, by the shell's rule for every client.
 
 ## Related
 
