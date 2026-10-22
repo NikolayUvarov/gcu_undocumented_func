@@ -76,6 +76,19 @@
     - also on the i7-930, "x86: keys, shell, tools" on 2761c834: the keys, shell and tools suites, the four clocks among them, then the bench suite's `check kernel` ran past its 8 s. That wait is the kernel track's, recorded in `requests-KRN.md` (6c062390).
 - **Left:** the MacBook Pro.
 
+## Progress (2026-10-22): "shell did not answer" on the MacBook Pro
+
+- **The maintainer's report:** after an update, setting the zone from `wm`'s Settings says the shell does not answer.
+- **How that comes about:**
+  - `wm` waited 2 s for `set-zone`.
+  - The shell answered only after the rtc service took the zone and after `data/clock.conf` was written.
+  - It answers nothing at all while a command or the cards' counters hold it.
+  - A slow disk, or a slow network stack behind `net-counters`, can take longer than that.
+- **The change:**
+  - the shell answers `set-zone` once the rtc service took the zone, and writes the file after its answer, logging `[SHELL] ZONE …, KEPT IN data/clock.conf`;
+  - `wm` waits 8 s for `set-clock` and `set-zone`, and says when it was a timeout.
+- **What the Mac's log should show next time:** `[RTC] ZONE`, `[SHELL] TIME ZONE … SET`, `[SHELL] ZONE … KEPT`, `[WM] SET ZONE`. Asked of LNK.
+
 ## Related
 
 [211-KRN-0051](211-KRN-0051-setting-the-clock.md) (`rtc.wit` 1.2 `set`), [211-APP-0042](../issues-done/211-APP-0042-date-set-in-the-shell.done) (`date set`), [000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) and [000-APP-0060](../issues-done/000-APP-0060-the-clock-from-wms-settings-at-once.done) (the date page), [000-APP-0012](../issues-done/000-APP-0012-clocks-read-the-rtc-once-a-minute.done) (`Clock`).

@@ -38,8 +38,10 @@ const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// How long wm waits for the shell to answer its menu's Shell item and to set the clock.
+// How long wm waits for the shell to answer its menu's Shell item; and to set the clock or the zone, which the shell may
+// answer only after a command it runs or the cards' counters (a slow network stack) end.
 const SHELL_MS: u32 = 2000;
+const SETTING_MS: u32 = 8000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
 /// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not: a
@@ -668,12 +670,13 @@ fn main(info: &'static BootInfo) {
                     let (y, mo, d) = mind::rtc::civil_from_days(date);
                     let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
-                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
                             Ok(Ok(())) => format!("The clock is set to {}", when),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
                             Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
                             Ok(Err(error)) => format!("The clock is not set ({:?})", error),
-                            Err(_) => String::from("The clock is not set: the shell does not answer"),
+                            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => format!("The clock is not set: the shell did not answer in {} s (a command running in its window?)", SETTING_MS / 1000),
+                            Err(error) => format!("The clock is not set: the shell does not answer ({:?})", error),
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
@@ -691,11 +694,12 @@ fn main(info: &'static BootInfo) {
                     // from its next reading of the RTC, this page and the background at once.
                     let zone = wm::settings::zone_name(if west { -(minutes as i32) } else { minutes as i32 });
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the zone needs the shell's commands, which wm does not hold") } else {
-                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_zone(Endpoint(SLOT_SHELL), west, minutes)) {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_zone(Endpoint(SLOT_SHELL), west, minutes)) {
                             Ok(Ok(())) => format!("The clocks show {} now, kept in data/clock.conf", zone),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", zone),
                             Ok(Err(error)) => format!("The zone is not set ({:?})", error),
-                            Err(_) => String::from("The zone is not set: the shell does not answer"),
+                            Err(mind::sys::Error::Other(mind::abi::ERR_TIMEOUT)) => format!("The zone is not set: the shell did not answer in {} s (a command running in its window?)", SETTING_MS / 1000),
+                            Err(error) => format!("The zone is not set: the shell does not answer ({:?})", error),
                         }
                     };
                     mind::println!("[WM] SET ZONE {}: {}", zone, text);

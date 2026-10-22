@@ -290,14 +290,21 @@ impl Shell {
                     let line = alloc::format!("date zone {}", zone.map(|z| alloc::format!("{}", z)).unwrap_or_default());
                     let result = match zone {
                         None => Err(commands::Error::Invalid),
-                        Some(zone) if manager => clockzone::set(zone).map(|said| self.note(format_args!("{}", said))).map_err(|_| commands::Error::Unavailable),
+                        // The rtc service first, then the answer; the file after it, which a slow disk (the MacBook Pro's)
+                        // may take longer over than the window manager waits.
+                        Some(zone) if manager => clockzone::apply(zone).map_err(|_| commands::Error::Unavailable),
                         Some(_) => self.client_line(&line, message.sender).and_then(|out| {
                             if core::str::from_utf8(&out).unwrap_or("").contains("ZONE UTC") { Ok(()) } else { Err(commands::Error::Unavailable) }
                         }),
                     };
                     let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
                     self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
+                    let applied = manager && result.is_ok();
                     let _ = commands::reply_set_zone(call, result);
+                    if let (true, Some(zone)) = (applied, zone) {
+                        let kept = clockzone::keep(zone);
+                        mind::println!("[SHELL] {}", kept);
+                    }
                 }
                 commands::Request::Battery => {
                     // A copy of the shell's battery client (shell.wit 1.4, 211-APP-0070): the service only reads, and

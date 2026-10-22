@@ -8072,6 +8072,7 @@ def wm_suite(vm):
         for key_name, zone in (("right", "UTC+00:30"), ("left", "UTC")):
             keys(key_name, text=f"[WM] SET ZONE {zone}: The clocks show {zone} now, kept in data/clock.conf")
             until(f'THE SHELL RAN "date zone {zone}" AT ONCE')
+            until(f"[SHELL] ZONE {zone}, KEPT IN data/clock.conf")  # the file after the answer: a slow disk does not hold wm
             screen_has(f"The clock, {zone}: ")
         assert last_state().startswith("MODE=SETTINGS"), last_state()
         keys("esc", text="MODE=NORMAL")
