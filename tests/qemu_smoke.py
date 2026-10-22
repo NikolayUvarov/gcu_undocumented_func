@@ -8835,8 +8835,10 @@ def wm_suite(vm):
     # init's lines go to the system log; the new shell's banner and its note come on the serial line.
     back = vm.expect("THE SCREEN IS ITS AGAIN", timeout=60, after="MIND CORE v1.6")
     assert re.search(r"\[SHELL\] WM \(PID \d+\) RAN BEFORE THIS SHELL STARTED", back), back[-1500:]
+    # The background's "SHELL RESUMED." is already in the log: read close all's own line.
+    vm.collect(); read[0] = len(vm.log)
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
-    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
+    require(wait("CLOSE ALL:", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
     # The start script runs once a boot (EFF's report of 2026-10-22): the second start of the shell says so.
     require(vm.command("dmesg -s shell", raw=True), "START 2 OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN")
