@@ -4309,6 +4309,8 @@ def vfs_suite(args):
             # PrintScreen (KEY_PRINT_SCREEN, decoded from PS/2's E0 37; the aarch64 VirtIO keyboard passes none): the same.
             if args.arch == "x86_64":
                 vm.hmp("sendkey print")
+                # The shell is in front: it writes the 3 MB file before it reads the next line, as for Ctrl+Alt+F6.
+                vm.expect("SCREENSHOT data/media/screen-004.bmp: ", timeout=180)
                 for _ in range(60):
                     keyed = vm.command("dmesg -s shell", raw=True)
                     if "(PRINTSCREEN)" in keyed:
