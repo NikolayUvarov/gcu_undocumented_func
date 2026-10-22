@@ -81,6 +81,35 @@ impl Dir {
         }
         Ok(run)
     }
+
+    /// `command` started in the directory as a run, its output kept; `said` goes to standard error, `name` to RUNS.
+    fn spawn(&mut self, said: &str, name: &str, mut command: Command) -> Result<(u32, u64), u8> {
+        if self.runs.len() >= RUNS_KEPT {
+            let oldest = self.runs.iter().position(|r| r.state != RUN_RUNNING).ok_or(code::BUSY)?;
+            self.runs.remove(oldest);
+        }
+        let mut child = command.current_dir(&self.root).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(io)?;
+        let out = Arc::new(Mutex::new(Output::default()));
+        for mut from in [Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>, Box::new(child.stderr.take().unwrap())] {
+            let to = out.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while let Ok(n @ 1..) = from.read(&mut buf) {
+                    let mut o = to.lock().unwrap();
+                    o.kept.extend_from_slice(&buf[..n]);
+                    o.total += n as u64;
+                    let over = o.kept.len().saturating_sub(KEEP);
+                    o.kept.drain(..over);
+                }
+                to.lock().unwrap().readers_done += 1;
+            });
+        }
+        let (id, pid) = (self.next, child.id() as u64);
+        self.next = self.next.wrapping_add(1).max(1);
+        eprintln!("run {id}: started {said} as PID {pid}");
+        self.runs.push(Run { id, name: name.to_string(), child, out, state: RUN_RUNNING, exit: EXIT_UNKNOWN });
+        Ok((id, pid))
+    }
 }
 
 fn not_empty(path: &std::path::Path) -> bool { fs::read_dir(path).map(|mut d| d.next().is_some()).unwrap_or(false) }
@@ -236,32 +265,19 @@ impl Files for Dir {
             let mut mode = fs::metadata(&program).map_err(io)?.permissions();
             if mode.mode() & 0o100 == 0 { mode.set_mode(mode.mode() | 0o100); fs::set_permissions(&program, mode).map_err(io)?; }
         }
-        if self.runs.len() >= RUNS_KEPT {
-            let oldest = self.runs.iter().position(|r| r.state != RUN_RUNNING).ok_or(code::BUSY)?;
-            self.runs.remove(oldest);
-        }
-        let mut child = Command::new(&program).args(args.split_whitespace()).current_dir(&self.root)
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(io)?;
-        let out = Arc::new(Mutex::new(Output::default()));
-        for mut from in [Box::new(child.stdout.take().unwrap()) as Box<dyn Read + Send>, Box::new(child.stderr.take().unwrap())] {
-            let to = out.clone();
-            std::thread::spawn(move || {
-                let mut buf = [0u8; 4096];
-                while let Ok(n @ 1..) = from.read(&mut buf) {
-                    let mut o = to.lock().unwrap();
-                    o.kept.extend_from_slice(&buf[..n]);
-                    o.total += n as u64;
-                    let over = o.kept.len().saturating_sub(KEEP);
-                    o.kept.drain(..over);
-                }
-                to.lock().unwrap().readers_done += 1;
-            });
-        }
-        let (id, pid) = (self.next, child.id() as u64);
-        self.next = self.next.wrapping_add(1).max(1);
-        eprintln!("run {id}: started {name} {args} as PID {pid}");
-        self.runs.push(Run { id, name: name.to_string(), child, out, state: RUN_RUNNING, exit: EXIT_UNKNOWN });
-        Ok((id, pid))
+        let mut command = Command::new(&program);
+        command.args(args.split_whitespace());
+        self.spawn(&format!("{name} {args}"), name, command)
+    }
+
+    /// COMMAND: `line` run by the host's shell, `sh -c` (`cmd /C` on Windows), as a run (800-LNK-0015).
+    fn command(&mut self, line: &str) -> Result<u32, u8> {
+        if !self.run { return Err(code::DENIED); }
+        let (shell, flag) = if cfg!(windows) { ("cmd", "/C") } else { ("/bin/sh", "-c") };
+        let mut command = Command::new(shell);
+        command.arg(flag).arg(line);
+        let word = line.split_whitespace().next().unwrap_or("");
+        self.spawn(&format!("sh: {line}"), &format!("sh: {word}"), command).map(|(id, _)| id)
     }
 
     fn output(&mut self, id: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> {

@@ -34,6 +34,8 @@ commands: hello                       the other end's name and version
           run <program> [<argument>...]  start a program on the other end, show its output until it ends; exits with
                                       its code where the other end knows it (MIND Core: link.conf must hold the word run)
           start <program> [<argument>...]  the same, printing only the run's number
+          sh <line>                   one line for the other end's shell, its output; exits 1 when the shell refused
+                                      or failed it (MIND Core: link.conf must hold the word dev; 800-LNK-0015)
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
           runs                        the runs the other end knows
           stop <run>                  stop a run's program
@@ -163,6 +165,7 @@ fn main() {
         ("rmdir", [dir, "-r"]) | ("rmdir", ["-r", dir]) => c.rmdir(dir.trim_end_matches('/'), true).map(|_| println!("removed {dir} and everything in it")),
         ("run", [program, rest @ ..]) => run(&mut c, program, &rest.join(" ")),
         ("start", [program, rest @ ..]) => c.run(program, &rest.join(" ")).map(|(run, pid)| println!("{run}\t{pid}")),
+        ("sh", [first, rest @ ..]) => sh(&mut c, &[*first].iter().chain(rest).copied().collect::<Vec<_>>().join(" ")),
         ("out", [run]) => out(&mut c, number(run), false).map(drop),
         ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
         ("runs", []) => runs(&mut c),
@@ -277,6 +280,14 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
               code.map_or(String::new(), |c| format!(", exit code {c}")));
     if let Some(c) = code.filter(|&c| c != 0) { std::process::exit(c.clamp(1, 255)); }
+    Ok(())
+}
+
+/// One line for the other end's shell: its output; a refusal or failure exits 1 (800-LNK-0015).
+fn sh(c: &mut Client<port::Port>, line: &str) -> Result<(), Error> {
+    let run = c.command(line)?;
+    let (_, exit) = out(c, run, true)?;
+    if exit != 0 && exit != linkproto::app::EXIT_UNKNOWN { std::process::exit((exit as i32).clamp(1, 255)); }
     Ok(())
 }
 

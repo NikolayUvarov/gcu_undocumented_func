@@ -1627,7 +1627,7 @@ CHECKS_PASS = ["clocks advance", "memory: write, read back", "memory: quota hold
                "text input: to its end", "text input: rights", "text input: writer gone", "launch: every slot",
                "launch: stop and notice", "a tool's console closes", "kernel memory unreadable",
                "own code unwritable", "null pointer faults", "the boot was checked", "the RTC's date", "the RTC advances", "the monotonic clock", "sleeps last as asked", "ram: write, read",
-               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "vfs_server", "loader", "sysmon", "shell"]
+               "ram: consistent", "programs on the disk", "the boot", "the modes", "a mode change refused", "a replace refused", "vfs_server", "loader", "sysmon", "shell"]
 CHECK_ROW = re.compile(r"^│ ([✓✗○]) │ (.+?) +│ (.*?) *│$", re.M)  # PIDs are renumbered, so widths vary
 
 
@@ -3993,11 +3993,17 @@ def link_suite(args):
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
-            # init's reboot client, the policy broker and the Wi-Fi station.
+            # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
-            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0))}  # 0: no station runs
+            developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
+                         (30, pids.get("shell"))}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
+            # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
+            commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
+            shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            assert commands and servers.get(int(commands[1])) == pids["shell"], commands
+            assert shell_client and shell_client[1] == "1" and shell_client[2] == commands[1], (shell_client, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -4111,6 +4117,7 @@ def modes_suite(args):
                 state = "development, as set by disk" if words else "normal, as set by disk"
                 assert rows.get("the modes") == ("✓", state), (rows.get("the modes"), out[-2000:])
                 assert rows.get("a mode change refused", ("",))[0] == "✓", out[-2000:]
+                assert rows.get("a replace refused", ("",))[0] == "✓", out[-2000:]  # 800-KRN-0144
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
@@ -4945,6 +4952,37 @@ def updater_suite(args, updater_elf):
     print("PASS: updater: a policy broker that never answers keeps neither the updater nor the shell from starting", flush=True)
 
 
+def updater_parser_check(vm, https):
+    """109-UPD-0017: a check's channel and heads are parsed in a helper of the check's own, which the loader starts
+    through the updater's helpers-only client (109-KRN-0117): while the server holds the channel's request, the helper
+    holds only its endpoint (stat caps); it is gone when the check ends."""
+    parsers = lambda: sorted(int(pid) for pid in re.findall(r"^(\d+) parse ", vm.command("ps", raw=True), re.M))
+    service = parsers()[0]  # the shared service, started at boot before any helper
+    hold, asked = threading.Event(), len(https.requests)
+    https.holds["/channels/stable"] = hold
+    try:
+        for _ in range(160):  # the next check (every 20 s) asks for the channel, and the server holds the answer
+            if ("/channels/stable", None) in https.requests[asked:]:
+                break
+            time.sleep(.25)
+        else:
+            raise AssertionError(("no check asked for the channel", https.requests[asked:]))
+        helpers = [pid for pid in parsers() if pid != service]
+        assert len(helpers) == 1, (helpers, vm.command("ps", raw=True))
+        text = vm.command(f"stat caps {helpers[0]}", raw=True)
+        require(text, "STAT CAPS VERSION=2 COUNT=1 ")
+        assert re.search(r"^SLOT=1 GEN=\d+ KIND=1 ", text, re.M), text
+    finally:
+        hold.set()
+    for _ in range(120):  # the check ends, and its helper with it
+        if helpers[0] not in parsers():
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(("the check's parser outlived it", vm.command("ps", raw=True)))
+    print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
+
+
 def update_releases(temp, arch):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out. Returns the volumes, the server, release 5's channel, release 6's
@@ -5032,6 +5070,7 @@ def update_suite(args):
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
+        updater_parser_check(vm, https)
         # Version 6 as published, but the first of its boot files changed on the server.
         (server / "channels/stable").write_bytes(good)
         blob = server / "blobs" / boot_files[0][1]
@@ -5080,6 +5119,8 @@ def update_suite(args):
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
         log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
+        assert "PARSER: THE SHARED SERVICE" not in log, log
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
@@ -6495,6 +6536,12 @@ def net_suite(args, disk):
         require(listed, "NETCHECK 1 SOCKETS")
         require(vm.command("rogue sockets"), "NETCHECK sockets NO GRANT")
         flow_bounds_check(vm, web_port)
+        # 109-KRN-0133: with one endpoint left in its quota, as the updater has, a program opens ten parser sessions in a
+        # row, each with a helper of its own: each session's end frees the endpoint for the next. After the checks that
+        # count grants, as it takes one of its own.
+        out = vm.command("netcheck sessions", timeout=120)
+        require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
+        require(out, "NETCHECK sessions OK")
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)

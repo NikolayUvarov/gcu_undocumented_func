@@ -31,6 +31,8 @@ pub mod kind {
     pub const OUTPUT: u8 = 51;
     pub const STOP: u8 = 52;
     pub const RUNS: u8 = 53;
+    /// A line for the slave's shell, whose answer is read as a run's output (800-LNK-0015).
+    pub const COMMAND: u8 = 54;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0xFF;
 }

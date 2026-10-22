@@ -61,6 +61,7 @@ Each operation has:
 | `uninstall` | `name` | deletes `apps/<name>` |
 | `log` | `from`, `max_bytes` | the other end's log from a cursor (default 0, 64 KiB); `next` in the result |
 | `reboot` | — | restarts the other end (MIND Core: `dev` in `link.conf`); the daemon says hello again when it is back |
+| `shell` | `line`, `timeout_seconds` | one line for the other end's shell (800-LNK-0015). Its output becomes the operation's; it fails when the shell refused or failed the line |
 
 **Names on the other end** are paths below its directory: on MIND Core, `data/link/` (protocol, section 5).
 

@@ -282,6 +282,16 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
             // It stays running: `work` follows it between the other operations.
             return Ok(());
         }
+        // A line for the other end's shell (800-LNK-0015): followed as a program is.
+        "shell" => {
+            let run = c.command(p.str("line").unwrap_or(""))?;
+            let limit = p.num("timeout_seconds").map_or(RUN_TIMEOUT, |t| t as u64);
+            with(state, id, |op| {
+                (op.run, op.cursor, op.deadline) = (Some(run), 0, Some(now() + limit));
+                op.result.set("run", Value::Num(run as f64));
+            });
+            return Ok(());
+        }
         "log" => {
             let (mut cursor, max) = (p.num("from").unwrap_or(0.0) as u64, p.num("max_bytes").unwrap_or(65536.0) as u64);
             let (mut got, mut buf) = (0u64, [0u8; MAX_PAYLOAD]);

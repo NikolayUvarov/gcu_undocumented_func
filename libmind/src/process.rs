@@ -188,6 +188,12 @@ pub const BADGE_LIFECYCLE: u16 = 2;
 pub const BADGE_MODE: u16 = 3;
 /// The badge of init's client that may only turn the maintenance mode on, with a reason: the Mind's, once it exists.
 pub const BADGE_MIND: u16 = 4;
+/// The badge of init's lifecycle client for link with `dev` in link.conf: `reboot`, and `replace` a service with an image
+/// from data/link/ (init.wit 1.6, 800-KRN-0144).
+pub const BADGE_DEVELOPER: u16 = 5;
+/// The badge of the shell's command client init mints for link with `dev` in link.conf (800-KRN-0148): the shell takes
+/// that client's lines on the link's rule.
+pub const BADGE_SHELL_LINK: u16 = 1;
 pub const REQUEST_TLS: u32 = 131072; // the launcher's TLS client in SLOT_TLS, for a program that also gets a flow grant (351-KRN-0034)
 pub const REQUEST_PARSE: u32 = 262144; // the shell's client of the parser service in SLOT_PARSE (109-KRN-0042)
 pub const REQUEST_CLIPBOARD: u32 = 524288; // the clipboard service's client in SLOT_CLIPBOARD (211-KRN-0058, for 000-APP-0032)

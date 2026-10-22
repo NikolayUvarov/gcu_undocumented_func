@@ -43,11 +43,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // `ssh` after `tls` and moves SLOT_DYNAMIC to 36 for SLOT_SSH and SLOT_UPDATE (351-KRN-0115, 351-KRN-0116).
 // ABI 13 adds the link to another machine: `usb_serial` and `link` right after `vfs_server` (800-KRN-0128).
 // ABI 14 moves SLOT_DYNAMIC to 37 for SLOT_MODE, the shell's client of init that sets the machine's modes (750-KRN-0143).
+// ABI 15 moves it to 38 for SLOT_COMMANDS, the shell's command endpoint made by init, so that link may hold a client (800-KRN-0148);
+// it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 14;
+pub const ABI_VERSION: u32 = 15;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
@@ -126,7 +128,7 @@ pub const SYSCALL_PORT_OUT: usize = 18;
 pub const SYSCALL_IRQ_WAIT: usize = 19;
 pub const SYSCALL_INPUT_EVENT: usize = 20;
 // READ_INPUT: next input event word of the calling (focused) task, 0 if none. READ_KEY returns only the legacy byte
-// of the next event that has one.
+// of the next key event that has one (a pointer event's byte is its horizontal steps, ABI 15).
 pub const SYSCALL_READ_INPUT: usize = 50;
 // INPUT_POINTER: arg1 = 1 to receive pointer events (KEY_POINTER), 0 to stop; for the calling task only. Without it
 // the kernel drops pointer events instead of queueing them (issue 156).
@@ -362,8 +364,11 @@ pub const SLOT_UPDATE: usize = 35;
 // init's client badged BADGE_MODE (init.wit 1.5 set-mode): the shell's alone, for its `mode` command; no program gets it
 // (ABI 14, 750-KRN-0143).
 pub const SLOT_MODE: usize = 36;
+// The shell's command endpoint (idl/shell.wit), made by init and kept across the shell's restarts: the shell serves it, and
+// init mints link's client of it in developer mode (ABI 15, 800-KRN-0148).
+pub const SLOT_COMMANDS: usize = 37;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 37;
+pub const SLOT_DYNAMIC: usize = 38;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
 pub const LAUNCH_SLOTS: [usize; 20] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
@@ -479,7 +484,7 @@ pub const NOTICE_FRONT: usize = 1 << 62; // issue 160
 
 // Input events: one word per key press or release, queued per task (64, oldest dropped). The kernel stores and routes
 // them; decoding and layouts live in ring 3 (ps2_kbd, the shell's UART decoder).
-// bits 0-7: legacy byte for READ_KEY (raw scancode or UART byte; 0: none) · 8-23: key (KEY_*; 0: not decoded) ·
+// bits 0-7: legacy byte for READ_KEY (raw scancode or UART byte; 0: none; in an absolute pointer event, its horizontal steps) · 8-23: key (KEY_*; 0: not decoded) ·
 // 24-31: modifiers (MOD_*) · 32: pressed · 40-63: Unicode character from the active layout (0: none).
 // INPUT_EVENT: arg1/arg2 = legacy bytes for an application / the focus owner, msg[0] = attention, msg[1]/msg[2] = full
 // event words for them (0: an event carrying only the byte).
@@ -490,6 +495,8 @@ pub const KEY_HOME: u16 = 10; pub const KEY_END: u16 = 11; pub const KEY_PAGE_UP
 pub const KEY_INSERT: u16 = 14; pub const KEY_DELETE: u16 = 15;
 pub const KEY_F1: u16 = 16; // F1..F12 = 16..27
 pub const KEY_SHIFT: u16 = 28; pub const KEY_CTRL: u16 = 29; pub const KEY_ALT: u16 = 30; pub const KEY_CAPS_LOCK: u16 = 31;
+// PrintScreen (E0 37 from a PC keyboard, HID usage 0x46), for a screenshot key (ABI 15, 000-KRN-0149).
+pub const KEY_PRINT_SCREEN: u16 = 33;
 // A pointer event (issue 156): the modifier byte holds the buttons (POINTER_*), the character field the movement:
 // bits 0-8 dx, 9-17 dy (both signed, dy grows downwards), 18-21 the wheel (signed, positive: towards the user).
 pub const KEY_POINTER: u16 = 32;
@@ -510,8 +517,11 @@ pub fn pointer_fields(event: usize) -> (u8, i32, i32, i32) {
 pub fn pointer_scroll(buttons: u8, dx: i32, dy: i32, wheel: i32, across: i32) -> usize {
     pointer_event(buttons, dx, dy, wheel) | (across.clamp(-8, 7) as usize & 0xF) << 34
 }
-/// The horizontal wheel steps of a relative pointer event (0 for an absolute one).
-pub fn pointer_across(event: usize) -> i32 { if event & POINTER_ABSOLUTE != 0 { 0 } else { (((event >> 34) & 0xF) as i32) << 28 >> 28 } }
+/// The horizontal wheel steps of a pointer event, relative or absolute (0 in an event made without them).
+pub fn pointer_across(event: usize) -> i32 {
+    let steps = if event & POINTER_ABSOLUTE != 0 { event & 0xF } else { (event >> 34) & 0xF };
+    (steps as i32) << 28 >> 28
+}
 // An absolute pointer event (issue 161): a pointer event with POINTER_ABSOLUTE set carries a position instead of the
 // movement — x in bits 0-11 and y in bits 12-23 of the character field — and the wheel in bits 34-37 (signed). In the
 // kernel's input queues the position is a share of the screen, 0 to POINTER_SCALE - 1 from the left and top edges (a
@@ -521,6 +531,11 @@ pub const POINTER_SCALE: usize = 4096;
 pub fn pointer_absolute(buttons: u8, x: usize, y: usize, wheel: i32) -> usize {
     let field = (x.min(POINTER_SCALE - 1) | y.min(POINTER_SCALE - 1) << 12) as u32;
     input_event(0, KEY_POINTER, buttons, true, field) | POINTER_ABSOLUTE | (wheel.clamp(-8, 7) as usize & 0xF) << 34
+}
+// An absolute event's horizontal wheel steps (211-KRN-0150): bits 0-3 of the byte field, signed, positive to the right;
+// zero in every event pointer_absolute makes, so its callers and pointer_absolute_fields are unchanged (ABI 15).
+pub fn pointer_absolute_scroll(buttons: u8, x: usize, y: usize, wheel: i32, across: i32) -> usize {
+    pointer_absolute(buttons, x, y, wheel) | (across.clamp(-8, 7) as usize & 0xF)
 }
 /// (buttons, x, y, wheel) of an absolute pointer event; None for any other event.
 pub fn pointer_absolute_fields(event: usize) -> Option<(u8, usize, usize, i32)> {
