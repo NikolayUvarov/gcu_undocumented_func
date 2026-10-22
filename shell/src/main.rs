@@ -231,8 +231,8 @@ impl Shell {
         Ok((WINDOW + at, id))
     }
 
-    // A client of the shell's commands for a program that asks for it (REQUEST_SHELL): the endpoint is made the first
-    // time; the caller lends the client and drops it.
+    // A client of the shell's commands for a program that asks for it (REQUEST_SHELL): init's endpoint, else one made
+    // the first time; the caller lends the client and drops it.
     fn commands_client(&mut self) -> Result<usize, Error> {
         let endpoint = match self.commands { Some(endpoint) => endpoint, None => { let endpoint = Endpoint::create()?; self.commands = Some(endpoint); endpoint } };
         mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) // grant: `run`'s buffer travels with the call
@@ -1263,16 +1263,16 @@ impl Events {
     fn clear(&mut self) { self.len = 0; }
 }
 
-// The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
-#[inline(never)]
-// The commands endpoint init made for the shell, if it did (800-APP-0102): the receive side of its keeper in the
-// shell's own SLOT_SHELL, whose client badged BADGE_SHELL_LINK `link` holds in developer mode. Else the shell makes one
-// at its first lend, as before.
+// The commands endpoint init made for the shell (ABI 15, 800-KRN-0148, for 800-APP-0102): the receive side of its
+// keeper in SLOT_COMMANDS, whose client badged BADGE_SHELL_LINK `link` holds in developer mode. Without one (a launch
+// that does not give it) the shell makes its own at its first lend, as before.
 fn given_commands() -> Option<Endpoint> {
-    let (kind, _, rights) = mind::dev::cap_info(SLOT_SHELL);
-    (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_SHELL))
+    let (kind, _, rights) = mind::dev::cap_info(SLOT_COMMANDS);
+    (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_COMMANDS))
 }
 
+// The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
+#[inline(never)]
 fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box<Shell> {
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,

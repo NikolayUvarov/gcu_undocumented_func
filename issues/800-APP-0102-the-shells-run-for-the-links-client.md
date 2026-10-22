@@ -1,6 +1,6 @@
 # 800-APP-0102 — What the shell's `run` takes from the link's client, in developer mode
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "you must be able to run commands there", 2026-10-22) · **Status:** open · **Blocked by:** `KRN`: `init` minting the shell's client for `link` with `dev` (LNK → KRN, 2026-10-22 03:56 UTC) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware (as 800) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "you must be able to run commands there", 2026-10-22) · **Status:** open · **Blocked by:** — (`KRN`'s client is in `main` with ABI 15, 800-KRN-0148) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware (as 800) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-22, from LNK's request (LNK → APP, 2026-10-22 03:56 UTC, for 800-LNK-0015) and the maintainer's choice (a) that LNK passed on at 03:58: "да, режим а".
 
@@ -13,11 +13,11 @@
 ## Plan
 
 - **The badge:** `mind::process::BADGE_SHELL_LINK` (1) on the shell's commands endpoint. The clients the shell lends carry no badge and no right to set one, so no program can pass for the link.
-- **The endpoint:** the shell makes its commands endpoint itself at its first lend, which `init` cannot hand to `link`, started before the shell. So the shell serves on an endpoint `init` gives it, if it gives one:
-  - the receive side of the shell's keeper, in the shell's own `SLOT_SHELL` (30, unused in the shell itself);
-  - `link`'s client is minted from that keeper with `BADGE_SHELL_LINK`, in a slot of `link`'s;
-  - without it, nothing changes.
-  - The proposal is KRN's to take or change.
+- **The endpoint:** the shell made its commands endpoint itself at its first lend, which `init` could not hand to `link`, started before the shell. KRN's 800-KRN-0148 (ABI 15) makes it in `init`:
+  - the receive side of the shell's keeper is in `SLOT_COMMANDS` (37);
+  - `link`'s client is minted from that keeper with `BADGE_SHELL_LINK`, in `link`'s slot 30, with `dev`.
+
+  The shell serves on `SLOT_COMMANDS` when it holds it, and mints the clients it lends from it. Without it, the shell makes its own as before. (A first version served on the shell's own `SLOT_SHELL`, a proposal KRN replaced.)
 - **`clients::taken_by(line, Client::Link)`:**
   - the commands any client gets at once, as before;
   - what a program's client is asked runs at once: the commands that only read (`netstat`, `ping`, `nslookup`, `logs`, `stat`, `pmap`, `caps <pid>`), and, by the maintainer's choice (a), those that change the machine (`kill`, `stop`, `reboot`, `poweroff`, `shutdown`, `budget`, `date set`, `logger`, `tpm`, `fetch`, `https`, a `>` into a file);
