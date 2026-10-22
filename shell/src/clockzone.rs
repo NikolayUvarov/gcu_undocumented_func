@@ -34,17 +34,26 @@ pub fn load(last: bool) -> Load {
 
 /// Sets the zone and keeps it in the file: the line that says so.
 pub fn set(zone: Zone) -> Result<String, &'static str> {
+    apply(zone)?;
+    Ok(keep(zone))
+}
+
+/// The zone given to the rtc service, which every clock reads: at once, before the file is written.
+pub fn apply(zone: Zone) -> Result<(), &'static str> {
     match mind::rtc::set_zone(zone) {
-        Ok(()) => {}
-        Err(mind::idl::rtc::Error::Rights) => return Err("ONLY THE SHELL'S RTC CLIENT MAY SET THE ZONE"),
-        Err(mind::idl::rtc::Error::Invalid) => return Err("THE CLOCK REFUSED THAT ZONE"),
-        Err(mind::idl::rtc::Error::Unavailable) => return Err("RTC NOT AVAILABLE (A SERVICE OLDER THAN RTC.WIT 1.3?)"),
+        Ok(()) => { mind::println!("[SHELL] TIME ZONE {} SET", zone); Ok(()) }
+        Err(mind::idl::rtc::Error::Rights) => Err("ONLY THE SHELL'S RTC CLIENT MAY SET THE ZONE"),
+        Err(mind::idl::rtc::Error::Invalid) => Err("THE CLOCK REFUSED THAT ZONE"),
+        Err(mind::idl::rtc::Error::Unavailable) => Err("RTC NOT AVAILABLE (A SERVICE OLDER THAN RTC.WIT 1.3?)"),
     }
-    mind::println!("[SHELL] TIME ZONE {} SET", zone);
-    Ok(match write(&text(zone)) {
+}
+
+/// The zone kept in the file for the next start, which a slow disk may take seconds over: the line that says so.
+pub fn keep(zone: Zone) -> String {
+    match write(&text(zone)) {
         Ok(()) => format!("ZONE {}, KEPT IN {}", zone, FILE),
         Err(why) => format!("ZONE {} UNTIL THE NEXT START: NOT KEPT IN {} ({})", zone, FILE, why),
-    })
+    }
 }
 
 fn read() -> Result<String, &'static str> {
