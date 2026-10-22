@@ -9,11 +9,12 @@ that a MIND machine is remotely manageable yet.
 
 The agent is two boot services on the network path of Appendix B.6
 ([750](../../issues/750-effector-agent.md)). They talk only through
-[`idl/effector.wit`](../../idl/effector.wit) 1.0, which `effector_gw` serves.
-The grants below are the ones planned in
-[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md);
-neither service runs yet, so this section is the design the code must keep,
-not a description of running code (MC-12.3).
+[`idl/effector.wit`](../../idl/effector.wit) 1.1, which `effector_gw` serves.
+The grants below are those of
+[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md),
+0120, 0121 and 0153, and the table below "As boot services" says which slot
+holds which. Those not built yet (the updater's client, the reboot badge, the
+test account) are marked as later.
 
 **Only in the development and maintenance modes** (the maintainer's decision
 of 2026-10-21, [750-EFF-0013](../../issues/750-EFF-0013-development-and-maintenance-modes.md)).
@@ -25,7 +26,7 @@ explicitly: by the operator, by a word written with the disk or by a command
 confirmed at the local console, or by the Mind through the same switch when it
 needs help from outside (MC-8.1, MC-12.6). It holds across reboots until it is
 turned off. Inside a mode, the policy and the gateway's audit below still bound
-every request. This is the design, not yet running code.
+every request. `init` does this since 750-KRN-0143.
 
 | Service | Holds | Parses | Never holds |
 |---|---|---|---|
@@ -53,8 +54,10 @@ file the owner wrote.
 
 **What leaves the machine:**
 
-- the heartbeat: release version, uptime, memory, the boot services' states,
-  whether a request is running;
+- the heartbeat: the agent's ID, host name, architecture and version;
+- telemetry every 30 s (750-EFF-0014): processor load, memory, uptime, the
+  boot services' states, PIDs, processor time and memory, the volumes' space,
+  the network cards' links and addresses, the count of commands answered;
 - each request's result, bounded and without credentials;
 - files, logs and screens the policy names, up to `max-bytes`.
 
@@ -136,9 +139,10 @@ as-yet-unwritten MIND client. No real endpoint is registered by these tests.
 [750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md)
 (ABI 16) it and `effector_gw` are boot images that `init` starts only in the
 development or maintenance mode (`data/mode.conf`, 750-EFF-0013); no program
-runs by their names. It heartbeats, polls and answers **every** command
-`denied`, after journaling the answer; nothing on the machine is acted on yet
-(the gateway is [750-EFF-0007](../../issues/750-EFF-0007-gateway-service.md)).
+runs by their names. It heartbeats, polls, hands the actions below to
+[`effector_gw`](../../issues/750-EFF-0007-gateway-service.md), whose owner's
+policy decides each, answers any other command `denied`, journals each answer
+before its ACK, and sends telemetry every 30 s.
 
 **Files.** The owner's are in `data/effector/`, which the session reads through a read-only scope; its own are in
 its private `system/effector`:
@@ -149,7 +153,9 @@ its private `system/effector`:
 | `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
 | `token` → `system/effector/token` | the agent | moved from `data/effector/token` at the first start; the owner may then remove the copy |
 | `agent_id` | the agent, once, in `system/effector` | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
-| `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK (`effector/src/journal.rs`) |
+| `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK, and a `done` line once it needs no more ACK (`effector/src/journal.rs`); compacted at each start through `journal.new` |
+| `artifact` | the agent, in `system/effector` | the screenshot or log of the answer waiting for its ACK, after a line naming its command, size and SHA-256; removed once acknowledged |
+| `executed` | the agent, in `system/effector` | the count of commands answered, kept across restarts for telemetry |
 
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
@@ -197,7 +203,8 @@ says so. The slots and badges are one table in `libmind/src/effector.rs`
 | | `SLOT_READER` (5) | a reading client of the volumes: `data/effector/policy`, the policy's file roots, `log:` |
 | | `SLOT_FILE` (7) | the writable scopes of 750-KRN-0120, for deliveries |
 | | `SLOT_VFS` (3) | its private `system/effector_gw`: the audit file (`audit`, then `audit.old` beyond 256 KiB) |
-| | `SLOT_SYSINFO` (10), `SLOT_LIFECYCLE` (11), `SLOT_LOG` (12) | memory, the services (750-KRN-0121's limited client), the log ring |
+| | `SLOT_SYSINFO` (10), `SLOT_LIFECYCLE` (11), `SLOT_LOG` (12) | the counters, the services (750-KRN-0121's limited client), the log ring |
+| | `SLOT_DISPLAY` (15) | the compositor's client (750-KRN-0153): the screen, which the compositor marks with its red dot while it is captured |
 
 A grant `init` does not give makes the requests that need it fail; without
 its private directory the gateway cannot write an audit line, so it refuses
@@ -205,13 +212,12 @@ every request (MC-10.6).
 
 **Not done in this slice** (each stays in its task):
 
-- the gateway's lifecycle client and writable scope (750-KRN-0120, 0121) and
-  screen capture: the requests that need them fail;
+- packages, the system update, reboot and the test account's scripts
+  (750-EFF-0008, 0009, 0010, 501): those commands are still denied;
 - a `shutting_down` heartbeat when `init` stops the session;
-- the session hands only `collect_file` to the gateway so far (below); every
-  other command is still denied;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
-- journal retention: the journal keeps 64 answers and then refuses new commands;
+- the heartbeat's `programs` list is empty: the server's MIND programs come from
+  its `programs-mindcore` configuration;
 - a `cancel_command` the server sends while an answer waits for its ACK (it
   may, even with `at_capacity=1`) is not answered and expires on the server;
   the command it names was already answered `denied`;
@@ -226,16 +232,39 @@ every request (MC-10.6).
 - **The journal** holds `completed` and `failed-<reason>` beside `denied` and `expired`.
 - **Logs** come from `log:` paths (`log:/bootNNNN.log`) through the same action, as the server's MIND boundary expects.
 
+**The other actions** (2026-10-22, contract 1.2), each decided by the owner's policy and audited by the gateway:
+- **`screenshot`** (`screen on`): the gateway takes the compositor's copy of the screen, shrinks it to fit 1280x800 and
+  writes a PNG (`effector_gw/src/png.rs`); the agent keeps it in `system/effector/artifact` and sends it inline in the
+  ACK as base64, as the server's other agents do.
+- **`collect_logs`** (`log ring`, or a `collect` root): the system log or a file, inline as text the same way.
+- **`deliver_file`** (`deliver ROOT`): downloaded from the server straight into the gateway, which checks the size and
+  SHA-256 before the file takes its name under the root (750-KRN-0120's scope).
+- **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
+  service; `init` checks the owner's policy again (750-KRN-0121).
+- **An action runs once**, for a new command that has not expired and whose answer the journal has room for.
+
+**Telemetry** (750-EFF-0014): every 30 s, a schema 1 sample to `/api/telemetry` (`effector/src/telemetry.rs`), from the
+gateway's `sample` (`effector.wit` 1.1) and the session's view of the network cards. Rates (processor load, each
+service's processor time) need two samples of the same boot and process, so the first sample has none; a value MIND
+does not measure (interface byte counters, swap, disk I/O) is left out, never sent as zero. The first send and each
+change in the server's answer give one line.
+
 **Tested** in QEMU (`tests/qemu_smoke.py --suites effector`, x86_64 and
 aarch64) against the fixture, the session started by `init` in the development
-mode: online with heartbeats at most 1.6 s apart; three commands denied after
+mode: online with heartbeats at most 1.6 s apart; two commands denied after
 journaling; an ACK the server failed retried; the token kept in
-`system/effector`; restarted by `svc`, three saved answers read back and a
+`system/effector`; restarted by `svc`, the saved answers read back and a
 redelivered command answered from the journal; with the configuration of a
 server with another certificate, refused before any request; the token absent
 from the log; with a policy collecting `data/reports/`, a 50 000-byte file
 uploaded whole with its SHA-256 and answered `completed`, a file outside it
-answered `failed: denied` and not sent, both in the gateway's audit. Host
-tests: `tests/effector_{session,json,wire,config,journal,policy}_host.rs`. This
+answered `failed: denied` and not sent, both in the gateway's audit; a
+1280x800 screenshot sent as a PNG that zlib reads whole, its capture audited;
+the system log sent inline; a 68 000-byte delivery written under the policy's
+root and one outside it refused; sysmon restarted; telemetry samples that the
+fixture's copy of the server's checks accepts, with processor load, 47 services
+and the guest's address; restarted, 10 saved answers read back with none
+acknowledged again. Host tests:
+`tests/effector_{session,json,wire,config,journal,policy,gateway,png,telemetry}_host.rs`. This
 is evidence for QEMU against the fixture, not for the real Effector server or a
 physical machine (750-EFF-0012).

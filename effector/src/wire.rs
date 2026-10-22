@@ -67,6 +67,65 @@ pub fn ack<'b>(buf: &'b mut [u8], command_id: &str, result_json: &str) -> Result
     Ok(w.finish()?)
 }
 
+/// What an answer carries back (contract 1.1, as the server's other agents send screenshots): its bytes go into the
+/// result as base64, which the server keeps as the operation's artifact. `picture`: a PNG's width and height.
+#[derive(Clone, Copy, Debug)]
+pub struct Artifact<'a> { pub name: &'a str, pub content_type: &'a str, pub size: u64, pub sha256: &'a str, pub truncated: bool, pub picture: Option<(u32, u32)> }
+
+/// What follows an artifact's base64 text in its ACK: the end of the data string, of the artifact, of the result, of
+/// the ACK (the result is a string, so its quotes are escaped).
+pub const ARTIFACT_SUFFIX: &[u8] = b"\\\"}}\"}";
+
+/// The ACK of a completed result with an artifact up to its base64 text, which `ARTIFACT_SUFFIX` follows. The data is
+/// the artifact's last member, so the text before it is what `ack` writes with the data empty.
+pub fn artifact_ack<'b>(buf: &'b mut [u8], command_id: &str, a: &Artifact<'_>) -> Result<&'b [u8], Error> {
+    let mut inner = [0u8; 1024];
+    let mut w = Writer::new(&mut inner);
+    w.object()?;
+    w.field_str("status", "completed")?;
+    w.field_u64("exit_code", 0)?;
+    w.field_str("stdout", "")?;
+    w.field_str("stderr", "")?;
+    w.field_bool("truncated", a.truncated)?;
+    w.field_str("run_as", "effector")?;
+    w.key("artifact")?;
+    w.object()?;
+    w.field_str("name", a.name)?;
+    w.field_str("content_type", a.content_type)?;
+    w.field_str("encoding", "base64")?;
+    w.field_u64("size", a.size)?;
+    w.field_str("sha256", a.sha256)?;
+    if let Some((width, height)) = a.picture {
+        w.key("metadata")?; w.object()?; w.field_u64("width", width as u64)?; w.field_u64("height", height as u64)?; w.end()?;
+    }
+    w.field_str("data", "")?;
+    w.end()?;
+    w.end()?;
+    let result = core::str::from_utf8(w.finish()?).map_err(|_| Error::Write)?;
+    let n = ack(buf, command_id, result)?.len();
+    if !buf[..n].ends_with(ARTIFACT_SUFFIX) { return Err(Error::Write); }
+    Ok(&buf[..n - ARTIFACT_SUFFIX.len()])
+}
+
+/// The length of `n` bytes as base64 (with padding).
+pub fn base64_len(n: u64) -> u64 { n.div_ceil(3) * 4 }
+
+/// `input` as base64 into `out` (at least `base64_len(input.len())` bytes); only the last piece of a stream may have a
+/// length that is not a multiple of 3. Returns the bytes written.
+pub fn base64(input: &[u8], out: &mut [u8]) -> usize {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut n = 0;
+    for group in input.chunks(3) {
+        let v = (group[0] as u32) << 16 | (*group.get(1).unwrap_or(&0) as u32) << 8 | *group.get(2).unwrap_or(&0) as u32;
+        out[n] = ALPHABET[(v >> 18) as usize & 63];
+        out[n + 1] = ALPHABET[(v >> 12) as usize & 63];
+        out[n + 2] = if group.len() > 1 { ALPHABET[(v >> 6) as usize & 63] } else { b'=' };
+        out[n + 3] = if group.len() > 2 { ALPHABET[v as usize & 63] } else { b'=' };
+        n += 4;
+    }
+    n
+}
+
 /// The members of object `at`: refused if a key comes twice; `wanted` keys are returned by position.
 fn members<const N: usize>(values: &[Value<'_>], at: usize, wanted: [&str; N]) -> Result<[Option<usize>; N], Error> {
     if values.get(at).map(|v| v.kind) != Some(Kind::Object) { return Err(Error::Shape); }
@@ -157,6 +216,38 @@ pub fn collect<'a>(values: &[Value<'a>]) -> Result<Collect<'a>, Error> {
         Some(_) => return Err(Error::Type),
     };
     Ok(Collect { path, max_bytes })
+}
+
+/// A `deliver_file` payload (Effector's FileTransferOperation): where, how many bytes with which SHA-256, and whether an
+/// existing file may be replaced. The gateway's policy decides the path; `max_bytes` bounds the announced size.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deliver<'a> { pub path: &'a str, pub size: u64, pub sha256: &'a str, pub overwrite: bool }
+
+pub fn deliver<'a>(values: &[Value<'a>]) -> Result<Deliver<'a>, Error> {
+    root(values)?;
+    let [path, size, sha256, overwrite, max] = members(values, 0, ["path", "size", "sha256", "overwrite", "max_bytes"])?;
+    let path = string(values, path)?;
+    if path.is_empty() || path.len() > 256 { return Err(Error::Bounds); }
+    let number = |at: Option<usize>| match at.map(|i| values[i]) {
+        None => Ok(None),
+        Some(v) if v.kind == Kind::Number => v.text.parse::<u64>().map(Some).map_err(|_| Error::Type),
+        Some(_) => Err(Error::Type),
+    };
+    let size = number(size)?.ok_or(Error::Missing)?;
+    if number(max)?.is_some_and(|m| size > m) { return Err(Error::Bounds); }
+    let sha256 = string(values, sha256)?;
+    if sha256.len() != 64 || !sha256.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Err(Error::Type); }
+    let overwrite = match overwrite.map(|i| values[i].kind) { None | Some(Kind::False) => false, Some(Kind::True) => true, Some(_) => return Err(Error::Type) };
+    Ok(Deliver { path, size, sha256, overwrite })
+}
+
+/// A `collect_logs` payload: JSON with `path` (Effector's CollectLogOperation), or the path itself.
+pub fn log_path<'a>(values: &[Value<'a>]) -> Result<&'a str, Error> {
+    root(values)?;
+    let [path] = members(values, 0, ["path"])?;
+    let path = string(values, path)?;
+    if path.is_empty() || path.len() > 256 { return Err(Error::Bounds); }
+    Ok(path)
 }
 
 pub fn rfc3339(t: &str) -> Option<Option<u64>> {

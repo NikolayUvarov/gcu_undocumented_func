@@ -1,6 +1,7 @@
 //! The Effector gateway's decisions and effects (750-EFF-0007) against a fake machine: the badge, the deadline, the
 //! policy, the audit before every answer (a failed audit write refuses the request, MC-10.6), files out in pieces with
-//! their SHA-256, files in checked by size and SHA-256 before they are published.
+//! their SHA-256, files in checked by size and SHA-256 before they are published; the screen within the policy's bound;
+//! the telemetry counters for the session and the owner only.
 #![allow(dead_code)]
 extern crate alloc;
 #[path = "../libmind/src/sha256.rs"] mod sha256;
@@ -20,6 +21,8 @@ struct Fake {
     audit: Vec<String>,
     audit_fails: bool,
     controlled: Vec<(String, policy::Action)>,
+    screen: Vec<u8>,
+    screens: usize,
 }
 
 impl Machine for Fake {
@@ -56,6 +59,15 @@ impl Machine for Fake {
     fn discard_temporary(&mut self, path: &str) { self.temporary.remove(path); }
     fn audit(&mut self, line: &str) -> bool { if self.audit_fails { return false; } self.audit.push(line.into()); true }
     fn policy_file(&mut self) -> Result<Vec<u8>, Fail> { self.policy.clone().ok_or(Fail::NotFound) }
+    fn screen(&mut self, max: u64) -> Result<Vec<u8>, Fail> {
+        self.screens += 1;
+        if self.screen.len() as u64 > max { Err(Fail::Bounds) } else { Ok(self.screen.clone()) }
+    }
+    fn sample(&mut self) -> Sample {
+        Sample { cpus: 2, busy_ns: 5, idle_ns: 7, uptime_ms: self.now, memory_total: 1000, memory_free: 900,
+                 services: vec![Load { name: "sysmon".into(), state: Some(ServiceState::Running), pid: 9, run_ns: 1, started_ns: 2, memory: 3 }],
+                 volumes: vec![(String::new(), 100, 40)] }
+    }
 }
 
 const POLICY: &str = "effector-policy 1\nagent on\nservice sysmon restart\nlog ring\ncollect data/reports/\ndeliver data/inbox/\nscreen on\nmax-bytes 100000\n";
@@ -190,9 +202,42 @@ fn a_delivered_file_is_checked_before_it_is_published() {
 }
 
 #[test]
+fn the_screen_leaves_within_the_policy() {
+    let (mut g, mut m) = ready();
+    m.screen = b"\x89PNG a picture".to_vec();
+    let t = g.open_screen(&mut m, Badge::Session, &origin("c1")).unwrap();
+    assert_eq!((t.size, t.sha256, t.truncated), (14, sha256::digest(&m.screen), false));
+    let mut buf = [0u8; 64];
+    assert_eq!(g.read(&mut m, Badge::Session, t.handle, 0, &mut buf).unwrap(), 14);
+    assert_eq!(&buf[..14], &m.screen[..]);
+    assert_eq!(g.open_screen(&mut m, Badge::Session, &origin("c2")).err(), Some(Fail::Busy), "one transfer at a time");
+    g.close(&mut m, Badge::Session, t.handle).unwrap();
+    assert!(m.audit.iter().any(|l| l.contains(" c1 open-screen done 14?bytes ")), "{:?}", m.audit);
+    // Larger than the policy's max-bytes (100000): refused, audited.
+    m.screen = vec![0; 100_001];
+    assert_eq!(g.open_screen(&mut m, Badge::Session, &origin("c3")).err(), Some(Fail::Bounds));
+    assert!(m.audit.last().unwrap().contains(" c3 open-screen done bounds "), "{:?}", m.audit);
+    // Without `screen on` the screen is never captured.
+    m.policy = Some(POLICY.replace("screen on\n", "").into_bytes());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    let captured = m.screens;
+    assert_eq!(g.open_screen(&mut m, Badge::Session, &origin("c4")).err(), Some(Fail::Denied));
+    assert_eq!(g.open_screen(&mut m, Badge::Other, &origin("c5")).err(), Some(Fail::Denied));
+    assert_eq!(m.screens, captured);
+}
+
+#[test]
+fn the_sample_is_for_the_session_and_the_owner() {
+    let (mut g, mut m) = ready();
+    let s = g.sample(&mut m, Badge::Session);
+    assert_eq!((s.cpus, s.memory_free, s.services.len(), s.volumes.len()), (2, 900, 1, 1));
+    assert_eq!(g.sample(&mut m, Badge::Owner), s);
+    assert_eq!(g.sample(&mut m, Badge::Other), Sample::default());
+}
+
+#[test]
 fn not_yet_cancel_and_status() {
     let (mut g, mut m) = ready();
-    assert_eq!(g.not_yet(&mut m, Badge::Session, &origin("c1"), "open-screen", policy::Ask::Screen), Fail::Unsupported, "allowed, not built yet");
     assert_eq!(g.not_yet(&mut m, Badge::Session, &origin("c2"), "reboot", policy::Ask::Reboot), Fail::Denied);
     m.files.insert("data/reports/r.bin".into(), vec![1; 10]);
     let t = g.open_file(&mut m, Badge::Session, &origin("c3"), "data/reports/r.bin").unwrap();
@@ -210,7 +255,7 @@ fn a_client_with_another_badge_gets_nothing() {
     let (mut g, mut m) = ready();
     m.files.insert("data/reports/r.bin".into(), vec![1; 10]);
     assert_eq!(g.open_file(&mut m, Badge::Other, &origin("c1"), "data/reports/r.bin").err(), Some(Fail::Denied));
-    assert_eq!(g.not_yet(&mut m, Badge::Other, &origin("c2"), "open-screen", policy::Ask::Screen), Fail::Denied);
+    assert_eq!(g.open_screen(&mut m, Badge::Other, &origin("c2")).err(), Some(Fail::Denied));
     assert_eq!(g.reload_policy(&mut m, Badge::Other).err(), Some(Fail::Denied));
     assert_eq!(g.audit_lines(Badge::Other, 4).err(), Some(Fail::Denied));
     assert_eq!(g.cancel(&mut m, Badge::Other, "c1").err(), Some(Fail::Denied));
