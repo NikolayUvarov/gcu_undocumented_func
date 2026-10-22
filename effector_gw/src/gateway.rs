@@ -8,6 +8,9 @@ use crate::sha256::Sha256;
 
 pub const CHUNK: usize = 32768;
 pub const AUDIT_KEPT: usize = 16;
+/// The largest screen PNG that leaves, as the server takes screenshots inline (2 MiB); the policy's `max-bytes` may
+/// be lower.
+pub const SCREEN_MAX: u64 = 2 << 20;
 
 /// Who asks: the session (`mind::effector::BADGE_SESSION`), the shell for the owner (`BADGE_OWNER`), or a client with
 /// any other badge, which every request refuses.
@@ -33,6 +36,17 @@ pub struct Transfer { pub handle: u32, pub size: u64, pub sha256: [u8; 32], pub 
 #[derive(Clone, Debug, Default)]
 pub struct Status { pub uptime_ms: u64, pub memory_used: u64, pub memory_total: u64, pub services: Vec<(String, ServiceState)>, pub policy: bool, pub busy: bool }
 
+/// A boot service's process as telemetry counts it (the IDL's `load`, 1.1).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Load { pub name: String, pub state: Option<ServiceState>, pub pid: u64, pub run_ns: u64, pub started_ns: u64, pub memory: u64 }
+
+/// The telemetry counters (the IDL's `sample`, 1.1): no file, log or screen data.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sample {
+    pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64,
+    pub services: Vec<Load>, pub volumes: Vec<(String, u64, u64)>,
+}
+
 /// The authorities `init` gives the gateway (750-KRN-0119); the service binds them, the host tests fake them.
 pub trait Machine {
     fn uptime_ms(&mut self) -> u64;
@@ -54,6 +68,10 @@ pub trait Machine {
     fn audit(&mut self, line: &str) -> bool;
     /// The owner's policy file, read whole (at most `policy::FILE_MAX` + 1 bytes).
     fn policy_file(&mut self) -> Result<Vec<u8>, Fail>;
+    /// What is on the screen now, as a PNG no larger than `max` bytes (`bounds` if it is).
+    fn screen(&mut self, max: u64) -> Result<Vec<u8>, Fail>;
+    /// The telemetry counters.
+    fn sample(&mut self) -> Sample;
 }
 
 enum Out { Bytes(Vec<u8>), File(String) }
@@ -134,6 +152,11 @@ impl Gateway {
         }
     }
 
+    /// The telemetry counters, for the session and the owner.
+    pub fn sample(&mut self, m: &mut dyn Machine, badge: Badge) -> Sample {
+        if badge == Badge::Other { Sample::default() } else { m.sample() }
+    }
+
     pub fn service_control(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, name: &str, action: policy::Action) -> Result<ServiceState, Fail> {
         let word = match action { policy::Action::Start => "start", policy::Action::Stop => "stop", policy::Action::Restart => "restart" };
         let request = alloc::format!("service-control {} {}", name, word);
@@ -180,6 +203,22 @@ impl Gateway {
         }
         if at != size { let _ = self.audited(m, Some(o), &request, "done", "io"); return Err(Fail::Io); }
         Ok(self.open(o, size, false, Out::File(String::from(path)), hash.finish()))
+    }
+
+    /// The screen as a PNG (`screen on` in the policy): the compositor marks the capture with its red dot (750-KRN-0153).
+    pub fn open_screen(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>) -> Result<Transfer, Fail> {
+        let request = "open-screen";
+        if self.out.is_some() || self.inc.is_some() { self.audited(m, Some(o), request, "busy", "refused"); return Err(Fail::Busy); }
+        self.admit(m, badge, o, request, Some(Ask::Screen))?;
+        let max = self.policy.as_ref().map_or(0, |p| p.max_bytes()).min(SCREEN_MAX);
+        let png = match m.screen(max).and_then(|p| if p.len() as u64 <= max { Ok(p) } else { Err(Fail::Bounds) }) {
+            Ok(p) => p,
+            Err(f) => { let _ = self.audited(m, Some(o), request, "done", fail_name(f)); return Err(f); }
+        };
+        let sha = crate::sha256::digest(&png);
+        let size = png.len() as u64;
+        let _ = self.audited(m, Some(o), request, "done", &alloc::format!("{} bytes", size));
+        Ok(self.open(o, size, false, Out::Bytes(png), sha))
     }
 
     /// Up to `CHUNK` bytes of the open transfer from `offset`; an empty answer is its end. A file that changed size

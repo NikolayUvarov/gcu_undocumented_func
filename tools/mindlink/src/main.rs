@@ -34,6 +34,9 @@ commands: hello                       the other end's name and version
           run <program> [<argument>...]  start a program on the other end, show its output until it ends; exits with
                                       its code where the other end knows it (MIND Core: link.conf must hold the word run)
           start <program> [<argument>...]  the same, printing only the run's number
+          replace <unit> <file> [<name>]  put <file> (as replace/<its name> unless <name>) and start the other end's
+                                      service <unit> again from it, unverified (MIND Core: dev in link.conf; 800-LNK-0016)
+          replace <unit> --back       start <unit> again from its boot image
           sh <line>                   one line for the other end's shell, its output; exits 1 when the shell refused
                                       or failed it (MIND Core: link.conf must hold the word dev; 800-LNK-0015)
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
@@ -165,6 +168,8 @@ fn main() {
         ("rmdir", [dir, "-r"]) | ("rmdir", ["-r", dir]) => c.rmdir(dir.trim_end_matches('/'), true).map(|_| println!("removed {dir} and everything in it")),
         ("run", [program, rest @ ..]) => run(&mut c, program, &rest.join(" ")),
         ("start", [program, rest @ ..]) => c.run(program, &rest.join(" ")).map(|(run, pid)| println!("{run}\t{pid}")),
+        ("replace", [unit, "--back"]) => c.replace(unit, "").map(|_| println!("{unit}: started again from its boot image")),
+        ("replace", [unit, file, rest @ ..]) if rest.len() <= 1 => replace(&mut c, unit, Path::new(file), rest.first().copied()),
         ("sh", [first, rest @ ..]) => sh(&mut c, &[*first].iter().chain(rest).copied().collect::<Vec<_>>().join(" ")),
         ("out", [run]) => out(&mut c, number(run), false).map(drop),
         ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
@@ -283,10 +288,30 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     Ok(())
 }
 
+/// A service started again from a file put first, unverified (800-LNK-0016): MIND Core's init logs it so.
+fn replace(c: &mut Client<port::Port>, unit: &str, file: &Path, name: Option<&str>) -> Result<(), Error> {
+    let base = file.file_name().and_then(|n| n.to_str()).unwrap_or("service.elf");
+    let name = name.map_or_else(|| format!("replace/{base}"), str::to_string);
+    if let Some((dir, _)) = name.rsplit_once('/') { c.mkdir(dir)?; }
+    put(c, file, Some(&name), false)?;
+    c.replace(unit, &name)?;
+    println!("{unit}: started again from {name}, unverified");
+    Ok(())
+}
+
 /// One line for the other end's shell: its output; a refusal or failure exits 1 (800-LNK-0015).
+/// MIND Core's `link` answers nothing while its shell runs the line (a `ping` waits), so a silent other end is waited
+/// for, up to two minutes, before the line counts as lost.
 fn sh(c: &mut Client<port::Port>, line: &str) -> Result<(), Error> {
     let run = c.command(line)?;
-    let (_, exit) = out(c, run, true)?;
+    let started = std::time::Instant::now();
+    let exit = loop {
+        match out(c, run, true) {
+            Ok((_, exit)) => break exit,
+            Err(Error::Timeout) if started.elapsed() < Duration::from_secs(130) => continue,
+            Err(e) => return Err(e),
+        }
+    };
     if exit != 0 && exit != linkproto::app::EXIT_UNKNOWN { std::process::exit((exit as i32).clamp(1, 255)); }
     Ok(())
 }

@@ -34,7 +34,7 @@ pub trait Store: Blocks + Clone {
     fn pins(&mut self) -> Result<Vec<(Cid, u64)>, String>;
     /// Sectors of the medium used and in all, and the names published.
     fn stats(&mut self) -> Result<(u64, u64, u32), String>;
-    /// Every published name, where the store can list them (blockstore.wit 1.3 cannot: fm shows the names it saw).
+    /// Every published name, where the store can list them (blockstore.wit 1.4; an older one cannot: fm shows the names it saw).
     fn names(&mut self) -> Option<Vec<String>>;
 }
 

@@ -1,10 +1,10 @@
-# 750-KRN-0120 — Writable `vfs` scopes for a boot service, kept across its restarts
+# 750-KRN-0120 — Writable `vfs` scopes for a boot service, kept across its restarts — done
 
-**Type:** `vfs_server`, `init` · **Owner:** kernel session (`vfs_server` since 175) · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
+**Type:** `vfs_server`, `init` · **Owner:** kernel session (`vfs_server` since 175) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
 
 ## Problem
 
-`vfs_server` lets only the shell's `BADGE_USER` client write; services get read-only clients. The Effector gateway must write its audit trail, delivered files and installed applications, which other programs, the shell and the loader read. It must not write anywhere else on `data/`. A private directory in `system/` (351-KRN-0040) covers its journal, not these. The agent track's request of 2026-10-09 is in [requests-KRN.md](requests-KRN.md).
+`vfs_server` lets only the shell's `BADGE_USER` client write; services get read-only clients. The Effector gateway must write its audit trail, delivered files and installed applications, which other programs, the shell and the loader read. It must not write anywhere else on `data/`. A private directory in `system/` (351-KRN-0040) covers its journal, not these. The agent track's request of 2026-10-09 is in [requests-KRN.md](../issues/requests-KRN.md).
 
 `vfs.wit` 2.2 already has `scope(dir, writable)`: a client confined to one directory, which may change files there if the caller may. Two parts are missing for a boot service:
 - a scope works for the first task that uses it and ends with that task, so a restarted service has none;
@@ -23,8 +23,8 @@ Plan steps 1 and 2 are made for one service, `link` (800-KRN-0128): at each star
 
 ## Acceptance criteria
 
-- [ ] A new `isolation` case (x86 and aarch64): a test service with a writable scope creates, renames and flushes files under its directory, and is refused everywhere else, a rename out of the scope included.
-- [ ] After `init` restarts it, the service writes through its new scopes, and the old ones are refused.
+- [x] A new `isolation` case (x86 and aarch64): a test service with a writable scope creates, renames and flushes files under its directory, and is refused everywhere else, a rename out of the scope included. (In the `modes` suite, with `tests/gateway_stub` as the gateway: the gateway's scope exists only in a mode.)
+- [x] After `init` restarts it, the service writes through its new scopes, and the old ones are refused. (The second start writes through its new scope and finds the first one's files; the first scope ends with its task, `[VFS] SCOPE … ENDED`, so nothing can use it.)
 
 ## Progress (2026-10-21)
 
@@ -43,6 +43,14 @@ Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb):
   Passed on x86 and aarch64 in this session's container (QEMU TCG). The criteria name the `isolation` suite; the gateway runs only in a mode, which the `modes` suite boots on both architectures.
 - **For EFF:** the gateway's writer names paths relative to the scope's root (`a.txt`, not `data/inbox/a.txt`).
 
+## Resolution
+
+- **General:** `init`'s `scope` and `scopes_of` make a writable scope from its own `BADGE_USER` client at each start of a service (`init/src/main.rs`); `link` (800-KRN-0128) and `effector_gw` use it.
+- **The gateway's:** a scope of the owner's policy's `deliver` root in `SLOT_FILE` (7), none without the line.
+- **Inside it,** `vfs_server` refuses a name and a rename that climb out, and a rename onto a name that exists.
+- **Checked** by the `modes` suite on x86 and aarch64. Landed in round 13 with EFF's request (`LANDING/2026-10-22T1958Z-EFF-…`): every group of gate `land-e93c47af` passed, `main` e93c47af.
+- **Not made:** a scope for installed applications (`data/apps/`). It comes with [750-EFF-0008](../issues/750-EFF-0008-application-packages.md) when that task needs it.
+
 ## Related
 
-[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750](750-effector-agent.md), `idl/vfs.wit` 2.2 (`scope`), 351-KRN-0040 (a private directory for `keystore`).
+[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), [750](../issues/750-effector-agent.md), `idl/vfs.wit` 2.2 (`scope`), 351-KRN-0040 (a private directory for `keystore`).

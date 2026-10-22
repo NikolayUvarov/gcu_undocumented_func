@@ -1,6 +1,6 @@
 # 000-KRN-0152 — A revoked lease does not fault its borrower
 
-**Type:** kernel (`user_heap`, the fault path), ABI (what a revoke does to a mapping) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-2.6, MC-6.8, MC-12.4
+**Type:** kernel (`user_heap`, the fault path), ABI (what a revoke does to a mapping) · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (2026-10-22, e93c47af); ASR's suite left · **Blocked by:** — · **Main task:** — · **Constitution:** MC-2.6, MC-6.8, MC-12.4
 
 From ASR's request with LNK and DRV (`KRN/2026-10-22T1606Z-LNK-a-lent-buffer-dropped-during-the-call.md` on `internal-dev-messages`). The maintainer's word, 2026-10-22: "`wm` must not fall in such cases".
 
@@ -29,10 +29,24 @@ From ASR's request with LNK and DRV (`KRN/2026-10-22T1606Z-LNK-a-lent-buffer-dro
 
 ## Acceptance criteria
 
-- [ ] Kernel host tests: a revoked mapping reads zeros and takes writes; freeing it releases the page; a borrower without room loses the mapping.
-- [ ] The `isolation` suite (x86; its adversary program is x86 only): after a revoke the borrower reads zeros, never the owner's later data, and writes without a fault; a child that keeps reading a revoked lease goes on.
+- [x] Kernel host tests: a revoked mapping reads zeros and takes writes; freeing it releases the page; a borrower without room loses the mapping.
+- [x] The `isolation` suite (x86; its adversary program is x86 only): after a revoke the borrower reads zeros, never the owner's later data, and writes without a fault; a child that keeps reading a revoked lease goes on.
 - [ ] ASR's suite (500-ASR-0012): a caller that gives up at different moments, the server still running and answering the next caller, on x86 and aarch64.
-- [ ] `docs/api` and `docs/profile` state the rule.
+- [x] `docs/api` and `docs/profile` state the rule.
+
+## Progress (2026-10-22)
+
+- **Made** on `claude/youthful-mendel-mf1soy` (46182f84):
+  - `user_heap::revoke` maps one zeroed page of the borrower's own at every page it mapped from the lease (`Space::map_repeated`), charged to it and its payers;
+  - no page for a borrower without room, a device mapping or an ended task: the range is unmapped as before;
+  - a data access that faults on a page mapped by the time the kernel looks is retried (`context::missing_page`, x86 and aarch64).
+- **ABI 17;** `docs/api` and `docs/profile` (Memory transfers) state the rule.
+- **Checked:**
+  - host test `a_revoked_lease_leaves_a_zeroed_page_of_the_borrowers_own`;
+  - the `isolation` cases `v`, `l` and `x`: zeros of the borrower's own, the owner's page unchanged, no fault;
+  - every group of gate `land-e93c47af`, landing round 13, `main` e93c47af.
+- **ASR's suite** (500-ASR-0012) passed three times in three on x86 with this change, in this session's container, applied from `claude/550-DRV-0036-radio-counts` 2094c7cd. It is not in `main` yet.
+- **Left:** the third criterion, once ASR's suite is in `main` and in a CI group.
 
 ## Related
 

@@ -22,7 +22,7 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
    - `netpolicy` with a change, `netrevoke` and `mode` stay refused over the link.
 3. **`LNK`, this task:**
    - **`linkproto`:** COMMAND (54) on the programs channel. It carries a line of up to 240 bytes. The answer is a run whose output and end are read with OUTPUT (51) as a program's are: state ENDED with exit 0, or exit 1 with the shell's reason (`refused`, `declined`, `busy`, `unavailable`).
-   - **`link`:** COMMAND calls the shell's `run` and keeps the answer as a run's output. It is logged as `[LINK] COMMAND <word>` with the command's word, not its line, so that no argument reaches the log.
+   - **`link`:** COMMAND calls the shell's `run` and keeps the answer as a run's output. It is logged as `[LINK] COMMAND <run>: <line>`, the whole line. Since 2026-10-22 (below) only a secret that `tpm seal` takes stays out of the log.
    - **`mindlink sh "<line>"`:** prints the output, exits 0 or 1. **`effector485`:** a kind `shell`.
    - **`mindlink serve --run`** answers COMMAND with `sh -c`, for the host tests.
 
@@ -34,7 +34,7 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
   - `mindlink sh ps` shows `link`;
   - a command the link's client may not run is refused with its reason;
   - without `dev`, COMMAND answers UNSUPPORTED.
-- [ ] **On the MacBook Pro over RS-485:** `ip`, `netstat -i`, `ps` and `dmesg -s netstack` read from the development machine.
+- [x] **On the MacBook Pro over RS-485:** `ip`, `netstat -i` and `ps` read from the development machine (2026-10-22, below). `dmesg` the shell takes from no client, and the link reads the system log itself.
 
 Evidence for the configurations named only (MC-12.1). What the link's client may run is the shell's decision. This task claims no more than the shell grants it (MC-3.11, MC-12.3).
 
@@ -49,6 +49,24 @@ Evidence for the configurations named only (MC-12.1). What the link's client may
   - **`effector485`'s kind `shell`:** followed as a program is, in the batch test.
   - **Docs:** `docs/link/protocol.md`, `mindlink.md` and `effector485.md`, English and Russian.
 - **`link` on MIND Core** answers COMMAND with UNSUPPORTED until `init` gives it a client of the shell (`KRN`) and the shell takes the link's lines (`APP`).
+- **2026-10-22, `link`'s side.**
+  - A COMMAND is answered at once with a run.
+  - `main` then hands the line to `shell::run` on slot 30 (800-KRN-0148), 60 s at most. The answer is the run's output, exit 0, or exit 1 with the shell's reason.
+  - `mindlink sh` waits up to two minutes for a silent other end.
+  - **The `link` suite's checks:** `sh ip` shows a `CARD` line, `sh ps` shows `link`, `sh netpolicy add …` is refused, and the log holds the command's word alone.
+    - With APP's `claude/wizardly-franklin-kec1a9` (800-APP-0102) merged locally, they passed (x86, QEMU).
+    - Without it the shell does not answer the link, and the suite says SKIP.
+- **2026-10-22, the MacBook Pro.**
+  - The release put through the link (b509a30: this branch with APP's, KRN's and NET/UPD's, ABI 16) brought the shell's rule for the link.
+  - `mindlink sh ip` and `sh netstat -i` showed `CARD 2 … WI-FI DEFAULT` with its counters. `sh ps` listed the services, `link` among them.
+  - `sh dmesg -s netstack` was refused, by the shell's rule for every client.
+
+- **2026-10-22, the whole line in the log, at the maintainer's word:** "the log must have the full command, not only its first word".
+  - `link` logs a shell line whole. A line longer than a log line holds is split over lines marked `…`.
+  - A program's arguments follow its start, as `[LINK] RUN <run>: ARGUMENTS …`.
+  - The one secret a command line can carry, what `tpm seal` takes, is logged as `[THE SECRET IS NOT LOGGED]`. `wifi` reads a passphrase from a file only, never from its arguments.
+  - `effector485`'s own log names each operation's whole command, under the same rule.
+  - **The `link` suite** checks the whole `netpolicy add …` line, a run's arguments, and that `tpm seal`'s secret is not in the log.
 
 ## Related
 

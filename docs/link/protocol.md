@@ -203,6 +203,7 @@ The slave starts a program from its directory for the master, keeps its output a
 | STOP (52) | `run u32` | empty: the program is ended |
 | RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped`, `faulted` |
 | COMMAND (54) | one line for the slave's shell, UTF-8, at most 240 bytes, no control characters | `run u32`: a run whose output and end OUTPUT reads (800-LNK-0015) |
+| REPLACE (55) | `unit_len u8`, the service's name (at most 16 bytes), then a file's name under the store (at most 64 bytes; empty: its boot image) | empty: the service was started again from it, unverified (800-LNK-0016; MIND Core: `dev` in `link.conf`, `init.wit` 1.6 `replace`) |
 
 - **Output** is counted from the program's start.
   - The slave keeps the last part of it: at least 16 KiB on MIND Core, 64 KiB in `mindlink serve`.
@@ -216,6 +217,7 @@ The slave starts a program from its directory for the master, keeps its output a
 - **COMMAND** runs a line in the slave's shell.
   - The shell's answer is the run's output, and its end is the run's end: exit 0, or 1 with the shell's reason when it refused or failed the line.
   - `mindlink serve --run` runs the line with `sh -c`.
+  - MIND Core's `link` logs the whole line, as `[LINK] COMMAND <run>: <line>`. The one exception is the secret `tpm seal` takes, which is never logged.
   - MIND Core's `link` will pass it to the shell's `run` (`idl/shell.wit`) with `dev` in `link.conf`, once `init` gives it a client of the shell. Until then it answers UNSUPPORTED.
 - **STOP** is refused with UNSUPPORTED where the slave cannot end a program. MIND Core's `link` asks the loader, which ends only the programs it started for `link` (800-KRN-0138).
 

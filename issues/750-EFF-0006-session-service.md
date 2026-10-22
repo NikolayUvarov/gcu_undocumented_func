@@ -124,3 +124,14 @@ The service runs as a program started from the shell (`effector data/effector/ef
   - `init` starting it (750-KRN-0119);
   - handing commands to the gateway instead of denying them;
   - the remaining criteria above.
+- **Later the same day,** with KRN's 750-KRN-0119 merged (e06a59de, ABI 16):
+  - The program form ended: no program runs by a boot service's name.
+  - The `effector` QEMU suite now starts the session in the development mode and restarts it with `svc`. It passes on x86_64 and aarch64.
+  - A stop by `init` sends no `shutting_down` heartbeat yet; that criterion stays open for the service form.
+
+## Progress — 2026-10-22, the actions and telemetry
+
+- **The session hands the gateway** `screenshot`, `collect_logs`, `deliver_file` and the three service actions, besides `collect_file`. Screenshots and logs go back inline in the ACK as base64, kept in `system/effector/artifact` until acknowledged (contract 1.2).
+- **Telemetry** every 30 s ([750-EFF-0014](750-EFF-0014-telemetry.md)); `X-Effector-Agent-ID` on every request.
+- **The journal no longer stops at 64 answers.** A `done` line marks an answer that needs no more ACK, so a restart does not acknowledge it again. A full journal drops its oldest acknowledged, expired record. An action runs only for a new command in time whose answer has room.
+- **Tested:** the `effector` QEMU suite on x86_64, all of it (`docs/effector/README.md`, "Tested").

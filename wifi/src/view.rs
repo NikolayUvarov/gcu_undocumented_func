@@ -1,9 +1,9 @@
 //! `wifi`'s screen (550-APP-0033): the networks a scan found, one row a name with its strongest access point, the
 //! strongest first; Enter joins one (a passphrase typed without echo for a protected one, kept by the station if
-//! asked); the link's state at the top. Only the drawing and the keys: the program gives it a `Station`, the host test
-//! the stand-in (tests/wifi_host.rs).
+//! asked); the link's state at the top; c the country, from the station's catalogue (550-APP-0082). Only the drawing
+//! and the keys: the program gives it a `Station`, the host test the stand-in (tests/wifi_host.rs).
 use crate::keys::{Code, Key};
-use crate::station::{check, mac, rate, shown, Link, Network, Refusal, Security, Station};
+use crate::station::{check, mac, rate, shown, Country, CountryState, CountryStatus, Link, Network, Refusal, Security, Station};
 use crate::tui::widgets::{Edit, InputLine, LINE_MAX};
 use crate::tui::{Grid, Line, Theme};
 use alloc::format;
@@ -43,8 +43,27 @@ pub fn bars(weakness: u8) -> usize {
 // A signal as dBm, or ? when unknown.
 fn dbm(weakness: u8) -> String { if weakness == 0 { String::from("?") } else { format!("-{}", weakness) } }
 
-/// The list, or the passphrase being typed for a network.
-pub enum Mode { List, Passphrase { ssid: Vec<u8>, security: Security, line: InputLine, remember: bool, problem: Option<&'static str> } }
+/// The list, the passphrase being typed for a network, or the catalogue's countries to choose one from (550-APP-0082):
+/// those whose code or name holds `find`.
+pub enum Mode {
+    List,
+    Passphrase { ssid: Vec<u8>, security: Security, line: InputLine, remember: bool, problem: Option<&'static str> },
+    Countries { all: Vec<Country>, find: InputLine, selected: usize },
+}
+
+/// The most pages of 32 countries the screen reads.
+const PAGES: u16 = 16;
+
+// The countries of `all` whose code or name holds `find`, any case.
+fn found<'a>(all: &'a [Country], find: &str) -> Vec<&'a Country> {
+    let find = find.to_ascii_lowercase();
+    all.iter().filter(|c| find.is_empty() || c.code.to_ascii_lowercase().contains(&find) || crate::countries::name(&c.code).is_some_and(|n| n.to_ascii_lowercase().contains(&find))).collect()
+}
+
+/// The country as the screen names it: `UZ (Uzbekistan)`.
+pub fn country_name(code: &str) -> String {
+    match crate::countries::name(code) { Some(name) => format!("{} ({})", code, name), None => String::from(code) }
+}
 
 pub enum Flow { Quit, Continue }
 
@@ -63,6 +82,8 @@ pub struct Wifi {
     pub windowed: bool,
     // Remembering was asked and the station answered that it does not remember networks: said when joined.
     unkept: bool,
+    /// The station's country (wifi.wit 1.1), read with each scan; None until read or with no station.
+    pub country: Option<CountryStatus>,
 }
 
 // The line's bytes overwritten before it is emptied: a passphrase does not stay in memory after use.
@@ -73,7 +94,7 @@ fn wipe(line: &mut InputLine) {
 
 impl Wifi {
     pub fn new(demo: bool) -> Self {
-        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo, windowed: false, unkept: false }
+        Self { rows: Vec::new(), selected: 0, mode: Mode::List, link: Link::Off, notice: String::new(), problem: None, demo, windowed: false, unkept: false, country: None }
     }
 
     fn refused(&mut self, refusal: Refusal) {
@@ -92,6 +113,46 @@ impl Wifi {
                 self.selected = chosen.and_then(|s| self.rows.iter().position(|r| r.ssid == s)).unwrap_or(0);
                 self.problem = None;
             }
+            Err(refusal) => self.refused(refusal),
+        }
+        self.country = station.country().ok();
+    }
+
+    // The catalogue, every page, for the country list; why not as the line under the list.
+    pub fn open_countries(&mut self, station: &mut dyn Station) {
+        let (mut all, mut from) = (Vec::new(), 0u16);
+        for _ in 0..PAGES {
+            match station.countries(from) {
+                Ok((total, page)) => {
+                    from += page.len() as u16;
+                    all.extend(page);
+                    if from >= total || from == 0 { break; }
+                }
+                Err(Refusal::Unsupported) => { self.notice = String::from("No catalogue in this station: it runs without a country, as before"); return; }
+                Err(refusal) => return self.refused(refusal),
+            }
+        }
+        // The cursor on the country applied, if any.
+        let applied = self.country.as_ref().map(|c| c.applied.clone()).unwrap_or_default();
+        let selected = all.iter().position(|c| c.code == applied).unwrap_or(0);
+        self.mode = Mode::Countries { all, find: InputLine::new(), selected };
+    }
+
+    // Asking for country `code`: the station leaves the network first; the line says what it applied.
+    fn choose_country(&mut self, station: &mut dyn Station, code: &str) {
+        match station.set_country(code) {
+            Ok(status) => {
+                self.notice = match status.state {
+                    CountryState::Applied => format!("Country {}: applied{}", country_name(&status.applied), if status.kept { ", kept" } else { ", not kept across restarts" }),
+                    CountryState::Failed => format!("Country {}: the radio refused its limits, nothing applied", country_name(&status.asked)),
+                    CountryState::None => format!("Country {}: not applied", country_name(code)),
+                };
+                self.country = Some(status);
+                self.poll(station);
+            }
+            Err(Refusal::Denied) => self.notice = String::from("wifi's client of the station only reads: the country needs the change badge"),
+            Err(Refusal::NotFound) => self.notice = format!("{} is not a country of the catalogue", code),
+            Err(Refusal::Unsupported) => self.notice = String::from("No catalogue in this station: it runs without a country, as before"),
             Err(refusal) => self.refused(refusal),
         }
     }
@@ -133,6 +194,27 @@ impl Wifi {
     /// A key: ↑↓ choose, Enter joins, r scans again, f forgets, d leaves, q or Esc ends; while a passphrase is typed,
     /// Tab ticks "remember", Enter joins, Esc goes back.
     pub fn key(&mut self, key: Key, station: &mut dyn Station) -> Flow {
+        // The country list: ↑↓ PgUp PgDn choose, typing finds, Enter asks for the one chosen, Esc goes back.
+        if let Mode::Countries { all, find, selected } = &mut self.mode {
+            let shown = found(all, find.as_str()).len();
+            match key.code() {
+                Code::Up => *selected = selected.saturating_sub(1),
+                Code::Down => *selected = (*selected + 1).min(shown.saturating_sub(1)),
+                Code::PageUp => *selected = selected.saturating_sub(10),
+                Code::PageDown => *selected = (*selected + 10).min(shown.saturating_sub(1)),
+                Code::Enter => {
+                    let Some(code) = found(all, find.as_str()).get(*selected).map(|c| c.code.clone()) else { return Flow::Continue };
+                    self.mode = Mode::List;
+                    self.choose_country(station, &code);
+                }
+                _ => match find.key(key) {
+                    Edit::Cancel => { self.mode = Mode::List; self.notice = String::from("The country stays as it was"); }
+                    Edit::Changed => *selected = 0,
+                    _ => {}
+                },
+            }
+            return Flow::Continue;
+        }
         if let Mode::Passphrase { security, line, remember, problem, .. } = &mut self.mode {
             match key.code() {
                 Code::Tab => *remember = !*remember,
@@ -175,6 +257,7 @@ impl Wifi {
             _ => match key.char() {
                 Some('q') => return Flow::Quit,
                 Some('r') => { self.refresh(station); self.notice = format!("{} networks", self.rows.len()); }
+                Some('c') => self.open_countries(station),
                 Some('d') => match station.leave() { Ok(()) => { self.notice = String::from("Left the network"); self.poll(station); } Err(r) => self.refused(r) },
                 Some('f') => {
                     let Some(ssid) = self.rows.get(self.selected).map(|r| r.ssid.clone()) else { return Flow::Continue };
@@ -201,9 +284,22 @@ impl Wifi {
             Link::Lost { ssid } => format!("LOST {}", shown(ssid)),
             Link::Failed { ssid, reason } => format!("FAILED {} {:?}", shown(ssid), reason),
         };
-        let mode = match &self.mode { Mode::List => String::from("LIST"), Mode::Passphrase { ssid, remember, .. } => format!("PASSPHRASE {} REMEMBER={}", shown(ssid), remember) }; // never the passphrase or its length
+        let mode = match &self.mode {
+            Mode::List => String::from("LIST"),
+            Mode::Passphrase { ssid, remember, .. } => format!("PASSPHRASE {} REMEMBER={}", shown(ssid), remember), // never the passphrase or its length
+            Mode::Countries { all, find, selected } => {
+                let list = found(all, find.as_str());
+                format!("COUNTRIES {} OF {} AT {}", list.len(), all.len(), list.get(*selected).map_or("-", |c| c.code.as_str()))
+            }
+        };
         let at = self.rows.get(self.selected).map_or(String::from("-"), |r| if r.ssid.is_empty() { String::from("(hidden)") } else { shown(&r.ssid) });
-        format!("MODE={} ROWS={} AT={} LINK={}", mode, self.rows.len(), at, link)
+        let country = match &self.country {
+            Some(c) if c.state == CountryState::Applied => c.applied.clone(),
+            Some(c) if c.state == CountryState::Failed => format!("FAILED-{}", c.asked),
+            Some(c) if !c.catalogue.is_empty() => String::from("NONE"),
+            _ => String::from("-"),
+        };
+        format!("MODE={} ROWS={} AT={} LINK={} COUNTRY={}", mode, self.rows.len(), at, link, country)
     }
 
     /// Draws the screen; returns where the text cursor is (in the passphrase's field).
@@ -238,7 +334,7 @@ impl Wifi {
         if let Link::Joined { .. } = self.link { grid.text_max(2, 2, "The address is the network stack's: ip shows it", w, theme.dim); }
         grid.text_max(2, 3, &format!("{:<32} {:<6} {:>5} {:>3} {:<10} {}", "NETWORK", "SIGNAL", "DBM", "CH", "SECURITY", ""), w, theme.dim);
         let top = 4;
-        let room = rows.saturating_sub(top + 4);
+        let room = rows.saturating_sub(top + 5);
         let first = self.selected.saturating_sub(room.saturating_sub(1));
         for (i, row) in self.rows.iter().enumerate().skip(first).take(room) {
             let joined = matches!(&self.link, Link::Joined { ssid, .. } if !row.ssid.is_empty() && *ssid == row.ssid);
@@ -266,8 +362,38 @@ impl Wifi {
             if let Some(why) = problem { grid.text_max(bx + 2, by + 4, why, bw - 4, theme.error); }
             grid.text_max(bx + 2, by + bh - 2, "Enter: join · Tab: remember · Esc: back", bw - 4, theme.dialog);
         }
+        if let Mode::Countries { all, find, selected } = &self.mode {
+            let list = found(all, find.as_str());
+            let (bw, bh) = (64.min(cols), rows.saturating_sub(4).clamp(8, 22));
+            let (bx, by) = ((cols - bw) / 2, (rows.saturating_sub(bh)) / 2);
+            let r = crate::tui::Rect::new(bx, by, bw, bh);
+            grid.fill(r, ' ', theme.dialog);
+            grid.frame_titled(r, Line::Double, &format!(" The country: {} of {} ", list.len(), all.len()), theme.dialog_frame, theme.dialog_frame);
+            grid.text_max(bx + 2, by + 1, "Find (code or name):", bw - 4, theme.dialog);
+            grid.text_padded(bx + 23, by + 1, find.as_str(), bw.saturating_sub(25), theme.input);
+            cursor = Some((bx + 23 + find.cursor_chars().min(bw.saturating_sub(26)), by + 1));
+            let room = bh.saturating_sub(5);
+            let first = selected.saturating_sub(room.saturating_sub(1));
+            for (i, c) in list.iter().enumerate().skip(first).take(room) {
+                let none = if c.send == 0 && c.listen == 0 { "  none usable" } else { "" };
+                let name: String = crate::countries::name(&c.code).unwrap_or("").chars().take(26).collect();
+                let line = format!("{} {:<26} send {:>2} listen {:>2}{}", c.code, name, c.send, c.listen, none);
+                grid.text_padded(bx + 2, by + 2 + i - first, &line, bw - 4, if i == *selected { theme.selected } else { theme.dialog });
+            }
+            if list.is_empty() { grid.text_max(bx + 2, by + 2, "No country holds that", bw - 4, theme.dim); }
+            grid.text_max(bx + 2, by + bh - 2, "Enter: ask for it (the network is left first) · Esc: back", bw - 4, theme.dialog);
+        }
+        let country = match &self.country {
+            Some(c) if c.catalogue.is_empty() => String::from("Country: no catalogue in this station"),
+            Some(c) if c.state == CountryState::Applied && c.asked == c.applied => format!("Country: {}", country_name(&c.applied)),
+            Some(c) if c.state == CountryState::Applied => format!("Country: {}, {} asked", country_name(&c.applied), country_name(&c.asked)),
+            Some(c) if c.state == CountryState::Failed => format!("Country: {} asked, the radio refused its limits: none applied (c: another)", country_name(&c.asked)),
+            Some(_) => String::from("Country: none asked yet (c: choose one)"),
+            None => String::new(),
+        };
+        grid.text_max(2, rows.saturating_sub(4), &country, w, theme.dim);
         grid.text_max(2, rows.saturating_sub(3), &self.notice, w, theme.accent);
-        let help = "↑↓: choose · Enter: join · r or F5: scan · d: leave · f: forget · q or Esc: quit";
+        let help = "↑↓: choose · Enter: join · r or F5: scan · d: leave · f: forget · c: country · q or Esc: quit";
         grid.text_max(2, rows.saturating_sub(2), help, w, theme.dim);
         cursor
     }

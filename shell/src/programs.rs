@@ -3,18 +3,44 @@
 //! line scrolled the first ones (`fm`) off a 50-line screen. `help <name>`: what a command or program does.
 use crate::console::Console;
 use core::fmt::Write;
-use mind::abi::{BOOT_SERVICES, NAME_MAX, SERVICE_INSTANCES};
+use core::sync::atomic::{AtomicU32, Ordering};
+use mind::abi::{BOOT_FILES, BOOT_SERVICES, BOOT_SLOT_A, BOOT_SLOT_B, NAME_MAX, SERVICE_INSTANCES};
 use mind::fs::File;
 use mind::util::FixedBuf;
 use mind::idl::loader;
 use mind::ipc::Endpoint;
 
+// The slot this boot runs from (BootInfo.boot_slot), and where the programs are once looked for: 0 not yet, 1 the disk
+// root, 2 the booted slot.
+static BOOT_SLOT: AtomicU32 = AtomicU32::new(0);
+static APPS: AtomicU32 = AtomicU32::new(0);
+
+/// The slot this boot runs from, for `about` (351-APP-0103).
+pub fn boot_slot(slot: u32) { BOOT_SLOT.store(slot, Ordering::Relaxed); }
+
+// Where the programs' files are (351-KRN-0151, for 351-APP-0103): the booted slot's directory when it holds any `*.elf`
+// that is no boot file, as `loader` decides, else the disk root. Looked for at the first `help <name>`.
+fn apps_dir() -> &'static str {
+    let slot = match BOOT_SLOT.load(Ordering::Relaxed) { BOOT_SLOT_A => "MIND/A/", BOOT_SLOT_B => "MIND/B/", _ => return "" };
+    if APPS.load(Ordering::Relaxed) == 0 {
+        let mut found = false;
+        let _ = mind::fs::list(slot.trim_end_matches('/'), |entry| {
+            let elf = !entry.is_dir && entry.name.len() > 4 && entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".elf");
+            let boot = entry.name.eq_ignore_ascii_case(b"kernel.elf") || BOOT_FILES.iter().any(|f| f.as_bytes().eq_ignore_ascii_case(entry.name));
+            found |= elf && !boot;
+        });
+        APPS.store(if found { 2 } else { 1 }, Ordering::Relaxed);
+    }
+    if APPS.load(Ordering::Relaxed) == 2 { slot } else { "" }
+}
+
 /// What a program says about itself (`mind::about!`: the `.mind_about` section of `name.elf`), read from the file
-/// without starting the program, into `out`; None for a program without it, or no such program.
+/// `loader` would start, in the booted slot or at the root, without starting the program, into `out`; None for a program
+/// without it, or no such program.
 pub fn about<'a>(name: &str, out: &'a mut [u8]) -> Option<&'a str> {
     if name.is_empty() || name.len() > NAME_MAX || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') { return None; }
-    let mut path = FixedBuf::<{ NAME_MAX + 4 }>::new();
-    let _ = write!(path, "{}.elf", name);
+    let mut path = FixedBuf::<{ NAME_MAX + 12 }>::new();
+    let _ = write!(path, "{}{}.elf", apps_dir(), name);
     let file = File::open(core::str::from_utf8(path.as_bytes()).ok()?).ok()?;
     let mut read = |at: usize, buffer: &mut [u8]| file.read_at(at, buffer).unwrap_or(0);
     let (offset, size) = mind::process::section(&mut read, ".mind_about")?;

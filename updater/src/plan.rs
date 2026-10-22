@@ -3,6 +3,18 @@
 // the bootloader's own encoding.
 use super::slots::{Record, SEQUENCE_LAST};
 
+/// What a file a manifest lists is to a slot (351-UPD-0023): the kernel or a boot service the bootloader loads, an
+/// application the slot carries with them, or a file of the root shared by both slots (licences, data).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind { Boot, Application, Shared }
+
+/// `boot` is the bootloader's list of boot services (BOOT_FILES); a volume's names may come back in another case.
+pub fn kind(path: &str, boot: &[&str]) -> Kind {
+    if path.eq_ignore_ascii_case("kernel.elf") || boot.iter().any(|name| name.eq_ignore_ascii_case(path)) { return Kind::Boot; }
+    let elf = path.len() > 4 && path.as_bytes()[path.len() - 4..].eq_ignore_ascii_case(b".elf");
+    if elf && !path.contains('/') { Kind::Application } else { Kind::Shared }
+}
+
 /// The other slot.
 pub fn other(slot: u8) -> u8 { if slot == b'A' { b'B' } else { b'A' } }
 

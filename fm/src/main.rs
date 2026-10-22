@@ -47,6 +47,9 @@ fn failure(error: Error) -> Failure {
 
 struct Vfs;
 
+// The most pages of 16 names the store: panel lists: 4096 names.
+const NAME_PAGES: usize = 256;
+
 // The block store's client in SLOT_BLOCKSTORE, as fm::store needs it.
 #[derive(Clone, Copy)]
 struct Remote;
@@ -110,7 +113,17 @@ impl Store for Remote {
     fn stats(&mut self) -> Result<(u64, u64, u32), String> {
         match blockstore::stat(STORE) { Ok(Ok(s)) => Ok((s.used, s.sectors, s.names)), Ok(Err(error)) => Err(alloc::format!("{:?}", error)), Err(_) => Err(String::from("the block store does not answer")) }
     }
-    fn names(&mut self) -> Option<Vec<String>> { None } // blockstore.wit 1.3 has no list of names
+    // Every current name, 16 a page (blockstore.wit 1.4, 300-APP-0101); None from an older store: fm shows the names it saw.
+    fn names(&mut self) -> Option<Vec<String>> {
+        let (mut names, mut after) = (Vec::new(), String::new());
+        for _ in 0..NAME_PAGES {
+            let page = match blockstore::names(STORE, "", &after) { Ok(Ok(page)) => page, _ => return None };
+            names.extend(page.as_slice().iter().map(|n| String::from(n.name.as_str())));
+            if page.len() < 16 { break; }
+            after = names.last().cloned().unwrap_or_default();
+        }
+        Some(names)
+    }
 }
 
 impl Disk for Vfs {
