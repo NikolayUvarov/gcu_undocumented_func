@@ -31,7 +31,9 @@ From the kernel track's request "A parser session ends before its helper does (1
 - **The `update` suite passed** in this session's container (x86, QEMU, 4 CPUs) on `f7cab643`:
   - `updater_parser_check`: while the server held a check's request, one helper ran beside the shared `parse`, holding only its endpoint, and it was gone with the check;
   - booted from slot B after the trial, the updater's log had no `PARSER: THE SHARED SERVICE`.
-- **Left:** the same on aarch64, and the landing gate.
+- **Again on `628be403`,** the branch with `main` 61e3d1d (ABI 14), in the same container: the `update` suite passed.
+- **aarch64:** "aarch64: files, network and TLS", which runs the `update` suite, passed on i7-930 on `6cbcdfe0` (Effector, exit 0).
+- **Left:** the landing gate.
 
 ## Related
 

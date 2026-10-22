@@ -38,7 +38,7 @@ From LNK's question "flow grants for the programs `link` starts, in its develope
   - `netpolicy` refuses `revoke`, `add` and `remove` from any other client and logs each refusal (`[NETPOLICY] ADD REFUSED FOR PID n: A LAUNCH-ONLY CLIENT`); a grant such a client asks for is logged `, ASKED BY A LAUNCH-ONLY CLIENT`;
   - `docs/network/policy.md` 0.4, `docs/idl`.
 - **Tested on the host:** `tests/netpolicy_host.rs`.
-- **Left:** the QEMU check needs a program with a launcher's client. `link` in developer mode will hold one once `init` mints it (requests-KRN.md). No program holds one before that.
+- **Left:** the QEMU check needs a program with a launcher's client. `link` in developer mode will hold one once `init` mints it (800-KRN-0142). No program holds one before that.
 
 ## Related
 
