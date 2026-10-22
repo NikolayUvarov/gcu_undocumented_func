@@ -1,6 +1,6 @@
 # 550-APP-0082 — The Wi-Fi country and its channels in `wifi` and `wm`'s Settings
 
-**Type:** tools (`wifi`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: stage 1, the commands without a screen, on the tools branch (2026-10-22) · **Blocked by:** — (`idl/wifi.wit` 1.1 is in `main`; the station's catalogue, 550-NET-0035 stage B, for the real answers) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** tracks G, H · **Constitution:** MC-2.3, MC-11.5, MC-12.3, MC-12.4
+**Type:** tools (`wifi`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: the commands without a screen and the screen's list, on the tools branch (2026-10-22) · **Blocked by:** — (`idl/wifi.wit` 1.1 is in `main`; the station's catalogue, 550-NET-0035 stage B, for the real answers) · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** tracks G, H · **Constitution:** MC-2.3, MC-11.5, MC-12.3, MC-12.4
 
 **Recorded by:** ASTRA auditor-fixer, 2026-10-16, in `requests-APP.md`, at the maintainer's request. Numbered by the tools track on 2026-10-20. The radio's catalogue is 213-DRV-0032's; the station's interface is the network track's.
 
@@ -58,8 +58,15 @@ Against the agreed interface, and its stand-in in the tools suite:
 - **Tests:**
   - host, `tests/wifi_host.rs`, against the stand-in;
   - the `net` suite, against `wlan` built without a catalogue: `NO CATALOGUE IN THIS STATION`.
+- **The screen** (stage 2, the same day):
+  - the line above the notice names the country;
+  - `c` opens the catalogue's list, found by code or name as it is typed;
+  - Enter asks for the country chosen; a failed one is shown as failed;
+  - a station without a catalogue says so and stays in the list.
+
+  Tested by a host test, and by the tools suite's `wifi --demo`: UZ found and applied.
 - **Left:**
-  - the screen's key for the country list, and `wm`'s Settings row;
+  - `wm`'s Settings row;
   - the real catalogue (stage B) and the MacBook Pro.
 
 ## Related

@@ -393,3 +393,41 @@ fn a_station_without_a_catalogue_or_without_the_change_badge_says_so() {
     assert_eq!(headless::country(&mut ReadOnly(Demo::new()), Some("UZ")), (headless::REFUSED, String::from("[WIFI] COUNTRY UZ NOT SET: WIFI'S CLIENT OF THE STATION ONLY READS: THE COUNTRY NEEDS THE CHANGE BADGE")));
     assert_eq!(headless::country(&mut Absent(String::from("no radio")), None), (headless::NO_STATION, String::from("[WIFI] NO STATION: no radio")));
 }
+
+#[test]
+fn the_screens_country_list_finds_and_asks_for_a_country() {
+    // 550-APP-0082: c opens the catalogue; typing finds by code or name; Enter asks for the one chosen; Esc goes back.
+    let mut demo = Demo::new();
+    let mut w = Wifi::new(true);
+    w.refresh(&mut demo);
+    assert!(w.status().ends_with(" COUNTRY=NONE"), "{}", w.status());
+    assert!(screen(&w).iter().any(|r| r.contains("Country: none asked yet (c: choose one)")));
+    w.key(char_key('c'), &mut demo);
+    assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5 AT DE"), "{}", w.status());
+    let shown = screen(&w);
+    assert!(shown.iter().any(|r| r.contains("The country: 5 of 5")) && shown.iter().any(|r| r.contains("XX ") && r.contains("none usable")), "{:?}", shown);
+    typed(&mut w, &mut demo, "uzb");
+    assert!(w.status().starts_with("MODE=COUNTRIES 1 OF 5 AT UZ"), "{}", w.status());
+    w.key(key(abi::KEY_ENTER), &mut demo);
+    assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=UZ"), "{}", w.status());
+    assert_eq!(w.notice, "Country UZ (Uzbekistan): applied, kept");
+    assert!(screen(&w).iter().any(|r| r.contains("Country: UZ (Uzbekistan)")));
+    // Opened again, the cursor is on the one applied; a radio that refuses: failed, shown so.
+    w.key(char_key('c'), &mut demo);
+    assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5 AT UZ"), "{}", w.status());
+    w.key(key(abi::KEY_DOWN), &mut demo);
+    w.key(key(abi::KEY_ENTER), &mut demo);
+    assert!(w.status().ends_with(" COUNTRY=FAILED-XX") && w.notice.contains("refused its limits"), "{} {}", w.status(), w.notice);
+    // Esc leaves it as it was; a station without a catalogue says so and stays in the list.
+    w.key(char_key('c'), &mut demo);
+    w.key(key(abi::KEY_ESC), &mut demo);
+    assert!(w.status().starts_with("MODE=LIST") && w.notice == "The country stays as it was");
+    let mut old = Demo::new();
+    old.catalogue = false;
+    let mut w = Wifi::new(true);
+    w.refresh(&mut old);
+    w.key(char_key('c'), &mut old);
+    assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=-"), "{}", w.status());
+    assert!(w.notice.starts_with("No catalogue in this station"));
+    assert!(screen(&w).iter().any(|r| r.contains("Country: no catalogue in this station")));
+}

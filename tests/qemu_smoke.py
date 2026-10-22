@@ -1165,10 +1165,18 @@ def shell_suite(vm):
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    # 550-APP-0082: c opens the stand-in's catalogue, typing finds Uzbekistan, Enter asks for it (the network is left first).
+    vm.send_bytes(b"c")
+    vm.expect("MODE=COUNTRIES 5 OF 5")
+    vm.send_bytes(b"uz")
+    vm.expect("MODE=COUNTRIES 1 OF 5 AT UZ")
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=OFF COUNTRY=UZ")
     vm.send_bytes(b"q")
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots, and its country "
+          "list finds UZ and applies it", flush=True)
     # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
     require(vm.command("battery"), "NO BATTERY SERVICE")
     require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
