@@ -27,9 +27,21 @@ The link has no request for it yet.
   - `rtc` replaced with a copy of `rtc.elf`, the `NOT VERIFIED` line with its SHA-256, `date` still answered;
   - back with `--back`;
   - `logd` refused.
-- [ ] **On the MacBook Pro:** `bcm_wifi` replaced over RS-485 with a build of DRV's, the Wi-Fi joined again, with no restart of the machine.
+- [x] **On the MacBook Pro:** `bcm_wifi` replaced over RS-485, the Wi-Fi joined again, with no restart of the machine (2026-10-22, below).
 
 Evidence for the configurations named only (MC-12.1). A replaced service runs unverified until the next boot, as the log says (MC-3.12, MC-12.3).
+
+## Progress
+
+- **2026-10-22, written; the host tests and the QEMU `link` suite pass** (x86, local, the case above).
+- **2026-10-22, the MacBook Pro** (`fast-test` 85fefd4, ABI 16, written with `--slots --link-dev --keep-wifi`), from Windows over RS-485:
+  - `mindlink replace rtc` put a copy of `rtc.elf` (104 352 bytes) as `replace/rtc.elf`;
+  - `init` logged `rtc REPLACED FROM data/link/replace/rtc.elf: SHA-256 bfaacc73…, NOT VERIFIED`;
+  - `mindlink replace rtc --back` returned it to its boot image.
+- **2026-10-22, `bcm_wifi` replaced on the MacBook Pro**, with the image of the release it ran (b509a30), then back.
+  - `init` logged `bcm_wifi REPLACED FROM data/link/replace/bcm_wifi.elf: SHA-256 ea1daf2b…, NOT VERIFIED`, and the radio was up 0.7 s later.
+  - The station lost the network and joined it again by itself, with no command: `Joining: LOST`, then `Joined` 3 s later (550-NET-0041). DHCP followed, about 19 s from the replace to the address.
+  - `--back` did the same: `BACK TO ITS BOOT IMAGE`, rejoined in 3 s, and 10 of 10 pings answered.
 
 ## Related
 

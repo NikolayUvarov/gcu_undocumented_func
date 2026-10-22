@@ -76,11 +76,13 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     eprintln!("effector485: {spec}: {name}");
                     let mut st = state.lock().unwrap();
                     (st.link.online, st.link.name, st.link.last_seen, st.link.error) = (true, name, now(), String::new());
+                    st.changed();
                     link = Some(c);
                 }
                 Err(e) => {
                     let mut st = state.lock().unwrap();
                     if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
+                    if st.link.error != e || st.link.online { st.changed(); }
                     (st.link.online, st.link.error) = (false, e);
                     drop(st);
                     std::thread::sleep(Duration::from_secs(3));
@@ -101,13 +103,13 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     (op.status, op.started) = ("running".into(), Some(now()));
                     (op.id.clone(), op.kind.clone(), op.params.clone())
                 });
-                st.touch();
+                if next.is_some() { st.touch(); }
                 st.save();
                 next
             };
             match next {
                 Some((id, kind, params)) => {
-                    eprintln!("effector485: {id}: {kind}");
+                    eprintln!("effector485: {id}: {}", crate::ops::command(&kind, &params));
                     if let Err(e) = execute(c, &state, &id, &kind, &params) {
                         with(&state, &id, |op| if !op.ended() { op.fail(&explain(e)) });
                         if line_lost(e) || c.master.line.failed() { lost = Some(e); }
@@ -120,6 +122,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
         if let Some(e) = lost {
             eprintln!("effector485: {spec}: {}", explain(e));
             (st.link.online, st.link.error) = (false, explain(e));
+            st.changed();
             link = None;
         } else {
             st.link.last_seen = now();
@@ -229,6 +232,31 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
             if let Err(e) = put(c, state, id, &file, &target, kind == "install" || p.bool("force") == Some(true))? { with(state, id, |op| op.fail(&e)); return Ok(()); }
             set("name", s(&target));
             if kind == "install" { note(format!("installed as {target}: run it with {{\"kind\":\"run\",\"name\":\"{target}\"}}\n")); }
+        }
+        // A service started again from a file put first (as replace/<its name> unless "name"), or from one the other end
+        // holds ("name"), unverified; or from its boot image with "back" (800-LNK-0016).
+        "replace" => {
+            let unit = p.str("unit").unwrap_or("");
+            // Back to its boot image: no file, and the operation ends below as every other does.
+            if p.bool("back") == Some(true) {
+                c.replace(unit, "")?;
+                note(format!("{unit}: started again from its boot image\n"));
+            } else {
+                let target = match (&file, name.is_empty()) {
+                    (_, false) => name.to_string(),
+                    (Some(f), true) => format!("replace/{}", f.file_name().and_then(|n| n.to_str()).unwrap_or("service.elf")),
+                    (None, true) => { with(state, id, |op| op.fail("a replace needs \"file\", \"name\" or \"back\"")); return Ok(()); }
+                };
+                if let Some(f) = &file {
+                    if let Some((parent, _)) = target.rsplit_once('/') {
+                        match c.mkdir(parent) { Ok(()) | Err(Error::Refused(code::UNSUPPORTED)) => {}, Err(e) => return Err(e) }
+                    }
+                    if let Err(e) = put(c, state, id, f, &target, false)? { with(state, id, |op| op.fail(&e)); return Ok(()); }
+                }
+                c.replace(unit, &target)?;
+                set("name", s(&target));
+                note(format!("{unit}: started again from {target}, unverified\n"));
+            }
         }
         "get" => {
             let file = file.unwrap();
