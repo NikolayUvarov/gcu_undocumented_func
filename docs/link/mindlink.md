@@ -54,6 +54,7 @@ Options come before the command; what follows the command is its own, a program'
 | `rmdir <dir> [-r]` | removes an empty directory; `-r`: with everything in it |
 | `run <program> [<argument>...]` | starts a program in the other end's directory and shows its output until it ends. Exits with its exit code where the other end knows it, and 1 after a fault. On MIND Core, `link.conf` must hold the word `run` |
 | `start <program> [<argument>...]` | the same, printing only the run's number and the program's PID |
+| `sh <line>` | one line for the other end's shell, and its output; exits 1 when the shell refused or failed it. MIND Core: `dev` in `link.conf` (800-LNK-0015) |
 | `out <run> [-f]` | a run's output that the other end still holds; `-f` follows it to its end |
 | `runs` | the runs the other end knows: number, PID, state, program |
 | `stop <run>` | ends a run's program |

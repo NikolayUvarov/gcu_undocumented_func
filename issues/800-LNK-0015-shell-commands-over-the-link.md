@@ -1,6 +1,6 @@
 # 800-LNK-0015 — The shell's commands over the link, in developer mode
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-22) · **Blocked by:** `KRN`: a client of the shell for `link` with `dev`; `APP`: what the shell's `run` takes from that client (both asked on `internal-dev-messages`, 2026-10-22) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** `KRN`: a client of the shell for `link` with `dev`; `APP`: what the shell's `run` takes from that client (both asked on `internal-dev-messages`, 2026-10-22) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-3.11, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -28,7 +28,7 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
 
 ## Acceptance criteria
 
-- [ ] **Host tests:** COMMAND through the lossy line (`linkproto`); `mindlink sh` against `serve --run`; `effector485`'s `shell`.
+- [x] **Host tests:** COMMAND through the lossy line (`linkproto`); `mindlink sh` against `serve --run`; `effector485`'s `shell` (2026-10-22, below).
 - [ ] **The QEMU `link` suite with `dev`:**
   - `mindlink sh ip` shows the cards;
   - `mindlink sh ps` shows `link`;
@@ -37,6 +37,18 @@ The shell already runs a client's command line: `idl/shell.wit` `run(line) -> by
 - [ ] **On the MacBook Pro over RS-485:** `ip`, `netstat -i`, `ps` and `dmesg -s netstack` read from the development machine.
 
 Evidence for the configurations named only (MC-12.1). What the link's client may run is the shell's decision. This task claims no more than the shell grants it (MC-3.11, MC-12.3).
+
+## Progress
+
+- **2026-10-22, the protocol and the host's side, written; their host tests pass.**
+  - **`linkproto`:** COMMAND (54), `Client::command`, and `Files::command`, UNSUPPORTED by default.
+    - `shell_commands_over_a_lossy_line`: twenty lines through a line that loses, repeats and echoes frames, each run once;
+    - the shell's refusal arrives as exit 1 with its reason;
+    - an empty line, one over 240 bytes and one with a control character are refused.
+  - **`mindlink sh <line>`:** its exit code is the line's. `serve --run` answers COMMAND with `sh -c`, and without `--run` refuses it.
+  - **`effector485`'s kind `shell`:** followed as a program is, in the batch test.
+  - **Docs:** `docs/link/protocol.md`, `mindlink.md` and `effector485.md`, English and Russian.
+- **`link` on MIND Core** answers COMMAND with UNSUPPORTED until `init` gives it a client of the shell (`KRN`) and the shell takes the link's lines (`APP`).
 
 ## Related
 
