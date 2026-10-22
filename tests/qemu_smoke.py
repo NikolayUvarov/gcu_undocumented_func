@@ -4974,10 +4974,11 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch):
+def update_releases(temp, arch, changed=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
-    TEMP/server as the release tool lays a server out. Returns the volumes, the server, release 5's channel, release 6's
-    and that one with its signature changed, release 6's manifest, its boot files (name, digest) and a channel maker."""
+    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6. Returns the
+    volumes, the server, release 5's channel, release 6's and that one with its signature changed, release 6's manifest,
+    its boot files (name, digest) and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
@@ -4985,6 +4986,9 @@ def update_releases(temp, arch):
     sign_manifest.sign_volume(volume)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
+    if changed:
+        with open(newer / changed, "ab") as elf:  # bytes past the ELF's segments: another file, loaded the same
+            elf.write(b"release 6 of the update suite\0")
     commit, toolchain, locks = sign_manifest.build_inputs()
     sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
     server = temp / "server"
@@ -5016,8 +5020,12 @@ def update_suite(args):
         return
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
-    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf")
     largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+    # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
+    applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
+                    if name.endswith(".elf") and "/" not in name and name != "kernel.elf" and name not in boot_slots.BOOT_FILES]
+    changed = next(digest for name, digest in applications if name == "uptime.elf")
     certificates = temp / "tls"
     certificates.mkdir()
     _certificates(certificates)
@@ -5098,7 +5106,7 @@ def update_suite(args):
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
-        print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
+        print(f"TIME: the updater staged {len(fetched)} files; the slowest: {slowest}", flush=True)
         for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
             print(f"TIME: the resume: {line}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
@@ -5121,14 +5129,18 @@ def update_suite(args):
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
     assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
-    for name, digest in boot_files:
+    for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    # Only the application release 6 changed came from the server; the others were copied from the volume's root.
+    asked = {path for path, _ in https.requests}
+    assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater as soon as init confirmed it; the file system is consistent", flush=True)
+          "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
+          "the one it changed fetched and the others copied from the volume; the file system is consistent", flush=True)
 
 
 def mindlink_tool():

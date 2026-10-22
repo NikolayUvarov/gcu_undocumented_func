@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -22,7 +22,7 @@ It cannot write anything else, and the manifest it reads grants nothing (MC-3.11
   - its expiry against the clock. A clock that cannot be read counts as expired: the updater does not take metadata it cannot show to be current (MC-9.4).
 - **The version.** A channel whose version is not above the running one is refused (`older`). The running version is the one the channel kept in the running slot shows: that channel must verify with the release key and name, for this architecture, the manifest the bootloader verified and booted (its digest is in `BootInfo`). A slot without such a channel, such as one made by `boot_slots.py layout`, runs version 0, "not known".
 - **The manifest** of this architecture: its SHA-256 must be the one the channel names, and its signature the **boot key**'s, the same key the bootloader checks.
-- **Every boot file** the manifest lists: `kernel.elf` and the services of `BOOT_FILES`, by size and SHA-256 after it is on the disk. Applications stay at the volume's root, shared by both slots ([slots.md](slots.md)), and are not fetched.
+- **Every file of the slot** the manifest lists, by size and SHA-256 after it is on the disk: `kernel.elf`, the services of `BOOT_FILES` and the applications, every other `*.elf` at the manifest's root (351-UPD-0023). The licences and data stay at the volume's root, shared by both slots ([slots.md](slots.md)), and are not fetched.
 
 The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_KEY` (files of 64 hex digits), or the public test keys (`updater/keys/release-test.pub`, `bootloader/keys/test.pub`). With a test key the updater says so at start.
 
@@ -31,8 +31,8 @@ The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_
 | Request (`idl/update.wit`) | What happens |
 |---|---|
 | `check` | The channel, checked as above. Returns what it offers and the running version. |
-| `fetch` | `check`, then the newer release into the slot that did not boot. First it removes the slot's `CHANNEL`, `MANIFEST`, `MANIFEST.SIG`, and every file the new manifest does not list (the bootloader refuses a slot with a boot file its manifest does not list). Then it fetches every boot file: a partial one is resumed where it ends, a cut connection is resumed with `Range`, and a file that is not as listed is fetched once more whole, then refused. Last come `MANIFEST`, `MANIFEST.SIG` and `CHANNEL`: a slot holds a channel only once all of it is there. |
-| `apply` | Checks the other slot as the bootloader will: the manifest's signature, every boot file it lists, no boot file it does not list. The channel kept there must show a version above the running one. Then it writes the record that boots that slot on trial with 1 to 9 tries, falling back to the running slot, and asks `init` to restart the machine. |
+| `fetch` | `check`, then the newer release into the slot that did not boot. First it removes the slot's `CHANNEL`, `MANIFEST`, `MANIFEST.SIG`, and every file the new manifest does not list (the bootloader refuses a slot with a boot file its manifest does not list). Then it fetches every boot file and application. An application the volume already holds as listed, in the running slot or at the root, is copied from there instead. A partial file is resumed where it ends, a cut connection is resumed with `Range`, and a file that is not as listed is fetched once more whole, then refused. Last come `MANIFEST`, `MANIFEST.SIG` and `CHANNEL`: a slot holds a channel only once all of it is there. |
+| `apply` | Checks the other slot as the bootloader will: the manifest's signature, every boot file it lists, no boot file it does not list. A slot that holds applications must hold every one the manifest lists and none it does not. A slot staged before 351-UPD-0023 holds none, and the root's serve it. The channel kept there must show a version above the running one. Then it writes the record that boots that slot on trial with 1 to 9 tries, falling back to the running slot, and asks `init` to restart the machine. |
 | `rollback` | The same check of the other slot. The channel kept there must show a version not below the highest minimum the updater has seen (the running slot's channel, and the last check). Then it writes the record that boots that slot on trial, falling back to the running one, and asks `init` to restart. |
 | `status` | The running slot, whether it is on trial, its version, the slot the newer record names and whether it is confirmed, the version staged in the other slot, and the last failure. |
 
@@ -74,6 +74,7 @@ tries 3                                   # tries of a trial boot for an automat
     - a channel naming an older version;
     - version 6 with one boot file changed on the server.
   - Then version 6 as published is fetched into slot B. Its largest boot file is cut midway and resumed with `Range`.
+  - Version 6 differs from 5 in one application, `uptime.elf`. Only that one is fetched; the others are copied from the volume's root, and slot B then holds every application as the manifest lists it.
   - It is checked and booted on trial through `init`'s restart. The bootloader loads release 6's manifest.
   - As soon as `init` confirmed the trial, the updater confirms slot B on the disk, well before the kernel's deadline, then finds nothing newer.
   - The records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation. `fsck.fat` finds the volume consistent.
@@ -85,6 +86,8 @@ tries 3                                   # tries of a trial boot for an automat
   - no valid record;
   - a sequence at its end.
 
+  They also cover how a manifest's files split into boot files, applications and the root's shared files.
+
 ## Not provided yet
 
 - **A caller of `idl/update.wit`.** No program holds a client of the updater: the shell's `update` command is the tools track's (351-APP-0029, numbered on its branch from [requests-APP.md](../../issues/requests-APP.md)), and the slot for its client is asked of the kernel track ([requests-KRN.md](../../issues/requests-KRN.md)). So `check`, `fetch`, `apply`, `rollback` and `status` run only through the automatic policy in the tests, and `rollback` and `status` have not run on the platform.
@@ -92,6 +95,6 @@ tries 3                                   # tries of a trial boot for an automat
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).
-- **Applications in the slots** ([slots.md](slots.md)).
+- **Applications run from the slot.** The updater stages them (351-UPD-0023), but the loader still opens every application from the root, so a trial or a fallback runs the root's. The loader's part is the kernel track's ([requests-KRN.md](../../issues/requests-KRN.md)). `boot_slots.py layout` and `make_usb_image.py --slots` put no applications into slot A yet ([slots.md](slots.md)).
 - **Slot images by default.** `make_usb_image.py --slots` makes an image the updater can update ([write-disk.md](../write-disk.md), 351-UPD-0016); without the option an image boots from its root and has no slot to fill.
 - **The clock.** Expiry is only as good as the system clock, and the updater has no second source of time.
