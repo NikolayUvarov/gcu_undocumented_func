@@ -4,7 +4,7 @@
 
 ## Problem
 
-The update track recorded this on 2026-10-20 ([requests-KRN.md](requests-KRN.md), "The loader starts no helper on a disk with boot slots"), for [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md) and [109-NET-0010](109-NET-0010-a-parser-per-session.md).
+The update track recorded this on 2026-10-20 ([requests-KRN.md](requests-KRN.md), "The loader starts no helper on a disk with boot slots"), for [109-UPD-0017](../issues-done/109-UPD-0017-the-updaters-checks-in-their-own-parser.done) and [109-NET-0010](../issues-done/109-NET-0010-a-parser-per-session.done).
 - **The failure.** On a disk with boot slots (351-UPD-0016), the boot services are only in `MIND/A/` or `MIND/B/`. `loader`'s `spawn_helper` opened `parse.elf` at the volume's root, so it answered `not-found`.
 - **The cost.** The updater's checks, and every `download`, fell back to the shared parser (`[UPDATER] PARSER: THE SHARED SERVICE (Loader(NotFound))`).
 
@@ -43,4 +43,4 @@ In `main` (8def173, gate g0138): the updater gets a parser of its own when boote
 
 ## Related
 
-[109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md), [109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [109-NET-0010](109-NET-0010-a-parser-per-session.md), [docs/update/slots.md](../docs/update/slots.md).
+[109-KRN-0117](109-KRN-0117-a-loader-client-that-only-starts-helpers.md), [109-UPD-0017](../issues-done/109-UPD-0017-the-updaters-checks-in-their-own-parser.done), [109-NET-0010](../issues-done/109-NET-0010-a-parser-per-session.done), [docs/update/slots.md](../docs/update/slots.md).

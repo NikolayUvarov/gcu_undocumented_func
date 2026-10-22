@@ -4,7 +4,7 @@
 
 ## Problem
 
-The updater parses each check's channel, manifest and heads in a `parse` helper of the check's own, as `download` does ([109-NET-0010](109-NET-0010-a-parser-per-session.md)), when it holds a loader client in `SLOT_LOADER` ([109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md)). `init` gives it none and no endpoint quota, so it uses the shared parser. A plain loader client would also let the updater start any program, which it must not hold (MC-3.7). The update track's request of 2026-10-14 is in [requests-KRN.md](requests-KRN.md).
+The updater parses each check's channel, manifest and heads in a `parse` helper of the check's own, as `download` does ([109-NET-0010](../issues-done/109-NET-0010-a-parser-per-session.done)), when it holds a loader client in `SLOT_LOADER` ([109-UPD-0017](../issues-done/109-UPD-0017-the-updaters-checks-in-their-own-parser.done)). `init` gives it none and no endpoint quota, so it uses the shared parser. A plain loader client would also let the updater start any program, which it must not hold (MC-3.7). The update track's request of 2026-10-14 is in [requests-KRN.md](requests-KRN.md).
 
 ## Plan
 
@@ -36,4 +36,4 @@ Not tested yet: a refused `run` with that badge. No program can hold such a clie
 
 ## Related
 
-[109-UPD-0017](109-UPD-0017-the-updaters-checks-in-their-own-parser.md), [109-KRN-0096](../issues-done/109-KRN-0096-the-loader-starts-a-helper.done), [109-NET-0010](109-NET-0010-a-parser-per-session.md), the stall of the updater's fetch after the cut (the kernel track's message to UPD of 2026-10-14 on `internal-dev-messages`).
+[109-UPD-0017](../issues-done/109-UPD-0017-the-updaters-checks-in-their-own-parser.done), [109-KRN-0096](../issues-done/109-KRN-0096-the-loader-starts-a-helper.done), [109-NET-0010](../issues-done/109-NET-0010-a-parser-per-session.done), the stall of the updater's fetch after the cut (the kernel track's message to UPD of 2026-10-14 on `internal-dev-messages`).

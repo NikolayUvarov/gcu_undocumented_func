@@ -1,6 +1,6 @@
 # 351-KRN-0151 — Applications from the booted slot, and their blobs through the link
 
-**Type:** `loader`, `scripts/link_update.py` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (2026-10-22) · **Blocked by:** — for the loader; the update track's staging (351-UPD-0023) for the `update` suite's criterion · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.3, MC-9.4, MC-12.7
+**Type:** `loader`, `scripts/link_update.py` · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (f8d76dd, landing round 9); the update track's staging left for the first criterion · **Blocked by:** — for the loader; the update track's staging (351-UPD-0023) for the `update` suite's criterion · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.3, MC-9.4, MC-12.7
 
 From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-22, "The applications from the booted slot, and their blobs through the link"), numbered here, for [351-UPD-0023](351-UPD-0023-applications-in-the-releases-slot.md).
 
@@ -24,8 +24,18 @@ From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-2
 ## Acceptance criteria
 
 - [ ] The `update` suite shows the trial boot running an application from slot B and the rollback running one from slot A, with the update track's part of 351-UPD-0023.
-- [ ] `linkupdate` (or the link suite's update) carries the applications.
-- [ ] A disk whose slot holds no applications still runs the root's.
+- [x] `linkupdate` (or the link suite's update) carries the applications (gate `land-f8d76dd9`, x86 and aarch64).
+- [x] A disk whose slot holds no applications still runs the root's (`slot_applications_check`, gate `land-f8d76dd9`, x86 and aarch64).
+
+## Progress (2026-10-22)
+
+- **`loader`.** At start it lists the booted slot and logs `[LOADER] APPLICATIONS FROM MIND/A/` (or `B`), or `… FROM THE ROOT: THE BOOTED SLOT HOLDS NONE`.
+  - With applications in the slot, a name without `/` is opened there, and `LIST` lists the slot. A path is opened as given.
+  - The slot's test is the updater's: any `*.elf` outside `BOOT_FILES` and `kernel.elf`.
+- **`scripts/link_update.py`.** It puts the applications' blobs after the boot files', a blob two files share once (`application()`: a listed `*.elf` at the root outside the boot files; the licences, the voice model and the bootloader are not sent). `tests/link_update_test.py` checks the list.
+- **The `linkupdate` suite** now puts the applications too, and `slot_applications_check` boots a slot without applications (the root's `uptime` runs) and then the same slot holding one (`probe` runs from `MIND/A/`, the root's `uptime` is unknown).
+- **The shell's `help <name>`** still reads the root's file: requested from the tools track ([requests-APP.md](requests-APP.md)).
+- **Left.** The `update` suite's criterion waits for 351-UPD-0023's staging. These runs are QEMU runs on the configurations named; they prove nothing about a machine (MC-12.1, MC-12.2).
 
 ## Related
 

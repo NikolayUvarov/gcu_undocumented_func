@@ -4004,6 +4004,9 @@ def link_suite(args):
             shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
             assert commands and servers.get(int(commands[1])) == pids["shell"], commands
             assert shell_client and shell_client[1] == "1" and shell_client[2] == commands[1], (shell_client, caps)
+            # 800-KRN-0142: link's policy client (slot 19) is badged BADGE_LAUNCH (1), so the broker refuses it any change.
+            policy_client = re.search(r"^SLOT=19 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
+            assert policy_client and policy_client[1] == "1" and servers.get(int(policy_client[2])) == pids.get("netpolicy"), (policy_client, caps)
 
             # 800-LNK-0010: a tree in data/link/.
             require(link(port, "put", str(sent), "a/b/s.bin", ok=False), "no such file or directory")
@@ -4068,6 +4071,9 @@ def link_suite(args):
                 if power in powers:
                     require(link(port, "run", *command, ok=power != "WIFI" or "wlan" in pids), wanted)
                     assert re.search(rf"\[LINK\] RUN \d+: STARTED {command[0]} AS PID \d+, LENT.* {power}", vm.command("dmesg -s link", raw=True)), power
+                    if power == "NETWORK":
+                        # 800-KRN-0142: the broker made netcheck's grant for a launch-only client.
+                        assert re.search(r"\[NETPOLICY\] GRANT \d+ TO netcheck: .*, ASKED BY A LAUNCH-ONLY CLIENT", vm.command("dmesg -s netpolicy", raw=True)), "launch-only"
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
@@ -5231,6 +5237,41 @@ def linkupdate_suite(args):
     print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; a channel with a changed signature is "
           "refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
           "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
+
+
+def slot_applications_check(args):
+    """351-KRN-0151: on a disk booted from slot A, the loader opens applications from the root while the slot holds none
+    (a slot staged before 351-UPD-0023), and from MIND/A/ only once it holds any *.elf outside BOOT_FILES."""
+    if not raw_tools():
+        print("SKIP: slot applications need mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-slotapps-"))
+    volume = temp / "volume"
+    (volume / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+
+    def boot(expect, runs, unknown):
+        vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none"])
+        try:
+            require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), expect)
+            require(vm.command(runs, raw=True), f"NAME={runs} FOREGROUND")
+            if unknown:
+                require(vm.command(unknown, raw=True), "UNKNOWN COMMAND")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-slotapps-{args.cpus}cpu.log").write_text(vm.log)
+    boot("[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE", "uptime", None)
+    # One application in the slot: it runs from there, and the root's are no longer this slot's.
+    image.write("MIND/A/probe.elf", (volume / "uptime.elf").read_bytes())
+    boot("[LOADER] APPLICATIONS FROM MIND/A/", "probe", "uptime")
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: linkupdate: a slot without applications runs the root's; one that holds any runs its own, and only "
+          "those (351-KRN-0151)", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -9612,6 +9653,7 @@ def main():
             continue
         if suite == "linkupdate":
             linkupdate_suite(args)
+            slot_applications_check(args)
             continue
         if suite == "modes":
             modes_suite(args)
