@@ -100,8 +100,8 @@ A release replaces the kernel and the boot services in its slot, but the applica
 
 ### Plan (a proposal; the kernel track decides)
 
-- **`loader`.** On a disk booted from a slot that holds applications, an application is opened from the booted slot only (`MIND/A/` or `MIND/B/`), as a helper is since 109-KRN-0133. A slot that holds none, staged by an updater before 351-UPD-0023, keeps the root's. What "holds applications" means is the kernel track's choice: for example, the slot's manifest lists an `*.elf` outside `BOOT_FILES`.
-- **`scripts/link_update.py`.** It puts the applications' blobs into `blobs/` with the boot files', since the updater reads every file the manifest lists from there.
+- **`loader`.** On a disk booted from a slot that holds applications, an application is opened from the booted slot only (`MIND/A/` or `MIND/B/`), as a helper is since 109-KRN-0133. A slot that holds none, staged by an updater before 351-UPD-0023, keeps the root's. What "holds applications" means is the kernel track's choice. The manifest does not tell it, since an older slot's manifest lists the applications too: for example, the booted slot holds the program's file, or any `*.elf` outside `BOOT_FILES`, which is the updater's own test before `apply` (it refuses a slot that holds some applications but not all).
+- **`scripts/link_update.py`.** It puts the blobs of the applications the release changed into `blobs/` with the boot files'. The updater copies an application the volume already holds as listed (in the running slot or at the root), so an unchanged one needs no blob; which ones the script sends is the kernel track's choice.
 
 ### Acceptance criteria
 
