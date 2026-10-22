@@ -1284,6 +1284,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let mut start = start::Start::new(mind::time::uptime_ms() as u64);
+    programs::boot_slot(info.boot_slot.slot);
     let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     if !term.has_screen() { start.stop(); mind::println!("[SHELL] NO SCREEN TO DRAW ON: THE SERIAL LINE ONLY"); }
     step(&mut start, "THE SCREEN AND THE SERIAL LINE (THE KERNEL)");
