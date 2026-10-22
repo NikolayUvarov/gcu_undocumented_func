@@ -24,6 +24,10 @@ From DRV's request of 2026-10-22 (`NET/2026-10-22T2011Z-DRV-wlan-attempts-4-to-7
 - [ ] The `net` suite passes on x86 and aarch64 with 7 tries (`wlansim` answers the tries it is asked for).
 - [ ] On the MacBook Pro, the station's sent frames are lost less often than with 4 tries. This is evidence for that machine and that access point only (MC-12.1).
 
+## Progress (2026-10-22)
+
+Made on `claude/youthful-mendel-mf1soy` (b9c2278d). The `net` suite passed on x86 with it, in this session's container (QEMU TCG); aarch64 and the Mac are left.
+
 ## Related
 
 [550-NET-0018](550-NET-0018-the-station-service.md), 550-DRV-0036 (the counting driver), `idl/wlanhw.wit` (`send`).
