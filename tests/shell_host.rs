@@ -22,6 +22,8 @@ mod netstat;
 mod ping;
 #[path = "../shell/src/modes.rs"]
 mod modes;
+#[path = "../shell/src/pick.rs"]
+mod pick;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -304,4 +306,21 @@ fn mode_shows_the_modes_and_turns_one_on_or_off() {
     let mut notice = String::new();
     assert!(!modes::notice(&mut notice, false, false, "disk") && notice.is_empty());
     assert!(modes::notice(&mut notice, true, false, "disk") && notice.starts_with("THE DEVELOPMENT MODE IS ON (SET BY disk)"), "{}", notice);
+}
+
+#[test]
+fn fg_takes_a_programs_name_and_lists_several() {
+    // The maintainer's request of 2026-10-22: fg <name>; the PIDs when several answer.
+    let tasks = [(1, "clock"), (2, "clock"), (3, "app"), (4, "app2"), (5, "wm"), (6, "dzen-clock")];
+    let found = |text| pick::matching(text, tasks.iter().copied()).collect::<Vec<_>>();
+    assert_eq!(found("wm"), vec![(5, "wm")]);
+    assert_eq!(found("WM"), vec![(5, "wm")], "any case");
+    // A name some are called keeps to them; else those whose name holds the text.
+    assert_eq!(found("clock"), vec![(1, "clock"), (2, "clock")]);
+    assert_eq!(found("app"), vec![(3, "app")]);
+    assert_eq!(found("dzen"), vec![(6, "dzen-clock")]);
+    assert_eq!(found("lock"), vec![(1, "clock"), (2, "clock"), (6, "dzen-clock")]);
+    assert_eq!(found("nosuch"), vec![]);
+    let picked = |text| pick::picked(pick::matching(text, tasks.iter().copied()));
+    assert_eq!((picked("wm"), picked("clock"), picked("nosuch")), (pick::Picked::One(5), pick::Picked::Several, pick::Picked::None));
 }

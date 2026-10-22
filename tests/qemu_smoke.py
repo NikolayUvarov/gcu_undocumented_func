@@ -714,6 +714,13 @@ def normal_suite(vm):
                  "fg 9999999999999999999999999", "run missing"]:
         require(vm.command(text), "ERROR:")
     require(vm.command("run"), "USAGE:")
+    # fg by name (the maintainer's request, 2026-10-22): the one called so is taken; several are listed by PID.
+    require(vm.command("fg clock"), "SEVERAL PROGRAMS ANSWER TO clock: PID 1 clock, PID 2 clock, FG <PID> TAKES ONE")
+    require(vm.command("fg app"), "SEVERAL PROGRAMS ANSWER TO app: PID 3 app, PID 4 app, FG <PID> TAKES ONE")
+    require(vm.command("fg nosuch"), "ERROR: NO PROGRAM CALLED nosuch RUNS")
+    vm.send("fg app2\n")
+    vm.expect("FOREGROUND PID=5")
+    vm.background(5)
     vm.send("fg 1\n")
     vm.expect("FOREGROUND PID=1")
     vm.background(1)
@@ -8732,6 +8739,24 @@ def wm_suite(vm):
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+    # The shell killed while wm runs (ASR's request; the maintainer, 2026-10-22: "wm must not fall in such cases"): init
+    # starts it again, and the new shell gives the wm still running the screen; wm's keys then work as before.
+    seen.clear()
+    read[0] = len(vm.log)
+    vm.send("wm clock\n")
+    out = wait("[WM] READY", lines=0)
+    survivor = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
+    time.sleep(.5)
+    vm.background(survivor)
+    shell_pid = vm.services()["shell"]
+    vm.send(f"kill {shell_pid}\n", raw=True)
+    vm.expect("[INIT] shell RESTARTED", timeout=60)
+    back = vm.expect("RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN", timeout=60)
+    assert re.search(r"\[SHELL\] WM \(PID \d+\) RAN BEFORE THIS SHELL STARTED", back), back[-1500:]
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    print("PASS: wm: the shell killed while wm runs comes back and gives wm the screen again; wm's close all works", flush=True)
     # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
     # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
     seen.clear()
