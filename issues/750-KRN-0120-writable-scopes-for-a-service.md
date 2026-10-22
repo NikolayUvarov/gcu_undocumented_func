@@ -40,7 +40,7 @@ Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb):
   - a name and a rename that climb out are refused;
   - restarted by the shell, the gateway gets a new scope, which finds the first one's files, and `vfs_server` ends the first one (`[VFS] SCOPE … ENDED`).
 
-  Passed on x86 in this session's container; aarch64 is running. The criteria name the `isolation` suite; the gateway runs only in a mode, which the `modes` suite boots on both architectures.
+  Passed on x86 and aarch64 in this session's container (QEMU TCG). The criteria name the `isolation` suite; the gateway runs only in a mode, which the `modes` suite boots on both architectures.
 - **For EFF:** the gateway's writer names paths relative to the scope's root (`a.txt`, not `data/inbox/a.txt`).
 
 ## Related

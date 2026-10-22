@@ -20,8 +20,12 @@ From EFF's request of 2026-10-22 (`KRN/2026-10-22T1650Z-EFF-0119-on-the-macbook-
 
 ## Acceptance criteria
 
-- [ ] The `modes` suite (x86 and aarch64): in the development mode `effector_gw` holds the compositor's client in slot 15, unbadged; without a mode it does not run.
-- [ ] `docs/profile/bootstrap.md` names the grant.
+- [x] The `modes` suite (x86 and aarch64): in the development mode `effector_gw` holds the compositor's client in slot 15, unbadged; without a mode it does not run.
+- [x] `docs/profile/bootstrap.md` names the grant.
+
+## Progress (2026-10-22)
+
+Made on `claude/youthful-mendel-mf1soy` (784e6a8f); the `modes` suite passed on x86 and aarch64 in this session's container (QEMU TCG). It closes once it is in `main`, with EFF's joint landing request.
 
 ## Related
 

@@ -15,7 +15,7 @@
 
 ## Acceptance criteria
 
-- [ ] In the `modes` suite (x86 and aarch64), a client with a set restarts a service in it and is refused for one outside it, for `init` and for itself; `stop-task` and `reboot` are refused. (The `isolation` suite at first: the gateway runs only in a mode, which the `modes` suite boots on both architectures, and `isolation`'s adversary program is x86 only.)
+- [x] In the `modes` suite (x86 and aarch64), a client with a set restarts a service in it and is refused for one outside it, for `init` and for itself; `stop-task` and `reboot` are refused. (The `isolation` suite at first: the gateway runs only in a mode, which the `modes` suite boots on both architectures, and `isolation`'s adversary program is x86 only.)
 - [ ] The shell's `BADGE_LIFECYCLE` client works as before (`svc`).
 
 ## Progress (2026-10-22)
@@ -27,8 +27,8 @@ Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb), 
   - **Always refused:** `init` and the shell (kept by `init`), the Effector services (the policy's protected names), `stop-task` and `reboot`. Each refusal names its reason and MC-3.4 in the log.
 - **`init.wit` 1.7** says so; the bindings are regenerated.
 - **The grant:** `effector_gw`'s slot 11, only in a mode.
-- **The check:** `tests/gateway_stub` in the gateway's place, in the `modes` suite, under `service sysmon restart`: the restart of `sysmon` passes; its stop and run, `logd`, `init`, the gateway itself, `stop-task` and `reboot` are refused, each with its log line. Passed on x86 in this session's container; aarch64 is running.
-- **Left:** the aarch64 run; the shell's `svc` (criterion 2) is run by the `services` suite unchanged.
+- **The check:** `tests/gateway_stub` in the gateway's place, in the `modes` suite, under `service sysmon restart`: the restart of `sysmon` passes; its stop and run, `logd`, `init`, the gateway itself, `stop-task` and `reboot` are refused, each with its log line. Passed on x86 and aarch64 in this session's container (QEMU TCG).
+- **Left:** the `services` suite's run of the shell's `svc` (criterion 2) with this change; the gate.
 
 ## Related
 
