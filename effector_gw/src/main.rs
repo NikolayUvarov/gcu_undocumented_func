@@ -24,10 +24,9 @@ use mind::idl::{display, init, log, sysinfo, vfs};
 use mind::ipc::Endpoint;
 use mind::mem::Mapping;
 
-const RECEIVED: usize = 9; // an unexpected capability lands here and is dropped
+const RECEIVED: usize = 9; // an unexpected capability lands here and is dropped; the screen's copy too, while encoded
 const PIECE: usize = 16384; // vfs reads and writes at most this much per call
 const AUDIT_MAX: u32 = 256 * 1024; // the audit file is renamed to `audit.old` beyond this
-const COPY: usize = 100; // the compositor's copy of the screen lands here and is dropped once encoded
 const SCREEN_WIDTH: usize = 1280; // a larger screen is shrunk to fit, its proportions kept
 const SCREEN_HEIGHT: usize = 800;
 static mut SCRATCH: [u8; wit::REQUEST_MAX] = [0; wit::REQUEST_MAX];
@@ -275,21 +274,25 @@ impl Machine for Host {
     fn screen(&mut self, _max: u64) -> Result<Vec<u8>, Fail> {
         if !present(SLOT_DISPLAY) { return Err(Fail::Unsupported); }
         let screen = Endpoint(SLOT_DISPLAY);
-        let mode = display::mode(screen).map_err(|_| Fail::Io)?;
-        match display::capture(screen, COPY) {
+        let failed = |what: core::fmt::Arguments| { mind::println!("[EFFECTOR_GW] THE SCREEN: {}", what); Fail::Io };
+        let mode = display::mode(screen).map_err(|e| failed(format_args!("NO MODE: {:?}", e)))?;
+        let _ = mind::ipc::drop_cap(RECEIVED);
+        match display::capture(screen, RECEIVED) {
             Ok(Ok(())) => {}
             Ok(Err(display::Error::NoScreen)) => return Err(Fail::NotFound),
-            _ => return Err(Fail::Io),
+            other => return Err(failed(format_args!("NO COPY: {:?}", other))),
         }
         let encoded = (|| {
-            let copy = Mapping::new(COPY).map_err(|_| Fail::Io)?;
+            let copy = Mapping::new(RECEIVED).map_err(|e| failed(format_args!("THE COPY NOT MAPPED: {:?}", e)))?;
             let (width, height, stride) = (mode.width as usize, mode.height as usize, mode.stride as usize);
-            if width == 0 || height == 0 || stride < width || copy.len() < stride * height * 4 { return Err(Fail::Io); }
+            if width == 0 || height == 0 || stride < width || copy.len() < stride * height * 4 {
+                return Err(failed(format_args!("{}x{} STRIDE {} IN A COPY OF {} BYTES", width, height, stride, copy.len())));
+            }
             let pixels = unsafe { core::slice::from_raw_parts(copy.as_ptr::<u32>() as *const u32, stride * height) };
             let (to_width, to_height) = png::fit(width, height, SCREEN_WIDTH, SCREEN_HEIGHT);
             Ok(png::encode(to_width, to_height, &mut |y, row| png::shrink_row(pixels, stride, width, height, to_height, y, row)))
         })();
-        let _ = mind::ipc::drop_cap(COPY);
+        let _ = mind::ipc::drop_cap(RECEIVED);
         encoded
     }
 

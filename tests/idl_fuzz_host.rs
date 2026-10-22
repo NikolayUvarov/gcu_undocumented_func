@@ -421,7 +421,7 @@ types! {
     battery: Error Status;
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
     display: Error Mode;
-    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary;
+    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState;
     keyboard: Layout SwitchKey State;

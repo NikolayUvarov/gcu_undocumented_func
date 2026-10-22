@@ -35,6 +35,7 @@ const CONNECT_MS: u32 = 10_000;
 const RECONNECT_MAX_MS: usize = 30_000;
 const PIECE: usize = 32768; // the gateway's transfers move this much a call
 const RAW: usize = 3 * 4096; // an artifact is encoded this much at a time (a multiple of 3: base64 without padding)
+const INLINE_MAX: u64 = 8 << 20; // an artifact's bytes, so its ACK as base64 stays below the server's 12 MiB
 const JOURNAL_MAX: usize = 8 * session::RECORDS_MAX * journal::LINE_MAX; // compacted at each start, so far above its need
 
 fn now() -> usize { mind::time::uptime_ms() }
@@ -161,7 +162,7 @@ struct Agent {
     activation_noted: bool,
     telemetry_at: usize,
     last: Option<telemetry::Counters>,
-    telemetry_refused: Option<u16>,
+    telemetry_said: Option<u16>,
     executed: u64,
     executed_total: u64,
     cpu_model: String,
@@ -498,7 +499,7 @@ impl Agent {
         use session::{Failure, Final};
         let opened = match opened {
             Ok(Ok(t)) => t,
-            Ok(Err(e)) => return Final::Failed(failure(e)),
+            Ok(Err(e)) => { mind::println!("EFFECTOR: {}: THE GATEWAY ANSWERED {:?}", id, e); return Final::Failed(failure(e)) }
             Err(e) => { mind::println!("EFFECTOR: {}: NO ANSWER FROM THE GATEWAY: {:?}", id, e); return Final::Failed(Failure::Unsupported) }
         };
         let kept = self.keep(id, &opened, name);
@@ -512,6 +513,7 @@ impl Agent {
     #[inline(never)]
     fn keep(&mut self, id: &str, t: &gateway::Transfer, name: &str) -> Result<(), session::Failure> {
         use session::Failure;
+        if t.size > INLINE_MAX { return Err(Failure::Bounds); }
         let name: String = name.chars().filter(|c| c.is_ascii_graphic() && *c != '"' && *c != '\\').take(64).collect();
         let header = alloc::format!("{} {} {} {} {}\n", id, t.size, t.sha256.as_str(), t.truncated as u8, if name.is_empty() { "artifact" } else { &name });
         let mut file = File::open_mode(&self.path("artifact"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).map_err(|_| Failure::Io)?;
@@ -605,18 +607,18 @@ impl Agent {
         let Ok(body) = telemetry::sample(&mut buf, &counters, self.last.as_ref(), &cards, &id) else { mind::println!("EFFECTOR: TELEMETRY OVER {} BYTES", telemetry::BODY_MAX); return };
         let body = body.to_vec();
         self.last = Some(counters);
-        let status = self.request(Method::Post, "/api/telemetry", "", Some(&body)).unwrap_or(0);
-        // One line when the server starts or stops refusing it, not one every 30 s.
-        let refused = (status != 204).then_some(status);
-        if refused != self.telemetry_refused {
-            match refused { Some(0) => {}, Some(st) => mind::println!("EFFECTOR: TELEMETRY ANSWERED {}", st), None => mind::println!("EFFECTOR: TELEMETRY SENT ({} BYTES)", body.len()) }
-            if refused != Some(0) { self.telemetry_refused = refused; }
+        // One line when what the server answers changes, not one every 30 s; a lost connection says so itself.
+        let Some(status) = self.request(Method::Post, "/api/telemetry", "", Some(&body)) else { return };
+        if self.telemetry_said != Some(status) {
+            if status == 204 { mind::println!("EFFECTOR: TELEMETRY SENT ({} BYTES), EVERY {} S", body.len(), telemetry::PERIOD_MS / 1000); }
+            else { mind::println!("EFFECTOR: TELEMETRY ANSWERED {}", status); }
+            self.telemetry_said = Some(status);
         }
     }
 
     /// Why no telemetry is sent, once until it is sent again.
     fn no_telemetry(&mut self, why: String) {
-        if self.telemetry_refused != Some(1) { mind::println!("EFFECTOR: TELEMETRY NOT SENT: {}", why); self.telemetry_refused = Some(1); }
+        if self.telemetry_said != Some(0) { mind::println!("EFFECTOR: TELEMETRY NOT SENT: {}", why); self.telemetry_said = Some(0); }
     }
 
     fn path(&self, name: &str) -> String { let mut p = self.dir.clone(); p.push('/'); p.push_str(name); p }
@@ -727,7 +729,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false,
-        telemetry_at: 0, last: None, telemetry_refused: None, executed: 0, executed_total: 0, cpu_model: cpu_model() });
+        telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model() });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),

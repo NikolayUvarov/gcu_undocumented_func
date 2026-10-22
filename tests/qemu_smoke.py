@@ -7189,7 +7189,8 @@ def effector_suite(args, disk):
             if line in out:
                 return out
             time.sleep(1)
-        raise AssertionError((line, session()[-3000:], vm.command("dmesg -s tls", raw=True)[-1500:], vm.command("dmesg -s netpolicy", raw=True)[-1500:]))
+        raise AssertionError((line, session()[-3000:], vm.command("dmesg -s effector_gw", raw=True)[-1500:], vm.command("dmesg -s tls", raw=True)[-1000:],
+                              vm.command("dmesg -s netpolicy", raw=True)[-1000:]))
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
         require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
@@ -7237,12 +7238,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(9 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(10 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (9 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (10 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")

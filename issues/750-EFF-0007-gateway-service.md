@@ -81,3 +81,9 @@ The gateway's decisions and effects are built as a library, apart from IPC, so t
   - Host tests in `effector_session` (22), `effector_journal` (4) and `effector_wire` (9).
   - The `effector` QEMU suite on x86_64: a 50 000-byte file under the policy's `collect` root is uploaded and answered `completed`. One outside it is answered `failed: denied` and not sent. Both are audited.
   - KRN's 0153 (screen), 0121 (lifecycle) and 0120 (delivery scope) are made on their branch (d69f0ad6). The gateway's writer then names paths relative to the scope.
+
+## Progress — 2026-10-22, the screen and the counters
+
+- **`open-screen`**: the compositor's copy (750-KRN-0153) shrunk to fit 1280x800 and written as a PNG (`effector_gw/src/png.rs`, host-tested against MIND's decoder and zlib), within the policy's `max-bytes` and 2 MiB; audited. The copy lands in the gateway's receive slot: a slot beyond the task's table is refused by the kernel (`Invalid`).
+- **`sample`** (`effector.wit` 1.1) for telemetry ([750-EFF-0014](750-EFF-0014-telemetry.md)).
+- **Delivery and service control** run through 750-KRN-0120's scope and 0121's client in the QEMU suite: a 68 000-byte file under `data/inbox/`, a path outside it refused, `sysmon` restarted.

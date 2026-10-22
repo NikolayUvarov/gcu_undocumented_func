@@ -1,6 +1,6 @@
-# MIND Core's Effector agent contract 1.1
+# MIND Core's Effector agent contract 1.2
 
-**Status:** implementation contract, 2026-10-15; 1.1 on 2026-10-22 (below). No real-machine compatibility is claimed.
+**Status:** implementation contract, 2026-10-15; 1.1 and 1.2 on 2026-10-22 (below). No real-machine compatibility is claimed.
 **Task:** [750-EFF-0001](../../issues/750-EFF-0001-protocol-contract.md).
 Publishing this subset was approved by the maintainer on 2026-10-09
 ([owner decision](../../issues-human/README.md#7-an-effector-server-for-mind-core)).
@@ -22,6 +22,29 @@ Publishing this subset was approved by the maintainer on 2026-10-09
 
 **1.1 (2026-10-22):** `token none` in `effector.conf`, for a server that asks no agent token. Nothing else
 changed; a configuration without that line behaves as under 1.0.
+
+**1.2 (2026-10-22):** the actions the gateway serves, on routes and fields the reviewed server already has
+(sst-test-deploy `server/artifacts.go`, `server/file_transfer.go`, `server/telemetry_store.go`, `docs/monitoring.md`).
+Everything 1.1 did stays.
+
+- **Every request** carries `X-Effector-Agent-ID: ID`. The server counts the agent's traffic by it; it is not a
+  credential.
+- **`screenshot` and `collect_logs` answer with an artifact inline**, as the server's other agents send screenshots:
+  the result gains `"artifact":{"name","content_type","encoding":"base64","size","sha256","metadata"?,"data"}`, `data`
+  last. A screenshot is `image/png`, at most 1280x800 and 2 MiB, with `metadata` `width` and `height`; a log is
+  `text/plain; charset=utf-8`, `truncated` when the policy cut it. An artifact above 8 MiB is refused (`failed: bounds`),
+  so the ACK stays below the server's 12 MiB.
+- **`collect_logs`** takes `path` (JSON, or the payload itself): `ring` (the system log) and `boot` (the last boot's
+  log) are logs, any other path is a file under the policy's `collect` roots.
+- **`deliver_file`** takes `path`, `size`, `sha256` (64 lower-case hex digits), `overwrite` and `max_bytes`; the bytes
+  come from `GET /api/commands/file`; the answer is `completed` once the gateway has checked them and named the file.
+- **`start_service`, `stop_service`, `restart_service`**: the command's `program_name` is a boot service's name.
+- **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
+  memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
+  and in all, kept in `system/effector/executed`).
+- **The journal** adds a line `ID IDENTITY done -` once an answer needs no more ACK, so a restart does not acknowledge it
+  again. When full, it drops its oldest record that is acknowledged and past its command's expiry; unacknowledged work
+  is still never forgotten, and an action runs only when its answer has room.
 
 `effector-agent 1.0` is the name of this MIND subset, not a version field that
 the existing server negotiates. The server publishes a build identity and an
