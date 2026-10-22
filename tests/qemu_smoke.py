@@ -5237,6 +5237,41 @@ def linkupdate_suite(args):
           "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
 
 
+def slot_applications_check(args):
+    """351-KRN-0151: on a disk booted from slot A, the loader opens applications from the root while the slot holds none
+    (a slot staged before 351-UPD-0023), and from MIND/A/ only once it holds any *.elf outside BOOT_FILES."""
+    if not raw_tools():
+        print("SKIP: slot applications need mkfs.fat, fsck.fat and mtools", flush=True)
+        return
+    temp = Path(tempfile.mkdtemp(prefix="mind-slotapps-"))
+    volume = temp / "volume"
+    (volume / "EFI/BOOT").mkdir(parents=True)
+    for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
+        shutil.copyfile(ROOT / IMAGE / name, volume / name)
+    sign_manifest.sign_volume(volume)
+    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
+    cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+
+    def boot(expect, runs, unknown):
+        vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none"])
+        try:
+            require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), expect)
+            require(vm.command(runs, raw=True), f"NAME={runs} FOREGROUND")
+            if unknown:
+                require(vm.command(unknown, raw=True), "UNKNOWN COMMAND")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-slotapps-{args.cpus}cpu.log").write_text(vm.log)
+    boot("[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE", "uptime", None)
+    # One application in the slot: it runs from there, and the root's are no longer this slot's.
+    image.write("MIND/A/probe.elf", (volume / "uptime.elf").read_bytes())
+    boot("[LOADER] APPLICATIONS FROM MIND/A/", "probe", "uptime")
+    shutil.rmtree(temp, ignore_errors=True)
+    print("PASS: linkupdate: a slot without applications runs the root's; one that holds any runs its own, and only "
+          "those (351-KRN-0151)", flush=True)
+
+
 def tone_power(samples, rate, start, hz):
     """How much of `hz` the 40 ms of `samples` from `start` hold."""
     window = samples[start:start + int(rate * 0.04)]
@@ -9625,6 +9660,7 @@ def main():
             continue
         if suite == "linkupdate":
             linkupdate_suite(args)
+            slot_applications_check(args)
             continue
         if suite == "modes":
             modes_suite(args)
