@@ -35,4 +35,4 @@ Left:
 
 ## Related
 
-[351-APP-0029](351-APP-0029-update-in-the-shell.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), [351-KRN-0115](../issues-done/351-KRN-0115-the-ssh-service-in-the-boot-services.done); for Effector's gateway, the client of `updater` in [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md) and [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md).
+[351-APP-0029](351-APP-0029-update-in-the-shell.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done), [351-KRN-0115](../issues-done/351-KRN-0115-the-ssh-service-in-the-boot-services.done); for Effector's gateway, the client of `updater` in [750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md) and [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done).

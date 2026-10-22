@@ -1,6 +1,6 @@
 # 750-KRN-0143 — `init` follows the development and maintenance modes: Effector's services only in a mode
 
-**Type:** `init`, IDL (`init.wit` 1.5), ABI (`SLOT_MODE`, ABI 14) · **Owner:** kernel session · **Priority:** P1 · **Status:** the mode in `main` (3bdd026, ABI 14, 2026-10-21); the services' part and the shell's command left · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
+**Type:** `init`, IDL (`init.wit` 1.5), ABI (`SLOT_MODE`, ABI 14) · **Owner:** kernel session · **Priority:** P1 · **Status:** the mode in `main` (3bdd026, ABI 14, 2026-10-21); the services' part and the shell's command left · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)) and their boot images ([750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done)) for the services' part; nothing for the mode itself · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.8, MC-8.1, MC-10.2, MC-12.3, MC-12.6
 
 From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026-10-21T1135Z-EFF-…`). The design is 750-EFF-0013's, on the agent track's branch.
 
@@ -10,7 +10,7 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
   - It runs **only in the development mode or the maintenance mode**, and in a mode it is a service that runs all the time.
   - A mode is turned on explicitly, by the operator, or by the Mind when it needs help from outside.
   - A mode is set by a word and by a command, and it holds across any number of reboots.
-- **What was planned.** [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md)), with no mode.
+- **What was planned.** [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md)), with no mode.
 - **What `init` does now.** It knows no mode. The only word it follows is the link's `dev` (800-KRN-0139), which the bootloader reads from `link.conf`.
 
 ## Plan
@@ -83,4 +83,4 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 
 ## Related
 
-[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).
+[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).

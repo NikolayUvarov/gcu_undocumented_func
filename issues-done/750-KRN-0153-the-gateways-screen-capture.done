@@ -1,6 +1,6 @@
-# 750-KRN-0153 — The Effector gateway's client of the screen
+# 750-KRN-0153 — The Effector gateway's client of the screen — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-10.2
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.4, MC-10.2
 
 From EFF's request of 2026-10-22 (`KRN/2026-10-22T1650Z-EFF-0119-on-the-macbook-…` on `internal-dev-messages`).
 
@@ -27,6 +27,12 @@ From EFF's request of 2026-10-22 (`KRN/2026-10-22T1650Z-EFF-0119-on-the-macbook-
 
 Made on `claude/youthful-mendel-mf1soy` (784e6a8f); the `modes` suite passed on x86 and aarch64 in this session's container (QEMU TCG). It closes once it is in `main`, with EFF's joint landing request.
 
+## Resolution
+
+- In `effector_gw`'s arm, only in a mode, `init` lends the compositor's client in `SLOT_DISPLAY` (15), unbadged (`init/src/main.rs`). `docs/profile/bootstrap.md` names it.
+- The `modes` suite checks the slot on x86 and aarch64. Landed in round 13 with EFF's request (`LANDING/2026-10-22T1958Z-EFF-…`): every group of gate `land-e93c47af` passed, `main` e93c47af.
+- Using it under the owner's `screen on`, with the audit, is the gateway's (750-EFF-0007).
+
 ## Related
 
-[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750-EFF-0007](750-EFF-0007-gateway-service.md), `idl/display.wit`, issue 086 (the shell's `screenshot`).
+[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), [750-EFF-0007](../issues/750-EFF-0007-gateway-service.md), `idl/display.wit`, issue 086 (the shell's `screenshot`).

@@ -4108,6 +4108,8 @@ def link_suite(args):
             require(link(port, "runs"), "stopped\tdata/link/t/mt.elf")
             logged = vm.command("dmesg -s link", raw=True)
             assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", logged), "the start is logged"
+            # A run's arguments are logged whole after its start (the maintainer's word, 2026-10-22).
+            assert re.search(r"\[LINK\] RUN \d+: ARGUMENTS --help", logged), "the arguments are logged"
             require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
             assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
 
@@ -4138,7 +4140,12 @@ def link_suite(args):
                 require(link(port, "sh", "ps"), "link")
                 # Never from the link, whatever the developer mode allows (800-NET-0038).
                 require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
-                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy", vm.command("dmesg -s link", raw=True)), "the word alone is logged"
+                # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
+                link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
+                logged = vm.command("dmesg -s link", raw=True)
+                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
+                assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
+                assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
