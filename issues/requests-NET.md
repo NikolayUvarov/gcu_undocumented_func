@@ -1,6 +1,6 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20; a parser session that ends before its helper (109-KRN-0133) became [109-NET-0037](../issues-done/109-NET-0037-a-parser-session-waits-for-its-helper.done), 2026-10-21) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (`wlan` joining a remembered network by itself became [550-NET-0041](550-NET-0041-wlan-joins-a-remembered-network-by-itself.md), 2026-10-22; the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20; a parser session that ends before its helper (109-KRN-0133) became [109-NET-0037](../issues-done/109-NET-0037-a-parser-session-waits-for-its-helper.done), 2026-10-21) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
@@ -118,39 +118,3 @@ The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy
 
 - **A check first:** in the `net` suite, `ping 10.0.2.200` (slirp answers ARP only for its own addresses), then `ping 10.0.2.2`, which should still answer.
 - **If it holds the queue:** drop a request whose neighbour is not found by its deadline, for example by giving each request its own ICMP socket, or by closing and opening the card's socket when a request ends in `Timeout`.
-
-## `wlan` joins a remembered network by itself, at start and after the network is lost (550)
-
-**Recorded by:** the kernel track (KRN), 2026-10-22, at the maintainer's word of that day ("a NET task"), which takes up the link track's request (`internal-dev-messages`, `NET/2026-10-22T1038Z-LNK-wlan-joins-a-remembered-network-by-itself.md`). **Constitution:** MC-11.9 (the kept key), MC-12.3.
-
-### Problem
-
-- **Who joins Wi-Fi today.** The MacBook Pro joins at start through `tests/hardware/wifijoin.msh`, run as `autorun.msh` from the volume's root (550-ASR-0007, 000-APP-0079).
-- **Why that breaks after an update.** An update through the link (351-KRN-0141) replaces the boot services in a slot, but nothing at the root. No program may write the root.
-- **What happened.** After each of the first two updates, the boot's one scan missed the network, and the old script gave up. The link track joined by hand over the link.
-- **What exists.** No task joins by itself: 550-NET-0024 keeps the key, but a join is still `wifi join`'s.
-
-### The maintainer's decision
-
-- **Where it goes.** `wlan`, a boot service updated through the cable, joins a remembered network by itself:
-  - at start;
-  - again after the network is lost.
-- **How.** It retries, and logs each attempt.
-- **The user's word still holds.** `wifi leave` and `forget` stay in force.
-
-### Plan (the link track's proposal; the network track decides the details)
-
-- **At start,** when `keystore` remembers networks: scan, and join the best remembered network heard, with the kept key as `wifi join` uses it. For example, the most recently joined first, then the strongest.
-- **Retries.** Retry until one is joined, for example every 10 s for two minutes, then every minute.
-- **The log.** Each attempt is one line, for example `[WLAN] AUTO-JOIN <name>: <outcome>`.
-- **A lost network** (beacons gone, a deauthentication) is joined again the same way.
-- **`wifi leave`** stops the automatic join until the next join or the next boot. **`forget`** takes the network out of it. How it is turned off for good is the network track's choice: a word in `keystore`'s record, a file, or `wifi`'s.
-
-### Acceptance criteria
-
-The `net` suite over `wlansim` shows:
-- after a restart of `wlan`, a remembered `MIND-TEST` joined with no command;
-- after `wifi leave`, no join;
-- a lost network joined again, each attempt in the log.
-
-`wifi`'s word for turning it off, if any, is the tools track's.
