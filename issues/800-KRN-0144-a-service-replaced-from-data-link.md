@@ -1,6 +1,6 @@
 # 800-KRN-0144 — In developer mode, `init` replaces a service with an image from `data/link/`, with no restart
 
-**Type:** `init`, IDL (`init.wit`, a new minor version) · **Owner:** kernel session · **Priority:** P2 · **Status:** made (2026-10-22): `init`'s side; the link track's `mindlink replace` and its suite left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.4, MC-12.1, MC-12.3
+**Type:** `init`, IDL (`init.wit`, a new minor version) · **Owner:** kernel session · **Priority:** P2 · **Status:** `init`'s side in `main` (aa50204, landing round 8); the link track's `mindlink replace` and its suite left · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Constitution:** MC-3.4, MC-12.1, MC-12.3
 
 From the link track's request of 2026-10-21, for the driver track's work on the MacBook Pro (`internal-dev-messages`, `KRN/2026-10-21T1233Z-LNK-…`). The maintainer asked for a debug mode in which the agents test on the Mac with no person at it.
 
