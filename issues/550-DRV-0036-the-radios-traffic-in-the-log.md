@@ -42,6 +42,27 @@ Evidence for this machine only (MC-12.1). The line counts what the driver sees; 
   - Sending works.
   - Next: [550-DRV-0037](../issues-done/550-DRV-0037-802-11b-until-ofdm-is-received.done) offers the station 802.11b only, so the access point keeps to CCK. [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md) goes on looking for why OFDM fails.
 - **The line was cut:** a log record keeps 200 bytes, so the counts after `HT … BAD` were lost. They are now two lines, `SENT` and `RECEIVED`.
+- **2026-10-22, the MacBook Pro under the Effector session: the lost data frames are the sending side's, and 7 tries keep them.**
+  - **The build:** a `bcm_wifi` of the disk's release (50995da9, ABI 16), put in with `replace` through `effector485` on COM22 and put back after each run. It logged each lost data frame (time, length, rate, tries, the status word, the time since the last beacon), and every other 10 s gave unicast data up to 7 tries in place of `wlan`'s 4.
+  - **Where the loss is.** Of 200 pings, 11 were lost, and 11 of the lost frames were 84-byte frames, a ping's request. So a lost ping is a request that never got out, not a reply that never came back.
+  - **What a lost frame looks like.**
+    - All 4 tries fail within 4 to 14 ms: status `00004001`, four tries and no ACK. The frames are protected data of every length, mostly at 11 Mbit/s.
+    - The losses come in episodes of a few seconds, then quiet for a minute.
+    - They are not tied to the access point's beacons: 6.8%, 2.7% and 6.1% lost at 0-10, 10-30 and 30-110 ms after one.
+  - **Not measurable this way.** With control frames kept, the radio passes up no ACK addressed to us, not even for acknowledged frames. So whether the access point's ACK came and was missed cannot be counted.
+  - **4 tries against up to 7, in alternate 10 s periods, two runs:**
+
+| Tries | Periods | Data frames | Lost | Tries a frame |
+|---|---|---|---|---|
+| 4, as `wlan` asks | 27 | 909 | 73 (8.0%) | 1.62 |
+| up to 7 | 16 | 922 | 7 (0.8%) | 1.63 |
+
+  - **What it shows.**
+    - An episode outlasts 4 quick tries but rarely 7: when 7 fail, they span 33 to 41 ms.
+    - Tries a frame are the same, so 7 cost no airtime when the air is clear.
+    - 7 is 802.11's default short retry limit.
+  - **The next task:** `wlan`'s `ATTEMPTS` from 4 to 7 (`wlan/src/main.rs`), asked of `NET` on `internal-dev-messages`. This track's criterion, a run with the share lost at each rate, is met by these runs.
+  - **Seen on the way.** After a `replace` of `bcm_wifi`, the restarted radio is on channel 1 while `wlan` still sends on the network's channel. Its first frames are lost at every rate until `wlan` gives the join up and joins again, about 30 s in all. That is the replace's own cost, not the losses above.
 
 ## Related
 
