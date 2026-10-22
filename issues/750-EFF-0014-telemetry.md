@@ -20,7 +20,7 @@
 - [x] Host tests (`tests/effector_telemetry_host.rs`): the first sample has no rates; rates from two samples; no rate for a restarted process, another boot or a gap over an hour; 48 services fit; percentages at most 100.
 - [x] The fixture checks a sample as the server's `validateTelemetry` does (`tests/effector_server.py`, its test).
 - [x] The `effector` QEMU suite on x86_64: samples the fixture accepts, with processor load, the services with their processes, the boot volume and the guest's address.
-- [ ] The same suite on aarch64.
+- [x] The same suite on aarch64.
 - [ ] On the real server: the monitoring view of a MIND agent filled (750-EFF-0012).
 
 ## Related
