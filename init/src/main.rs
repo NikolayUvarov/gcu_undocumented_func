@@ -62,6 +62,7 @@ const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and thei
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
+const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector", "effector_gw"]; // run only in a mode (750-EFF-0013), once they are boot images
 
@@ -108,7 +109,10 @@ const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
-              boot: idl_init::Boot, modes: idl_init::ModeState }
+              boot: idl_init::Boot, modes: idl_init::ModeState,
+              // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
+              // memory object init holds unmapped, and the image's length.
+              replaced: [Option<(usize, usize)>; UNITS] }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -417,8 +421,9 @@ impl Init {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                     self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
                     grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT);
-                    // Init's lifecycle client that may only reboot, as the updater's (351-KRN-0022).
-                    grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_REBOOT)?, CLIENT);
+                    // Init's lifecycle client that may reboot, as the updater's (351-KRN-0022), and replace a service with an
+                    // image from data/link/ (800-KRN-0144).
+                    grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
                     mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
@@ -786,8 +791,12 @@ impl Init {
         let length = if count == 0 { name.len() } else { name.len() + 1 + count };
         text[..name.len()].copy_from_slice(name.as_bytes());
         if count > 0 { text[name.len() + 1..length].copy_from_slice(&args[..count]); }
-        let pid = mind::process::spawn_raw(&text[..length], Image::Boot(unit_image(index).0), &grants.list[..grants.count], plan.flags, plan.quota)
-            .inspect_err(|_| { for slot in [receiver, scope].into_iter().flatten() { let _ = ipc::drop_cap(slot); } })?;
+        // A replaced service starts from its image in data/link/ (800-KRN-0144): a read-only copy for the kernel to copy.
+        let replaced = match self.replaced[index] { Some((object, len)) => Some((ipc::mint(object, CAP_READ, 0, 0)?, len)), None => None };
+        let image = replaced.map_or(Image::Boot(unit_image(index).0), |(cap, len)| Image::Memory { cap, len });
+        let spawned = mind::process::spawn_raw(&text[..length], image, &grants.list[..grants.count], plan.flags, plan.quota);
+        if let Some((cap, _)) = replaced { let _ = ipc::drop_cap(cap); }
+        let pid = spawned.inspect_err(|_| { for slot in [receiver, scope].into_iter().flatten() { let _ = ipc::drop_cap(slot); } })?;
         self.pids[index] = pid;
         self.starts[index] += 1;
         self.stopped[index] = false;
@@ -865,10 +874,81 @@ impl Init {
         Ok(())
     }
 
+    // A service started from an ELF in data/link/ in place of its boot image, until the next boot (800-KRN-0144). Only
+    // link's developer client asks; the image is not verified against the manifest, and the log says so (MC-12.1).
+    fn replace(&mut self, name: &str, path: &str, badge: u16, sender: u64) -> core::result::Result<(), idl_init::Error> {
+        use idl_init::Error as E;
+        if badge != mind::process::BADGE_DEVELOPER { return Err(refused(sender, badge, "REPLACE", format_args!("REPLACE {}", name), "MC-3.8")); }
+        let index = Self::index(name).filter(|&i| i != 0).ok_or(E::NotFound)?;
+        if Self::kept(index) || matches!(unit_name(index), "vfs_server" | "logd" | "usb_serial" | "link") {
+            mind::println!("[INIT] REPLACE REFUSED: {} CARRIES THE OPERATOR, THE LOG OR THE LINK", unit_name(index));
+            return Err(E::Denied);
+        }
+        // The image leaves init's address space: init keeps a memory object it cannot write (Pages::detach).
+        let image = match path.is_empty() {
+            true => None,
+            false => {
+                let (pages, len) = self.link_image(path)?;
+                let digest = mind::sha256::digest(&pages.as_slice()[..len]);
+                Some((pages.detach().map_err(|_| E::Failed)?, len, digest))
+            }
+        };
+        if self.running(index) { self.stop_service(index)?; }
+        match &image {
+            Some((_, _, digest)) => {
+                let mut hex = [0u8; 64];
+                for (i, b) in digest.iter().enumerate() { hex[2 * i] = b"0123456789abcdef"[(b >> 4) as usize]; hex[2 * i + 1] = b"0123456789abcdef"[(b & 15) as usize]; }
+                mind::println!("[INIT] {} REPLACED FROM {}/{}: SHA-256 {}, NOT VERIFIED", unit_name(index), LINK_DIR, path, core::str::from_utf8(&hex).unwrap_or("?"));
+            }
+            None => mind::println!("[INIT] {} BACK TO ITS BOOT IMAGE", unit_name(index)),
+        }
+        if let Some((old, _)) = self.replaced[index].take() { let _ = ipc::drop_cap(old); }
+        self.replaced[index] = image.map(|(object, len, _)| (object, len));
+        self.start_service(index).map(drop)
+    }
+
+    // An ELF read whole from data/link/<path>, a plain relative name, through a client of the user's files that init
+    // drops at once.
+    fn link_image(&mut self, path: &str) -> core::result::Result<(mind::mem::Pages, usize), idl_init::Error> {
+        use idl_init::Error as E;
+        if path.starts_with('/') || path.contains(':') || path.split('/').any(|part| part.is_empty() || part == "." || part == "..") { return Err(E::NotFound); }
+        let keeper = self.keeper("vfs_server").map_err(|_| E::Failed)?;
+        let client = ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER).map_err(|_| E::Failed)?;
+        let files = Endpoint(client);
+        let read = (|| -> core::result::Result<(mind::mem::Pages, usize), E> {
+            let root = vfs::root(files, "").ok().and_then(|r| r.ok()).ok_or(E::NotFound)?;
+            let dir = vfs::open_dir(files, root, LINK_DIR, false);
+            let _ = vfs::close(files, root);
+            let dir = dir.ok().and_then(|r| r.ok()).ok_or(E::NotFound)?;
+            let file = vfs::open(files, dir, path, 0);
+            let _ = vfs::close(files, dir);
+            let file = file.ok().and_then(|r| r.ok()).ok_or(E::NotFound)?;
+            let read = (|| {
+                let size = vfs::stat(files, file).ok().and_then(|r| r.ok()).ok_or(E::NotFound)?.size as usize;
+                if !(64..=REPLACE_MAX).contains(&size) { return Err(E::Failed); }
+                let mut image = mind::mem::Pages::new(size).ok_or(E::Failed)?;
+                let mut done = 0;
+                while done < size {
+                    let want = (size - done).min(mind::fs::CHUNK);
+                    let got = vfs::read(files, file, done as u32, want as u32, &mut image.as_mut_slice()[done..done + want]).ok().and_then(|r| r.ok()).ok_or(E::Failed)?;
+                    if got == 0 { return Err(E::Failed); }
+                    done += got;
+                }
+                if &image.as_slice()[..4] != b"\x7fELF" { return Err(E::Failed); }
+                Ok((image, size))
+            })();
+            let _ = vfs::close(files, file);
+            read
+        })();
+        let _ = ipc::drop_cap(client);
+        read
+    }
+
     fn list(&self) -> [idl_init::Service; UNITS] {
         core::array::from_fn(|i| idl_init::Service {
             name: wire_text(unit_name(i)), pid: if i == 0 { INIT_PID } else if self.running(i) { self.pids[i] } else { 0 },
             starts: if i == 0 { 1 } else { self.starts[i] }, running: i == 0 || self.running(i), quarantined: self.quarantined[i], holds: wire_text(HOLDS[unit_image(i).0]),
+            replaced: self.replaced[i].is_some(),
         })
     }
 
@@ -901,14 +981,15 @@ impl Init {
                 let result = if service { Err(refused(sender, badge, "STOP", format_args!("STOP PID {}, A SERVICE", pid), "MC-6.8")) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
-            // Only the updater's badged client may restart the machine (351-KRN-0022).
-            Request::Reboot if badge != mind::process::BADGE_REBOOT => {
+            // Only the updater's badged client and link's developer client may restart the machine (351-KRN-0022, 800-KRN-0144).
+            Request::Reboot if !matches!(badge, mind::process::BADGE_REBOOT | mind::process::BADGE_DEVELOPER) => {
                 idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
             }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
             // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
+            Request::Replace { name, path } => { let result = self.replace(name.as_str(), path.as_str(), badge, sender); idl_init::reply_replace(call, result) }
             Request::SetMode { which, on, reason } => {
                 let result = self.set_mode(which, on, reason.as_str(), badge, sender);
                 idl_init::reply_set_mode(call, result)
@@ -1096,7 +1177,7 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
-                         modes: idl_init::ModeState::default() };
+                         modes: idl_init::ModeState::default(), replaced: [None; UNITS] };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));

@@ -188,6 +188,9 @@ pub const BADGE_LIFECYCLE: u16 = 2;
 pub const BADGE_MODE: u16 = 3;
 /// The badge of init's client that may only turn the maintenance mode on, with a reason: the Mind's, once it exists.
 pub const BADGE_MIND: u16 = 4;
+/// The badge of init's lifecycle client for link with `dev` in link.conf: `reboot`, and `replace` a service with an image
+/// from data/link/ (init.wit 1.6, 800-KRN-0144).
+pub const BADGE_DEVELOPER: u16 = 5;
 /// The badge of the shell's command client init mints for link with `dev` in link.conf (800-KRN-0148): the shell takes
 /// that client's lines on the link's rule.
 pub const BADGE_SHELL_LINK: u16 = 1;
