@@ -4955,10 +4955,11 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch):
+def update_releases(temp, arch, changed=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
-    TEMP/server as the release tool lays a server out. Returns the volumes, the server, release 5's channel, release 6's
-    and that one with its signature changed, release 6's manifest, its boot files (name, digest) and a channel maker."""
+    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6. Returns the
+    volumes, the server, release 5's channel, release 6's and that one with its signature changed, release 6's manifest,
+    its boot files (name, digest) and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
@@ -4966,6 +4967,9 @@ def update_releases(temp, arch):
     sign_manifest.sign_volume(volume)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
+    if changed:
+        with open(newer / changed, "ab") as elf:  # bytes past the ELF's segments: another file, loaded the same
+            elf.write(b"release 6 of the update suite\0")
     commit, toolchain, locks = sign_manifest.build_inputs()
     sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
     server = temp / "server"
@@ -4997,8 +5001,12 @@ def update_suite(args):
         return
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
-    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf")
     largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+    # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
+    applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
+                    if name.endswith(".elf") and "/" not in name and name != "kernel.elf" and name not in boot_slots.BOOT_FILES]
+    changed = next(digest for name, digest in applications if name == "uptime.elf")
     certificates = temp / "tls"
     certificates.mkdir()
     _certificates(certificates)
@@ -5038,6 +5046,8 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
         assert "PARSER: THE SHARED SERVICE" not in log, log
+        # 351-KRN-0151: slot A, laid out without applications, runs the root's.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE")
         (server / "channels/stable").write_bytes(forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
@@ -5075,11 +5085,19 @@ def update_suite(args):
         fetched = re.findall(r"\[UPDATER\] FETCH: \d+ OF \d+: [^\n]*", attempt)
         # init's confirmation is a kernel line that can land inside the shell's first prompt (M…IND>): the suite waits for
         # the line, whole, then for a fresh prompt (000-KRN-0136).
-        out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        try:
+            out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=1500, after="BOOT: SLOT B LOADED ON TRIAL")
+        except AssertionError:
+            # What the updater did after staging: its lines are in the log service, not on the serial line.
+            try:
+                print(vm.command("dmesg -s updater", raw=True)[-4000:], flush=True)
+            except AssertionError:
+                pass
+            raise
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
         slowest = max(fetched, key=lambda line: int(re.search(r"IN (\d+) MS", line)[1]), default="none")
-        print(f"TIME: the updater fetched {len(fetched)} boot files; the slowest: {slowest}", flush=True)
+        print(f"TIME: the updater staged {len(fetched)} files; the slowest: {slowest}", flush=True)
         for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
             print(f"TIME: the resume: {line}", flush=True)
         for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
@@ -5093,6 +5111,9 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
+        # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/B/")
+        require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         logged("[UPDATER] CHECK: REFUSED: Older", 60)
         assert "PANIC" not in vm.log, vm.log[-2000:]
     finally:
@@ -5102,14 +5123,19 @@ def update_suite(args):
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
     assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
-    for name, digest in boot_files:
+    for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
+    # Only the application release 6 changed came from the server; the others were copied from the volume's root.
+    asked = {path for path, _ in https.requests}
+    assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater as soon as init confirmed it; the file system is consistent", flush=True)
+          "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
+          "the one it changed fetched and the others copied from the volume, and the trial runs them from there; the file "
+          "system is consistent", flush=True)
 
 
 def mindlink_tool():
@@ -6498,6 +6524,10 @@ def net_suite(args, disk):
             print("SKIP: the Wi-Fi station in the boot services needs the wlansim fixture (scripts/x86_fixtures.sh, build_aarch64.sh --fixtures)", flush=True)
         require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
         ping_options_check(vm)
+        # 000-NET-0039: echo requests to an address on the card's network that no host has (slirp answers ARP only for its
+        # own) are lost, and the gateway's answer still comes: each request has a socket of its own, not the card's queue.
+        require(vm.command("ping -c 3 10.0.2.200", timeout=30), "PING: 3 SENT, 0 RECEIVED")
+        require(vm.command("ping -c 3 10.0.2.2", timeout=30), "PING: 3 SENT, 3 RECEIVED")
         # wm's `show = net` line gives the frames a second (000-APP-0049): every card's as the stack counts them, the
         # Wi-Fi station's too, from the shell (shell.wit 1.7, 000-APP-0096); the card client badged BADGE_COUNTERS the
         # shell lends for REQUEST_NET_COUNTERS stays wm's second source.
@@ -6572,6 +6602,12 @@ def net_suite(args, disk):
         out = vm.command("netcheck sessions", timeout=120)
         require(out, "NETCHECK sessions: 10 OF 10 WITH A PARSER OF THEIR OWN")
         require(out, "NETCHECK sessions OK")
+        # 000-NET-0040 (socket.wit 2.6): an echo of 1000 bytes of a pattern comes back whole and the same; one of none
+        # with the stack's own pattern; one over 1472 bytes is refused.
+        out = vm.command("netcheck echo:10.0.2.2:1000:a55a0f echo:10.0.2.2:0: echo:10.0.2.2:1473:00", timeout=60)
+        for line in ("NETCHECK echo: 1000 BYTES BACK IN", "NETCHECK echo:10.0.2.2:1000:a55a0f OK", "NETCHECK echo: 0 BYTES BACK IN",
+                     "NETCHECK echo:10.0.2.2:0: OK", "NETCHECK echo:10.0.2.2:1473:00 Invalid"):
+            require(out, line)
         counters = re.search(r"SENT=(\d+) RECEIVED=(\d+) DROPPED=(\d+) INTERRUPTS=(\d+)", vm.command("net"))
         assert counters and int(counters[1]) >= 5 and int(counters[2]) >= 5 and int(counters[4]) >= 1, counters  # sent, received, interrupts
         _msix_only(vm)

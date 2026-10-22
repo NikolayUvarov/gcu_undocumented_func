@@ -6,7 +6,7 @@ mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
 
-use plan::{confirm, may_stage, newest, other, trial_of_other};
+use plan::{confirm, kind, may_stage, newest, other, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -87,4 +87,17 @@ fn a_sequence_that_could_not_count_on_is_not_written() {
     assert_eq!(trial_of_other([Some(rec(last - 1, b'A', 0, 0, true)), None], b'A', 3), Some((1, rec(last, b'B', b'A', 3, false))));
     assert_eq!(trial_of_other([Some(rec(last, b'A', 0, 0, true)), None], b'A', 3), None);
     assert_eq!(confirm([Some(rec(last, b'A', b'B', 1, false)), None], b'A'), None);
+}
+
+#[test]
+fn a_manifest_splits_into_boot_files_applications_and_shared_files() {
+    let boot = ["init.elf", "shell.elf"];
+    assert_eq!(kind("kernel.elf", &boot), Kind::Boot);
+    assert_eq!(kind("init.elf", &boot), Kind::Boot);
+    assert_eq!(kind("SHELL.ELF", &boot), Kind::Boot, "a volume's name in another case");
+    assert_eq!(kind("wm.elf", &boot), Kind::Application);
+    assert_eq!(kind("UPTIME.ELF", &boot), Kind::Application);
+    for shared in ["EFI/BOOT/BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf"] {
+        assert_eq!(kind(shared, &boot), Kind::Shared, "{}", shared);
+    }
 }
