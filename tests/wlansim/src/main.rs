@@ -8,7 +8,9 @@
 // It takes a country's limits (wlanhw.wit 1.2, 550-NET-0035): then it tunes only to their channels and refuses a probe
 // request where the station may only listen. Until limits are first set it keeps 1.1's ways, as the station of stage A
 // sets none. With the test-only feature `slow` (550-NET-0030) it answers nothing for its first LATE_MS, and for
-// SILENT_MS after the station asks (ARP) for SILENT_ADDRESS. A test service: in no image but the tests'.
+// SILENT_MS after the station asks (ARP) for SILENT_ADDRESS. When the station asks for GONE_ADDRESS the access point
+// goes away (550-NET-0041): a deauthentication, then GONE_MS with no beacon and no answer, while the radio answers its
+// calls. A test service: in no image but the tests'.
 use dot11::frame::{self, Mac, BROADCAST, ETHERTYPE_EAPOL, FROM_DS, PROTECTED, SNAP, TO_DS, TYPE_DATA, TYPE_MANAGEMENT};
 use mind::abi::BootInfo;
 use mind::idl::codec::List;
@@ -46,6 +48,10 @@ const SILENT_MS: u64 = 20_000;
 #[cfg(feature = "slow")]
 const SILENT_ADDRESS: [u8; 4] = [10, 0, 4, 99];
 
+// The access point goes away for GONE_MS when the station asks (ARP) for GONE_ADDRESS: a network lost (550-NET-0041).
+const GONE_ADDRESS: [u8; 4] = [10, 0, 4, 98];
+const GONE_MS: u64 = 25_000;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Expect { Nothing, Message2, Message4 }
 
@@ -71,6 +77,8 @@ struct Sim {
     limits: Option<Vec<(u8, bool)>>,
     // Until when (uptime, ms) the radio answers nothing: set only with the feature `slow`.
     silent_until: Option<u64>,
+    // Until when (uptime, ms) the access point is away: no beacon, no answer to the station.
+    gone_until: Option<u64>,
 }
 
 fn mac64(m: &Mac) -> u64 { m.iter().fold(0, |v, &b| v << 8 | b as u64) }
@@ -165,8 +173,18 @@ impl Sim {
         self.eapol(&m[..len]);
     }
 
+    // Whether the access point is away at `now`; it says so once it is back.
+    fn gone(&mut self, now: u64) -> bool {
+        let Some(until) = self.gone_until else { return false };
+        if now < until { return true; }
+        self.gone_until = None;
+        mind::println!("[WLANSIM] THE ACCESS POINT IS BACK");
+        false
+    }
+
     // What the access point does with a frame the station sent on its channel; whether it was acknowledged.
     fn station_sent(&mut self, f: &[u8]) -> bool {
+        if self.gone(mind::time::uptime_ms() as u64) { return false; }
         let Ok(h) = frame::header(f) else { return false };
         if h.kind == TYPE_MANAGEMENT {
             match h.subtype {
@@ -245,6 +263,17 @@ impl Sim {
 
     // The network behind the access point: DHCP, ARP for the gateway, ICMP echo to it.
     fn network(&mut self, source: &Mac, ethertype: u16, p: &[u8]) {
+        if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == GONE_ADDRESS {
+            mind::println!("[WLANSIM] THE ACCESS POINT GOES AWAY FOR {} S: A DEAUTHENTICATION, THEN NO BEACON OR ANSWER", GONE_MS / 1000);
+            let mut r = self.header(frame::DEAUTHENTICATION, &OWN);
+            r.extend_from_slice(&3u16.to_le_bytes());
+            self.hear(&r);
+            self.associated = false;
+            self.tk = None;
+            self.expect = Expect::Nothing;
+            self.gone_until = Some(mind::time::uptime_ms() as u64 + GONE_MS);
+            return;
+        }
         #[cfg(feature = "slow")]
         if ethertype == 0x0806 && p.len() >= 28 && p[6..8] == [0, 1] && p[24..28] == SILENT_ADDRESS {
             mind::println!("[WLANSIM] SILENT FOR {} S", SILENT_MS / 1000);
@@ -318,6 +347,7 @@ impl Sim {
     }
 
     fn tick(&mut self, now: u64) {
+        if self.gone(now) { return; }
         if now >= self.beacon_at {
             self.beacon_at = now + BEACON_MS;
             if self.channel == CHANNEL { let b = self.announcement(frame::BEACON, &BROADCAST); self.hear(&b); }
@@ -369,7 +399,7 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     let mut sim = Sim { channel: 0, filter: wlanhw::Filter::default(), queue: Vec::new(), waiters: Vec::new(), beacon_at: 0, sequence: 0,
                         associated: false, authenticator: None, expect: Expect::Nothing, tries: 0, tk: None, replay: Replay::default(), pn: 0,
-                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, silent_until: None };
+                        gtk: Gtk { id: 1, key: random32()[..16].try_into().unwrap_or([7; 16]) }, group_pn: 0, refused: false, limits: None, silent_until: None, gone_until: None };
     mind::println!("[WLANSIM] READY: {} ON CHANNEL {}", core::str::from_utf8(SSID).unwrap_or("?"), CHANNEL);
     #[cfg(feature = "slow")]
     {

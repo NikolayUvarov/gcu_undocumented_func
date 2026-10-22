@@ -1,6 +1,6 @@
 # 550-NET-0041 — `wlan` joins a remembered network by itself, at start and after the network is lost
 
-**Type:** network (service) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Type:** network (service) · **Owner:** `NET` track: the kernel session, its owner (the maintainer, 2026-10-22) · **Priority:** P1 · **Status:** made (2026-10-22); the `net` suite's runs and the gate left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 From the request "`wlan` joins a remembered network by itself, at start and after the network is lost (550)" in requests-NET.md (2026-10-22). The kernel track recorded it at the maintainer's word of that day ("a NET task"), taking up the link track's request (`internal-dev-messages`, `NET/2026-10-22T1038Z-LNK-…`). This task takes it from that file.
 
@@ -39,6 +39,30 @@ From the request "`wlan` joins a remembered network by itself, at start and afte
   - after `wifi leave`, no join follows;
   - a lost network is joined again, each attempt in the log.
 - [ ] Host tests for the retry schedule and the choice of network.
+
+## Progress (2026-10-22)
+
+- **`wlan/src/auto.rs`** holds the schedule and the choice, with no I/O:
+  - a try every 10 s for the first two minutes of a search, then one a minute;
+  - the network last joined first, when heard, else the strongest remembered network heard;
+  - `wifi leave` turns it off until the station next joins.
+  - `tests/wlan_auto_host.rs` checks these, and passed.
+- **`wlan`.**
+  - A try runs when the station is neither joined nor busy (no scan, no join, no rejoin of its own), with something remembered.
+  - Each try ends in one log line: `[WLAN] AUTO-JOIN MIND-TEST: JOINED (TRY 3)`, `[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK HEARD, 1 KEPT (TRY 1), AGAIN IN 10 S`, or the join's reason.
+  - A client's join stops an automatic scan, and puts the next try 10 s off.
+  - Without a random source the station says once that it tries nothing by itself.
+  - `wifi leave` logs `[WLAN] LEFT THE NETWORK: NO AUTOMATIC JOIN UNTIL THE NEXT ONE`.
+- **`tests/wlansim`.** An ARP for 10.0.4.98 sends the access point away: a deauthentication, then 25 s with no beacon and no answer, while the radio answers its calls.
+- **The `net` suite** (`wifi_join_check`):
+  - after `keystore` and `wlan` restart, the remembered network is joined with no command;
+  - the access point goes away, and the station's failed tries are logged with their numbers before it joins again by itself;
+  - after `wifi leave`, there is no join for 25 s, and `wifi status` says OFF.
+- **Docs.**
+  - [docs/network/station.md](../docs/network/station.md) is new;
+  - `wlan`'s row in [docs/profile/bootstrap.md](../docs/profile/bootstrap.md) says what it joins by itself;
+  - the `wifi` guide is the tools track's ([requests-APP.md](requests-APP.md)).
+- **The first try's place.** The most recently joined network across restarts needs a field in `keystore`'s record. Until then, "last joined" means since `wlan` started.
 
 ## Related
 

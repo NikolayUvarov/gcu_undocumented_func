@@ -7,6 +7,8 @@
 // each handshake's keys: the station holds no PMK of a remembered network (MC-11.9). The country (wifi.wit 1.1,
 // 550-NET-0035) needs the regulatory catalogue, not in this build yet (stage A): its calls answer `unsupported`, no
 // country is applied, and the station keeps to the rules that hold before one is known (probes on 1 to 11 alone).
+// At start and after a network is lost it joins a remembered one heard by itself, trying again and logging each try,
+// until `wifi leave` (550-NET-0041): a boot service, so every release through the link brings it.
 use dot11::scan::{Bss, Security};
 use dot11::station::{Out, Reason, Secret, State, Station, ETHERNET_MAX, FRAME_MAX};
 use mind::abi::BootInfo;
@@ -15,6 +17,7 @@ use mind::idl::codec::List;
 use mind::idl::{keystore, net, wifi, wire, wlanhw};
 use mind::ipc::Endpoint;
 use mind::network::{BADGE_COUNTERS, BADGE_WIFI, BADGE_WIFI_CHANGE};
+mod auto;
 mod service_turn;
 
 extern crate alloc;
@@ -77,6 +80,10 @@ impl Queue {
     }
 }
 
+// An automatic try under way: its scan, then its join of a remembered network (its name), and its number.
+#[derive(Clone, Copy)]
+enum Try { Scanning(u32), Joining([u8; 32], usize, u32) }
+
 struct Wlan {
     station: Station,
     deadline: Deadline,
@@ -90,6 +97,10 @@ struct Wlan {
     counters: net::Counters,
     waiters: [Option<wire::Call>; WAITERS],
     scans: [Option<wire::Call>; WAITERS],
+    auto: auto::Auto,
+    trying: Option<Try>,
+    // The network last joined, tried first after it is lost.
+    previous: ([u8; 32], usize),
 }
 
 impl Wlan {
@@ -257,7 +268,10 @@ impl Wlan {
                 let mut out = Out::default();
                 self.station.leave(&mut out, &mut self.tx);
                 self.apply(out);
-                mind::println!("[WLAN] LEFT THE NETWORK");
+                // The user's word: no automatic join until the station next joins a network.
+                self.auto.left();
+                self.trying = None;
+                mind::println!("[WLAN] LEFT THE NETWORK: NO AUTOMATIC JOIN UNTIL THE NEXT ONE");
                 wifi::reply_leave(call, Ok(()))
             }
             wifi::Request::Forget { ssid } => {
@@ -288,6 +302,16 @@ impl Wlan {
 
     fn join(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
         if !self.radio { return Err(wifi::Error::NoDevice); }
+        // A client's join ends an automatic try (its scan is stopped, so the station takes the join), and the next try
+        // waits a first wait, so the client's outcome is the station's for a while.
+        if let Some(Try::Scanning(_)) = self.trying.take() {
+            if self.station.state() == State::Scanning { let mut out = Out::default(); self.station.leave(&mut out, &mut self.tx); self.apply(out); }
+        }
+        self.auto.idle(now);
+        self.join_kept(ssid, passphrase, remember, now)
+    }
+
+    fn join_kept(&mut self, ssid: &[u8], passphrase: &str, remember: bool, now: u64) -> Result<(), wifi::Error> {
         let bss = self.station.networks().best(ssid).copied();
         let secret = match bss.map(|b| b.security) {
             Some(Security::Wpa2) => {
@@ -310,6 +334,72 @@ impl Wlan {
         }
     }
 
+    // The automatic join (550-NET-0041): when the station is not joined, a scan, then the remembered network heard (the
+    // one last joined first, else the strongest) with its kept key; each try ends in one line of the log.
+    fn auto_join(&mut self, now: u64) {
+        let state = self.station.state();
+        if state == State::Joined {
+            if let Some(Try::Joining(name, len, number)) = self.trying.take() {
+                mind::println!("[WLAN] AUTO-JOIN {}: JOINED (TRY {})", Name(&name[..len]), number);
+            }
+            if let Some(bss) = self.station.network() { let s = bss.ssid(); self.previous.0[..s.len()].copy_from_slice(s); self.previous.1 = s.len(); }
+            self.auto.joined();
+            return;
+        }
+        match self.trying {
+            Some(Try::Scanning(number)) if state != State::Scanning => {
+                self.trying = None;
+                let kept = remembered(self.deadline);
+                let heard = self.station.networks().iter().filter(|b| matches!(b.security, Security::Wpa2 | Security::Open)).map(|b| (b.ssid(), b.weakness));
+                let mut name = ([0u8; 32], 0);
+                if let Some(ssid) = auto::choose(heard, |s| kept.as_slice().iter().any(|k| k.ssid.as_slice() == s), &self.previous.0[..self.previous.1]) {
+                    name.0[..ssid.len()].copy_from_slice(ssid);
+                    name.1 = ssid.len();
+                }
+                if name.1 == 0 {
+                    let wait = self.auto.ended(now) / 1000;
+                    mind::println!("[WLAN] AUTO-JOIN: NO REMEMBERED NETWORK HEARD, {} KEPT (TRY {}), AGAIN IN {} S", kept.as_slice().len(), number, wait);
+                    return;
+                }
+                match self.join_kept(&name.0[..name.1], "", false, now) {
+                    Ok(()) => self.trying = Some(Try::Joining(name.0, name.1, number)),
+                    Err(error) => {
+                        let wait = self.auto.ended(now) / 1000;
+                        mind::println!("[WLAN] AUTO-JOIN {}: {:?} (TRY {}), AGAIN IN {} S", Name(&name.0[..name.1]), error, number, wait);
+                    }
+                }
+            }
+            Some(Try::Joining(name, len, number)) if state != State::Joining => {
+                self.trying = None;
+                let wait = self.auto.ended(now) / 1000;
+                mind::println!("[WLAN] AUTO-JOIN {}: {} (TRY {}), AGAIN IN {} S", Name(&name[..len]), said(self.station.reason()), number, wait);
+            }
+            Some(_) => {}
+            // A client's scan, or the station's own rejoin of a network just lost, goes first.
+            None if !self.radio || !self.auto.due(now) || matches!(state, State::Scanning | State::Joining) => {}
+            None => {
+                if remembered(self.deadline).is_empty() { self.auto.idle(now); return; }
+                // A remembered network is WPA2's: without a random source its handshake is refused (issue 103), so no try.
+                if !mind::random::available() {
+                    mind::println!("[WLAN] AUTO-JOIN OFF: NO {}, WHICH A REMEMBERED NETWORK'S HANDSHAKE NEEDS", mind::random::SOURCE);
+                    self.auto.left();
+                    return;
+                }
+                let number = self.auto.begin(now);
+                let mut out = Out::default();
+                let started = self.station.scan(now, &mut out, &mut self.tx);
+                self.apply(out);
+                match started {
+                    Ok(()) => self.trying = Some(Try::Scanning(number)),
+                    Err(error) => {
+                        let wait = self.auto.ended(now) / 1000;
+                        mind::println!("[WLAN] AUTO-JOIN: NO SCAN, {:?} (TRY {}), AGAIN IN {} S", error, number, wait);
+                    }
+                }
+            }
+        }
+    }
+
     fn status(&self) -> wifi::Status {
         let state = match self.station.state() {
             State::Off => wifi::State::Off, State::Scanning => wifi::State::Scanning, State::Joining => wifi::State::Joining,
@@ -327,6 +417,14 @@ impl Wlan {
             if state == wifi::State::Joined { status.rate = self.station.data_rate(); }
         }
         status
+    }
+}
+
+// Why the station failed or lost its network, for the log.
+fn said(reason: Reason) -> &'static str {
+    match reason {
+        Reason::WrongPassphrase => "WRONG PASSPHRASE", Reason::NoAnswer => "NO ANSWER", Reason::Refused => "REFUSED",
+        Reason::NotFound => "NOT FOUND", Reason::Unsupported => "UNSUPPORTED", Reason::Lost => "LOST", Reason::None => "LEFT",
     }
 }
 
@@ -357,7 +455,7 @@ fn main(_info: &'static BootInfo) {
     let mut wlan = Wlan { station: Station::new([0; 6], &[], false), deadline: Deadline::after(0, 0), radio: false, own: [0; 6], tx: [0; FRAME_MAX], rx: [0; ETHERNET_MAX],
                           radio_frame: [0; FRAME_MAX + RADIO_HEADER],
                           queue: Queue { frames: alloc::vec![0; QUEUE * ETHERNET_MAX], lens: [0; QUEUE], head: 0, count: 0 }, counters: net::Counters::default(),
-                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS] };
+                          waiters: [const { None }; WAITERS], scans: [const { None }; WAITERS], auto: auto::Auto::new(), trying: None, previous: ([0; 32], 0) };
     let mut scratch = [0u8; net::REQUEST_MAX];
     let mut last = State::Off;
     let (mut asked, mut waited) = (0u64, false);
@@ -393,11 +491,12 @@ fn main(_info: &'static BootInfo) {
                 }
             }
         }, |wlan| wlan.radio && wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some(), Wlan::pump);
+        if wlan.deadline.remaining(mind::time::monotonic_ns() / 1_000_000).is_some() { wlan.auto_join(mind::time::uptime_ms() as u64); }
         let state = wlan.station.state();
         if state != last {
-            mind::println!("[WLAN] {:?}{}", state, if state == State::Failed || wlan.station.reason() == Reason::Lost { match wlan.station.reason() {
-                Reason::WrongPassphrase => ": WRONG PASSPHRASE", Reason::NoAnswer => ": NO ANSWER", Reason::Refused => ": REFUSED",
-                Reason::NotFound => ": NOT FOUND", Reason::Unsupported => ": UNSUPPORTED", Reason::Lost => ": LOST", Reason::None => "" } } else { "" });
+            let reason = wlan.station.reason();
+            let shown = (state == State::Failed && reason != Reason::None) || reason == Reason::Lost;
+            mind::println!("[WLAN] {:?}{}{}", state, if shown { ": " } else { "" }, if shown { said(reason) } else { "" });
             last = state;
         }
     }
