@@ -1962,7 +1962,8 @@ def fm_check(vm):
     vm.serial()  # Enter: into docs
     assert canon("A:/") in screen[0] and canon("10Quit") in screen[-1], (screen[0], screen[-1])
     assert table_row(screen, r"║EFI +│.SUB-DIR.│\d{4}-\d\d-\d\d│\d\d:\d\d║"), screen
-    assert table_row(screen, r"║kernel\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
+    # A file's row, its size and date: the first file, as the root's files grow with the boot images (750-KRN-0119).
+    assert table_row(screen, r"║ahci\.elf +│ +\d+│\d{4}-\d\d-\d\d│"), screen
     assert "CURRENT=.." in poke("[FM] LEFT=/docs FULL")
     # F3 views notes.txt in the built-in viewer; Esc comes back.
     keys(b"\x1b[B", "CURRENT=notes.txt")
