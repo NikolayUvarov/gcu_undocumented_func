@@ -1,6 +1,6 @@
 # 800-NET-0038 — A network policy client that may only launch, for the link's developer mode
 
-**Type:** network (service) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the broker's part built and host-tested; its QEMU check waits for `init`'s part) · **Blocked by:** for `link`'s client, `init` minting it with the badge ([800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.md)) · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Roadmap:** track D · **Constitution:** MC-11.3, MC-11.6, Appendix B.6
+**Type:** network (service) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** in progress (the broker's part in `main` through landing round 8; its QEMU check waits for `init`'s part) · **Blocked by:** for `link`'s client, `init` minting it with the badge ([800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.md)) · **Main task:** — (for [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md)) · **Roadmap:** track D · **Constitution:** MC-11.3, MC-11.6, Appendix B.6
 
 From LNK's question "flow grants for the programs `link` starts, in its developer mode" (internal-dev-messages, NET/, 2026-10-21 06:00 UTC).
 
@@ -39,6 +39,11 @@ From LNK's question "flow grants for the programs `link` starts, in its develope
   - `docs/network/policy.md` 0.4, `docs/idl`.
 - **Tested on the host:** `tests/netpolicy_host.rs`.
 - **Left:** the QEMU check needs a program with a launcher's client. `link` in developer mode will hold one once `init` mints it (800-KRN-0142). No program holds one before that.
+
+## Progress (2026-10-22)
+
+- **The broker's part is in `main`** through landing round 8 (`claude/relaxed-meitner-5bmhpz` a1488f4d, merged as 50bc8bd6; candidate aa50204e gated in full): `netpolicy.wit` 1.2 `denied`, `BADGE_LAUNCH` and `may_change_policy` in `libmind/src/network.rs`, the refusals in `netpolicy`, and `tests/netpolicy_host.rs`.
+- **Left:** `init` minting `link`'s client with `BADGE_LAUNCH` ([800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.md)), then the QEMU check.
 
 ## Related
 

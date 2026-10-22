@@ -63,6 +63,6 @@ All three tasks are done, with the kernel and tools tracks' parts made for them:
 - A malformed head is refused and logged there.
 
 The recorded items:
-- **Per-session parser instances:** [109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md).
+- **Per-session parser instances:** [109-NET-0010](109-NET-0010-a-parser-per-session.done).
 - **The updater's metadata through `parse`:** a plan item of [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done).
 - **B.6's external medium path:** recorded as a gap in the authority map; it is not the network track's, and no task has it yet.

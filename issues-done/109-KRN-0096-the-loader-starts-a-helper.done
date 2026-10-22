@@ -4,7 +4,7 @@
 
 ## Problem
 
-[109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md) needs a parser process for each session, "started by the session's launcher with no client at all, not even the standard ones `loader` gives a program". The maintainer asked the kernel session to do it (2026-10-12).
+[109-NET-0010](109-NET-0010-a-parser-per-session.done) needs a parser process for each session, "started by the session's launcher with no client at all, not even the standard ones `loader` gives a program". The maintainer asked the kernel session to do it (2026-10-12).
 
 `loader` could not:
 
@@ -33,4 +33,4 @@ In `main` at 289e84b; the gate of 10d3ec3 passed every group on 2026-10-20 (un-r
 
 ## Related
 
-[109-NET-0010](../issues/109-NET-0010-a-parser-per-session.md), `loader/src/main.rs`, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md) (rule 5).
+[109-NET-0010](109-NET-0010-a-parser-per-session.done), `loader/src/main.rs`, [docs/profile/bootstrap.md](../docs/profile/bootstrap.md) (rule 5).

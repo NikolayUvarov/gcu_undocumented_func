@@ -1244,7 +1244,8 @@ impl Scheduler {
         let result: Result<usize, usize> = match request.syscall_num {
             SYSCALL_RDTSC | SYSCALL_UPTIME | SYSCALL_CLOCK => Ok(clock_syscall(request.syscall_num, ptr).unwrap()),
             // The legacy byte of the next event that has one (events without a byte are skipped).
-            SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 => break event_byte(event) as usize, Some(_) => {} } }),
+            // A pointer event's byte is its horizontal steps, never a key's (211-KRN-0150).
+            SYSCALL_READ_KEY => Ok(loop { match task.input.pop() { None => break 0, Some(event) if event_byte(event) != 0 && event_key(event) != KEY_POINTER => break event_byte(event) as usize, Some(_) => {} } }),
             SYSCALL_READ_INPUT => Ok(task.input.pop().unwrap_or(0)),
             SYSCALL_INPUT_POINTER => { task.pointer = request.arg1 != 0; Ok(0) }
             SYSCALL_LOG => {
