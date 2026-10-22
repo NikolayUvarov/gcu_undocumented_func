@@ -137,10 +137,24 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
+    /// `thousandths` / 1000 as a decimal number with three places (`12.345`), for rates and percentages.
+    pub fn decimal(&mut self, thousandths: u64) -> Result<(), Error> {
+        self.value()?;
+        let (mut v, mut digits) = (thousandths / 1000, [0u8; 24]);
+        let mut i = digits.len() - 4;
+        let fraction = thousandths % 1000;
+        digits[i..].copy_from_slice(&[b'.', b'0' + (fraction / 100) as u8, b'0' + (fraction / 10 % 10) as u8, b'0' + (fraction % 10) as u8]);
+        loop { i -= 1; digits[i] = b'0' + (v % 10) as u8; v /= 10; if v == 0 { break; } }
+        self.bytes(&digits[i..])?;
+        self.closed();
+        Ok(())
+    }
+
     /// `"key": "value"` inside an object.
     pub fn field_str(&mut self, k: &str, v: &str) -> Result<(), Error> { self.key(k)?; self.string(v) }
     pub fn field_u64(&mut self, k: &str, v: u64) -> Result<(), Error> { self.key(k)?; self.unsigned(v) }
     pub fn field_bool(&mut self, k: &str, v: bool) -> Result<(), Error> { self.key(k)?; self.boolean(v) }
+    pub fn field_decimal(&mut self, k: &str, thousandths: u64) -> Result<(), Error> { self.key(k)?; self.decimal(thousandths) }
 }
 
 use Error::Order;

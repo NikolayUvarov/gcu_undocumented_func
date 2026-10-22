@@ -5,7 +5,11 @@
 /// asked (MC-3.8, MC-3.11), and is audited before it is answered (MC-10.3); a failed audit write refuses it (MC-10.6).
 /// Data leaves the machine only through `open-log`, `open-file` and `open-screen`, each named by the policy (MC-10.7).
 /// A transfer has one handle at a time; a request runs to its end before the next one is read.
-package mind:effector@1.0.0;
+///
+/// 1.1 (750-EFF-0014): `sample`, the counters the session publishes as the server's telemetry: the processors' time,
+/// the program memory, the boot services' processes and the volumes' space. Like `status`, it carries no file, log or
+/// screen data and changes nothing.
+package mind:effector@1.1.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -58,6 +62,16 @@ interface effector {
     /// read (the system's uptime in ms).
     record policy-summary { version: u16, sha256: string<64>, rules: u16, read-ms: u64 }
 
+    /// A boot service's process for telemetry (1.1): its state, its PID (0: none), its CPU time and when it started (ns
+    /// of uptime, which tells a restarted process from the old one), and its memory (image, stack, heap and screen).
+    record load { name: string<16>, state: service-state, pid: u64, run-ns: u64, started-ns: u64, memory: u64 }
+    /// A volume's size and free space in bytes (1.1): the boot volume (empty name), `ram`, `log`.
+    record space { name: string<16>, bytes: u64, free: u64 }
+    /// The counters of one telemetry sample (1.1): the online processors and their busy and idle time since boot (ns),
+    /// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
+    /// session turns two samples into rates.
+    record sample { cpus: u16, busy-ns: u64, idle-ns: u64, uptime-ms: u64, memory-total: u64, memory-free: u64, services: list<load, 48>, volumes: list<space, 4> }
+
     /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
     status: func() -> status;
     /// Starts, stops or restarts a boot service the policy names for that action. `init`, the shell and the agent's
@@ -98,4 +112,6 @@ interface effector {
     reload-policy: func() -> result<policy-summary, error>;
     /// The owner only: the last `count` audit lines (at most 16), newest last.
     audit: func(count: u8) -> result<list<string<256>, 16>, error>;
+    /// The telemetry counters (1.1, after the 1.0 calls so their numbers stay). Allowed to both clients; changes nothing.
+    sample: func() -> sample;
 }

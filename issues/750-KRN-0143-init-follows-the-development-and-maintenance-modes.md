@@ -64,6 +64,19 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
   - `BADGE_MIND`'s holder, the Mind;
   - the three-reboot criterion.
 
+## Progress (2026-10-22)
+
+**The services' part** is made with 750-KRN-0119 (ABI 16):
+- both Effector services start once a mode is read, and stop when none is on;
+- a client may not start them without a mode;
+- the `modes` suite checks this both ways (x86).
+
+**Left:**
+- `set-mode` through `BADGE_MODE`, once the shell's `mode` command calls it;
+- `BADGE_MIND`'s holder;
+- the three-reboot criterion;
+- the safe start's maintenance case.
+
 ## Settled
 
 - **A safe start** (000-KRN-0076) starts both services when the maintenance mode is on: help from outside is what a machine that failed to boot needs (the maintainer, 2026-10-21, through EFF). Whether a safe start keeps the development mode was not asked.

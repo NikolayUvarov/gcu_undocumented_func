@@ -22,7 +22,9 @@ import urllib.parse
 
 CONTRACT = "effector-agent 1.0"
 JSON_LIMIT = 64 * 1024
+ACK_LIMIT = 4 * 1024 * 1024  # a result with an artifact inline (a 2 MiB PNG as base64); the server takes 12 MiB
 FILE_LIMIT = 1024 * 1024
+MAX_SAMPLES = 64
 MAX_COMMANDS = 128
 MAX_AGENTS = 8
 MAX_FILES = 16
@@ -127,7 +129,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not re.fullmatch(r"[0-9]{1,10}", lengths[0]):
             raise ValueError("invalid Content-Length")
         length = int(lengths[0])
-        if length > (FILE_LIMIT if binary else JSON_LIMIT):
+        if length > (FILE_LIMIT if binary else ACK_LIMIT if self.route == "/api/commands/ack" else JSON_LIMIT):
             raise OverflowError("fixture body limit exceeded")
         data = self.rfile.read(length)
         if len(data) != length:
@@ -349,11 +351,63 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 fixture.deployment_results.append(data)
                 self._reply(200, {"status": "ok"})
             elif self.route == "/api/telemetry":
-                if not identifier(self.headers.get("X-Effector-Agent-ID")):
-                    raise ValueError("agent header required")
+                agent = self.headers.get("X-Effector-Agent-ID")
+                if not identifier(agent) or agent not in fixture.agents:
+                    self._error(404, "endpoint not found")
+                    return
+                problem = telemetry_problem(data)
+                if problem:
+                    self._error(400, "invalid telemetry sample: " + problem)
+                    return
+                if len(fixture.telemetry) >= MAX_SAMPLES:
+                    fixture.telemetry.popleft()
+                fixture.telemetry.append({"agent_id": agent, "sample": data})
+                fixture.changed.notify_all()
                 self._reply(204)
             else:
                 self._error(404, "unknown route")
+
+
+def telemetry_problem(sample):
+    """What the Effector server's validateTelemetry (server/telemetry_store.go) would refuse in a schema 1 sample."""
+    if not isinstance(sample, dict) or sample.get("schema") != 1:
+        return "schema"
+    if not isinstance(sample.get("sample_id"), str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,96}", sample["sample_id"]):
+        return "sample_id"
+    interval = sample.get("interval_seconds")
+    if not isinstance(interval, (int, float)) or not 0 < interval <= 3600:
+        return "interval_seconds"
+    if not isinstance(sample.get("sampled_at"), str) or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d:\d\d)", sample["sampled_at"]):
+        return "sampled_at"
+    system = sample.get("system")
+    if not isinstance(system, dict) or not isinstance(system.get("logical_cpus"), int) or not 1 <= system["logical_cpus"] <= 65536:
+        return "logical_cpus"
+    lists = {"disks": 64, "interfaces": 64, "components": 128}
+    for name, limit in lists.items():
+        if not isinstance(sample.get(name), list) or len(sample[name]) > limit:
+            return name
+    for adapter in sample["interfaces"]:
+        mac = adapter.get("mac_address", "")
+        if mac and not re.fullmatch(r"[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}", mac):
+            return "mac_address"
+        for address in adapter.get("ip_addresses", []):
+            if not re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", address):
+                return "ip_addresses"
+
+    def bad(value, key=""):
+        if isinstance(value, dict):
+            return next((k for k, v in value.items() if bad(v, k)), None)
+        if isinstance(value, list):
+            return len(value) > 256 or any(bad(v) for v in value)
+        if isinstance(value, str):
+            return len(value) > 512
+        if isinstance(value, bool) or value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return value < 0 or value > 1e18 or (key.endswith("percent") and value > 100)
+        return True
+    found = bad(sample)
+    return found and f"value {found}"
 
 
 class EffectorFixture:
@@ -373,6 +427,7 @@ class EffectorFixture:
         self.errors = collections.deque(maxlen=32)
         self.commands, self.results, self.agents, self.files, self.uploads, self.faults = {}, {}, {}, {}, {}, {}
         self.deployment_results = []
+        self.telemetry = collections.deque()
         self.activated = True
         self.server = self.thread = self.directory = None
 

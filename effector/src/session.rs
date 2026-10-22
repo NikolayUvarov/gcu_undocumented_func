@@ -54,16 +54,56 @@ impl Command<'_> {
     }
 }
 
-/// This initial core never executes an action; a gateway completion is a different future interface.
+/// Why an action the agent handed to its gateway failed: the gateway's errors (`idl/effector.wit`) and the agent's own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Final { Denied, Expired }
+pub enum Failure { Denied, NoPolicy, NotFound, Bounds, Digest, Busy, Expired, Audit, Io, Malformed, Unsupported, Upload }
+impl Failure {
+    pub const ALL: [Failure; 12] = [Self::Denied, Self::NoPolicy, Self::NotFound, Self::Bounds, Self::Digest, Self::Busy, Self::Expired,
+                                    Self::Audit, Self::Io, Self::Malformed, Self::Unsupported, Self::Upload];
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Denied => "denied", Self::NoPolicy => "no-policy", Self::NotFound => "not-found", Self::Bounds => "bounds",
+            Self::Digest => "digest", Self::Busy => "busy", Self::Expired => "expired", Self::Audit => "audit", Self::Io => "io",
+            Self::Malformed => "malformed", Self::Unsupported => "unsupported", Self::Upload => "upload",
+        }
+    }
+    pub fn from_name(name: &str) -> Option<Self> { Self::ALL.iter().copied().find(|f| f.name() == name) }
+}
+
+macro_rules! failed { ($name:literal) => { concat!(r#"{"status":"failed","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":""#, $name, r#""}"#) } }
+
+/// What an answer carries back besides its status (750-EFF-0007): the screen as a PNG, or a log's text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Artifact { Screen, Log }
+impl Artifact {
+    pub fn name(self) -> &'static str { match self { Self::Screen => "screen", Self::Log => "log" } }
+    pub fn from_name(name: &str) -> Option<Self> { [Self::Screen, Self::Log].into_iter().find(|a| a.name() == name) }
+}
+
+/// A command's answer: denied (no gateway action for it), expired, or what the gateway did. `Captured`: completed with
+/// an artifact the agent keeps until the answer is acknowledged; its result is built from that file, not `result_json`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Final { Denied, Expired, Completed, Captured(Artifact), Failed(Failure) }
 impl Final {
-    pub fn status(self) -> &'static str { match self { Self::Denied => "denied", Self::Expired => "expired" } }
-    pub fn reason(self) -> &'static str { match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired" } }
+    pub fn status(self) -> &'static str {
+        match self { Self::Denied => "denied", Self::Expired => "expired", Self::Completed | Self::Captured(_) => "completed", Self::Failed(_) => "failed" }
+    }
+    pub fn reason(self) -> &'static str {
+        match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired", Self::Completed | Self::Captured(_) => "", Self::Failed(f) => f.name() }
+    }
+    /// The result as a JSON text; a `Captured` answer whose artifact is gone is answered as the `io` failure it is.
     pub fn result_json(self) -> &'static str {
         match self {
             Self::Denied => r#"{"status":"denied","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"action_not_allowed"}"#,
             Self::Expired => r#"{"status":"expired","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"command_expired"}"#,
+            Self::Completed => r#"{"status":"completed","exit_code":0,"stdout":"","stderr":"","truncated":false,"run_as":"effector"}"#,
+            Self::Captured(_) => failed!("io"),
+            Self::Failed(f) => match f {
+                Failure::Denied => failed!("denied"), Failure::NoPolicy => failed!("no-policy"), Failure::NotFound => failed!("not-found"),
+                Failure::Bounds => failed!("bounds"), Failure::Digest => failed!("digest"), Failure::Busy => failed!("busy"),
+                Failure::Expired => failed!("expired"), Failure::Audit => failed!("audit"), Failure::Io => failed!("io"),
+                Failure::Malformed => failed!("malformed"), Failure::Unsupported => failed!("unsupported"), Failure::Upload => failed!("upload"),
+            },
         }
     }
 }
@@ -72,8 +112,10 @@ impl Final {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Record { pub agent: Id, pub id: Id, pub identity: [u8; 32], pub result: Final, pub expires_unix: Option<u64> }
 
+/// A record to make durable. `rewrite`: an acknowledged record was dropped to make room, so the journal is written
+/// again whole (`Session::journal`) rather than appended to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Store { pub sequence: u64, pub slot: usize, pub record: Record }
+pub struct Store { pub sequence: u64, pub slot: usize, pub record: Record, pub rewrite: bool }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Accepted { Store(Store), Replay, InProgress }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,7 +160,7 @@ impl Lane {
 }
 
 #[derive(Clone, Copy)]
-struct Saved { record: Record, durable: bool, done: bool }
+struct Saved { record: Record, durable: bool, done: bool, sequence: u64 }
 #[derive(Clone, Copy)]
 struct Pending { slot: usize, first: bool, deadline_ms: Option<u64> }
 
@@ -130,7 +172,10 @@ pub struct Session {
 }
 impl Session {
     /// Restore only validated complete records from the trusted bounded journal; never infer completion from an ID alone.
-    pub fn new(agent_id: &str, recovered: &[Record], now_ms: u64) -> Result<Self, Error> {
+    pub fn new(agent_id: &str, recovered: &[Record], now_ms: u64) -> Result<Self, Error> { Self::restore(agent_id, recovered, &[], now_ms) }
+
+    /// As `new`, with `done[i]` telling that record `i`'s answer needs no more ACK (the journal's `done` line).
+    pub fn restore(agent_id: &str, recovered: &[Record], done: &[bool], now_ms: u64) -> Result<Self, Error> {
         if recovered.len() > RECORDS_MAX { return Err(Error::Full); }
         let mut session = Self {
             agent: Id::new(agent_id)?, records: [None; RECORDS_MAX], pending: None, saving: None,
@@ -141,8 +186,9 @@ impl Session {
         for (slot, &record) in recovered.iter().enumerate() {
             if record.agent != session.agent { return Err(Error::WrongAgent); }
             if session.records[..slot].iter().flatten().any(|old| old.record.id == record.id) { return Err(Error::Journal); }
-            session.records[slot] = Some(Saved { record, durable: true, done: false });
+            session.records[slot] = Some(Saved { record, durable: true, done: done.get(slot).copied().unwrap_or(false), sequence: slot as u64 + 1 });
         }
+        session.store_sequence = recovered.len() as u64;
         Ok(session)
     }
     pub fn agent_id(&self) -> &str { self.agent.as_str() }
@@ -151,6 +197,15 @@ impl Session {
     pub fn journal_failed(&self) -> bool { self.journal_failed }
     pub fn record_count(&self) -> usize { self.records.iter().flatten().filter(|r| r.durable).count() }
     pub fn record(&self, slot: usize) -> Option<Record> { self.records.get(slot).and_then(|s| s.filter(|r| r.durable).map(|r| r.record)) }
+    /// What the journal holds, oldest first: each record (with the one being saved) and whether it needs no more ACK.
+    /// Records are copied one at a time (the program stack is 64 KiB).
+    pub fn journal(&self) -> impl Iterator<Item = (Record, bool)> + '_ {
+        let mut order = [(u64::MAX, 0u8); RECORDS_MAX];
+        let mut n = 0;
+        for (slot, saved) in self.records.iter().enumerate() { if let Some(s) = saved { order[n] = (s.sequence, slot as u8); n += 1; } }
+        order[..n].sort_unstable();
+        (0..n).map(move |i| { let s = self.records[order[i].1 as usize].unwrap(); (s.record, s.done) })
+    }
 
     pub fn heartbeat(&mut self, now_ms: u64) -> Result<Option<Attempt>, Error> {
         let attempt = self.heartbeat.begin(now_ms)?;
@@ -186,7 +241,39 @@ impl Session {
     pub fn poll_overdue(&self, now_ms: u64) -> Option<Attempt> { self.poll.overdue(now_ms) }
     pub fn ack_overdue(&self, now_ms: u64) -> Option<Attempt> { self.ack.overdue(now_ms) }
 
-    pub fn receive(&mut self, command: Command<'_>, now: Time) -> Result<Accepted, Error> {
+    /// Whether `command` is new (true) or the one already saved under its ID (false): an action runs only for a new one.
+    pub fn fresh(&self, command: &Command<'_>) -> Result<bool, Error> {
+        let (id, identity) = command.identity(self.agent)?;
+        match self.records.iter().flatten().find(|s| s.record.id == id) {
+            Some(saved) if saved.record.identity != identity => Err(Error::Conflict),
+            Some(_) => Ok(false),
+            None => Ok(true),
+        }
+    }
+
+    /// Whether an action may run for `command` now: the agent free, the command new and not expired, and room for its
+    /// answer in the journal. An action never runs when its answer could not be kept.
+    pub fn runnable(&self, command: &Command<'_>, now: Time) -> bool {
+        !self.busy() && !self.stopping && self.fresh(command) == Ok(true) && self.room(now).is_some()
+            && deadline(command.expires_unix, now).is_ok_and(|d| d.map_or(true, |d| d > now.monotonic_ms))
+    }
+
+    pub fn registered(&self) -> bool { self.registered }
+
+    /// A slot for a new record, and whether a record is dropped for it. A full journal makes room by dropping its
+    /// oldest record that is acknowledged and past its command's expiry: a redelivery after that is answered
+    /// `expired`, never run. Nothing else is ever dropped.
+    fn room(&self, now: Time) -> Option<(usize, bool)> {
+        if let Some(slot) = self.records.iter().position(Option::is_none) { return Some((slot, false)); }
+        let past = |s: &Saved| s.record.expires_unix.is_some_and(|e| now.unix_seconds.is_some_and(|u| u >= e));
+        let oldest = self.records.iter().enumerate().filter_map(|(i, s)| s.filter(|s| s.durable && s.done && past(s)).map(|s| (i, s.sequence))).min_by_key(|&(_, q)| q);
+        oldest.map(|(slot, _)| (slot, true))
+    }
+
+    pub fn receive(&mut self, command: Command<'_>, now: Time) -> Result<Accepted, Error> { self.receive_with(command, now, Final::Denied) }
+
+    /// As `receive`, with `done` as a new command's answer (what its action did); an expired one stays `expired`.
+    pub fn receive_with(&mut self, command: Command<'_>, now: Time, done: Final) -> Result<Accepted, Error> {
         if self.stopping { return Err(Error::Busy); }
         if self.journal_failed { return Err(Error::Journal); }
         let (id, identity) = command.identity(self.agent)?;
@@ -199,13 +286,13 @@ impl Session {
             self.ack.reset(now.monotonic_ms); Ok(Accepted::Replay)
         } else {
             if self.busy() { return Err(Error::Busy); }
-            let slot = self.records.iter().position(Option::is_none).ok_or(Error::Full)?;
+            let (slot, rewrite) = self.room(now).ok_or(Error::Full)?;
             let deadline_ms = deadline(command.expires_unix, now)?;
             let expired = deadline_ms.is_some_and(|d| d <= now.monotonic_ms);
-            let record = Record { agent: self.agent, id, identity, result: if expired { Final::Expired } else { Final::Denied }, expires_unix: command.expires_unix };
+            let record = Record { agent: self.agent, id, identity, result: if expired { Final::Expired } else { done }, expires_unix: command.expires_unix };
             self.store_sequence = self.store_sequence.checked_add(1).ok_or(Error::Sequence)?;
-            let store = Store { sequence: self.store_sequence, slot, record };
-            self.records[slot] = Some(Saved { record, durable: false, done: false });
+            let store = Store { sequence: self.store_sequence, slot, record, rewrite };
+            self.records[slot] = Some(Saved { record, durable: false, done: false, sequence: self.store_sequence });
             self.pending = Some(Pending { slot, first: true, deadline_ms });
             self.saving = Some(store); self.ack.reset(now.monotonic_ms);
             Ok(Accepted::Store(store))

@@ -30,6 +30,19 @@ Plan steps 1 and 2 are made for one service, `link` (800-KRN-0128): at each star
 
 800-KRN-0128 is done (`main` 8def173). Its last point, a name outside `data/link/` refused by `vfs_server` and not only by `link`, moves here: the `isolation` case above shows it for a scope.
 
+## Progress (2026-10-22)
+
+Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb):
+
+- **The Effector gateway's delivery scope.** At each start `init` reads the `deliver` root of the owner's `data/effector/policy` (`Policy::deliver`, 750-KRN-0121) and puts a writable scope of it in `effector_gw`'s `SLOT_FILE`; none without the line. The policy's parser refuses a root outside `data/` or in a protected tree.
+- **The check** is in the `modes` suite, with `tests/gateway_stub` in the gateway's place, under `deliver data/inbox/`:
+  - in the scope a file is written, flushed, renamed and read back;
+  - a name and a rename that climb out are refused;
+  - restarted by the shell, the gateway gets a new scope, which finds the first one's files, and `vfs_server` ends the first one (`[VFS] SCOPE … ENDED`).
+
+  Passed on x86 and aarch64 in this session's container (QEMU TCG). The criteria name the `isolation` suite; the gateway runs only in a mode, which the `modes` suite boots on both architectures.
+- **For EFF:** the gateway's writer names paths relative to the scope's root (`a.txt`, not `data/inbox/a.txt`).
+
 ## Related
 
 [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [750](750-effector-agent.md), `idl/vfs.wit` 2.2 (`scope`), 351-KRN-0040 (a private directory for `keystore`).

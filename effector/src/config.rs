@@ -42,6 +42,7 @@ pub struct Config {
     name: Option<Text<NAME_MAX>>,
     address: Option<u32>,
     hostname: Text<NAME_MAX>,
+    no_token: bool,
 }
 
 fn hex32(s: &str) -> Option<[u8; 32]> {
@@ -91,7 +92,7 @@ impl Config {
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() > FILE_MAX { return Err(Error { line: 0, kind: ErrorKind::TooLarge }); }
         let text = core::str::from_utf8(bytes).map_err(|_| Error { line: 0, kind: ErrorKind::NotText })?;
-        let (mut version, mut url, mut pins, mut name, mut address, mut hostname) = (false, None, [None; 2], None, None, None);
+        let (mut version, mut url, mut pins, mut name, mut address, mut hostname, mut no_token) = (false, None, [None; 2], None, None, None, None);
         let mut parts = None;
         for (i, raw) in text.split('\n').enumerate() {
             let line_no = (i + 1).min(u16::MAX as usize) as u16;
@@ -136,19 +137,27 @@ impl Config {
                     if value.len() > NAME_MAX || !value.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_') { return Err(err(ErrorKind::Malformed)); }
                     hostname = Text::<NAME_MAX>::new(value);
                 }
+                // The server asks no agent token (Effector's `security.mode=disabled`): said here, never implied by a missing file.
+                "token" => {
+                    if no_token.is_some() { return Err(err(ErrorKind::Duplicate)); }
+                    if value != "none" { return Err(err(ErrorKind::Malformed)); }
+                    no_token = Some(true);
+                }
                 _ => return Err(err(ErrorKind::UnknownKey)),
             }
         }
         if !version { return Err(Error { line: 0, kind: ErrorKind::Version }); }
         let (url, (host, port, path)) = match (url, parts) { (Some(u), Some(p)) => (u, p), _ => return Err(Error { line: 0, kind: ErrorKind::Missing }) };
         if pins[0].is_none() { return Err(Error { line: 0, kind: ErrorKind::Missing }); }
-        let config = Config { url, host, port, path, pins, name, address, hostname: hostname.unwrap_or(Text::new("mindcore").unwrap()) };
+        let config = Config { url, host, port, path, pins, name, address, hostname: hostname.unwrap_or(Text::new("mindcore").unwrap()), no_token: no_token.unwrap_or(false) };
         // A host name needs an address to reach it: `address`, or the host is itself one.
         if config.address().is_none() { return Err(Error { line: 0, kind: ErrorKind::Missing }); }
         Ok(config)
     }
 
     pub fn url(&self) -> &str { self.url.as_str() }
+    /// `token none`: no token file is read and no `Authorization` header is sent.
+    pub fn no_token(&self) -> bool { self.no_token }
     pub fn host(&self) -> &str { &self.url.as_str()[self.host.0..self.host.1] }
     pub fn port(&self) -> u16 { self.port }
     /// The base path without a final `/` (`/effector`, or empty); routes are appended to it.

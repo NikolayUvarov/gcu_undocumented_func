@@ -1,6 +1,6 @@
 # 750-KRN-0119 — Boot images and `init`'s grants for `effector` and `effector_gw`
 
-**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (started only in a mode); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the gateway's client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
+**Type:** `init`, ABI (`common/abi.rs`: the boot images; the ABI version after 351-KRN-0115's), tests · **Owner:** kernel session · **Priority:** P2 · **Status:** made (2026-10-22): the boot images, the grants of `mind::effector`'s table and the modes; 0120's and 0121's grants, and EFF's suite in a mode, left · **Blocked by:** the two services ([750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md)); [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md) (started only in a mode); [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.md), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.md); the gateway's client of `updater` ([750-UPD-0020](750-UPD-0020-the-gateways-client-of-the-updater.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-7.5, MC-11.11
 
 ## Problem
 
@@ -35,6 +35,30 @@ The Effector agent is two boot services ([750](750-effector-agent.md)): `effecto
 
 - [ ] In QEMU, with both enabled, each service holds exactly the listed grants (the `isolation` suite's checks, x86 and aarch64).
 - [ ] Without a mode, neither starts, and every other suite passes as before.
+
+## Progress (2026-10-22)
+
+- **ABI 16.** `effector_gw` and `effector` are boot images after `updater` (`BOOT_SERVICES`, `BOOT_FILES`). `tests/runtime.rs`, `docs/api` and the suites' service list follow.
+- **Only in a mode.**
+  - `init` skips both at boot. Once the modes are read, `follow_modes` starts `effector_gw`, then `effector`.
+  - With no mode on, `init` stops them, the session first, and refuses a client's `run` or `restart`: `[INIT] effector_gw NOT STARTED: NO MODE IS ON`.
+- **The grants**, from EFF's table in `mind::effector` (EFF, `KRN/2026-10-22T1425Z-…`):
+  - **`effector_gw --service`:** its endpoint; `vfs_server` badged `BADGE_EFFECTOR_GW` (7, slot 3), whose private directory `system/effector_gw` `init` makes before each start; `BADGE_READER` (slot 5); `sysmon` (10); the log to read (12).
+  - **`effector --service`:** `rtc` (2); `BADGE_EFFECTOR` (6, slot 3, `system/effector`); a read-only scope of `data/effector/` made at each start (slot 7); the flow for program `effector` (18); `tls` badged `BADGE_TLS_NO_DEVICE` (20); `parse` (28); `effector_gw` badged `BADGE_SESSION` (slot 4).
+  - **In `vfs_server`.** The two private directories, each its own badge's alone (`PRIVATE` in `vfs_server/src/zone.rs`; `tests/vfs_zone_host.rs`).
+  - **`init`'s scope helper is general now** (`scope`, `scopes_of`), as 750-KRN-0120's first step: `link` and `effector` use it.
+- **The `modes` suite** (x86 and aarch64, passed in this session's container, QEMU TCG):
+  - **In the development mode:** both run, the gateway first; each holds exactly the slots above, with their badges and servers; the session keeps the owner's token in `system/effector`.
+  - **Without a mode:** neither runs, and `run effector_gw` is refused.
+- **What this changes for EFF.**
+  - `loader` runs no boot service's name as a program, so `effector CONFIG` from the shell is no longer a program. That holds to the maintainer's decision that Effector runs only in a mode.
+  - The `effector` suite starts it from the shell, so it has to move to a mode. That is EFF's (`EFF/2026-10-22T…-KRN-750-krn-0119-starts-…`), and the two land together.
+- **`fm`'s check in the `tools` suite** reads the root's first file row, `ahci.elf`, for a file's size and date. With `effector_gw.elf` at the root, `kernel.elf` is one row below the panel (landing round 11).
+- **Left:**
+  - 0121's lifecycle client (slot 11) and 0120's scope for deliveries (the gateway's slot 7);
+  - the updater's client, `BADGE_REBOOT` and screen capture, with their tasks;
+  - the shell's client badged `BADGE_OWNER` (APP, 750-APP-0093);
+  - the gate on the maintainer's machines, with EFF's suite in a mode.
 
 ## Related
 
