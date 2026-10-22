@@ -1,6 +1,6 @@
 # 351-UPD-0023 — A release carries its applications in its slot, so its services and applications move and fall back together
 
-**Type:** update (service, images) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** in progress (the updater's part built and tested on x86 in this session's container; the loader's part waits for `KRN`) · **Blocked by:** `KRN` for the loader's and `scripts/link_update.py`'s parts ([requests-KRN.md](requests-KRN.md)) · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.2, MC-9.3, MC-12.4
+**Type:** update (service, images) · **Owner:** `UPD` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** in progress (the updater's part built and tested on x86 in this session's container; the loader's part waits for `KRN`) · **Blocked by:** [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) (`KRN`: the loader's and `scripts/link_update.py`'s parts) · **Main task:** [351](351-self-update.md) · **Roadmap:** track C · **Constitution:** MC-9.2, MC-9.3, MC-12.4
 
 From the link track's report and request "An update through the link replaces the boot services but not the applications, and they drift apart" (`internal-dev-messages`, `ALL/2026-10-22T0428Z-LNK-…`), which asked `UPD` for a decision.
 
@@ -26,8 +26,8 @@ Of the link track's two options, the first: **the release carries its applicatio
   - a file whose digest matches one already on the volume (the running slot's or the root's) is copied from it, not fetched;
   - the licences, the voice model and `data/` stay at the root, shared: they are data, not code bound to an interface;
   - `verify_other` checks the slot's applications too, so `apply` refuses a slot missing one.
-- **The loader (`KRN`, requested).** On a disk booted from a slot that holds applications, it opens an application from the booted slot only, as it opens a helper since 109-KRN-0133. A slot that holds none (staged before this change) keeps the root's, as today.
-- **The link (`KRN`, `scripts/link_update.py`, requested).** It puts the blobs of the applications the release changed with the boot files', since the updater reads them from the same `blobs/` directory. An unchanged one is copied from the volume and needs none.
+- **The loader (`KRN`, 351-KRN-0151).** On a disk booted from a slot that holds applications (any `*.elf` outside `BOOT_FILES`, the updater's own test before `apply`), it opens an application from the booted slot only, as it opens a helper since 109-KRN-0133. A slot that holds none (staged before this change) keeps the root's, as today.
+- **The link (`KRN`, `scripts/link_update.py`, 351-KRN-0151).** It puts the blobs of every application the release lists with the boot files'; `mindlink put` skips a blob the other end holds. The updater copies an unchanged application from the volume and does not read its blob.
 - **Images.** `scripts/boot_slots.py layout` and `make_usb_image.py --slots` put the applications into slot A (and B with `--both`), and keep a copy at the root for a system booted from the root.
 - **The bootloader.** Check that it boots a slot with applications in it: it verifies by name only what it loads.
 - **Checks.**
