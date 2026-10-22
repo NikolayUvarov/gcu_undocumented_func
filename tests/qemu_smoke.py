@@ -5274,13 +5274,18 @@ def slot_applications_check(args):
     image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
 
+    # 351-APP-0103: the shell's `help <name>` reads the file the loader would start.
+    about = "uptime, load averages over 1, 5 and 15 minutes"
+
     def boot(expect, runs, unknown):
         vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none"])
         try:
             require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), expect)
             require(vm.command(runs, raw=True), f"NAME={runs} FOREGROUND")
+            require(vm.command(f"help {runs}", raw=True), about)
             if unknown:
                 require(vm.command(unknown, raw=True), "UNKNOWN COMMAND")
+                require(vm.command(f"help {unknown}", raw=True), f"NO COMMAND OR PROGRAM CALLED {unknown}")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -5291,7 +5296,7 @@ def slot_applications_check(args):
     boot("[LOADER] APPLICATIONS FROM MIND/A/", "probe", "uptime")
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: a slot without applications runs the root's; one that holds any runs its own, and only "
-          "those (351-KRN-0151)", flush=True)
+          "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -8419,6 +8424,7 @@ def wm_suite(vm):
         keys("up", text="SETTINGS=Network")
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
+        screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):

@@ -322,6 +322,9 @@ fn the_country_is_asked_for_applied_and_read_back_by_its_code() {
     assert_eq!(parse("channels 00"), Ok(Some(Command::Channels(Some("00".into())))));
     assert_eq!(parse("channels"), Ok(Some(Command::Channels(None))));
     for wrong in ["country usa", "country u", "country u z", "channels uz de"] { assert_eq!(parse(wrong), Err(headless::USAGE), "{}", wrong); }
+    // `--countries` (wm's Settings, Network, Country): the screen, with nothing else.
+    assert_eq!((parse("--countries"), parse("--demo --countries")), (Ok(None), Ok(None)));
+    assert_eq!(parse("status --countries"), Err(headless::USAGE));
     // The names are the tool's: the catalogue has codes only.
     assert_eq!((countries::name("UZ"), countries::name("DE"), countries::name("00"), countries::name("ZZ")), (Some("Uzbekistan"), Some("Germany"), None, None));
     assert!(countries::NAMES.windows(2).all(|w| w[0].0 < w[1].0) && countries::NAMES.len() == 249);
@@ -430,4 +433,9 @@ fn the_screens_country_list_finds_and_asks_for_a_country() {
     assert!(w.status().starts_with("MODE=LIST") && w.status().ends_with(" COUNTRY=-"), "{}", w.status());
     assert!(w.notice.starts_with("No catalogue in this station"));
     assert!(screen(&w).iter().any(|r| r.contains("Country: no catalogue in this station")));
+    // `wifi --countries` opens the list at start, as `c` does.
+    let mut w = Wifi::new(true);
+    w.refresh(&mut demo);
+    w.open_countries(&mut demo);
+    assert!(w.status().starts_with("MODE=COUNTRIES 5 OF 5"), "{}", w.status());
 }

@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (two waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (one waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -21,6 +21,8 @@ Numbered on 2026-10-20:
 - the shell's `effector` command, for 750: [750-APP-0093](750-APP-0093-the-shells-effector-command.md), waiting for 750-EFF-0003 and 750-EFF-0006;
 - display output over several monitors, for 177: [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), waiting for 177's steps 0–1.
 
+Numbered on 2026-10-22: `help <name>` reading the program from the booted slot, for 351-KRN-0151: [351-APP-0103](351-APP-0103-help-reads-the-booted-slots-program.md).
+
 `wifi` following `idl/wifi.wit` 1.0 (the network track, 2026-10-12) was done in 550-APP-0033, and the note on the station's client in `SLOT_WIFI`, the read-only card client and the badged TLS client (550-KRN-0097, 000-KRN-0109) is taken up by 550-APP-0033, 000-APP-0049 and 351-APP-0083.
 
 Notes read and kept as they are (the other tracks' changes stand, and the tools track words nothing otherwise):
@@ -34,14 +36,6 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
-
-## `help <name>` reads the program from the booted slot
-
-**From:** the kernel track (KRN), 2026-10-22, for [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) and 351-UPD-0023 · **Constitution:** MC-9.3
-
-- **What changed.** On a disk booted from a slot that holds applications, `loader` opens an application, and lists one in `LIST`, from that slot (`MIND/A/` or `MIND/B/`), not the root.
-- **What is left in the shell.** `programs::about` (`help <name>`, `list -l`) still opens `<name>.elf` at the root. There it reads another build's text, or none once a release drops a program.
-- **Asked.** Read the booted slot's copy when the slot holds applications, as `files` reads the booted slot's kernel (351-APP-0088), or ask `loader` for the text.
 
 ## The `wifi` guide names the station's automatic join
 
