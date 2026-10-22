@@ -247,6 +247,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [351-UPD-0023](../issues-done/351-UPD-0023-applications-in-the-releases-slot.done) | A release carries its applications in its slot, so its services and applications move and fall back together | the updater stages and copies them, the loader opens them from the booted slot (351-KRN-0151), images lay them out in slot A; `update` shows the trial and a fallback each running its own, x86 and aarch64 |
 | [800-KRN-0142](../issues-done/800-KRN-0142-the-links-launch-only-policy-client.done) | The link's network policy client may only launch | `init` mints slot 19 badged `BADGE_LAUNCH` with `dev`; the `link` suite; landing round 9, `main` f8d76dd; the refusal's QEMU run waived (800-NET-0038) |
 | [800-NET-0038](../issues-done/800-NET-0038-a-policy-client-that-may-only-launch.done) | A network policy client that may only launch, for the link's developer mode | `BADGE_LAUNCH`, `netpolicy.wit` 1.2 `denied`; refusals host-tested, `link`'s client checked in QEMU by 800-KRN-0142; the refusal's QEMU run waived by the maintainer (2026-10-22) |
 | [550-APP-0104](../issues-done/550-APP-0104-the-wifi-guide-names-the-stations-own-join.done) | The `wifi` guide names the station's own join of a remembered network (NET's request, for 550-NET-0041) | one line beside `d` and `f` in both guides: what joins by itself, what `d` and `f` do to it | done (2026-10-22) |

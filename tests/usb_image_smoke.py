@@ -65,6 +65,8 @@ def slots_check(args, work):
         require(vm.log.replace("\r", ""), "BOOT: SLOT A LOADED\n")
         require(vm.service_logs("vfs_server", "UPDATE ZONE"), "[VFS] UPDATE ZONE: MIND/B AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE")
         require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 1; THE NEWER RECORD: SLOT A CONFIRMED")
+        # 351-UPD-0023: the applications are packed into slot A with the services, and the loader opens them there.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         # 109-KRN-0117: the updater read the channel through a parser of its own, started with its loader client, which
         # carries BADGE_HELPERS_ONLY (1); the parser ended with the check, so the shared parse service runs alone.
         real = vm.services()
@@ -95,7 +97,7 @@ def slots_check(args, work):
         log = Path(tempfile.gettempdir()) / f"mind-core-usb-slots{'' if args.arch == 'x86_64' else '-' + args.arch}.log"
         log.write_text(vm.log)
     print(f"PASS ({args.arch}): the image packed with slots boots from slot A; the update zone is slot B; the updater reads "
-          "the running version from the release channel kept in slot A; files reads slot A's kernel whole", flush=True)
+          "the running version from the release channel kept in slot A; its applications run from slot A; files reads slot A's kernel whole", flush=True)
 
 
 def debug_mode(vm, name):

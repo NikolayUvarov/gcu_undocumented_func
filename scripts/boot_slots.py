@@ -6,7 +6,7 @@ records, MIND/BOOT0 and MIND/BOOT1, of one sector each. The bootloader follows t
 number, counts a trial's tries down on the other record before the slot runs, and falls back to the other slot.
 
 Usage:
-    boot_slots.py layout VOLUME OUT [--both]   OUT: VOLUME (a signed build) with its boot set in slot A, and in B too
+    boot_slots.py layout VOLUME OUT [--both]   OUT: VOLUME (a signed build) with its boot set and applications in slot A, and in B too
                                                with --both; slot A confirmed
     boot_slots.py show VOLUME|IMAGE            the two records of a directory or a raw disk image (MBR, FAT)
     boot_slots.py stage IMAGE SLOT [--tries N] the record that boots SLOT on trial, N tries (default 3), falling back
@@ -61,15 +61,22 @@ def boot_set(volume):
     return [name for name in ("kernel.elf", *BOOT_FILES, *SIGNED) if (Path(volume) / name).is_file()]
 
 
-def layout(volume, out, both=False):
-    """OUT: a copy of VOLUME with its boot set moved into slot A (and copied to B), slot A confirmed."""
+def applications(volume):
+    """A volume's applications, which go into the slot with its services (351-UPD-0023): every other *.elf at its root."""
+    return sorted(p.name for p in Path(volume).glob("*.elf") if p.is_file() and p.name != "kernel.elf" and p.name not in BOOT_FILES)
+
+
+def layout(volume, out, both=False, with_applications=True):
+    """OUT: a copy of VOLUME with its boot set and its applications moved into slot A (and copied to B), slot A
+    confirmed; without `with_applications` they stay at the root, as in a slot an updater staged before 351-UPD-0023."""
     volume, out = Path(volume), Path(out)
     shutil.copytree(volume, out)
+    moved = boot_set(volume) + (applications(volume) if with_applications else [])
     for slot in ("A", "B") if both else ("A",):
         (out / "MIND" / slot).mkdir(parents=True)
-        for name in boot_set(volume):
+        for name in moved:
             shutil.copyfile(volume / name, out / "MIND" / slot / name)
-    for name in boot_set(volume):
+    for name in moved:
         (out / name).unlink()
     (out / FILES[0]).write_bytes(record(1, "A", confirmed=True))
     (out / FILES[1]).write_bytes(bytes(RECORD))
