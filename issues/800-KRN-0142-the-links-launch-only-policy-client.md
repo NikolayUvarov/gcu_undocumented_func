@@ -34,4 +34,4 @@ From the network track's request in [requests-KRN.md](requests-KRN.md) (2026-10-
 
 ## Related
 
-[800-NET-0038](800-NET-0038-a-policy-client-that-may-only-launch.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done).
+[800-NET-0038](../issues-done/800-NET-0038-a-policy-client-that-may-only-launch.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done).
