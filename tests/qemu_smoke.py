@@ -4153,8 +4153,7 @@ def modes_suite(args):
                     require(vm.command("mode", raw=True), "MODE: DEVELOPMENT, SET BY disk")
                     for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")):
                         vm.send("mode maintenance on the modes suite\n")
-                        vm.expect("TURN THE MAINTENANCE MODE ON?", timeout=10)
-                        vm.expect("(Y/N)", timeout=10)
+                        require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
                         vm.send_bytes(answer)
                         require(vm.expect("MIND> ", timeout=30), said)
                     require(vm.command("dmesg -s init", raw=True), "[INIT] MODE MAINTENANCE ON BY operator (PID ")
