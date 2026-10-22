@@ -3762,7 +3762,7 @@ def services_suite(vm):
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
     # The shell's commands answer the same keys with their lines of help; fm /? shows fm's text unstarted (000-APP-0054).
-    for line, want in (("date -h", "- date: calendar date and time from the RTC"), ("date /?", "- date: calendar date"),
+    for line, want in (("date -h", "- date: calendar date and time in the time zone"), ("date /?", "- date: calendar date"),
                        ("ls --help", "- ls [path], cat <file>: files"), ("ps -help", "- ps: tasks"), ("kill /H", "- kill <id>: terminate")):
         output = vm.command(line)
         require(output, want)
