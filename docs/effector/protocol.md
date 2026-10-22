@@ -1,6 +1,6 @@
-# MIND Core's Effector agent contract 1.0
+# MIND Core's Effector agent contract 1.1
 
-**Status:** implementation contract, 2026-10-15; no MIND agent or real-machine compatibility is claimed.
+**Status:** implementation contract, 2026-10-15; 1.1 on 2026-10-22 (below). No real-machine compatibility is claimed.
 **Task:** [750-EFF-0001](../../issues/750-EFF-0001-protocol-contract.md).
 Publishing this subset was approved by the maintainer on 2026-10-09
 ([owner decision](../../issues-human/README.md#7-an-effector-server-for-mind-core)).
@@ -19,6 +19,9 @@ Publishing this subset was approved by the maintainer on 2026-10-09
   establish neither authenticated interoperability nor support for MIND's
   operations. [750-EFF-0012](../../issues/750-EFF-0012-run-against-the-effector-server.md)
   records those checks when the agent exists.
+
+**1.1 (2026-10-22):** `token none` in `effector.conf`, for a server that asks no agent token. Nothing else
+changed; a configuration without that line behaves as under 1.0.
 
 `effector-agent 1.0` is the name of this MIND subset, not a version field that
 the existing server negotiates. The server publishes a build identity and an
@@ -39,7 +42,11 @@ certificate pins. Append `/api/...` to the entire base path; dropping
 `/effector` talks to the wrong application. URLs supplied by the server must
 remain at the configured HTTPS origin and within the configured base path.
 
-Every native agent request carries `Authorization: Bearer <AgentToken>`.
+Every native agent request carries `Authorization: Bearer <AgentToken>`, unless the owner's configuration says
+`token none` (1.1). That is for a server whose `security.mode` is `disabled`, as `hesere.uz` runs on 2026-10-22: it
+checks no agent token, so the agent reads no token file and sends no `Authorization` header. A missing token file
+never means `token none`; it stops the agent. The pinned TLS connection is the same in both cases. Without the
+token, the server cannot tell this agent from anyone who reaches it, but the agent still knows its server by the pin.
 Operator `API_KEY` credentials and `/api/v1/operations` belong to the operator
 side and are not agent credentials or routes. Never send credentials over
 HTTP, follow a redirect, or log a token. Setup must move the token into the

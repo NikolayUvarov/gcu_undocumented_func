@@ -7125,6 +7125,45 @@ def _https_server(directory, certificate):
     return server, context
 
 
+def effector_live_suite(args, disk):
+    """750-EFF-0012: the agent against a real Effector server, not the fixture. MIND_EFFECTOR_LIVE names a directory
+    with the owner's `effector.conf`, `agent_id`, and `token` unless the configuration says `token none`;
+    MIND_EFFECTOR_LIVE_SECONDS is how long it runs (default 120). Not in CI: it needs the network and a server. The
+    token, if any, goes only onto the guest's disk and is checked absent from the log."""
+    live = Path(os.environ["MIND_EFFECTOR_LIVE"])
+    seconds = int(os.environ.get("MIND_EFFECTOR_LIVE_SECONDS", "120"))
+    conf = (live / "effector.conf").read_text()
+    server = re.search(r"^server https://([^/:\s]+)(?::(\d+))?", conf, re.M)
+    address = re.search(r"^address (\S+)$", conf, re.M)
+    host, port = (address.group(1) if address else server.group(1)), int(server.group(2) or 443)
+    (disk / "netpolicy.txt").write_text(f"effector {host} tcp {port} {seconds + 600} 100000000\n")
+    directory = disk / "data" / "effector"
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in ("effector.conf", "agent_id", "token"):
+        if (live / name).exists():
+            shutil.copyfile(live / name, directory / name)
+    token = (live / "token").read_text().strip() if (live / "token").exists() else None
+    entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
+    vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+    try:
+        require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP")
+        started = time.monotonic()
+        vm.send(f"effector data/effector/effector.conf --for {seconds}\n")
+        out = vm.expect("MIND> ", timeout=seconds + 120, after="EFFECTOR: STOPPED")
+        events = [line for line in out.splitlines() if line.startswith("EFFECTOR:")]
+        for line in events:
+            print(f"  {line}", flush=True)
+        if token:
+            assert token not in vm.log, "the token reached the log"
+        require(out, "EFFECTOR: CONNECTED TO")
+        refused = [line for line in events if "ANSWERED" in line or "REFUSED" in line]
+        assert not refused, refused
+        print(f"PASS: the Effector agent against {server.group(1)} for {time.monotonic() - started:.0f} s: connected, "
+              f"{len([e for e in events if 'DENIED' in e])} commands denied, no heartbeat or poll refused", flush=True)
+    finally:
+        vm.close()
+
+
 def effector_suite(args, disk):
     """750-EFF-0006, first slice: the Effector agent started from the shell against the contract's fixture
     (tests/effector_server.py) over HTTPS with a pinned leaf: it stays online with heartbeats less than five seconds
@@ -9920,6 +9959,9 @@ def main():
                 continue
             if suite == "effector":
                 effector_suite(args, disk)
+                continue
+            if suite == "effector-live":
+                effector_live_suite(args, disk)
                 continue
             if suite == "netbench":
                 netbench_suite(args, disk)

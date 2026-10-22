@@ -31,3 +31,24 @@ The local server-only platform boundary is recorded in external `issues-done/81-
 ## Related
 
 [750-EFF-0001](750-EFF-0001-protocol-contract.md), [750-EFF-0002](750-EFF-0002-test-server.md), [501](501-effector.md), [550](550-network-on-real-hardware.md), [docs/profile/evidence.md](../docs/profile/evidence.md).
+
+## Progress — 2026-10-22: the first live session, against `hesere.uz`
+
+The maintainer named the server, `https://hesere.uz/effector`.
+- **The server.** It runs `security.mode=disabled`, said Effector's agent, so its agents carry no token. Contract 1.1 adds `token none` for that case.
+- **The run.** `tests/qemu_smoke.py --suites effector-live`, x86_64 QEMU on the maintainer's laptop (LEG9), user networking.
+  - **The agent:** `effector` from branch `claude/EFF-effector-agent`, agent ID `mind-qemu-x64-01`.
+  - **The server:** `1.2.0.227`, commit `3c2f179e81f0`, which includes task 81's MIND boundary.
+  - **The pins:** leaf `473d2d9f…bbe0` and SPKI `6df4cafe…a0bf` of the Let's Encrypt certificate valid until 2027-01-07.
+- **Seen, for 121 s:**
+  - TLS 1.3 to `37.140.216.52:443`, pinned;
+  - no heartbeat or poll refused;
+  - the server's polls said the agent waits for the owner's activation;
+  - a shutdown heartbeat at the end.
+- **Not seen yet:**
+  - the endpoint as the server lists it;
+  - activation;
+  - any command;
+  - ten minutes online;
+  - aarch64 or hardware.
+- **The pins change when Let's Encrypt renews the certificate,** if the key changes with it. A next pin is needed in `effector.conf` before then, or the agent refuses the server.

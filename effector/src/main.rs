@@ -123,16 +123,19 @@ impl Agent {
         text.push_str(self.config.base_path()); text.push_str(route); text.push_str(query);
         let mut authorization = String::from("Bearer ");
         authorization.push_str(&self.token);
+        let send_token = !self.token.is_empty();
         let mut buffer = core::mem::take(&mut self.body);
         buffer.clear();
         let result = (|| {
             let url = Url::parse(&text).ok()?;
             let connection = self.connect()?;
             let mut parser = mind::parse::Service(PARSER);
-            let headers = [("Content-Type", "application/json"), ("Authorization", authorization.as_str())];
+            // `token none`: the server asks no agent token, so none is sent.
+            let all = [("Content-Type", "application/json"), ("Authorization", authorization.as_str())];
+            let headers = if send_token { &all[..] } else { &all[..1] };
             let mut source = body.unwrap_or(&[]);
             let length = body.map(|b| b.len() as u64);
-            let sent = connection.request(method, &url, &headers, length.map(|n| (n, &mut source as &mut dyn http::Source)), &mut parser, false);
+            let sent = connection.request(method, &url, headers, length.map(|n| (n, &mut source as &mut dyn http::Source)), &mut parser, false);
             let mut response = match sent { Ok(r) => r, Err(e) => { mind::println!("EFFECTOR: {} {}: {:?}", if body.is_some() { "POST" } else { "GET" }, route, e); return None; } };
             let status = response.status;
             let mut chunk = [0u8; 2048];
@@ -318,12 +321,13 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false });
-    let kept = if service { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
+    let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
+        _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
         Some(t) => agent.token = String::from(t),
         None => fail(format_args!("NO VALID TOKEN FILE BESIDE THE CONFIGURATION")),
     }
-    if service && kept.as_deref().and_then(config::token).is_none() {
+    if service && !agent.config.no_token() && kept.as_deref().and_then(config::token).is_none() {
         let written = File::open_mode(&agent.path("token"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).and_then(|mut f| { f.write_at(0, agent.token.as_bytes())?; f.write_at(agent.token.len(), b"\n")?; f.flush() });
         if written.is_err() { fail(format_args!("CANNOT KEEP THE TOKEN IN {}", SESSION_DIR)); }
         mind::println!("EFFECTOR: THE TOKEN IS KEPT IN {}; THE OWNER MAY REMOVE {}/token", SESSION_DIR, OWNER_DIR);
