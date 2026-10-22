@@ -16,7 +16,7 @@
 ## Acceptance criteria
 
 - [x] In the `modes` suite (x86 and aarch64), a client with a set restarts a service in it and is refused for one outside it, for `init` and for itself; `stop-task` and `reboot` are refused. (The `isolation` suite at first: the gateway runs only in a mode, which the `modes` suite boots on both architectures, and `isolation`'s adversary program is x86 only.)
-- [ ] The shell's `BADGE_LIFECYCLE` client works as before (`svc`).
+- [x] The shell's `BADGE_LIFECYCLE` client works as before (`svc`).
 
 ## Progress (2026-10-22)
 
@@ -28,7 +28,8 @@ Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb), 
 - **`init.wit` 1.7** says so; the bindings are regenerated.
 - **The grant:** `effector_gw`'s slot 11, only in a mode.
 - **The check:** `tests/gateway_stub` in the gateway's place, in the `modes` suite, under `service sysmon restart`: the restart of `sysmon` passes; its stop and run, `logd`, `init`, the gateway itself, `stop-task` and `reboot` are refused, each with its log line. Passed on x86 and aarch64 in this session's container (QEMU TCG).
-- **Left:** the `services` suite's run of the shell's `svc` (criterion 2) with this change; the gate.
+- **The shell's `svc`** works as before: the `services` suite passed on x86 with this change, in this session's container.
+- **Left:** the gate, with EFF's joint landing request.
 
 ## Related
 
