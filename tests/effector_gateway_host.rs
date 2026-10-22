@@ -204,3 +204,14 @@ fn not_yet_cancel_and_status() {
     let s = g.status(&mut m);
     assert!(s.policy && !s.busy && s.services.len() == 2 && s.memory_total == 1000);
 }
+
+#[test]
+fn a_client_with_another_badge_gets_nothing() {
+    let (mut g, mut m) = ready();
+    m.files.insert("data/reports/r.bin".into(), vec![1; 10]);
+    assert_eq!(g.open_file(&mut m, Badge::Other, &origin("c1"), "data/reports/r.bin").err(), Some(Fail::Denied));
+    assert_eq!(g.not_yet(&mut m, Badge::Other, &origin("c2"), "open-screen", policy::Ask::Screen), Fail::Denied);
+    assert_eq!(g.reload_policy(&mut m, Badge::Other).err(), Some(Fail::Denied));
+    assert_eq!(g.audit_lines(Badge::Other, 4).err(), Some(Fail::Denied));
+    assert_eq!(g.cancel(&mut m, Badge::Other, "c1").err(), Some(Fail::Denied));
+}
