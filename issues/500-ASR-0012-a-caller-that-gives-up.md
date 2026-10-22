@@ -1,6 +1,6 @@
 # 500-ASR-0012 — A caller that gives up: the server answering into a buffer that is gone survives
 
-**Type:** test (fault injection) · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** `KRN`: what the kernel does with a lent buffer its caller drops during the call (asked 2026-10-22) · **Main task:** [500](500-fuzzing-abi-and-idl.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.1
+**Type:** test (fault injection) · **Owner:** `ASR` · **Priority:** P1 · **Status:** in progress (2026-10-22) · **Blocked by:** `KRN`: [000-KRN-0152](000-KRN-0152-a-revoked-lease-does-not-fault-its-borrower.md) (ABI 17), a revoked lease leaves its borrower a zeroed page of its own · **Main task:** [500](500-fuzzing-abi-and-idl.md) · **Constitution:** MC-2.3, MC-6.1, MC-12.1
 
 ## Problem
 
@@ -45,7 +45,10 @@ Evidence for the configurations named only (MC-12.1).
     - it runs case `G` three times and fails on a fault of the server.
   - **Today it fails as the Mac did:** `FAULT PID=1 CPU=0 VECTOR=14 ERROR=0x6`, the shell's fault of the same afternoon (x86, QEMU, 4 CPUs).
   - **The `isolation` suite still passes** with the new case in the program.
-  - Once KRN states its rule, the case follows it. If the reply goes through the kernel, the case's direct write becomes that call. Then the suite joins a CI group.
+- **2026-10-22, KRN's rule (000-KRN-0152, ABI 17).** On revocation the server's mapping becomes a zeroed page of its own, so its late write goes nowhere.
+  - As KRN suggested, case `G` now also checks the caller's side. The child keeps its page past the server's late write, then reads it: nothing of that write may be there (MC-2.6).
+  - The suite fails on that too.
+  - It joins a CI group (x86 and aarch64) once 000-KRN-0152 lands.
 
 ## Related
 
