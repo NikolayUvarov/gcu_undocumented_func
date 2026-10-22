@@ -4127,13 +4127,29 @@ def modes_suite(args):
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
+                # The shell's `mode` (750-EFF-0013): the modes and who set them, said above the first prompt while one is on;
+                # a mode goes on after the operator agrees, which init logs with the shell's BADGE_MODE (3), and off at once.
+                if words:
+                    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE DEVELOPMENT MODE IS ON (SET BY disk)")
+                    require(vm.command("mode", raw=True), "MODE: DEVELOPMENT, SET BY disk")
+                    for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")):
+                        vm.send("mode maintenance on the modes suite\n")
+                        vm.expect("TURN THE MAINTENANCE MODE ON?", timeout=10)
+                        vm.expect("(Y/N)", timeout=10)
+                        vm.send_bytes(answer)
+                        require(vm.expect("MIND> ", timeout=30), said)
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE MAINTENANCE ON BY operator (PID ")
+                    require(vm.command("mode development off", raw=True), "MODE: MAINTENANCE, SET BY operator: operator")
+                    require(vm.command("cat data/mode.conf", raw=True), "maintenance")
+                    require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); the shell alone holds init's mode client, in SLOT_MODE; check reads "
-          "the modes and is refused a change, which init logs with its clause (MC-12.6)", flush=True)
+          "the modes and is refused a change, which init logs with its clause (MC-12.6); the shell's mode turns one on "
+          "after the operator agrees and off at once (750-EFF-0013)", flush=True)
 
 
 def fsck_volume(image, start, fs_sectors):

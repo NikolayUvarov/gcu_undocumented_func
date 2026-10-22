@@ -286,6 +286,11 @@ Line editing with arrows, Home/End and Del; history (↑/↓, 32 lines); lower c
   - A request's size and payload (`-s`, `-p`) wait for the stack to send them: its requests carry 8 bytes (requests-NET.md).
 - `ip` (550-APP-0085): the default card's address, then each card with its address, frames, kind, `DOWN`, `PREFERRED` and `DEFAULT`.
 - `netstat [-i]` (000-APP-0031): every socket of the stack with its protocol, ports, remote end, TCP state, bytes each way and program, then the cards; `-i` the cards alone.
+- `mode [development|maintenance on|off [reason]]` (750-EFF-0013, `init.wit` 1.5): the machine's modes, in which `init` runs the Effector agent's services and keeps the choice in `data/mode.conf` across reboots.
+  - `mode` alone: which are on, who set them last (`disk`, `operator`, `mind`) and why: `MODE: MAINTENANCE, SET BY operator: the Mac's Wi-Fi tests`.
+  - `on` asks first at this console, saying what the agent may then do; `off` needs no question. The reason goes to `init`'s log line (`operator` without one).
+  - Through `init`'s client badged `BADGE_MODE` in `SLOT_MODE`, the shell's alone. No client the shell lends may run it, the link's neither; a script run at this console may, and is asked the same.
+  - While a mode is on, the shell says so above its first prompt and in the system log.
 
 **Virtual consoles** (issue 155): Ctrl+Alt+F1…F4 show console 1–4, whatever program has the keyboard; the shell takes these keys before any program (`INPUT_LISTEN`).
 - Each console has its own text and scrollback, input line, history, foreground program and console program; one shell process serves all four.
