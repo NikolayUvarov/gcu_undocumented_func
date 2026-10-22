@@ -28,9 +28,12 @@ def follow(reads, before=""):
 
 def test_release_files():
     manifest = (b"mind-manifest 1\nfile kernel.elf 10 aa 0 0\nfile shell.elf 20 bb 0 0\nfile memtest.elf 30 cc 0 0\n"
-                b"file init.elf 40 dd 0 0\n")
+                b"file init.elf 40 dd 0 0\nfile LICENSES/LICENSE-MIT 5 ee 0 0\nfile voice/model.bin 6 ff 0 0\n"
+                b"file EFI/BOOT/BOOTX64.EFI 7 ab 0 0\nfile app.elf 8 cd 0 0\nfile app2.elf 8 cd 0 0\n")
     files = lu.release_files(manifest, "x86_64", 7)
-    assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "releases/7/x86_64/MANIFEST", "releases/7/x86_64/MANIFEST.SIG"], files  # memtest is no boot file
+    # The boot files first, then the applications (351-KRN-0151), a shared blob once; no licence, model or bootloader.
+    assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "blobs/cc", "blobs/cd", "releases/7/x86_64/MANIFEST",
+                     "releases/7/x86_64/MANIFEST.SIG"], files
 
 
 def test_follow():
