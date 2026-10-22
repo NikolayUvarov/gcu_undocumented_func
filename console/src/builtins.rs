@@ -103,16 +103,17 @@ fn change(out: &mut String, name: &str, args: &str) -> bool {
 }
 
 fn date(out: &mut String) -> bool {
-    match (mind::rtc::date(), mind::rtc::seconds_since_midnight()) {
-        (Some((y, m, d)), Some(s)) => { let _ = write!(out, "{}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, s / 3600, s / 60 % 60, s % 60); true }
-        _ => { let _ = write!(out, "date: the clock does not answer"); false }
+    // In the zone the rtc service holds (000-APP-0099).
+    match mind::rtc::local_date_time() {
+        Some(((y, m, d), s)) => { let _ = write!(out, "{}-{:02}-{:02} {:02}:{:02}:{:02} {}", y, m, d, s / 3600, s / 60 % 60, s % 60, mind::rtc::zone()); true }
+        None => { let _ = write!(out, "date: the clock does not answer"); false }
     }
 }
 
 // The time of day and how long the system has run (the clock program is `clock`).
 fn time(out: &mut String) -> bool {
     let up = mind::time::uptime_ms() / 1000;
-    match mind::rtc::seconds_since_midnight() {
+    match mind::rtc::local_date_time().map(|(_, s)| s) {
         Some(s) => { let _ = write!(out, "{:02}:{:02}:{:02}, up {}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60, up / 3600, up / 60 % 60, up % 60); true }
         None => { let _ = write!(out, "time: the clock does not answer; up {}:{:02}:{:02}", up / 3600, up / 60 % 60, up % 60); false }
     }

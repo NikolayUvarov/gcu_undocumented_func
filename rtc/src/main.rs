@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 // LEGACY: the CMOS RTC on ISA ports (docs/legacy.md); the PL031 of aarch64 `virt` is the other clock (issue 202).
-// Ring 3 RTC driver: answers CALL with the time since midnight and the date, and sets them for the client with the
-// setting badge (idl/rtc.wit).
+// Ring 3 RTC driver: answers CALL with the time since midnight and the date (UTC), and sets them for the client with the
+// setting badge; it keeps the time zone the clocks show the time in, which the same client sets (idl/rtc.wit 1.3).
 mod cmos;
 use cmos::{decode_time, encode_date, encode_time};
 use mind::abi::{BootInfo, CAP_KIND_MMIO, SLOT_DEV0};
@@ -13,6 +13,8 @@ use mind::ipc::Endpoint;
 const SECONDS: u8 = 0x00; const MINUTES: u8 = 0x02; const HOURS: u8 = 0x04; const DAY: u8 = 0x07; const MONTH: u8 = 0x08; const YEAR: u8 = 0x09;
 const STATUS_A: u8 = 0x0A; const STATUS_B: u8 = 0x0B; const UPDATE_IN_PROGRESS: u8 = 0x80; const SET: u8 = 0x80;
 const WEEKDAY: u8 = 0x06;
+// Where a caller's lent page comes, for the calls that carry a record (rtc.wit 1.3's zone).
+const RECEIVED: usize = 9;
 
 // The update window (UIP, up to about 2 ms once a second) can cover several quick tries: after QUICK of them the
 // reads wait a tick, so a later try lands after the update.
@@ -84,17 +86,29 @@ impl Clock {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // UTC until the shell sets it from data/clock.conf (000-APP-0099).
+    let mut zone = rtc::Offset { west: false, minutes: 0 };
     let clock = match cap_info(SLOT_DEV0).0 { CAP_KIND_MMIO => Mmio::map(SLOT_DEV0).map(Clock::Pl031).unwrap_or(Clock::Cmos(Ports(SLOT_DEV0))), _ => Clock::Cmos(Ports(SLOT_DEV0)) };
     loop {
         // Requests are checked against idl/rtc.wit before they are served (MC-2.4).
-        let Ok(request) = Endpoint::SERVICE.recv(0) else { continue };
-        let _ = match rtc::decode(&request, 0) {
+        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        let _ = match rtc::decode(&request, RECEIVED) {
             Ok((rtc::Request::Now, call)) => rtc::reply_now(call, clock.time().map(|seconds| seconds as u32)),
             Ok((rtc::Request::Date, call)) => rtc::reply_date(call, clock.date()),
             Ok((rtc::Request::Set { date, seconds }, call)) => {
                 let result = if request.badge & mind::rtc::BADGE_SET == 0 { Err(rtc::Error::Rights) } else { clock.set(date, seconds) };
                 if result.is_ok() { mind::println!("[RTC] SET BY PID {}", request.sender); }
                 rtc::reply_set(call, result)
+            }
+            Ok((rtc::Request::Zone, call)) => rtc::reply_zone(call, &zone),
+            Ok((rtc::Request::SetZone { zone: asked }, call)) => {
+                let result = if request.badge & mind::rtc::BADGE_SET == 0 { Err(rtc::Error::Rights) }
+                    else if mind::rtc::Zone::from_offset(&asked).is_none() { Err(rtc::Error::Invalid) } else { Ok(()) };
+                if result.is_ok() {
+                    zone = asked;
+                    mind::println!("[RTC] ZONE {} SET BY PID {}", mind::rtc::Zone::from_offset(&zone).unwrap_or_default(), request.sender);
+                }
+                rtc::reply_set_zone(call, result)
             }
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),

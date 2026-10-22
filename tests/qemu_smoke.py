@@ -1165,10 +1165,18 @@ def shell_suite(vm):
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    # 550-APP-0082: c opens the stand-in's catalogue, typing finds Uzbekistan, Enter asks for it (the network is left first).
+    vm.send_bytes(b"c")
+    vm.expect("MODE=COUNTRIES 5 OF 5")
+    vm.send_bytes(b"uz")
+    vm.expect("MODE=COUNTRIES 1 OF 5 AT UZ")
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=OFF COUNTRY=UZ")
     vm.send_bytes(b"q")
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots, and its country "
+          "list finds UZ and applies it", flush=True)
     # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
     require(vm.command("battery"), "NO BATTERY SERVICE")
     require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
@@ -1181,8 +1189,27 @@ def shell_suite(vm):
     for wrong in ("2031-02-30 08:30", "2100-01-01 00:00", "2031-05-17"):
         require(vm.command(f"date set {wrong}"), "USAGE: DATE SET YYYY-MM-DD HH:MM[:SS]")
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
+    # The time zone (000-APP-0099): the RTC keeps UTC, every clock shows it with the zone the rtc service holds (rtc.wit
+    # 1.3); date zone sets it and keeps it in data/clock.conf; date set takes the zone's time. Back to UTC at the end.
+    require(vm.command("date zone"), "ZONE: UTC (THE RTC KEEPS UTC")
+    minute = lambda text, zone: (lambda m: m and int(m[1]) * 60 + int(m[2]))(re.search(rf"DATE: \d{{4}}-\d\d-\d\d (\d\d):(\d\d):\d\d {re.escape(zone)}\s", text))
+    utc = minute(vm.command("date"), "UTC")
+    require(vm.command("date zone +03:00"), "ZONE UTC+03:00, KEPT IN data/clock.conf")
+    east = minute(vm.command("date"), "UTC+03:00")
+    assert utc is not None and east is not None and (east - utc) % 1440 in (180, 181), (utc, east)
+    require(vm.command("cat data/clock.conf"), "zone UTC+03:00")
+    require(vm.service_logs("rtc", "[RTC] ZONE"), "[RTC] ZONE UTC+03:00 SET BY PID")
+    require(vm.command("date set 2031-05-17 09:00:00"), "CLOCK SET, IN UTC+03:00 (THE RTC KEEPS UTC)")
+    require(vm.command("date"), "DATE: 2031-05-17 09:00:0")
+    require(vm.command("date zone -05:30"), "ZONE UTC-05:30, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 00:30:0")  # 06:00 UTC
+    for wrong in ("+15:00", "3", "Moscow", "+03:60"):
+        require(vm.command(f"date zone {wrong}"), "USAGE: DATE ZONE")
+    require(vm.command("date zone UTC"), "ZONE UTC, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 06:00:0")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
-    print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    print("PASS: date set: the clock set by the shell and read back; impossible dates refused; date zone shifted every "
+          "reading by UTC+03:00 and UTC-05:30, kept it in data/clock.conf, and date set took the zone's time", flush=True)
     # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
     # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
     # names.
@@ -3269,13 +3296,20 @@ def fm_store_check(vm):
     keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
     vm.send_bytes(b"\r")
     status_line(vm, "JOB=NONE", whole=True)
+    # 300-APP-0101: the panel lists every name the store has (blockstore.wit 1.4), those blocks published too: copy, and
+    # list/n00 to list/n17 in two pages of the store's list.
+    to("copy")
+    to("list")
+    keys(b"\r", "RIGHT=/store:list ")
+    to("n17")
     vm.send_bytes(b"\x1b[21~")  # F10
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
     require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
     require(log, "REMOVED fmnote.txt VERSION")
-    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8; the "
+          "names blocks published are listed, 18 of them in a directory", flush=True)
 
 
 def free_port():
@@ -3736,7 +3770,7 @@ def services_suite(vm):
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
     # The shell's commands answer the same keys with their lines of help; fm /? shows fm's text unstarted (000-APP-0054).
-    for line, want in (("date -h", "- date: calendar date and time from the RTC"), ("date /?", "- date: calendar date"),
+    for line, want in (("date -h", "- date: calendar date and time in the time zone"), ("date /?", "- date: calendar date"),
                        ("ls --help", "- ls [path], cat <file>: files"), ("ps -help", "- ps: tasks"), ("kill /H", "- kill <id>: terminate")):
         output = vm.command(line)
         require(output, want)
@@ -5269,13 +5303,18 @@ def slot_applications_check(args):
     image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
 
+    # 351-APP-0103: the shell's `help <name>` reads the file the loader would start.
+    about = "uptime, load averages over 1, 5 and 15 minutes"
+
     def boot(expect, runs, unknown):
         vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none"])
         try:
             require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), expect)
             require(vm.command(runs, raw=True), f"NAME={runs} FOREGROUND")
+            require(vm.command(f"help {runs}", raw=True), about)
             if unknown:
                 require(vm.command(unknown, raw=True), "UNKNOWN COMMAND")
+                require(vm.command(f"help {unknown}", raw=True), f"NO COMMAND OR PROGRAM CALLED {unknown}")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -5286,7 +5325,7 @@ def slot_applications_check(args):
     boot("[LOADER] APPLICATIONS FROM MIND/A/", "probe", "uptime")
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: a slot without applications runs the root's; one that holds any runs its own, and only "
-          "those (351-KRN-0151)", flush=True)
+          "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -6404,9 +6443,13 @@ def wifi_join_check(vm):
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
+    # 550-APP-0082: wlan answers wifi.wit 1.1's country calls; built without a catalogue (550-NET-0035 stage A), it says so.
+    run("wifi country", 30, "[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION")
+    run("wifi country uz", 30, "[WIFI] COUNTRY UZ NOT SET: NO CATALOGUE IN THIS STATION")
+    run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -7587,7 +7630,8 @@ def wm_suite(vm):
         mode, focus, rects = state()
         assert focus == shell and rects[shell][2:] == (80, 24), rects
         typed("ps", "TASK(S); SHELL PID=")
-        typed("date", "(RTC, NO TIME ZONE)")
+        rows = typed("date", "DATE: ")  # in the zone, UTC here (000-APP-0099)
+        assert any(re.search(r"DATE: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", row) for row in rows), rows
         clock_pid = int(started["clock"]) + BASE
         typed(f"logs {clock_pid}", f"LOGS PID={clock_pid}")
         # A program started there opens a window of its own in wm, and the session goes on.
@@ -7792,10 +7836,26 @@ def wm_suite(vm):
     # screen took. Under emulation it says how long, not how fast a real machine is.
     frame = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE, (\d+) MS AT MOST, (\d+) FRAMES IN \d+ S \((\d+)X(\d+) BLOCKS OF \d PX\)", "".join(seen))
     assert frame and int(frame[1]) <= int(frame[2]) and int(frame[3]) >= 1, "".join(seen)[-2000:]
+    # The image under the pattern (000-APP-0100): each half keeps its colour's shares, lit and dimmed where the
+    # curtains are, and the light moves; its first frame's time too.
+    mark = len(seen)
+    out, screen, colour = desktop_alone("background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60", again=.5)
+    require(out, "[WM] BACKGROUND background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60;")
+    points = [(px, py) for py in range(48, 400, 8) for px in range(0, 1280, 8) if not 600 <= px < 680]
+    shares = lambda c, px: c[0] > c[1] > c[2] if px < 640 else c[2] > c[1] > c[0]
+    kept = sum(shares(colour(px, py), px) for px, py in points)
+    assert kept >= len(points) * 95 // 100, (kept, len(points))
+    reds = {colour(px, py)[0] for px, py in points if px < 600}
+    assert max(reds) - min(reds) > 40, sorted(reds)  # lit and dimmed, not the picture as it is
+    lit = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for px, py in points)
+    assert lit > 16, lit
+    both = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE", "".join(seen[mark:]))
+    assert both, "".join(seen[mark:])[-2000:]
     require(vm.command("rm data/wm.conf"), "OK")
     require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
-          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms", flush=True)
+          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms; combined, the "
+          f"picture keeps its colours under the moving light ({kept} of {len(points)} points), its frame in {both[1]} ms", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
     read[0] = len(vm.log)
 
@@ -8170,7 +8230,7 @@ def wm_suite(vm):
                 time.sleep(.3)
                 screen = screen_text(vm)
                 vm.serial(enter=False)
-                found = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen))
+                found = re.search(r"The clock, UTC(?:[+-]\d\d:\d\d)?: (\d{4})-", "".join(screen))
                 if found and (want is None or int(found[1]) == want):
                     return int(found[1])
             raise AssertionError((want, screen))
@@ -8179,7 +8239,7 @@ def wm_suite(vm):
             known = {m[0] for m in windows_re.findall("".join(seen))}
             year = page()
             keys("right" if step > 0 else "left")
-            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            keys(*["down"] * 7, text="SETTINGS=Date and time:Set the clock")
             keys("ret", text=f"[WM] SET CLOCK {year + step:04}-")
             until(f'THE SHELL RAN "date set {year + step:04}-')
             assert re.search(rf'THE SHELL RAN "date set {year + step:04}-[^"]*" AT ONCE', "".join(seen)), "".join(seen)[-2000:]
@@ -8193,8 +8253,19 @@ def wm_suite(vm):
 
         year = set_year(1)
         set_year(-1)
+        # The zone row (000-APP-0099): → and ← set it through the shell at once, kept in data/clock.conf; the page's clock
+        # line names it. Back to UTC, which the suites after this one expect.
+        page()
+        keys(*["down"] * 6, text="SETTINGS=Date and time:Time zone")
+        for key_name, zone in (("right", "UTC+00:30"), ("left", "UTC")):
+            keys(key_name, text=f"[WM] SET ZONE {zone}: The clocks show {zone} now, kept in data/clock.conf")
+            until(f'THE SHELL RAN "date zone {zone}" AT ONCE')
+            until(f"[SHELL] ZONE {zone}, KEPT IN data/clock.conf")  # the file after the answer: a slow disk does not hold wm
+            screen_has(f"The clock, {zone}: ")
+        assert last_state().startswith("MODE=SETTINGS"), last_state()
+        keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: the date page set the year to {year + 1} and back at once through the shell, with no question "
-              "and no window of the shell's; the page stayed open and showed it", flush=True)
+              "and no window of the shell's; the page stayed open and showed it; its zone row set UTC+00:30 and UTC again", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
@@ -8348,7 +8419,7 @@ def wm_suite(vm):
                 keys("down", text=f"SETTINGS=Background:{row}")
             if row == "Image file":
                 # Enter with nothing typed browses data/ for the picture (000-APP-0072); Esc goes back, Enter on a
-                # picture sets it; the picture row puts none back.
+                # picture sets it; the picture row puts none back, through combined.
                 keys("ret", text="BROWSE=data:..")
                 screen_has("Choose the picture (BMP, PNG, JPEG): data")
                 keys("esc", text="SETTINGS=Background:Image file")
@@ -8362,6 +8433,7 @@ def wm_suite(vm):
                 keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
                 assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
                 keys("up", text="SETTINGS=Background:Picture")
+                keys("right", text="[WM] SETTINGS background = combined data/sky.jpg;")  # under the pattern (000-APP-0100)
                 keys("right", text="[WM] SETTINGS ")
                 assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
                 keys("down", text="SETTINGS=Background:Image file")
@@ -8381,6 +8453,7 @@ def wm_suite(vm):
         keys("up", text="SETTINGS=Network")
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
+        screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -8630,6 +8703,7 @@ def wm_suite(vm):
     assert last_state().endswith("SETTINGS=Background"), last_state()
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
+    keys("right", text="[WM] SETTINGS background = combined data/background.bmp")  # the image under the pattern (000-APP-0100)
     keys("right", text="[WM] SETTINGS background = none")
     require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")

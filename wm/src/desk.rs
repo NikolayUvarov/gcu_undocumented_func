@@ -423,6 +423,8 @@ pub enum Action {
     Settings(crate::background::Config),
     /// Settings asks for the clock to be set (000-APP-0055): through the shell, which asks the user in its window.
     SetClock { date: u32, seconds: u32 },
+    /// The time zone through the shell (shell.wit 1.9, 000-APP-0099).
+    SetZone { west: bool, minutes: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -638,6 +640,7 @@ impl Wm {
                     Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                     // The shell sets the clock at once (000-APP-0060): Settings stay open and show the outcome.
                     Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                    Outcome::SetZone { west, minutes } => Action::SetZone { west, minutes },
                     // The network page's row (550-APP-0033): its program in a window, in front of the closed Settings.
                     Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
                 };
@@ -763,6 +766,7 @@ impl Wm {
                 Outcome::Close => { self.mode = Mode::Normal; Action::Redraw }
                 Outcome::Changed(config) => { self.background = config.clone(); Action::Settings(config) }
                 Outcome::SetClock { date, seconds } => Action::SetClock { date, seconds },
+                    Outcome::SetZone { west, minutes } => Action::SetZone { west, minutes },
                 Outcome::Run(command) => { self.mode = Mode::Normal; Action::Run(command) }
             };
         }

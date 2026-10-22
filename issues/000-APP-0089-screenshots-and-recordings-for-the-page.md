@@ -1,6 +1,6 @@
 # 000-APP-0089 — Screenshots and recordings for the project's page
 
-**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); PrintScreen (the kernel track's key code) and the MacBook Pro's run left · **Blocked by:** PrintScreen: a key code from `KRN` ([requests-KRN.md](requests-KRN.md), "A key code for PrintScreen") · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
+**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); PrintScreen (the kernel track's key code) and the MacBook Pro's run left · **Blocked by:** — (the key code is in `main` with ABI 15: [000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done), `KEY_PRINT_SCREEN`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, for [000-KRN-0093](000-KRN-0093-pictures-and-video-for-the-showcase.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
