@@ -7156,10 +7156,11 @@ def _https_server(directory, certificate):
 
 
 def effector_live_suite(args, disk):
-    """750-EFF-0012: the agent against a real Effector server, not the fixture. MIND_EFFECTOR_LIVE names a directory
-    with the owner's `effector.conf`, `agent_id`, and `token` unless the configuration says `token none`;
-    MIND_EFFECTOR_LIVE_SECONDS is how long it runs (default 120). Not in CI: it needs the network and a server. The
-    token, if any, goes only onto the guest's disk and is checked absent from the log."""
+    """750-EFF-0012: the agent against a real Effector server, not the fixture, as init starts it in the maintenance mode
+    (750-KRN-0119). MIND_EFFECTOR_LIVE names a directory with the owner's `effector.conf`, and `token` unless the
+    configuration says `token none`; MIND_EFFECTOR_LIVE_SECONDS is how long it is watched (default 120). Not in CI: it
+    needs the network and a server. The token, if any, goes only onto the guest's disk and is checked absent from the
+    log."""
     live = Path(os.environ["MIND_EFFECTOR_LIVE"])
     seconds = int(os.environ.get("MIND_EFFECTOR_LIVE_SECONDS", "120"))
     conf = (live / "effector.conf").read_text()
@@ -7167,39 +7168,47 @@ def effector_live_suite(args, disk):
     address = re.search(r"^address (\S+)$", conf, re.M)
     host, port = (address.group(1) if address else server.group(1)), int(server.group(2) or 443)
     (disk / "netpolicy.txt").write_text(f"effector {host} tcp {port} {seconds + 600} 100000000\n")
-    directory = disk / "data" / "effector"
-    directory.mkdir(parents=True, exist_ok=True)
-    for name in ("effector.conf", "agent_id", "token"):
+    (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "mode.conf").write_text("maintenance\n")
+    for name in ("effector.conf", "token"):
         if (live / name).exists():
-            shutil.copyfile(live / name, directory / name)
+            shutil.copyfile(live / name, disk / "data" / "effector" / name)
+    if (live / "agent_id").exists():
+        (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(live / "agent_id", disk / "system" / "effector" / "agent_id")
     token = (live / "token").read_text().strip() if (live / "token").exists() else None
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: MAINTENANCE (data/mode.conf)")
         started = time.monotonic()
-        vm.send(f"effector data/effector/effector.conf --for {seconds}\n")
-        out = vm.expect("MIND> ", timeout=seconds + 120, after="EFFECTOR: STOPPED")
-        events = [line for line in out.splitlines() if line.startswith("EFFECTOR:")]
+        time.sleep(seconds)
+        events = [line for line in vm.command("dmesg -s effector", raw=True).splitlines() if "EFFECTOR:" in line]
         for line in events:
             print(f"  {line}", flush=True)
         if token:
             assert token not in vm.log, "the token reached the log"
-        require(out, "EFFECTOR: CONNECTED TO")
-        refused = [line for line in events if "ANSWERED" in line or "REFUSED" in line]
+        assert any("EFFECTOR: CONNECTED TO" in line for line in events), events
+        # The service starts before DHCP: refusals before the first connection are the network coming up.
+        first = next(i for i, line in enumerate(events) if "EFFECTOR: CONNECTED TO" in line)
+        refused = [line for line in events[first:] if "Transport" in line or "ANSWERED" in line or "REFUSED" in line]
+        print(f"{'PASS' if not refused else 'FAIL'}: the Effector agent in the maintenance mode against {server.group(1)} for "
+              f"{time.monotonic() - started:.0f} s: connected, {len([e for e in events if 'DENIED' in e])} commands denied, "
+              f"{len(refused)} requests failed", flush=True)
         assert not refused, refused
-        print(f"PASS: the Effector agent against {server.group(1)} for {time.monotonic() - started:.0f} s: connected, "
-              f"{len([e for e in events if 'DENIED' in e])} commands denied, no heartbeat or poll refused", flush=True)
     finally:
         vm.close()
 
 
 def effector_suite(args, disk):
-    """750-EFF-0006, first slice: the Effector agent started from the shell against the contract's fixture
-    (tests/effector_server.py) over HTTPS with a pinned leaf: it stays online with heartbeats less than five seconds
-    apart, answers every command `denied` after journaling it, retries an ACK the server failed, sends a shutdown
-    heartbeat; restarted, it reads its journal back and answers a redelivered command with the saved answer, not a new
-    one; a server with another certificate is refused; the token never reaches the log."""
+    """750-EFF-0006 and 750-KRN-0119: the Effector agent as init starts it in a mode, against the contract's fixture
+    (tests/effector_server.py) over HTTPS with a pinned leaf. With `development` in data/mode.conf init starts
+    effector_gw, then `effector --service`, which reads data/effector/ and keeps the token, agent_id and journal in its
+    private system/effector. It stays online with heartbeats less than five seconds apart, answers every command
+    `denied` after journaling it and retries an ACK the server failed; restarted by `svc`, it reads its journal back and
+    answers a redelivered command with the saved answer, not a new one; with the configuration of a server whose
+    certificate is not the pinned one, it is refused before any request; the token never reaches the log."""
     sys.path.insert(0, str(ROOT / "tests"))
     import effector_server  # noqa: E402
     agent, token = "mind-test", "mind-effector-test-token"
@@ -7222,61 +7231,73 @@ def effector_suite(args, disk):
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
     (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 600 100000\n")
-    for name, port in (("effector", server.port), ("rogue", rogue.port)):
-        directory = disk / "data" / name
-        directory.mkdir(parents=True, exist_ok=True)
-        # The rogue directory names the good server's pin for the rogue server: its certificate must be refused.
-        (directory / "effector.conf").write_text(f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n")
-        (directory / "token").write_text(token + "\n")
-        (directory / "agent_id").write_text(agent + "\n")
+    (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "data" / "mode.conf").write_text("development\n")
+    conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
+    (disk / "data" / "effector" / "effector.conf").write_text(conf(server.port))
+    (disk / "data" / "effector" / "token").write_text(token + "\n")
+    # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
+    (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
+    # The agent's ID, as an earlier start would have left it in the session's private directory.
+    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
+    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
+
+    def session():
+        return vm.command("dmesg -s effector", raw=True)
+
+    def until(line, seconds=90):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            out = session()
+            if line in out:
+                return out
+            time.sleep(1)
+        raise AssertionError((line, session()[-3000:]))
     try:
         require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
-        # The gateway is in the image; from the shell it serves nothing and ends at once (750-EFF-0007).
-        require(vm.command("run effector_gw"), "[EFFECTOR_GW] NOT A SERVICE")
+        require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
         exec_id = server.queue(agent, "exec_v1", {"command": "echo forbidden", "run_as": "service", "session": "service", "timeout_seconds": 5})
         restart_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
         unknown_id = server.queue(agent, "powershell_v1", {"command": "Get-Date"})
         server.inject("/api/commands/ack", "ack_500")  # the first ACK fails once: it is retried, not dropped
-        vm.send("effector data/effector/effector.conf --for 30\n")
-        out = vm.expect("MIND> ", timeout=120, after="EFFECTOR: STOPPED")
-        for line in ("EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS)", "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)",
-                     f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: DENIED {restart_id} restart_service", f"EFFECTOR: DENIED {unknown_id} powershell_v1",
-                     f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED", "EFFECTOR: STOPPING", "EFFECTOR: STOPPED\n"):
+        out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
+        time.sleep(20)  # heartbeats to measure, beside the commands
+        out = session()
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS)",
+                     "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: DENIED {restart_id} restart_service",
+                     f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
         for command in (exec_id, restart_id, unknown_id):
             result = server.operation(command)
             assert result and result["status"] == "denied" and result["result"]["error"] == "action_not_allowed", (command, result)
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
-        assert record["system_state"] == "shutting_down", record
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
-        print(f"PASS: the Effector agent online against the fixture: {len(beats)} heartbeats, at most {max(gaps):.1f} s apart; "
-              "three commands answered denied after journaling, a failed ACK retried, a shutdown heartbeat", flush=True)
+        print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
+              f"at most {max(gaps):.1f} s apart; three commands answered denied after journaling, a failed ACK retried; the token "
+              "kept in its private directory", flush=True)
         # Restarted: the journal read back; a redelivered command gets its saved answer again, not a new one.
-        vm.send("effector data/effector/effector.conf --for 16\n")
-        # The saved answers are acknowledged again first (never run again); then the server hands cmd-2 over again.
-        first = vm.expect(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED", timeout=60)
-        require(first, "(3 SAVED RESULTS)")
+        require(vm.command("svc restart effector"), "effector")
+        until("(3 SAVED RESULTS)", 60)
         server.redeliver(restart_id)
-        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
-        for line in (f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", f"EFFECTOR: ACK {restart_id} denied ACCEPTED"):
-            require(out, line)
-        assert f"EFFECTOR: DENIED {restart_id}" not in out, out
-        journal = vm.command("cat data/effector/journal")
-        require(journal, "effector-journal 1")
-        assert journal.count(" denied -") == 3, journal
-        print("PASS: restarted, the agent reads its journal back (3 saved results) and answers a redelivered command with "
-              "the saved answer, journaled once", flush=True)
-        # A server with another certificate: refused, nothing sent to it.
-        vm.send("effector data/rogue/effector.conf --for 6\n")
-        out = vm.expect("MIND> ", timeout=60, after="EFFECTOR: STOPPED")
-        require(out, "EFFECTOR: TLS CONNECT REFUSED")
+        out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
+        assert out.count(f"EFFECTOR: DENIED {restart_id}") == 1, out[-3000:]
+        print("PASS: restarted by svc, the agent reads its journal back (3 saved results) and answers a redelivered command "
+              "with the saved answer, journaled once", flush=True)
+        # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
+        require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
+        require(vm.command("mv data/rogue.conf data/effector/effector.conf"), "OK")
+        require(vm.command("svc restart effector"), "effector")
+        until(f"EFFECTOR: AGENT mind-test TO 10.0.2.2/effector", 30)
+        deadline = time.monotonic() + 30
+        while "REFUSED: NOT A PINNED KEY OR CERTIFICATE" not in vm.command("dmesg -s tls", raw=True) and time.monotonic() < deadline:
+            time.sleep(1)
+        require(vm.command("dmesg -s tls", raw=True), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
         assert not any(r["path"].endswith("/api/heartbeat") for r in list(rogue.requests)), list(rogue.requests)
-        require(vm.command("dmesg -s tls"), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
-        assert token not in vm.log, "the token reached the log"
+        assert token not in vm.log and token not in session(), "the token reached the log"
         print("PASS: a server with another certificate refused before any request; the token never in the log", flush=True)
     finally:
         stop_watch.set()

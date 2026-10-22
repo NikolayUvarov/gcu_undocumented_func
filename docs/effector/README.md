@@ -132,31 +132,38 @@ as-yet-unwritten MIND client. No real endpoint is registered by these tests.
 
 ## Running the session (750-EFF-0006, first slice)
 
-`effector` is the session service's first slice: a program started from the
-shell until [750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md)
-makes it a boot service. It heartbeats, polls and answers **every** command
+`effector` is the session service's first slice. Since
+[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md)
+(ABI 16) it and `effector_gw` are boot images that `init` starts only in the
+development or maintenance mode (`data/mode.conf`, 750-EFF-0013); no program
+runs by their names. It heartbeats, polls and answers **every** command
 `denied`, after journaling the answer; nothing on the machine is acted on yet
 (the gateway is [750-EFF-0007](../../issues/750-EFF-0007-gateway-service.md)).
 
-**Files, all in one directory** (the only one the shell lends it, `REQUEST_FILE`):
+**Files.** The owner's are in `data/effector/`, which the session reads through a read-only scope; its own are in
+its private `system/effector`:
 
 | File | Written by | Contents |
 |---|---|---|
 | `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), and `token none` for a server that asks no agent token. Any other line refuses the file (`effector/src/config.rs`) |
 | `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
-| `agent_id` | the agent, once | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
-| `journal` | the agent | `effector-journal 1`, then one line per answer, appended and flushed before its ACK (`effector/src/journal.rs`) |
+| `token` → `system/effector/token` | the agent | moved from `data/effector/token` at the first start; the owner may then remove the copy |
+| `agent_id` | the agent, once, in `system/effector` | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
+| `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK (`effector/src/journal.rs`) |
 
 **The network policy line** (`netpolicy add`, which asks the user, 108): the
 program name `effector`, the server's address and port, a term and volume for
 a long-running service, e.g. `effector 203.0.113.7 tcp 443 31536000 10000000000`.
 
-**Against a real server** (750-EFF-0012): `MIND_EFFECTOR_LIVE=DIR tests/qemu_smoke.py --suites effector-live` copies `DIR`'s `effector.conf`, `agent_id` and `token` (if any) onto the guest's disk, adds the network policy line for the configured address, and runs the agent for `MIND_EFFECTOR_LIVE_SECONDS` (default 120). It is not in CI.
+**Run.** The owner writes `development` or `maintenance` in `data/mode.conf` and restarts the machine; `init` starts
+`effector_gw`, then `effector --service`. `svc restart effector` restarts the session; `rm data/mode.conf` and a
+restart end it. It prints one line per event (`CONNECTED`, `DENIED`, `ACK … ACCEPTED`, `REPEATED`, refusals), read
+with `dmesg -s effector`; the token never reaches the log. A stop by `init` sends no `shutting_down` heartbeat yet.
 
-**Run:** `effector data/effector/effector.conf [--for SECONDS]`. With `--for`
-it stops after that long and sends a `shutting_down` heartbeat; without it, it
-runs until it is stopped. It prints one line per event (`CONNECTED`, `DENIED`,
-`ACK … ACCEPTED`, `REPEATED`, refusals); the token never reaches the log.
+**Against a real server** (750-EFF-0012): `MIND_EFFECTOR_LIVE=DIR tests/qemu_smoke.py --suites effector-live` puts
+`DIR`'s `effector.conf`, `token` (if any) and `agent_id` on the guest's disk with the maintenance mode and the network
+policy line for the configured address, and watches the session for `MIND_EFFECTOR_LIVE_SECONDS` (default 120). It
+is not in CI.
 
 **How it behaves:**
 
@@ -172,7 +179,7 @@ runs until it is stopped. It prints one line per event (`CONNECTED`, `DENIED`,
   server failed is retried with back-off; after a restart the saved answers are
   sent again, never run again, and a redelivered command gets its saved answer.
 
-**As boot services** (2026-10-22, built, not yet started by `init`): `init`
+**As boot services** (2026-10-22; `init` starts them since 750-KRN-0119): `init`
 starts both with `--service` in the development or maintenance mode
 (750-KRN-0119, 0143). Started any other way, `effector_gw` serves nothing and
 says so. The slots and badges are one table in `libmind/src/effector.rs`
@@ -196,9 +203,9 @@ every request (MC-10.6).
 
 **Not done in this slice** (each stays in its task):
 
-- `init` starting the two services, their grants and private directories
-  (750-KRN-0119, 0120, 0121): until then the session runs from the shell and the
-  token sits in `data/effector/`, which the shell can read;
+- the gateway's lifecycle client and writable scope (750-KRN-0120, 0121) and
+  screen capture: the requests that need them fail;
+- a `shutting_down` heartbeat when `init` stops the session;
 - the session handing commands to the gateway (750-EFF-0006, 0007): every
   command is still denied;
 - the wake-up stream (SSE): polling only, as the contract allows a first slice;
@@ -210,11 +217,13 @@ every request (MC-10.6).
   device key as a client certificate (`connect-pins` cannot send one).
 
 **Tested** in QEMU (`tests/qemu_smoke.py --suites effector`, x86_64 and
-aarch64) against the fixture: online with heartbeats at most 1.6 s apart over
-30 s; three commands denied after journaling; an ACK the server failed retried;
-a shutdown heartbeat; restarted, three saved answers read back and a
-redelivered command answered from the journal; a server with another
-certificate refused before any request; the token absent from the log. Host
+aarch64) against the fixture, the session started by `init` in the development
+mode: online with heartbeats at most 1.6 s apart; three commands denied after
+journaling; an ACK the server failed retried; the token kept in
+`system/effector`; restarted by `svc`, three saved answers read back and a
+redelivered command answered from the journal; with the configuration of a
+server with another certificate, refused before any request; the token absent
+from the log. Host
 tests: `tests/effector_{session,json,wire,config,journal,policy}_host.rs`. This
 is evidence for QEMU against the fixture, not for the real Effector server or a
 physical machine (750-EFF-0012).
