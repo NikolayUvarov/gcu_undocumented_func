@@ -320,8 +320,12 @@ impl Updater {
         };
         let (manifest, signature) = (read("MANIFEST", MANIFEST_MAX)?, read("MANIFEST.SIG", 64)?);
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
+        // The metadata first: a session's own parser ends after 30 s without a request, less than hashing a slot takes
+        // on a slow machine (parse's IDLE_MS).
         let parser = parser();
         let files = slot_files(&manifest, parser.endpoint())?;
+        let shown = self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint());
+        drop(parser);
         for name in BOOT_FILES.iter().chain(["kernel.elf"].iter()) {
             let path = format!("MIND/{}/{}", slot, name);
             match (files.iter().find(|f| f.path.as_str() == *name), File::open(&path)) {
@@ -350,7 +354,7 @@ impl Updater {
                 }
             }
         }
-        match self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint()) { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
+        match shown { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
     }
 
     // Asks init to restart the machine; init answers first.

@@ -1,6 +1,6 @@
 # Requests for the update track (UPD), not numbered yet
 
-**Owner:** update track (TRACKS: the tracks module session; worked meanwhile by the storage session) · **Status:** open (1 request, 2026-10-21; a parser session that ends before its helper became [109-UPD-0022](109-UPD-0022-the-slots-channels-through-one-parser.md), 2026-10-21) · **Recorded by:** the kernel track (KRN)
+**Owner:** update track (TRACKS: the tracks module session; worked meanwhile by the storage session) · **Status:** open (1 request, 2026-10-21; a parser session that ends before its helper became [109-UPD-0022](../issues-done/109-UPD-0022-the-slots-channels-through-one-parser.done), 2026-10-21) · **Recorded by:** the kernel track (KRN)
 
 The update track numbers its own tasks (`NNN-UPD-MMMM`), so requests from other tracks wait here. The update track turns each into a task and removes it from this file, and the file goes when it is empty.
 
