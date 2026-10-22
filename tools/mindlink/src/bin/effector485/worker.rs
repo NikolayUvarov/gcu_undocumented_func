@@ -230,6 +230,30 @@ fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value
             set("name", s(&target));
             if kind == "install" { note(format!("installed as {target}: run it with {{\"kind\":\"run\",\"name\":\"{target}\"}}\n")); }
         }
+        // A service started again from a file put first (as replace/<its name> unless "name"), or from one the other end
+        // holds ("name"), unverified; or from its boot image with "back" (800-LNK-0016).
+        "replace" => {
+            let unit = p.str("unit").unwrap_or("");
+            if p.bool("back") == Some(true) {
+                c.replace(unit, "")?;
+                note(format!("{unit}: started again from its boot image\n"));
+                return Ok(());
+            }
+            let target = match (&file, name.is_empty()) {
+                (_, false) => name.to_string(),
+                (Some(f), true) => format!("replace/{}", f.file_name().and_then(|n| n.to_str()).unwrap_or("service.elf")),
+                (None, true) => { with(state, id, |op| op.fail("a replace needs \"file\", \"name\" or \"back\"")); return Ok(()); }
+            };
+            if let Some(f) = &file {
+                if let Some((parent, _)) = target.rsplit_once('/') {
+                    match c.mkdir(parent) { Ok(()) | Err(Error::Refused(code::UNSUPPORTED)) => {}, Err(e) => return Err(e) }
+                }
+                if let Err(e) = put(c, state, id, f, &target, false)? { with(state, id, |op| op.fail(&e)); return Ok(()); }
+            }
+            c.replace(unit, &target)?;
+            set("name", s(&target));
+            note(format!("{unit}: started again from {target}, unverified\n"));
+        }
         "get" => {
             let file = file.unwrap();
             let part = PathBuf::from(format!("{}.part", file.display()));

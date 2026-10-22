@@ -16,10 +16,10 @@ pub const RUN_TIMEOUT_MAX: u64 = 86_400;
 const ENDED_KEPT: usize = 500;
 
 /// The kinds, and the fields each needs besides `kind`, `idempotency_key` and `reason`.
-pub const KINDS: [(&str, &[&str]); 15] = [
+pub const KINDS: [(&str, &[&str]); 16] = [
     ("hello", &[]), ("put", &["file"]), ("get", &["name", "file"]), ("list", &[]), ("stat", &["name"]), ("mkdir", &["name"]),
     ("move", &["from", "to"]), ("delete", &["name"]), ("rmdir", &["name"]), ("run", &["name"]), ("install", &["file"]),
-    ("uninstall", &["name"]), ("log", &[]), ("reboot", &[]), ("shell", &["line"]),
+    ("uninstall", &["name"]), ("log", &[]), ("reboot", &[]), ("shell", &["line"]), ("replace", &["unit"]),
 ];
 
 pub fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
