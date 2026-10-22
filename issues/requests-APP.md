@@ -21,7 +21,7 @@ Numbered on 2026-10-20:
 - the shell's `effector` command, for 750: [750-APP-0093](750-APP-0093-the-shells-effector-command.md), waiting for 750-EFF-0003 and 750-EFF-0006;
 - display output over several monitors, for 177: [177-APP-0094](177-APP-0094-wm-over-several-monitors.md), waiting for 177's steps 0–1.
 
-Numbered on 2026-10-22: `help <name>` reading the program from the booted slot, for 351-KRN-0151: [351-APP-0103](351-APP-0103-help-reads-the-booted-slots-program.md); the `wifi` guide naming the station's own join, for 550-NET-0041 (its request is on the kernel session's branch): [550-APP-0104](550-APP-0104-the-wifi-guide-names-the-stations-own-join.md), waiting for 550-NET-0041 in `main`.
+Numbered on 2026-10-22: `help <name>` reading the program from the booted slot, for 351-KRN-0151: [351-APP-0103](351-APP-0103-help-reads-the-booted-slots-program.md); the `wifi` guide naming the station's own join, for 550-NET-0041 (its request is on the kernel session's branch): [550-APP-0104](../issues-done/550-APP-0104-the-wifi-guide-names-the-stations-own-join.done), done once 550-NET-0041 was in `main`.
 
 `wifi` following `idl/wifi.wit` 1.0 (the network track, 2026-10-12) was done in 550-APP-0033, and the note on the station's client in `SLOT_WIFI`, the read-only card client and the badged TLS client (550-KRN-0097, 000-KRN-0109) is taken up by 550-APP-0033, 000-APP-0049 and 351-APP-0083.
 
@@ -36,11 +36,3 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
-
-## The `wifi` guide names the station's automatic join
-
-**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) · **Constitution:** MC-12.3
-
-- **What changed.** `wlan` joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
-- **What stops it.** `wifi leave` (`d` in `wifi`'s window) stops it until the station next joins; `forget` (`f`) takes the network out of it.
-- **Asked.** One line in the `wifi` guide (docs/tools/README.md and README_RU.md) that says so, beside `d` and `f`. A word in `wifi` to turn it off for good can follow if the network track adds one to `wifi.wit`.
