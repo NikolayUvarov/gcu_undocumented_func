@@ -7149,7 +7149,9 @@ def effector_suite(args, disk):
                 seen = n
     watcher = threading.Thread(target=watch, daemon=True)
     watcher.start()
-    (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 600 100000\n")
+    # The broker grants a program the smallest term and volume of its lines, and init keeps that grant across restarts:
+    # both lines alike, so the rogue's does not shrink the session's budget.
+    (disk / "netpolicy.txt").write_text(f"effector 10.0.2.2 tcp {server.port} 86400 1000000000\neffector 10.0.2.2 tcp {rogue.port} 86400 1000000000\n")
     (disk / "data" / "effector").mkdir(parents=True, exist_ok=True)
     (disk / "data" / "mode.conf").write_text("development\n")
     conf = lambda port: f"effector-config 1\nserver https://10.0.2.2:{port}/effector\npin leaf:{server.leaf_pin}\nhostname mind-qemu\n"
