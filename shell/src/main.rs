@@ -102,6 +102,7 @@ struct Shell {
     windowed: Option<u64>, // the program the window's session last started in a window of its own
     commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044), made at the first lend
     managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
+    unasked: bool, // while a line from the link's client runs (800-APP-0102): no question in the shell's window
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
@@ -329,9 +330,17 @@ impl Shell {
                     let _ = commands::reply_net_counters(call, counters.as_ref().map(|list| list.as_slice()).map_err(|e| *e));
                 }
                 commands::Request::Run { line } => {
-                    let result = self.client_line(line.as_str(), message.sender);
+                    // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
+                    let link = message.badge == mind::process::BADGE_SHELL_LINK;
+                    let result = self.line_for(line.as_str(), message.sender, if link { clients::Client::Link } else { clients::Client::Program });
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
-                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    if link {
+                        // The command's word alone in the system log: its arguments may be the user's (as `link` logs it).
+                        let word = line.as_str().split_whitespace().next().unwrap_or("");
+                        mind::println!("[SHELL] FOR THE LINK THE SHELL {} {}", verdict, word.to_ascii_uppercase());
+                    } else {
+                        self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    }
                     let answer = result.as_ref().map(|bytes| { let mut from = bytes.len().saturating_sub(ANSWER_MAX); while from < bytes.len() && bytes[from] & 0xC0 == 0x80 { from += 1; } &bytes[from..] });
                     let _ = commands::reply_run(call, answer.map_err(|e| *e));
                 }
@@ -342,14 +351,20 @@ impl Shell {
     // A command line from a client of the shell's commands (`console` in a window manager, 211-APP-0044), run on the
     // shell's authority as if typed: what it printed. One that changes the machine runs in the shell's window, shown as
     // typed there with the client's PID, once the user agrees (reboot, poweroff and stop ask themselves).
-    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> {
+    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> { self.line_for(line, client, clients::Client::Program) }
+
+    // A client's line, as `kind` may have it run: at once, after the user agrees in the shell's window, or not at all.
+    fn line_for(&mut self, line: &str, client: u64, kind: clients::Client) -> Result<alloc::vec::Vec<u8>, commands::Error> {
         let line = line.trim();
         let word = line.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-        let taken = clients::taken(line);
+        let taken = clients::taken_by(line, kind);
         if taken == clients::Taken::Refused { return Err(commands::Error::Refused); }
         if taken == clients::Taken::Now {
+            // The link's line runs with no question in the shell's window: no one is there to answer (800-APP-0102).
+            self.unasked = kind == clients::Client::Link;
             let outer = self.term.capture.replace(alloc::vec::Vec::new());
             self.command(line.as_bytes());
+            self.unasked = false;
             return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
         }
         self.note(format_args!("FOR PID {} THE SHELL ASKS IN ITS WINDOW: \"{}\"", client, line));
@@ -988,10 +1003,10 @@ impl Shell {
             self.term.clear();
         } else if is(b"reboot") {
             // Keys in the shell's window come through the window manager: it asks first.
-            if is_window(self.active) && !msh::ask(self, "RESTART THE MACHINE?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "RESTART THE MACHINE?") { return; }
             power::reboot(&mut self.term, args);
         } else if is(b"poweroff") || is(b"shutdown") {
-            if is_window(self.active) && !msh::ask(self, "TURN THE MACHINE OFF?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "TURN THE MACHINE OFF?") { return; }
             power::poweroff(&mut self.term, args);
         } else if is(b"voice") {
             self.voice_command(args);
@@ -1005,7 +1020,7 @@ impl Shell {
             let _ = writeln!(self.term, "SCREENSHOT IN {} S{}", asked.delay_ms / 1000, if file.is_empty() { String::new() } else { alloc::format!(": {}", file) });
             self.shot = Some((mind::time::uptime_ms() as u64 + asked.delay_ms, file));
         } else if is(b"stop") {
-            if is_window(self.active) && !msh::ask(self, "HALT THE SYSTEM?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "HALT THE SYSTEM?") { return; }
             files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");
             control::halt();
@@ -1245,7 +1260,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), unasked: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, safe: safe::Safe::default(), shot: None })
 }
 
