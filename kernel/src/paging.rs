@@ -145,6 +145,11 @@ impl Space {
         self.map_with(virtual_start, physical, size, writable, false, Caching::WriteCombining)
     }
 
+    // One frame at every page of a range: a revoked lease's place in its borrower (000-KRN-0152).
+    pub fn map_repeated(&mut self, virtual_start: usize, physical: usize, size: usize, writable: bool) -> Result<(), &'static str> {
+        self.map_checked(virtual_start, physical, size, writable, false, Caching::Memory, true)
+    }
+
     fn map_with(
         &mut self,
         virtual_start: usize,
@@ -153,6 +158,20 @@ impl Space {
         writable: bool,
         executable: bool,
         caching: Caching,
+    ) -> Result<(), &'static str> {
+        self.map_checked(virtual_start, physical, size, writable, executable, caching, false)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn map_checked(
+        &mut self,
+        virtual_start: usize,
+        physical: usize,
+        size: usize,
+        writable: bool,
+        executable: bool,
+        caching: Caching,
+        repeated: bool,
     ) -> Result<(), &'static str> {
         if virtual_start < USER_IMAGE
             || virtual_start >= USER_END
@@ -173,7 +192,7 @@ impl Space {
                 return Err("OVERLAPPING USER PAGES");
             }
         }
-        let result = self.map_pages(virtual_start, physical, size, writable, executable, caching);
+        let result = self.map_pages(virtual_start, physical, size, writable, executable, caching, repeated);
         if result.is_err() {
             self.unmap(virtual_start, size);
         } else {
@@ -182,6 +201,7 @@ impl Space {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn map_pages(
         &mut self,
         virtual_start: usize,
@@ -190,6 +210,7 @@ impl Space {
         writable: bool,
         executable: bool,
         caching: Caching,
+        repeated: bool,
     ) -> Result<(), &'static str> {
         for offset in (0..size).step_by(PAGE) {
             let address = virtual_start + offset;
@@ -208,7 +229,8 @@ impl Space {
                 if entry.read() & mmu::VALID != 0 {
                     return Err("OVERLAPPING USER PAGES");
                 }
-                let leaf = mmu::leaf((physical + offset) as u64, writable, executable, caching == Caching::Device);
+                let frame = if repeated { physical } else { physical + offset };
+                let leaf = mmu::leaf(frame as u64, writable, executable, caching == Caching::Device);
                 entry.write(if caching == Caching::WriteCombining { mmu::write_combining(leaf) } else { leaf });
             }
         }
@@ -296,6 +318,8 @@ impl Space {
     }
 
     fn flush(&self) { mmu::flush(self.root()); }
+    // Drops this CPU's cached translations of the space, before an access that faulted is tried again.
+    pub fn forget_cached(&self) { self.flush(); }
 
     // Translate through this task's locked page tables, never by trusting a
     // user-supplied kernel pointer. Null, supervisor, noncanonical and holes fail.

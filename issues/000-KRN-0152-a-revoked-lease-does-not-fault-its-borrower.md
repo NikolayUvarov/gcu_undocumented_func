@@ -20,7 +20,7 @@ From ASR's request with LNK and DRV (`KRN/2026-10-22T1606Z-LNK-a-lent-buffer-dro
    - Reads give zeros, and writes land in that page.
    - The owner's memory is out of reach exactly as before.
    - The mapping stays until the borrower frees it, which releases the page.
-2. **The cost.** One page per mapping, charged to the borrower's quota. A borrower with no room left loses the mapping as today, and the kernel logs it.
+2. **The cost.** One page per mapping, charged to the borrower and its payers like its page tables. A borrower with no room left in its heap's quota loses the mapping as today: its next access faults, and `faults` shows it. A device mapping, and a task that has ended, get no page either.
 3. **On every architecture.** A page table entry may be invalid for a moment while it is replaced (aarch64's break-before-make). A fault at an address that is mapped with the access asked by the time the kernel looks is retried, not fatal.
 4. **ABI 17.**
    - `docs/api` says what a revoke does to a borrower's mapping.
@@ -30,7 +30,7 @@ From ASR's request with LNK and DRV (`KRN/2026-10-22T1606Z-LNK-a-lent-buffer-dro
 ## Acceptance criteria
 
 - [ ] Kernel host tests: a revoked mapping reads zeros and takes writes; freeing it releases the page; a borrower without room loses the mapping.
-- [ ] The `isolation` suite (x86 and aarch64): after a revoke the borrower reads zeros, never the owner's later data, and writes without a fault.
+- [ ] The `isolation` suite (x86; its adversary program is x86 only): after a revoke the borrower reads zeros, never the owner's later data, and writes without a fault; a child that keeps reading a revoked lease goes on.
 - [ ] ASR's suite (500-ASR-0012): a caller that gives up at different moments, the server still running and answering the next caller, on x86 and aarch64.
 - [ ] `docs/api` and `docs/profile` state the rule.
 
