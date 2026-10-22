@@ -39,7 +39,7 @@ Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md).
 
 ## The `wifi` guide names the station's automatic join
 
-**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](550-NET-0041-wlan-joins-a-remembered-network-by-itself.md) · **Constitution:** MC-12.3
+**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) · **Constitution:** MC-12.3
 
 - **What changed.** `wlan` joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
 - **What stops it.** `wifi leave` (`d` in `wifi`'s window) stops it until the station next joins; `forget` (`f`) takes the network out of it.

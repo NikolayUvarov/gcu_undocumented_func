@@ -1,6 +1,6 @@
 # The Wi-Fi station: what joins by itself
 
-**Version:** 0.1 (2026-10-22) · **Track:** `NET`, task [550-NET-0041](../../issues/550-NET-0041-wlan-joins-a-remembered-network-by-itself.md) for main task [550](../../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Version:** 0.1 (2026-10-22) · **Track:** `NET`, task [550-NET-0041](../../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) for main task [550](../../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 `wlan` is the 802.11 station, a boot service that runs when a radio does (`bcm_wifi`, or `wlansim` in the tests). A program joins a network through its `idl/wifi.wit` client (the `wifi` tool). The station also joins a network by itself, as this page describes. It is a boot service, so every release, including one put through the link, brings this behaviour with it. A script at the volume's root does not.
 
