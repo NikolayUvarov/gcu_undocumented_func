@@ -8,6 +8,11 @@
 //! directory of the boot disk (`system/netpolicy/netpolicy.txt`, which only the broker opens), and the broker reads it
 //! in place of the shipped `netpolicy.txt`. Only a launcher holds a client: the shell asks the user before it adds or
 //! removes a line. Grants made before a change keep their rules; the next grant follows the change.
+//!
+//! 1.2 (800-NET-0038): a client badged `mind::network::BADGE_LAUNCH` may only launch: it prepares, takes and binds
+//! grants and reads the policy and the grants, and is refused `revoke`, `add` and `remove` (`denied`), as is a client
+//! with any other badge. The shell's client has no badge; `link` gets a launcher's in its developer mode, as it has no
+//! user to ask.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -17,16 +22,17 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:netpolicy";
-pub const VERSION: (u8, u8, u8) = (1, 1, 0);
+pub const VERSION: (u8, u8, u8) = (1, 2, 0);
 const MAJOR: usize = 1;
 
-/// `unwritable` (1.1): the change could not be stored, so it was not made.
+/// `unwritable` (1.1): the change could not be stored, so it was not made. `denied` (1.2): a launcher's client asked
+/// to change the policy or to revoke a grant.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Error { #[default] NoPolicy = 0, NoNetwork = 1, Limit = 2, NotFound = 3, Invalid = 4, Unwritable = 5 }
+pub enum Error { #[default] NoPolicy = 0, NoNetwork = 1, Limit = 2, NotFound = 3, Invalid = 4, Unwritable = 5, Denied = 6 }
 impl Error {
     /// The case with wire code `code`; None for a code the interface does not define.
-    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoPolicy), 1 => Some(Self::NoNetwork), 2 => Some(Self::Limit), 3 => Some(Self::NotFound), 4 => Some(Self::Invalid), 5 => Some(Self::Unwritable), _ => None } }
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::NoPolicy), 1 => Some(Self::NoNetwork), 2 => Some(Self::Limit), 3 => Some(Self::NotFound), 4 => Some(Self::Invalid), 5 => Some(Self::Unwritable), 6 => Some(Self::Denied), _ => None } }
 }
 impl Wire for Error {
     const MAX: usize = 1;

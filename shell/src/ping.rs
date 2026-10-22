@@ -1,6 +1,6 @@
 //! `ping`'s command line and its tally (000-APP-0095): how many echo requests, how often, how long each waits for its
-//! reply, the fast mode, and the line `ping` ends with. The size and the payload of a request wait for the stack to
-//! send them (`socket.wit` sends 8 bytes, `MINDCORE`; issues/requests-NET.md).
+//! reply, the fast mode, each request's place in the run, and the line `ping` ends with. The size and the payload of a
+//! request wait for the stack to send them (`socket.wit` sends 8 bytes, `MINDCORE`; issues/requests-NET.md).
 use core::fmt::Write;
 
 pub const USAGE: &str = "USAGE: PING [-C COUNT] [-I SECONDS] [-W SECONDS] [-F] HOST";
@@ -52,6 +52,11 @@ fn milliseconds(text: &str) -> Option<u32> {
     let whole = if whole.is_empty() { 0 } else { whole.parse::<u32>().ok()? };
     let part = if part.is_empty() { 0 } else { part.parse::<u32>().ok()? * 10u32.pow(3 - part.len() as u32) };
     whole.checked_mul(1000)?.checked_add(part)
+}
+
+/// A request's place in the run, `[2/3] `, or `[5] ` for a run until Esc (`-c 0`).
+pub fn place(out: &mut impl Write, n: u32, count: u32) {
+    let _ = if count == 0 { write!(out, "[{}] ", n) } else { write!(out, "[{}/{}] ", n, count) };
 }
 
 /// The requests sent and the replies, with their least, mean and greatest time.

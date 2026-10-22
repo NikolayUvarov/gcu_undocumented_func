@@ -48,7 +48,7 @@ Each operation has:
 | Kind | Fields | Does |
 |---|---|---|
 | `hello` | — | the other end's name and protocol |
-| `put` | `file` (a path on this machine), `name`, `force` | sends a file. `name` is the other end's (default: the file's own name); skipped when the other end holds the same bytes, unless `force` |
+| `put` | `file` (a path on this machine), `name`, `force` | sends a file. `name` is the other end's (default: the file's own name), its directories made when missing; skipped when the other end holds the same bytes, unless `force` |
 | `get` | `name`, `file` | fetches a file, checked by SHA-256 |
 | `list` | `name` | a directory's listing; the top without `name` |
 | `stat` | `name` | `size` and `sha256` in the result |
@@ -56,15 +56,18 @@ Each operation has:
 | `move` | `from`, `to`, `replace` | moves or renames a file or a directory |
 | `delete` | `name` | deletes a file |
 | `rmdir` | `name`, `recursive` | removes a directory |
-| `run` | `name`, `args`, `timeout_seconds` (600, at most 86400) | starts a program on the other end. Its output becomes the operation's; it completes when the program ends, with `exit_code` where the other end knows it (MIND Core does not yet: `null`) |
+| `run` | `name`, `args`, `timeout_seconds` (600, at most 86400) | starts a program on the other end. Its output becomes the operation's; it completes when the program ends, with `exit_code` where the other end knows it (`null` otherwise); a fault fails it |
 | `install` | `file`, `name` | puts a program into `apps/`, replacing one of the same name |
 | `uninstall` | `name` | deletes `apps/<name>` |
 | `log` | `from`, `max_bytes` | the other end's log from a cursor (default 0, 64 KiB); `next` in the result |
+| `reboot` | — | restarts the other end (MIND Core: `dev` in `link.conf`); the daemon says hello again when it is back |
+| `shell` | `line`, `timeout_seconds` | one line for the other end's shell (800-LNK-0015). Its output becomes the operation's; it fails when the shell refused or failed the line |
 
 **Names on the other end** are paths below its directory: on MIND Core, `data/link/` (protocol, section 5).
 
 **What the other end allows** decides the rest:
 - MIND Core starts programs only with the word `run` in `link.conf`;
+- with `dev`, the developer mode (800-LNK-0012), it also runs the built-in programs by name (`netcheck`, `wifi`), lends them the network, the Wi-Fi station and the system monitor that `init` grants it, and restarts on `reboot`;
 - `mindlink serve` only with `--run`.
 
 ## The API
@@ -83,7 +86,7 @@ JSON over HTTP, as Effector's:
 
 **The output** keeps the last 256 KiB of each operation.
 
-**Cancel** stops a put or a get between frames. It stops a running program with STOP, where the other end can. MIND Core's `link` cannot yet: the cancel is then recorded as `cancel_error` and the program goes on (800-KRN-0132, point 3).
+**Cancel** stops a put or a get between frames. It stops a running program with STOP, where the other end can: MIND Core's `link` does, through the loader (800-KRN-0138). Where it cannot, the cancel is recorded as `cancel_error` and the program goes on.
 
 ## The command line
 

@@ -8,7 +8,7 @@ The bootloader can boot either of two copies of the system, slots A and B. Which
 
 | Path | Holds |
 |---|---|
-| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services and the build's `MANIFEST` and `MANIFEST.SIG`. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
+| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services and the build's `MANIFEST` and `MANIFEST.SIG`; in a slot the updater staged, the release's applications too (351-UPD-0023). The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
 | `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each |
 | `EFI/BOOT/` | the bootloader, outside the slots (351-UPD-0010 updates it) |
 | the root | the applications, the licences and the voice model, shared by both slots |
@@ -95,7 +95,7 @@ The suites with a root volume show that a volume without records boots as before
 ## Not provided yet
 
 - **A confirmation the updater is told of.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The updater learns of the confirmation only by outliving the deadline, so the record reaches the disk about two minutes after the boot ([updater.md](updater.md)).
-- **Applications in the slots.** They stay at the root, shared, so a fallback runs the newer applications on the older kernel. Moving them needs the loader to know the booted slot (with 351-KRN-0014).
+- **Applications run from the slots.** The loader opens them from the root, shared, so a release can put a service under an application built against another version of its interface, and a fallback runs the newer applications on the older services. On the MacBook Pro a release with `shell.wit` 1.8 under a `wm` built against 1.9 could not set the time zone (2026-10-22). Decided: a release carries its applications in its slot, and the loader opens them from the booted slot ([351-UPD-0023](../../issues/351-UPD-0023-applications-in-the-releases-slot.md)). The updater stages them there ([updater.md](updater.md)); the loader's part is requested from `KRN`, and `boot_slots.py layout` puts none into slot A yet.
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.
 - **Slot images by default.** `make_usb_image.py` lays the build out in slots only with `--slots` ([write-disk.md](../write-disk.md)); `files` still reads the kernel at the root ([requests-APP.md](../../issues/requests-APP.md)).
 - **A cut during the bootloader's own write, on real media** (351-ASR-0005).

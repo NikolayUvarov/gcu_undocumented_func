@@ -2,7 +2,7 @@
 #![no_main]
 // check [group …]: a self-test of what is done (176-KRN-0063). Each check passes (✓), fails with its reason (✗) or is
 // skipped with its reason (○); the summary counts them and the exit status is 1 if any failed. The table goes to the
-// screen and, with each check's details, to log:checkNNNN.txt. Of init's lifecycle interface it calls only `list`.
+// screen and, with each check's details, to log:checkNNNN.txt. Of init's lifecycle interface it calls `boot`, `list`, `mode`, and `set-mode` to see it refused.
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -109,7 +109,37 @@ fn kernel(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
     text_input(run);
     every_slot(run);
+    stop_and_notice(run);
     console_closes(run);
+}
+
+// The loader ends a program it started for check, and only such a one, and sends each one's exit notice where check
+// asked (loader 1.11, 800-KRN-0138): one that waits, stopped, and one that ends at once with code 3.
+fn stop_and_notice(run: &mut Run) {
+    let name = "launch: stop and notice";
+    let Ok(endpoint) = Endpoint::create() else { return run.report(name, fail(String::from("no endpoint created"))) };
+    let killed = child::start_watched("check", "--child", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)).and_then(|pid| match loader::stop(Endpoint::LOADER, pid) {
+        Ok(Ok(())) => child::exit_notice(endpoint, pid).map(|exit| (pid, exit)),
+        other => { let _ = child::stop(endpoint, pid); Err(format!("stop: {:?}", other)) }
+    });
+    let exited = child::start_watched("check", "--exit 3", endpoint).and_then(|pid| child::exit_notice(endpoint, pid));
+    // Init (PID 1) is not check's program, nor is one that has ended.
+    let refused = [loader::stop(Endpoint::LOADER, 1), loader::stop(Endpoint::LOADER, killed.as_ref().map_or(1, |&(pid, _)| pid))];
+    // A watch needs the right to receive.
+    let send_only = loader::begin(Endpoint::LOADER, "check", "--exit 0").ok().and_then(Result::ok).map(|session| {
+        let watched = ipc::mint(endpoint.0, CAP_WRITE, 0, 0).map(|copy| { let watched = loader::watch(Endpoint::LOADER, session, copy); let _ = ipc::drop_cap(copy); watched });
+        let _ = loader::abort(Endpoint::LOADER, session);
+        watched
+    });
+    let not_found = |r: &mind::Result<Result<(), loader::Error>>| matches!(r, Ok(Err(loader::Error::NotFound)));
+    run.report(name, match (killed, exited) {
+        (Ok((pid, mind::process::Exit::Killed)), Ok(mind::process::Exit::Code(3))) if refused.iter().all(not_found) && matches!(send_only, Some(Ok(Ok(Err(loader::Error::Rights))))) =>
+            pass(format!("PID {} killed; code 3 noticed; 3 refused", pid)),
+        (Ok(_), Ok(_)) if !refused.iter().all(not_found) => fail(format!("stop of PID 1 or an ended one: {:?}", refused)),
+        (Ok(_), Ok(_)) if !matches!(send_only, Some(Ok(Ok(Err(loader::Error::Rights))))) => fail(format!("a send-only watch: {:?}", send_only)),
+        (killed, exited) => fail(format!("stopped: {:?}; ended at once: {:?}", killed.map(|k| k.1), exited)),
+    });
+    let _ = ipc::drop_cap(endpoint.0);
 }
 
 // A tool whose console is gone stops at its next row (176-KRN-0103): kbench, its output sent to an endpoint that goes.
@@ -345,6 +375,24 @@ fn services(run: &mut Run, info: &mind::BootInfo) {
         Ok(Ok(b)) => pass(format!("{}, {}", match b.slot as u32 { BOOT_SLOT_A => "slot A", BOOT_SLOT_B => "slot B", _ => "the volume's root" }, if b.trial { "on trial, confirmed" } else { "not on trial" })),
         other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
     });
+    // The machine's modes (init.wit 1.5, 750-KRN-0143): any client reads them; only the shell's mode client changes them.
+    run.report("the modes", match lifecycle::mode(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(m)) => pass(format!("{}, as set by {}", match (m.development, m.maintenance) { (true, true) => "development and maintenance", (true, false) => "development", (false, true) => "maintenance", _ => "normal" }, m.by.as_str())),
+        other => fail(format!("init did not say: {:?}", other.map(|r| r.err()))),
+    });
+    run.report("a mode change refused", match lifecycle::set_mode(Endpoint(SLOT_LIFECYCLE), lifecycle::Mode::Maintenance, true, "check: a lifecycle client may not") {
+        Ok(Err(lifecycle::Error::Denied)) => pass(String::from("denied to a lifecycle client")),
+        Ok(Ok(())) => {
+            let _ = lifecycle::set_mode(Endpoint(SLOT_LIFECYCLE), lifecycle::Mode::Maintenance, false, "check: undoing a change it should not have made");
+            fail(String::from("init turned the maintenance mode on for a lifecycle client"))
+        }
+        other => fail(format!("not denied: {:?}", other.map(|r| r.err()))),
+    });
+    // 800-KRN-0144: replacing a service is link's developer client's alone; nothing is stopped or read for another.
+    run.report("a replace refused", match lifecycle::replace(Endpoint(SLOT_LIFECYCLE), "rtc", "check.elf") {
+        Ok(Err(lifecycle::Error::Denied)) => pass(String::from("denied to a lifecycle client")),
+        other => fail(format!("not denied: {:?}", other.map(|r| r.err()))),
+    });
     match lifecycle::list(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(list)) => for s in list.as_slice() {
             let verdict = if s.running {
@@ -452,6 +500,7 @@ fn main(info: &'static mind::BootInfo) {
     if args == "--child" { return child::serve(); }
     if args == "--reader" { return child::read_input(); }
     if args == "--slots" { return child::report_slots(); }
+    if let Some(code) = args.strip_prefix("--exit ") { mind::process::exit_with(code.parse().unwrap_or(1)); }
     if let Some(kind) = args.strip_prefix("--probe ") { return child::probe(kind); }
     let chosen: Vec<&str> = args.split_whitespace().collect();
     if let Some(unknown) = chosen.iter().find(|w| !GROUPS.iter().any(|(name, _)| name == *w)) { mind::println!("check: no group {}\n{}", unknown, USAGE); mind::process::exit_with(2); }

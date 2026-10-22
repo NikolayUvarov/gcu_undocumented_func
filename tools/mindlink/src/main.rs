@@ -27,16 +27,22 @@ commands: hello                       the other end's name and version
           get <name> [<file>]         fetch a file
           ls [<dir>]                  the other end's files; a directory's name ends in /
           stat <name>                 a file's size and SHA-256
-          rm <name>                   delete a file
+          rm <name>                   delete a file (also: delete <name>, as effector485 names it)
           mkdir <dir>                 make a directory and its missing parents
           mv <from> <to> [--force]    move or rename a file or directory; --force replaces a file at <to>
           rmdir <dir> [-r]            remove an empty directory; -r: and everything in it
           run <program> [<argument>...]  start a program on the other end, show its output until it ends; exits with
                                       its code where the other end knows it (MIND Core: link.conf must hold the word run)
           start <program> [<argument>...]  the same, printing only the run's number
+          replace <unit> <file> [<name>]  put <file> (as replace/<its name> unless <name>) and start the other end's
+                                      service <unit> again from it, unverified (MIND Core: dev in link.conf; 800-LNK-0016)
+          replace <unit> --back       start <unit> again from its boot image
+          sh <line>                   one line for the other end's shell, its output; exits 1 when the shell refused
+                                      or failed it (MIND Core: link.conf must hold the word dev; 800-LNK-0015)
           out <run> [-f]              a run's output that the other end still holds; -f follows it to its end
           runs                        the runs the other end knows
           stop <run>                  stop a run's program
+          reboot                      restart the other end's machine (MIND Core: link.conf must hold the word dev)
           log [-f]                    the other end's log; -f follows it
           console                     type at the other end's console (lines from standard input, Ctrl-D ends)
           sniff [<seconds>]           the line's raw bytes as they come, in hex, for a check of the wiring (default 10 s)
@@ -154,7 +160,7 @@ fn main() {
         ("ls", []) => ls(&mut c, ""),
         ("ls", [dir]) => ls(&mut c, dir.trim_end_matches('/')),
         ("stat", [name]) => stat(&mut c, name).map(|(size, d)| println!("{name}\t{size}\t{}", hex(&d))),
-        ("rm", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
+        ("rm" | "delete", [name]) => c.delete(name).map(|_| println!("deleted {name}")),
         ("mkdir", [dir]) => c.mkdir(dir.trim_end_matches('/')).map(|_| println!("made {dir}")),
         ("mv", [from, to]) => c.rename(from, to, false).map(|_| println!("moved {from} to {to}")),
         ("mv", [from, to, "--force"]) | ("mv", ["--force", from, to]) => c.rename(from, to, true).map(|_| println!("moved {from} to {to}")),
@@ -162,10 +168,14 @@ fn main() {
         ("rmdir", [dir, "-r"]) | ("rmdir", ["-r", dir]) => c.rmdir(dir.trim_end_matches('/'), true).map(|_| println!("removed {dir} and everything in it")),
         ("run", [program, rest @ ..]) => run(&mut c, program, &rest.join(" ")),
         ("start", [program, rest @ ..]) => c.run(program, &rest.join(" ")).map(|(run, pid)| println!("{run}\t{pid}")),
+        ("replace", [unit, "--back"]) => c.replace(unit, "").map(|_| println!("{unit}: started again from its boot image")),
+        ("replace", [unit, file, rest @ ..]) if rest.len() <= 1 => replace(&mut c, unit, Path::new(file), rest.first().copied()),
+        ("sh", [first, rest @ ..]) => sh(&mut c, &[*first].iter().chain(rest).copied().collect::<Vec<_>>().join(" ")),
         ("out", [run]) => out(&mut c, number(run), false).map(drop),
         ("out", [run, "-f"]) => out(&mut c, number(run), true).map(drop),
         ("runs", []) => runs(&mut c),
         ("stop", [run]) => c.stop(number(run)).map(|_| println!("stopped run {run}")),
+        ("reboot", []) => c.reboot().map(|_| println!("{spec}: restarting")),
         ("log", []) => log(&mut c, false),
         ("log", ["-f"]) => log(&mut c, true),
         ("console", []) => console(&mut c),
@@ -267,10 +277,42 @@ fn run(c: &mut Client<port::Port>, program: &str, args: &str) -> Result<(), Erro
     let (run, pid) = c.run(program, args)?;
     eprintln!("run {run}: {program} started as PID {pid}");
     let (state, exit) = out(c, run, true)?;
+    if state == linkproto::app::RUN_FAULTED {
+        eprintln!("run {run}: faulted (vector {exit})");
+        std::process::exit(1);
+    }
     let code = (exit != linkproto::app::EXIT_UNKNOWN).then_some(exit as i32);
     eprintln!("run {run}: {}{}", if state == linkproto::app::RUN_STOPPED { "stopped" } else { "ended" },
               code.map_or(String::new(), |c| format!(", exit code {c}")));
     if let Some(c) = code.filter(|&c| c != 0) { std::process::exit(c.clamp(1, 255)); }
+    Ok(())
+}
+
+/// A service started again from a file put first, unverified (800-LNK-0016): MIND Core's init logs it so.
+fn replace(c: &mut Client<port::Port>, unit: &str, file: &Path, name: Option<&str>) -> Result<(), Error> {
+    let base = file.file_name().and_then(|n| n.to_str()).unwrap_or("service.elf");
+    let name = name.map_or_else(|| format!("replace/{base}"), str::to_string);
+    if let Some((dir, _)) = name.rsplit_once('/') { c.mkdir(dir)?; }
+    put(c, file, Some(&name), false)?;
+    c.replace(unit, &name)?;
+    println!("{unit}: started again from {name}, unverified");
+    Ok(())
+}
+
+/// One line for the other end's shell: its output; a refusal or failure exits 1 (800-LNK-0015).
+/// MIND Core's `link` answers nothing while its shell runs the line (a `ping` waits), so a silent other end is waited
+/// for, up to two minutes, before the line counts as lost.
+fn sh(c: &mut Client<port::Port>, line: &str) -> Result<(), Error> {
+    let run = c.command(line)?;
+    let started = std::time::Instant::now();
+    let exit = loop {
+        match out(c, run, true) {
+            Ok((_, exit)) => break exit,
+            Err(Error::Timeout) if started.elapsed() < Duration::from_secs(130) => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    if exit != 0 && exit != linkproto::app::EXIT_UNKNOWN { std::process::exit((exit as i32).clamp(1, 255)); }
     Ok(())
 }
 

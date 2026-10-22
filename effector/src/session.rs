@@ -15,8 +15,13 @@ pub enum Error { Identifier, Text, WrongAgent, Clock, ClockRange, Full, Busy, Co
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Id { bytes: [u8; 64], len: u8 }
 impl Id {
-    pub fn new(text: &str) -> Result<Self, Error> {
-        if text.is_empty() || text.len() > 64 || !text.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') { return Err(Error::Identifier); }
+    /// An agent ID: 1–64 of `[A-Za-z0-9_-]` (contract 1.0).
+    pub fn new(text: &str) -> Result<Self, Error> { Self::checked(text, false) }
+    /// A command ID: also `.`, which the server's IDs carry (`20261021064900.000000001_000042`).
+    pub fn command(text: &str) -> Result<Self, Error> { Self::checked(text, true) }
+    fn checked(text: &str, dot: bool) -> Result<Self, Error> {
+        let ok = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || (dot && c == b'.');
+        if text.is_empty() || text.len() > 64 || !text.bytes().all(ok) || text.starts_with('.') { return Err(Error::Identifier); }
         let mut id = Self { bytes: [0; 64], len: text.len() as u8 };
         id.bytes[..text.len()].copy_from_slice(text.as_bytes());
         Ok(id)
@@ -35,7 +40,7 @@ pub struct Command<'a> {
 }
 impl Command<'_> {
     fn identity(&self, agent: Id) -> Result<(Id, [u8; 32]), Error> {
-        let id = Id::new(self.id)?;
+        let id = Id::command(self.id)?;
         if Id::new(self.agent_id)? != agent { return Err(Error::WrongAgent); }
         if self.action.is_empty() || [self.action, self.program, self.payload].iter().any(|s| s.len() > TEXT_MAX) { return Err(Error::Text); }
         let mut hash = Sha256::new();

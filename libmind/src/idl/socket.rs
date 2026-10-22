@@ -26,6 +26,11 @@
 //! station (slot 4); the default is the preferred card while its link is up and it has an address and a gateway, else
 //! the first card in that order that has. `prefer` names the preferred card (operator and policy badges: the broker
 //! applies the policy's `default card N` line); `cards` tells every card's kind and state.
+//!
+//! 2.6 (000-NET-0040): `ping-with` sends an echo request of `size` data bytes (0 to 1472, one frame on a 1500-byte MTU),
+//! `pattern` repeated over them (1 to 16 bytes; empty: `MINDCORE`). Its answer gives the round trip, the reply's data
+//! size, and whether its data are what was sent. A grant's echo is counted in its volume, the request's bytes and as
+//! many for the reply, when it is sent; `ping` is counted the same way, 16 bytes each way.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -35,7 +40,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:socket";
-pub const VERSION: (u8, u8, u8) = (2, 5, 0);
+pub const VERSION: (u8, u8, u8) = (2, 6, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -92,6 +97,15 @@ impl Wire for Usage {
     const MAX: usize = <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.sent.encode(w)?; self.received.encode(w)?; self.sockets.encode(w)?; self.left_ms.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { sent: Wire::decode(r)?, received: Wire::decode(r)?, sockets: Wire::decode(r)?, left_ms: Wire::decode(r)? }) }
+}
+
+/// An echo's answer: the round trip in microseconds, the reply's data bytes, whether they are what was sent (2.6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Echo { pub time_us: u32, pub size: u16, pub matched: bool }
+impl Wire for Echo {
+    const MAX: usize = <u32 as Wire>::MAX + <u16 as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.time_us.encode(w)?; self.size.encode(w)?; self.matched.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { time_us: Wire::decode(r)?, size: Wire::decode(r)?, matched: Wire::decode(r)? }) }
 }
 
 /// The interface: address and prefix length, gateway and DNS server (0: none), MAC address, whether DHCP
@@ -183,6 +197,25 @@ pub fn ping(endpoint: Endpoint, address: u32, timeout_ms: u32) -> Result<core::r
     Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
 }
 
+/// ICMP echo to `address` with `size` data bytes of `pattern` (2.6). Errors: `invalid` (a size over 1472, a pattern
+/// longer than 16), and those of `ping`.
+pub fn ping_with(endpoint: Endpoint, address: u32, timeout_ms: u32, size: u16, pattern: &[u8]) -> Result<core::result::Result<Echo, Error>> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        address.encode(&mut w).ok_or(SysError::Invalid)?;
+        timeout_ms.encode(&mut w).ok_or(SysError::Invalid)?;
+        size.encode(&mut w).ok_or(SysError::Invalid)?;
+        codec::encode_slice::<u8, 16>(pattern, &mut w).ok_or(SysError::Invalid)?;
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 7, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Echo as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// IPv4 address of `name` from DNS server `server` (0: the configured one) on `port` (0: 53).
 pub fn resolve(endpoint: Endpoint, name: &str, server: u32, port: u16, timeout_ms: u32) -> Result<core::result::Result<u32, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
@@ -194,7 +227,7 @@ pub fn resolve(endpoint: Endpoint, name: &str, server: u32, port: u16, timeout_m
         timeout_ms.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 3 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 4, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -203,7 +236,7 @@ pub fn resolve(endpoint: Endpoint, name: &str, server: u32, port: u16, timeout_m
 
 /// A UDP socket on local `port` (0: any free port).
 pub fn udp_open(endpoint: Endpoint, port: u16) -> Result<core::result::Result<u32, Error>> {
-    let words = [4 | MAJOR << 8 | ((port) as usize) << 16, 0];
+    let words = [5 | MAJOR << 8 | ((port) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -220,7 +253,7 @@ pub fn udp_send(endpoint: Endpoint, socket: u32, address: u32, port: u16, data: 
         codec::encode_bytes::<1472>(data, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 0, false, false)?;
     if length != Some(0) { return Err(SysError::Invalid); }
@@ -235,7 +268,7 @@ pub fn udp_receive(endpoint: Endpoint, socket: u32) -> Result<core::result::Resu
         socket.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 7 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1480, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -244,7 +277,7 @@ pub fn udp_receive(endpoint: Endpoint, socket: u32) -> Result<core::result::Resu
 
 /// A TCP connection to `address` and `port`, answered once it is established (or refused, or timed out).
 pub fn tcp_connect(endpoint: Endpoint, address: u32, port: u16, timeout_ms: u32) -> Result<core::result::Result<u32, Error>> {
-    let words = [7 | MAJOR << 8 | ((address) as usize) << 16 | ((port) as usize) << 48, ((timeout_ms) as usize) << 0];
+    let words = [8 | MAJOR << 8 | ((address) as usize) << 16 | ((port) as usize) << 48, ((timeout_ms) as usize) << 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -260,7 +293,7 @@ pub fn tcp_send(endpoint: Endpoint, socket: u32, data: &[u8]) -> Result<core::re
         codec::encode_bytes::<4096>(data, &mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 4, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -276,7 +309,7 @@ pub fn tcp_receive(endpoint: Endpoint, socket: u32, length: u32, out: &mut [u8])
         length.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 9 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 4098, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -285,7 +318,7 @@ pub fn tcp_receive(endpoint: Endpoint, socket: u32, length: u32, out: &mut [u8])
 
 /// Closes a socket (TCP: after the queued data is sent) and frees its handle.
 pub fn close(endpoint: Endpoint, socket: u32) -> Result<core::result::Result<(), Error>> {
-    let words = [10 | MAJOR << 8 | ((socket) as usize) << 16, 0];
+    let words = [11 | MAJOR << 8 | ((socket) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     wire::check_reply(&reply, [0, 0], false)?;
@@ -303,7 +336,7 @@ pub fn policy_set(endpoint: Endpoint, badge: u16, rules: &[Rule], seconds: u32, 
         bytes.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 11 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 0, false, false)?;
     if length != Some(0) { return Err(SysError::Invalid); }
@@ -312,7 +345,7 @@ pub fn policy_set(endpoint: Endpoint, badge: u16, rules: &[Rule], seconds: u32, 
 
 /// Drops a grant: its sockets are closed and further requests with its badge are refused (policy badge only).
 pub fn policy_drop(endpoint: Endpoint, badge: u16) -> Result<core::result::Result<u32, Error>> {
-    let words = [12 | MAJOR << 8 | ((badge) as usize) << 16, 0];
+    let words = [13 | MAJOR << 8 | ((badge) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -327,7 +360,7 @@ pub fn policy_usage(endpoint: Endpoint, badge: u16) -> Result<core::result::Resu
         badge.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 13 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 24, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -341,7 +374,7 @@ pub fn interfaces(endpoint: Endpoint) -> Result<core::result::Result<List<Interf
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 15 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 158, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -350,7 +383,7 @@ pub fn interfaces(endpoint: Endpoint) -> Result<core::result::Result<List<Interf
 
 /// Turns transmit checksum offload on or off (operator only, 2.2); returns the cards that use it now (bit n: card n).
 pub fn offload(endpoint: Endpoint, enable: bool) -> Result<core::result::Result<u32, Error>> {
-    let words = [15 | MAJOR << 8 | ((enable) as usize) << 16, 0];
+    let words = [16 | MAJOR << 8 | ((enable) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let _ = wire::check_reply(&reply, [0xffffffff0000, 0x0], false)?;
@@ -366,7 +399,7 @@ pub fn sockets(endpoint: Endpoint, start: u32) -> Result<core::result::Result<Li
         start.encode(&mut w).ok_or(SysError::Invalid)?;
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 16 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 17 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 1314, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -376,7 +409,7 @@ pub fn sockets(endpoint: Endpoint, start: u32) -> Result<core::result::Result<Li
 /// Names the preferred card, 255 for none (operator and policy badges, 2.5); `invalid` for a card the stack has no
 /// slot for.
 pub fn prefer(endpoint: Endpoint, card: u8) -> Result<core::result::Result<(), Error>> {
-    let words = [17 | MAJOR << 8 | ((card) as usize) << 16, 0];
+    let words = [18 | MAJOR << 8 | ((card) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     wire::check_reply(&reply, [0, 0], false)?;
@@ -390,7 +423,7 @@ pub fn cards(endpoint: Endpoint) -> Result<core::result::Result<List<Card, 4>, E
         let mut w = Writer::new(buffer.as_mut_slice());
         w.len()
     };
-    let reply = wire::call_buffer(endpoint, 18 | MAJOR << 8, &buffer, length)?;
+    let reply = wire::call_buffer(endpoint, 19 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
     let length = wire::buffer_reply(&reply, 30, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
@@ -405,6 +438,7 @@ pub const REQUEST_MAX: usize = 4102;
 pub enum Request<'a> {
     Config,
     Ping { address: u32, timeout_ms: u32 },
+    PingWith { address: u32, timeout_ms: u32, size: u16, pattern: List<u8, 16> },
     Resolve { name: Text<253>, server: u32, port: u16, timeout_ms: u32 },
     UdpOpen { port: u16 },
     UdpSend { socket: u32, address: u32, port: u16, data: &'a [u8] },
@@ -443,6 +477,17 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Ping { address: wire::field(&words, 0, 16, 32) as u32, timeout_ms: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
         }
         3 => {
+            let (call, length) = wire::take_buffer(request, cap, 7, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            let address = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let timeout_ms = <u32 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let size = <u16 as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            let pattern = <List<u8, 16> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::PingWith { address, timeout_ms, size, pattern }, call))
+        }
+        4 => {
             let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -453,11 +498,11 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Resolve { name, server, port, timeout_ms }, call))
         }
-        4 => {
+        5 => {
             wire::body(request, cap, [0xffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::UdpOpen { port: wire::field(&words, 0, 16, 16) as u16 }, Call::words(request, cap)))
         }
-        5 => {
+        6 => {
             let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -468,7 +513,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::UdpSend { socket, address, port, data }, call))
         }
-        6 => {
+        7 => {
             let (call, length) = wire::take_buffer(request, cap, 1480, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -476,11 +521,11 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::UdpReceive { socket }, call))
         }
-        7 => {
+        8 => {
             wire::body(request, cap, [0xffffffffffff0000, 0xffffffff], CAP_KIND_NONE, false)?;
             Ok((Request::TcpConnect { address: wire::field(&words, 0, 16, 32) as u32, port: wire::field(&words, 0, 48, 16) as u16, timeout_ms: wire::field(&words, 1, 0, 32) as u32 }, Call::words(request, cap)))
         }
-        8 => {
+        9 => {
             let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -489,7 +534,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::TcpSend { socket, data }, call))
         }
-        9 => {
+        10 => {
             let (call, length) = wire::take_buffer(request, cap, 4098, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -498,11 +543,11 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::TcpReceive { socket, length }, call))
         }
-        10 => {
+        11 => {
             wire::body(request, cap, [0xffffffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Close { socket: wire::field(&words, 0, 16, 32) as u32 }, Call::words(request, cap)))
         }
-        11 => {
+        12 => {
             let (call, length) = wire::take_buffer(request, cap, 0, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -513,11 +558,11 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::PolicySet { badge, rules, seconds, bytes }, call))
         }
-        12 => {
+        13 => {
             wire::body(request, cap, [0xffff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::PolicyDrop { badge: wire::field(&words, 0, 16, 16) as u16 }, Call::words(request, cap)))
         }
-        13 => {
+        14 => {
             let (call, length) = wire::take_buffer(request, cap, 24, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -525,18 +570,18 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::PolicyUsage { badge }, call))
         }
-        14 => {
+        15 => {
             let (call, length) = wire::take_buffer(request, cap, 158, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Interfaces, call))
         }
-        15 => {
+        16 => {
             wire::body(request, cap, [0x10000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Offload { enable: wire::field(&words, 0, 16, 1) != 0 }, Call::words(request, cap)))
         }
-        16 => {
+        17 => {
             let (call, length) = wire::take_buffer(request, cap, 1314, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -544,11 +589,11 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Sockets { start }, call))
         }
-        17 => {
+        18 => {
             wire::body(request, cap, [0xff0000, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Prefer { card: wire::field(&words, 0, 16, 8) as u8 }, Call::words(request, cap)))
         }
-        18 => {
+        19 => {
             let (call, length) = wire::take_buffer(request, cap, 30, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
@@ -566,6 +611,10 @@ pub fn reply_config(call: Call, value: core::result::Result<&Config, Error>) -> 
 pub fn reply_ping(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_ping_with(call: Call, value: core::result::Result<&Echo, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_resolve(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

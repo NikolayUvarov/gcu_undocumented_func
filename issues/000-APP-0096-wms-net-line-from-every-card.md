@@ -1,6 +1,6 @@
 # 000-APP-0096 — `wm`'s network line counts every card, the Wi-Fi station's too
 
-**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 2a33a71b (2026-10-20), checked in QEMU; the MacBook Pro's run left · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
+**Type:** tools (`wm`, `shell`, interface) · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open: in `main` since 2a33a71b (2026-10-20), the 250 ms bound since 1d841622 (2026-10-21), checked in QEMU; the MacBook Pro's run left · **Blocked by:** — · **Main task:** — (split from [000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md)) · **Roadmap:** track D, G · **Constitution:** MC-3.11, MC-12.3, MC-12.4
 
 **Recorded by:** the tools track, 2026-10-20, from the maintainer's report: "now we have network working but desktop widget with date time cpu load says 'no network counters'".
 
@@ -20,7 +20,7 @@
   - It reads only and reaches nothing on the network (MC-3.11: the authority stays the shell's).
 - **`wm` sums every card's frames** for `NET IN n/S OUT n/S`.
   - The shell's answer comes first. Without it, `wm` reads the card client lent with `BADGE_COUNTERS`, as before.
-  - The shell is asked with a 50 ms bound. When it does not answer in time (busy with a long command), it is left alone for 10 s and the line stays as it was.
+  - The shell is asked with a 250 ms bound. When it does not answer in time (busy with a long command), it is left alone for 5 s and the line stays as it was. (50 ms and 10 s at first: on PCU at a load of 11, gate 25, the shell never answered within 50 ms and `wm` gave no rate in 90 s.)
 - **The line says why it has nothing:**
   - `NET: NO CARD`: the stack counts no card;
   - `NET: NO NETWORK STACK`;
@@ -47,6 +47,7 @@
   - locally: the network driver without legacy, TLC, services, scheduling and files on a3ebd34c; the build, the host tests, boot and keys on 2a33a71b.
   The commits after a3ebd34c changed the suites, the IDL fuzzer's list and `dictate`'s and `speak`'s memory request; the groups that run them ran on 2a33a71b.
 - **This is QEMU's virtio-net and stand-in radio**, not the MacBook Pro's Wi-Fi (MC-12.1).
+- **A loaded machine** (gate 25, PCU at a load of about 11): the first rate over Wi-Fi did not come within the suite's 90 s twice, and passed alone. The bound is 250 ms and the suite waits 180 s (2026-10-21), in `main` with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1.
 - **Left:** the MacBook Pro over Wi-Fi: the line moves while a download runs.
 
 ## Related

@@ -81,6 +81,7 @@ mod idl {
     #[path = "../../libmind/src/idl/block.rs"] pub mod block;
     #[path = "../../libmind/src/idl/blockstore.rs"] pub mod blockstore;
     #[path = "../../libmind/src/idl/display.rs"] pub mod display;
+    #[path = "../../libmind/src/idl/effector.rs"] pub mod effector;
     #[path = "../../libmind/src/idl/gpio.rs"] pub mod gpio;
     #[path = "../../libmind/src/idl/init.rs"] pub mod init;
     #[path = "../../libmind/src/idl/keyboard.rs"] pub mod keyboard;
@@ -352,7 +353,7 @@ fn scribble() {
 #[test]
 fn every_receiver_survives_fuzzed_messages() {
     let receivers = [
-        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), owned!(gpio), owned!(init), owned!(keyboard),
+        owned!(audio), owned!(battery), owned!(block), borrowed!(blockstore), owned!(display), borrowed!(effector), owned!(gpio), owned!(init), owned!(keyboard),
         borrowed!(keystore), owned!(loader), owned!(log), borrowed!(net), owned!(netpolicy), borrowed!(parse), owned!(rtc),
         borrowed!(serial), owned!(shell), borrowed!(socket), borrowed!(ssh), owned!(sysinfo), borrowed!(tls), borrowed!(tpm), owned!(tts), owned!(update), owned!(usb), borrowed!(vfs),
         owned!(video), owned!(voice), owned!(wifi), owned!(window), borrowed!(wlanhw),
@@ -420,8 +421,9 @@ types! {
     battery: Error Status;
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
     display: Error Mode;
+    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service Boot;
+    init: Error Service Boot Mode ModeState;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;
@@ -432,7 +434,7 @@ types! {
     rtc: Error;
     serial: Error Info;
     shell: Error CardCounters;
-    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card;
+    socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo;
     ssh: Error;
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;

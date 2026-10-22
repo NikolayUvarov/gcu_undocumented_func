@@ -342,22 +342,39 @@ fn a_task_slot_kept_across_a_shrink_reads_as_empty() {
 }
 
 #[test]
+fn absolute_pointer_events_carry_horizontal_steps() {
+    // 211-KRN-0150: across steps from -8 to 7 in an absolute event, the rest unchanged; an older event reads 0.
+    use abi::*;
+    for across in -8..=7 {
+        let event = pointer_absolute_scroll(POINTER_LEFT, 4095, 17, -3, across);
+        assert_eq!((pointer_absolute_fields(event), pointer_across(event)), (Some((POINTER_LEFT, 4095, 17, -3)), across));
+    }
+    assert_eq!(pointer_absolute_scroll(0, 1, 2, 0, 99), pointer_absolute_scroll(0, 1, 2, 0, 7), "clamped");
+    let older = pointer_absolute(POINTER_RIGHT, 100, 200, 5);
+    assert_eq!((pointer_across(older), event_byte(older)), (0, 0));
+    assert_eq!(pointer_across(pointer_scroll(0, 1, 1, 0, -4)), -4, "a relative event as before");
+}
+
+#[test]
 fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     // 211-KRN-0058: SLOT_SHELL and SLOT_CLIPBOARD below SLOT_DYNAMIC, each named slot once, the loader's own kept.
     use abi::*;
     let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
         SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
         SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
-        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE];
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS];
     let mut seen = std::collections::BTreeSet::new();
     for slot in named {
         assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_DYNAMIC, ABI_VERSION), (30, 31, 32, 33, 34, 35, 36, 13));
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_DYNAMIC, ABI_VERSION),
+        (30, 31, 32, 33, 34, 35, 36, 37, 38, 15));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_COMMANDS), "the shell's own command endpoint is no program's");
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));
     assert!(CAP_SLOTS - SLOT_DYNAMIC >= 64, "dynamic slots left in the initial capability space");

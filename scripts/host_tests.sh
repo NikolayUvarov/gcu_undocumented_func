@@ -8,7 +8,7 @@ rustc --edition=2021 --test tests/runtime.rs -o "$OUT/runtime-tests"
 "$OUT/runtime-tests"
 rustc --edition=2021 --test tests/tts_host.rs -o "$OUT/tts-tests"
 "$OUT/tts-tests"
-for test in heap keys tui viewer idl record rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid blockstore dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io bcm_txwait serial usb_hub; do
+for test in heap keys tui viewer idl record rtc sysmon monitor fm block fat edit logd search bmp netring window wm clock virtio_input hid battery aml gpio pins wifi path video uvc iso_ring line beep console say jpeg script diag cid blockstore netpolicy dag checkpoint boot_slots http tpm fbank nn russian syntax shell image bench vfs_zone release models idl_fuzz updater json rtl8168 rtw89_firmware rtw89_power rtw89_fwcmd rtw89_mac rtw89_pcie rtw89_download rtw89_phy rtw89_iqk rtw89_calibration rtw89_channel_policy rtw89_channel_power rtw89_startup rtw89_pipeline rtw89_pipeline_mac rtw89_initial_phy rtw89_channel_rfk rtw89_station rtw89_calibration_policy rtw89_runtime_mac rtw89_phycap rtw89_rx rtw89_frames rtw89_data_mode rtw89_native_dma rtw89_connection rtw89_tx rtw89_post_mac rtw89_h2c rtw89_btc rtw89_btc_init rtw89_btc_reports rtw89_btc_codec rtw89_btc_control rtw89_btc_session rtw89_dpk realtek_probe fch_watchdog pci_control boot_abi io bcm_txwait serial usb_hub effector_session effector_policy effector_json effector_wire effector_config effector_journal effector_gateway zip wifijoin wlan_auto; do
     rustc --edition=2021 --test "tests/${test}_host.rs" -o "$OUT/$test-tests"
     "$OUT/$test-tests"
 done
@@ -28,6 +28,10 @@ cargo test --quiet --manifest-path ssh/Cargo.toml --target-dir "$OUT/ssh-target"
 rustc --edition=2021 -O --test tests/voice_host.rs -o "$OUT/voice-tests"
 "$OUT/voice-tests"
 python3 tests/idl_test.py
+python3 tests/land_test.py # the landing queue's requests, plan and candidate (AGENTS.md, section 4)
+python3 tests/link_update_test.py # an update through the link: what goes over the cable, the log followed (351-KRN-0141)
+python3 tests/kernel_budget_test.py
+python3 scripts/kernel_budget.py # the kernel's size against kernel/size-budget.json (850-KRN-0145)
 python3 tests/font_test.py
 python3 tests/manifest_test.py
 python3 tests/release_test.py

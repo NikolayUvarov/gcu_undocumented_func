@@ -6,12 +6,16 @@
 // fails or the time is up), open:A.B.C.D:PORT (connect and keep the connection until the program ends), sockets (the
 // stack's list of this grant's open sockets, socket.wit 2.4), cards (each card's kind and state, which one is preferred
 // and which is the default, socket.wit 2.5), card (the card client in SLOT_NET, which a launcher lends read-only for
-// REQUEST_NET_COUNTERS: its info and counters read, a frame sent or received and a ring lent each refused, 000-NET-0015).
-// A console program; without a grant every check reports NO GRANT.
+// REQUEST_NET_COUNTERS: its info and counters read, a frame sent or received and a ring lent each refused, 000-NET-0015),
+// sessions (ten parser sessions in a row, each with a helper of its own, with one endpoint left in the quota, 109-KRN-0133),
+// echo:A.B.C.D:SIZE:HEX (an echo of SIZE data bytes of the pattern HEX, its reply's size and data checked, socket.wit 2.6).
+// A console program; without a grant every network check reports NO GRANT.
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NET, SLOT_NETWORK};
 use mind::idl::{net, socket};
 use mind::ipc::Endpoint;
+use mind::http::Parser as _;
 use mind::mem::Pages;
+use mind::parse::Session;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK);
 
@@ -65,6 +69,59 @@ fn cards() -> mind::sys::Result<Result<(), socket::Error>> {
     Ok(Ok(()))
 }
 
+// An echo of `size` data bytes of the pattern `hex` (up to 16 bytes; none: the stack's own): the reply must carry as
+// many bytes, and the same (000-NET-0040).
+fn echo(address: u32, size: u16, hex: &str) -> mind::sys::Result<Result<(), socket::Error>> {
+    let mut pattern = [0u8; 16];
+    let mut count = 0;
+    for pair in hex.as_bytes().chunks(2).take(16) {
+        let Some(byte) = core::str::from_utf8(pair).ok().and_then(|text| u8::from_str_radix(text, 16).ok()) else { return Ok(Err(socket::Error::Invalid)) };
+        pattern[count] = byte;
+        count += 1;
+    }
+    Ok(match socket::ping_with(STACK, address, 2000, size, &pattern[..count])? {
+        Ok(echo) => {
+            mind::println!("NETCHECK echo: {} BYTES BACK IN {} US, {}", echo.size, echo.time_us, if echo.matched { "THE SAME DATA" } else { "OTHER DATA" });
+            if echo.matched && echo.size == size { Ok(()) } else { Err(socket::Error::Invalid) }
+        }
+        Err(error) => Err(error),
+    })
+}
+
+// Ten parser sessions in a row with one endpoint free, as the updater has: each has a helper of its own and parses a
+// head, and its end frees the endpoint for the next (109-KRN-0133).
+fn sessions() -> mind::sys::Result<Result<(), socket::Error>> {
+    let mut held = [0usize; 16];
+    let mut count = 0;
+    while count < held.len() {
+        match Endpoint::create() { Ok(endpoint) => { held[count] = endpoint.0; count += 1; } Err(_) => break }
+    }
+    if count == 0 { mind::println!("NETCHECK sessions: NO ENDPOINT IN THE QUOTA"); return Ok(Err(socket::Error::Invalid)); }
+    count -= 1;
+    let _ = mind::ipc::drop_cap(held[count]);
+    // The kernel frees that endpoint on its next reap pass: the first session waits for it, at most 2 s; each one after
+    // must get its parser at once after the last one's end.
+    let started = mind::time::uptime_ms();
+    let mut own = 0;
+    for round in 1..=10 {
+        let Some(mut session) = (loop {
+            match Session::own(Endpoint::LOADER) {
+                Ok(session) => break Some(session),
+                Err(_) if round == 1 && mind::time::uptime_ms() - started < 2000 => { mind::time::sleep(10); }
+                Err(why) => { mind::println!("NETCHECK sessions: SESSION {}: NO PARSER OF ITS OWN ({:?})", round, why); break None }
+            }
+        }) else { break };
+        // A head as mind::http hands it over: without the blank line that ends it.
+        match session.head(b"HTTP/1.1 200 OK\r\nContent-Length: 5") {
+            Ok(head) if head.status == 200 && head.length == Some(5) => own += 1,
+            other => { mind::println!("NETCHECK sessions: SESSION {}: {:?}", round, other.map(|h| h.status)); break }
+        }
+    }
+    for endpoint in &held[..count] { let _ = mind::ipc::drop_cap(*endpoint); }
+    mind::println!("NETCHECK sessions: {} OF 10 WITH A PARSER OF THEIR OWN, {} ENDPOINTS HELD", own, count);
+    Ok(if own == 10 { Ok(()) } else { Err(socket::Error::Invalid) })
+}
+
 // The card client in SLOT_NET: what it may read, and what a read-only one is refused (000-NET-0015).
 fn card() -> mind::sys::Result<Result<(), socket::Error>> {
     let nic = Endpoint(SLOT_NET);
@@ -107,12 +164,14 @@ fn check(text: &str) -> mind::sys::Result<Result<(), socket::Error>> {
         "sockets" => return sockets(),
         "cards" => return cards(),
         "card" => return card(),
+        "sessions" => return sessions(),
+        "echo" => return echo(address, b.parse().unwrap_or(u16::MAX), c),
         _ => Err(socket::Error::Invalid),
     })
 }
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card");
+    mind::about!("netcheck — tries network access with the grant the policy broker gave it, one line per check.\nUsage: netcheck <check>...   tcp:A.B.C.D:PORT  udp:A.B.C.D:PORT  ping:A.B.C.D  dns:NAME  hold:A.B.C.D:PORT:SECONDS  open:A.B.C.D:PORT  sockets  cards  card  sessions  echo:A.B.C.D:SIZE:HEX");
     for word in mind::process::args_str().split_whitespace() { report(word, check(word)); }
 }

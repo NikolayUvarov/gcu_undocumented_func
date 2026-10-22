@@ -7,6 +7,11 @@ use crate::frame::MAX_PAYLOAD;
 use crate::sha256::Sha256;
 
 pub const NAME_MAX: usize = 255;
+/// The longest line COMMAND carries: what the MIND Core shell's `run` takes (`idl/shell.wit`).
+pub const COMMAND_MAX: usize = 240;
+/// REPLACE's unit and path at most: MIND Core's `init.wit` `replace`.
+pub const UNIT_MAX: usize = 16;
+pub const REPLACE_PATH_MAX: usize = 64;
 /// The smallest payload an end agrees to: a stat's answer and a listing's line fit.
 pub const MIN_PAYLOAD: usize = 64;
 /// The bytes a data request or answer carries besides the data: an offset.
@@ -16,6 +21,8 @@ const DATA_HEAD: usize = 8;
 pub const RUN_RUNNING: u8 = 0;
 pub const RUN_ENDED: u8 = 1;
 pub const RUN_STOPPED: u8 = 2;
+/// Ended by a fault: `exit` holds the vector.
+pub const RUN_FAULTED: u8 = 3;
 pub const EXIT_UNKNOWN: u32 = u32::MAX;
 /// The bytes an OUTPUT answer carries before the output: state, exit code, the output's offset.
 const OUTPUT_HEAD: usize = 13;
@@ -235,6 +242,29 @@ impl<L: Line> Client<L> {
         Ok((text.len(), (next != u32::MAX).then_some(next)))
     }
 
+    /// Runs `line` in the other end's shell: the run whose output and end OUTPUT reads.
+    pub fn command(&mut self, line: &str) -> Result<u32, Error> {
+        if line.trim().is_empty() || line.len() > COMMAND_MAX { return Err(Error::TooBig); }
+        let mut r = [0u8; 16];
+        let n = self.master.call(channel::PROGRAMS, kind::COMMAND, line.as_bytes(), &mut r)?;
+        u32_at(&r[..n], 0).ok_or(Error::Protocol)
+    }
+
+    /// Starts service `unit` again from `path`, a file the other end holds, or from its boot image when `path` is empty.
+    pub fn replace(&mut self, unit: &str, path: &str) -> Result<(), Error> {
+        if unit.is_empty() || unit.len() > UNIT_MAX || path.len() > REPLACE_PATH_MAX { return Err(Error::TooBig); }
+        let mut p = [0u8; 1 + UNIT_MAX + REPLACE_PATH_MAX];
+        p[0] = unit.len() as u8;
+        p[1..1 + unit.len()].copy_from_slice(unit.as_bytes());
+        p[1 + unit.len()..1 + unit.len() + path.len()].copy_from_slice(path.as_bytes());
+        self.master.call(channel::PROGRAMS, kind::REPLACE, &p[..1 + unit.len() + path.len()], &mut [0u8; 8]).map(|_| ())
+    }
+
+    /// Restarts the other end's machine; it answers first.
+    pub fn reboot(&mut self) -> Result<(), Error> {
+        self.master.call(channel::CONTROL, kind::REBOOT, &[], &mut [0u8; 8]).map(|_| ())
+    }
+
     /// Console bytes to the other end, its console's output since the last call back into `out`.
     pub fn console(&mut self, input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
         let mut r = [0u8; MAX_PAYLOAD];
@@ -274,6 +304,12 @@ pub trait Files {
     fn stop(&mut self, _run: u32) -> Result<(), u8> { Err(code::UNSUPPORTED) }
     /// "run\tpid\tstate\tname\n" lines from entry `cursor`; the next cursor, None at the end.
     fn runs(&mut self, _cursor: u32, _out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { Err(code::UNSUPPORTED) }
+    /// Runs `line` in the shell (at most COMMAND_MAX bytes, not empty): a run whose output and end `output` gives.
+    fn command(&mut self, _line: &str) -> Result<u32, u8> { Err(code::UNSUPPORTED) }
+    /// Starts service `unit` again from `path` (a name under the store), or from its boot image when `path` is "".
+    fn replace(&mut self, _unit: &str, _path: &str) -> Result<(), u8> { Err(code::UNSUPPORTED) }
+    /// Restarts the machine once this request is answered.
+    fn reboot(&mut self) -> Result<(), u8> { Err(code::UNSUPPORTED) }
 }
 
 /// A store kept elsewhere (a static, so a large buffer is off the stack).
@@ -296,6 +332,9 @@ impl<F: Files + ?Sized> Files for &mut F {
     fn output(&mut self, run: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> { (**self).output(run, cursor, out) }
     fn stop(&mut self, run: u32) -> Result<(), u8> { (**self).stop(run) }
     fn runs(&mut self, cursor: u32, out: &mut [u8]) -> Result<(usize, Option<u32>), u8> { (**self).runs(cursor, out) }
+    fn command(&mut self, line: &str) -> Result<u32, u8> { (**self).command(line) }
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> { (**self).replace(unit, path) }
+    fn reboot(&mut self) -> Result<(), u8> { (**self).reboot() }
 }
 
 /// A file's name as the slave takes it: one component, printable, none of `/ \ :` and not `.` or `..`.
@@ -343,6 +382,7 @@ impl<F: Files> Service for FileService<F> {
         let reply = &mut reply[..limit];
         match (ch, k) {
             (channel::CONTROL, kind::POLL) => Ok(0),
+            (channel::CONTROL, kind::REBOOT) => self.files.reboot().map(|_| 0),
             (channel::CONTROL, kind::HELLO) => {
                 let theirs = u16_at(p, 2).ok_or(code::BAD_REQUEST)? as usize;
                 self.limit = theirs.clamp(MIN_PAYLOAD, MAX_PAYLOAD);
@@ -469,6 +509,22 @@ impl<F: Files> Service for FileService<F> {
                 let (n, next) = self.files.runs(cursor, &mut reply[4..])?;
                 reply[..4].copy_from_slice(&next.unwrap_or(u32::MAX).to_le_bytes());
                 Ok(4 + n)
+            }
+            (channel::PROGRAMS, kind::COMMAND) => {
+                let line = core::str::from_utf8(p).map_err(|_| code::BAD_REQUEST)?;
+                if line.trim().is_empty() || line.len() > COMMAND_MAX || line.chars().any(|c| c.is_control()) { return Err(code::BAD_REQUEST); }
+                let run = self.files.command(line)?;
+                reply[..4].copy_from_slice(&run.to_le_bytes());
+                Ok(4)
+            }
+            (channel::PROGRAMS, kind::REPLACE) => {
+                let len = *p.first().ok_or(code::BAD_REQUEST)? as usize;
+                let unit = core::str::from_utf8(p.get(1..1 + len).ok_or(code::BAD_REQUEST)?).map_err(|_| code::BAD_REQUEST)?;
+                if unit.is_empty() || unit.len() > UNIT_MAX || !unit.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') { return Err(code::BAD_REQUEST); }
+                let rest = &p[1 + len..];
+                let path = if rest.is_empty() { "" } else { path_name(rest).ok_or(code::DENIED)? };
+                if path.len() > REPLACE_PATH_MAX { return Err(code::DENIED); }
+                self.files.replace(unit, path).map(|_| 0)
             }
             _ => Err(code::UNSUPPORTED),
         }

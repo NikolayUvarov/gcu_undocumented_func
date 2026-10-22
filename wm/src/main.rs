@@ -42,9 +42,10 @@ const SYNC_MS: usize = 250;
 const SHELL_MS: u32 = 2000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
-/// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not.
-const NET_SHELL_MS: u32 = 50;
-const SHELL_QUIET_MS: usize = 10_000;
+/// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not: a
+/// loaded machine's shell answers in more than 50 ms (gate 25, PCU), a busy one (a long command) not at all.
+const NET_SHELL_MS: u32 = 250;
+const SHELL_QUIET_MS: usize = 5_000;
 // How often the battery is read: as often as its service reads it (idl/battery.wit).
 const BATTERY_MS: usize = 5000;
 // How long after the shell set the clock the background reads the RTC each second (000-APP-0055).
@@ -625,10 +626,13 @@ fn main(info: &'static BootInfo) {
                 Action::Redraw => {}
                 Action::Close(id) => manager.close(id),
                 Action::Run(command) if command == menu::SHELL && holds(SLOT_SHELL) => {
-                    // The shell opens its own window (211-APP-0044); it may be busy with a command for a while.
-                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::window(Endpoint(SLOT_SHELL)));
+                    // The shell opens another window of its own each time (211-APP-0044, shell.wit 1.8, 000-APP-0097);
+                    // it may be busy with a command for a while.
+                    let answer = mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::new_window(Endpoint(SLOT_SHELL)));
                     let text = match answer {
                         Ok(Ok(id)) => { shell_window = Some(id); format!("The shell's window ({})", id) }
+                        Ok(Err(mind::idl::shell::Error::Busy)) => String::from("The shell has 32 windows open: close one to open another"),
+                        Ok(Err(mind::idl::shell::Error::NoMemory)) => String::from("The shell has no memory for another window: close one"),
                         Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
                         Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
                     };

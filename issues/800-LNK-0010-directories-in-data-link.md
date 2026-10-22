@@ -43,7 +43,7 @@ The maintainer asked on 2026-10-20 to place files and to move them ("place files
   - gets a file back through its new path;
   - has `rmdir` of a directory that is not empty refused;
   - has the climbing names refused by `link`. They never reach `vfs_server`, so this suite does not exercise its scope's own refusal.
-- [ ] **The MacBook Pro over the RS-485 cable:** the same steps.
+- [x] **The MacBook Pro over the RS-485 cable** (2026-10-21): the same steps, below.
 
 Evidence for the configurations named only (MC-12.1).
 
@@ -56,6 +56,12 @@ Evidence for the configurations named only (MC-12.1).
     - `hello` worked;
     - `ls` fell back to the old listing;
     - `mkdir` was refused with "does not serve this", as the protocol says.
+
+- **2026-10-21, the MacBook Pro** (`fast-test` b09b7bb), from Windows through the CH340 and RS-485 at 460 800 bit/s, with `mindlink.exe`:
+  - made `a/b/`, put a file into it, moved it to `c/`, and got it back with the same SHA-256;
+  - had `rmdir a` refused as not empty, then removed `a` whole with `-r`;
+  - `ls` showed each step;
+  - had `mkdir ../x` refused.
 
 ## Related
 

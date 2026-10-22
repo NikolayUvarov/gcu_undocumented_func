@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (none waiting, 2026-10-20) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (two waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -8,8 +8,8 @@ Numbered on the tools branch (2026-10-09): clocks and the RTC (000-APP-0012), `l
 
 Numbered on 2026-10-20:
 
-- the shell lending a TLS client without the device certificate, for 351-NET-0022: [351-APP-0083](351-APP-0083-tls-without-the-device-certificate.md);
-- the shell lending the SSH service's client, for 351-NET-0027: [351-APP-0084](351-APP-0084-the-shell-lends-the-ssh-client.md);
+- the shell lending a TLS client without the device certificate, for 351-NET-0022: [351-APP-0083](../issues-done/351-APP-0083-tls-without-the-device-certificate.done);
+- the shell lending the SSH service's client, for 351-NET-0027: [351-APP-0084](../issues-done/351-APP-0084-the-shell-lends-the-ssh-client.done);
 - `ip` showing each card's kind and the default card, for 550-NET-0025: [550-APP-0085](../issues-done/550-APP-0085-ip-shows-each-cards-kind.done);
 - the safe start shown by the shell and `wm`, for 000-KRN-0076: [000-APP-0086](../issues-done/000-APP-0086-the-safe-start-shown.done);
 - `app`, `app2` and `dzen-clock` cleaned, from the critique of 2026-10-14: [000-APP-0087](../issues-done/000-APP-0087-app-app2-and-dzen-cleaned.done);
@@ -34,3 +34,19 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
+
+## `help <name>` reads the program from the booted slot
+
+**From:** the kernel track (KRN), 2026-10-22, for [351-KRN-0151](351-KRN-0151-applications-from-the-booted-slot.md) and 351-UPD-0023 · **Constitution:** MC-9.3
+
+- **What changed.** On a disk booted from a slot that holds applications, `loader` opens an application, and lists one in `LIST`, from that slot (`MIND/A/` or `MIND/B/`), not the root.
+- **What is left in the shell.** `programs::about` (`help <name>`, `list -l`) still opens `<name>.elf` at the root. There it reads another build's text, or none once a release drops a program.
+- **Asked.** Read the booted slot's copy when the slot holds applications, as `files` reads the booted slot's kernel (351-APP-0088), or ask `loader` for the text.
+
+## The `wifi` guide names the station's automatic join
+
+**From:** the network track (NET, worked by the kernel session), 2026-10-22, for [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done) · **Constitution:** MC-12.3
+
+- **What changed.** `wlan` joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
+- **What stops it.** `wifi leave` (`d` in `wifi`'s window) stops it until the station next joins; `forget` (`f`) takes the network out of it.
+- **Asked.** One line in the `wifi` guide (docs/tools/README.md and README_RU.md) that says so, beside `d` and `f`. A word in `wifi` to turn it off for good can follow if the network track adds one to `wifi.wit`.

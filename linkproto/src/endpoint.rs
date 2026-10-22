@@ -7,6 +7,8 @@ use crate::frame::{self, Decoder, Header, MAX_PAYLOAD, MAX_WIRE};
 pub mod kind {
     pub const HELLO: u8 = 1;
     pub const POLL: u8 = 2;
+    /// The slave's machine restarts, after its answer (800-LNK-0012).
+    pub const REBOOT: u8 = 3;
     pub const PUT_OPEN: u8 = 10;
     pub const PUT_DATA: u8 = 11;
     pub const PUT_CLOSE: u8 = 12;
@@ -29,6 +31,10 @@ pub mod kind {
     pub const OUTPUT: u8 = 51;
     pub const STOP: u8 = 52;
     pub const RUNS: u8 = 53;
+    /// A line for the slave's shell, whose answer is read as a run's output (800-LNK-0015).
+    pub const COMMAND: u8 = 54;
+    /// A service started again from a file the slave holds, or from its boot image (800-LNK-0016).
+    pub const REPLACE: u8 = 55;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0xFF;
 }

@@ -73,6 +73,13 @@ fn session(spec: &str, tag: &str) {
     assert!(ok && !d.join("srv/copy.bin").exists(), "{out}");
     let (ok, out) = run(p, &["get", "copy.bin"], b"");
     assert!(!ok && out.contains("no such file"), "{out}");
+    // `delete`, as effector485 names it, is `rm`.
+    let small = d.join("small.txt");
+    std::fs::write(&small, b"to be deleted").unwrap();
+    let (ok, out) = run(p, &["put", small.to_str().unwrap(), "small.txt"], b"");
+    assert!(ok && d.join("srv/small.txt").exists(), "{out}");
+    let (ok, out) = run(p, &["delete", "small.txt"], b"");
+    assert!(ok && !d.join("srv/small.txt").exists(), "{out}");
     let (ok, out) = run(p, &["put", big.to_str().unwrap(), "../escape"], b"");
     assert!(!ok && out.contains("not allowed"), "{out}");
     drop(s);
@@ -125,10 +132,17 @@ fn directories_and_programs() {
     ok(&["stop", &id]);
     assert!(ok(&["runs"]).contains("stopped\tapps/slow.sh"));
     fails(&["out", "12345"], "no such file");
+    // 800-LNK-0015: a line for the other end's shell, its words joined; its exit code is mindlink's.
+    assert!(ok(&["sh", "echo", "sum", "$((40+2))", "&&", "ls"]).contains("sum 42\napps\nc\n"));
+    let (done, out) = run(p, &["sh", "echo refused >&2; exit 3"], b"");
+    assert!(!done && out.contains("refused"), "{out}");
+    assert!(ok(&["runs"]).contains("ended\tsh: echo"), "a line's run is listed by its command's word");
     drop(s);
 
     let s = serve("pty", &d.join("srv"), &d.join("srv.log"));
     let (done, out) = run(&s.port, &["run", "apps/hello.sh"], b"");
+    assert!(!done && out.contains("not allowed"), "{out}");
+    let (done, out) = run(&s.port, &["sh", "echo", "no"], b"");
     assert!(!done && out.contains("not allowed"), "{out}");
     drop(s);
     std::fs::remove_dir_all(&d).ok();
