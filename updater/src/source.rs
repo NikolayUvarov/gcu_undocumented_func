@@ -235,18 +235,23 @@ impl Source {
             Source::Directory(dir) => {
                 let from = File::open(&format!("{}/{}", dir, path)).map_err(|_| Error::Missing)?;
                 if from.size() as u64 != size { return Err(Error::Digest); }
-                let mut buffer = alloc::vec![0u8; STAGE];
-                let mut at = have as usize;
-                while at < size as usize {
-                    let got = from.read_at(at, &mut buffer).map_err(|_| Error::Network)?;
-                    if got == 0 { return Err(Error::Network); }
-                    if file.write_at(at, &buffer[..got]) != Ok(got) { return Err(Error::Write); }
-                    at += got;
-                }
+                copy(&from, file, have as usize, size as usize)?;
                 Ok(size - have)
             }
         }
     }
+}
+
+/// Bytes `at..size` of `from` into the same place of `file`.
+pub fn copy(from: &File, file: &mut File, mut at: usize, size: usize) -> Result<(), Error> {
+    let mut buffer = alloc::vec![0u8; STAGE];
+    while at < size {
+        let got = from.read_at(at, &mut buffer[..STAGE.min(size - at)]).map_err(|_| Error::Network)?;
+        if got == 0 { return Err(Error::Network); }
+        if file.write_at(at, &buffer[..got]) != Ok(got) { return Err(Error::Write); }
+        at += got;
+    }
+    Ok(())
 }
 
 /// The SHA-256 of a file as it is on the disk.

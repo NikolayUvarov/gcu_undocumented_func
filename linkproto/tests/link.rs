@@ -78,7 +78,7 @@ fn take(q: &mut VecDeque<u8>, out: &mut [u8]) -> usize {
 /// Files in memory, counting writes: a repeated request must not write twice.
 #[derive(Default)]
 struct Disk { files: BTreeMap<String, Vec<u8>>, dirs: BTreeSet<String>, open: Option<(String, Vec<u8>)>, reading: Vec<u8>, writes: u32, log: Vec<u8>,
-              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32 }
+              console: Vec<u8>, runs: Vec<Run>, starts: u32, reboots: u32, commands: u32, replaced: Vec<(String, String)> }
 
 /// A program of the simulated end: `echo.elf` prints its arguments and ends; `loop.elf` prints a line a poll until stopped.
 /// A shell command (COMMAND) ends at once: its line echoed with exit 0, or `refused` with exit 1 for `netpolicy add`.
@@ -225,6 +225,13 @@ impl Files for Disk {
         Ok(())
     }
     fn reboot(&mut self) -> Result<(), u8> { self.reboots += 1; Ok(()) }
+    /// As MIND Core's init: `logd` is never replaced, a file must exist; each replace is kept, a repeat too.
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
+        if unit == "logd" { return Err(code::DENIED); }
+        if !path.is_empty() && !self.files.contains_key(path) { return Err(code::NOT_FOUND); }
+        self.replaced.push((unit.into(), path.into()));
+        Ok(())
+    }
     fn command(&mut self, line: &str) -> Result<u32, u8> {
         self.commands += 1;
         let word = line.split_whitespace().next().unwrap_or("");
@@ -472,6 +479,26 @@ fn programs_over_a_lossy_line() {
     assert_eq!(c.master.line.service.files.reboots, 1);
     let (n, next) = c.runs(19, &mut out).unwrap();
     assert_eq!((std::str::from_utf8(&out[..n]).unwrap(), next), ("20\t120\tended\tapps/echo.elf\n21\t121\tstopped\tloop.elf\n", None));
+}
+
+#[test]
+fn replace_over_a_lossy_line() {
+    let faults = Faults { lose_write: 30_000, repeat_write: 30_000, echo: true, ..Faults::default() };
+    let (mut c, _) = pair(faults, 31, 0);
+    c.master.tries = 12;
+    c.mkdir("replace").unwrap();
+    put(&mut c, "replace/rtc.elf", b"\x7fELF").unwrap();
+    for _ in 0..10 {
+        c.replace("rtc", "replace/rtc.elf").unwrap();
+        c.replace("rtc", "").unwrap();
+    }
+    let replaced = &c.master.line.service.files.replaced;
+    assert!(replaced.len() >= 20 && replaced.iter().all(|(u, _)| u == "rtc"), "{replaced:?}");
+    assert_eq!(c.replace("logd", "replace/rtc.elf"), Err(Error::Refused(code::DENIED)));
+    assert_eq!(c.replace("rtc", "replace/missing.elf"), Err(Error::Refused(code::NOT_FOUND)));
+    assert_eq!(c.replace("rtc", "../rtc.elf"), Err(Error::Refused(code::DENIED)));
+    assert_eq!(c.replace("rtc d", ""), Err(Error::Refused(code::BAD_REQUEST)));
+    assert_eq!(c.replace("", ""), Err(Error::TooBig));
 }
 
 #[test]

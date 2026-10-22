@@ -33,6 +33,8 @@ pub mod kind {
     pub const RUNS: u8 = 53;
     /// A line for the slave's shell, whose answer is read as a run's output (800-LNK-0015).
     pub const COMMAND: u8 = 54;
+    /// A service started again from a file the slave holds, or from its boot image (800-LNK-0016).
+    pub const REPLACE: u8 = 55;
     pub const REPLY: u8 = 0x80;
     pub const ERROR: u8 = 0xFF;
 }

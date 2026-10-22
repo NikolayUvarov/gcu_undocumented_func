@@ -203,6 +203,7 @@ The slave starts a program from its directory for the master, keeps its output a
 | STOP (52) | `run u32` | empty: the program is ended |
 | RUNS (53) | `cursor u32` | `next u32`, then lines `run<TAB>pid<TAB>state<TAB>name<LF>`, `state` one of `running`, `ended`, `stopped`, `faulted` |
 | COMMAND (54) | one line for the slave's shell, UTF-8, at most 240 bytes, no control characters | `run u32`: a run whose output and end OUTPUT reads (800-LNK-0015) |
+| REPLACE (55) | `unit_len u8`, the service's name (at most 16 bytes), then a file's name under the store (at most 64 bytes; empty: its boot image) | empty: the service was started again from it, unverified (800-LNK-0016; MIND Core: `dev` in `link.conf`, `init.wit` 1.6 `replace`) |
 
 - **Output** is counted from the program's start.
   - The slave keeps the last part of it: at least 16 KiB on MIND Core, 64 KiB in `mindlink serve`.
