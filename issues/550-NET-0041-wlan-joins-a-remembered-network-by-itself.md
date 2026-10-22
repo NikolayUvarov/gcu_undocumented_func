@@ -1,6 +1,6 @@
 # 550-NET-0041 — `wlan` joins a remembered network by itself, at start and after the network is lost
 
-**Type:** network (service) · **Owner:** `NET` track: the kernel session, its owner (the maintainer, 2026-10-22) · **Priority:** P1 · **Status:** made (2026-10-22); the `net` suite's runs and the gate left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
+**Type:** network (service) · **Owner:** `NET` track: the kernel session, its owner (the maintainer, 2026-10-22) · **Priority:** P1 · **Status:** made and tested (2026-10-22); the gate left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.3
 
 From the request "`wlan` joins a remembered network by itself, at start and after the network is lost (550)" in requests-NET.md (2026-10-22). The kernel track recorded it at the maintainer's word of that day ("a NET task"), taking up the link track's request (`internal-dev-messages`, `NET/2026-10-22T1038Z-LNK-…`). This task takes it from that file.
 
@@ -34,11 +34,11 @@ From the request "`wlan` joins a remembered network by itself, at start and afte
 
 ## Acceptance criteria
 
-- [ ] The `net` suite over `wlansim`, on x86 and aarch64:
+- [x] The `net` suite over `wlansim`, on x86 and aarch64 (passed on this session's machine, 2026-10-22: the station joined again after 2 logged tries on each):
   - after a restart of `wlan`, a remembered `MIND-TEST` is joined with no command, the attempt in the log;
   - after `wifi leave`, no join follows;
   - a lost network is joined again, each attempt in the log.
-- [ ] Host tests for the retry schedule and the choice of network.
+- [x] Host tests for the retry schedule and the choice of network (`tests/wlan_auto_host.rs`).
 
 ## Progress (2026-10-22)
 
