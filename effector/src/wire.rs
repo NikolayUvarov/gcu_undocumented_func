@@ -79,6 +79,8 @@ pub fn heartbeat<'b>(buf: &'b mut [u8], h: &Heartbeat<'_>) -> Result<&'b [u8], E
     w.field_bool("config_auto_update_enabled", false)?;
     w.field_str("transport_mode", "https_only")?;
     w.field_str("transport", "https")?;
+    // Its actions run within their fixed budget: no reservation extends one (Effector ahelp, build 232, the fixed mode).
+    w.field_bool("renewable_execution_timeout", false)?;
     if let Some(t) = h.agent_time { w.field_str("agent_time", t)?; }
     if let Some(l) = h.load {
         w.key("load")?; w.object()?;

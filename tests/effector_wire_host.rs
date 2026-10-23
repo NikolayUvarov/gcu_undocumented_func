@@ -32,8 +32,8 @@ fn the_heartbeat_is_the_contracts_minimal_one() {
     let mut buf = [0u8; 1024];
     let h = Heartbeat { agent_id: "mind_test_0123456789abcdef", hostname: "mind-test", arch: "x64", agent_version: "0.1.0", stopping: false, agent_time: None, busy: None, load: None };
     let body = core::str::from_utf8(heartbeat(&mut buf, &h).unwrap()).unwrap().to_owned();
-    // docs/effector/protocol.md, "A minimal heartbeat is".
-    assert_eq!(body, r#"{"agent_id":"mind_test_0123456789abcdef","hostname":"mind-test","os_version":"mindcore","arch":"x64","run_mode":"service","username":"effector","agent_version":"0.1.0","programs":[],"system_state":"running","busy":false,"max_concurrent_commands":1,"occupied_queues":0,"free_slots":1,"config_auto_update_enabled":false,"transport_mode":"https_only","transport":"https"}"#);
+    // docs/effector/protocol.md, "A minimal heartbeat is", and 1.2's renewable_execution_timeout (the fixed mode).
+    assert_eq!(body, r#"{"agent_id":"mind_test_0123456789abcdef","hostname":"mind-test","os_version":"mindcore","arch":"x64","run_mode":"service","username":"effector","agent_version":"0.1.0","programs":[],"system_state":"running","busy":false,"max_concurrent_commands":1,"occupied_queues":0,"free_slots":1,"config_auto_update_enabled":false,"transport_mode":"https_only","transport":"https","renewable_execution_timeout":false}"#);
     let mut buf = [0u8; 1024];
     let stopping = Heartbeat { stopping: true, agent_time: Some("2026-10-21T07:06:26Z"), ..h };
     let body = core::str::from_utf8(heartbeat(&mut buf, &stopping).unwrap()).unwrap().to_owned();
@@ -213,7 +213,7 @@ fn a_held_command_and_the_load_are_in_the_heartbeat() {
     // While an answer waits for the server, the one slot is occupied: idle reports would close the command as unconfirmed.
     assert!(body.contains(r#""busy":true,"busy_since":"2026-10-23T02:28:56Z","executing_commands":[{"command_id":"cmd-1","action":"screenshot","started_at":"2026-10-23T02:28:56Z"}],"max_concurrent_commands":1,"occupied_queues":1,"free_slots":0,"#), "{body}");
     // 100 x 1.5 / 8 cores = 18.75%: the server's Linux reading, its default threshold 100.
-    assert!(body.ends_with(r#""load":{"load_percent":18.750,"load_average":1.500,"cpu_cores":8}}"#), "{body}");
+    assert!(body.ends_with(r#""renewable_execution_timeout":false,"load":{"load_percent":18.750,"load_average":1.500,"cpu_cores":8}}"#), "{body}");
     parsed(&body);
     assert_eq!(Load::new(150, 0), None, "no cores, no load");
     assert_eq!(with_values(r#"{"path":"x","timeout_seconds":600}"#, |v| timeout_seconds(v)), Ok(Some(600)));

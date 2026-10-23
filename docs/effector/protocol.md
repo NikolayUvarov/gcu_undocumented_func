@@ -47,7 +47,9 @@ Everything 1.1 did stays.
     its answer is sent until the server takes it or refuses it for good, and the server keeps a late one
     (`late_acknowledgement`);
   - its own execution budget is its payload's `timeout_seconds` (1–3600), the gateway's deadline for it; without one,
-    the server's default for its kind (services 180 s, screenshots 30 s, others 120 s);
+    the server's default for its kind (services 180 s, screenshots 30 s, others 120 s). The heartbeat says
+    `renewable_execution_timeout:false` (build 232): a reservation's renewal extends no MIND action, whose commands
+    run in the server's fixed mode;
   - while an answer waits for the server, the heartbeat says so (`busy`, `busy_since`, `executing_commands`,
     `occupied_queues` 1, `free_slots` 0), so idle reports never close the command as `agent_execution_unconfirmed`;
   - every heartbeat carries `load` (`load_percent` = 100 x the one-minute load average / cores, `load_average`,
