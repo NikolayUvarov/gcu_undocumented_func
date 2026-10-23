@@ -26,10 +26,20 @@ From DRV's request of 2026-10-23 (`KRN/2026-10-23T0350Z-DRV-a-service-stop-wedge
 ## Acceptance criteria
 
 - [ ] QEMU (no BCM4331 there): every suite passes as before (the gate).
-- [ ] On the MacBook Pro:
+- [x] On the MacBook Pro:
   - a stop or `replace` of `bcm_wifi` while its receiver is busy logs the kernel's `802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF`;
   - the next start brings the radio up with no reboot.
   - This is evidence for that machine only (MC-12.1). DRV's to run.
+
+## Progress (2026-10-23)
+
+- **Made** in bcc9b8eb. The x86 build and the `services` suite passed in this session's container, and the aarch64 build too.
+- **DRV's run on the MacBook Pro** (`KRN/2026-10-23T0645Z-DRV-550-krn-0157-checked-on-the-macbook.md`):
+  - **Before,** EFF's slot A with no 0157: three `replace`s of `bcm_wifi` under the Effector agent's traffic each left the core at `00000002`, and only a reboot cleared it.
+  - **After,** slot B with `pci.rs` from bcc9b8eb: three `replace`s under traffic, 25 s apart. Each time the next start found `RESET STATUS 00000000` before and after, and `wlan` joined again 10 to 13 s later.
+  - **The kernel's line** at a stop goes to its own console only, not to the system log read over the link. The core's state shows the stop worked.
+  - This is evidence for that machine and those builds only (MC-12.1).
+- **Left:** the gate.
 
 ## Related
 
