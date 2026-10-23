@@ -39,6 +39,9 @@ Everything 1.1 did stays.
 - **`deliver_file`** takes `path`, `size`, `sha256` (64 lower-case hex digits), `overwrite` and `max_bytes`; the bytes
   come from `GET /api/commands/file`; the answer is `completed` once the gateway has checked them and named the file.
 - **`start_service`, `stop_service`, `restart_service`**: the command's `program_name` is a boot service's name.
+- **`exec_v1` with the command `reboot`** (the server's `exec`) restarts the machine under the owner's `reboot on`: the
+  gateway answers, then asks `init` 10 s later, which checks the policy again (750-KRN-0154); the answer is
+  `completed` once the restart is admitted. Every other command is still `denied`: MIND runs none.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).

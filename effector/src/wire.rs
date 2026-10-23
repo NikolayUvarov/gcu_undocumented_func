@@ -275,6 +275,14 @@ pub fn deliver<'a>(values: &[Value<'a>]) -> Result<Deliver<'a>, Error> {
     Ok(Deliver { path, size, sha256, overwrite })
 }
 
+/// An `exec_v1` payload's command (Effector's ExecOperation). MIND runs none: the agent maps only `reboot` to the
+/// gateway's restart, under the owner's `reboot on`; every other command is denied.
+pub fn exec_command<'a>(values: &[Value<'a>]) -> Result<&'a str, Error> {
+    root(values)?;
+    let [command] = members(values, 0, ["command"])?;
+    string(values, command)
+}
+
 /// A command's own execution budget (`timeout_seconds`, 1–3600) when its payload names one; it is apart from the
 /// command's term in the server's queue (Effector ahelp, "Reservation lease, queue waiting and command runtime").
 pub fn timeout_seconds(values: &[Value<'_>]) -> Result<Option<u64>, Error> {

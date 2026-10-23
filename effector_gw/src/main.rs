@@ -296,6 +296,11 @@ impl Machine for Host {
         encoded
     }
 
+    fn reboot(&mut self) -> Result<(), Fail> {
+        if !present(SLOT_LIFECYCLE) { return Err(Fail::Unsupported); }
+        match init::reboot(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(())) => Ok(()), Ok(Err(init::Error::Denied)) => Err(Fail::Denied), _ => Err(Fail::Io) }
+    }
+
     fn load(&mut self) -> u32 {
         if !present(SLOT_SYSINFO) { return 0; }
         match sysinfo::load(Endpoint(SLOT_SYSINFO)) { Ok(Ok(l)) => l.one, _ => 0 }
@@ -438,7 +443,16 @@ fn main(_info: &'static BootInfo) {
                 let step = if apply { policy::Update::Apply } else { policy::Update::Check };
                 wit::reply_update_check(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "update-check", Ask::Update(step)))))
             }
-            wit::Request::Reboot { origin: o, .. } => wit::reply_reboot(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "reboot", Ask::Reboot)))),
+            wit::Request::Reboot { origin: o, delay_ms } => {
+                // Answered first, so the session keeps and sends its result; then init is asked, after the delay.
+                let admitted = gw.reboot(m, badge, &origin(&o), delay_ms);
+                let sent = wit::reply_reboot(reply, admitted.map(drop).map_err(error));
+                if let Ok(delay) = admitted {
+                    mind::time::sleep(delay as usize);
+                    if let Err(f) = gw.restart(m, o.command.as_str()) { mind::println!("[EFFECTOR_GW] THE RESTART WAS REFUSED: {}", gateway::fail_name(f)); }
+                }
+                sent
+            }
             wit::Request::TestRun { origin: o, .. } => wit::reply_test_run(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "test-run", Ask::Test(&[]))))),
             wit::Request::Cancel { command } => wit::reply_cancel(reply, gw.cancel(m, badge, command.as_str()).map_err(error)),
             wit::Request::ReloadPolicy => {

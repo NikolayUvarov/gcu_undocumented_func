@@ -242,6 +242,9 @@ every request (MC-10.6).
 - **`collect_logs`** (`log ring`, or a `collect` root): the system log or a file, inline as text the same way.
 - **`deliver_file`** (`deliver ROOT`): downloaded from the server straight into the gateway, which checks the size and
   SHA-256 before the file takes its name under the root (750-KRN-0120's scope).
+- **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
+  again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart. Any other
+  command is denied: MIND runs none.
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
 - **An action runs once**, for a new command that has not expired and whose answer the journal has room for.

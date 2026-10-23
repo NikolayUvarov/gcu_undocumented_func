@@ -30,6 +30,7 @@ const PARSER: Endpoint = Endpoint(SLOT_PARSE);
 const GATEWAY: Endpoint = Endpoint(SLOT_GATEWAY);
 const ACTION_S: u64 = 120; // a gateway request's budget when the command names none, from when it is handed over
 const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
+const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
 const BODY_MAX: usize = 16384;
 // A request waits this long for a byte: TCP resends a segment lost twice at 3 s (1 + 2 s, smoltcp's RTO), so a burst of
 // Wi-Fi loss would otherwise cost a new connection and TLS handshake every few seconds (DRV, 2026-10-23).
@@ -493,6 +494,16 @@ impl Agent {
             "screenshot" => {
                 let opened = gateway::open_screen(GATEWAY, &o);
                 self.capture(id, opened, Artifact::Screen, "screenshot.png")
+            }
+            // The server's `exec` with the command `reboot`: the gateway's restart, under the owner's `reboot on`.
+            "exec_v1" => {
+                let command = self.parsed(payload.as_bytes(), |v| wire::exec_command(v).map(String::from)).ok()?;
+                if command.trim() != "reboot" { return None; }
+                match gateway::reboot(GATEWAY, &o, REBOOT_DELAY_MS) {
+                    Ok(Ok(())) => { mind::println!("EFFECTOR: {}: THE MACHINE RESTARTS IN {} S", id, REBOOT_DELAY_MS / 1000); Final::Completed }
+                    Ok(Err(e)) => Final::Failed(failure(e)),
+                    Err(_) => Final::Failed(Failure::Unsupported),
+                }
             }
             "start_service" => service(gateway::ServiceAction::Start),
             "stop_service" => service(gateway::ServiceAction::Stop),

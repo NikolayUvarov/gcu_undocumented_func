@@ -221,3 +221,10 @@ fn a_held_command_and_the_load_are_in_the_heartbeat() {
     assert_eq!(with_values(r#"{"timeout_seconds":0}"#, |v| timeout_seconds(v)), Err(Error::Bounds));
     assert_eq!(with_values(r#"{"timeout_seconds":"5"}"#, |v| timeout_seconds(v)), Err(Error::Type));
 }
+
+#[test]
+fn an_exec_payload_gives_its_command() {
+    let text = r#"{"command":"reboot","run_as":"service","session":"service","timeout_seconds":300}"#;
+    assert_eq!(with_values(text, |v| exec_command(v).map(str::to_owned)), Ok("reboot".to_owned()));
+    assert_eq!(with_values(r#"{"run_as":"service"}"#, |v| exec_command(v).err()), Some(Error::Missing));
+}
