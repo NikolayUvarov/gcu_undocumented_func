@@ -65,7 +65,7 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
   - Quotas above 64 GiB (an ABI change).
   - A machine with 8 GiB or more.
   - `svc` while applications hold everything (an application itself).
-  - The tasks of a CPU that zeroes wait for the block ([262-KRN-0165](../issues/262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.md) keeps the other CPUs' sleeps on time).
+  - The tasks of a CPU that zeroes wait for the block ([262-KRN-0165](262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.done) keeps the other CPUs' sleeps on time).
 
 ## Related
 
@@ -94,7 +94,7 @@ Made on `claude/youthful-mendel-mf1soy` (a2b80aa2, d43aedd0):
   - **The check found a fault in the clock (x86).** While the boot CPU zeroes a large block with its interrupts off, it takes no tick, so the PM timer's reads, one a second, can be more than its 4.7 s wrap apart. The TSC's rate measured again at 60 s (000-KRN-0100) then lost the hidden wraps: it read 3444 MHz instead of 2700. The clock ran 22% slow after that, and the shell stalled 52 s. Each PM read now keeps its TSC, and the TSC counts the wraps between two reads (`clock.rs`, `pm_elapsed`).
   - **Checked** (this session's container, QEMU TCG, 4 CPUs, 6 GiB). On x86: 3072 MiB in GiB blocks and 2865 MiB in small ones, 32 807 KiB left, `rtc` restarted and served; the TSC skew kernel's `clock` suite also passed. On aarch64: 3072 MiB and 2885 MiB, 32 798 KiB left, `rtc` restarted and served. Emulated runs, for this container only (MC-12.1).
 - **Left:**
-  - while the boot CPU zeroes a large block, every sleep and IPC deadline of the system waits for its tick: [262-KRN-0165](../issues/262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.md) (in landing round 23);
+  - while the boot CPU zeroed a large block, every sleep and IPC deadline of the system waited for its tick: [262-KRN-0165](262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.done) fixed that for the other CPUs (landing round 25); the zeroing CPU's own tasks still wait;
   - a machine with 8 GiB or more and a program of 6 GiB;
   - blocks of several runs, if a fragmented pool refuses large blocks in practice;
   - quotas above 64 GiB (an ABI change).
