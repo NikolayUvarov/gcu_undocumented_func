@@ -31,7 +31,9 @@ const GATEWAY: Endpoint = Endpoint(SLOT_GATEWAY);
 const ACTION_S: u64 = 120; // a gateway request's budget when the command names none, from when it is handed over
 const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
 const BODY_MAX: usize = 16384;
-const REQUEST_MS: usize = 3000;
+// A request waits this long for a byte: TCP resends a segment lost twice at 3 s (1 + 2 s, smoltcp's RTO), so a burst of
+// Wi-Fi loss would otherwise cost a new connection and TLS handshake every few seconds (DRV, 2026-10-23).
+const REQUEST_MS: usize = 10_000;
 const CONNECT_MS: u32 = 10_000;
 const RECONNECT_MAX_MS: usize = 30_000;
 const PIECE: usize = 32768; // the gateway's transfers move this much a call

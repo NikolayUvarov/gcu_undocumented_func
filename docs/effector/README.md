@@ -177,8 +177,10 @@ is not in CI.
 **How it behaves:**
 
 - One HTTPS connection to the pinned server (`tls.wit` 1.2 `connect-pins`),
-  reconnected with back-off from 1 to 30 s. Every request is bounded by 3 s
-  of silence, so a stalled server delays a heartbeat by at most that.
+  reconnected with back-off from 1 to 30 s. Every request is bounded by 10 s
+  of silence: long enough for TCP to resend a segment lost twice on a lossy
+  Wi-Fi (1 + 2 + 4 s), so a burst of loss slows a heartbeat instead of costing
+  a new connection; a stalled server delays a heartbeat by at most that.
 - Heartbeat every 1.5 s, before anything else in the loop; poll at least every
   10 s, at once again after a command or an accepted ACK (the server hands one
   command a poll), with `at_capacity=1` while an answer waits for its ACK, so
