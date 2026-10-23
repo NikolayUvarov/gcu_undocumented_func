@@ -80,6 +80,14 @@ The stick was `fast-test` 0d73c076, then EFF's release trees (slot B 31d66d3c, s
 
 Evidence for the MacBook Pro's BCM4331 only (MC-12.1). Other boards with this chip may wire their front end otherwise.
 
+## Progress
+
+- **2026-10-23, on the MacBook as its slot B.** The release went in through the link (version 202610230616, confirmed by init): EFF's slot tree d46435eb with this commit's `bcm_wifi` and KRN's 550-KRN-0157.
+  - The line `THE EXTERNAL LNA HELD OFF: RF CONTROL 0400 0400 0400 (THE PHY'S WAS 0000 0000 0000)` comes 2 s after the radio starts serving. Logged together with the start's lines, logd had refused it once.
+  - In the first periods, 81, 93 and 92 of 97 beacons were heard, at a mean of −68 dBm.
+  - Three replaces of `bcm_wifi` under traffic each found the core clean (reset status 0) and came up. Before 550-KRN-0157, three in a row had wedged it.
+  - EFF is asked to build its next release trees on this one, so a later slot update keeps both.
+
 ## Related
 
 [550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), 550-KRN-0157.
