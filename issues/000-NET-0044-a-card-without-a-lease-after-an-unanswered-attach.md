@@ -36,4 +36,4 @@
 
 ## Related
 
-[000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md) (a ring kept lent until the driver says whether it holds it), 000-KRN-0129, 550-NET-0043 (the run in which it was seen; in the landing queue).
+[000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md) (a ring kept lent until the driver says whether it holds it), 000-KRN-0129, [550-NET-0043](550-NET-0043-fifteen-tries-for-a-sent-frame.md) (the run in which it was seen).

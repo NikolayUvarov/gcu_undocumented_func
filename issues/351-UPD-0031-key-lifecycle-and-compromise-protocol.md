@@ -24,7 +24,7 @@ MC-11.9 keeps access to key material apart from the right to ask for a signature
 - **The compromise protocol**, for each role:
   - which releases stay valid (those signed before and listed again in a new channel) and which are refused;
   - how devices learn of it (the key file);
-  - what an offline device does ([351-UPD-0025](351-UPD-0025-expiry-and-the-offline-policy.md));
+  - what an offline device does ([351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done));
   - how recovery stays available ([351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md));
   - what a key change does not undo (MC-9.6, last sentence).
 - **MC-11.9.** Signing runs through `scripts/release.py`, with a seed read from a file or a token and never from the command line. A device holds no key that signs updates.
