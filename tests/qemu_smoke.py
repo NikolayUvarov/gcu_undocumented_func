@@ -712,7 +712,7 @@ def big_memory_check(vm):
     require(log, "[MEMTEST] BIG HELD 3072 MiB IN 3 BLOCKS ZEROED=true INTACT=true GIB ALIGNED=true")
     assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
     # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
-    stat = vm.command(f"stat {pid}", raw=True)
+    stat = vm.command(f"stat {pid}")  # not raw: the suite's PIDs are counted from the first program (to_real)
     kernel = re.search(r" KERNEL=(\d+) ", stat)
     assert kernel, stat
     kernel = int(kernel[1])
