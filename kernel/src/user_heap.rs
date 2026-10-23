@@ -10,6 +10,12 @@ struct Block {
     node: u64, // derivation node of the capability a foreign mapping was made from
     writable: bool,
     device: bool,
+    sink: bool, // a revoked lease's place: one zeroed page of the task's own at each of its pages (000-KRN-0152)
+}
+
+impl Block {
+    // The task's own bytes in this block: one page for a revoked lease's place.
+    fn owned(&self) -> usize { if self.sink { PAGE } else { self.size } }
 }
 
 pub struct Heap {
@@ -49,7 +55,7 @@ impl Heap {
         let address = self.find_hole(size)?;
         let memory = Region::task(size, PAGE).ok()?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
-        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false });
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false, sink: false });
         self.bytes += size;
         Some(address)
     }
@@ -67,7 +73,7 @@ impl Heap {
             crate::paging::Caching::WriteCombining => space.map_framebuffer(address, physical, size, writable).ok()?,
             crate::paging::Caching::Memory => space.map(address, physical, size, writable, false).ok()?,
         }
-        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device, device });
+        self.blocks[slot] = Some(Block { address, physical, memory: None, size, node, writable: writable || device, device, sink: false });
         self.shared += size;
         Some(address)
     }
@@ -75,7 +81,7 @@ impl Heap {
     // Only the exact start of a heap block can be shared: this prevents handing out code, stack or foreign pages.
     // Own blocks only: sharing a foreign mapping would mint a new root with rights the mapper never had.
     pub fn shareable(&self, address: usize, requested: usize) -> Option<(usize, usize)> {
-        let block = self.blocks.iter().flatten().find(|b| b.address == address && b.memory.is_some())?;
+        let block = self.blocks.iter().flatten().find(|b| b.address == address && b.memory.is_some() && !b.sink)?;
         let size = if requested == 0 { block.size } else { requested.checked_add(PAGE - 1)? & !(PAGE - 1) };
         (size <= block.size).then_some((block.physical, size))
     }
@@ -85,16 +91,29 @@ impl Heap {
         self.blocks.iter().flatten().any(|b| b.memory.is_none() && b.physical < physical + size && physical < b.physical + b.size)
     }
 
-    // Unmaps foreign mappings made from revoked capabilities; without `reclaim` page tables stay (another CPU may still
-    // walk them until it switches address space). Returns whether anything was unmapped.
-    pub fn revoke(&mut self, space: &mut Space, nodes: &[u64], reclaim: bool) -> bool {
-        let mut any = false;
+    // Takes foreign mappings made from revoked capabilities off the owner's memory; without `reclaim` page tables stay
+    // (another CPU may still walk them until it switches address space). In a memory lease's place goes one zeroed page
+    // of the task's own, at each of its pages, so a late access reads zeros and writes there instead of faulting
+    // (000-KRN-0152); with no room for that page, for a device or for a task that ended (no `sink`), the range is left
+    // unmapped. Returns whether anything changed and how many such pages were put in.
+    pub fn revoke(&mut self, space: &mut Space, nodes: &[u64], reclaim: bool, sink: bool) -> (bool, usize) {
+        let (mut any, mut sinks) = (false, 0);
         for index in 0..self.blocks.len() {
             let Some(block) = self.blocks[index].as_ref().filter(|b| b.memory.is_none() && nodes.contains(&b.node)) else { continue };
-            if reclaim { space.unmap(block.address, block.size); } else { space.unmap_leaves(block.address, block.size); }
-            self.shared -= block.size; self.blocks[index] = None; any = true;
+            let (address, size, writable, device) = (block.address, block.size, block.writable, block.device);
+            space.unmap_leaves(address, size);
+            self.shared -= size; self.blocks[index] = None; any = true;
+            let room = PAGE <= self.limit.saturating_sub(self.bytes + self.retained);
+            let page = if device || !room || !sink { None } else { Region::task(PAGE, PAGE).ok() };
+            match page {
+                Some(page) if space.map_repeated(address, page.ptr() as usize, size, writable).is_ok() => {
+                    self.blocks[index] = Some(Block { address, physical: page.ptr() as usize, memory: Some(page), size, node: 0, writable, device: false, sink: true });
+                    self.bytes += PAGE; sinks += 1;
+                }
+                _ => if reclaim { space.unmap(address, size); },
+            }
         }
-        any
+        (any, sinks)
     }
 
     // Statistics (STAT): private bytes and blocks, mapped foreign bytes, and what a heap-window address belongs to.
@@ -110,12 +129,12 @@ impl Heap {
 
     // Whether any writable mapping (own block or foreign) overlaps the physical range.
     pub fn writes(&self, physical: usize, size: usize) -> bool {
-        self.blocks.iter().flatten().any(|b| b.writable && b.physical < physical + size && physical < b.physical + b.size)
+        self.blocks.iter().flatten().any(|b| b.writable && b.physical < physical + size && physical < b.physical + b.owned())
     }
 
     // Takes an own block out of the address space and hands its memory to the caller (MEM_DETACH).
     pub fn detach(&mut self, space: &mut Space, address: usize) -> Option<Region> {
-        let index = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address && b.memory.is_some()))?;
+        let index = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address && b.memory.is_some() && !b.sink))?;
         let block = self.blocks[index].take().unwrap();
         space.unmap(block.address, block.size);
         self.bytes -= block.size;
@@ -133,7 +152,7 @@ impl Heap {
         let slot = self.blocks.iter().position(|b| b.as_ref().is_some_and(|b| b.address == address || (b.device && b.address == address & !(PAGE - 1))))?;
         let block = self.blocks[slot].take().unwrap();
         space.unmap(block.address, block.size);
-        if block.memory.is_some() { self.bytes -= block.size; } else { self.shared -= block.size; }
+        if block.memory.is_some() { self.bytes -= block.owned(); } else { self.shared -= block.size; }
         Some(block.memory)
     }
 }
@@ -178,10 +197,35 @@ mod tests {
         assert!(heap.shareable(mapped, 0).is_none(), "a mapping is not re-shareable");
         assert!(space.readable(mapped).is_some() && space.writable(mapped).is_none(), "read-only mapping");
         assert!(heap.made_from(7) && !heap.made_from(8));
-        assert!(!heap.revoke(&mut space, &[8], true));
-        assert!(heap.revoke(&mut space, &[7], false));
+        assert_eq!(heap.revoke(&mut space, &[8], true, false), (false, 0));
+        assert_eq!(heap.revoke(&mut space, &[7], false, false), (true, 0), "an ended task gets no page in the lease's place");
         assert!(space.readable(mapped).is_none() && !heap.made_from(7));
         assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, crate::paging::Caching::Memory, true, 9).is_some(), "shared quota returned");
+    }
+
+    #[test]
+    fn a_revoked_lease_leaves_a_zeroed_page_of_the_borrowers_own() {
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::with_limit(2 * PAGE));
+        let mut foreign = Region::new(3 * PAGE, PAGE).unwrap();
+        foreign.bytes_mut().fill(0x5A);
+        let mapped = heap.map_shared(&mut space, foreign.ptr() as usize, 3 * PAGE, crate::paging::Caching::Memory, true, 7).unwrap();
+        assert_eq!(heap.revoke(&mut space, &[7], true, true), (true, 1));
+        // Every page of the range is one zeroed page of the task's own, writable as the lease was; the owner's is untouched.
+        let pages: Vec<usize> = (0..3).map(|i| space.writable(mapped + i * PAGE).unwrap()).collect();
+        assert!(pages.iter().all(|&p| p == pages[0] && p != foreign.ptr() as usize));
+        unsafe { (pages[2] as *mut u8).write(7); assert_eq!((pages[0] as *const u8).read(), 7); }
+        assert!(foreign.bytes_mut().iter().all(|&b| b == 0x5A), "the owner's memory is out of reach");
+        assert!(!heap.made_from(7) && heap.shareable(mapped, 0).is_none() && heap.detach(&mut space, mapped).is_none());
+        assert_eq!(heap.bytes(), PAGE, "one page charged, not the range");
+        // Freeing the range releases the page.
+        let page = heap.free(&mut space, mapped).unwrap().unwrap();
+        assert_eq!(page.len(), PAGE);
+        assert!(space.readable(mapped).is_none() && heap.bytes() == 0);
+        // With no room left for the page, the range is unmapped as before.
+        heap.allocate(&mut space, 2 * PAGE).unwrap();
+        let again = heap.map_shared(&mut space, foreign.ptr() as usize, PAGE, crate::paging::Caching::Memory, false, 8).unwrap();
+        assert_eq!(heap.revoke(&mut space, &[8], true, true), (true, 0));
+        assert!(space.readable(again).is_none());
     }
 
     #[test]

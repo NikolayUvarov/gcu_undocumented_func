@@ -46,6 +46,9 @@ impl WallClock {
         Some(seconds)
     }
 
+    /// Whether the next `seconds` at monotonic time `now_ns` begins a resynchronization (reads the slow clock anew).
+    pub fn due(&self, now_ns: u64) -> bool { self.aligning.is_none() && (self.anchor.is_none() || now_ns.saturating_sub(self.synced_ns) >= RESYNC_NS) }
+
     /// True once after midnight and after each resynchronization: the date may have changed and should be read again.
     pub fn date_due(&mut self) -> bool { core::mem::replace(&mut self.new_day, false) }
 

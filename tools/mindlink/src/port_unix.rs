@@ -6,7 +6,12 @@ use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// The bytes this process sent and received on its lines: `effector485` shows them, with the speed (800-LNK-0018).
+pub static SENT: AtomicU64 = AtomicU64::new(0);
+pub static RECEIVED: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -122,7 +127,7 @@ impl Port {
 impl linkproto::Line for Port {
     fn write(&mut self, bytes: &[u8]) -> bool {
         if self.failed { return false; }
-        if self.file.write_all(bytes).is_err() { self.failed = true; }
+        if self.file.write_all(bytes).is_err() { self.failed = true; } else { SENT.fetch_add(bytes.len() as u64, Ordering::Relaxed); }
         !self.failed
     }
 
@@ -132,7 +137,7 @@ impl linkproto::Line for Port {
         let ready = unsafe { poll(&mut p, 1, timeout_ms.min(i32::MAX as u32) as c_int) };
         if ready <= 0 { return 0; }
         let n = unsafe { read(p.fd, out.as_mut_ptr().cast(), out.len()) };
-        if n > 0 { return n as usize; }
+        if n > 0 { RECEIVED.fetch_add(n as u64, Ordering::Relaxed); return n as usize; }
         // Readable yet nothing: the other side hung up (a closed connection, a converter pulled out).
         let e = std::io::Error::last_os_error();
         if n == 0 || e.kind() != std::io::ErrorKind::Interrupted { self.failed = true; }

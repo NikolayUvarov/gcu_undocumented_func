@@ -280,6 +280,19 @@ impl Files for Dir {
         self.spawn(&format!("sh: {line}"), &format!("sh: {word}"), command).map(|(id, _)| id)
     }
 
+    /// REPLACE, with --run: taken when the file is here (or for the boot image) and written to the log, as `init` logs
+    /// one; no service runs here to start again (800-LNK-0016).
+    fn replace(&mut self, unit: &str, path: &str) -> Result<(), u8> {
+        if !self.run { return Err(code::DENIED); }
+        if !path.is_empty() && !self.path(path).is_file() { return Err(code::NOT_FOUND); }
+        if let Some(log) = &self.log {
+            let from = if path.is_empty() { "ITS BOOT IMAGE".to_string() } else { path.to_string() };
+            let line = format!("[SERVE] REPLACE {unit} FROM {from}\n");
+            std::fs::OpenOptions::new().append(true).open(log).and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes())).map_err(io)?;
+        }
+        Ok(())
+    }
+
     fn output(&mut self, id: u32, cursor: u64, out: &mut [u8]) -> Result<RunOutput, u8> {
         let run = self.find(id)?;
         let o = run.out.lock().unwrap();

@@ -3,6 +3,8 @@
 //! so a restarted daemon finds its queue and follows the programs it had started.
 use crate::json::{obj, s, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The statuses an operation ends in.
@@ -16,10 +18,10 @@ pub const RUN_TIMEOUT_MAX: u64 = 86_400;
 const ENDED_KEPT: usize = 500;
 
 /// The kinds, and the fields each needs besides `kind`, `idempotency_key` and `reason`.
-pub const KINDS: [(&str, &[&str]); 15] = [
+pub const KINDS: [(&str, &[&str]); 16] = [
     ("hello", &[]), ("put", &["file"]), ("get", &["name", "file"]), ("list", &[]), ("stat", &["name"]), ("mkdir", &["name"]),
     ("move", &["from", "to"]), ("delete", &["name"]), ("rmdir", &["name"]), ("run", &["name"]), ("install", &["file"]),
-    ("uninstall", &["name"]), ("log", &[]), ("reboot", &[]), ("shell", &["line"]),
+    ("uninstall", &["name"]), ("log", &[]), ("reboot", &[]), ("shell", &["line"]), ("replace", &["unit"]),
 ];
 
 pub fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
@@ -109,6 +111,28 @@ impl Op {
     }
 }
 
+/// An operation as a command, for the daemon's log: its kind and fields whole, but for the secret a shell line's
+/// `tpm seal` takes, which stays out of the log as it does in MIND Core's (link/src/main.rs).
+pub fn command(kind: &str, params: &Value) -> String {
+    let mut out = kind.to_string();
+    if let Value::Obj(fields) = params {
+        for (name, value) in fields {
+            let text = match value { Value::Str(v) => v.clone(), v => v.text() };
+            let text = if kind == "shell" && name == "line" { sealed(&text) } else { text };
+            out.push_str(&format!(" {name}={text}"));
+        }
+    }
+    out
+}
+
+fn sealed(line: &str) -> String {
+    let mut words = line.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(a), Some(b)) if a.eq_ignore_ascii_case("tpm") && b.eq_ignore_ascii_case("seal") => format!("{a} {b} [THE SECRET IS NOT LOGGED]"),
+        _ => line.to_string(),
+    }
+}
+
 /// The last `max` bytes of `text`, cut at a character's start.
 pub fn tail(text: &str, max: usize) -> &str {
     let mut from = text.len().saturating_sub(max);
@@ -120,7 +144,8 @@ pub fn tail(text: &str, max: usize) -> &str {
 #[derive(Default)]
 pub struct Link { pub port: String, pub online: bool, pub name: String, pub last_seen: u64, pub error: String }
 
-pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub link: Link, dirty: bool }
+/// `changes` counts the changes, so that the page's feeds see one without taking the lock.
+pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub link: Link, dirty: bool, pub changes: Arc<AtomicU64> }
 
 pub enum Submitted { New(usize), Again(usize) }
 
@@ -141,7 +166,7 @@ impl State {
             op.status = "lost".into();
         }
         let next = ops.iter().filter_map(|o| o.id.rsplit('-').next()?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
-        Ok(State { ops, next, file, link: Link { port: port.to_string(), ..Link::default() }, dirty: false })
+        Ok(State { ops, next, file, link: Link { port: port.to_string(), ..Link::default() }, dirty: false, changes: Arc::default() })
     }
 
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
@@ -159,7 +184,10 @@ impl State {
         else { eprintln!("effector485: {} could not be written", self.file.display()); }
     }
 
-    pub fn touch(&mut self) { self.dirty = true; }
+    pub fn touch(&mut self) { self.dirty = true; self.changed(); }
+
+    /// A change the state file does not keep: the cable's other end came or went.
+    pub fn changed(&self) { self.changes.fetch_add(1, Ordering::Release); }
 
     pub fn position(&self, index: usize) -> Option<usize> {
         (self.ops[index].status == "queued").then(|| self.ops[..=index].iter().filter(|o| o.status == "queued").count())
@@ -191,7 +219,7 @@ impl State {
             started: None, finished: None, output: Vec::new(), output_bytes: 0, result: Value::Obj(Vec::new()), cancel: None,
             run: None, cursor: 0, deadline: None,
         });
-        self.dirty = true;
+        self.touch();
         Ok(Submitted::New(self.ops.len() - 1))
     }
 
@@ -206,10 +234,25 @@ impl State {
         } else {
             op.cancel = Some((key.to_string(), reason.to_string()));
         }
-        self.dirty = true;
+        self.touch();
         Ok(i)
     }
 
     pub fn queued(&self) -> usize { self.ops.iter().filter(|o| o.status == "queued").count() }
     pub fn running(&self) -> usize { self.ops.iter().filter(|o| o.status == "running").count() }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::command;
+    use crate::json::parse;
+
+    #[test]
+    fn a_command_whole_but_a_seal() {
+        let c = |kind, json| command(kind, &parse(json).unwrap());
+        assert_eq!(c("shell", r#"{"line":"netpolicy add netcheck 10.0.2.9 icmp"}"#), "shell line=netpolicy add netcheck 10.0.2.9 icmp");
+        assert_eq!(c("shell", r#"{"line":"TPM  seal hunter2 more"}"#), "shell line=TPM seal [THE SECRET IS NOT LOGGED]");
+        assert_eq!(c("run", r#"{"name":"netcheck","args":"ping:1.2.3.4","timeout_seconds":30}"#), "run name=netcheck args=ping:1.2.3.4 timeout_seconds=30");
+        assert_eq!(c("replace", r#"{"unit":"rtc","back":true}"#), "replace unit=rtc back=true");
+    }
 }

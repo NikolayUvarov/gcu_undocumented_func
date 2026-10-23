@@ -42,7 +42,7 @@ The link track asked for this part at once, on its branch and into `fast-test`, 
 
 ## Related
 
-[800-LNK-0002](../issues/800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](../issues/800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](../issues/750-KRN-0120-writable-scopes-for-a-service.md), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.done) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
+[800-LNK-0002](../issues/800-LNK-0002-usb-serial-ftdi-and-ch340.md), [800-LNK-0003](../issues/800-LNK-0003-the-link-service-on-mind-core.md), [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.done), [351-KRN-0115](351-KRN-0115-the-ssh-service-in-the-boot-services.done) (ABI 12, without these), [docs/msh.md](../docs/msh.md) (`autorun.msh`, read the same way).
 
 ## Resolution
 
@@ -51,5 +51,5 @@ The link track asked for this part at once, on its branch and into `fast-test`, 
   - the link track's `link` suite: a file each way, the log with the kernel's lines, `stat caps` of `link`;
   - without `link.conf`, every other suite passed in the gate;
   - on the maintainer's MacBook Pro over RS-485 (the link track's record).
-- **Moved to 750-KRN-0120.** A name outside `data/link/` is refused by `link` in the suite. The refusal by `vfs_server`'s scope itself is the `isolation` case of [750-KRN-0120](../issues/750-KRN-0120-writable-scopes-for-a-service.md).
+- **Moved to 750-KRN-0120.** A name outside `data/link/` is refused by `link` in the suite. The refusal by `vfs_server`'s scope itself is the `isolation` case of [750-KRN-0120](750-KRN-0120-writable-scopes-for-a-service.done).
 - **Gate.** Gate g0138 on 8def173 (`main` f8d50ac merged): every group passed — host tests, models (TLC), the x86 builds and 24 x86 groups (un-rizen and i9), the aarch64 builds and 9 aarch64 groups (un-rizen and PCU). The x86 groups that had timed out on an overloaded un-rizen (load average 40 on 16 threads) in gates g0132–g0137 ran on i9. `main` = 8def173.

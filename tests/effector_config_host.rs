@@ -48,7 +48,7 @@ fn what_is_refused() {
         (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\npin spki:{SPKI}\npin spki:{LEAF}\n"), 5, ErrorKind::Malformed),
         (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\naddress 10.0.2.256\n"), 4, ErrorKind::Malformed),
         (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\naddress 010.0.2.2\n"), 4, ErrorKind::Malformed),
-        (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\ntoken secret\n"), 4, ErrorKind::UnknownKey),
+        (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\ntoken secret\n"), 4, ErrorKind::Malformed), // only `token none`
         (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\nhostname two words\n"), 4, ErrorKind::Malformed),
         (format!("effector-config 1\nserver https://10.0.2.2/\npin leaf:{LEAF}\nname bad_name\n"), 4, ErrorKind::Malformed),
     ] {
@@ -73,4 +73,14 @@ fn the_agent_id() {
     assert_eq!(id, "mind_0123456789abcdef");
     assert_eq!(agent_id(format!("{id}\n").as_bytes()), Some(id.as_str()));
     for bad in [&b""[..], b"mind.x", b"has space", &[b'a'; 65]] { assert_eq!(agent_id(bad), None); }
+}
+
+#[test]
+fn a_server_that_asks_no_token() {
+    let base = format!("effector-config 1\nserver https://hesere.uz/effector\npin leaf:{LEAF}\naddress 37.140.216.52\n");
+    assert!(!Config::parse(base.as_bytes()).unwrap().no_token(), "a token is needed unless the owner says otherwise");
+    assert!(Config::parse(format!("{base}token none\n").as_bytes()).unwrap().no_token());
+    // Only `none`: a token never sits in the configuration, which is not secret storage.
+    assert_eq!(kind(&format!("{base}token 0123456789abcdef\n")), (5, ErrorKind::Malformed));
+    assert_eq!(kind(&format!("{base}token none\ntoken none\n")), (6, ErrorKind::Duplicate));
 }

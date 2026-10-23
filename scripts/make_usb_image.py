@@ -122,15 +122,16 @@ def read_payloads(source, arch="x86_64"):
 
 def slots(payloads, arch, channel=None):
     """The payloads laid out in slots (351-UPD-0016, docs/update/slots.md), as `boot_slots.py layout` lays out a volume:
-    the kernel, the boot services and the signed manifest in MIND/A, confirmed by MIND/BOOT0, with MIND/BOOT1 empty;
-    the applications, licences and voice stay at the root, shared. With `channel`, a release's signed channel file
+    the kernel, the boot services, the applications (351-UPD-0023) and the signed manifest in MIND/A, confirmed by
+    MIND/BOOT0, with MIND/BOOT1 empty; the licences and voice stay at the root, shared. With `channel`, a release's signed channel file
     kept in MIND/A/CHANNEL, so the updater knows the version: it must verify with the release key and name this
     manifest for `arch`."""
     # Only with slots: the packager alone needs no other script.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import boot_slots, release as release_tool, sign_manifest  # noqa: E401
     boot = {"kernel.elf", *BOOT_FILES, *SIGNED}
-    out = {(f"MIND/A/{name}" if name in boot else name): data for name, data in payloads.items()}
+    # The applications too: every other *.elf at the root goes with the services it was built with (351-UPD-0023).
+    out = {(f"MIND/A/{name}" if name in boot or ("/" not in name and name.endswith(".elf")) else name): data for name, data in payloads.items()}
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
     out["MIND/BOOT1"] = bytes(boot_slots.RECORD)
     if channel is not None:

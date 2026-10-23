@@ -31,3 +31,54 @@ The local server-only platform boundary is recorded in external `issues-done/81-
 ## Related
 
 [750-EFF-0001](750-EFF-0001-protocol-contract.md), [750-EFF-0002](750-EFF-0002-test-server.md), [501](501-effector.md), [550](550-network-on-real-hardware.md), [docs/profile/evidence.md](../docs/profile/evidence.md).
+
+## Progress — 2026-10-22: the first live session, against `hesere.uz`
+
+The maintainer named the server, `https://hesere.uz/effector`.
+- **The server.** It runs `security.mode=disabled`, said Effector's agent, so its agents carry no token. Contract 1.1 adds `token none` for that case.
+- **The run.** `tests/qemu_smoke.py --suites effector-live`, x86_64 QEMU on the maintainer's laptop (LEG9), user networking.
+  - **The agent:** `effector` from branch `claude/EFF-effector-agent`, agent ID `mind-qemu-x64-01`.
+  - **The server:** `1.2.0.227`, commit `3c2f179e81f0`, which includes task 81's MIND boundary.
+  - **The pins:** leaf `473d2d9f…bbe0` and SPKI `6df4cafe…a0bf` of the Let's Encrypt certificate valid until 2027-01-07.
+- **Seen, for 121 s:**
+  - TLS 1.3 to `37.140.216.52:443`, pinned;
+  - no heartbeat or poll refused;
+  - the server's polls said the agent waits for the owner's activation;
+  - a shutdown heartbeat at the end.
+- **Not seen yet:**
+  - the endpoint as the server lists it;
+  - activation;
+  - any command;
+  - ten minutes online;
+  - aarch64 or hardware.
+- **The pins change when Let's Encrypt renews the certificate,** if the key changes with it. A next pin is needed in `effector.conf` before then, or the agent refuses the server.
+
+## Progress — 2026-10-22: the MacBook Pro, against `hesere.uz`
+
+The first run on real hardware.
+
+**The setup:**
+- **The machine:** `fast-test` 85fefd4 (ABI 16, with 0119), `--slots --link-dev`, release b509a30.
+- **Wi-Fi:** the BCM4331 on CoolNet2.
+- **Through the link:** the owner's files were put under `data/link/effector/`. The owner then ran `setup.msh` at the keyboard: the files moved to `data/effector/`, `netpolicy add` was answered Y, and `data/mode.conf` was written (maintenance), then a restart.
+- **The shell faulted** right after `netpolicy add` in the script. That is APP's, reported. The owner wrote the mode and restarted by hand.
+
+**Seen:**
+- **The services:**
+  - `[INIT] MODE: MAINTENANCE`;
+  - `init` started `effector_gw` (PID 37), then `effector` (PID 38);
+  - the flow was granted, and the token was moved into `system/effector`;
+  - agent `mind_4cd67c61c5c9496b` connected, pinned, to `hesere.uz` 227 at 10 s.
+- **The server:** it listed `mind-macbook-pro` online. The owner activated it.
+- **A `screenshot` command reached the agent** and was answered `denied`.
+- **The connection:**
+  - its ACK failed three times on transport errors;
+  - the server ended both screenshot requests with `timeout` ("agent did not acknowledge");
+  - in about 290 s there were 27 heartbeat, 4 poll and 1 ACK transport errors, and 32 new connections;
+  - meanwhile `bcm_wifi` counted a fifth to two fifths of its frames lost, at 1 to 2 Mbit/s, 802.11b only (DRV, reported).
+- **The gateway:** it held no `data/effector/policy`, so every action would answer `no-policy`.
+
+**Not met:**
+- a stable session on this machine;
+- an ACK through;
+- ten minutes online.

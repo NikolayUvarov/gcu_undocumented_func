@@ -11,7 +11,7 @@ The maintainer's decision (2026-10-21):
 - **Both modes are turned on by a word and by a command**, so that the mode survives any number of reboots.
 
 The plan until now is different:
-- [750](750-effector-agent.md) and [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md) start both services when the owner enables them in `data/services.txt` (173-KRN-0035).
+- [750](750-effector-agent.md) and [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) start both services when the owner enables them in `data/services.txt` (173-KRN-0035).
 - The policy's `agent on|off` ([docs/effector/policy.md](../docs/effector/policy.md)) decides what they may do.
 - Neither depends on a mode.
 
@@ -67,4 +67,4 @@ A safe start (000-KRN-0076) **still starts both services in the maintenance mode
 
 ## Related
 
-[750](750-effector-agent.md), [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md) (to follow the mode), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (`mode` instead of `effector enable|disable`), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the same pattern for the link), [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md).
+[750](750-effector-agent.md), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) (to follow the mode), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (`mode` instead of `effector enable|disable`), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the same pattern for the link), [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0007](750-EFF-0007-gateway-service.md).

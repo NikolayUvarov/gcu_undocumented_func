@@ -421,7 +421,7 @@ types! {
     battery: Error Status;
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
     display: Error Mode;
-    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary;
+    effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;
     init: Error Service Boot Mode ModeState;
     keyboard: Layout SwitchKey State;
@@ -431,7 +431,7 @@ types! {
     net: Error Info Counters;
     netpolicy: Error Grant;
     parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
-    rtc: Error;
+    rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters;
     socket: Error Protocol Rule Interface Usage Config Datagram SocketInfo TcpState CardKind Card Echo;

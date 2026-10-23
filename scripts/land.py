@@ -378,7 +378,9 @@ class Gate:
         command = self.prelude(name) + (
             f"[ -d {clone}/.git ] || {{ mkdir -p {os.path.dirname(clone)} && git clone -q {URL} {clone}; }} || exit 3\n"
             f"cd {clone} || exit 3\ngit merge --abort 2>/dev/null; git reset -q --hard\n"
-            f"git fetch -q origin && git checkout -q --detach {self.commit} || exit 4\necho \"TREE $(git rev-parse HEAD)\"\n")
+            f"git fetch -q origin && git checkout -q --detach {self.commit} || exit 4\n"
+            # The volume roots the build fills are ignored by git: a file an earlier candidate built would stay in them.
+            f"rm -rf usb_root aarch64_root\necho \"TREE $(git rev-parse HEAD)\"\n")
         status, code, output = self.submit(machine, command, 900, f"{TRACK} landing gate {self.tag}: the tree on {name}",
                                            f"land-{self.tag}-{name}-tree")
         ok = status == "completed" and code == 0 and f"TREE {self.commit}" in output

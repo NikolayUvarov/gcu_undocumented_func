@@ -6,6 +6,10 @@
 //! asked (MC-3.8, MC-3.11), and is audited before it is answered (MC-10.3); a failed audit write refuses it (MC-10.6).
 //! Data leaves the machine only through `open-log`, `open-file` and `open-screen`, each named by the policy (MC-10.7).
 //! A transfer has one handle at a time; a request runs to its end before the next one is read.
+//!
+//! 1.1 (750-EFF-0014): `sample`, the counters the session publishes as the server's telemetry: the processors' time,
+//! the program memory, the boot services' processes and the volumes' space. Like `status`, it carries no file, log or
+//! screen data and changes nothing.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -15,7 +19,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -161,6 +165,36 @@ impl Wire for PolicySummary {
     const MAX: usize = <u16 as Wire>::MAX + <Text<64> as Wire>::MAX + <u16 as Wire>::MAX + <u64 as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.sha256.encode(w)?; self.rules.encode(w)?; self.read_ms.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, sha256: Wire::decode(r)?, rules: Wire::decode(r)?, read_ms: Wire::decode(r)? }) }
+}
+
+/// A boot service's process for telemetry (1.1): its state, its PID (0: none), its CPU time and when it started (ns
+/// of uptime, which tells a restarted process from the old one), and its memory (image, stack, heap and screen).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Load { pub name: Text<16>, pub state: ServiceState, pub pid: u64, pub run_ns: u64, pub started_ns: u64, pub memory: u64 }
+impl Wire for Load {
+    const MAX: usize = <Text<16> as Wire>::MAX + <ServiceState as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.state.encode(w)?; self.pid.encode(w)?; self.run_ns.encode(w)?; self.started_ns.encode(w)?; self.memory.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, state: Wire::decode(r)?, pid: Wire::decode(r)?, run_ns: Wire::decode(r)?, started_ns: Wire::decode(r)?, memory: Wire::decode(r)? }) }
+}
+
+/// A volume's size and free space in bytes (1.1): the boot volume (empty name), `ram`, `log`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Space { pub name: Text<16>, pub bytes: u64, pub free: u64 }
+impl Wire for Space {
+    const MAX: usize = <Text<16> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.bytes.encode(w)?; self.free.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, bytes: Wire::decode(r)?, free: Wire::decode(r)? }) }
+}
+
+/// The counters of one telemetry sample (1.1): the online processors and their busy and idle time since boot (ns),
+/// the uptime, the memory programs run in (the kernel's frame pool, bytes), the boot services and the volumes. The
+/// session turns two samples into rates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sample { pub cpus: u16, pub busy_ns: u64, pub idle_ns: u64, pub uptime_ms: u64, pub memory_total: u64, pub memory_free: u64, pub services: List<Load, 48>, pub volumes: List<Space, 4> }
+impl Wire for Sample {
+    const MAX: usize = <u16 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <List<Load, 48> as Wire>::MAX + <List<Space, 4> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.cpus.encode(w)?; self.busy_ns.encode(w)?; self.idle_ns.encode(w)?; self.uptime_ms.encode(w)?; self.memory_total.encode(w)?; self.memory_free.encode(w)?; self.services.encode(w)?; self.volumes.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { cpus: Wire::decode(r)?, busy_ns: Wire::decode(r)?, idle_ns: Wire::decode(r)?, uptime_ms: Wire::decode(r)?, memory_total: Wire::decode(r)?, memory_free: Wire::decode(r)?, services: Wire::decode(r)?, volumes: Wire::decode(r)? }) }
 }
 
 /// The machine's state for the heartbeat. Allowed to both clients; changes nothing.
@@ -440,6 +474,19 @@ pub fn audit(endpoint: Endpoint, count: u8) -> Result<core::result::Result<List<
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Text<256>, 16> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
+/// The telemetry counters (1.1, after the 1.0 calls so their numbers stay). Allowed to both clients; changes nothing.
+pub fn sample(endpoint: Endpoint) -> Result<Sample> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 19 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 2630, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Sample as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 32782;
 
@@ -464,6 +511,7 @@ pub enum Request<'a> {
     Cancel { command: Text<64> },
     ReloadPolicy,
     Audit { count: u8 },
+    Sample,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -626,6 +674,13 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Audit { count }, call))
         }
+        19 => {
+            let (call, length) = wire::take_buffer(request, cap, 2630, &mut *scratch)?;
+            let copy: &'a [u8; REQUEST_MAX] = scratch;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Sample, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -700,4 +755,7 @@ pub fn reply_reload_policy(call: Call, value: core::result::Result<&PolicySummar
 pub fn reply_audit(call: Call, value: core::result::Result<&[Text<256>], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Text<256>, 16>(value, w))
+}
+pub fn reply_sample(call: Call, value: &Sample) -> Result<()> {
+    wire::reply_buffer(call, |w| value.encode(w))
 }

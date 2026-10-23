@@ -2,7 +2,7 @@
 
 **Type:** `loader`, `scripts/link_update.py` · **Owner:** kernel session · **Priority:** P1 · **Status:** in `main` (f8d76dd, landing round 9); the update track's staging left for the first criterion · **Blocked by:** — for the loader; the update track's staging (351-UPD-0023) for the `update` suite's criterion · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.3, MC-9.4, MC-12.7
 
-From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-22, "The applications from the booted slot, and their blobs through the link"), numbered here, for [351-UPD-0023](351-UPD-0023-applications-in-the-releases-slot.md).
+From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-22, "The applications from the booted slot, and their blobs through the link"), numbered here, for [351-UPD-0023](../issues-done/351-UPD-0023-applications-in-the-releases-slot.done).
 
 ## Problem
 
@@ -39,4 +39,4 @@ From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-2
 
 ## Related
 
-[351-UPD-0023](351-UPD-0023-applications-in-the-releases-slot.md), [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md).
+[351-UPD-0023](../issues-done/351-UPD-0023-applications-in-the-releases-slot.done), [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md).

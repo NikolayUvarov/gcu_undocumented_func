@@ -12,7 +12,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:shell";
-pub const VERSION: (u8, u8, u8) = (1, 8, 0);
+pub const VERSION: (u8, u8, u8) = (1, 9, 0);
 const MAJOR: usize = 1;
 
 /// Why the shell did not do it: no window broker client, or no memory for the window; (1.1) a command it does not
@@ -71,8 +71,8 @@ pub fn run(endpoint: Endpoint, line: &str, out: &mut [u8]) -> Result<core::resul
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); let data = codec::decode_bytes::<7000>(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)?; out.get_mut(..data.len()).ok_or(SysError::Invalid)?.copy_from_slice(data); data.len() }))
 }
 
-/// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, without a time zone, as `date set`
-/// does (1.2, 000-APP-0055: wm's Settings). For the window manager the shell started, at once: setting it in its
+/// Sets the clock to `date` (days since 2000-01-01) and `seconds` since midnight, as `date set` does (1.2,
+/// 000-APP-0055: wm's Settings): local time, in the zone the clocks show (1.9, 000-APP-0099; the RTC keeps UTC). For the window manager the shell started, at once: setting it in its
 /// Settings is the user's choice (1.3, 000-APP-0060). For any other client, once the user agrees in the shell's
 /// window; a word call, so such a caller may stop waiting while the shell asks (`mind::idl::wire::with_timeout`).
 pub fn set_clock(endpoint: Endpoint, date: u32, seconds: u32) -> Result<core::result::Result<(), Error>> {
@@ -150,6 +150,17 @@ pub fn new_window(endpoint: Endpoint) -> Result<core::result::Result<u32, Error>
     Ok(Ok(wire::field(&reply, 0, 16, 32) as u32))
 }
 
+/// Sets the time zone every clock shows, as `date zone` does, and keeps it in `data/clock.conf` (1.9, 000-APP-0099):
+/// `minutes` east of UTC, or west with `west`, up to UTC-12:00 and UTC+14:00 (`invalid` beyond). For the window
+/// manager the shell started, at once, as the clock; for any other client, once the user agrees in the shell's window.
+pub fn set_zone(endpoint: Endpoint, west: bool, minutes: u32) -> Result<core::result::Result<(), Error>> {
+    let words = [9 | MAJOR << 8 | ((west) as usize) << 16 | ((minutes) as usize) << 17, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    wire::check_reply(&reply, [0, 0], false)?;
+    Ok(Ok(()))
+}
+
 /// A request to the `shell` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -161,6 +172,7 @@ pub enum Request {
     BootNotice,
     NetCounters,
     NewWindow,
+    SetZone { west: bool, minutes: u32 },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -212,6 +224,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::NewWindow, Call::words(request, cap)))
         }
+        9 => {
+            wire::body(request, cap, [0x1ffffffff0000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::SetZone { west: wire::field(&words, 0, 16, 1) != 0, minutes: wire::field(&words, 0, 17, 32) as u32 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -249,4 +265,8 @@ pub fn reply_net_counters(call: Call, value: core::result::Result<&[CardCounters
 pub fn reply_new_window(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_set_zone(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, 0])
 }

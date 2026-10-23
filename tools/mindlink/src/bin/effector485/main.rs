@@ -2,10 +2,13 @@
 //! its one master and serves Effector's operations on 127.0.0.1 (docs/effector.md, section 3): each with an id, an
 //! idempotency key and a reason; queued and carried out in order; read for status and output; cancelled by id. The
 //! other commands are its client. docs/link/effector485.md says how to use it.
+mod feed;
 mod http;
 mod json;
 mod ops;
+mod traffic;
 mod worker;
+mod ws;
 #[cfg(unix)]
 #[path = "../../port_unix.rs"]
 mod port;
@@ -29,6 +32,7 @@ const USAGE: &str = "usage: effector485 daemon <port> [--baud <rate>] [--payload
 The daemon holds the cable (<port> as for mindlink: COM22, /dev/ttyUSB0, tcp:HOST:PORT) and serves operations on
 --listen (default 127.0.0.1:8485). Its state, the queue and the results, is kept in --state (default: .effector485 in
 the home directory). With --key-file, every call must carry that file's text in the X-API-Key header.
+A browser on this machine shows the operations live and starts the usual ones at http://<listen>/.
 
 commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <reason> [--wait]
               kinds and their fields:
@@ -103,14 +107,27 @@ fn daemon(spec: String, o: worker::Options, listen: &str, dir: &std::path::Path,
     if !bound.starts_with("127.") && !bound.starts_with("[::1]") && key.is_none() { die(format!("{bound} is reachable from other machines: give --key-file")); }
     // The first line says where it listens (the tests read it).
     println!("effector485 listening on {bound}, the cable on {spec}, the state in {}", dir.display());
+    traffic::start(if spec.contains(':') { 0 } else { o.baud });
+    let changes = state.changes.clone();
     let state = Arc::new(Mutex::new(state));
     let worker_state = state.clone();
     std::thread::spawn(move || worker::work(worker_state, spec, o));
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        let (state, key) = (state.clone(), key.clone());
+        let (state, key, changes) = (state.clone(), key.clone(), changes.clone());
+        let bound = bound.clone();
         std::thread::spawn(move || {
             let request = match http::read_request(&mut stream) { Ok(r) => r, Err(e) => return http::respond(&mut stream, 400, "text/plain", &e) };
+            if let Err(why) = same_site(&request, &bound) { return http::respond(&mut stream, 403, "application/json", &error(why).text()); }
+            // The page itself is static and holds nothing: it asks the API, which the key guards.
+            if request.method == "GET" && request.path == "/" { return http::respond(&mut stream, 200, "text/html; charset=utf-8", PAGE); }
+            // The page's live feed: a browser sends no X-API-Key on a WebSocket, so the feed asks for the key itself.
+            if request.method == "GET" && request.path == "/api/v1/stream" {
+                let Some(websocket) = &request.websocket else { return http::respond(&mut stream, 400, "application/json", &error("a WebSocket is expected here").text()) };
+                let Some(place) = feed::Place::take() else { return http::respond(&mut stream, 503, "application/json", &error("too many pages are open").text()) };
+                if ws::handshake(&mut stream, websocket).is_ok() { feed::serve(stream, state, changes, key, place); }
+                return;
+            }
             let (status, body) = if key.is_some() && request.key != key { (401, error("the X-API-Key header is missing or wrong")) } else { route(&state, &request) };
             http::respond(&mut stream, status, "application/json", &body.text());
         });
@@ -118,6 +135,27 @@ fn daemon(spec: String, o: worker::Options, listen: &str, dir: &std::path::Path,
 }
 
 fn error(text: &str) -> Value { obj(vec![("error", s(text))]) }
+
+/// The browser page: the daemon's state, its operations and their output, and buttons for the usual ones.
+const PAGE: &str = include_str!("ui.html");
+
+/// A request from this daemon's own page or from a program, not from another site in the same browser: on a loopback
+/// address the Host must be a loopback name with this port (no DNS rebinding), and an Origin, which browsers send, must be
+/// this daemon's own.
+fn same_site(r: &http::Request, bound: &str) -> Result<(), &'static str> {
+    let port = bound.rsplit(':').next().unwrap_or("");
+    let loopback = bound.starts_with("127.") || bound.starts_with("[::1]");
+    let local = |host: &str| [format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")].iter().any(|h| h == host);
+    if loopback {
+        if let Some(host) = &r.host { if !local(host) { return Err("this daemon answers only to its own loopback address"); } }
+    }
+    if let Some(origin) = &r.origin {
+        let own = origin.strip_prefix("http://").map(str::to_ascii_lowercase);
+        let same = match (&own, &r.host) { (Some(o), Some(h)) => o == h && (!loopback || local(o)), _ => false };
+        if !same { return Err("a request from another site is refused"); }
+    }
+    Ok(())
+}
 
 fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
     let mut st = state.lock().unwrap();
@@ -129,6 +167,7 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
                 ("agent_id", s("link")), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("name", s(&l.name)),
                 ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
                 ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
+                ("sent_bytes", Value::Num(traffic::sample().sent as f64)), ("received_bytes", Value::Num(traffic::sample().received as f64)),
             ]);
             (200, Value::Arr(vec![link]))
         }
