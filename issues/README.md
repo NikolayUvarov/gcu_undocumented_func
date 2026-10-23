@@ -90,7 +90,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [550-NET-0042](550-NET-0042-seven-tries-for-a-sent-frame.md) | `wlan` tries a sent frame up to 7 times, 802.11's default; 4 lost 8% of them on the MacBook Pro (DRV's request); in `main` c9531fac, the Mac's run left | `NET` | P1 | — | D |
 | [850](850-the-cultural-code.md) | The cultural code: a manifesto, the canon's maxims and a lexicon that the code bears out (the maintainer's request) | main task, `PHI` | P2 | the maintainer's questions: the hero, the adversary, Banks's names | — |
 | [850-PHI-0001](850-PHI-0001-the-manifesto.md) | The manifesto: one page, English and Russian, every claim with its evidence or marked a goal | `PHI` | P2 | 850's questions | — |
-| [850-PHI-0002](850-PHI-0002-the-canons-maxims-in-lore-1-6.md) | `LORE` 1.6: one maxim per discipline, with what enforces it today and what does not yet | `PHI` | P2 | — | — |
 | [176-KRN-0147](176-KRN-0147-check-kernel-waits-long-enough.md) | The bench suite gives `check kernel` 90 s, not 8: its last check waits for kbench (APP's request, for 000-APP-0099); in `main` b05bfb2, the tools track's run on the i7 left | `KRN` | P2 | — | A |
 | [000-KRN-0131](000-KRN-0131-a-safe-start-prepares-what-it-leaves-out.md) | A safe start prepares the services it leaves out (ASTRA's audit H10): their capabilities minted while `init` holds the platform privilege, their devices stopped, so `svc start` starts them | `KRN` | P2 | — | track A |
 | [000-KRN-0129](000-KRN-0129-virtio-net-faults-on-aarch64-with-16-cpus.md) | `virtio_net` faults at boot on aarch64 with 16 CPUs (a data abort, vector 36): `netstack` revokes a frame ring the driver already mapped when `attach` answers late; the fix is the network track's | `KRN` | P1 | [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md) | track A |
@@ -258,6 +257,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [850-PHI-0002](../issues-done/850-PHI-0002-the-canons-maxims-in-lore-1-6.done) | LORE 1.6 in English and Russian | Five maxims with clauses, evidence and explicit limits; incoming canon integrated, previous edition archived; Constitution unchanged |
 | [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) | The station service `wlan` over `wlanhw.wit`, configured through `wifi.wit` | WPA2 join, lease and ping in QEMU (x86, aarch64) and on the MacBook Pro; the Mac's `https` and a `BADGE_WIFI`-only refusal waived by the maintainer (2026-10-23) |
 | [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) | Remembered Wi-Fi networks kept by `keystore` | kept PMKs, joins with no passphrase after restarts, `forget`, in QEMU (x86, aarch64); a badge-less `keystore` client and the Mac's reboot waived by the maintainer (2026-10-23) |
 | [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done) | The station offers only the rates the radio has | 802.11b alone with `wlansim` in QEMU (x86, aarch64); a real radio without OFDM waived by the maintainer (2026-10-23) |

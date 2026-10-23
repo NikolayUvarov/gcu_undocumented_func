@@ -1,0 +1,50 @@
+# 850-PHI-0002 — The canon's maxims: `LORE` 1.6, one maxim per discipline, with what enforces it today — done
+
+**Type:** document (English and Russian) · **Owner:** `PHI` · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [850](../issues/850-the-cultural-code.md) · **Constitution:** MC-12.3; the Preamble; Articles 1–4, 6, 10
+
+## Problem
+
+- **`LORE` 1.5 is out of date.** `constitution/lore/LORE.*.md` sets out the five disciplines in edition 1.5, but it still names the Constitution 1.5 and RFC 0.3.
+- **Nothing in it is short enough to quote.**
+- **Some formulations proposed on 2026-10-21 are false today:**
+  - "nothing exists but the immutable (CAS) or the isolated (actors)": most data lives on mutable FAT volumes, beside the content-addressed block store;
+  - "no byte leaves for the network without the user's cryptographically confirmed intent": flows are granted by `netpolicy` from its policy file;
+  - "Marain cannot express a vulnerability": there is no compiler, and RFC 001 itself says compilation confirms neither authority nor safety.
+
+## Plan
+
+`LORE` 1.6, aligned with the Constitution 1.6, in English and Russian. For each discipline:
+- **A maxim** that a reader can quote. Candidates:
+  - ontology: "No shared state: every service is a task of its own; memory is shared only when lent, explicitly";
+  - epistemology: "Without a mandate, the object does not exist for you" (endpoints have no global names, `common/abi.rs`);
+  - ethics: "A service's death is its own event, not the end of the world" (restart budgets, quarantine, 000-KRN-0075);
+  - praxeology: "No telepathy through global state: only an explicit, typed dialogue" (IPC and `idl/*.wit`);
+  - aesthetics: "The kernel is 7,600 lines of Rust for two architectures; everything else, drivers included, is outside it" (a number, measured, held by [850-KRN-0145](../issues-done/850-KRN-0145-a-budget-for-the-kernels-size.done)).
+- **Two columns:**
+  - "enforced today", with the clause and its evidence: a suite, a profile row;
+  - "not yet", what the code does not do.
+
+  This turns "show me the test" into the form of the canon itself.
+- **The links** name the current documents.
+
+## Acceptance criteria
+
+- [x] `LORE.EN.md` and `LORE.RU.md` are edition 1.6, changed in one commit, naming the Constitution 1.6 and RFC 0.4.
+- [x] Every maxim has both columns. Every "enforced today" names a clause and its evidence.
+- [x] No maxim states as true what the code does not do.
+
+## Related
+
+[850](../issues/850-the-cultural-code.md), [850-PHI-0001](../issues/850-PHI-0001-the-manifesto.md), [docs/profile](../docs/profile/README.md).
+
+## Resolution
+
+The maintainer directed this session to adopt the reviewed English/Russian lore on 2026-10-23. The pair is now LORE 1.6 at `constitution/lore/LORE.EN.md` and `LORE.RU.md`, a non-normative architectural and cultural canon; the Constitution remains 1.6 and RFC 001 remains 0.4.
+
+- Each of the five disciplines has a maxim and a two-column table. Each current-state cell names its MC clauses and a profile, suite, bounded model or completed task; unimplemented properties and configuration limits remain visible.
+- The incoming ideas are integrated as a qualified account of hidden authority, a lexicon, a proposed sensory code, the architect's covenant and bounded learning/self-improvement. Hash identity is not truth, the kernel is not the whole TCB, a typed proposal is not authorization, and revocation is not an instantaneous global undo.
+- The unchanged LORE 1.5 pair is archived under `constitution/lore/archive/LORE_v1.5.EN.md` and `.RU.md`. The founding-document index documents the stable current-lore paths and links both editions.
+- Task 850 and its manifesto remain open. Choosing the manifesto's protagonist, the detailed APP design, broader lexicon work and third-party naming questions are not closed by this text.
+- Source provenance: the maintainer's local incoming `LORE.EN.md` SHA-256 `f9de4989a10c4be9141b9cb3ddd1ccbafa051db2a53dfa3f6ee58543b06c0d16`; `LORE.RU.md` SHA-256 `e927e7f71f280c0ac8db919d9cb8788a66de6e4558b84683d9a02c1481038db6`. The evidence snapshot for implementation claims is `main` `bb7262bd`; no new OS runs are claimed.
+
+**Validation:** both language versions reviewed together; all five current-state rows checked for clause and evidence references; local links and MC identifiers checked; the archived pair compared byte-for-byte with the previous edition. Documentation only: no build, image or test consumes the changed lore; no gate needed under AGENTS.md section 4.
