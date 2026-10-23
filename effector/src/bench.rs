@@ -17,7 +17,7 @@ pub const DISK: &str = "effector_seqio_v1";
 const BATCH: u64 = 4096;
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
 const COPY_BYTES: usize = 4 << 20; // 8 MiB in the Linux agent: two such buffers and the rest would pass the task's 16 MiB
-const DISK_PIECE: usize = 1 << 20;
+const DISK_PIECE: usize = 64 << 10; // 1 MiB a write on Linux; a slow disk would hold a 1 MiB write past a heartbeat
 const DISK_WRAP: u64 = 16 << 20; // the file starts again at 16 MiB, as the Linux agent's
 
 /// One batch of the CPU benchmark (`performanceBatch`).
