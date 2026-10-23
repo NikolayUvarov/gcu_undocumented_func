@@ -182,8 +182,12 @@ impl control::Access for CommandAccess<'_> {
     fn write_command(&mut self, value: u16) { unsafe { command(self.0, value); } }
 }
 
-// Readback must confirm stopping before init clears a driver's retained DMA region.
-pub unsafe fn quiesce(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Stopped) }
+// Readback must confirm stopping before init clears a driver's retained DMA region. The BCM4331's 802.11 core is reset
+// first, as at boot: a stop while it writes what it receives would leave its agent wedged (550-KRN-0157).
+pub unsafe fn quiesce(device: &Device) -> bool {
+    if device.id == BCM4331 { bcm4331_stop_core(device.bus, device.device, device.function, device.bars[0]); }
+    control::transition(&mut CommandAccess(device), control::Mode::Stopped)
+}
 
 // New Realtek drivers install their rings before explicitly enabling bus mastering.
 pub unsafe fn registers_only(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Registers) }
