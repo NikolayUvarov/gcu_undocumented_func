@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use ed25519_dalek::{Signature, VerifyingKey};
 use mind::abi::*;
 use mind::fs::{Dir, File, MODE_CREATE, MODE_WRITE};
-use mind::idl::update::{self as api, Error, Offer, State};
+use mind::idl::update::{self as api, Error, Metadata, Offer, State};
 use mind::idl::codec::Text;
 use mind::idl::{init, wire};
 use mind::ipc::Endpoint;
@@ -135,8 +135,17 @@ struct Updater {
     slot: u8, trial: bool, manifest: [u8; 32],
     /// The running version (0: not known), the version staged in the other slot (0: none), the minimum last seen.
     running: u64, staged: u64, minimum: u64,
+    /// The channel it holds (351-UPD-0025): the last one read from the source, else the running slot's; and which.
+    held: Option<(Channel, Held)>,
     failure: String,
 }
+
+/// Where the channel the updater holds came from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Held { Source, Slot(u8) }
+
+/// Whether a channel's expiry has passed, or the clock cannot be read (MC-9.4).
+fn expired(channel: &Channel) -> bool { plan::expired(release::expires_unix(&channel.expires), mind::rtc::unix_time()) }
 
 impl Updater {
     fn records(&self) -> [Option<Record>; 2] {
@@ -163,19 +172,40 @@ impl Updater {
 
     fn other(&self) -> &'static str { slot_name(plan::other(self.slot)) }
 
-    /// The version a slot holds as the channel kept there shows it: signed with the release key and naming, for this
-    /// architecture, the manifest `digest` (None: read the slot's MANIFEST). 0 when it shows none. The caller's parser
-    /// reads it, so that one session serves several reads (109-KRN-0133).
-    fn kept_version(&self, slot: &str, digest: Option<[u8; 32]>, parser: Endpoint) -> (u64, u64) {
-        let Ok(file) = File::open(&format!("MIND/{}/CHANNEL", slot)) else { return (0, 0) };
+    /// The channel kept in a slot, if it is signed with the release key and names, for this architecture, the manifest
+    /// `digest` (None: read the slot's MANIFEST); its version is the slot's. The caller's parser reads it, so that one
+    /// session serves several reads (109-KRN-0133).
+    fn kept(&self, slot: &str, digest: Option<[u8; 32]>, parser: Endpoint) -> Option<Channel> {
+        let file = File::open(&format!("MIND/{}/CHANNEL", slot)).ok()?;
         let mut bytes = alloc::vec![0u8; file.size().min(CHANNEL_MAX)];
-        if file.read_at(0, &mut bytes) != Ok(bytes.len()) { return (0, 0); }
-        let Ok(channel) = channel_of(&bytes, parser) else { return (0, 0) };
+        if file.read_at(0, &mut bytes) != Ok(bytes.len()) { return None; }
+        let channel = channel_of(&bytes, parser).ok()?;
         let digest = digest.or_else(|| {
             let manifest = File::open(&format!("MIND/{}/MANIFEST", slot)).ok()?;
             (manifest.size() <= MANIFEST_MAX).then(|| sha256(&manifest)).flatten()
         });
-        if digest.is_some() && channel.manifest(ARCH) == digest { (channel.version, channel.minimum) } else { (0, 0) }
+        (digest.is_some() && channel.manifest(ARCH) == digest).then_some(channel)
+    }
+
+    /// Holds `channel`, and says so in the log when it is another one or came from elsewhere.
+    fn hold(&mut self, channel: Channel, from: Held) {
+        if self.held == Some((channel, from)) { return; }
+        self.held = Some((channel, from));
+        let from = match from { Held::Source => String::from("FROM THE SOURCE"), Held::Slot(slot) => format!("KEPT IN SLOT {}", slot as char) };
+        let (expires, clock) = (core::str::from_utf8(&channel.expires).unwrap_or(""), mind::rtc::unix_time());
+        mind::println!("[UPDATER] METADATA: CHANNEL {} VERSION {}, MINIMUM {}, EXPIRES {}, {}{}", channel.name.as_str(), channel.version,
+            channel.minimum, expires, from, match clock {
+                None => "; THE CLOCK CANNOT BE READ: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL",
+                Some(_) if expired(&channel) => "; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL",
+                Some(_) => "",
+            });
+    }
+
+    fn metadata(&self) -> Metadata {
+        let Some((channel, from)) = self.held else { return Metadata::default() };
+        Metadata { channel: Text::new(channel.name.as_str()).unwrap_or_default(), version: channel.version, minimum: channel.minimum,
+                   expires: Text::new(core::str::from_utf8(&channel.expires).unwrap_or("")).unwrap_or_default(), expired: expired(&channel),
+                   checked: from == Held::Source }
     }
 
     fn state(&self) -> State {
@@ -196,9 +226,9 @@ impl Updater {
         let bytes = source.small(&format!("channels/{}", self.config.channel), CHANNEL_MAX, parser)?;
         let channel = channel_of(&bytes, parser.endpoint())?;
         if channel.name.as_str() != self.config.channel { return Err(Error::Malformed); }
+        self.hold(channel, Held::Source);
         // A clock that cannot be read cannot show the channel current (MC-9.4: expiry handled by a set policy).
-        let now = mind::rtc::unix_time().ok_or(Error::Expired)?;
-        if release::expires_unix(&channel.expires) <= now { return Err(Error::Expired); }
+        if expired(&channel) { return Err(Error::Expired); }
         self.minimum = self.minimum.max(channel.minimum);
         Ok((channel, bytes))
     }
@@ -308,8 +338,8 @@ impl Updater {
         })
     }
 
-    /// The other slot checked as the bootloader will check it, and the version its kept channel shows.
-    fn verify_other(&self) -> Result<(u64, u64), Error> {
+    /// The other slot checked as the bootloader will check it, and the channel kept there.
+    fn verify_other(&self) -> Result<Channel, Error> {
         let slot = self.other();
         let read = |name: &str, limit: usize| -> Result<Vec<u8>, Error> {
             let file = File::open(&format!("MIND/{}/{}", slot, name)).map_err(|_| Error::NotStaged)?;
@@ -324,7 +354,7 @@ impl Updater {
         // on a slow machine (parse's IDLE_MS).
         let parser = parser();
         let files = slot_files(&manifest, parser.endpoint())?;
-        let shown = self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint());
+        let shown = self.kept(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint());
         drop(parser);
         for name in BOOT_FILES.iter().chain(["kernel.elf"].iter()) {
             let path = format!("MIND/{}/{}", slot, name);
@@ -354,7 +384,7 @@ impl Updater {
                 }
             }
         }
-        match shown { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
+        shown.ok_or(Error::NotStaged)
     }
 
     // Asks init to restart the machine; init answers first.
@@ -367,8 +397,11 @@ impl Updater {
         let result = (|| {
             if !(1..=TRIES_MAX).contains(&tries) { return Err(Error::NotStaged); }
             self.may_stage()?;
-            let (version, _) = self.verify_other()?;
+            let channel = self.verify_other()?;
+            let version = channel.version;
             if version <= self.running { return Err(Error::Older); }
+            // Past its channel's expiry a staged release waits for a current one (351-UPD-0025); a rollback does not.
+            if expired(&channel) { return Err(Error::Expired); }
             let write = plan::trial_of_other(self.records(), self.slot, tries).ok_or(Error::Write)?;
             mind::println!("[UPDATER] APPLY: VERSION {} IN SLOT {} ON TRIAL WITH {} TRIES, FALLING BACK TO {}", version, self.other(), tries, slot_name(self.slot));
             self.write_record(write)?;
@@ -380,7 +413,7 @@ impl Updater {
     fn rollback(&mut self) -> Result<(), Error> {
         let result = (|| {
             self.may_stage()?;
-            let (version, _) = self.verify_other().map_err(|_| Error::NoFallback)?;
+            let version = self.verify_other().map_err(|_| Error::NoFallback)?.version;
             if version < self.minimum { return Err(Error::NoFallback); }
             let write = plan::trial_of_other(self.records(), self.slot, 1).ok_or(Error::Write)?;
             mind::println!("[UPDATER] ROLLBACK: VERSION {} IN SLOT {} ON TRIAL, FALLING BACK TO {}", version, self.other(), slot_name(self.slot));
@@ -420,7 +453,7 @@ impl Updater {
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let slot = match info.boot_slot.slot { BOOT_SLOT_A => b'A', BOOT_SLOT_B => b'B', _ => 0 };
-    let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, failure: String::new() };
+    let mut updater = Updater { config: config(), slot, trial: info.boot_slot.trial != 0, manifest: info.boot_slot.manifest, running: 0, staged: 0, minimum: 0, held: None, failure: String::new() };
     if keys::RELEASE_TEST_KEY || keys::BOOT_TEST_KEY {
         mind::println!("[UPDATER] KEYS: {}{}", if keys::RELEASE_TEST_KEY { "THE TEST RELEASE KEY " } else { "" }, if keys::BOOT_TEST_KEY { "THE TEST BOOT KEY" } else { "" });
     }
@@ -433,15 +466,17 @@ fn main(info: &'static BootInfo) {
         // Both slots' channels through one parser: a session's helper may hold the updater's one endpoint for a moment
         // after it ends (109-KRN-0133).
         let parser = parser();
-        let (running, minimum) = updater.kept_version(slot_name(slot), Some(updater.manifest), parser.endpoint());
+        let kept = updater.kept(slot_name(slot), Some(updater.manifest), parser.endpoint());
+        let (running, minimum) = kept.map_or((0, 0), |c| (c.version, c.minimum));
         updater.running = running; updater.minimum = minimum;
-        let (staged, _) = updater.kept_version(updater.other(), None, parser.endpoint());
+        let staged = updater.kept(updater.other(), None, parser.endpoint()).map_or(0, |c| c.version);
         drop(parser);
         updater.staged = if staged > running { staged } else { 0 };
         let recorded = plan::newest(updater.records());
         mind::println!("[UPDATER] SLOT {}{}, VERSION {}; THE NEWER RECORD: {}", slot_name(slot), if updater.trial { " ON TRIAL" } else { "" },
             if running == 0 { String::from("NOT KNOWN") } else { format!("{}", running) },
             recorded.map_or(String::from("NONE"), |(_, r)| format!("SLOT {} {}", r.slot as char, if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" })));
+        if let Some(channel) = kept { updater.hold(channel, Held::Slot(slot)); }
         if updater.trial {
             let seconds = if info.boot_slot.deadline_s == 0 { TRIAL_DEADLINE_S } else { info.boot_slot.deadline_s } as usize;
             let at = seconds * 1000 + MARGIN_MS;
@@ -483,6 +518,7 @@ fn main(info: &'static BootInfo) {
             Ok((api::Request::Apply { tries }, call)) => api::reply_apply(call, updater.apply(tries)),
             Ok((api::Request::Rollback, call)) => api::reply_rollback(call, updater.rollback()),
             Ok((api::Request::Status, call)) => api::reply_status(call, &updater.state()),
+            Ok((api::Request::Metadata, call)) => api::reply_metadata(call, &updater.metadata()),
             Err(reason) if request.is_call => wire::reject(reason),
             Err(_) => Ok(()),
         };
