@@ -1,6 +1,6 @@
 # 262-KRN-0161 — Large pages for a program's large blocks
 
-**Type:** kernel (generic page tables, `arch/*/mmu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md) (blocks of 2 MiB runs) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-12.1
+**Type:** kernel (generic page tables, `arch/*/mmu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md) (large blocks aligned to 2 MiB and 1 GiB) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-12.1
 
 From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md), item 2.
 
@@ -11,10 +11,10 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
 
 ## Plan
 
-1. **2 MiB pages.** A run of a block that is 2 MiB-aligned in both its virtual and its physical address is mapped by one entry one level up:
+1. **2 MiB pages.** A part of a block that is 2 MiB-aligned in both its virtual and its physical address is mapped by one entry one level up:
    - x86-64: a page directory entry with `PS`;
    - aarch64 (4 KiB granule): a level-2 block descriptor.
-2. **1 GiB pages** where the CPU has them (x86-64: `CPUID.80000001h:EDX.Page1GB`; aarch64: level-1 blocks), for a whole GiB of a block whose frames are one aligned GiB of the pool. Otherwise its 2 MiB pages stay.
+2. **1 GiB pages** where the CPU has them (x86-64: `CPUID.80000001h:EDX.Page1GB`; aarch64: level-1 blocks), for a whole GiB of a block that is 1 GiB-aligned in both its addresses. Otherwise its 2 MiB pages stay.
 3. **The walk learns large leaves.** `readable`, `validate_read`, `unmap` and a revocation find a large leaf and stop there.
    - A large leaf is unmapped whole only: blocks are freed whole, so it is never split.
 4. **The attributes stay as for 4 KiB pages:** user, write-back, writable and never executable, never global.
