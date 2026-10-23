@@ -4188,7 +4188,7 @@ def modes_suite(args):
     if not raw_tools():
         print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
         return
-    for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
+    for words, expected in ((b"# the operator's\ndevelopment\nturbo\nlink-console\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
             extra = {**MODES_EFFECTOR_FILES, "data/mode.conf": words} if words else None
             image, _, _ = raw_fat_image(Path(temp), extra=extra)
@@ -4198,6 +4198,8 @@ def modes_suite(args):
                 require(log, f"[INIT] MODE: {expected}")
                 if words:
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
+                    # The link's console counts only with `dev` in link.conf, which this disk has not (800-KRN-0155).
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: link-console (NO dev IN link.conf)")
                     effector_grants_check(vm)
                     pids = vm.services()
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
@@ -4351,6 +4353,7 @@ def gateway_stub_check(args):
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
+            stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
             refusals = vm.command("dmesg -s init", raw=True)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -4375,8 +4378,10 @@ def gateway_stub_check(args):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
     # 750-KRN-0154: the owner allows the reboot. The stub asks it at its first start; QEMU restarts the machine.
+    # 800-KRN-0155: with `dev` in link.conf the word `link-console` counts, across the reboot too.
     with tempfile.TemporaryDirectory(prefix="smoke-gateway-reboot-", dir=ROOT / IMAGE) as temp:
-        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-now": b"1\n"}
+        extra = {"data/mode.conf": b"development\nlink-console\n", "link.conf": b"dev\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n",
+                 "data/inbox/reboot-now": b"1\n"}
         image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, prompt=False,
                 extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
@@ -4384,7 +4389,7 @@ def gateway_stub_check(args):
             vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=240)
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
             vm.expect("MIND> ", timeout=120)
-            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT AND LINK CONSOLE (data/mode.conf)")
             # The first start's files were written before the reboot, and its request was taken away before it asked.
             for _ in range(60):
                 out = vm.command("dmesg -s effector_gw", raw=True)
@@ -4393,6 +4398,7 @@ def gateway_stub_check(args):
                 time.sleep(1)
             require(out, "[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             require(out, "[GATEWAY-STUB] REBOOT NOT ASKED")
+            require(out, "[GATEWAY-STUB] LINK CONSOLE ON")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -4400,7 +4406,8 @@ def gateway_stub_check(args):
     print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
-          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode", flush=True)
+          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
+          "answers whether the link's console is on, which needs `dev` in link.conf (800-KRN-0155)", flush=True)
 
 
 def effector_grants_check(vm):
