@@ -7387,9 +7387,9 @@ def effector_suite(args, disk):
     (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
     # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
     (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
-    # The agent's ID, as an earlier start would have left it in the session's private directory.
-    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
-    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
+    # The owner's agent ID: the session keeps it in its private directory at the first start, so a disk written afresh
+    # stays the agent the server knows.
+    (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
@@ -7415,7 +7415,7 @@ def effector_suite(args, disk):
         out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
         time.sleep(20)  # heartbeats to measure, beside the commands
         out = session()
-        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT ID mind-test FROM data/effector/agent_id, KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
@@ -7426,11 +7426,20 @@ def effector_suite(args, disk):
         assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
+        # While the failed ACK waited, the one slot was occupied: the server takes no idle report for it (Effector ahelp).
+        held = [b for b in list(server.beats) if b.get("busy")]
+        assert any(b["executing_commands"][0]["command_id"] == exec_id and b["occupied_queues"] == 1 and b["free_slots"] == 0 and b["busy_since"] for b in held), held[-3:]
+        assert not record["busy"] and record["free_slots"] == 1, record
+        # The load, in the heartbeat and the poll, once a telemetry sample has counted the cores.
+        loaded = [b["load"] for b in list(server.beats) if "load" in b]
+        assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
+        assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
               f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
-              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
+              "name refused by the gateway, a failed ACK retried with the agent busy meanwhile; the load in the heartbeat and "
+              f"the poll ({loaded[-1]['load_percent']}% of {loaded[-1]['cpu_cores']} cores); the token kept in its private directory", flush=True)
         # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
         # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
         collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
@@ -7448,16 +7457,16 @@ def effector_suite(args, disk):
         assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
-        effector_actions_check(vm, server, agent, until)
+        effector_actions_check(vm, server, agent, until, beats)
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(10 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(12 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (10 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (12 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -7479,7 +7488,7 @@ def effector_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
 
 
-def effector_actions_check(vm, server, agent, until):
+def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
     shot_id = server.queue(agent, "screenshot")
@@ -7512,11 +7521,36 @@ def effector_actions_check(vm, server, agent, until):
     server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
     until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
     assert server.operation("deliver-2")["result"]["error"] == "denied", server.operation("deliver-2")
+    # The server's `exec` of `reboot` maps to the gateway's restart, which this policy (no `reboot on`) refuses; any other
+    # command stays denied (the first part's exec_v1).
+    reboot_id = server.queue(agent, "exec_v1", {"command": "reboot", "run_as": "service", "session": "service", "timeout_seconds": 300})
+    until(f"EFFECTOR: ACK {reboot_id} failed ACCEPTED")
+    assert server.operation(reboot_id)["result"]["error"] == "denied", server.operation(reboot_id)
+    require(vm.command("dmesg -s effector_gw", raw=True), f"{reboot_id} reboot?in?10000?ms denied refused")
     # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
     sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
     print(f"PASS: collect_logs sent the system log inline; deliver_file wrote {len(delivery)} bytes under the policy's root and "
           "refused a path outside it; restart_service restarted sysmon, which the policy names", flush=True)
+    # performance_measure (750-EFF-0016): the agents' fixed benchmarks run a slice at a time between heartbeats, the agent
+    # busy with it meanwhile; a result the server's AcceptPerformance takes.
+    perf_id = server.queue(agent, "performance_measure", {"duration_seconds": 12, "timeout_seconds": 90})
+    begun = time.monotonic()
+    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS MEASUREMENT ACCEPTED", 120)
+    require(out, f"EFFECTOR: STARTED {perf_id} performance_measure (12 S)")
+    r = server.operation(perf_id)["result"]
+    assert r["status"] == "completed" and r["benchmark"] == "effector_bogomips_v1" and re.fullmatch(r"[0-9a-f]{16}", r["checksum"]), r
+    assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
+    assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
+    assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
+    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    during = [b for b in list(server.beats) if b.get("busy") and b["executing_commands"][0]["action"] == "performance_measure"]
+    assert during, "the agent busy with the benchmark"
+    window = [t for t in beats if t >= begun]
+    assert len(window) > 3 and max(b - a for a, b in zip(window, window[1:])) < 5.0, "heartbeats went on during the benchmark"
+    print(f"PASS: performance_measure: {r['bogomips']} million iterations/s on one thread, {r['memory_mib_per_second']} MiB/s copied, "
+          f"disk {r['disk_write_mib_per_second']}/{r['disk_read_mib_per_second']} MiB/s written/read; heartbeats under 5 s apart while it "
+          "ran, the agent busy with it", flush=True)
     # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.
     deadline = time.monotonic() + 75
     while time.monotonic() < deadline and sum(1 for t in list(server.telemetry) if "cpu_percent" in t["sample"]["system"]) < 1:
