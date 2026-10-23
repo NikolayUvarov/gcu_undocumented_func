@@ -1,8 +1,8 @@
-# 262-KRN-0164 — Stacks larger than 64 KiB
+# 262-KRN-0164 — Stacks larger than 64 KiB — done
 
-**Type:** kernel (spawn), `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1
+**Type:** kernel (spawn), `libmind` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [262](../issues/262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1
 
-From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md), item 5.
+From the tools track's request of 2026-10-23 in [requests-KRN.md](../issues/requests-KRN.md), item 5.
 
 ## Problem
 
@@ -17,7 +17,7 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
    - no such header, or 0: 64 KiB, as now.
    - **How a program sets it.** The linker's `-z stack-size=` sets `p_memsz` only when the linker makes the headers itself. Our programs' linker scripts list their headers (`PHDRS`), so they add a `PT_GNU_STACK` header holding a `NOLOAD` section of the size (`memtest/memstack.ld`). The section takes no memory of the image.
 2. **It is charged** to the spawner's memory quota with the image, as the 64 KiB is today.
-3. **A worker** ([262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md)) gets its stack's size in `WORKER_START`, within the same limit.
+3. **A worker** ([262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done)) gets its stack's size in `WORKER_START`, within the same limit.
 4. **The guard page stays** below every stack.
 
 ## Acceptance criteria
@@ -27,9 +27,16 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
   - through 6 MiB it faults, and `faults` shows the address in the guard page below its stack.
 - [x] `docs/api` says how a program asks for its stack.
 
+## Resolution
+
+- **The kernel** sizes a task's stack from its ELF's `PT_GNU_STACK`, from 64 KiB to 8 MiB (`STACK_MIN_BYTES`, `STACK_MAX_BYTES` in `common/abi.rs`; `kernel/src/elf.rs`, `scheduler.rs`), charged with the image, the guard page below it.
+- **A worker's stack** is `WORKER_START`'s `arg2`, within the same limits (0: what the ELF asks), made with [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done); `docs/api` states both. The suites start workers with 0 only: no suite starts one with a size of its own.
+- **Tests:** host test `runtime` (the header's sizes and refusals) and the `stack` check (`memstack`: 3 MiB of calls run, 6 MiB fault in the guard page), x86 and aarch64.
+- **Gate:** the landing gate `land-a2a1062e` passed every group, x86 and aarch64, on `main` a2a1062e (2026-10-23).
+
 ## Related
 
-[262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md), [262](262-model-runtime-on-the-machines-full-hardware.md).
+[262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done), [262](../issues/262-model-runtime-on-the-machines-full-hardware.md).
 
 ## Progress (2026-10-23)
 
@@ -39,4 +46,4 @@ Made on `claude/youthful-mendel-mf1soy`:
 - **Checked** (this session's container, QEMU TCG):
   - host test `runtime`: no header gives 64 KiB, 4 MiB is read, sizes round up to pages, 8 MiB + 1 and more are refused;
   - the `stack` check (in the `normal` suite, and alone as `--suites stack`) on x86 and aarch64: 3 MiB of calls run, 6 MiB fault in the guard page.
-- **Left:** a worker's stack in `WORKER_START`, with [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md).
+- **Left:** a worker's stack in `WORKER_START`, with [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done).

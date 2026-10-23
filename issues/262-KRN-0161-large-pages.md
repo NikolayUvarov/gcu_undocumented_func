@@ -1,6 +1,6 @@
 # 262-KRN-0161 — Large pages for a program's large blocks
 
-**Type:** kernel (generic page tables, `arch/*/mmu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing and the machines' measurements left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-12.1
+**Type:** kernel (generic page tables, `arch/*/mmu.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` a2a1062e; the machines' measurements left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-12.1
 
 From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md), item 2.
 
@@ -38,6 +38,7 @@ Made on `claude/youthful-mendel-mf1soy` (ed9dac59), ABI 19:
   - `big_memory_check` (`--suites bigmem`, and the `normal` suite with more than 4 GiB), 4 CPUs and 6 GiB, x86 and aarch64: the program holding 3 GiB had 63 KiB of kernel bytes (`stat`: its task record, context, info pages and page tables), where its page tables alone would take about 6 MiB in 4 KiB pages; every page written and read back;
   - kbench's `pages` group in the same runs, the median of a read: x86 386 ns in large pages and 528 ns in 4 KiB pages; aarch64 438 ns and 641 ns.
 - **What the numbers say, and do not.** Under TCG, QEMU's own translation cache sits between the guest's pages and the host, so the two rows say little of a CPU's TLB. A machine's figure comes from a run on it (MC-12.1).
+- **In `main`** a2a1062e (landing round 21, 2026-10-23): the gate `land-a2a1062e` passed every group, x86 and aarch64.
 - **Left:** the random read timed on each machine at hand. The suites run QEMU without KVM everywhere, the Effector machines too, so their figures are emulation's; a machine's figure needs QEMU with KVM there, or `kbench pages` on the machine itself (the MacBook Pro by the maintainer).
 
 ## Related
