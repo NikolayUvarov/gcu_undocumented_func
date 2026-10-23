@@ -22,10 +22,10 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
 
 ## Acceptance criteria
 
-- [ ] A QEMU suite (x86 and aarch64):
+- [x] A QEMU suite (x86 and aarch64):
   - a test program whose ELF asks for 4 MiB recurses through 3 MiB of stack;
   - through 6 MiB it faults, and `faults` shows the address in the guard page below its stack.
-- [ ] `docs/api` says how a program asks for its stack.
+- [x] `docs/api` says how a program asks for its stack.
 
 ## Related
 
@@ -38,5 +38,5 @@ Made on `claude/youthful-mendel-mf1soy`:
 - **`memstack`** (a second program of the `memtest` crate, with its own linker script) asks for 4 MiB and recurses through as many KiB as asked.
 - **Checked** (this session's container, QEMU TCG):
   - host test `runtime`: no header gives 64 KiB, 4 MiB is read, sizes round up to pages, 8 MiB + 1 and more are refused;
-  - the `stack` check (in the `normal` suite, and alone as `--suites stack`) on x86: 3 MiB of calls run, 6 MiB fault in the guard page; aarch64 is running.
+  - the `stack` check (in the `normal` suite, and alone as `--suites stack`) on x86 and aarch64: 3 MiB of calls run, 6 MiB fault in the guard page.
 - **Left:** a worker's stack in `WORKER_START`, with [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md).
