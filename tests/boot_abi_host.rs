@@ -59,6 +59,18 @@ fn the_handoff_takes_every_loader_since_abi_16_and_no_other() {
     assert_eq!(size_of::<BootInfo>(), 1048, "a change of BootInfo is a change of the handoff");
 }
 
+// 351-KRN-0167: a kernel that refuses the handoff reads the trial and the ACPI root from ABI 10's record alone.
+#[test]
+fn a_refused_handoff_reads_the_trial_and_the_acpi_root_from_abi_10s_record() {
+    let mut old: Abi10BootInfo = unsafe { core::mem::zeroed() };
+    old.abi_version = 10;
+    old.acpi_rsdp = 0x1234_5000;
+    old.boot_slot.trial = 1;
+    assert_eq!(unsafe { BootInfo::read_refused(core::ptr::addr_of!(old).cast()) }, (true, 0x1234_5000));
+    old.boot_slot.trial = 0;
+    assert_eq!(unsafe { BootInfo::read_refused(core::ptr::addr_of!(old).cast()) }, (false, 0x1234_5000));
+}
+
 #[test]
 fn image_access_covers_both_arrays_in_order_and_rejects_out_of_range() {
     let mut info: BootInfo = unsafe { core::mem::zeroed() };

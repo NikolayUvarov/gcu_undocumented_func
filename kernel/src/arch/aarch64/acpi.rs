@@ -6,6 +6,7 @@ use crate::serial_print;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 static SMC: AtomicBool = AtomicBool::new(false); // PSCI through SMC instead of HVC
+static PSCI: AtomicBool = AtomicBool::new(false); // the FADT names PSCI
 // The enabled CPUs' MPIDR affinities in MADT order (the boot CPU among them), and how many.
 pub static CPUS: [AtomicU64; crate::cpu::MAX] = [const { AtomicU64::new(0) }; crate::cpu::MAX];
 pub static CPU_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -83,20 +84,11 @@ pub unsafe fn init(rsdp: u64) {
                 let first = if gicr != 0 { gicr } else { gicc_gicr };
                 if first != 0 { board::set(&board::GICR, mapped(first)); }
             }
-            // The console: interface type at 36 (3 a PL011, 0x0E the SBSA generic UART), the register address (a
-            // generic address structure) at 40, its address at 44; the interrupt (GSIV) at 54 when bit 3 of 52 is set.
-            b"SPCR" if table.len() >= 58 => {
-                // Another kind of UART (a 16550, a mini UART) is not driven: no console rather than a wrong address.
-                if matches!(table[36], 0x03 | 0x0E) && table[40] == 0 {
-                    board::set(&board::UART, mapped(u64_at(table, 44)));
-                    if table[52] & 8 != 0 { let gsiv = u32_at(table, 54) as usize; if gsiv >= 32 { board::set(&board::UART_LINE, gsiv - 32); } }
-                }
-            }
+            b"SPCR" => console(table),
             // The generic timer: the virtual EL1 timer's GSIV at 64 (a PPI).
             b"TPM2" => { if let Some(base) = crate::tpm2::registers(table, false).filter(|&b| b < WINDOW) { board::set(&board::TPM, base as usize); } }
             b"GTDT" if table.len() >= 68 => { let ppi = u32_at(table, 64) as usize; if (16..32).contains(&ppi) { board::set(&board::TIMER_PPI, ppi); } }
-            // ARM_BOOT_ARCH at 129: bit 0 PSCI compliant, bit 1 PSCI through HVC.
-            b"FACP" if table.len() >= 131 => SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed),
+            b"FACP" => conduit(table),
             _ => {}
         }
     }
@@ -108,6 +100,39 @@ pub unsafe fn init(rsdp: u64) {
                      board::get(&board::UART_LINE), board::get(&board::TIMER_PPI), CPU_COUNT.load(Ordering::Acquire));
     report_pins();
     if CPU_COUNT.load(Ordering::Acquire) == 0 { serial_print("MIND CORE KERNEL: ACPI: NO GICC IN THE MADT, ONE CPU\n"); }
+}
+
+// The console: interface type at 36 (3 a PL011, 0x0E the SBSA generic UART), the register address (a generic address
+// structure) at 40, its address at 44; the interrupt (GSIV) at 54 when bit 3 of 52 is set. Another kind of UART (a 16550,
+// a mini UART) is not driven: no console rather than a wrong address.
+fn console(table: &[u8]) {
+    if table.len() < 58 || !matches!(table[36], 0x03 | 0x0E) || table[40] != 0 { return; }
+    board::set(&board::UART, mapped(u64_at(table, 44)));
+    if table[52] & 8 != 0 { let gsiv = u32_at(table, 54) as usize; if gsiv >= 32 { board::set(&board::UART_LINE, gsiv - 32); } }
+}
+
+// The FADT's ARM_BOOT_ARCH at 129: bit 0 PSCI compliant, bit 1 PSCI through HVC.
+fn conduit(table: &[u8]) {
+    if table.len() < 131 { return; }
+    PSCI.store(table[129] & 1 != 0, Ordering::Relaxed);
+    SMC.store(table[129] & 1 != 0 && table[129] & 2 == 0, Ordering::Relaxed);
+}
+
+/// Before the handoff is trusted (351-KRN-0167): only the console (virt's, or the SPCR's) and PSCI's conduit.
+pub unsafe fn early(rsdp: u64) {
+    let Some(list) = bytes(rsdp, 36).filter(|r| &r[..8] == b"RSD PTR " && r[15] >= 2).and_then(|root| table(u64_at(root, 24))) else { return };
+    if list.len() >= 16 && &list[10..16] == b"BOCHS " { board::set(&board::UART, board::VIRT_UART); }
+    for at in (36..list.len().saturating_sub(7)).step_by(8) {
+        let Some(table) = table(u64_at(list, at)) else { continue };
+        match &table[..4] { b"SPCR" => console(table), b"FACP" => conduit(table), _ => {} }
+    }
+}
+
+/// A restart before anything else is set up: PSCI SYSTEM_RESET when the FADT names PSCI, else it returns (351-KRN-0167).
+pub unsafe fn reset() {
+    if !PSCI.load(Ordering::Relaxed) { serial_print("MIND CORE KERNEL: NO PSCI IN THE FADT: NO RESTART\n"); return; }
+    serial_print("MIND CORE KERNEL: REBOOT VIA PSCI SYSTEM_RESET\n");
+    psci(PSCI_SYSTEM_RESET, 0, 0, 0);
 }
 
 /// A PSCI call through the conduit the FADT names; its result.
