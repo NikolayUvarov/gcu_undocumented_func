@@ -5,7 +5,7 @@
 //! lets it write, at each start, and whether a reboot it asks is served. Never packaged into the normal OS; the real
 //! gateway is 750-EFF-0007.
 use mind::abi::*;
-use mind::idl::{init, vfs};
+use mind::idl::{display, init, vfs};
 use mind::ipc::Endpoint;
 
 // What init answered a lifecycle request: OK, DENIED, or another outcome.
@@ -72,10 +72,26 @@ fn write(files: Endpoint, root: u32, path: &str, data: &[u8]) -> bool {
     written
 }
 
+// The Effector agent's mark (800-KRN-0156) through the screen's client, badged for it: each state for 6 s, a call a
+// second, then no more calls, so the mark goes 3 s later.
+fn remote_mark() {
+    let screen = Endpoint(SLOT_DISPLAY);
+    for (state, name) in [(display::RemoteState::Changing, "CHANGING"), (display::RemoteState::Reading, "READING"), (display::RemoteState::Unconnected, "UNCONNECTED")] {
+        let answer = display::remote(screen, state);
+        mind::println!("[GATEWAY-STUB] REMOTE MARK {} {}", name, if matches!(answer, Ok(Ok(()))) { "OK" } else { "FAILED" });
+        for _ in 0..6 { mind::time::sleep(1000); let _ = display::remote(screen, state); }
+    }
+    mind::println!("[GATEWAY-STUB] REMOTE MARK STOPPED");
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // Whether the link's console is on (800-KRN-0155): any client of init may ask.
+    let console = match init::link_console(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(true)) => "ON", Ok(Ok(false)) => "OFF", _ => "FAILED" };
+    mind::println!("[GATEWAY-STUB] LINK CONSOLE {}", console);
     lifecycle();
     scope();
     reboot();
+    remote_mark();
     loop { mind::time::sleep(1000); }
 }

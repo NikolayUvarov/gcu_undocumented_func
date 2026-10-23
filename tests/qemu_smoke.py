@@ -4016,7 +4016,7 @@ def link_suite(args):
             require(link(port, "put", str(sent), "../escape.bin", ok=False), "not allowed")
             require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED sent.bin")
             # 800-KRN-0128, 0132: link holds exactly usb_serial's client, a scope of vfs_server, an application's loader
-            # client and a log reader.
+            # client, a log reader and the compositor's client for its mark (800-KRN-0156).
             pids = vm.services()
             caps = vm.command(f"stat caps {pids['link']}", raw=True)
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
@@ -4029,7 +4029,7 @@ def link_suite(args):
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
             # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
-            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
+            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
                          (30, pids.get("shell"))}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
@@ -4166,12 +4166,9 @@ def modes_suite(args):
     if not raw_tools():
         print("SKIP: modes suite needs mkfs.fat and mtools", flush=True)
         return
-    for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
+    for words, expected in ((b"# the operator's\ndevelopment\nturbo\nlink-console\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
-            # The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
-            extra = {"data/mode.conf": words, "netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
-                     "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
-                     "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY} if words else None
+            extra = {**MODES_EFFECTOR_FILES, "data/mode.conf": words} if words else None
             image, _, _ = raw_fat_image(Path(temp), extra=extra)
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
             try:
@@ -4179,6 +4176,8 @@ def modes_suite(args):
                 require(log, f"[INIT] MODE: {expected}")
                 if words:
                     require(log, "[INIT] data/mode.conf: WORD LEFT OUT: turbo")
+                    # The link's console counts only with `dev` in link.conf, which this disk has not (800-KRN-0155).
+                    require(log, "[INIT] data/mode.conf: WORD LEFT OUT: link-console (NO dev IN link.conf)")
                     effector_grants_check(vm)
                     pids = vm.services()
                     servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
@@ -4216,6 +4215,17 @@ def modes_suite(args):
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
+                    # 750-KRN-0143: and no process holds an Effector grant: init's named client, the session's or the
+                    # gateway's private files (init itself, which mints every grant, aside).
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    files = vm.services()["vfs_server"]
+                    for name, pid in vm.services().items():
+                        if pid == 1:
+                            continue
+                        caps = vm.command(f"stat caps {pid}", raw=True)
+                        for badge, ep in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M):
+                            server = servers.get(int(ep))
+                            assert not (server == 1 and badge == "6") and not (server == files and badge in ("6", "7")), (name, caps)
                     vm.command("run effector_gw")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
                     assert "effector_gw" not in vm.services(), vm.services()
@@ -4223,17 +4233,79 @@ def modes_suite(args):
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    modes_lifecycle_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
-          "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
-          "init's mode client, in SLOT_MODE; check reads the modes and is refused a change, which init logs with its clause "
-          "(MC-12.6)", flush=True)
+          "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
+          "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
+          "change, which init logs with its clause (MC-12.6)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
 GATEWAY_POLICY = b"effector-policy 1\nagent on\nservice sysmon restart\ndeliver data/inbox/\n"
+# The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
+MODES_EFFECTOR_FILES = {"netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
+                        "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
+                        "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY}
+
+
+def modes_lifecycle_check(args):
+    """750-KRN-0143: in the development mode init starts each Effector service again after it is killed, and the mode
+    holds over three reboots; a safe start (000-KRN-0076) with the maintenance mode on starts both services."""
+    cpu = ["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"]
+
+    def both(vm):
+        for _ in range(90):
+            services = vm.services()
+            if "effector_gw" in services and "effector" in services:
+                return services
+            time.sleep(1)
+        raise AssertionError((vm.services(), vm.command("dmesg -s init", raw=True)[-1500:]))
+
+    with tempfile.TemporaryDirectory(prefix="smoke-modes-reboots-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, extra=cpu)
+        try:
+            for name in ("effector_gw", "effector"):
+                pid = both(vm)[name]
+                require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+                for _ in range(60):
+                    if vm.services().get(name, pid) != pid:
+                        break
+                    time.sleep(1)
+                require(vm.command("dmesg -s init", raw=True), f"[INIT] {name} RESTARTED PID=")
+            both(vm)
+            for _ in range(3):
+                vm.send("reboot\n")
+                vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=120)
+                vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+                vm.expect("MIND> ", timeout=120)
+                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+                both(vm)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-modes-reboots-{args.cpus}cpu.log").write_text(vm.log)
+    with tempfile.TemporaryDirectory(prefix="smoke-modes-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": b"maintenance\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, extra=cpu)
+        try:
+            # A reset within the minute after READY leaves the run's mark, so the next boot is a safe start.
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] MODE: MAINTENANCE (data/mode.conf)")
+            both(vm)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-modes-safe-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the modes over a run (750-KRN-0143): init starts each Effector service again after it is killed, three "
+          "reboots keep the development mode, and a safe start with the maintenance mode on starts both", flush=True)
 
 
 def gateway_stub_check(args):
@@ -4260,6 +4332,7 @@ def gateway_stub_check(args):
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
+            stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
             refusals = vm.command("dmesg -s init", raw=True)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
@@ -4270,6 +4343,28 @@ def gateway_stub_check(args):
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
             stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] REBOOT NOT ASKED")
+            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, then stops calling, and
+            # the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
+            seen, deadline = [], time.monotonic() + 60
+            while time.monotonic() < deadline:
+                _, size, _, screen = vm.screenshot().split(b"\n", 3)
+                width = int(size.split()[0])
+                at = (18 * width + width - 96) * 3
+                pixel = screen[at:at + 3]
+                if not seen or seen[-1] != pixel:
+                    seen.append(pixel)
+                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True).rpartition("SCOPE START 2")[2]:
+                    break
+                time.sleep(.3)
+            time.sleep(4)
+            _, size, _, screen = vm.screenshot().split(b"\n", 3)
+            after = screen[at:at + 3]
+            colours = {bytes((0xE0, 0x20, 0x20)): "red", bytes((0xE0, 0xC0, 0x20)): "yellow", bytes((0x80, 0x80, 0x80)): "grey"}
+            assert {colours.get(p) for p in seen} >= {"red", "yellow", "grey"} and after not in colours, ([p.hex() for p in seen], after.hex())
+            marks = vm.command("dmesg -s compositor", raw=True)
+            for line in ("[COMPOSITOR] REMOTE MARK Effector: Changing", "[COMPOSITOR] REMOTE MARK Effector: Reading",
+                         "[COMPOSITOR] REMOTE MARK Effector: Unconnected", "[COMPOSITOR] REMOTE MARK Effector: OFF"):
+                require(marks, line)
             files = vm.command("dmesg -s vfs_server", raw=True)
             scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
             assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
@@ -4284,8 +4379,10 @@ def gateway_stub_check(args):
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
     # 750-KRN-0154: the owner allows the reboot. The stub asks it at its first start; QEMU restarts the machine.
+    # 800-KRN-0155: with `dev` in link.conf the word `link-console` counts, across the reboot too.
     with tempfile.TemporaryDirectory(prefix="smoke-gateway-reboot-", dir=ROOT / IMAGE) as temp:
-        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-now": b"1\n"}
+        extra = {"data/mode.conf": b"development\nlink-console\n", "link.conf": b"dev\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n",
+                 "data/inbox/reboot-now": b"1\n"}
         image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, prompt=False,
                 extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
@@ -4293,7 +4390,7 @@ def gateway_stub_check(args):
             vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=240)
             vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
             vm.expect("MIND> ", timeout=120)
-            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT AND LINK CONSOLE (data/mode.conf)")
             # The first start's files were written before the reboot, and its request was taken away before it asked.
             for _ in range(60):
                 out = vm.command("dmesg -s effector_gw", raw=True)
@@ -4302,6 +4399,7 @@ def gateway_stub_check(args):
                 time.sleep(1)
             require(out, "[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             require(out, "[GATEWAY-STUB] REBOOT NOT ASKED")
+            require(out, "[GATEWAY-STUB] LINK CONSOLE ON")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -4309,7 +4407,9 @@ def gateway_stub_check(args):
     print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
-          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode", flush=True)
+          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
+          "answers whether the link's console is on, which needs `dev` in link.conf (800-KRN-0155); the gateway lights the "
+          "Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
 
 
 def effector_grants_check(vm):
@@ -4335,8 +4435,11 @@ def effector_grants_check(vm):
         return {int(s): (int(b), named.get(servers.get(int(ep)), "?")) for s, b, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
                 if servers.get(int(ep)) != pids[name]}
     gw, session = held("effector_gw"), held("effector")
+    # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
+    quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
+    assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
     assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
-    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (0, "compositor"), gw
+    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
     require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
@@ -5450,12 +5553,13 @@ def linkupdate_suite(args):
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
-        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33).
+        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33); slot 15
+        # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         granted = {int(slot) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M) if servers.get(int(ep)) != pids["link"]}
-        assert {2, 3, 12} <= granted <= {2, 3, 5, 12}, caps
+        assert {2, 3, 12, 15} <= granted <= {2, 3, 5, 12, 15}, caps
         started = time.monotonic()
         for path in files:
             link.put(server / path, path)
