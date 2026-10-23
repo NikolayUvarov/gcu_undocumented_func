@@ -82,3 +82,11 @@ The first run on real hardware.
 - a stable session on this machine;
 - an ACK through;
 - ten minutes online.
+
+## Progress — 2026-10-23, the MacBook Pro on a stick from `fast-test` 0d73c076 (ABI 17)
+
+- **The configuration:** the maintenance mode written with the disk; `effector.conf` with `token none` and the owner's policy (`screen on`, `log ring`, `log boot`, `collect log:/`, `collect data/media/`, `deliver data/inbox/`, `max-bytes 2097152`) put in place by the owner's script over the link; Wi-Fi BCM4331 at 11 Mbit/s CCK. The rewrite wiped `system/effector`, so the agent made a new ID, `mind_353abc18de2dbd0e`, activated by the owner as `mind-mbp2`.
+- **The gateway's grants as `init` gave them:** SYSINFO LIFECYCLE LOG READER WRITER PRIVATE DISPLAY.
+- **Telemetry on `hesere.uz`** (`GET /api/v1/monitoring`, 02:28 UTC): `Intel(R) Core(TM) i7-3615QM CPU @ 2.30GHz`, 8 CPUs, 5.8% busy, 8 160 358 400 bytes of memory, the boot, `ram` and `log` volumes, card 2 wireless with its MAC, 47 services with their PIDs, processor time and memory; the server counted the agent's traffic by `X-Effector-Agent-ID`.
+- **A screenshot asked through the server's API** (operation `20261023022853.806949911_000330`): `completed` in 4 s, a 1280x800 PNG of 124 829 bytes, SHA-256 `e39c9096…`, which the downloaded artifact matches; it shows the machine's console.
+- **Still seen:** about one transport error in 10–15 s on this Wi-Fi (DRV's 802.11b losses); requests and the ACK went through on reconnects.
