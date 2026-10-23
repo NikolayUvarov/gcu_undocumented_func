@@ -1,6 +1,6 @@
 //! effector485 against `mindlink serve --run` over a pseudo-terminal (800-LNK-0011): a batch of put, mkdir, move, list,
 //! run with output and log; an idempotency key that repeats does the work once; cancel stops a running program; the
-//! queue and the results outlive the daemon.
+//! queue and the results outlive the daemon; a lease holds the machine for one session (800-LNK-0021).
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -244,5 +244,96 @@ fn the_page_its_feed_and_other_sites() {
     feed_until(&mut s, "\"type\":\"hello\"").unwrap();
     page_says(&mut s, "{\"key\":\"sesame\"}");
     assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains("\"online\":false"));
+    std::fs::remove_dir_all(&d).ok();
+}
+
+/// A call as a program makes one, with `headers` (each ending in CRLF) and a JSON body; the answer's head and body.
+fn send(at: &str, method: &str, path: &str, headers: &str, body: &str) -> (String, String) {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(at).unwrap();
+    write!(s, "{method} {path} HTTP/1.1\r\nHost: {at}\r\nConnection: close\r\n{headers}Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    let (h, b) = answer.split_once("\r\n\r\n").unwrap();
+    (h.to_string(), b.to_string())
+}
+
+#[test]
+fn a_reservation_holds_the_machine() {
+    let d = std::env::temp_dir().join(format!("effector485-reserve-{}", std::process::id()));
+    std::fs::remove_dir_all(&d).ok();
+    for sub in ["srv", "state"] { std::fs::create_dir_all(d.join(sub)).unwrap(); }
+    std::fs::write(d.join("srv.log"), "booted\n").unwrap();
+    let (_serve, line) = start(MINDLINK, &["pty", "serve", d.join("srv").to_str().unwrap(), "--log", d.join("srv.log").to_str().unwrap(), "--run"]);
+    let pty = line.split_whitespace().nth(1).unwrap().to_string();
+    let (daemon1, at) = daemon(&pty, &d.join("state"));
+    let ok = |args: &[&str]| { let (code, out) = e485(&at, args); assert_eq!(code, 0, "{args:?}: {out}"); out };
+    let leases = "/api/v1/terminal-reservations";
+
+    // The lease: SESSION:PIN alone on the first line, and the PIN never shown again.
+    let out = Command::new(EFFECTOR).args(["--at", &at, "reserve", "--minutes", "5", "--reason", "test: a slot update", "--owner", "EFF"]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let lease = String::from_utf8(out.stdout).unwrap().lines().next().unwrap().to_string();
+    let (session, pin) = lease.split_once(':').unwrap();
+    assert!(session.starts_with("R-") && session.len() == 10 && pin.len() == 12, "{lease}");
+    let (head, body) = send(&at, "GET", leases, "", "");
+    assert!(head.starts_with("HTTP/1.1 200") && body.contains(session) && body.contains("\"owner\":\"EFF\"") && body.contains("\"reason\":\"test: a slot update\""), "{body}");
+    assert!(!body.contains(pin) && !body.contains("\"pin\""), "{body}");
+    assert!(ok(&["reservations"]).contains(&format!("{session}\tEFF\ttest: a slot update\tuntil ")));
+    let (head, body) = send(&at, "POST", leases, "", r#"{"duration_minutes":5,"reason":"test: another","owner":"DRV"}"#);
+    assert!(head.starts_with("HTTP/1.1 409") && body.contains("\"code\":\"terminal_reserved\"") && body.contains(session) && !body.contains(pin), "{head}\n{body}");
+    for bad in [r#"{"duration_minutes":61,"reason":"test"}"#, r#"{"duration_minutes":0.5,"reason":"test"}"#, r#"{"duration_minutes":5,"reason":" "}"#] {
+        assert!(send(&at, "POST", leases, "", bad).0.starts_with("HTTP/1.1 400"), "{bad}");
+    }
+
+    // Another session's change waits, saying for what; a read passes it.
+    let theirs = field(&ok(&["submit", "mkdir", "name=theirs", "--key", "L-theirs", "--reason", "test: another session's mkdir"]), "id").to_string();
+    assert!(ok(&["submit", "log", "--key", "L-log", "--reason", "test: a read passes", "--wait"]).contains("booted"));
+    let status = ok(&["status", &theirs]);
+    assert!(status.contains("\"status\":\"queued\"") && status.contains("\"waiting\":{\"code\":\"terminal_reserved\"")
+            && status.contains("reserved by EFF (test: a slot update) until ") && status.contains(&format!("UTC ({session})")), "{status}");
+    assert!(ok(&["endpoints"]).contains(&format!("\"reservation\":{{\"session_id\":\"{session}\"")));
+
+    // The holder's own run, with the flag or the environment.
+    ok(&["submit", "mkdir", "name=mine", "--key", "L-mine", "--reason", "test: the holder's mkdir", "--reservation", &lease, "--wait"]);
+    let out = Command::new(EFFECTOR).args(["--at", &at, "submit", "mkdir", "name=mine2", "--key", "L-mine2", "--reason", "test: the holder's, by the environment", "--wait"])
+        .env("EFFECTOR485_RESERVATION", &lease).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(ok(&["status", &theirs]).contains("\"status\":\"queued\""));
+    assert!(d.join("srv/mine").is_dir() && d.join("srv/mine2").is_dir() && !d.join("srv/theirs").exists());
+
+    // A wrong PIN neither submits, renews nor releases; the right one renews, by the body or the headers.
+    let wrong = format!("{session}:WRONGWRONGWR");
+    let (code, out) = e485(&at, &["submit", "hello", "--key", "L-wrong", "--reason", "test: a wrong PIN", "--reservation", &wrong]);
+    assert!(code != 0 && out.contains("PIN"), "{out}");
+    let (head, body) = send(&at, "PATCH", leases, "", &format!(r#"{{"duration_minutes":10,"reservation_session_id":"{session}","reservation_pin":"WRONGWRONGWR"}}"#));
+    assert!(head.starts_with("HTTP/1.1 409") && body.contains("PIN"), "{head}\n{body}");
+    let (code, out) = e485(&at, &["release", &wrong]);
+    assert!(code != 0 && out.contains("PIN"), "{out}");
+    let (head, body) = send(&at, "PATCH", leases, &format!("X-Effector-Reservation-Session: {session}\r\nX-Effector-Reservation-Pin: {pin}\r\n"), r#"{"duration_minutes":10}"#);
+    assert!(head.starts_with("HTTP/1.1 200") && body.contains("\"duration_minutes\":10") && body.contains("\"renewal_attempts\":1"), "{body}");
+    assert!(ok(&["renew", &lease, "--minutes", "3"]).contains(&format!("{session}: held until ")));
+
+    // The lease outlives a restart: the mkdir still waits, and the page's feed says why.
+    drop(daemon1);
+    let (_daemon2, at2) = daemon(&pty, &d.join("state"));
+    let ok2 = |args: &[&str]| { let (code, out) = e485(&at2, args); assert_eq!(code, 0, "{args:?}: {out}"); out };
+    assert!(ok2(&["status", &theirs]).contains("\"code\":\"terminal_reserved\""));
+    let (mut s, _) = feed(&at2, &format!("http://{at2}"));
+    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains(&format!("\"reservation\":{{\"session_id\":\"{session}\"")));
+    assert!(feed_until(&mut s, "\"type\":\"ops\"").unwrap().contains("\"waiting\":{\"code\":\"terminal_reserved\""));
+
+    // Released, the waiting mkdir runs.
+    assert_eq!(ok2(&["release", &lease]).trim(), format!("{session}: released"));
+    for _ in 0..100 {
+        if ok2(&["status", &theirs]).contains("\"status\":\"completed\"") { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(d.join("srv/theirs").is_dir() && !ok2(&["status", &theirs]).contains("waiting"));
+    assert!(ok2(&["endpoints"]).contains("\"reservation\":null"));
+    assert_eq!(send(&at2, "GET", leases, "", "").1, "{\"reservations\":[]}");
+    assert!(feed_until(&mut s, "\"reservation\":null").is_some());
+    let (head, _) = send(&at2, "DELETE", leases, "", &format!(r#"{{"reservation_session_id":"{session}","reservation_pin":"{pin}"}}"#));
+    assert!(head.starts_with("HTTP/1.1 409"), "{head}");
     std::fs::remove_dir_all(&d).ok();
 }

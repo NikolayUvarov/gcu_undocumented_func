@@ -1,7 +1,8 @@
 //! effector485 (800-LNK-0011): a small Effector over MIND Link, for local use. `effector485 daemon` holds the cable as
 //! its one master and serves Effector's operations on 127.0.0.1 (docs/effector.md, section 3): each with an id, an
 //! idempotency key and a reason; queued and carried out in order; read for status and output; cancelled by id. The
-//! other commands are its client. docs/link/effector485.md says how to use it.
+//! other commands are its client. A lease holds the machine for one session (800-LNK-0021). docs/link/effector485.md
+//! says how to use it.
 mod feed;
 mod http;
 mod json;
@@ -17,7 +18,7 @@ mod port;
 mod port;
 
 use json::{obj, s, Value};
-use ops::{State, Submitted, FINAL, KINDS};
+use ops::{now, utc, State, Submitted, FINAL, KINDS, LEASE_MINUTES_MAX};
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -55,7 +56,16 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
           output <id>                    its output so far
           list [--active]                the operations, newest last
           cancel <id> --key <idempotency key> --reason <reason>
-          endpoints                      the cable's other end: online, its name";
+          endpoints                      the cable's other end: online, its name, the lease
+          reserve --minutes <1-60> --reason <reason> [--owner <track>]
+                                         holds the machine for this session: prints SESSION:PIN alone on its first
+                                         line. Others' operations that change it wait; reads pass
+          renew [SESSION:PIN] [--minutes <1-60>]   the lease's time again, from now
+          release [SESSION:PIN]
+          reservations                   the lease held: session, owner, reason, expiry, seconds left
+
+submit and cancel carry the lease of --reservation SESSION:PIN, or of EFFECTOR485_RESERVATION; renew and release take
+it from there when it is not given.";
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("effector485: {msg}");
@@ -135,6 +145,24 @@ fn daemon(spec: String, o: worker::Options, listen: &str, dir: &std::path::Path,
 }
 
 fn error(text: &str) -> Value { obj(vec![("error", s(text))]) }
+fn not_held(text: &str) -> Value { obj(vec![("error", s(text)), ("code", s("reservation_not_held"))]) }
+
+/// A lease's `duration_minutes`: a whole number from 1 to LEASE_MINUTES_MAX, or none.
+fn minutes(v: &Value) -> Result<Option<u64>, String> {
+    match v.get("duration_minutes") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Num(n)) if n.fract() == 0.0 && (1.0..=LEASE_MINUTES_MAX as f64).contains(n) => Ok(Some(*n as u64)),
+        _ => Err(format!("\"duration_minutes\" is a whole number from 1 to {LEASE_MINUTES_MAX}")),
+    }
+}
+
+/// The lease a call names: by `reservation_session_id` and `reservation_pin` in `body`, or by the headers.
+fn credentials(r: &http::Request, body: &Value) -> Option<(String, String)> {
+    let session = body.str("reservation_session_id").map(str::to_string).or_else(|| r.session.clone());
+    let pin = body.str("reservation_pin").map(str::to_string).or_else(|| r.pin.clone());
+    if session.is_none() && pin.is_none() { return None; }
+    Some((session.unwrap_or_default(), pin.unwrap_or_default()))
+}
 
 /// The browser page: the daemon's state, its operations and their output, and buttons for the usual ones.
 const PAGE: &str = include_str!("ui.html");
@@ -159,6 +187,8 @@ fn same_site(r: &http::Request, bound: &str) -> Result<(), &'static str> {
 
 fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
     let mut st = state.lock().unwrap();
+    let t = now();
+    st.expire(t);
     match (r.method.as_str(), r.path.as_str()) {
         ("GET", "/api/v1/api-key") => (200, obj(vec![("valid", Value::Bool(true))])),
         ("GET", "/api/v1/endpoints") => {
@@ -168,24 +198,35 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
                 ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
                 ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
                 ("sent_bytes", Value::Num(traffic::sample().sent as f64)), ("received_bytes", Value::Num(traffic::sample().received as f64)),
+                ("reservation", st.lease_at(t).map_or(Value::Null, |l| l.json(t))),
             ]);
             (200, Value::Arr(vec![link]))
         }
         ("POST", "/api/v1/operations") => {
             let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
-            match st.submit(&request) {
-                Ok(Submitted::New(i)) => { st.save(); (201, st.ops[i].json(st.position(i), false)) }
-                Ok(Submitted::Again(i)) => (200, st.ops[i].json(st.position(i), false)),
+            // The lease the headers name; a key used already answers its operation, whatever became of that lease.
+            let used = request.str("idempotency_key").is_some_and(|k| st.ops.iter().any(|o| o.key == k));
+            let session = match credentials(r, &Value::Null) {
+                None => None,
+                Some((session, pin)) => match st.holds(&session, &pin, t) {
+                    Ok(()) => Some(session),
+                    Err(e) if !used => return (409, not_held(&e)),
+                    Err(_) => None,
+                },
+            };
+            match st.submit(&request, session) {
+                Ok(Submitted::New(i)) => { st.save(); (201, st.view(i, t)) }
+                Ok(Submitted::Again(i)) => (200, st.view(i, t)),
                 Err(e) => (400, error(&e)),
             }
         }
         ("GET", "/api/v1/operations") => {
             if let Some(id) = r.param("id") {
-                return match st.find(id) { Some(i) => (200, st.ops[i].json(st.position(i), false)), None => (404, error(&format!("no operation {id}"))) };
+                return match st.find(id) { Some(i) => (200, st.view(i, t)), None => (404, error(&format!("no operation {id}"))) };
             }
             let active = r.param("status") == Some("active");
             let list = (0..st.ops.len()).filter(|&i| !active || !st.ops[i].ended()).map(|i| {
-                let mut v = st.ops[i].json(st.position(i), false);
+                let mut v = st.view(i, t);
                 // A list is for finding operations: their output is read one by one.
                 if let Some(Value::Obj(result)) = match &mut v { Value::Obj(f) => f.iter_mut().find(|(k, _)| k == "result").map(|(_, v)| v), _ => None } {
                     result.retain(|(k, _)| k != "stdout");
@@ -208,14 +249,43 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             let (Some(id), Some(key), Some(reason)) = (request.str("operation_id"), request.str("idempotency_key"), request.str("reason")) else {
                 return (400, error("a cancel needs \"operation_id\", its own \"idempotency_key\" and a \"reason\""));
             };
-            match st.cancel(id, key, reason) { Ok(i) => { st.save(); (200, st.ops[i].json(st.position(i), false)) } Err((code, e)) => (code, error(&e)) }
+            match st.cancel(id, key, reason) { Ok(i) => { st.save(); (200, st.view(i, t)) } Err((code, e)) => (code, error(&e)) }
+        }
+        ("GET", "/api/v1/terminal-reservations") => (200, obj(vec![("reservations", Value::Arr(st.lease_at(t).map(|l| l.json(t)).into_iter().collect()))])),
+        ("POST", "/api/v1/terminal-reservations") => {
+            let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
+            let minutes = match minutes(&request) {
+                Ok(Some(m)) => m,
+                Ok(None) => return (400, error(&format!("a reservation needs \"duration_minutes\", 1 to {LEASE_MINUTES_MAX}"))),
+                Err(e) => return (400, error(&e)),
+            };
+            let Some(reason) = request.str("reason").map(str::trim).filter(|r| !r.is_empty()) else {
+                return (400, error("a reservation needs a \"reason\", which everyone sees"));
+            };
+            match st.reserve(minutes, reason, request.str("owner").unwrap_or("").trim(), t) {
+                Ok(l) => (201, obj(vec![("reservation", l.json(t)), ("pin", s(&l.pin))])),
+                Err(l) => (409, obj(vec![("error", l.waiting().get("message").cloned().unwrap_or(Value::Null)), ("code", s("terminal_reserved")), ("reservation", l.json(t))])),
+            }
+        }
+        ("PATCH" | "DELETE", "/api/v1/terminal-reservations") => {
+            let request = if r.body.trim().is_empty() { obj(vec![]) } else { match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) } };
+            let Some((session, pin)) = credentials(r, &request) else {
+                return (400, error("the reservation is named by \"reservation_session_id\" and \"reservation_pin\", or the X-Effector-Reservation-Session and -Pin headers"));
+            };
+            if r.method == "DELETE" {
+                return match st.release(&session, &pin, t) { Ok(l) => (200, obj(vec![("status", s("released")), ("reservation", l.json(t))])), Err(e) => (409, not_held(&e)) };
+            }
+            let minutes = match minutes(&request) { Ok(m) => m, Err(e) => return (400, error(&e)) };
+            match st.renew(&session, &pin, minutes, t) { Ok(l) => (200, obj(vec![("reservation", l.json(t))])), Err(e) => (409, not_held(&e)) }
         }
         _ => (404, error(&format!("no route {} {}", r.method, r.path))),
     }
 }
 
-fn call(at: &str, key: Option<&str>, method: &str, path: &str, body: Option<&Value>) -> Value {
-    let (status, text) = http::call(at, method, path, key, body.map(|b| b.text()).as_deref()).unwrap_or_else(|e| die(e));
+fn call(at: &str, key: Option<&str>, method: &str, path: &str, body: Option<&Value>) -> Value { call_with(at, key, &[], method, path, body) }
+
+fn call_with(at: &str, key: Option<&str>, headers: &[(&str, &str)], method: &str, path: &str, body: Option<&Value>) -> Value {
+    let (status, text) = http::call(at, method, path, key, headers, body.map(|b| b.text()).as_deref()).unwrap_or_else(|e| die(e));
     let v = json::parse(&text).unwrap_or_else(|e| die(format!("the daemon's answer: {e}")));
     if status >= 400 { die(v.str("error").unwrap_or(&text)); }
     v
@@ -244,6 +314,13 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
     let active = args.iter().position(|a| a == "--active").map(|i| { args.remove(i); }).is_some();
     let idem = take(&mut args, "--key");
     let reason = take(&mut args, "--reason");
+    let minutes = take(&mut args, "--minutes").map(|m| m.parse::<u64>().unwrap_or_else(|_| die("--minutes takes a number")));
+    let owner = take(&mut args, "--owner");
+    // The lease this call holds, as `reserve` printed it.
+    let pair = |l: &str| l.trim().split_once(':').map(|(a, b)| (a.to_string(), b.to_string()))
+        .unwrap_or_else(|| die(format!("{l}: a reservation is SESSION:PIN, as `effector485 reserve` prints it")));
+    let lease = take(&mut args, "--reservation").or_else(|| std::env::var("EFFECTOR485_RESERVATION").ok()).filter(|l| !l.trim().is_empty()).map(|l| pair(&l));
+    let held: Vec<(&str, &str)> = lease.iter().flat_map(|(session, pin)| [("X-Effector-Reservation-Session", session.as_str()), ("X-Effector-Reservation-Pin", pin.as_str())]).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
         ["submit", kind, fields @ ..] => {
@@ -255,7 +332,7 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
             }
             request.set("idempotency_key", s(&idem.unwrap_or_else(|| die("--key <idempotency key> is needed"))));
             request.set("reason", s(&reason.unwrap_or_else(|| die("--reason <reason> is needed"))));
-            let op = call(at, key, "POST", "/api/v1/operations", Some(&request));
+            let op = call_with(at, key, &held, "POST", "/api/v1/operations", Some(&request));
             let id = op.str("id").unwrap_or("").to_string();
             if wait_flag { wait(at, key, &id) } else { println!("{}", op.text()) }
         }
@@ -272,11 +349,46 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
         ["cancel", id] => {
             let request = obj(vec![("operation_id", s(id)), ("idempotency_key", s(&idem.unwrap_or_else(|| die("--key <idempotency key> is needed")))),
                                    ("reason", s(&reason.unwrap_or_else(|| die("--reason <reason> is needed"))))]);
-            println!("{}", call(at, key, "POST", "/api/v1/operations/cancel", Some(&request)).text());
+            println!("{}", call_with(at, key, &held, "POST", "/api/v1/operations/cancel", Some(&request)).text());
         }
         ["endpoints"] => println!("{}", call(at, key, "GET", "/api/v1/endpoints", None).text()),
+        ["reserve"] => {
+            let minutes = minutes.unwrap_or_else(|| die(format!("--minutes <1 to {LEASE_MINUTES_MAX}> is needed")));
+            let mut request = obj(vec![("duration_minutes", Value::Num(minutes as f64)), ("reason", s(&reason.unwrap_or_else(|| die("--reason <reason> is needed"))))]);
+            if let Some(o) = &owner { request.set("owner", s(o)); }
+            let v = call(at, key, "POST", "/api/v1/terminal-reservations", Some(&request));
+            let l = v.get("reservation").cloned().unwrap_or(Value::Null);
+            // Alone on the first line, for a script to keep.
+            println!("{}:{}", l.str("session_id").unwrap_or(""), v.str("pin").unwrap_or(""));
+            eprintln!("{}; renew it before then, release it when done", until(&l));
+        }
+        ["renew" | "release", rest @ ..] if rest.len() <= 1 => {
+            let (session, pin) = rest.first().map(|r| pair(r)).or(lease.clone()).unwrap_or_else(|| die(format!("{} SESSION:PIN, or EFFECTOR485_RESERVATION", words[0])));
+            let mut request = obj(vec![("reservation_session_id", s(&session)), ("reservation_pin", s(&pin))]);
+            if words[0] == "release" {
+                call(at, key, "DELETE", "/api/v1/terminal-reservations", Some(&request));
+                return println!("{session}: released");
+            }
+            if let Some(m) = minutes { request.set("duration_minutes", Value::Num(m as f64)); }
+            println!("{}", until(call(at, key, "PATCH", "/api/v1/terminal-reservations", Some(&request)).get("reservation").unwrap_or(&Value::Null)));
+        }
+        ["reservations"] => {
+            let v = call(at, key, "GET", "/api/v1/terminal-reservations", None);
+            let Some(Value::Arr(list)) = v.get("reservations") else { die("the daemon's answer has no list") };
+            if list.is_empty() { eprintln!("the machine is not reserved"); }
+            for l in list {
+                println!("{}\t{}\t{}\tuntil {} UTC\t{} s left", l.str("session_id").unwrap_or(""), l.str("owner").unwrap_or(""), l.str("reason").unwrap_or(""),
+                         utc(l.num("expires_at").unwrap_or(0.0) as u64), l.num("remaining_seconds").unwrap_or(0.0));
+            }
+        }
         _ => { eprintln!("{USAGE}"); std::process::exit(2); }
     }
+}
+
+/// A lease's end, as the command line says it.
+fn until(l: &Value) -> String {
+    let left = l.num("remaining_seconds").unwrap_or(0.0) as u64;
+    format!("{}: held until {} UTC ({} min left)", l.str("session_id").unwrap_or(""), utc(l.num("expires_at").unwrap_or(0.0) as u64), left.div_ceil(60))
 }
 
 /// Shows an operation's output as it comes until it ends, then its end; exits with a program's exit code, or 1 when

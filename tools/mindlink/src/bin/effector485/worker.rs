@@ -1,17 +1,18 @@
 //! The cable's one master: queued operations carried out one at a time, and between them the programs they started
-//! followed: their output read, their end seen, a cancel or a time limit turned into STOP.
+//! followed: their output read, their end seen, a cancel or a time limit turned into STOP. While a lease is held, only
+//! its holder's operations and reads start; the programs started before it are still followed.
 use crate::json::{s, Value};
 use crate::ops::{now, State, RUN_TIMEOUT};
 use crate::port::Port;
 use linkproto::app::{Client, EXIT_UNKNOWN, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
-use linkproto::endpoint::code;
+use linkproto::endpoint::{channel, code, kind};
 use linkproto::frame::{MAX_PAYLOAD, MAX_WIRE};
 use linkproto::Error;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Mutex<State>>;
 
@@ -37,6 +38,10 @@ pub fn explain(e: Error) -> String {
         }),
     }
 }
+
+/// How long the line may stay quiet between operations: then a POLL keeps the other end's mark lit (800-LNK-0020) and
+/// finds a lost line before the next request does. The other end does not log it, as it logs a hello.
+const KEEP_WARM: Duration = Duration::from_secs(2);
 
 /// The line is gone or silent: the daemon says hello again before the next request.
 fn line_lost(e: Error) -> bool { matches!(e, Error::Timeout | Error::Line) }
@@ -69,6 +74,7 @@ fn with<T>(state: &Shared, id: &str, f: impl FnOnce(&mut crate::ops::Op) -> T) -
 
 pub fn work(state: Shared, spec: String, o: Options) {
     let mut link: Option<Client<Port>> = None;
+    let mut spoke = Instant::now();
     loop {
         if link.is_none() {
             match connect(&spec, &o) {
@@ -84,6 +90,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
                     if st.link.error != e || st.link.online { st.changed(); }
                     (st.link.online, st.link.error) = (false, e);
+                    st.expire(now());
                     drop(st);
                     std::thread::sleep(Duration::from_secs(3));
                     continue;
@@ -94,12 +101,17 @@ pub fn work(state: Shared, spec: String, o: Options) {
         let mut lost = None;
         let runs: Vec<String> = state.lock().unwrap().ops.iter().filter(|o| o.status == "running" && o.run.is_some()).map(|o| o.id.clone()).collect();
         for id in &runs {
+            spoke = Instant::now();
             if let Err(e) = follow(c, &state, id) { if line_lost(e) { lost = Some(e); break; } }
         }
         if lost.is_none() {
             let next = {
                 let mut st = state.lock().unwrap();
-                let next = st.ops.iter_mut().find(|o| o.status == "queued").map(|op| {
+                // The first queued that a lease lets through: its holder's and reads overtake the others', which wait.
+                let at = now();
+                let first = (0..st.ops.len()).find(|&i| st.ops[i].status == "queued" && st.may_run(&st.ops[i], at));
+                let next = first.map(|i| {
+                    let op = &mut st.ops[i];
                     (op.status, op.started) = ("running".into(), Some(now()));
                     (op.id.clone(), op.kind.clone(), op.params.clone())
                 });
@@ -114,6 +126,14 @@ pub fn work(state: Shared, spec: String, o: Options) {
                         with(&state, &id, |op| if !op.ended() { op.fail(&explain(e)) });
                         if line_lost(e) || c.master.line.failed() { lost = Some(e); }
                     }
+                    spoke = Instant::now();
+                }
+                None if runs.is_empty() && spoke.elapsed() >= KEEP_WARM => {
+                    let mut answer = [0u8; 16];
+                    if let Err(e) = c.master.call(channel::CONTROL, kind::POLL, &[], &mut answer) {
+                        if line_lost(e) || c.master.line.failed() { lost = Some(e); }
+                    }
+                    spoke = Instant::now();
                 }
                 None => std::thread::sleep(Duration::from_millis(if runs.is_empty() { 200 } else { 100 })),
             }
@@ -127,6 +147,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
         } else {
             st.link.last_seen = now();
         }
+        st.expire(now());
         st.save();
     }
 }
