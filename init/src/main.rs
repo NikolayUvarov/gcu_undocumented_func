@@ -113,7 +113,7 @@ const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
-              boot: idl_init::Boot, modes: idl_init::ModeState,
+              boot: idl_init::Boot, modes: idl_init::ModeState, link_console: bool,
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
               replaced: [Option<(usize, usize)>; UNITS] }
@@ -436,7 +436,7 @@ impl Init {
                 // Developer mode, link.conf's word `dev` (800-KRN-0139, the maintainer's decision of 2026-10-21): what the
                 // shell lends its programs without asking, so whoever holds the cable may debug the machine as its user.
                 // The servers start after link: their keepers are made now and reached once they run.
-                if words.split_ascii_whitespace().any(|word| word == "dev") {
+                if self.link_dev() {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                     // The policy broker's client that may only launch (800-KRN-0142): link has no user to ask before a change.
                     grants.add(SLOT_NETPOLICY, self.badged(&mut minted, "netpolicy", mind::network::BADGE_LAUNCH)?, CLIENT);
@@ -1074,6 +1074,7 @@ impl Init {
             // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
+            Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
             Request::Replace { name, path } => { let result = self.replace(name.as_str(), path.as_str(), badge, sender); idl_init::reply_replace(call, result) }
             Request::SetMode { which, on, reason } => {
                 let result = self.set_mode(which, on, reason.as_str(), badge, sender);
@@ -1106,6 +1107,13 @@ impl Init {
 
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
+
+    // The link's developer mode: link.conf's word `dev`, as the bootloader read it (800-KRN-0139).
+    fn link_dev(&self) -> bool {
+        let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
+        let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
+        core::str::from_utf8(&words[..length]).unwrap_or("").split_ascii_whitespace().any(|word| word == "dev")
+    }
 
     // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
     // too large or refused, which allows nothing.
@@ -1184,12 +1192,16 @@ impl Init {
             match word {
                 "development" => modes.development = true,
                 "maintenance" => modes.maintenance = true,
+                // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
+                "link-console" if self.link_dev() => self.link_console = true,
+                "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
                 other => mind::println!("[INIT] {}: WORD LEFT OUT: {}", MODE_FILE, other),
             }
         }
         self.modes = modes;
         let name = match (modes.development, modes.maintenance) { (true, true) => "DEVELOPMENT AND MAINTENANCE", (true, false) => "DEVELOPMENT", (false, true) => "MAINTENANCE", _ => "NORMAL" };
-        mind::println!("[INIT] MODE: {} ({})", name, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        let (name, console) = match (name, self.link_console) { ("NORMAL", true) => ("LINK CONSOLE", ""), (name, true) => (name, " AND LINK CONSOLE"), (name, false) => (name, "") };
+        mind::println!("[INIT] MODE: {}{} ({})", name, console, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
     }
 
     // data/mode.conf rewritten whole: one word a line, and who changed it last.
@@ -1198,6 +1210,7 @@ impl Init {
         let _ = core::fmt::Write::write_fmt(&mut text, format_args!("# the machine's modes, written by init (750-KRN-0143); last changed by {}\n", modes.by.as_str()));
         if modes.development { let _ = core::fmt::Write::write_str(&mut text, "development\n"); }
         if modes.maintenance { let _ = core::fmt::Write::write_str(&mut text, "maintenance\n"); }
+        if self.link_console { let _ = core::fmt::Write::write_str(&mut text, "link-console\n"); }
         let client = self.user_files()?;
         let files = Endpoint(client);
         let written = (|| -> Result<()> {
@@ -1341,7 +1354,7 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
-                         modes: idl_init::ModeState::default(), replaced: [None; UNITS] };
+                         modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS] };
     let order = boot_order();
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));

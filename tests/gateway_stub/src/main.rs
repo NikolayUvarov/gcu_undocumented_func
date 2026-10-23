@@ -74,6 +74,9 @@ fn write(files: Endpoint, root: u32, path: &str, data: &[u8]) -> bool {
 
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
+    // Whether the link's console is on (800-KRN-0155): any client of init may ask.
+    let console = match init::link_console(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(true)) => "ON", Ok(Ok(false)) => "OFF", _ => "FAILED" };
+    mind::println!("[GATEWAY-STUB] LINK CONSOLE {}", console);
     lifecycle();
     scope();
     reboot();
