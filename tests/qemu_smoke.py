@@ -715,6 +715,13 @@ def normal_suite(vm):
                  "fg 9999999999999999999999999", "run missing"]:
         require(vm.command(text), "ERROR:")
     require(vm.command("run"), "USAGE:")
+    # fg by name (the maintainer's request, 2026-10-22): the one called so is taken; several are listed by PID.
+    require(vm.command("fg clock"), "SEVERAL PROGRAMS ANSWER TO clock: PID 1 clock, PID 2 clock, FG <PID> TAKES ONE")
+    require(vm.command("fg app"), "SEVERAL PROGRAMS ANSWER TO app: PID 3 app, PID 4 app, FG <PID> TAKES ONE")
+    require(vm.command("fg nosuch"), "ERROR: NO PROGRAM CALLED nosuch RUNS")
+    vm.send("fg app2\n")
+    vm.expect("FOREGROUND PID=5")
+    vm.background(5)
     vm.send("fg 1\n")
     vm.expect("FOREGROUND PID=1")
     vm.background(1)
@@ -1106,10 +1113,13 @@ def shell_suite(vm):
     vm.collect()
     assert vm.log.count("ERROR: UNKNOWN COMMAND") >= 2, "the recalled command ran again"
     vm.output = ""
-    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Three helps push it off
-    # every screen and keep it within the 400 lines kept, with the boot log's last lines below it (211-PRT-0004).
+    # Scrollback: after enough output the banner is off the screen; Shift+PgUp brings it back. Helps until it is off,
+    # at most three, keep it within the 400 lines kept on every screen (help is 92 lines at aarch64's 100 columns), with
+    # the boot log's last lines below it (211-PRT-0004).
     for _ in range(3):
         vm.command("help")
+        if not any(canon("MIND CORE v1.6") in row for row in screen_text(vm)):
+            break
     assert not any(canon("MIND CORE v1.6") in row for row in screen_text(vm))
     for _ in range(12):
         vm.hmp("sendkey shift-pgup")
@@ -2250,11 +2260,26 @@ def search_check(vm):
     assert lines(vm.command("grep ELF kernel.elf")) == ["BINARY FILE kernel.elf MATCHES"]
     require(vm.command("grep x ram:docs"), "GREP: ram:docs: IS A DIRECTORY (USE -R)")
     require(vm.command("find -bogus"), "FIND: UNKNOWN OPTION -bogus")
+    # `|` (000-APP-0074): what a shell command prints is grep's text input (the maintainer: `ps | grep wm`). The line's
+    # echo starts with the command before `|`, so it is left out here.
+    def piped(line):
+        return [row for row in lines(vm.command(line, timeout=30)) if row != line]
+    assert piped("cat ram:a.txt | grep hello") == ["hello world"]
+    found = piped("ps | grep shell")
+    assert found and all("shell" in row for row in found), found
+    assert piped("ls ram:docs | grep -c md") == ["1"]
+    assert piped("cat ram:a.txt | grep zzz") == [], "no line matched"
+    require(vm.command("ps | grep"), "USAGE: GREP")
+    require(vm.command("grep hello"), "USAGE: GREP")  # no path and no input
+    require(vm.command("ps | ls"), "| FEEDS A PROGRAM (GREP …), NOT THE SHELL'S LS")
+    require(vm.command("ps |"), "A COMMAND COMES ON EACH SIDE OF |")
+    require(vm.command("ps | grep a | grep b"), "ONE | A LINE")
     for path in ("ram:docs/b.md", "ram:a.txt"):
         require(vm.command(f"rm {path}"), "OK")
     require(utf8("rm ram:docs/заметки.txt"), "OK")
     require(vm.command("rm ram:docs"), "OK")
-    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file", flush=True)
+    print("PASS: find and grep: names, types and sizes on ram: and the boot disk; Cyrillic text with -i; -n, -l, -c, -r; a binary file; "
+          "a shell command's output piped into grep", flush=True)
 
 
 def busy_suite(vm):
@@ -4171,6 +4196,22 @@ def modes_suite(args):
                 # The refusal names its caller and the clause it enforces (850-KRN-0146).
                 refusal = vm.command("dmesg -s init", raw=True)
                 assert re.search(r"\[INIT\] MODE CHANGE REFUSED: PID \d+ \(BADGE 2\) MAY NOT TURN MAINTENANCE ON \(MC-12\.6\)", refusal), refusal[-2000:]
+                # The shell's `mode` (750-EFF-0013): the modes and who set them, said above the first prompt while one is on;
+                # a mode goes on after the operator agrees, which init logs with the shell's BADGE_MODE (3), and off at once.
+                if words:
+                    require(vm.command("dmesg -s shell", raw=True), "[SHELL] THE DEVELOPMENT MODE IS ON (SET BY disk)")
+                    require(vm.command("mode", raw=True), "MODE: DEVELOPMENT, SET BY disk")
+                    for answer, said in ((b"n", "MODE: NOT CHANGED"), (b"y", "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")):
+                        vm.send("mode maintenance on the modes suite\n")
+                        require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
+                        vm.send_bytes(answer)
+                        require(vm.expect("MIND> ", timeout=30), said)
+                    require(vm.command("dmesg -s init", raw=True), "[INIT] MODE MAINTENANCE ON BY operator (PID ")
+                    require(vm.command("mode development off", raw=True), "MODE: MAINTENANCE, SET BY operator: operator")
+                    require(vm.command("cat data/mode.conf", raw=True), "maintenance")
+                    require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
+                    print("PASS: modes: the shell's mode shows the mode set by disk, turns one on after the operator agrees "
+                          "and off at once; init logs the change with the shell's badge (750-EFF-0013)", flush=True)
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
@@ -4579,6 +4620,17 @@ def vfs_suite(args):
                     break
                 time.sleep(1)
             require(keyed, "[SHELL] SCREENSHOT data/media/screen-003.bmp: ")
+            # PrintScreen (KEY_PRINT_SCREEN, decoded from PS/2's E0 37; the aarch64 VirtIO keyboard passes none): the same.
+            if args.arch == "x86_64":
+                vm.hmp("sendkey print")
+                # The shell is in front: it writes the 3 MB file before it reads the next line, as for Ctrl+Alt+F6.
+                vm.expect("SCREENSHOT data/media/screen-004.bmp: ", timeout=180)
+                for _ in range(60):
+                    keyed = vm.command("dmesg -s shell", raw=True)
+                    if "(PRINTSCREEN)" in keyed:
+                        break
+                    time.sleep(1)
+                require(keyed, "[SHELL] SCREENSHOT data/media/screen-004.bmp: ")
             # record -s 2: frames half the screen's size; without a file, data/media/record-001.avi.
             for command, line in (("run record -s 2 -t 2 data/half.avi &", "[RECORD] data/half.avi THE SCREEN"), ("run record -r 1 -t 1 &", "[RECORD] data/media/record-001.avi THE SCREEN")):
                 pid = int(re.search(r"PID=(\d+) NAME=record BACKGROUND", vm.command(command))[1])
@@ -4681,7 +4733,9 @@ def vfs_suite(args):
             require(vm.command("cat data/notes.txt"), "line one")
             # With the screenshot, the recording, and the camera's still and video.
             require(vm.command("ls data"), f"8 ENTRIES, 7 FILES, {15 + size + len(avi_file) + len(half) + len(mtype('data/cam.bmp')) + len(mtype('data/cam.avi'))} BYTES")
-            require(vm.command("ls data/media"), "4 ENTRIES, 4 FILES, ")
+            # Three screenshots and a recording, and PrintScreen's on x86.
+            shots = 5 if args.arch == "x86_64" else 4
+            require(vm.command("ls data/media"), f"{shots} ENTRIES, {shots} FILES, ")
             require(vm.command("ls ram:"), "0 ENTRIES")
         finally:
             vm.close()
@@ -6610,7 +6664,7 @@ def wifi_boot_check(vm):
 
 def ping_options_check(vm):
     """ping's options (000-APP-0095): -c and -i, -f with no line for each reply, -w and a dot for each request lost,
-    -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) goes out through QEMU's gateway to the host's network, which may answer
+    -s and -p with each reply's size and data checked, -c 0 until Ctrl+C. 192.0.2.1 (TEST-NET-1) goes out through QEMU's gateway to the host's network, which may answer
     (some sandboxes answer every address) or not: the dots must be the requests lost either way."""
     began = time.monotonic()
     out = vm.command("ping -c 3 -i 0.5 10.0.2.2", timeout=20)
@@ -6628,7 +6682,16 @@ def ping_options_check(vm):
     tally = re.search(r"(?:\n(\.+))?\nPING: 4 SENT, (\d) RECEIVED, (\d+)% LOST", out)
     assert tally and len(tally[1] or "") == 4 - int(tally[2]) and int(tally[3]) == (4 - int(tally[2])) * 25, out[-1500:]
     assert "REPLY FROM" not in out and took < 10, (took, out[-1500:])
-    require(vm.command("ping -s 100 10.0.2.2"), "PING: -S AND -P WAIT FOR THE NETWORK STACK TO SEND THEM")
+    # -s and -p (socket.wit 2.6 ping-with, 000-NET-0040): each reply's size, its data checked against the pattern sent.
+    out = vm.command("ping -c 2 -i 0.2 -s 1000 -p a55a0f 10.0.2.2", timeout=20)
+    require(out, "PING: 2 SENT, 2 RECEIVED, 0% LOST, TIME ")
+    assert out.count("REPLY FROM 10.0.2.2: 1000 BYTES, TIME=") == 2 and "BAD DATA" not in out, out[-1500:]
+    out = vm.command("ping -f -c 20 -s 1472 10.0.2.2", timeout=60)
+    require(out, "PING: 20 SENT, 20 RECEIVED, 0% LOST")
+    assert "REPLY FROM" not in out and "BAD DATA" not in out, out[-1500:]
+    require(vm.command("ping -c 1 -s 0 10.0.2.2", timeout=20), "REPLY FROM 10.0.2.2: 0 BYTES, TIME=")
+    require(vm.command("ping -s 1473 10.0.2.2"), "PING: -S TAKES 0 TO 1472 DATA BYTES")
+    require(vm.command("ping -p abc 10.0.2.2"), "PING: -P TAKES 1 TO 16 BYTES IN HEXADECIMAL")
     require(vm.command("ping -c x 10.0.2.2"), "PING: -C TAKES 1 TO 1000000 REQUESTS, OR 0: UNTIL ESC")
     vm.send("ping -c 0 -i 0.2 10.0.2.2\n")
     vm.expect("[1] REPLY FROM 10.0.2.2: TIME=", timeout=10)
@@ -7428,9 +7491,9 @@ def effector_suite(args, disk):
     (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
     # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
     (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
-    # The agent's ID, as an earlier start would have left it in the session's private directory.
-    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
-    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
+    # The owner's agent ID: the session keeps it in its private directory at the first start, so a disk written afresh
+    # stays the agent the server knows.
+    (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
@@ -7456,7 +7519,7 @@ def effector_suite(args, disk):
         out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
         time.sleep(20)  # heartbeats to measure, beside the commands
         out = session()
-        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT ID mind-test FROM data/effector/agent_id, KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
@@ -7467,11 +7530,20 @@ def effector_suite(args, disk):
         assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
+        # While the failed ACK waited, the one slot was occupied: the server takes no idle report for it (Effector ahelp).
+        held = [b for b in list(server.beats) if b.get("busy")]
+        assert any(b["executing_commands"][0]["command_id"] == exec_id and b["occupied_queues"] == 1 and b["free_slots"] == 0 and b["busy_since"] for b in held), held[-3:]
+        assert not record["busy"] and record["free_slots"] == 1, record
+        # The load, in the heartbeat and the poll, once a telemetry sample has counted the cores.
+        loaded = [b["load"] for b in list(server.beats) if "load" in b]
+        assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
+        assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
               f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
-              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
+              "name refused by the gateway, a failed ACK retried with the agent busy meanwhile; the load in the heartbeat and "
+              f"the poll ({loaded[-1]['load_percent']}% of {loaded[-1]['cpu_cores']} cores); the token kept in its private directory", flush=True)
         # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
         # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
         collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
@@ -7489,16 +7561,16 @@ def effector_suite(args, disk):
         assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
-        effector_actions_check(vm, server, agent, until)
+        effector_actions_check(vm, server, agent, until, beats)
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(10 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(12 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (10 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (12 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -7520,7 +7592,7 @@ def effector_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
 
 
-def effector_actions_check(vm, server, agent, until):
+def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
     shot_id = server.queue(agent, "screenshot")
@@ -7553,11 +7625,36 @@ def effector_actions_check(vm, server, agent, until):
     server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
     until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
     assert server.operation("deliver-2")["result"]["error"] == "denied", server.operation("deliver-2")
+    # The server's `exec` of `reboot` maps to the gateway's restart, which this policy (no `reboot on`) refuses; any other
+    # command stays denied (the first part's exec_v1).
+    reboot_id = server.queue(agent, "exec_v1", {"command": "reboot", "run_as": "service", "session": "service", "timeout_seconds": 300})
+    until(f"EFFECTOR: ACK {reboot_id} failed ACCEPTED")
+    assert server.operation(reboot_id)["result"]["error"] == "denied", server.operation(reboot_id)
+    require(vm.command("dmesg -s effector_gw", raw=True), f"{reboot_id} reboot?in?10000?ms denied refused")
     # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
     sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
     print(f"PASS: collect_logs sent the system log inline; deliver_file wrote {len(delivery)} bytes under the policy's root and "
           "refused a path outside it; restart_service restarted sysmon, which the policy names", flush=True)
+    # performance_measure (750-EFF-0016): the agents' fixed benchmarks run a slice at a time between heartbeats, the agent
+    # busy with it meanwhile; a result the server's AcceptPerformance takes.
+    perf_id = server.queue(agent, "performance_measure", {"duration_seconds": 12, "timeout_seconds": 90})
+    begun = time.monotonic()
+    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS MEASUREMENT ACCEPTED", 120)
+    require(out, f"EFFECTOR: STARTED {perf_id} performance_measure (12 S)")
+    r = server.operation(perf_id)["result"]
+    assert r["status"] == "completed" and r["benchmark"] == "effector_bogomips_v1" and re.fullmatch(r"[0-9a-f]{16}", r["checksum"]), r
+    assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
+    assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
+    assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
+    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    during = [b for b in list(server.beats) if b.get("busy") and b["executing_commands"][0]["action"] == "performance_measure"]
+    assert during, "the agent busy with the benchmark"
+    window = [t for t in beats if t >= begun]
+    assert len(window) > 3 and max(b - a for a, b in zip(window, window[1:])) < 5.0, "heartbeats went on during the benchmark"
+    print(f"PASS: performance_measure: {r['bogomips']} million iterations/s on one thread, {r['memory_mib_per_second']} MiB/s copied, "
+          f"disk {r['disk_write_mib_per_second']}/{r['disk_read_mib_per_second']} MiB/s written/read; heartbeats under 5 s apart while it "
+          "ran, the agent busy with it", flush=True)
     # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.
     deadline = time.monotonic() + 75
     while time.monotonic() < deadline and sum(1 for t in list(server.telemetry) if "cpu_percent" in t["sample"]["system"]) < 1:
@@ -9193,6 +9290,29 @@ def wm_suite(vm):
           f"alone ({summary[1]} frames, {summary[2]} coded, 320x176) with REC on its frame; programs get only what wm holds; "
           "a program that ended at once with a failure leaves its message and status in its window until a key; "
           "leaving and a killed wm keep the programs and the next wm restores the places; close all ends them", flush=True)
+    # The shell killed while wm runs (ASR's request; the maintainer, 2026-10-22: "wm must not fall in such cases"): init
+    # starts it again, and the new shell gives the wm still running the screen; wm's keys then work as before.
+    seen.clear()
+    read[0] = len(vm.log)
+    vm.send("wm clock\n")
+    out = wait("[WM] READY", lines=0)
+    survivor = int(re.search(r"STARTED PID=(\d+) NAME=wm FOREGROUND", out)[1])
+    time.sleep(.5)
+    vm.background(survivor)
+    shell_pid = vm.services()["shell"]
+    vm.send(f"kill {shell_pid}\n", raw=True)
+    # init's lines go to the system log; the new shell's banner and its note come on the serial line.
+    back = vm.expect("THE SCREEN IS ITS AGAIN", timeout=60, after="MIND CORE v1.6")
+    assert re.search(r"\[SHELL\] WM \(PID \d+\) RAN BEFORE THIS SHELL STARTED", back), back[-1500:]
+    # The background's "SHELL RESUMED." is already in the log: read close all's own line.
+    vm.collect(); read[0] = len(vm.log)
+    vm.hmp("sendkey alt-x"); vm.serial(enter=False)
+    require(wait("CLOSE ALL:", lines=0).replace("\n", ""), "CLOSE ALL: 1 WINDOWS")
+    time.sleep(1); vm.collect(); vm.output = ""
+    # The start script runs once a boot (EFF's report of 2026-10-22): the second start of the shell says so.
+    require(vm.command("dmesg -s shell", raw=True), "START 2 OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN")
+    print("PASS: wm: the shell killed while wm runs comes back, gives wm the screen again and runs no start script; wm's "
+          "close all works", flush=True)
     # reboot from console through the shell (211-APP-0044): the shell opens its window and asks there; once the user
     # agrees, it restarts the machine (QEMU exits: -no-reboot). The suite's last step.
     seen.clear()

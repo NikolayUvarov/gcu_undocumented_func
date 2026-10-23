@@ -72,6 +72,10 @@ pub trait Machine {
     fn screen(&mut self, max: u64) -> Result<Vec<u8>, Fail>;
     /// The telemetry counters.
     fn sample(&mut self) -> Sample;
+    /// The one-minute load average x 100 (0: unknown).
+    fn load(&mut self) -> u32;
+    /// Asks `init` to restart the machine, which it does only under the owner's `reboot on` (750-KRN-0154).
+    fn reboot(&mut self) -> Result<(), Fail>;
 }
 
 enum Out { Bytes(Vec<u8>), File(String) }
@@ -157,6 +161,11 @@ impl Gateway {
         if badge == Badge::Other { Sample::default() } else { m.sample() }
     }
 
+    /// The one-minute load average x 100, for the session's heartbeat and poll and for the owner.
+    pub fn load(&mut self, m: &mut dyn Machine, badge: Badge) -> u32 {
+        if badge == Badge::Other { 0 } else { m.load() }
+    }
+
     pub fn service_control(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, name: &str, action: policy::Action) -> Result<ServiceState, Fail> {
         let word = match action { policy::Action::Start => "start", policy::Action::Stop => "stop", policy::Action::Restart => "restart" };
         let request = alloc::format!("service-control {} {}", name, word);
@@ -219,6 +228,23 @@ impl Gateway {
         let size = png.len() as u64;
         let _ = self.audited(m, Some(o), request, "done", &alloc::format!("{} bytes", size));
         Ok(self.open(o, size, false, Out::Bytes(png), sha))
+    }
+
+    /// A restart of the machine (`reboot on`), `delay_ms` (at most 600000) after the answer, so the session keeps and sends
+    /// its result first. Returns the delay; the caller answers, waits it, then calls `restart`.
+    pub fn reboot(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, delay_ms: u32) -> Result<u32, Fail> {
+        let request = alloc::format!("reboot in {} ms", delay_ms);
+        if delay_ms > 600_000 { let _ = self.audited(m, Some(o), &request, "bounds", "refused"); return Err(Fail::Bounds); }
+        self.admit(m, badge, o, &request, Some(Ask::Reboot))?;
+        Ok(delay_ms)
+    }
+
+    /// The restart `reboot` admitted: `init` checks the owner's policy again and restarts the machine, or refuses.
+    pub fn restart(&mut self, m: &mut dyn Machine, command: &str) -> Result<(), Fail> {
+        let result = m.reboot();
+        let o = Origin { command, initiator: "", reason: "", truncated: false, deadline_ms: u64::MAX };
+        let _ = self.audited(m, Some(&o), "reboot", "done", match &result { Ok(()) => "restarting", Err(f) => fail_name(*f) });
+        result
     }
 
     /// Up to `CHUNK` bytes of the open transfer from `offset`; an empty answer is its end. A file that changed size

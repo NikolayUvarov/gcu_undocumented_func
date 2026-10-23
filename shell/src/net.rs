@@ -148,8 +148,9 @@ fn state(out: &mut impl Write, card: &socket::Card) {
     }
 }
 
-// `ping [-c count] [-i seconds] [-w seconds] [-f] host` (000-APP-0095): each line on the screen as it comes, Esc or
-// Ctrl+C stopping it, then the tally. A request the policy or the stack refuses for good ends it.
+// `ping [-c count] [-i seconds] [-w seconds] [-f] [-s bytes] [-p hex] host` (000-APP-0095): each line on the screen as
+// it comes, Esc or Ctrl+C stopping it, then the tally. `-s` and `-p` go through `ping-with` (socket.wit 2.6), whose answer
+// says the reply's size and whether its data are what was sent. A request the policy or the stack refuses for good ends it.
 pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
     let asked = match crate::ping::parse(core::str::from_utf8(args).unwrap_or("")) { Ok(asked) => asked, Err(usage) => { let _ = writeln!(shell.term, "{}", usage); return } };
     let Some(target) = address(&mut shell.term, asked.host) else { return };
@@ -157,12 +158,22 @@ pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
     while asked.count == 0 || tally.sent < asked.count {
         let started = mind::time::uptime_ms() as u64;
         let out = &mut shell.term;
-        match socket::ping(STACK, target, asked.wait_ms) {
-            Ok(Ok(us)) => {
+        // The round trip, and with -s or -p the reply's data bytes and whether they are what was sent.
+        let echo = match asked.size {
+            Some(size) => socket::ping_with(STACK, target, asked.wait_ms, size, asked.pattern()).map(|r| r.map(|e| (e.time_us, Some((e.size, e.matched))))),
+            None => socket::ping(STACK, target, asked.wait_ms).map(|r| r.map(|us| (us, None))),
+        };
+        match echo {
+            Ok(Ok((us, data))) => {
                 tally.reply(us);
+                if let Some((_, false)) = data { tally.bad_data(); }
                 if !asked.fast {
                     crate::ping::place(out, tally.sent, asked.count);
-                    let _ = write!(out, "REPLY FROM "); dotted(out, target); let _ = writeln!(out, ": TIME={} US", us);
+                    let _ = write!(out, "REPLY FROM "); dotted(out, target);
+                    match data {
+                        Some((bytes, matched)) => { let _ = writeln!(out, ": {} BYTES, TIME={} US{}", bytes, us, if matched { "" } else { ", BAD DATA" }); }
+                        None => { let _ = writeln!(out, ": TIME={} US", us); }
+                    }
                 }
             }
             Ok(Err(Error::Timeout)) if asked.fast => { tally.lost(); dots = true; let _ = write!(out, "."); }
@@ -173,6 +184,8 @@ pub fn ping(shell: &mut crate::Shell, args: &[u8]) {
                 failed(out, "PING", error);
                 if matches!(error, Error::Denied | Error::Invalid) { break; }
             }
+            // A stack older than socket.wit 2.6 rejects the call it does not know.
+            Err(mind::sys::Error::Invalid) if asked.sized() => { let _ = writeln!(out, "PING: THIS NETWORK STACK SENDS NO -S OR -P (IT IS OLDER THAN SOCKET.WIT 2.6)"); return; }
             Err(_) => { stack_failed(out); return; }
         }
         // The wait for the next request, the screen kept up to date and Esc watched meanwhile.
