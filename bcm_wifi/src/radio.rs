@@ -46,6 +46,12 @@ const TX_CORES: u16 = 0x00C0;
 // The cores whose front ends stay off: with core 2's on, OFDM frames from access points at -43 dBm were not received;
 // with it off they were, every one (2026-10-14, 550-DRV-0028). Its transmitter is not among TX_CORES.
 pub const CORES_OFF: u8 = 0b100;
+// The external LNA's control taken from the PHY and held off on every core, by the RF control override in PHY 0x84C,
+// 0x86C and 0x88C. Under the PHY's own control the receiver missed a fifth of an access point's beacons at -45 dBm and
+// lost 5% of data frames after 7 tries; held off, 5% and 2% (550-DRV-0039). Frames still go out under it. The levels
+// read are then about 20 dB lower, without the LNA's gain.
+pub const RF_CONTROL_HELD: u16 = 0x0400;
+const RF_CONTROL: [u16; 3] = [0x84C, 0x86C, 0x88C];
 // The cores the radio switches off when it comes up: CORES_OFF, or another set for a test (data/wifi-ofdm.txt, 550-DRV-0029).
 static CORES_OFF_AT_UP: AtomicU8 = AtomicU8::new(CORES_OFF);
 pub fn set_cores_off_at_up(mask: u8) { CORES_OFF_AT_UP.store(mask & 0b111, Ordering::Relaxed); }
@@ -105,6 +111,8 @@ pub struct Radio<'a> {
     c: &'a Core<'a>,
     dma: Dma, buffers: usize, next: usize, tx_ring: usize, tx_buffers: usize, tx_next: usize, tx_generation: u8,
     pub mac: [u8; 6],
+    // The RF control overrides the PHY had before they were held, said once the start's lines are out (550-DRV-0039).
+    pub lna_was: Option<[u16; 3]>,
     channel: u8,
     filter: Filter,
     queue: Pages, head: usize, count: usize,
@@ -177,7 +185,7 @@ impl<'a> Radio<'a> {
         let Some(queue) = Pages::new(QUEUE * QUEUE_STRIDE) else { mind::println!("[BCM] NO MEMORY FOR THE RECEIVE QUEUE"); return None };
         dma.zero(ring, RING_BYTES); dma.zero(tx_ring, RING_BYTES);
         let mut r = Radio { c, dma, buffers, next: 0, tx_ring, tx_buffers, tx_next: 0, tx_generation: 0, mac, channel: 0, filter: Filter::default(),
-                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default() };
+                            queue, head: 0, count: 0, retry: 0, mac_extra: 0, afe_saved: None, staging: [0; STRIDE], counts: Counts::default(), lna_was: None };
         for slot in 0..SLOTS {
             r.poison(slot);
             let (d, address) = (ring + 16 * slot, r.dma.physical(r.buffer(slot)) as u32);
@@ -215,7 +223,25 @@ impl<'a> Radio<'a> {
             Ok(()) => mind::println!("[BCM] FRONT ENDS OFF FOR A TEST: CORE 0 {}, CORE 1 {}, CORE 2 {}", onoff(off, 0), onoff(off, 1), onoff(off, 2)),
             Err(_) => mind::println!("[BCM] FRONT ENDS NOT SWITCHED OFF (CORES {:03b})", off),
         }
+        r.lna_was = Some(RF_CONTROL.map(|reg| c.phy(reg)));
+        r.rf_control(RF_CONTROL_HELD);
         Some(r)
+    }
+
+    // The line saying the LNA is held off, once: logd refuses a service's records past 64 a second, which the radio's start
+    // passes, so it waits for the first tally.
+    pub fn say_lna(&mut self) {
+        let Some(was) = self.lna_was.take() else { return };
+        let now = RF_CONTROL.map(|reg| self.c.phy(reg));
+        mind::println!("[BCM] THE EXTERNAL LNA HELD OFF: RF CONTROL {:04X} {:04X} {:04X} (THE PHY'S WAS {:04X} {:04X} {:04X}); WITH IT ON A FIFTH OF STRONG FRAMES WAS MISSED",
+                       now[0], now[1], now[2], was[0], was[1], was[2]);
+    }
+
+    // The three cores' RF control overrides set to `v`, with the MAC suspended.
+    pub fn rf_control(&self, v: u16) {
+        let suspended = self.c.suspend();
+        for reg in RF_CONTROL { self.c.phy_w(reg, v); }
+        if suspended { self.c.enable(); }
     }
 
     fn buffer(&self, slot: usize) -> usize { self.buffers + slot * STRIDE }
