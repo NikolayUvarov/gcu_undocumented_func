@@ -55,4 +55,4 @@ In `main` at 289e84b. The gate of 10d3ec3 (`main` 1753bf4 merged), 2026-10-20, p
 
 ## Related
 
-[550-NET-0018](../issues/550-NET-0018-the-station-service.md), [550-NET-0024](../issues/550-NET-0024-remembered-wi-fi-networks.md), [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.done) (in the same change), 550-DRV-0027 (`bcm_wifi` as a radio), 550-APP-0033 (`wifi`), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).
+[550-NET-0018](550-NET-0018-the-station-service.done), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.done), [000-KRN-0109](000-KRN-0109-the-shells-clients-may-badge-for-programs.done) (in the same change), 550-DRV-0027 (`bcm_wifi` as a radio), 550-APP-0033 (`wifi`), [docs/profile/bootstrap.md](../docs/profile/bootstrap.md).

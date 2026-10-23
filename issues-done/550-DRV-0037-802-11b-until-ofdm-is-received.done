@@ -59,4 +59,4 @@ Evidence for this machine and network only (MC-12.1). 802.11b's rates bound the 
 
 ## Related
 
-[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](../issues/550-DRV-0029-bcm4331-receives-ofdm.md), [550-NET-0028](../issues/550-NET-0028-rates-the-radio-has.md).
+[550-DRV-0036](../issues/550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](../issues/550-DRV-0029-bcm4331-receives-ofdm.md), [550-NET-0028](550-NET-0028-rates-the-radio-has.done).

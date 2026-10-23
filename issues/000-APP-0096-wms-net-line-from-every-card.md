@@ -64,4 +64,4 @@
 
 ## Related
 
-[000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](550-NET-0018-the-station-service.md) (the station's card).
+[000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) (the station's card).
