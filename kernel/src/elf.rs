@@ -2,6 +2,7 @@
 // writable globals, .bss, GOT pointers or application-local stacks are shared.
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+const PT_GNU_STACK: u32 = 0x6474_e551; // its p_memsz: the stack the program asks for (262-KRN-0164)
 #[cfg(not(target_arch = "aarch64"))]
 const MACHINE: u16 = 62; // x86-64
 #[cfg(target_arch = "aarch64")]
@@ -29,6 +30,7 @@ pub struct Image<'a> {
     headers: &'a [u8],
     min: usize,
     pub size: usize,
+    pub stack: usize, // the task's stack in bytes, whole pages
     entry: usize,
 }
 
@@ -56,6 +58,7 @@ impl<'a> Image<'a> {
         let entry = word(data, 24);
         let mut executable_entry = false;
         let mut dynamic_count = 0;
+        let mut stack = 0;
         for p in headers.chunks_exact(56) {
             match u32_at(p, 0) {
                 PT_LOAD => {
@@ -83,6 +86,7 @@ impl<'a> Image<'a> {
                     executable_entry |= u32_at(p, 4) & 1 != 0 && entry >= address && entry < end;
                 }
                 PT_DYNAMIC => dynamic_count += 1,
+                PT_GNU_STACK => stack = word(p, 40),
                 3 | 7 => return Err("ELF INTERPRETER/TLS NOT SUPPORTED"),
                 _ => {}
             }
@@ -91,11 +95,16 @@ impl<'a> Image<'a> {
         if size == 0 || size > 8 * 1024 * 1024 || !executable_entry || dynamic_count > 1 {
             return Err("INVALID ELF IMAGE OR ENTRY POINT");
         }
+        if stack > crate::abi::STACK_MAX_BYTES {
+            return Err("ELF STACK ABOVE 8 MIB");
+        }
+        let stack = stack.next_multiple_of(4096).max(crate::abi::STACK_MIN_BYTES);
         Ok(Self {
             data,
             headers,
             min,
             size,
+            stack,
             entry,
         })
     }

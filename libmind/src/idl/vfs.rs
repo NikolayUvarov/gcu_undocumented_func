@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:vfs";
-pub const VERSION: (u8, u8, u8) = (2, 3, 0);
+pub const VERSION: (u8, u8, u8) = (2, 4, 0);
 const MAJOR: usize = 2;
 
 /// Why a request failed.
@@ -297,6 +297,17 @@ pub fn format(endpoint: Endpoint, handle: u32, label: &str) -> Result<core::resu
     Ok(Ok(()))
 }
 
+/// The file's bytes from `offset` into the memory object `target`, as many as fit or as the file has; returns the
+/// count. The caller lends the object with the write right, so the bytes are charged to it, not to vfs_server; one
+/// call for the whole object, with no 16 KiB limit; a file up to 4 GiB − 1 byte, FAT32's limit (2.4, 262-KRN-0162).
+pub fn fill(endpoint: Endpoint, file: u32, offset: u64, target: usize) -> Result<core::result::Result<u64, Error>> {
+    let words = [17 | MAJOR << 8 | ((file) as usize) << 16, ((offset) as usize) << 0];
+    let reply = wire::call(endpoint, words, Some((target, false)))?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0x0, 0xffffffffffffffff], false)?;
+    Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 16394;
 
@@ -319,6 +330,7 @@ pub enum Request<'a> {
     Check { handle: u32 },
     Scope { dir: u32, writable: bool },
     Format { handle: u32, label: Text<11> },
+    Fill { file: u32, offset: u64, target: usize },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -455,6 +467,10 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Format { handle, label }, call))
         }
+        17 => {
+            wire::body(request, cap, [0xffffffff0000, 0xffffffffffffffff], CAP_KIND_MEMORY, true)?;
+            Ok((Request::Fill { file: wire::field(&words, 0, 16, 32) as u32, offset: wire::field(&words, 1, 0, 64) as u64, target: cap }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -523,4 +539,8 @@ pub fn reply_scope(call: Call, value: core::result::Result<usize, Error>) -> Res
 pub fn reply_format(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_fill(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [0, ((value) as usize) << 0])
 }

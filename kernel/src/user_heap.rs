@@ -26,6 +26,24 @@ pub struct Heap {
     limit: usize, // the task's memory quota: private and retained bytes together
 }
 
+// Large blocks are aligned for large pages where the pool allows (262-KRN-0160, 0161): from 2 MiB on to 2 MiB, from
+// 1 GiB on to 1 GiB, in both their addresses; the space then maps them in 2 MiB and 1 GiB pages, unless the task asks for
+// 4 KiB pages (`small`).
+pub const LARGE: usize = 2 * 1024 * 1024;
+pub const HUGE: usize = 1 << 30;
+fn alignment(size: usize) -> usize { if size >= HUGE { HUGE } else if size >= LARGE { LARGE } else { PAGE } }
+
+// Frames for a block of `size`, as aligned as the pool allows; zeroed or not (the caller then zeroes them).
+fn frames(size: usize, zeroed: bool) -> Option<Region> {
+    let mut align = alignment(size);
+    loop {
+        let memory = if zeroed { Region::task(size, align) } else { Region::task_unzeroed(size, align) };
+        if let Ok(memory) = memory { return Some(memory); }
+        if align == PAGE { return None; }
+        align = if align == HUGE { LARGE } else { PAGE };
+    }
+}
+
 impl Heap {
     #[cfg(test)]
     pub fn new() -> Self {
@@ -36,36 +54,65 @@ impl Heap {
     }
 
     fn find_hole(&self, size: usize) -> Option<usize> {
-        let mut address = USER_HEAP + PAGE;
+        let align = alignment(size);
+        let mut address = (USER_HEAP + PAGE).next_multiple_of(align);
         loop {
             let end = address.checked_add(size + PAGE)?;
             if end > USER_END { return None; }
             if let Some(block) = self.blocks.iter().flatten().find(|b| address < b.address + b.size + PAGE && end > b.address) {
-                address = block.address + block.size + PAGE;
+                address = (block.address + block.size + PAGE).next_multiple_of(align);
             } else { break; }
         }
         Some(address)
     }
 
-    pub fn allocate(&mut self, space: &mut Space, requested: usize) -> Option<usize> {
+    pub fn allocate(&mut self, space: &mut Space, requested: usize, small: bool) -> Option<usize> {
         if requested == 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
         if size > self.limit.saturating_sub(self.bytes + self.retained) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        let memory = Region::task(size, PAGE).ok()?;
-        space.map(address, memory.ptr() as usize, size, true, false).ok()?;
+        let memory = frames(size, true)?;
+        Self::map_own(space, address, &memory, small)?;
         self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false, sink: false });
         self.bytes += size;
         Some(address)
     }
 
-    // Mappings of foreign memory count against their own quota and don't eat into the private heap.
+    // A large block in two steps (262-KRN-0160): `reserve` checks the quota and a free slot and counts the block's bytes;
+    // the caller takes its frames (`frames_unzeroed`) and zeroes them outside the scheduler's lock; then `place` maps
+    // them, or `unreserve` gives the bytes back.
+    pub fn reserve(&mut self, requested: usize) -> Option<usize> {
+        let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
+        if size == 0 || size > self.limit.saturating_sub(self.bytes + self.retained) || self.blocks.iter().all(Option::is_some) { return None; }
+        self.bytes += size;
+        Some(size)
+    }
+    pub fn frames_unzeroed(size: usize) -> Option<Region> { frames(size, false) }
+    pub fn unreserve(&mut self, size: usize) { self.bytes -= size; }
+    pub fn place(&mut self, space: &mut Space, memory: Region, small: bool) -> Option<usize> {
+        let size = memory.len();
+        let slot = self.blocks.iter().position(Option::is_none)?;
+        let address = self.find_hole(size)?;
+        Self::map_own(space, address, &memory, small)?;
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false, sink: false });
+        Some(address)
+    }
+
+    fn map_own(space: &mut Space, address: usize, memory: &Region, small: bool) -> Option<()> {
+        let (physical, size) = (memory.ptr() as usize, memory.len());
+        if small { space.map_small(address, physical, size, true) } else { space.map(address, physical, size, true, false) }.ok()
+    }
+
+    // Mappings of foreign memory count against their own limit and don't eat into the private heap: the larger of
+    // SHARED_MAX_BYTES and the task's memory quota, so a program can map an object as large as it may hold (262-KRN-0162).
+    fn shared_limit(&self) -> usize { SHARED_MAX_BYTES.max(self.limit) }
+
     pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, caching: crate::paging::Caching, writable: bool, node: u64) -> Option<usize> {
         let device = caching == crate::paging::Caching::Device;
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
-        if size > SHARED_MAX_BYTES - self.shared { return None; }
+        if size > self.shared_limit().saturating_sub(self.shared) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         match caching {
@@ -165,32 +212,32 @@ mod tests {
     #[test]
     fn holes_are_reused_and_frees_are_checked() {
         let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
-        let a = heap.allocate(&mut space, 4096).unwrap();
-        let b = heap.allocate(&mut space, 8192).unwrap();
+        let a = heap.allocate(&mut space, 4096, false).unwrap();
+        let b = heap.allocate(&mut space, 8192, false).unwrap();
         assert!(b > a && space.writable(a).is_some() && space.writable(b + 4096).is_some());
         assert!(heap.free(&mut space, a).is_some());
         assert!(space.readable(a).is_none());
         assert!(heap.free(&mut space, a).is_none(), "double free");
         assert!(heap.free(&mut space, b + 4096).is_none(), "not the start of a block");
-        assert_eq!(heap.allocate(&mut space, 4096), Some(a), "first fit reuses the hole");
+        assert_eq!(heap.allocate(&mut space, 4096, false), Some(a), "first fit reuses the hole");
     }
 
     #[test]
     fn block_and_byte_limits_include_retained_memory() {
         let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
-        let blocks: Vec<usize> = (0..HEAP_MAX_BLOCKS).map(|_| heap.allocate(&mut space, 4096).unwrap()).collect();
-        assert!(heap.allocate(&mut space, 4096).is_none(), "block limit");
+        let blocks: Vec<usize> = (0..HEAP_MAX_BLOCKS).map(|_| heap.allocate(&mut space, 4096, false).unwrap()).collect();
+        assert!(heap.allocate(&mut space, 4096, false).is_none(), "block limit");
         for block in blocks { heap.free(&mut space, block); }
-        assert!(heap.allocate(&mut space, HEAP_MAX_BYTES + 1).is_none());
+        assert!(heap.allocate(&mut space, HEAP_MAX_BYTES + 1, false).is_none());
         heap.retained = HEAP_MAX_BYTES - 4096;
-        assert!(heap.allocate(&mut space, 8192).is_none(), "retained blocks count against the quota");
-        assert!(heap.allocate(&mut space, 4096).is_some());
+        assert!(heap.allocate(&mut space, 8192, false).is_none(), "retained blocks count against the quota");
+        assert!(heap.allocate(&mut space, 4096, false).is_some());
     }
 
     #[test]
     fn only_own_blocks_are_shareable_and_revoke_unmaps_by_node() {
         let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
-        let own = heap.allocate(&mut space, 4096).unwrap();
+        let own = heap.allocate(&mut space, 4096, false).unwrap();
         let foreign = Region::new(8192, PAGE).unwrap();
         let mapped = heap.map_shared(&mut space, foreign.ptr() as usize, 8192, crate::paging::Caching::Memory, false, 7).unwrap();
         assert!(heap.shareable(own, 0).is_some());
@@ -201,6 +248,21 @@ mod tests {
         assert_eq!(heap.revoke(&mut space, &[7], false, false), (true, 0), "an ended task gets no page in the lease's place");
         assert!(space.readable(mapped).is_none() && !heap.made_from(7));
         assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, crate::paging::Caching::Memory, true, 9).is_some(), "shared quota returned");
+    }
+
+    #[test]
+    fn the_shared_limit_is_the_larger_of_its_own_and_the_memory_quota() {
+        // 262-KRN-0162: a task with a quota above SHARED_MAX_BYTES may map foreign memory up to its quota, and no more.
+        let quota = SHARED_MAX_BYTES + 2 * LARGE;
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::with_limit(quota));
+        let foreign = 0x40_0000_0000;
+        let mapped = heap.map_shared(&mut space, foreign, SHARED_MAX_BYTES + LARGE, crate::paging::Caching::Memory, false, 7).unwrap();
+        assert!(heap.map_shared(&mut space, foreign, 2 * LARGE, crate::paging::Caching::Memory, false, 8).is_none(), "past the quota");
+        assert!(heap.map_shared(&mut space, foreign, LARGE, crate::paging::Caching::Memory, false, 8).is_some());
+        assert!(heap.free(&mut space, mapped).is_some() && heap.shared_bytes() == LARGE);
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::with_limit(LARGE));
+        assert!(heap.map_shared(&mut space, foreign, SHARED_MAX_BYTES, crate::paging::Caching::Memory, false, 7).is_some(), "a small quota keeps SHARED_MAX_BYTES");
+        assert!(heap.map_shared(&mut space, foreign, PAGE, crate::paging::Caching::Memory, false, 8).is_none());
     }
 
     #[test]
@@ -222,7 +284,7 @@ mod tests {
         assert_eq!(page.len(), PAGE);
         assert!(space.readable(mapped).is_none() && heap.bytes() == 0);
         // With no room left for the page, the range is unmapped as before.
-        heap.allocate(&mut space, 2 * PAGE).unwrap();
+        heap.allocate(&mut space, 2 * PAGE, false).unwrap();
         let again = heap.map_shared(&mut space, foreign.ptr() as usize, PAGE, crate::paging::Caching::Memory, false, 8).unwrap();
         assert_eq!(heap.revoke(&mut space, &[8], true, true), (true, 0));
         assert!(space.readable(again).is_none());
@@ -231,10 +293,29 @@ mod tests {
     #[test]
     fn detach_leaves_the_address_space_and_the_quota() {
         let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
-        let block = heap.allocate(&mut space, HEAP_MAX_BYTES).unwrap();
+        let block = heap.allocate(&mut space, HEAP_MAX_BYTES, false).unwrap();
         let region = heap.detach(&mut space, block).unwrap();
         assert_eq!(region.len(), HEAP_MAX_BYTES);
         assert!(space.readable(block).is_none() && heap.free(&mut space, block).is_none());
-        assert!(heap.allocate(&mut space, 4096).is_some());
+        assert!(heap.allocate(&mut space, 4096, false).is_some());
+    }
+
+    #[test]
+    fn large_blocks_are_aligned_and_a_refused_one_leaves_nothing() {
+        // 262-KRN-0160: from 2 MiB on, a block lies on a 2 MiB boundary in both its addresses, after a small one too.
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let small = heap.allocate(&mut space, PAGE, false).unwrap();
+        let large = heap.allocate(&mut space, 3 * LARGE, false).unwrap();
+        assert!(large > small && large % LARGE == 0 && space.readable(large).unwrap() % LARGE == 0);
+        // In two steps: reserved bytes count, a refused reservation counts nothing, a placed block is mapped and aligned.
+        let before = heap.bytes();
+        assert!(heap.reserve(HEAP_MAX_BYTES).is_none() && heap.bytes() == before);
+        let size = heap.reserve(2 * LARGE).unwrap();
+        assert_eq!(heap.bytes(), before + size);
+        let placed = heap.place(&mut space, Heap::frames_unzeroed(size).unwrap(), false).unwrap();
+        assert!(placed % LARGE == 0 && space.readable(placed + size - 1).is_some() && heap.bytes() == before + size);
+        assert!(heap.free(&mut space, placed).is_some() && heap.bytes() == before);
+        heap.reserve(LARGE).map(|size| heap.unreserve(size));
+        assert_eq!(heap.bytes(), before);
     }
 }

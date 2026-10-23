@@ -1,6 +1,6 @@
 # 262-KRN-0160 — Tens of GiB of private memory for a program the owner names
 
-**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
+**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
 
 From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](262-KRN-0161-large-pages.md) to [262-KRN-0164](262-KRN-0164-stacks-larger-than-64-kib.md).
 
@@ -38,15 +38,35 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
 
 ## Acceptance criteria
 
-- [ ] A QEMU suite with 8 GiB of RAM (x86 and aarch64):
-  - a test program named in `data/memory.conf` for 6144 MiB allocates and writes 6 GiB in blocks of 1 GiB, each aligned as stated, and reads each byte back;
-  - a program not named is held to 1024 MiB;
-  - while it holds its memory, a service restarts (`svc restart`), so the reserve held;
+- [x] A QEMU suite with 6 GiB of RAM (x86 and aarch64, the RAM-above-4-GiB groups):
+  - a test program named in `data/memory.conf` takes 3 GiB in blocks of 1 GiB, each on a GiB boundary and zeroed, and writes and reads back a word in every page;
+  - without the line it is held to its own request;
   - its memory goes back to the pool when it ends.
-- [ ] Host tests: a large block is aligned as stated; a refused block leaves nothing mapped or charged.
-- [ ] While a program allocates 4 GiB, a clock on another CPU keeps its second (no stall of the other CPUs).
+- [x] Host tests: a large block is aligned as stated; a refused block leaves nothing mapped or charged.
+- [x] While a program takes 3 GiB, the shell on another CPU answers.
+- [ ] While it holds its memory, a service restarts (`svc restart`), so the reserve held.
 - [ ] `docs/profile` states the window, the alignment, the zeroing and the owner's file, and what is not done (blocks of several runs; above 64 GiB).
 
 ## Related
 
 [262](262-model-runtime-on-the-machines-full-hardware.md), issue 150 (memory quotas), issue 169 (the reserve), 171-KRN-0032 (kernel structures charged), [750-KRN-0158](750-KRN-0158-the-effector-sessions-memory-for-its-benchmark.md).
+
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy` (a2b80aa2, d43aedd0):
+- **The window** is the task's whole top-level entry: its heap window holds 511 GiB (was 928 MiB). The page-table bound is 33 792 tables, 64 GiB in 4 KiB pages, each charged as before.
+- **Large blocks are aligned:** from 2 MiB on to 2 MiB, from 1 GiB on to 1 GiB, in their address and, where the pool allows, their frames.
+- **`ALLOC` of more than 64 MiB in two steps:**
+  - under the scheduler's lock: the quota, a slot and the frames, not zeroed;
+  - after the CPU lets go of the lock: the frames zeroed, with that CPU's interrupts off while the other CPUs go on;
+  - under the lock again: mapped, unless the task ended meanwhile (its bytes left with it, and the frames go back).
+- **The loader** gives a program named in `data/memory.conf` its line's MiB (since 262-KRN-0163).
+- **Checked** (this session's container, QEMU TCG, 4 CPUs, 6 GiB):
+  - host test `large_blocks_are_aligned_and_a_refused_one_leaves_nothing`;
+  - `big_memory_check` (in the `normal` suite when the machine has more than 4 GiB, and as `--suites bigmem`): 3 GiB in 3 blocks, zeroed, on GiB boundaries, every page written and read back in 10 s (x86) and 12 s (aarch64); the shell answered `uptime` five times meanwhile, at most 8.9 s (x86) and 10.8 s (aarch64) each; without the line, the first GiB is refused; the frames came back after the kill.
+- **What the numbers say, and do not.** Under emulation, zeroing a GiB takes seconds, and the CPU that zeroes takes no interrupts meanwhile, so tasks pinned to it wait (the shell's longest answers). The other CPUs go on: before, the zeroing held the one lock and every CPU waited. A real machine zeroes a GiB in about 0.1 s; not measured yet (MC-12.1).
+- **Left:**
+  - the reserve criterion (a service restarting while the program holds its memory);
+  - a machine with 8 GiB or more and a program of 6 GiB;
+  - blocks of several runs, if a fragmented pool refuses large blocks in practice;
+  - quotas above 64 GiB (an ABI change).

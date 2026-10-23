@@ -28,6 +28,16 @@ pub fn user_readable(entry: u64) -> bool { entry & (VALID | USER) == VALID | USE
 pub fn user_writable(entry: u64) -> bool { entry & (VALID | USER | WRITE) == VALID | USER | WRITE }
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & WRITE != 0, entry & NX == 0, entry & UNCACHED == UNCACHED) }
+const PS: u64 = 1 << 7; // a 2 MiB or 1 GiB page (262-KRN-0161)
+static HUGE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(cfg!(test));
+/// Whether a valid entry one or two levels above the 4 KiB pages maps memory itself: a 2 MiB or 1 GiB page.
+pub fn large(entry: u64) -> bool { entry & PS != 0 }
+/// A user page's entry as a 2 MiB or 1 GiB page with the same attributes (its PAT bit stays clear: write-back).
+pub fn block(page: u64) -> u64 { page | PS }
+/// A large page's entry in a 4 KiB page's form, for the checks of its permissions.
+pub fn page(entry: u64) -> u64 { entry & !PS }
+/// Whether the CPU has 1 GiB pages (CPUID 80000001h EDX bit 26).
+pub fn huge_pages() -> bool { HUGE.load(Ordering::Relaxed) }
 /// Root entry 0 of every space: the kernel's identity map.
 /// Root entries every space shares with the kernel: entry 0, its identity map of the first 4 GiB and of free RAM above.
 pub const KERNEL_ENTRIES: usize = 1;
@@ -93,6 +103,7 @@ pub fn kernel_root() -> usize {
 }
 
 pub unsafe fn init(map: &[crate::abi::StatPhys]) -> Result<(), &'static str> {
+    HUGE.store(core::arch::x86_64::__cpuid(0x80000001).edx & (1 << 26) != 0, Ordering::Relaxed);
     // Firmware RAM may extend above 3 GiB: the Ryzen's kernel arena lies there (213-KRN-0112).
     let root = Region::new(PAGE, PAGE)?;
     let pdpt = Region::new(PAGE, PAGE)?;

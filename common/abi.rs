@@ -47,12 +47,14 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
 // ABI 16 adds the Effector agent's two boot images, `effector_gw` and `effector`, which run only in a mode (750-KRN-0119).
 // ABI 17: CAP_REVOKE leaves a borrower one zeroed page of its own at each page it mapped from the lease, so a late access
-// reads zeros and writes there instead of faulting (000-KRN-0152).
+// reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
+// the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
+// addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 17;
+pub const ABI_VERSION: u32 = 19;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
@@ -411,6 +413,12 @@ pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH
 
 // HEAP_MAX_BYTES is the default memory quota of a task (SPAWN); blocks are heap blocks and mappings together.
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
+// ALLOC's arg2 holds flags: ALLOC_SMALL_PAGES maps the block in 4 KiB pages only, not 2 MiB and 1 GiB ones, as for a
+// measurement of what large pages give (262-KRN-0161, ABI 19). Any other bit refuses the call.
+pub const ALLOC_SMALL_PAGES: usize = 1;
+// A task's stack is what its ELF's PT_GNU_STACK asks (p_memsz, the linker's -z stack-size=), in whole pages, at least
+// STACK_MIN_BYTES; an ELF asking more than STACK_MAX_BYTES is refused. An unmapped guard page lies below it (262-KRN-0164).
+pub const STACK_MIN_BYTES: usize = 64 * 1024; pub const STACK_MAX_BYTES: usize = 8 * 1024 * 1024;
 // Separate limit for mapped foreign memory (frame, IPC buffers, shared read-only objects).
 pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 
@@ -439,6 +447,9 @@ pub const SPAWN_FOREGROUND: usize = 4;
 // The task gets a text input (000-KRN-0094, ABI 9): its writer, a CAP_KIND_TEXT capability, goes to the spawner, its
 // handle in arg2 of the reply. Without the flag the task has none: TEXT_READ answers ERR_NOT_FOUND.
 pub const SPAWN_TEXT: usize = 8;
+// The kernel keeps the task's program (its ELF, or its boot image's index), charged with its image, so that the task may
+// start workers of it (WORKER_START, 262-KRN-0163, ABI 18). Without the flag WORKER_START answers ERR_RIGHTS.
+pub const SPAWN_WORKERS: usize = 16;
 pub const SPAWN_GRANTS_MAX: usize = 32; // 32 since ABI 4: the shell's grants grew (351-KRN-0027)
 // Program arguments: the SPAWN name buffer may be `name\0arguments`; the kernel copies the arguments into the child's
 // read-only info page at ARGS_OFFSET as a u16 length followed by the bytes.
@@ -618,6 +629,16 @@ pub const SYSCALL_TEXT_WRITE: usize = 62;
 // once the input was closed or no writer is left. With nothing queued yet it waits up to TEXT_WAIT_MS for bytes, a
 // close or any input event and answers ERR_BUSY: the caller asks again. ERR_NOT_FOUND for a task started without one.
 pub const SYSCALL_TEXT_READ: usize = 63;
+// WORKER_START (262-KRN-0163, ABI 18): arg1 = the worker's argument word, arg2 = its stack in bytes (0: what the
+// program's ELF asks; more than STACK_MAX_BYTES: ERR_INVALID), msg[2] = address of a Grant array, msg[3] = grant count
+// -> PID. The worker runs the caller's own program in an address space of its own, with exactly the granted
+// capabilities (copied or moved as at SPAWN; never a privilege), on another CPU while one is free. Only a task started
+// with SPAWN_WORKERS may (else ERR_RIGHTS); at most one live worker per online CPU, each counted in the caller's task
+// quota (ERR_LIMIT). Its image, stack and memory are charged to the caller; it ends when the caller ends.
+pub const SYSCALL_WORKER_START: usize = 64;
+// A worker's info page holds at WORKER_OFFSET its index (1, 2, ...; 0 in a task that is no worker), then its argument
+// word, a u64 each.
+pub const WORKER_OFFSET: usize = 3584;
 pub const TEXT_CLOSE: usize = 1;
 pub const TEXT_QUEUE: usize = 4096;
 pub const TEXT_WAIT_MS: u64 = 1000;
