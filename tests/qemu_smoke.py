@@ -746,7 +746,16 @@ def big_memory_check(vm):
             break
     left = frames_free(vm)
     assert RECOVERY_RESERVE - 1024 * 1024 <= left < RECOVERY_RESERVE + 1024 * 1024, (left, RECOVERY_RESERVE)
-    require(vm.command("svc restart rtc"), "rtc restarted: PID")
+    # `svc` is an application and does not start above the reserve; init restarts a killed service from it.
+    require(vm.command("svc restart rtc"), "ERROR: OUT OF MEMORY")
+    rtc = vm.services()["rtc"]
+    vm.command(f"kill {rtc}", raw=True)
+    for _ in range(40):
+        if vm.services().get("rtc", rtc) != rtc:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError("init did not restart rtc while memtest held all it could")
     assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the restarted rtc does not serve"
     for holder in holders:
         require(vm.command(f"kill {holder}"), f"KILLED PID={holder}")
@@ -764,7 +773,7 @@ def big_memory_check(vm):
     require(output, "kbench: 2 measurements, 0 failed")
     require(vm.command("rm data/memory.conf"), "OK")
     print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
-    print(f"PASS: the reserve held (262-KRN-0160): with a line of 16 GiB, memtest took {most} MiB in GiB blocks and {rest // 1024} MiB more in small ones, {left // 1024} KiB of the frame pool stayed (reserve {RECOVERY_RESERVE // 1024} KiB), and rtc restarted and served meanwhile", flush=True)
+    print(f"PASS: the reserve held (262-KRN-0160): with a line of 16 GiB, memtest took {most} MiB in GiB blocks and {rest // 1024} MiB more in small ones, {left // 1024} KiB of the frame pool stayed (reserve {RECOVERY_RESERVE // 1024} KiB); `svc` could not start, and init restarted a killed rtc, which served", flush=True)
     print(f"PASS: large pages (262-KRN-0161): the 3 GiB took {kernel // 1024} KiB of kernel bytes with their page tables; kbench read a GiB at random in {rows['large pages'][0]:.0f} ns a read in large pages and {rows['4 KiB pages'][0]:.0f} ns in 4 KiB pages (QEMU, not a machine's figure)", flush=True)
 
 
