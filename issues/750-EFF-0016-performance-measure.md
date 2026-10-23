@@ -17,14 +17,17 @@
 3. **The result is kept** in `system/effector/result` and journaled as `reported` before its ACK.
 4. **Left out,** all optional to the server:
    - the pointer chase, which the server takes only over exactly 16 MiB, a task's whole memory;
-   - the parallel CPU phase, which needs threads the session has not;
-   - the load sampling.
+   - the parallel CPU phase, which needs threads the session has not. Asked of KRN, with the memory, on 2026-10-23.
+5. **The conditions** (the server's `load`, added 2026-10-23):
+   - the machine's busy share in a baseline second;
+   - its share over the run, sampled each second from the gateway's counters;
+   - that share less the agent's own.
 
 ## Acceptance criteria
 
 - [x] Host tests (`tests/effector_bench_host.rs`): the CPU loop is the Linux agent's; a run in slices gives a result with every field the server checks; a failed disk leaves the disk numbers out.
 - [x] The `effector` QEMU suite on x86_64 and aarch64: a 12 s run accepted with every field, heartbeats under 5 s apart meanwhile (after the disk moved to 64 KiB pieces).
-- [ ] On the MacBook: the card shows a saved measurement.
+- [x] On the MacBook (2026-10-23, operation `20261023051204.958726827_000057`): `completed` in 50 s, saved by the server as the endpoint's `performance`: 202.3 million iterations/s on one thread, 1758 MiB/s copied, 3.1 MiB/s written and 33.1 MiB/s read on the boot stick.
 
 ## Related
 

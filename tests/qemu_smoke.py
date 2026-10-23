@@ -7746,6 +7746,9 @@ def effector_actions_check(vm, server, agent, until, beats):
     assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
     assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
     assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    load = r["load"]  # the conditions: a baseline second before, samples each second, the agent's own share apart
+    assert load["samples"] >= 3 and load["occupied_queues_start"] == 1 and load["other_queues_max"] == 0, load
+    assert 0 <= load["cpu_before_percent"] <= 100 and 0 <= load["background_cpu_average_percent"] <= load["cpu_average_percent"] <= 100, load
     during = [b for b in list(server.beats) if b.get("busy") and b["executing_commands"][0]["action"] == "performance_measure"]
     assert during, "the agent busy with the benchmark"
     window = [t for t in beats if t >= begun]

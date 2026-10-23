@@ -1,6 +1,6 @@
 # 800-KRN-0156 — Two marks in the compositor: who can reach the machine from outside
 
-**Type:** `compositor`, `init`, IDL (`display.wit` 1.2) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — (for 800-LNK-0020 and the Effector agent) · **Constitution:** MC-3.11, MC-10.2
+**Type:** `compositor`, `init`, IDL (`display.wit` 1.2) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` 344aa298; the link's mark and an unbadged refusal end to end left) · **Blocked by:** — · **Main task:** — (for 800-LNK-0020 and the Effector agent) · **Constitution:** MC-3.11, MC-10.2
 
 From LNK's request of 2026-10-23 (`KRN/2026-10-23T0252Z-LNK-two-marks-in-the-compositor-for-the-remote-links.md` on `internal-dev-messages`), on the maintainer's word: the screen must show who can reach the machine remotely, and what they may do there.
 

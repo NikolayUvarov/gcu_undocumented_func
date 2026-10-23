@@ -96,7 +96,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [800-KRN-0156](800-KRN-0156-the-remote-marks-in-the-compositor.md) | Two marks in the compositor, the link's and the Effector agent's, grey, yellow or red for what each path may do; `display.wit` 1.2 `remote`, by the caller's badge from `init` (LNK's request, for 800-LNK-0020) | `KRN` | P2 | — | development on real hardware |
 | [750-KRN-0158](750-KRN-0158-the-effector-sessions-memory-for-its-benchmark.md) | The Effector session's memory quota, 48 MiB, for its benchmark's 16 MiB chase and copy buffers (EFF's request, for 750-EFF-0016) | `KRN` | P3 | — | — |
 | [750-KRN-0159](750-KRN-0159-parallel-workers-for-the-effector-benchmark.md) | Parallel workers for the Effector benchmark: a loader client for one named program, one per CPU (EFF's request, for 750-EFF-0016) | `KRN` | P3 | EFF's `bench_worker` | — |
-| [550-KRN-0157](550-KRN-0157-a-service-stop-resets-the-bcm4331-core.md) | A service's stop resets the BCM4331's 802.11 core first, as boot does (550-KRN-0082), so a stop or `replace` of `bcm_wifi` under a busy receiver does not wedge it (DRV's request) | `KRN` | P1 | — | D |
 | [550-NET-0042](550-NET-0042-seven-tries-for-a-sent-frame.md) | `wlan` tries a sent frame up to 7 times, 802.11's default; 4 lost 8% of them on the MacBook Pro (DRV's request); in `main` c9531fac, the Mac's run left | `NET` | P1 | — | D |
 | [850](850-the-cultural-code.md) | The cultural code: a manifesto, the canon's maxims and a lexicon that the code bears out (the maintainer's request) | main task, `PHI` | P2 | the maintainer's questions: the hero, the adversary, Banks's names | — |
 | [850-PHI-0001](850-PHI-0001-the-manifesto.md) | The manifesto: one page, English and Russian, every claim with its evidence or marked a goal | `PHI` | P2 | 850's questions | — |
@@ -267,6 +266,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [550-KRN-0157](../issues-done/550-KRN-0157-a-service-stop-resets-the-bcm4331-core.done) | A service's stop resets the BCM4331's 802.11 core first, as boot does | Three `replace`s under traffic on the MacBook Pro left the core clean (DRV); every gate group passed on `main` 344aa298 |
 | [850-PHI-0002](../issues-done/850-PHI-0002-the-canons-maxims-in-lore-1-6.done) | LORE 1.6 in English and Russian | Five maxims with clauses, evidence and explicit limits; incoming canon integrated, previous edition archived; Constitution unchanged |
 | [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) | The station service `wlan` over `wlanhw.wit`, configured through `wifi.wit` | WPA2 join, lease and ping in QEMU (x86, aarch64) and on the MacBook Pro; the Mac's `https` and a `BADGE_WIFI`-only refusal waived by the maintainer (2026-10-23) |
 | [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) | Remembered Wi-Fi networks kept by `keystore` | kept PMKs, joins with no passphrase after restarts, `forget`, in QEMU (x86, aarch64); a badge-less `keystore` client and the Mac's reboot waived by the maintainer (2026-10-23) |
