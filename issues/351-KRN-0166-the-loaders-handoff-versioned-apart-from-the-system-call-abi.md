@@ -1,6 +1,6 @@
 # 351-KRN-0166 — The loader's handoff versioned apart from the system-call ABI
 
-**Type:** kernel (`main.rs`), `common/abi.rs`, bootloader · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-12.4, MC-12.7, MC-6.5
+**Type:** kernel (`main.rs`), `common/abi.rs`, bootloader · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-12.4, MC-12.7, MC-6.5
 
 From EFF's request of 2026-10-23 (`internal-dev-messages`, `KRN/2026-10-23T1856Z-EFF-two-requests-a-slot-update-across-a-syscall-abi-change.md`), filed at the maintainer's word.
 
@@ -27,10 +27,25 @@ From EFF's request of 2026-10-23 (`internal-dev-messages`, `KRN/2026-10-23T1856Z
 
 ## Acceptance criteria
 
-- [ ] A kernel of ABI 19 boots from the loader of an earlier ABI whose `BootInfo` is the same (QEMU, x86 and aarch64), and programs of ABI 19 run.
-- [ ] A loader of another handoff is refused with the message, as now, by the test kernel the `loader-abi-test` feature builds.
-- [ ] Host tests: the layout pinned; the accepted range named in one place.
-- [ ] `docs/api` and `docs/profile` state the two versions and which change needs a new loader.
+- [x] A kernel of ABI 19 boots from the loader of an earlier ABI whose `BootInfo` is the same (QEMU, x86 and aarch64), and programs of ABI 19 run.
+- [x] A loader of another handoff is refused with the message, as now, by the test kernel the `loader-abi-test` feature builds.
+- [x] Host tests: the layout pinned; the accepted range named in one place.
+- [x] `docs/api` and `docs/profile` state the two versions and which change needs a new loader.
+
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy` (585331ac):
+- **`common/abi.rs`:** `BOOT_HANDOFF_VERSION` (19), `BOOT_HANDOFF_OLDEST` (16) and `handoff_accepted`.
+- **Where the handoff last changed.** `BootInfo`, `BOOT_FILES` and its constants are the same since ABI 16's two Effector images (750-KRN-0119, dc5e6dcd), and `bootloader/` has no commit since. ABI 15 had 41 images.
+- **The loader** writes the handoff version.
+- **The kernel** takes 16 to 19. Its message names the range: `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`.
+- **The `loader-abi-test` kernel** takes only 20.
+- **Checked** (this session's container, QEMU TCG):
+  - host test `the_handoff_takes_every_loader_since_abi_16_and_no_other`: `BootInfo` is 1048 bytes, 43 images, the range 16 to 19;
+  - the x86 `boot` suite: the test kernel refuses the loader with the new message, on COM1 and on the screen; the trial boots pass;
+  - `tests/aarch64_smoke.py`: the boot and the trial slots;
+  - **today's kernel and programs from the loader of ABI 17,** built from `main` 344aa298: the `shell` suite on x86 and on aarch64. These are one run each, outside the gate, and that loader is not kept as a fixture.
+- **What it gives the MacBook.** Its stick's loader (ABI 17) takes kernels of ABI 17 to 19, and later ones until `BootInfo` changes. EFF's stick needs no rewrite for these.
 
 ## Related
 

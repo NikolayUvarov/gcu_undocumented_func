@@ -8,7 +8,9 @@ On a raw disk image with both slots and the bootloader of the build:
 - the file system is consistent after the bootloader's writes;
 - vfs_server's update zone is the slot that did not boot (351-UPD-0008);
 - with the updater's test stand-in on the volume, init's client of vfs_server badged for the update zone fills the slot
-  that did not boot and writes a boot record whole in place, and nothing else (351-KRN-0022).
+  that did not boot and writes a boot record whole in place, and nothing else (351-KRN-0022);
+- `refused_trial`: slot B on trial with a kernel that refuses the loader's handoff restarts the machine, and slot A
+  boots (351-KRN-0167).
 
 `boot(image, until)` boots the image and returns the console output up to `until`; the volume has no keystore
 (`quiet_volume`). Init's confirmation is 351-KRN-0014: the host writes the confirmed record here, as the updater will.
@@ -110,6 +112,32 @@ def run(boot, temp, volume, label, updater=None):
         update_zone(boot, temp, volume, label, updater)
     else:
         print(f"SKIP ({label}): the update zone's client: no test stand-in for the updater was built", flush=True)
+
+
+def refused_trial(boot, temp, volume, kernel, label):
+    """Slot B on trial holds `kernel`, built with `loader-abi-test`: it refuses the handoff, says why and restarts the
+    machine; the loader then boots slot A, B's one try spent. `boot` lets the machine restart."""
+    temp = Path(temp)
+    source = quiet_volume(volume, temp / "volume")
+    other = temp / "other"
+    shutil.copytree(source, other)
+    (other / "kernel.elf").write_bytes(Path(kernel).read_bytes())
+    sign_manifest.sign_volume(other)
+    slots = boot_slots.layout(source, temp / "slots", both=True)
+    for name in boot_slots.boot_set(other):
+        shutil.copyfile(other / name, slots / "MIND" / "B" / name)
+    image = boot_slots.Image.create(temp / "refused.img", slots)
+    for path in (source, other, slots):
+        shutil.rmtree(path)
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    out = boot(image.path, STARTED).replace("\r", "")
+    at = 0
+    for line in ("BOOT: SLOT B LOADED ON TRIAL", "KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION", "TRIAL: RESTARTING INTO THE FALLBACK",
+                 "BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", STARTED):
+        at = out.find(line, at)
+        assert at >= 0, (line, out[-3000:])
+    print(f"PASS ({label}): a trial whose kernel refuses the loader's handoff restarts the machine, and the loader boots "
+          "slot A with B's try spent", flush=True)
 
 
 def update_zone(boot, temp, volume, label, updater):

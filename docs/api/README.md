@@ -194,6 +194,20 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 
 MIND Core is pre-1.0. The system call numbers, records and service interfaces can change between commits; a change is recorded in the commit, in `common/abi.rs` and here. Service interfaces carry a version: a change that breaks an existing function increments the major version and old clients get status 0x81 instead of misread data ([docs/idl, Evolution](../idl/README.md#evolution-mc-124)). A stable ABI is a goal of a later roadmap stage, not a current promise.
 
+### The loader's handoff (351-KRN-0166)
+
+The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (19) in the word ABI 10 put the ABI in. The kernel
+takes any version from `BOOT_HANDOFF_OLDEST` (16) to its own: `BootInfo` and the boot images have not changed since ABI 16,
+and loaders before this wrote their ABI there. A change of system calls (ABI 17 to 19) therefore needs no new loader; a
+change of `BootInfo` or `BOOT_FILES` sets both versions above every ABI so far, and the kernel then refuses older loaders
+with `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`. Programs keep checking `ABI_VERSION`.
+
+Every handoff keeps ABI 10's record in front: the framebuffer, `acpi_rsdp`, the version word and `boot_slot`. A kernel that
+refuses the handoff therefore still shows why on the screen and reads whether the boot is a trial. On a trial it adds
+`TRIAL: RESTARTING INTO THE FALLBACK` and restarts the machine (x86: port `0xCF9`, then the 8042 controller; aarch64: PSCI
+`SYSTEM_RESET` when the FADT names PSCI), and the loader, which counted the try, boots the fallback slot. Outside a trial
+it stops (351-KRN-0167).
+
 ### Staged PCI startup (ABI 11)
 
 `PLATFORM_DEVICE_BAR_IDLE` (kind 14; device index and memory BAR) grants MMIO

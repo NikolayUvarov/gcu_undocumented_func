@@ -26,23 +26,24 @@ import boot_slots_check  # noqa: E402
 CASES = {"kernel_read": 0x24, "text_write": 0x24, "stack_exec": 0x20, "undefined": 0x00}
 
 
-def boot(args, disk, until, timeout=90, decoy=None, raw=False):
+def boot(args, disk, until, timeout=90, decoy=None, raw=False, reboot=False):
     """Boots QEMU on `disk` and returns the console output once `until` appears, or every line of a tuple (or the
     timeout passes). AAVMF under TCG now and then stalls before it loads the bootloader; a boot that shows no kernel
     line is tried once more. `decoy`: a directory served as another FAT disk ahead of `disk` (211-KRN-0012). `raw`:
-    `disk` is a disk image, as every boot volume here is (000-KRN-0067)."""
-    output = boot_once(args, disk, until, timeout, decoy, raw)
+    `disk` is a disk image, as every boot volume here is (000-KRN-0067). `reboot`: a restart boots again instead of
+    ending QEMU."""
+    output = boot_once(args, disk, until, timeout, decoy, raw, reboot)
     if "MIND CORE KERNEL" not in output and "BdsDxe: starting" not in output:
         print("NOTE: the firmware stalled before loading the bootloader; booting again", flush=True)
-        output = boot_once(args, disk, until, timeout, decoy, raw)
+        output = boot_once(args, disk, until, timeout, decoy, raw, reboot)
     return output
 
 
-def boot_once(args, disk, until, timeout, decoy=None, raw=False):
+def boot_once(args, disk, until, timeout, decoy=None, raw=False, reboot=False):
     variables = Path(tempfile.mkdtemp()) / "vars.fd"
     shutil.copyfile(args.vars, variables)
     process = subprocess.Popen(
-        [args.qemu, "-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512", "-nographic", "-no-reboot",
+        [args.qemu, "-machine", "virt,gic-version=3", "-cpu", "max", "-m", "512", "-nographic", *([] if reboot else ["-no-reboot"]),
          "-drive", f"if=pflash,format=raw,readonly=on,file={args.code}", "-drive", f"if=pflash,format=raw,file={variables}",
          *(["-drive", f"format=raw,file=fat:{decoy},readonly=on"] if decoy else []),
          "-drive", f"format=raw,file={disk}" if raw else f"format=raw,file=fat:rw:{disk}", "-device", "ramfb", "-nic", "none"],
@@ -69,7 +70,7 @@ def disk_with(rtc=None):
     disk = Path(tempfile.mkdtemp()) / "root"
     atexit.register(shutil.rmtree, disk.parent, True)  # a copy of the build: removed when the test ends
     # Leftovers of an interrupted suite run (smoke-*, screen dumps) stay out: a big extra tree upsets QEMU 8.2.2's vvfat.
-    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "shell.elf", "smoke-*", "*.ppm"))
+    shutil.copytree(BUILD, disk, ignore=shutil.ignore_patterns("fault-*.elf", "fixture-kernel-*.elf", "shell.elf", "smoke-*", "*.ppm"))
     if rtc:
         shutil.copyfile(BUILD / f"fault-{rtc}.elf", disk / "rtc.elf")
     sign_manifest.sign_volume(disk)  # signed as the build signs it (350-UPD-0002)
@@ -152,6 +153,11 @@ def main():
     updater = BUILD / "fixture-updater.elf"  # scripts/build_aarch64.sh --fixtures
     boot_slots_check.run(lambda image, until: boot(args, image, until, raw=True), slots, disk_with(), "aarch64",
                          updater if updater.exists() else None)
+    # 351-KRN-0167: slot B's kernel refuses the loader on a trial and restarts the machine through PSCI.
+    refused = Path(tempfile.mkdtemp(prefix="mind-refused-"))
+    atexit.register(shutil.rmtree, refused, True)
+    boot_slots_check.refused_trial(lambda image, until: boot(args, image, until, timeout=180, raw=True, reboot=True), refused,
+                                   disk_with(), BUILD / "fixture-kernel-loader-abi.elf", "aarch64")
 
     for case, code in CASES.items():
         output = boot(args, image_of(disk_with(case)), "QUARANTINED", timeout=120, raw=True)

@@ -11,7 +11,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, ABI_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -458,7 +458,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: ABI_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
     if pause_s > 0 {

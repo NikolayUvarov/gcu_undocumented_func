@@ -4,7 +4,7 @@
 # with the licences and the voice model as on the x86 image. The network driver is built without its legacy (port I/O)
 # interface. With --fixtures, also the fault-test service in four variants (aarch64_root/fault-<case>.elf) for
 # tests/aarch64_smoke.py, the busy fixture (aarch64_root/fixture-busy_app.elf) for the busy and smp suites and the
-# updater's stand-in (aarch64_root/fixture-updater.elf) for the updater suite.
+# updater's stand-in (aarch64_root/fixture-updater.elf) for the updater suite, and the others the suites name.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/aarch64_root"
@@ -68,6 +68,9 @@ if [[ "${1:-}" == --fixtures ]]; then
     # The stand-in radio for the station (550-NET-0018).
     (cd "$ROOT/tests/wlansim" && cargo build --release --target "$TARGET")
     cp "$ROOT/tests/wlansim/target/$TARGET/release/wlansim" "$OUT/fixture-wlansim.elf"
+    # The kernel that takes only the next handoff version, for a refused trial (351-KRN-0167).
+    (cd "$ROOT/kernel" && cargo build --release --target "$TARGET" --features loader-abi-test --target-dir "$ROOT/kernel/target/loader-abi")
+    cp "$ROOT/kernel/target/loader-abi/$TARGET/release/kernel" "$OUT/fixture-kernel-loader-abi.elf"
 fi
 # The bootloader signed for Secure Boot if $MIND_SECURE_BOOT_KEYS names the keys (351-UPD-0012), then the boot
 # manifest and its signature over everything staged (350-UPD-0002).
