@@ -4,7 +4,7 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-package mind:init@1.7.0;
+package mind:init@1.8.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -58,4 +58,7 @@ interface init {
     /// carries the link or the log (vfs_server, logd, usb_serial, link) and the shell. Errors: not-found (no such
     /// service or file), failed (not an ELF, or the start failed).
     replace: func(name: string<16>, path: string<64>) -> result<_, error>;
+    /// Whether the link's console is on (1.8, 800-KRN-0155): the word `link-console` of data/mode.conf, counted only
+    /// with `dev` in link.conf. Only the disk's file sets it; `set-mode` keeps it. Any client may ask.
+    link-console: func() -> result<bool, error>;
 }

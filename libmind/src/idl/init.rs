@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 7, 0);
+pub const VERSION: (u8, u8, u8) = (1, 8, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -228,6 +228,16 @@ pub fn replace(endpoint: Endpoint, name: &str, path: &str) -> Result<core::resul
     Ok(Ok(()))
 }
 
+/// Whether the link's console is on (1.8, 800-KRN-0155): the word `link-console` of data/mode.conf, counted only
+/// with `dev` in link.conf. Only the disk's file sets it; `set-mode` keeps it. Any client may ask.
+pub fn link_console(endpoint: Endpoint) -> Result<core::result::Result<bool, Error>> {
+    let words = [11 | MAJOR << 8, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let _ = wire::check_reply(&reply, [0x10000, 0x0], false)?;
+    Ok(Ok(wire::field(&reply, 0, 16, 1) != 0))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -241,6 +251,7 @@ pub enum Request {
     Mode,
     SetMode { which: Mode, on: bool, reason: Text<120> },
     Replace { name: Text<16>, path: Text<64> },
+    LinkConsole,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -322,6 +333,10 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Replace { name, path }, call))
         }
+        11 => {
+            wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::LinkConsole, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -365,4 +380,8 @@ pub fn reply_set_mode(call: Call, value: core::result::Result<(), Error>) -> Res
 pub fn reply_replace(call: Call, value: core::result::Result<(), Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |_| Some(()))
+}
+pub fn reply_link_console(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::finish(call, [((value) as usize) << 16, 0])
 }

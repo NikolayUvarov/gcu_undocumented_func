@@ -1,6 +1,6 @@
 # 000-NET-0040 — An echo request of a chosen size and pattern, its reply's size and data checked (`socket.wit` 2.6) — done
 
-**Type:** network (stack, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [000-APP-0095](../issues/000-APP-0095-ping-options.md)) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4
+**Type:** network (stack, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P3 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [000-APP-0095](000-APP-0095-ping-options.done)) · **Roadmap:** track D · **Constitution:** MC-11.6, MC-12.4
 
 From the tools track's request "An echo request's size and payload, for `ping -s` and `-p` (000-APP-0095)" in requests-NET.md (2026-10-20), which this task takes from that file.
 
@@ -42,5 +42,5 @@ From the tools track's request "An echo request's size and payload, for `ping -s
 
 ## Related
 
-- [000-APP-0095](../issues/000-APP-0095-ping-options.md): `ping`'s options.
+- [000-APP-0095](000-APP-0095-ping-options.done): `ping`'s options.
 - [000-NET-0039](000-NET-0039-an-echo-request-holds-no-other.done): an ICMP socket per echo request, which this builds on.

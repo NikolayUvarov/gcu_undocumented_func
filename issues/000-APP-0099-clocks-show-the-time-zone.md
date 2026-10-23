@@ -91,6 +91,12 @@
   - The `wm` suite checks the kept line.
 - **On the Mac:** LNK puts a release with the 1.9 shell and the 1.3 rtc; the zone is to be set again there.
 
+## On the MacBook Pro (2026-10-22)
+
+- **The zone applies.** LNK reported it (`APP/2026-10-22T1555Z-…`): the zone set in `wm`'s Settings takes effect.
+  - The release was b509a30, put through the link into slot B, whose shell (`shell.wit` 1.9) and `wm` travel together (351-UPD-0023).
+  - It is evidence for that machine and that release only (MC-12.1).
+
 ## Related
 
 [211-KRN-0051](211-KRN-0051-setting-the-clock.md) (`rtc.wit` 1.2 `set`), [211-APP-0042](../issues-done/211-APP-0042-date-set-in-the-shell.done) (`date set`), [000-APP-0055](000-APP-0055-date-and-time-from-wms-settings.md) and [000-APP-0060](../issues-done/000-APP-0060-the-clock-from-wms-settings-at-once.done) (the date page), [000-APP-0012](../issues-done/000-APP-0012-clocks-read-the-rtc-once-a-minute.done) (`Clock`).

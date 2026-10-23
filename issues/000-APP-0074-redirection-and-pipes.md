@@ -1,6 +1,6 @@
 # 000-APP-0074 — Redirection and pipes in the shell and in `msh`
 
-**Type:** tools (`shell`, `msh`, tools) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `>` and `>>` done; `<` and `|` wait · **Blocked by:** [000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md) for `<` and `|` · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
+**Type:** tools (`shell`, `msh`, tools) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `>`, `>>` and `|` done; `<` left · **Blocked by:** — ([000-KRN-0094](000-KRN-0094-a-text-input-for-programs.md)'s text input is in `main`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-3.11, MC-11.5
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, at the maintainer's request: "redirection and pipes have to be added to the shell". Numbered by the tools track on 2026-10-14; the maintainer chose it as the track's next task.
 
@@ -55,6 +55,22 @@
   - `cat log:boot0001.log | sha256` equals `sha256 log:boot0001.log`;
   - 100 KiB through `|` arrive whole.
 - **On the MacBook Pro:** `dmesg -s battery > data/battery.txt` leaves the file on the stick.
+
+## Progress (2026-10-22): `|`
+
+- **The maintainer's need:** `ps | grep wm` did not run.
+- **The kernel's part** (000-KRN-0094) has been in `main` since 289e84b: a program started with `loader.wit` 1.9 `commit-with-input` reads a text input whose writer its launcher holds.
+- **The shell** (`shell/src/pipe.rs`, `piped_line`, `feed_more`):
+  - `command | program` gathers what the command prints, as `>` does. That includes a console program before `|`, which runs to its end first, and the `ERROR: ` lines, which stay on the screen.
+  - It then starts the program with that as its input.
+  - Its main loop fills the input as the program reads, so neither waits on the other, and closes it at the end.
+  - One `|` a line. The program after it is one of the disk's; a shell command there is named and refused.
+  - `| … > file` works through `>`.
+- **`grep` without a path** reads its text input; without one, its usage (`search/src/bin/grep.rs`).
+- **Tests:**
+  - host tests (`tests/shell_host.rs`: the split; `tests/search_host.rs`: grep without a path);
+  - the `find`/`grep` check: `cat | grep`, `ps | grep shell`, `ls | grep -c`, a line that matches nothing, the refusals.
+- **Left:** `<`; more than one `|`.
 
 ## Related
 
