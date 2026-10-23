@@ -22,7 +22,7 @@ A channel's expiry is set when the channel is published, for days or weeks. So a
 
   Then it fetches the channel the timestamp names.
 - **Publishing:** `scripts/release.py timestamp` renews it, and a publish writes it last.
-- **The offline policy** ([351-UPD-0025](351-UPD-0025-expiry-and-the-offline-policy.md)) applies with the shorter expiry.
+- **The offline policy** ([351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done)) applies with the shorter expiry.
 
 ## Acceptance criteria
 
@@ -37,4 +37,4 @@ A channel's expiry is set when the channel is published, for days or weeks. So a
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0025](351-UPD-0025-expiry-and-the-offline-policy.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md).

@@ -1,0 +1,67 @@
+# 351-UPD-0025 — Expiry of metadata and the offline policy, written down and shown — done
+
+**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.4
+
+Split from [351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
+
+## Problem
+
+What is done: the updater refuses an expired channel, and it counts a clock it cannot read as expired (docs/update/updater.md). The `update` suite shows the refusal over HTTPS.
+
+What is not done:
+
+- the policy for a device that has been offline longer than the expiry is not written down;
+- the directory source (`linkupdate`) has not shown the refusal;
+- `status` does not say that the metadata the device holds has expired.
+
+MC-9.4 asks that expiry during autonomous operation follow a predefined policy, and Appendix B.5 that freezes be checked.
+
+## Plan
+
+- **The policy**, in docs/update/updater.md and updater_RU.md. A device past its metadata's expiry:
+  - keeps running its confirmed slot;
+  - refuses to fetch or apply until fresh metadata comes;
+  - still allows a rollback to a version not below the floor ([351-UPD-0024](../issues/351-UPD-0024-version-floor-in-the-boot-records.md)), since that needs no network;
+  - says so in `status` and in the log.
+
+  A clock that cannot be read counts as expired.
+- **`status`** gives the held channel's expiry and whether it has passed: a new field in `idl/update.wit`, as a minor version.
+- **The `linkupdate` suite** refuses an expired channel from a directory.
+- **Freezes.** A server that keeps serving the same unexpired channel can hold a device on it until the channel expires. A shorter bound is the timestamp key ([351-UPD-0028](../issues/351-UPD-0028-a-short-lived-timestamp-key.md)).
+
+## Acceptance criteria
+
+- The `update` and `linkupdate` suites refuse an expired channel, on x86 and aarch64, with no record written.
+- `status` shows the expiry and that it has passed.
+- The policy is in docs/update/updater.md and updater_RU.md.
+
+## Related
+
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0007](351-UPD-0007-updater-service.done), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351-UPD-0028](../issues/351-UPD-0028-a-short-lived-timestamp-key.md).
+
+## Resolution
+
+Done in `main` f2f598b4 (landing round 21, 2026-10-23), from `claude/relaxed-meitner-5bmhpz` 6667e8ce and a0526865.
+
+- **The policy** is in [docs/update/updater.md](../docs/update/updater.md) 0.5 and [updater_RU.md](../docs/update/updater_RU.md), section "Metadata past its expiry".
+  - The system runs on in its confirmed slot.
+  - `check` and `fetch` refuse an expired channel, and `apply` refuses a staged release whose kept channel has expired.
+  - `rollback` stays possible offline.
+  - A clock that cannot be read counts as expired.
+- **The updater** (`updater/src/main.rs`):
+  - it holds the channel it last verified: the source's, or else the running slot's;
+  - it logs that channel as `[UPDATER] METADATA: CHANNEL … EXPIRES …, KEPT IN SLOT A | FROM THE SOURCE`, with `; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL` once the expiry has passed.
+  - `plan::expired` decides; `tests/updater_host.rs` tests it.
+- **`idl/update.wit` 1.1** adds `metadata`, which gives the same to a client. It is a new function at the end, a minor version. A new field of `status` would have changed that reply's layout, a major version.
+
+How each criterion stands:
+
+- **The `update` and `linkupdate` suites refuse an expired channel** with no record written, on x86 and aarch64: met.
+  - Passed in this session's container (x86) and on `un-rizen-service` (aarch64), on e6e11df5 and again on a0526865 after `main` was merged.
+  - Passed in round 21's gate.
+- **The expiry, and that it has passed, shown:** met through the log on the platform.
+  - The `update` suite reads the line at start and after a boot with the clock 60 days on and no network, where the system runs on.
+  - The `metadata` call has **not** run on the platform: no program holds the updater's client yet. Its first caller is the shell's `update` (351-APP-0029), asked in [requests-APP.md](../issues/requests-APP.md).
+- **The policy in `updater.md` and `updater_RU.md`:** met.
+
+Not shown on the platform: `apply`'s refusal of an expired staged release. The automatic run checks the source first, so only a client's `apply` reaches it. The host test covers the decision it rests on.

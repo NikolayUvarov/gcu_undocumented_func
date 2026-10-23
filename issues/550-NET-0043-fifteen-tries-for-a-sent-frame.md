@@ -1,6 +1,6 @@
 # 550-NET-0043 — Fifteen tries for a frame the station sends
 
-**Type:** `wlan` · **Owner:** network track · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1
+**Type:** `wlan` · **Owner:** network track · **Priority:** P1 · **Status:** in `main` (2026-10-23, f2f598b4); the MacBook Pro's run left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1
 
 From DRV's request of 2026-10-23 (`NET/2026-10-23T0705Z-DRV-fifteen-tries-for-a-data-frame-under-bursts-of-interference.md` on `internal-dev-messages`). The maintainer's word, as DRV gives it: the MacBook Pro sits in interference that cannot be removed, and MIND must work through it.
 
@@ -25,8 +25,18 @@ From DRV's request of 2026-10-23 (`NET/2026-10-23T0705Z-DRV-fifteen-tries-for-a-
 
 ## Acceptance criteria
 
-- [ ] The `net` suite passes on x86 and aarch64 with 15 tries (`wlansim` answers the tries it is asked for).
+- [x] The `net` suite passes on x86 and aarch64 with 15 tries (`wlansim` answers the tries it is asked for).
 - [ ] On the MacBook Pro, the share of sent frames lost in a burst is lower than in the two bursts of 2026-10-23 with 7 tries. This is DRV's to record, and it is evidence for that machine, that access point and that interference only (MC-12.1).
+
+## Progress (2026-10-23)
+
+- **In `main`** f2f598b4, landing round 21, from `claude/relaxed-meitner-5bmhpz` e6e11df5 (with 351-UPD-0025).
+- **The `net` suite passed with 15 tries:**
+  - x86 in this session's container (QEMU TCG), with `scripts/x86_fixtures.sh`: the Wi-Fi station's checks over `wlansim`'s WPA2 access point among them;
+  - aarch64 on `un-rizen-service`, built with `--fixtures`;
+  - and in round 21's gate.
+- **One x86 run failed** in the modern-only and legacy-only VirtIO card check, outside this change. The next run passed. It is recorded as [000-NET-0044](000-NET-0044-a-card-without-a-lease-after-an-unanswered-attach.md).
+- **Left:** the MacBook Pro's run, DRV's to record.
 
 ## Related
 
