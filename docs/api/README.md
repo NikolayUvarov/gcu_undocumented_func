@@ -202,6 +202,12 @@ and loaders before this wrote their ABI there. A change of system calls (ABI 17 
 change of `BootInfo` or `BOOT_FILES` sets both versions above every ABI so far, and the kernel then refuses older loaders
 with `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`. Programs keep checking `ABI_VERSION`.
 
+Every handoff keeps ABI 10's record in front: the framebuffer, `acpi_rsdp`, the version word and `boot_slot`. A kernel that
+refuses the handoff therefore still shows why on the screen and reads whether the boot is a trial. On a trial it adds
+`TRIAL: RESTARTING INTO THE FALLBACK` and restarts the machine (x86: port `0xCF9`, then the 8042 controller; aarch64: PSCI
+`SYSTEM_RESET` when the FADT names PSCI), and the loader, which counted the try, boots the fallback slot. Outside a trial
+it stops (351-KRN-0167).
+
 ### Staged PCI startup (ABI 11)
 
 `PLATFORM_DEVICE_BAR_IDLE` (kind 14; device index and memory BAR) grants MMIO
