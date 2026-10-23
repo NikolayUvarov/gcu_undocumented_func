@@ -1,6 +1,6 @@
-# 351-KRN-0167 — A kernel that refuses its loader on a trial boot restarts the machine
+# 351-KRN-0167 — A kernel that refuses its loader on a trial boot restarts the machine — done
 
-**Type:** kernel (`main.rs`, `trial.rs`, `arch/*`) · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-6.5, MC-6.8, MC-12.4
+**Type:** kernel (`main.rs`, `trial.rs`, `arch/*`) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-6.5, MC-6.8, MC-12.4
 
 From EFF's request of 2026-10-23 (`internal-dev-messages`, `KRN/2026-10-23T1856Z-EFF-two-requests-a-slot-update-across-a-syscall-abi-change.md`), filed at the maintainer's word.
 
@@ -12,7 +12,7 @@ From EFF's request of 2026-10-23 (`internal-dev-messages`, `KRN/2026-10-23T1856Z
 
 ## Plan
 
-1. **Read whether the boot is a trial without trusting the rest of `BootInfo`.** The flag must sit where every loader that sets trials writes it. Either it joins the fixed prefix that is read before the check (with `abi_version`), or the kernel reads it at the offset that the loaders of every accepted era agree on. Which of the two, is decided against `BootInfo`'s history (see [351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.md)).
+1. **Read whether the boot is a trial without trusting the rest of `BootInfo`.** The flag must sit where every loader that sets trials writes it. Either it joins the fixed prefix that is read before the check (with `abi_version`), or the kernel reads it at the offset that the loaders of every accepted era agree on. Which of the two, is decided against `BootInfo`'s history (see [351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done)).
 2. **On a trial, a refusal restarts the machine** without using `BootInfo`'s other fields:
    - x86: the reset control register (port `0xCF9`), then the keyboard controller's reset;
    - aarch64: PSCI `SYSTEM_RESET`.
@@ -42,6 +42,19 @@ Made on `claude/youthful-mendel-mf1soy` (b0535581):
   - host test `a_refused_handoff_reads_the_trial_and_the_acpi_root_from_abi_10s_record`.
 - **Not done.** An aarch64 board without ACPI, or whose FADT names no PSCI, halts instead. The restart was not tried on a machine.
 
+## Resolution
+
+Landed in round 26 (`main` 6bf90421, 2026-10-23); every gate group passed on that commit, i9's on rz-2 while i9 was out (QEMU, x86 and aarch64).
+- **What was made.**
+  - A kernel that refuses the handoff reads the trial flag at its offset in ABI 10's record. Every handoff keeps that record in front (`BootInfo::read_refused`).
+  - On a trial it adds `TRIAL: RESTARTING INTO THE FALLBACK` and restarts the machine: x86 through port `0xCF9`, the 8042 controller, then a triple fault; aarch64 through PSCI `SYSTEM_RESET`, with the conduit read from the FADT (`acpi::early`, which also gives the refusal the PL011).
+  - Outside a trial it halts, as before.
+- **The gate's checks.**
+  - `boot_slots_check.refused_trial` in the x86 `boot` suite and in `tests/aarch64_smoke.py`: slot B on trial holds the `loader-abi-test` kernel, the machine restarts, and slot A boots with B's try spent.
+  - The `boot` suite's check that outside a trial the kernel stays stopped.
+  - The host test for `read_refused`.
+- **Not done:** an aarch64 board without ACPI, or whose FADT names no PSCI, halts instead of restarting. The restart was not tried on a machine.
+
 ## Related
 
-[351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.md), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md), [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md), [351](351-self-update.md).
+[351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md), [351](../issues/351-self-update.md).

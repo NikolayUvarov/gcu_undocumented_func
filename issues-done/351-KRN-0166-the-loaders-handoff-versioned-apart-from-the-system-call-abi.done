@@ -1,6 +1,6 @@
-# 351-KRN-0166 — The loader's handoff versioned apart from the system-call ABI
+# 351-KRN-0166 — The loader's handoff versioned apart from the system-call ABI — done
 
-**Type:** kernel (`main.rs`), `common/abi.rs`, bootloader · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-12.4, MC-12.7, MC-6.5
+**Type:** kernel (`main.rs`), `common/abi.rs`, bootloader · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-12.4, MC-12.7, MC-6.5
 
 From EFF's request of 2026-10-23 (`internal-dev-messages`, `KRN/2026-10-23T1856Z-EFF-two-requests-a-slot-update-across-a-syscall-abi-change.md`), filed at the maintainer's word.
 
@@ -47,6 +47,18 @@ Made on `claude/youthful-mendel-mf1soy` (585331ac):
   - **today's kernel and programs from the loader of ABI 17,** built from `main` 344aa298: the `shell` suite on x86 and on aarch64. These are one run each, outside the gate, and that loader is not kept as a fixture.
 - **What it gives the MacBook.** Its stick's loader (ABI 17) takes kernels of ABI 17 to 19, and later ones until `BootInfo` changes. EFF's stick needs no rewrite for these.
 
+## Resolution
+
+Landed in round 26 (`main` 6bf90421, 2026-10-23); every gate group passed on that commit, i9's on rz-2 while i9 was out (QEMU, x86 and aarch64).
+- **What was made.** `BOOT_HANDOFF_VERSION` (19) and `BOOT_HANDOFF_OLDEST` (16) live in `common/abi.rs`; the loader writes the handoff version in the word at offset 720.
+  - The kernel takes 16 to 19, because `BootInfo` and the boot images have not changed since ABI 16.
+  - The `loader-abi-test` kernel takes only 20.
+  - The host test `boot_abi` pins `BootInfo`'s size (1048 bytes), the image count (43) and the range.
+- **Docs.** `docs/api` and `docs/profile` (the MC-11.1 row) say which change needs a new loader.
+- **Evidence outside the gate.** Today's kernel and programs booted from the loader of ABI 17 (`main` 344aa298): one run of the `shell` suite on x86 and one on aarch64.
+- **What it gives the MacBook.** Its stick's loader (ABI 17) takes kernels of ABI 17 to 19, and later ones until `BootInfo` changes. A slot update across these ABIs needs no new stick.
+- **Not tried:** the MacBook itself.
+
 ## Related
 
-[351-KRN-0167](351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.md), 351-UPD-0010 ([updating the bootloader](351-UPD-0010-updating-the-bootloader.md)), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md), [351](351-self-update.md).
+[351-KRN-0167](351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.done), 351-UPD-0010 ([updating the bootloader](../issues/351-UPD-0010-updating-the-bootloader.md)), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351](../issues/351-self-update.md).
