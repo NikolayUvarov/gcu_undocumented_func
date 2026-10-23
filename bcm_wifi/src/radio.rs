@@ -79,7 +79,8 @@ pub struct Sent { pub acked: bool, pub attempts: u8 }
 // The network's beacons heard, their summed signal and the interval they give in TU: against the beacons due, what the
 // receiving side missed; those missed between two heard, by their timestamps, in runs of 1, 2 to 4 and more. The good
 // CCK frames by signal (SIGNAL_BINS) and summed: how weak a sender is still heard. The polls that found the receive
-// ring out of buffers (550-DRV-0036).
+// ring out of buffers (550-DRV-0036). The good CCK frames whose receive header gave no level (no core's power byte
+// below 0), and the last such bytes: on the MacBook Pro for an hour on 2026-10-23, every frame, with reception sound.
 #[derive(Clone, Copy, Default)]
 pub struct Counts {
     pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
@@ -88,6 +89,7 @@ pub struct Counts {
     pub ofdm_weak: u32,
     pub beacons: u32, pub beacon_power: i32, pub beacon_tu: u16, pub last_beacon: u64, pub missed: u32, pub missed_runs: [u32; 3],
     pub cck_heard: u32, pub cck_power: i32, pub cck_bins: [u32; 5], pub ring_full: u32,
+    pub beacons_level: u32, pub no_level: u32, pub no_level_raw: [u8; 3],
 }
 // The signal bins' lower bounds in dBm: -50 and up, -60 to -51, -70 to -61, -80 to -71, below.
 pub const SIGNAL_BINS: [i8; 4] = [-50, -60, -70, -80];
@@ -400,11 +402,14 @@ impl<'a> Radio<'a> {
             self.counts.cck_heard += 1;
             self.counts.cck_power += signal as i32;
             self.counts.cck_bins[SIGNAL_BINS.iter().position(|&b| signal >= b).unwrap_or(4)] += 1;
+        } else if !ofdm {
+            self.counts.no_level += 1;
+            self.counts.no_level_raw = [s[9], s[10], s[11]];
         }
         let f = &s[start..end];
-        if f.len() >= 36 && f[0] == 0x80 && self.filter.bssid != [0; 6] && f[16..22] == self.filter.bssid && heard {
+        if f.len() >= 36 && f[0] == 0x80 && self.filter.bssid != [0; 6] && f[16..22] == self.filter.bssid {
             self.counts.beacons += 1;
-            self.counts.beacon_power += signal as i32;
+            if heard { self.counts.beacons_level += 1; self.counts.beacon_power += signal as i32; }
             self.counts.beacon_tu = u16::from_le_bytes([f[32], f[33]]);
             gaps(&mut self.counts, u64::from_le_bytes(f[24..32].try_into().unwrap()));
         }
