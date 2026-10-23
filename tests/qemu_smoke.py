@@ -5424,9 +5424,15 @@ def update_suite(args):
                 return log
             time.sleep(2)
         raise AssertionError((line, log[-3000:]))
+    held = json.loads(kept.split(b"\n")[0])
+    held = f"[UPDATER] METADATA: CHANNEL stable VERSION 5, MINIMUM {held['minimum']}, EXPIRES {held['expires']}, KEPT IN SLOT A"
     try:
         log = logged("[UPDATER] CHECK: REFUSED: Expired", 120)
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
+        # 351-UPD-0025: the channel it holds, kept in slot A and current, then the source's, expired.
+        for line in (held + "\n", "[UPDATER] METADATA: CHANNEL stable VERSION 6, MINIMUM 5, EXPIRES 2020-01-01T00:00:00Z, "
+                                  "FROM THE SOURCE; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL"):
+            require(log, line)
         # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: slot A is laid out with release 5's applications, and they run from there.
@@ -5513,12 +5519,17 @@ def update_suite(args):
     asked = {path for path, _ in https.requests}
     assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
     # The record a fallback or a rollback leaves, slot A confirmed, as the next sequence: slot A boots release 5 with its
-    # own applications, the uptime release 6 changed among them (351-UPD-0023).
+    # own applications, the uptime release 6 changed among them (351-UPD-0023). The clock is 60 days on, past the expiry
+    # of the channel kept there, with no network: the system runs on and says the channel expired (351-UPD-0025).
     assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
     boot_slots.write_next(image, slot="A", confirmed=True)
-    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    import datetime
+    later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc=later, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
     try:
-        require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 5")
+        log = vm.service_logs("updater", "[UPDATER] METADATA")
+        for line in ("[UPDATER] SLOT A, VERSION 5", held + "; EXPIRED: FETCH AND APPLY WAIT FOR A CURRENT CHANNEL"):
+            require(log, line)
         require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
         assert "PANIC" not in vm.log, vm.log[-2000:]
@@ -5531,7 +5542,8 @@ def update_suite(args):
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
-          "slot A, release 5 runs its own; the file system is consistent", flush=True)
+          "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
+          "is consistent", flush=True)
 
 
 def mindlink_tool():
@@ -5546,8 +5558,8 @@ def linkupdate_suite(args):
     """An update through the link (351-KRN-0141): the update suite's image (release 5 in slot A, confirmed, its channel
     kept there) with link.conf at the root and update.txt naming data/link/rel, `automatic apply` every 20 s, and no
     network. Through QEMU's emulated FT232 the host's mindlink puts release 6 there as the release tool lays a server
-    out: the boot files' blobs and the signed manifest, then a channel whose signature was changed, refused with no
-    boot record written, then the channel as published. The updater takes version 6 from that directory into slot B,
+    out: the boot files' blobs and the signed manifest, then an expired channel and one whose signature was changed, each
+    refused with no boot record written (351-UPD-0025), then the channel as published. The updater takes version 6 from that directory into slot B,
     boots it on trial through init's restart and confirms it on the disk; mindlink's `log` reads each step from the
     other end. Without `dev` in link.conf, link holds none of the developer mode's grants (800-KRN-0139)."""
     if not raw_tools() or not shutil.which("openssl"):
@@ -5556,7 +5568,7 @@ def linkupdate_suite(args):
     mindlink = mindlink_tool()
     temp = Path(tempfile.mkdtemp(prefix="mind-linkupdate-"))
     arch = args.arch
-    volume, _, server, kept, good, forged, manifest6, boot_files, _ = update_releases(temp, arch)
+    volume, _, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
     layout = temp / "layout"
     boot_slots.layout(volume, layout)
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
@@ -5587,16 +5599,17 @@ def linkupdate_suite(args):
             link.put(server / path, path)
         print(f"TIME: {len(files)} files, {sum((server / p).stat().st_size for p in files)} bytes, put through the link in "
               f"{time.monotonic() - started:.0f} s", flush=True)
-        bad = temp / "forged"
-        bad.write_bytes(forged)
-        before = link.log()
-        link.put(bad, "channels/stable")
-        # The script's follower stops at the refusal, as it would on a real machine.
-        try:
-            link_update.follow(link, 120, say=lambda line: None, before=before)
-            raise AssertionError("the channel with a changed signature was not refused")
-        except RuntimeError as refused:
-            require(str(refused), "[UPDATER] CHECK: REFUSED: Signature")
+        # The script's follower stops at a refusal, as it would on a real machine: an expired channel (351-UPD-0025), then
+        # one whose signature was changed.
+        for bad, refusal in ((channel(6, 5, "2020-01-01T00:00:00Z"), "Expired"), (forged, "Signature")):
+            (temp / "bad").write_bytes(bad)
+            before = link.log()
+            link.put(temp / "bad", "channels/stable")
+            try:
+                link_update.follow(link, 120, say=lambda line: None, before=before)
+                raise AssertionError(f"the channel was not refused: {refusal}")
+            except RuntimeError as refused:
+                require(str(refused), f"[UPDATER] CHECK: REFUSED: {refusal}")
         log = link.log()
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         assert "[UPDATER] RECORD" not in log and "[UPDATER] FETCH: VERSION 6" not in log, log
@@ -5623,8 +5636,8 @@ def linkupdate_suite(args):
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
-    print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; a channel with a changed signature is "
-          "refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
+    print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; an expired channel and one with a changed "
+          "signature are refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
           "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
 
 

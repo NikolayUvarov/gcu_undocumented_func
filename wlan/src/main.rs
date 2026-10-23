@@ -30,8 +30,9 @@ const POLL_MS: u32 = 10;
 // Received Ethernet frames kept for the stack and parked `wait` calls.
 const QUEUE: usize = 32;
 const WAITERS: usize = 4;
-// Tries of a frame the station sends: 802.11's default short retry limit (550-NET-0042; 4 lost 8% on the MacBook Pro).
-const ATTEMPTS: u8 = 7;
+// Tries of a frame the station sends: the most a radio takes, to outlast bursts of interference (550-NET-0043; 7 lost
+// about 20% of the MacBook Pro's frames in a burst, 550-NET-0042).
+const ATTEMPTS: u8 = 15;
 const RADIO_HEADER: usize = 8;
 // The radio is asked with a deadline, and again every RADIO_MS until it answers; meanwhile the station serves its
 // clients as a card without a radio (550-NET-0030), so the stack does not wait on it.

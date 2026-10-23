@@ -3,7 +3,7 @@
 /// a manifest's with the boot key, and every file it stages by size and SHA-256, before a boot record names the slot.
 /// The parser service reads the metadata (MC-11.11). The source, the channel and what the updater does by itself are
 /// in `update.txt` on the boot volume. A request runs to its end before the next one is read.
-package mind:update@1.0.0;
+package mind:update@1.1.0;
 
 interface update {
     /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -11,7 +11,7 @@ interface update {
     /// source did not answer, or a transfer failed after its tries; `missing`: the source has no such file, or the
     /// channel no manifest for this architecture; `malformed`: the parser refused the metadata, or its answer does not
     /// make the bytes; `signature`: a channel or manifest not signed by its key; `expired`: the channel's expiry has
-    /// passed, or the clock cannot be read; `older`: the channel names the running version or an older one; `digest`:
+    /// passed, or the clock cannot be read (for `apply`, the channel kept with the staged release); `older`: the channel names the running version or an older one; `digest`:
     /// a file not as its manifest lists it; `write`: the slot or a boot record could not be written; `not-staged`: no
     /// verified newer release in the other slot; `no-fallback`: no slot to roll back to, or its version is not known or
     /// is below the minimum; `denied`: init refused the restart; `no-parser`: the parser service did not answer.
@@ -25,6 +25,12 @@ interface update {
     /// record is confirmed; the version staged in the other slot (0: none); the last failure (empty: none).
     record state { slot: u8, trial: bool, running: u64, recorded: u8, confirmed: bool, staged: u64, failure: string<64> }
 
+    /// The channel the updater holds, checked with the release key: the one it last read from the source, or else the
+    /// one kept in the running slot (`channel` empty: none). `expired`: its expiry has passed or the clock cannot be
+    /// read, so `fetch` and `apply` wait for a current channel while the system runs on and `rollback` stays possible
+    /// (351-UPD-0025). `checked`: read from the source since the updater started.
+    record metadata { channel: string<32>, version: u64, minimum: u64, expires: string<20>, expired: bool, checked: bool }
+
     /// Reads the channel and checks its signature, its form and its expiry. A version not above the running one is
     /// `older`.
     check: func() -> result<offer, error>;
@@ -32,12 +38,15 @@ interface update {
     /// partial file ends and checked by size and SHA-256, then the manifest, its signature and the channel. Returns the
     /// version staged.
     fetch: func() -> result<u64, error>;
-    /// Checks the other slot as the bootloader will, writes the boot record that boots it on trial with `tries` (1 to
-    /// 9), falling back to the running slot, and asks init to restart the machine.
+    /// Checks the other slot as the bootloader will, and that the channel kept there has not expired; writes the boot
+    /// record that boots it on trial with `tries` (1 to 9), falling back to the running slot, and asks init to restart
+    /// the machine.
     apply: func(tries: u8) -> result<_, error>;
     /// Writes the boot record that boots the other slot on trial, falling back to the running one, if the channel kept
     /// there shows a version not below the minimum the updater knows; then asks init to restart the machine.
     rollback: func() -> result<_, error>;
     /// The updater's view (above).
     status: func() -> state;
+    /// The channel the updater holds (above); added in 1.1.
+    metadata: func() -> metadata;
 }
