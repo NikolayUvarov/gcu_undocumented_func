@@ -87,6 +87,8 @@
 - The kernels (products in each quantization, attention, normalization, element-wise) are compiled on the build host, as 178 plans, and travel with the runtime, each with its hash.
 - *Acceptance:* the same tokens as on the CPU within a stated tolerance (exact for greedy decoding where the arithmetic allows it); `nn bench` on each GPU, with its memory used and its share of the device.
 
+**Stages 4 and 5 are carried out by the track `NRL`** ([900](900-neural-representation-lab.md), opened 2026-10-23 at the maintainer's request): its T03 (the spline and other representations), T07 (calibration and local training) and T10 (joint fine-tuning). Its runtime crate and artifacts run inside this task's `nnd`. What follows stays as this task's statement of what the system needs from them.
+
 **4. Fine-tuning.**
 
 - **What:**
@@ -139,5 +141,6 @@ Each stage's criteria above. The main task is split into `APP` tasks per stage w
 - [178](178-models-on-every-accelerator.md) (the accelerators), [174](174-full-use-of-pc-hardware.md) (the drivers);
 - [250](250-voice-dictation.md), [251](251-model-cache-and-model-disk.md), [252](252-neural-speech-synthesis.md);
 - [260](260-ai-agents-on-the-platform.md) (the agent's local provider);
+- [900](900-neural-representation-lab.md) (the track `NRL`: representations, conversion, fine-tuning);
 - [650](650-building-on-the-target.md) (threads and a POSIX layer, which a port of an existing runtime would need instead);
 - `libmind/src/nn`.
