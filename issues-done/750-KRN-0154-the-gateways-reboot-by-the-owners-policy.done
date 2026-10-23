@@ -1,8 +1,8 @@
-# 750-KRN-0154 — The gateway's reboot, by the owner's policy
+# 750-KRN-0154 — The gateway's reboot, by the owner's policy — done
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-6.7
+**Type:** `init` · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7, MC-6.7
 
-Split from [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), whose plan gave `effector_gw` an `init` client badged `BADGE_REBOOT`. It serves [750-EFF-0010](750-EFF-0010-reboot.md).
+Split from [750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), whose plan gave `effector_gw` an `init` client badged `BADGE_REBOOT`. It serves [750-EFF-0010](../issues/750-EFF-0010-reboot.md).
 
 ## Problem
 
@@ -19,9 +19,9 @@ Split from [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for
 
 ## Acceptance criteria
 
-- [ ] In the `modes` suite (x86 and aarch64), the gateway's stand-in under `reboot on` reboots the machine, and the next boot comes up in the same mode.
-- [ ] Without `reboot on`, its `reboot` is refused with the reason, and the machine runs on.
-- [ ] `stop-task` stays refused for the gateway.
+- [x] In the `modes` suite (x86 and aarch64), the gateway's stand-in under `reboot on` reboots the machine, and the next boot comes up in the same mode.
+- [x] Without `reboot on`, its `reboot` is refused with the reason, and the machine runs on.
+- [x] `stop-task` stays refused for the gateway.
 
 ## Progress (2026-10-23)
 
@@ -34,8 +34,15 @@ Made on `claude/youthful-mendel-mf1soy`:
   - without `reboot on`, the reboot is refused with that line, and the machine runs on;
   - with it, QEMU restarts the machine once, and the next boot comes up in the development mode; the stub's second start finds the first one's files and asks nothing.
 - **`docs/profile/bootstrap.md`** says so.
-- **Run:** x86, in this session's container (QEMU TCG); aarch64 is running.
+- **Run:** the `modes` suite passed on x86 and aarch64 (the reboot through PSCI `SYSTEM_RESET`), in this session's container (QEMU TCG).
+
+## Resolution
+
+- `init` serves `reboot` from the gateway's `BADGE_NAMED` client (slot 11) only under the owner's `reboot on`, read at each request (`named_reboot`); otherwise it refuses with the reason and MC-3.4. No new badge, slot or ABI.
+- The `modes` suite checks both ways on x86 and aarch64, with `tests/gateway_stub`.
+- Landed in round 15: every group of gate `land-436c2f2b` passed (the `no-i9` preset, on un-rizen and PCU), `main` 436c2f2b.
+- The gateway's own use of it, after the session's `shutting_down` heartbeat, is EFF's (750-EFF-0010).
 
 ## Related
 
-[750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-KRN-0121](../issues-done/750-KRN-0121-a-lifecycle-client-for-named-services.done), [750-EFF-0010](750-EFF-0010-reboot.md), `idl/init.wit` (`reboot`), `libmind/src/effector/policy.rs` (`Ask::Reboot`).
+[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), [750-KRN-0121](750-KRN-0121-a-lifecycle-client-for-named-services.done), [750-EFF-0010](../issues/750-EFF-0010-reboot.md), `idl/init.wit` (`reboot`), `libmind/src/effector/policy.rs` (`Ask::Reboot`).

@@ -68,7 +68,7 @@ The Effector agent is two boot services ([750](../issues/750-effector-agent.md))
   - `effector_gw`: slots 3 (`system/effector_gw`), 5, 7 (750-KRN-0120's delivery scope), 10, 11 (750-KRN-0121's lifecycle client), 12, and 15 (750-KRN-0153's screen).
 - **Checked** by the `modes` suite on x86 and aarch64, with EFF's `effector` suite in a mode. Landed in round 13 with EFF's request (`LANDING/2026-10-22T1958Z-EFF-…`): every group of gate `land-e93c47af` passed, `main` e93c47af.
 - **Split off:**
-  - the gateway's reboot: [750-KRN-0154](../issues/750-KRN-0154-the-gateways-reboot-by-the-owners-policy.md);
+  - the gateway's reboot: [750-KRN-0154](750-KRN-0154-the-gateways-reboot-by-the-owners-policy.done);
   - its client of `updater`: [750-UPD-0020](../issues/750-UPD-0020-the-gateways-client-of-the-updater.md), whose `init` part becomes a kernel task once the badge is defined;
   - the shell's `BADGE_OWNER` client: [750-APP-0093](../issues/750-APP-0093-the-shells-effector-command.md);
   - a scope for installed applications: with [750-EFF-0008](../issues/750-EFF-0008-application-packages.md).
