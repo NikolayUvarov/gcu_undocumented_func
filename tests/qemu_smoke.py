@@ -4273,6 +4273,20 @@ def link_suite(args):
                 require(link(port, "replace", "rtc", "--back"), "from its boot image")
                 assert "BACK TO ITS BOOT IMAGE" in vm.command("dmesg -s init", raw=True).upper()
                 require(link(port, "replace", "logd", str(rtc), ok=False), "not allowed")
+            # 800-LNK-0020: the link's mark on the screen (the compositor's 800-KRN-0156): red while a master is heard and
+            # dev lets it change the machine, grey once it has been quiet for 5 s, red again at its next request.
+            marked = vm.command("dmesg -s link", raw=True)
+            if "[LINK] MARK:" not in marked:
+                print("SKIP: link: no mark on the screen yet (display.wit 1.2, 800-KRN-0156)", flush=True)
+            else:
+                require(marked, "[LINK] MARK: Changing")
+                require(vm.command("dmesg -s compositor", raw=True), "REMOTE MARK Link: Changing")
+                time.sleep(8)
+                require(vm.command("dmesg -s link", raw=True), "[LINK] MARK: Unconnected")
+                require(vm.command("dmesg -s compositor", raw=True), "REMOTE MARK Link: Unconnected")
+                link(port, "hello")
+                time.sleep(2)
+                assert vm.command("dmesg -s link", raw=True).count("[LINK] MARK: Changing") >= 2, "red again"
             missing = [p for p in ("NETWORK", "WIFI", "SYSINFO", "REBOOT") if p not in powers]
             if missing:
                 print(f"SKIP: link: dev: init grants link no {', '.join(missing)} yet (LNK's request to KRN of 2026-10-21)", flush=True)
@@ -4287,7 +4301,7 @@ def link_suite(args):
     print("PASS: link: through QEMU's emulated FT232, mindlink put and got 64 KiB with matching SHA-256, listed it, read "
           "the system log with the kernel's lines, and was refused a name outside data/link/; link holds init's four grants (and with dev the developer mode's); "
           "a tree made, moved and removed; programs put into data/link/t/ started with their output and exit codes, one stopped; "
-          "the developer mode started a built-in program by name", flush=True)
+          "the developer mode started a built-in program by name; the link's mark on the screen went red, grey when quiet and red again", flush=True)
 
 
 def modes_suite(args):
