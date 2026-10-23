@@ -203,6 +203,12 @@ fn sprom(bar: &Mmio, capabilities: u32) -> Option<[u8; 6]> {
         mind::println!("[BCM] CHIP CONTROL GIVEN BACK: {:08X}", bar.read32(CC + CC_CHIP_CONTROL));
     }
     if found.is_none() { mind::println!("[BCM] NO VALID SPROM"); }
+    // Chip control bit 2 (EXT_LNA_G) off, as the firmware leaves it: with it on, no network is heard (550-DRV-0036).
+    let before = bar.read32(CC + CC_CHIP_CONTROL);
+    if before & 1 << 2 != 0 {
+        bar.write32(CC + CC_CHIP_CONTROL, before & !(1 << 2));
+        mind::println!("[BCM] CHIP CONTROL BIT 2 (EXTERNAL LNA) OFF AGAIN: {:08X} -> {:08X}", before, bar.read32(CC + CC_CHIP_CONTROL));
+    }
     found
 }
 

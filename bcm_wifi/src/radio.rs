@@ -70,14 +70,33 @@ pub struct Sent { pub acked: bool, pub attempts: u8 }
 // and with a bad FCS (index 0 and 1) by rate (6 to 54 Mbit/s) and by MPDU length (up to 64, 65 to 256, longer), and the
 // powers and clipped count of those with a bad FCS: what tells a frame received badly from one not heard (550-DRV-0029).
 // A frame with a bad FCS weaker than BAD_FCS_FLOOR on every core is noise taken for a frame: only counted, in `ofdm_weak`.
+// The network's beacons heard, their summed signal and the interval they give in TU: against the beacons due, what the
+// receiving side missed; those missed between two heard, by their timestamps, in runs of 1, 2 to 4 and more. The good
+// CCK frames by signal (SIGNAL_BINS) and summed: how weak a sender is still heard. The polls that found the receive
+// ring out of buffers (550-DRV-0036).
 #[derive(Clone, Copy, Default)]
 pub struct Counts {
     pub queued: u32, pub filtered: u32, pub bad: u32, pub dma_errors: u32, pub frames: [[u32; 3]; 3], pub acks_cck: u32, pub acks_ofdm: u32,
     pub ofdm_power: [i32; 3], pub ofdm_clipped: u32,
     pub ofdm_rates: [[u32; 2]; 8], pub ofdm_lengths: [[u32; 2]; 3], pub bad_fcs_power: [i32; 3], pub bad_fcs_clipped: u32,
     pub ofdm_weak: u32,
+    pub beacons: u32, pub beacon_power: i32, pub beacon_tu: u16, pub last_beacon: u64, pub missed: u32, pub missed_runs: [u32; 3],
+    pub cck_heard: u32, pub cck_power: i32, pub cck_bins: [u32; 5], pub ring_full: u32,
 }
+// The signal bins' lower bounds in dBm: -50 and up, -60 to -51, -70 to -61, -80 to -71, below.
+pub const SIGNAL_BINS: [i8; 4] = [-50, -60, -70, -80];
 pub const BAD_FCS_FLOOR: i8 = -75;
+
+// A beacon of the network sent at `tsf`: the beacons missed since the last one heard.
+fn gaps(c: &mut Counts, tsf: u64) {
+    let last = core::mem::replace(&mut c.last_beacon, tsf);
+    let interval = c.beacon_tu as u64 * 1024;
+    if last == 0 || interval == 0 || tsf <= last || tsf - last > 10_000_000 { return; }
+    let gap = ((tsf - last + interval / 2) / interval) as u32;
+    if gap < 2 { return; }
+    c.missed += gap - 1;
+    c.missed_runs[if gap == 2 { 0 } else if gap <= 5 { 1 } else { 2 }] += 1;
+}
 
 // OFDM's rates in 500 kbit/s, in the order Counts keeps them.
 pub const OFDM_RATES: [u8; 8] = [12, 18, 24, 36, 48, 72, 96, 108];
@@ -309,6 +328,7 @@ impl<'a> Radio<'a> {
         self.c.w32(RX_INDEX, (((self.next + SLOTS - 1) % SLOTS) * 16) as u32);
         let reason = self.c.r32(DMA0_REASON);
         if reason != 0 { self.c.w32(DMA0_REASON, reason); if reason & 0xDC00 != 0 { self.counts.dma_errors += 1; } }
+        if reason & 0x2000 != 0 { self.counts.ring_full += 1; }
     }
 
     // One completed buffer: its 24-byte receive header checked, the frame queued with the interface's header.
@@ -348,8 +368,21 @@ impl<'a> Radio<'a> {
         }
         let own = if self.filter.own == [0; 6] { self.mac } else { self.filter.own };
         if s[start] == 0xD4 && s[start + 4..start + 10] == own { if ofdm { self.counts.acks_ofdm += 1 } else { self.counts.acks_cck += 1 } }
-        if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
         let signal = [s[9], s[10], s[11]].map(|v| v as i8).into_iter().max().unwrap_or(0);
+        let heard = signal < 0 && signal > -128;
+        if !ofdm && heard {
+            self.counts.cck_heard += 1;
+            self.counts.cck_power += signal as i32;
+            self.counts.cck_bins[SIGNAL_BINS.iter().position(|&b| signal >= b).unwrap_or(4)] += 1;
+        }
+        let f = &s[start..end];
+        if f.len() >= 36 && f[0] == 0x80 && self.filter.bssid != [0; 6] && f[16..22] == self.filter.bssid && heard {
+            self.counts.beacons += 1;
+            self.counts.beacon_power += signal as i32;
+            self.counts.beacon_tu = u16::from_le_bytes([f[32], f[33]]);
+            gaps(&mut self.counts, u64::from_le_bytes(f[24..32].try_into().unwrap()));
+        }
+        if !self.wanted(&s[start..end]) { self.counts.filtered += 1; return; }
         let weakness = if signal < 0 && signal > -128 { signal.unsigned_abs() } else { 0 };
         let channel = match (u16::from_le_bytes([s[22], s[23]]) >> 3) as u8 { 0 => self.channel, ch => ch };
         let len = end - start;

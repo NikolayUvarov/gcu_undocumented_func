@@ -64,6 +64,36 @@ Evidence for this machine only (MC-12.1). The line counts what the driver sees; 
   - **The next task:** `wlan`'s `ATTEMPTS` from 4 to 7 (`wlan/src/main.rs`), asked of `NET` on `internal-dev-messages`. This track's criterion, a run with the share lost at each rate, is met by these runs.
   - **Seen on the way.** After a `replace` of `bcm_wifi`, the restarted radio is on channel 1 while `wlan` still sends on the network's channel. Its first frames are lost at every rate until `wlan` gives the join up and joins again, about 30 s in all. That is the replace's own cost, not the losses above.
 
+- **2026-10-23, the MacBook Pro on hesere.uz's Effector agent: the receiver hears nothing weaker than about −61 dBm.** The stick was `fast-test` 0d73c076 (ABI 17), with 7 tries in `wlan`. The builds were put in with `replace` through `effector485`, and the log was read the same way.
+  - **The agent's `Transport` errors.** There were 12 in the first 2050 s:
+    - 8 in one burst, 443 to 523 s after boot. Each 10 s, 3 to 6 of 19 to 32 data frames were lost after 7 tries, the rate fell to 1 Mbit/s, and 175 to 215 good frames were received against 450 to 520 before and after;
+    - 2 at this track's own replaces;
+    - 2 while hesere.uz answered `502`.
+  - **Why a burst breaks the session.** The agent gives a request up after 3 s without a byte. smoltcp resends a lost segment after 1 s, and again 2 s later. So a segment lost twice ends the request (told to `EFF`).
+  - **Two new lines every 10 s** (`bcm_wifi/src/radio.rs` `Counts`, `serve.rs` `beacon_line`):
+    - the network's beacons heard against those due by their interval, their mean signal, and those missed in runs;
+    - every good CCK frame by signal.
+  - **What they show in quiet periods.**
+    - **Beacons.** 75% to 94% of the beacons due are heard, at a mean of −43 to −46 dBm. The missed ones are mostly single, and the receive ring is never short of buffers.
+    - **Signal.** Of about 500 good CCK frames each 10 s, all but 0 to 2 are at −60 dBm or stronger. The level falls off sharply below −61 dBm, though the scan at boot heard 19 access points.
+    - **What that means.** The access point's −44 dBm is only about 17 dB above where the receiver stops hearing, so a burst of interference uses up the margin.
+    - **Not settled.** Whether the receiver is deaf below that level, or its dBm read high, is not settled: the levels are not calibrated (MC-12.3).
+  - **Tried, and not the cause:**
+
+| Test | Beacons heard | Data lost after 7 tries | Frames below −60 dBm |
+|---|---|---|---|
+| core 2's front end off (as built), 2 runs of 14 and 13 periods | 84.8%, 83.7% | 3.4%, 2.8% | 7, 6 |
+| every front end on, 2 runs of 13 and 14 periods | 87.2%, 88.0% | 3.4%, 1.5% | 13, 11 |
+
+  - **Chip control bit 2** (`EXT_LNA_G`; the SPROM's board flags 0x1201 name an external LNA).
+    - **With the bit on,** no network was heard at all.
+    - **The bit outlived the service's restart,** so `bcm_wifi` now clears it at start if it is set.
+    - **The replace that followed left the core with reset status `00000002`.** `init`'s stop turns bus mastering off without stopping the core, which the kernel does only at boot (550-KRN-0082). Asked of `KRN` on `internal-dev-messages`.
+    - **A reboot over the link** brought the radio back, with the maintainer's leave to reboot when the Mac hangs.
+  - **Next:**
+    - the receiver's thresholds and gain on the HT-PHY's CCK path, and whether the levels read are calibrated (550-DRV-0029, 550-DRV-0028);
+    - the next burst in the new lines.
+
 ## Related
 
 [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), [550-ASR-0007](550-ASR-0007-wifi-join-tests.md), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md).
