@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -74,7 +74,9 @@ tries 3                                   # tries of a trial boot for an automat
     - a channel naming an older version;
     - version 6 with one boot file changed on the server.
   - Then version 6 as published is fetched into slot B. Its largest boot file is cut midway and resumed with `Range`.
-  - Version 6 differs from 5 in one application, `uptime.elf`. Only that one is fetched; the others are copied from the volume's root, and slot B then holds every application as the manifest lists it.
+  - The image's slot A holds release 5's applications, and they run from there (`[LOADER] APPLICATIONS FROM MIND/A/`).
+  - Version 6 differs from 5 in one application, `uptime.elf`. Only that one is fetched; the others are copied from slot A, and slot B then holds every application as the manifest lists it. The trial runs them from slot B.
+  - Booted back in slot A, from the record a fallback or a rollback leaves (written by the host), release 5 runs its own applications from slot A, its `uptime` among them.
   - It is checked and booted on trial through `init`'s restart. The bootloader loads release 6's manifest.
   - As soon as `init` confirmed the trial, the updater confirms slot B on the disk, well before the kernel's deadline, then finds nothing newer.
   - The records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation. `fsck.fat` finds the volume consistent.
@@ -95,6 +97,5 @@ tries 3                                   # tries of a trial boot for an automat
 - **SSH** (351-NET-0004).
 - **Rollback protection** beyond the version check: a fallback is booted whatever its version (351-UPD-0009, 0011).
 - **Key rotation and revocation** (351-UPD-0009). The bootloader is not updated (351-UPD-0010).
-- **Applications run from the slot.** The updater stages them (351-UPD-0023), but the loader still opens every application from the root, so a trial or a fallback runs the root's. The loader's part is the kernel track's ([requests-KRN.md](../../issues/requests-KRN.md)). `boot_slots.py layout` and `make_usb_image.py --slots` put no applications into slot A yet ([slots.md](slots.md)).
 - **Slot images by default.** `make_usb_image.py --slots` makes an image the updater can update ([write-disk.md](../write-disk.md), 351-UPD-0016); without the option an image boots from its root and has no slot to fill.
 - **The clock.** Expiry is only as good as the system clock, and the updater has no second source of time.

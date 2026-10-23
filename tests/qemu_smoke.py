@@ -5273,8 +5273,8 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
         assert "PARSER: THE SHARED SERVICE" not in log, log
-        # 351-KRN-0151: slot A, laid out without applications, runs the root's.
-        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE")
+        # 351-UPD-0023 with 351-KRN-0151: slot A is laid out with release 5's applications, and they run from there.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         (server / "channels/stable").write_bytes(forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
@@ -5353,16 +5353,29 @@ def update_suite(args):
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
-    # Only the application release 6 changed came from the server; the others were copied from the volume's root.
+    # Only the application release 6 changed came from the server; the others were copied from slot A.
     asked = {path for path, _ in https.requests}
     assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
+    # The record a fallback or a rollback leaves, slot A confirmed, as the next sequence: slot A boots release 5 with its
+    # own applications, the uptime release 6 changed among them (351-UPD-0023).
+    assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
+    boot_slots.write_next(image, slot="A", confirmed=True)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 5")
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
+        require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-back-{args.cpus}cpu.log").write_text(vm.log)
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
-          "the one it changed fetched and the others copied from the volume, and the trial runs them from there; the file "
-          "system is consistent", flush=True)
+          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
+          "slot A, release 5 runs its own; the file system is consistent", flush=True)
 
 
 def mindlink_tool():
@@ -5470,7 +5483,7 @@ def slot_applications_check(args):
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
     sign_manifest.sign_volume(volume)
-    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
+    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout", with_applications=False))
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
 
     # 351-APP-0103: the shell's `help <name>` reads the file the loader would start.
