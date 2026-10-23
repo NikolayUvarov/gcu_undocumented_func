@@ -1,6 +1,6 @@
 # Remote build and test machines through Effector
 
-**Version:** 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
+**Version:** 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
 
 The maintainer lends agents real machines for builds and tests through **Effector**, a service that runs commands on registered computers.
 
@@ -35,7 +35,7 @@ The maintainer lends agents real machines for builds and tests through **Effecto
   - Builds, host tests and single QEMU groups do run there.
   - Two x86 groups go to another machine, as measured on 2026-10-14 (the tools track's gate of eda1c74):
     - "x86: Secure Boot with our keys" stops at once with `No module named 'virt'`;
-    - "x86: reproducible build" builds the image twice and ran past an operation's hour. It took 7 minutes on i9 and 26 on `DESKTOP-i7-930-wsl-u24`.
+    - "x86: reproducible build" builds the image twice and ran past the hour its operation was given. It took 7 minutes on i9 and 26 on `DESKTOP-i7-930-wsl-u24`.
     - Send them to a machine with CI's packages: `i9`, `un-rizen-service` or `DESKTOP-i7-930-wsl-u24`.
 
 - **What is on `i9_4e6882212251`** (section 6):
@@ -113,7 +113,7 @@ An operation runs one shell script on a machine as a user:
 script = open("build_and_test.sh").read()   # POSIX sh; keep its output short (tail your logs)
 op = call("POST", "/api/v1/operations", {
     "agent_id": "PCU_585240b00e8a", "kind": "exec", "run_as": "un", "command": script,
-    "timeout_seconds": 3600,             # the execution limit: at most 3600
+    "timeout_seconds": 3600,             # this operation's own deadline, chosen by its sender (the API takes 1 to 3600)
     "sequential": True,                  # long or CPU-heavy work waits in the machine's queue
     "queue_ttl_seconds": 6 * 3600,       # how long it may wait behind other agents' work
     "idempotency_key": "KRN-351-KRN-0057-x86-20261010T0400",
@@ -162,7 +162,11 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
    - Short read-only checks (versions, free space, a log's tail) are not sequential. They still take a queue: with one queue they wait for the running operation.
 2. **Nothing outlives its operation.** No `nohup`, `&`, `setsid`, `screen`, `tmux` or `systemd-run` for work. A detached job runs outside the queue and collides with the next agent's build or test.
-3. **One operation runs at most an hour** (`timeout_seconds` ≤ 3600). Split longer work into operations that each fit, and queue them one after another: for example, one QEMU group or one build each.
+3. **Time** (the maintainer, 2026-10-23).
+   - **A queue reservation's 1 to 60 minutes is a lease, not a limit on the work.** It is there only so that a reservation someone forgot frees itself. Renew it as often as the work needs: the service limits neither the total time nor the number of renewals (its help, on reservations).
+   - **One operation, one command, still ends at its `timeout_seconds`** (the API takes 1 to 3600): the server ends it with `agent did not acknowledge the operation before timeout_seconds elapsed`. The maintainer is changing the service so that it no longer cuts a command short: renewing a reservation is to extend the run time of the command bound to it, so that a long gate held under a renewed reservation is not cut after an hour. Until that change is in the service, the parts below hold.
+   - **Split the work into parts of about an hour, two at most:** for example one QEMU group or one build each, queued one after another. On a slow machine a group that takes longer goes to a faster one, or into smaller parts.
+   - **A `timeout` says the part outran its time, not that the change is wrong.** Report it as such: which `timeout_seconds` the operation had and what it had done by then.
 4. **Each track works in its own directory:** `/home/un/mind-core/<TRK>/` (for example `/home/un/mind-core/NET/`), with its own clone and its own `target/` directories.
    - Never build in, clean or change another track's directory.
    - The kernel track's clone is still at `/home/un/mind-core/gcu_undocumented_func` and moves to `KRN/`.
