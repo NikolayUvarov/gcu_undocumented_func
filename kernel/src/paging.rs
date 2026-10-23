@@ -15,8 +15,8 @@ pub const USER_INFO: usize = USER_IMAGE + 0x0400_0000;
 pub const USER_MAILBOX: usize = USER_INFO + PAGE;
 pub const USER_EXIT: usize = USER_IMAGE + 0x0500_0000;
 pub const USER_HEAP: usize = USER_IMAGE + 0x0600_0000;
-pub const USER_END: usize = USER_IMAGE + 0x4000_0000; // 928 MiB heap window: private quota + frame/IPC mappings (issue 150)
-const TABLES: usize = 640; // the whole heap window mapped (each table one page of the frame pool, 171-KRN-0032)
+pub const USER_END: usize = USER_IMAGE + (1 << 39); // the task's whole top-level entry: its heap window holds 511 GiB (262-KRN-0160)
+const TABLES: usize = 33_792; // 64 GiB mapped in 4 KiB pages and the levels above (each table a page of the frame pool, charged: 171-KRN-0032)
 const ADDRESS: u64 = 0x000f_ffff_ffff_f000;
 
 pub struct Space {

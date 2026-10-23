@@ -29,6 +29,7 @@ mod context {
 mod frames {
     pub fn ready() -> bool { false }
     pub fn allocate(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
+    pub fn allocate_unzeroed(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
     pub unsafe fn free(_: core::ptr::NonNull<u8>, _: core::alloc::Layout) {}
     pub fn owns(_: *const u8) -> bool { false }
 }

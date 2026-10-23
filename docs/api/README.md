@@ -44,7 +44,7 @@ This is the full list: every `SYSCALL_*` constant of `common/abi.rs`, which rema
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`) |
+| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`). The heap window is the rest of the task's 512 GiB top-level entry. A block of 2 MiB or more lies on a 2 MiB boundary, one of 1 GiB or more on a 1 GiB boundary, in its address and, where the pool allows, in its frames; a block of more than 64 MiB is zeroed after the kernel lets go of its lock, so other CPUs go on meanwhile (262-KRN-0160) |
 | 9 | `FREE` | `arg1` = block address; memory still referenced elsewhere is kept until released and stays charged to the owner |
 | 15 | `MEM_SHARE` | `arg1` = address of an own heap block → handle of a memory capability (read, write, grant) |
 | 16 | `MEM_MAP` | `arg1` = memory, DMA or MMIO handle → mapped address; `arg2` = size. Read-only without `CAP_WRITE`; MMIO uncached |
