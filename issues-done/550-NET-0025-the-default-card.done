@@ -6,7 +6,7 @@ From the request "Several network interfaces" in requests-NET.md: "The default i
 
 ## Problem
 
-`netstack` takes as its default the first card with a gateway, whatever its kind. With the Wi-Fi station as a third card ([550-NET-0018](../issues/550-NET-0018-the-station-service.md)), which card a machine's traffic leaves through then follows the order of `init`'s slots. Nothing says so, nobody can choose otherwise, and no client can tell a card's kind.
+`netstack` takes as its default the first card with a gateway, whatever its kind. With the Wi-Fi station as a third card ([550-NET-0018](550-NET-0018-the-station-service.done)), which card a machine's traffic leaves through then follows the order of `init`'s slots. Nothing says so, nobody can choose otherwise, and no client can tell a card's kind.
 
 ## Plan
 
@@ -37,7 +37,7 @@ In the `net` suite's two-card check (x86, aarch64):
 
 ## Related
 
-[550](../issues/550-network-on-real-hardware.md), [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.done), [550-NET-0018](../issues/550-NET-0018-the-station-service.md), [108](108-editable-network-policy.done), [docs/network/policy.md](../docs/network/policy.md).
+[550](../issues/550-network-on-real-hardware.md), [550-NET-0023](550-NET-0023-a-cards-link-down-and-up.done), [550-NET-0018](550-NET-0018-the-station-service.done), [108](108-editable-network-policy.done), [docs/network/policy.md](../docs/network/policy.md).
 
 ## Resolution
 
