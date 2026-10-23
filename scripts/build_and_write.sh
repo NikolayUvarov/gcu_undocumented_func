@@ -2,7 +2,7 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number>   |   --list
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--mode=<modes>] <disk number>   |   --list
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
@@ -29,6 +29,10 @@
 #                  of 2026-10-21: link may also give the programs it starts the network and the Wi-Fi station, run the
 #                  built-in programs and restart the machine, once init grants it these (KRN). Whoever holds the cable
 #                  then debugs the machine as its user would. For the maintainer's own machines only.
+#   --mode=<modes> after the write, put data/mode.conf on the boot volume with the modes, one line: `maintenance`,
+#                  `development`, or both comma-separated (`--mode=development,maintenance`). init reads it at start
+#                  and runs the Effector agent's services in them (750-KRN-0143, docs/effector/README.md); `mode`
+#                  in the shell changes it later.
 #   --keep-wifi    keep the Wi-Fi networks the machine remembers across the write: before it, system/keystore/
 #                  (wifi.kept, device.key, wifi.country) is saved from the disk's volume MIND CORE into
 #                  ~/.config/mind/keystore (mode 600; a fresh disk uses what was saved last), and after it put back,
@@ -76,6 +80,13 @@ while [[ $# -gt 0 ]]; do
         --link-run) LINK_RUN=1; shift ;;
         --link-dev) LINK_RUN=1; LINK_DEV=1; shift ;;
         --keep-wifi) KEEP_WIFI=1; shift ;;
+        --mode=*) m="${1#--mode=}"; words=()
+                  for w in ${m//,/ }; do
+                      [[ $w == development || $w == maintenance ]] || { echo "--mode=<modes>: development, maintenance or both, comma-separated: $w" >&2; exit 1; }
+                      [[ " ${words[*]-} " == *" $w "* ]] || words+=("$w")
+                  done
+                  [[ ${#words[@]} -gt 0 ]] || { echo "--mode=<modes>: development, maintenance or both" >&2; exit 1; }
+                  FLAGS+=("mode.conf:${words[*]}"); shift ;;
         *) break ;;
     esac
 done
@@ -248,7 +259,7 @@ if [[ "${1:-}" == "--list" ]]; then
 fi
 [[ ($LINK_RUN == 1 || $SLOTS == 1) && -z $LINK_BAUD ]] && LINK_BAUD=460800
 [[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] <disk number> | --list}"
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--mode=<modes>] <disk number> | --list}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 
 cd "$REPO"
