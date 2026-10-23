@@ -1,8 +1,8 @@
-# 262-KRN-0160 — Tens of GiB of private memory for a program the owner names
+# 262-KRN-0160 — Tens of GiB of private memory for a program the owner names — done
 
-**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (in `main` a2a1062e; the reserve criterion made on `claude/youthful-mendel-mf1soy`, landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
+**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [262](../issues/262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
 
-From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](262-KRN-0161-large-pages.md) to [262-KRN-0164](../issues-done/262-KRN-0164-stacks-larger-than-64-kib.done).
+From the tools track's request of 2026-10-23 in [requests-KRN.md](../issues/requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](../issues/262-KRN-0161-large-pages.md) to [262-KRN-0164](../issues-done/262-KRN-0164-stacks-larger-than-64-kib.done).
 
 ## Problem
 
@@ -22,7 +22,7 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
 2. **Large blocks stay contiguous, aligned for large pages.**
    - A memory capability names one physical range (`Capability::Memory`), and sharing, revocation and the orphans' accounting rely on it. Blocks made of several runs would change all of them, so they wait for a measurement that fragmentation refuses large blocks in practice.
    - The frame pool gives task memory from the highest range first, which on a PC is the RAM above 4 GiB in one piece, so a model's blocks taken early fit.
-   - A block of 2 MiB or more is taken 2 MiB-aligned, and one of 1 GiB or more 1 GiB-aligned where the pool allows, for [262-KRN-0161](262-KRN-0161-large-pages.md).
+   - A block of 2 MiB or more is taken 2 MiB-aligned, and one of 1 GiB or more 1 GiB-aligned where the pool allows, for [262-KRN-0161](../issues/262-KRN-0161-large-pages.md).
    - A large block refused while the pool has the bytes says so in the log (`FRAGMENTED`), so the measurement exists.
 3. **Zeroing outside the scheduler's lock.**
    - `ALLOC` zeroes its frames today while it holds the one scheduler lock, with interrupts off: about 50–100 ms a GiB, a stall of every CPU.
@@ -47,9 +47,29 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
 - [x] While it holds its memory, a service restarts (`svc restart`), so the reserve held.
 - [x] `docs/profile` states the window, the alignment, the zeroing and the owner's file, and what is not done (blocks of several runs; above 64 GiB).
 
+## Resolution
+
+- **What a program the owner names in `data/memory.conf` gets.**
+  - Its line's MiB, up to 64 GiB, in a private window of 511 GiB.
+  - Blocks of 2 MiB and 1 GiB on their boundaries, where the pool allows.
+  - A block of more than 64 MiB is zeroed with the scheduler's lock let go, and mapped only if the task still lives.
+- **Where it is.** `kernel/src/scheduler.rs`, `user_heap.rs`, `loader`. `docs/profile/kernel-objects.md` states it, and what is not done.
+- **Tests.**
+  - Host tests: aligned blocks; a refused block leaves nothing.
+  - `big_memory_check`, in the gate's two "RAM above 4 GiB" groups: 3 GiB in GiB blocks, zeroed and aligned, every page written and read back; the shell served meanwhile; none without the owner's line; the frames returned.
+  - The reserve: with a line of 16 GiB, the frame pool kept init's 32 MiB, and init restarted a killed `rtc`, which served.
+- **The clock fault the reserve check found** is fixed in the same landing. The PM timer's wraps a long gap hid are now counted from the TSC (`clock.rs`).
+- **Gates.** `land-a2a1062e` (round 21) and `land-e8004e1c` (round 22) passed every group, x86 and aarch64, on `main` a2a1062e and 7a972cc0 (2026-10-23). These are QEMU runs (TCG); no machine was measured (MC-12.1).
+- **Not done, and stated so.**
+  - Blocks of several runs.
+  - Quotas above 64 GiB (an ABI change).
+  - A machine with 8 GiB or more.
+  - `svc` while applications hold everything (an application itself).
+  - The tasks of a CPU that zeroes wait for the block ([262-KRN-0165](../issues/262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.md) keeps the other CPUs' sleeps on time).
+
 ## Related
 
-[262](262-model-runtime-on-the-machines-full-hardware.md), issue 150 (memory quotas), issue 169 (the reserve), 171-KRN-0032 (kernel structures charged), [750-KRN-0158](750-KRN-0158-the-effector-sessions-memory-for-its-benchmark.md).
+[262](../issues/262-model-runtime-on-the-machines-full-hardware.md), issue 150 (memory quotas), issue 169 (the reserve), 171-KRN-0032 (kernel structures charged), [750-KRN-0158](../issues/750-KRN-0158-the-effector-sessions-memory-for-its-benchmark.md).
 
 ## Progress (2026-10-23)
 
@@ -74,7 +94,7 @@ Made on `claude/youthful-mendel-mf1soy` (a2b80aa2, d43aedd0):
   - **The check found a fault in the clock (x86).** While the boot CPU zeroes a large block with its interrupts off, it takes no tick, so the PM timer's reads, one a second, can be more than its 4.7 s wrap apart. The TSC's rate measured again at 60 s (000-KRN-0100) then lost the hidden wraps: it read 3444 MHz instead of 2700. The clock ran 22% slow after that, and the shell stalled 52 s. Each PM read now keeps its TSC, and the TSC counts the wraps between two reads (`clock.rs`, `pm_elapsed`).
   - **Checked** (this session's container, QEMU TCG, 4 CPUs, 6 GiB). On x86: 3072 MiB in GiB blocks and 2865 MiB in small ones, 32 807 KiB left, `rtc` restarted and served; the TSC skew kernel's `clock` suite also passed. On aarch64: 3072 MiB and 2885 MiB, 32 798 KiB left, `rtc` restarted and served. Emulated runs, for this container only (MC-12.1).
 - **Left:**
-  - while the boot CPU zeroes a large block, every sleep and IPC deadline of the system waits for its tick (about 5 s a GiB under TCG; about 0.1 s a GiB expected on a machine, not measured): zeroing in pieces between which the boot CPU takes its tick, or on another CPU, is not done;
+  - while the boot CPU zeroes a large block, every sleep and IPC deadline of the system waits for its tick: [262-KRN-0165](../issues/262-KRN-0165-the-boot-cpu-keeps-its-tick-while-it-zeroes.md) (in landing round 23);
   - a machine with 8 GiB or more and a program of 6 GiB;
   - blocks of several runs, if a fragmented pool refuses large blocks in practice;
   - quotas above 64 GiB (an ABI change).
