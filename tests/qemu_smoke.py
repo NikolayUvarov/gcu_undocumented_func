@@ -4038,7 +4038,7 @@ def link_suite(args):
             require(link(port, "put", str(sent), "../escape.bin", ok=False), "not allowed")
             require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED sent.bin")
             # 800-KRN-0128, 0132: link holds exactly usb_serial's client, a scope of vfs_server, an application's loader
-            # client and a log reader.
+            # client, a log reader and the compositor's client for its mark (800-KRN-0156).
             pids = vm.services()
             caps = vm.command(f"stat caps {pids['link']}", raw=True)
             servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
@@ -4051,7 +4051,7 @@ def link_suite(args):
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
             # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
-            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"])]
+            base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
                          (30, pids.get("shell"))}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
@@ -4365,6 +4365,28 @@ def gateway_stub_check(args):
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
             stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             stub("[GATEWAY-STUB] REBOOT NOT ASKED")
+            # 800-KRN-0156: the restarted stub lights the Effector agent's mark red, yellow and grey, then stops calling, and
+            # the mark goes. Its centre, left of the camera mark, on the framebuffer only (QEMU's screendump).
+            seen, deadline = [], time.monotonic() + 60
+            while time.monotonic() < deadline:
+                _, size, _, screen = vm.screenshot().split(b"\n", 3)
+                width = int(size.split()[0])
+                at = (18 * width + width - 96) * 3
+                pixel = screen[at:at + 3]
+                if not seen or seen[-1] != pixel:
+                    seen.append(pixel)
+                if "[GATEWAY-STUB] REMOTE MARK STOPPED" in vm.command("dmesg -s effector_gw", raw=True).rpartition("SCOPE START 2")[2]:
+                    break
+                time.sleep(.3)
+            time.sleep(4)
+            _, size, _, screen = vm.screenshot().split(b"\n", 3)
+            after = screen[at:at + 3]
+            colours = {bytes((0xE0, 0x20, 0x20)): "red", bytes((0xE0, 0xC0, 0x20)): "yellow", bytes((0x80, 0x80, 0x80)): "grey"}
+            assert {colours.get(p) for p in seen} >= {"red", "yellow", "grey"} and after not in colours, ([p.hex() for p in seen], after.hex())
+            marks = vm.command("dmesg -s compositor", raw=True)
+            for line in ("[COMPOSITOR] REMOTE MARK Effector: Changing", "[COMPOSITOR] REMOTE MARK Effector: Reading",
+                         "[COMPOSITOR] REMOTE MARK Effector: Unconnected", "[COMPOSITOR] REMOTE MARK Effector: OFF"):
+                require(marks, line)
             files = vm.command("dmesg -s vfs_server", raw=True)
             scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
             assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
@@ -4408,7 +4430,8 @@ def gateway_stub_check(args):
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
           "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
-          "answers whether the link's console is on, which needs `dev` in link.conf (800-KRN-0155)", flush=True)
+          "answers whether the link's console is on, which needs `dev` in link.conf (800-KRN-0155); the gateway lights the "
+          "Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
 
 
 def effector_grants_check(vm):
@@ -4435,7 +4458,7 @@ def effector_grants_check(vm):
                 if servers.get(int(ep)) != pids[name]}
     gw, session = held("effector_gw"), held("effector")
     assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
-    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (0, "compositor"), gw
+    assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
     require(vm.command("dmesg -s vfs_server", raw=True), ":/inbox (WRITABLE)")  # vfs_server names the directory alone
