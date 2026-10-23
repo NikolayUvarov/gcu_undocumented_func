@@ -1,6 +1,6 @@
 # 750-KRN-0158 — The Effector session's memory quota for its benchmark
 
-**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.13
+**Type:** `init` · **Owner:** kernel session · **Priority:** P3 · **Status:** open (the quota in `main` 344aa298; EFF's benchmark left) · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.13
 
 From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and-workers-for-the-agents-benchmark.md` on `internal-dev-messages`), for 750-EFF-0016.
 
@@ -19,8 +19,14 @@ From EFF's request of 2026-10-23 (`KRN/2026-10-23T0609Z-EFF-a-request-memory-and
 
 ## Acceptance criteria
 
-- [ ] In the `modes` suite (x86 and aarch64), `effector` runs with a 48 MiB quota (`stat`), and every other suite passes as before (the gate).
+- [x] In the `modes` suite (x86 and aarch64), `effector` runs with a 48 MiB quota (`stat`), and every other suite passes as before (the gate).
 - [ ] EFF's benchmark allocates the 16 MiB chase and the copy buffers in a mode (750-EFF-0016).
+
+## Progress (2026-10-23)
+
+- **In `main` 344aa298** (landing round 18): `init` gives `effector` 48 MiB (e47b16cf).
+- **The gate `land-344aa298`** passed every group; the `modes` suite, in "x86: services, storage, audio" and "aarch64: files, network and TLS", reads the quota with `stat`.
+- **Left:** EFF's benchmark taking its buffers in a mode (750-EFF-0016), EFF's to show.
 
 ## Related
 

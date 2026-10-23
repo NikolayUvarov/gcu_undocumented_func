@@ -1,6 +1,6 @@
-# 550-KRN-0157 — A service's stop resets the BCM4331's 802.11 core first, as boot does
+# 550-KRN-0157 — A service's stop resets the BCM4331's 802.11 core first, as boot does — done
 
-**Type:** kernel (`pci.rs`, `quiesce`) · **Owner:** kernel session · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-1.5, MC-6.8
+**Type:** kernel (`pci.rs`, `quiesce`) · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Constitution:** MC-1.5, MC-6.8
 
 From DRV's request of 2026-10-23 (`KRN/2026-10-23T0350Z-DRV-a-service-stop-wedges-the-bcm4331-core-as-boot-did-before-0082.md` on `internal-dev-messages`).
 
@@ -25,7 +25,7 @@ From DRV's request of 2026-10-23 (`KRN/2026-10-23T0350Z-DRV-a-service-stop-wedge
 
 ## Acceptance criteria
 
-- [ ] QEMU (no BCM4331 there): every suite passes as before (the gate).
+- [x] QEMU (no BCM4331 there): every suite passes as before (the gate).
 - [x] On the MacBook Pro:
   - a stop or `replace` of `bcm_wifi` while its receiver is busy logs the kernel's `802.11 CORE RESET BEFORE ITS BUS MASTERING IS TURNED OFF`;
   - the next start brings the radio up with no reboot.
@@ -39,7 +39,12 @@ From DRV's request of 2026-10-23 (`KRN/2026-10-23T0350Z-DRV-a-service-stop-wedge
   - **After,** slot B with `pci.rs` from bcc9b8eb: three `replace`s under traffic, 25 s apart. Each time the next start found `RESET STATUS 00000000` before and after, and `wlan` joined again 10 to 13 s later.
   - **The kernel's line** at a stop goes to its own console only, not to the system log read over the link. The core's state shows the stop worked.
   - This is evidence for that machine and those builds only (MC-12.1).
-- **Left:** the gate.
+
+## Resolution
+
+- **The stop** resets the 802.11 core before bus mastering is turned off, as boot does (`kernel/src/pci.rs`, bcc9b8eb).
+- **On the MacBook Pro** (DRV): three `replace`s of `bcm_wifi` under traffic, the core clean at each next start and `wlan` joined again with no reboot. Evidence for that machine and those builds only (MC-12.1).
+- **QEMU:** the landing gate `land-344aa298` passed every group, x86 and aarch64, on `main` 344aa298 (2026-10-23).
 
 ## Related
 
