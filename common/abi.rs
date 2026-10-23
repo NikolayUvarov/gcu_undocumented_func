@@ -47,7 +47,8 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
 // ABI 16 adds the Effector agent's two boot images, `effector_gw` and `effector`, which run only in a mode (750-KRN-0119).
 // ABI 17: CAP_REVOKE leaves a borrower one zeroed page of its own at each page it mapped from the lease, so a late access
-// reads zeros and writes there instead of faulting (000-KRN-0152).
+// reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
+// the info page's WORKER_OFFSET (262-KRN-0163).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
