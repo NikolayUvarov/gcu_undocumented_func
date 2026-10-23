@@ -2425,6 +2425,7 @@ def smp_suite(vm):
     require(vm.command(f"kill {rtc}", raw=True), "KILLED PID=")
     require(vm.service_logs("init", "rtc RESTARTED"), "rtc RESTARTED")
     assert heap_used(vm) == baseline
+    workers_check(vm)
     if vm.arch == "aarch64":
         # No WFI state in QEMU's monitor: with every CPU idle the emulator uses little processor time.
         vm.serial()
@@ -2465,6 +2466,48 @@ def giveup_suite(vm):
             f"try {attempt + 1}: the server faulted writing a buffer its caller gave up ({fault and fault.group(0)})"
     print("PASS: giveup: a server wrote a buffer its caller had given up and revoked, had its reply refused and served "
           "the next message, and the caller's page kept nothing of it, three times (500-ASR-0012)", flush=True)
+
+
+def workers_check(vm):
+    """262-KRN-0163: a program the owner names in data/memory.conf starts workers of itself, at most one per online CPU,
+    each on a CPU of its own while one is free; a worker's fault ends only that worker, and killing the program ends
+    its workers. Without the owner's line it starts none."""
+    def memtest(args):
+        vm.send(f"memtest {args}\n")
+        return vm.expect("MIND> ", timeout=120, after=f"memtest {args}\n")
+    require(memtest("workers 1"), "[MEMTEST] WORKER 1 REFUSED Rights")
+    vm.command("mkdir data")
+    require(vm.command("write data/memory.conf memtest 160"), "WROTE 12 BYTES")
+    cpus = vm.cpus
+    output = memtest(f"workers {cpus + 1}")
+    require(output, f"[MEMTEST] WORKER {cpus + 1} REFUSED Other")
+    require(output, f"[MEMTEST] WORKERS {cpus} STARTED, {cpus} COUNTED 200000 EACH")
+    output = memtest("workers 3 fault")
+    require(output, "ENDED Fault(")
+    require(output, "[MEMTEST] WORKERS 3 STARTED, 2 COUNTED 200000 EACH")
+    # Held: the program and its workers each on a CPU of its own, then all gone when the program is killed.
+    creator = int(re.search(r"STARTED PID=(\d+)", vm.command(f"run memtest workers {cpus - 1} hold &"))[1])
+    log = vm.program_logs(creator, f"WORKER {cpus - 1} PID=")
+    workers = [int(pid) for pid in re.findall(r"\[MEMTEST\] WORKER \d+ PID=(\d+)", log)]
+    assert len(workers) == cpus - 1, log
+    rows = task_rows(vm)
+    placed = {pid: int(rows[pid][3]) for pid in [creator, *workers]}
+    assert sorted(placed.values()) == list(range(cpus)), placed
+    require(vm.command(f"kill {creator}"), f"KILLED PID={creator}")
+    for _ in range(40):
+        if not set(workers) & set(task_rows(vm)):
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(f"workers {workers} outlived their creator: {task_rows(vm)}")
+    # kbench times a worker's start and a call a worker answers, once the owner names it.
+    require(vm.command("write data/memory.conf kbench 64"), "WROTE 10 BYTES")
+    vm.send("kbench workers --quick\n")
+    output = vm.expect("MIND> ", timeout=300, after="kbench workers --quick\n")
+    rows = bench_rows(output, ["worker start", "worker call and reply"])
+    require(output, "kbench: 2 measurements, 0 failed")
+    require(vm.command("rm data/memory.conf"), "OK")
+    print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
 
 
 def isolation_suite(vm):
@@ -10285,7 +10328,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -10502,7 +10545,7 @@ def main():
                 else:
                     {"normal": normal_suite, "busy": busy_suite, "memory": memory_suite,
                      "smp": smp_suite, "isolation": isolation_suite, "giveup": giveup_suite, "heap": heap_suite,
-                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check}[suite](vm)
+                     "dzen": dzen_suite, "services": services_suite, "store": store_suite, "storefaults": store_faults_suite, "ahci": ahci_suite, "keys": keys_suite, "shell": shell_suite, "tools": tools_suite, "bench": bench_suite, "windows": windows_suite, "wm": wm_suite, "usb": usb_suite, "stack": stack_check, "workers": workers_check}[suite](vm)
             finally:
                 vm.close()
                 log = Path(tempfile.gettempdir()) / f"mind-core-{suite}-{args.cpus}cpu.log"

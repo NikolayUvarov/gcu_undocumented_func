@@ -2,7 +2,8 @@
 #![no_main]
 // kbench [group …] [--quick]: the kernel's performance (176-KRN-0062). Each measurement is repeated; the screen shows
 // its median with a bar on a log scale, its minimum and its 99th percentile, and log:kbenchNNNN.txt every statistic
-// with a histogram. The IPC and process groups talk to copies of kbench it starts (`kbench --child`).
+// with a histogram. The IPC and process groups talk to copies of kbench it starts (`kbench --child`), the workers group
+// to workers of itself (262-KRN-0163), which it may start only when the owner names it in data/memory.conf.
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -11,17 +12,17 @@ use bench::child::{self, ECHO, EXIT};
 use bench::measure::{batches, now, Run};
 use bench::report;
 use core::hint::black_box;
-use mind::abi::{CAP_READ, CAP_WRITE, ERR_LIMIT};
+use mind::abi::{CAP_GRANT, CAP_READ, CAP_WRITE, ERR_LIMIT, SLOT_INIT};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Pages;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO);
 
-const GROUPS: [(&str, &str); 6] = [
+const GROUPS: [(&str, &str); 7] = [
     ("syscall", "System calls"), ("ipc", "IPC, two processes"), ("caps", "Capabilities"),
-    ("memory", "Memory"), ("timer", "The timer"), ("process", "Processes"),
+    ("memory", "Memory"), ("timer", "The timer"), ("process", "Processes"), ("workers", "Workers, other CPUs"),
 ];
-const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]";
+const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process|workers …] [--quick]";
 const MIB: usize = 1024 * 1024;
 const PAGE: usize = 4096;
 
@@ -156,11 +157,47 @@ fn processes(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
 }
 
+// A worker's start until it says hello, and a call answered by a worker on another CPU (262-KRN-0163).
+fn workers(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.fail("worker start", "no endpoint") };
+    let Ok(client) = ipc::mint(endpoint.0, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0) else { let _ = ipc::drop_cap(endpoint.0); return run.fail("worker start", "no client") };
+    let grants = [mind::process::grant(SLOT_INIT, client, u8::MAX)];
+    let n = run.reps(20);
+    let (mut start, mut worker) = (Vec::with_capacity(n), 0);
+    for k in 0..n {
+        let t = now();
+        let pid = match mind::process::start_worker(0, 0, &grants) {
+            Ok(pid) => pid,
+            Err(mind::Error::Rights) => { run.note(String::from("workers: not measured, kbench is not named in data/memory.conf")); break; }
+            Err(e) => { run.fail("worker start", &format!("start: {:?}", e)); break; }
+        };
+        if let Err(why) = child::hello(endpoint) { run.fail("worker start", &why); break; }
+        start.push(now() - t);
+        if k + 1 < n { if !child::stop(endpoint, pid) { run.fail("worker start", "a worker did not end"); break; } } else { worker = pid; }
+    }
+    if worker != 0 {
+        run.row("worker start", &mut start, 1);
+        let n = run.reps(1000);
+        let mut samples = Vec::with_capacity(n);
+        for k in 0..n {
+            let t = now();
+            let reply = endpoint.call_timeout(&Message::new(ECHO, k), 0, 5000);
+            let dt = now() - t;
+            if !matches!(reply, Ok(r) if r.data[1] == k) { run.fail("worker call and reply", &format!("call {}: {:?}", k, reply.map(|r| r.data))); break; }
+            samples.push(dt);
+        }
+        if samples.len() == n { run.row("worker call and reply", &mut samples, 1); }
+        child::stop(endpoint, worker);
+    }
+    let _ = ipc::drop_cap(client);
+    let _ = ipc::drop_cap(endpoint.0);
+}
+
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, the timer, processes.\nUsage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
+    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, the timer, processes, workers.\nUsage: kbench [syscall|ipc|caps|memory|timer|process|workers …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
     let args = mind::process::args_str().trim();
-    if args == "--child" { return child::serve(); }
+    if args == "--child" || mind::process::worker().is_some() { return child::serve(); }
     let words: Vec<&str> = args.split_whitespace().collect();
     let quick = words.contains(&"--quick");
     let chosen: Vec<&str> = words.iter().copied().filter(|w| *w != "--quick").collect();
@@ -175,6 +212,7 @@ fn main(info: &'static mind::BootInfo) {
             "caps" => caps(&mut run),
             "memory" => memory(&mut run),
             "timer" => timer(&mut run),
+            "workers" => workers(&mut run),
             _ => processes(&mut run),
         }
     }
