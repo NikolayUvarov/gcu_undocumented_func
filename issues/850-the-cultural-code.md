@@ -6,25 +6,28 @@
 
 The maintainer proposed on 2026-10-21 to use the structure of an "iconic IP guide" (the bibles that hold together worlds such as Star Wars or Cyberpunk) so that MIND Core can be understood and shared beyond the people who build it.
 - **What exists.** The Constitution v1.6 is the law: requirements, numbered `MC-<article>.<clause>`, deliberately sober ("novelty in itself is not a criterion of quality").
-  - `constitution/lore/LORE.*.md` holds the five disciplines (ontology, epistemology, ethics, praxeology, aesthetics). It is still edition 1.5 and names the Constitution 1.5 and RFC 0.3.
+  - `constitution/lore/LORE.*.md` holds the five disciplines (ontology, epistemology, ethics, praxeology, aesthetics). Edition 1.6 (2026-10-23) names the Constitution 1.6 and RFC 0.4, with one maxim and scoped implementation evidence per discipline.
   - The README's "Why MIND Core" is the only outward story.
 - **What is missing:**
-  - a one-page manifesto;
-  - short maxims a reader can quote;
-  - a lexicon that matches the code's own names;
-  - one rule for the system's voice in its logs and errors.
+  - a one-page standalone manifesto and its editorial decisions (the canon now has short maxims);
+  - a complete lexicon mapped to code identifiers (LORE 1.6 supplies a bounded introductory vocabulary);
+  - product implementation of the voice and system-map proposals recorded in LORE 1.6.
 - **The trap.** In an operating system the philosophy must compile into code. A text that promises more than the code does is found out by the first careful reader, and the Constitution forbids presenting intentions as guarantees (MC-12.3).
 
 ## Plan
 
 1. **The manifesto** ([850-PHI-0001](850-PHI-0001-the-manifesto.md)): one page, English and Russian, non-normative, outside the Constitution's articles.
-2. **The canon's maxims** ([850-PHI-0002](850-PHI-0002-the-canons-maxims-in-lore-1-6.md)): `LORE` 1.6, aligned with the Constitution 1.6. Each discipline gets one maxim, with what enforces it today and what does not yet.
+2. **The canon's maxims** ([850-PHI-0002](../issues-done/850-PHI-0002-the-canons-maxims-in-lore-1-6.done)): `LORE` 1.6, aligned with the Constitution 1.6. Each discipline gets one maxim, with what enforces it today and what does not yet.
 3. **Philosophy compiled into checks, the kernel track's part:**
    - [850-KRN-0145](../issues-done/850-KRN-0145-a-budget-for-the-kernels-size.done): a budget for the kernel's size, checked in CI;
    - [850-KRN-0146](../issues-done/850-KRN-0146-refusals-name-the-clause.done): refusals name the clause they enforce.
 4. **A lexicon** (a later task): the entities' names, each mapped to an identifier in the code. A word the code does not use is not introduced.
 5. **The sensory code** (later, with `APP`): the first boot, the system's voice, one visual anchor. These are designs for the tools track, not promises in the manifesto.
 6. **The Constitution itself.** It changes only by a new edition with the contents MC-12.5 asks, in both languages, and only if the analysis finds a requirement to add. Rhetoric does not go into the articles.
+
+## Progress (2026-10-23)
+
+850-PHI-0002 is done: LORE 1.6 integrates the reviewed incoming canon in both languages, with the previous pair archived. The maintainer requested this adoption; it does not settle the manifesto's protagonist, third-party naming rights or the remaining manifesto/product work. The Constitution is unchanged.
 
 ## Questions to settle (the maintainer)
 
