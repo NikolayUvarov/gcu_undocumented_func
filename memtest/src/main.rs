@@ -5,6 +5,9 @@
 // quota, and frees everything; `memtest hold <MiB>` keeps them until killed. `memtest share <MiB>` fills a block, seals it (a read-only memory object), maps it and
 // starts a second memtest that maps the same object; both check the contents. `memtest fill` takes all the heap it can
 // get, in ever smaller blocks down to 64 KiB, and keeps it until killed (issue 169: the recovery reserve stops it).
+// `memtest workers <n> [hold|fault]` starts n workers of itself (262-KRN-0163) on one shared page, each counting into its
+// own word once the page says go; it reports each one's count and how it ended. hold: they count until memtest is
+// killed; fault: the last one faults instead of counting.
 use mind::abi::{BootInfo, CAP_READ};
 use mind::idl::loader;
 use mind::ipc::{self, Endpoint, Message};
@@ -16,6 +19,8 @@ const QUOTA_MIB: u32 = 160;
 const MIB: usize = 1024 * 1024;
 const BLOCK: usize = 16 * MIB;
 const RECEIVED: usize = 9; // the (fixed) slot the child receives the object in
+const COUNT: u64 = 200_000; // what each worker counts to
+const GO: usize = 0; // the shared page's word that starts the workers; word i is worker i's count
 
 fn word(index: usize) -> u64 { (index as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0x5A5A }
 
@@ -121,9 +126,48 @@ fn child() {
     let _ = Endpoint::INIT.send(&Message::new(total as usize, flags));
 }
 
+fn workers(count: usize, mode: &str) {
+    let Some(page) = Pages::new(4096) else { mind::println!("[MEMTEST] OUT OF MEMORY"); return };
+    let Ok(object) = page.share() else { mind::println!("[MEMTEST] SHARE FAILED"); return };
+    let Ok(notices) = Endpoint::create() else { mind::println!("[MEMTEST] NO ENDPOINT"); return };
+    let words = page.address() as *mut u64;
+    let argument = match mode { "hold" => 1, "fault" => 2, _ => 0 };
+    let mut started = 0;
+    for index in 1..=count {
+        let grants = [mind::process::grant(RECEIVED, object, u8::MAX)];
+        match mind::process::start_worker(argument | (count as u64) << 8, 0, &grants) {
+            Ok(pid) => { let _ = mind::process::watch(pid, notices); started += 1; mind::println!("[MEMTEST] WORKER {} PID={}", index, pid); }
+            Err(e) => mind::println!("[MEMTEST] WORKER {} REFUSED {:?}", index, e),
+        }
+    }
+    unsafe { words.add(GO).write_volatile(1); }
+    if argument == 1 { loop { mind::time::sleep(1000); } }
+    for _ in 0..started {
+        match notices.recv_timeout(0, 120_000) {
+            Ok(received) => if let Some(exit) = received.exit { mind::println!("[MEMTEST] WORKER PID={} ENDED {:?}", exit.pid, mind::process::Exit::from_reason(exit.reason)) },
+            Err(e) => { mind::println!("[MEMTEST] NO EXIT NOTICE {:?}", e); break }
+        }
+    }
+    let counts: [u64; 8] = core::array::from_fn(|i| if i < started { unsafe { words.add(1 + i).read_volatile() } } else { 0 });
+    let counted = counts[..started].iter().filter(|&&n| n == COUNT).count();
+    mind::println!("[MEMTEST] WORKERS {} STARTED, {} COUNTED {} EACH", started, counted, COUNT);
+}
+
+// A worker: maps the page, waits for go, then counts into its word (or faults, or counts on for ever).
+fn work(index: u64, argument: u64) {
+    let Ok(mapping) = Mapping::new(RECEIVED) else { return };
+    let words = mapping.as_ptr::<u64>();
+    while unsafe { words.add(GO).read_volatile() } == 0 { mind::time::sleep(1); }
+    let (mode, count) = (argument & 0xFF, argument >> 8);
+    if mode == 2 && index == count { unsafe { (8 as *mut u64).write_volatile(index) } } // a fault on purpose
+    let mut n = 0;
+    while mode == 1 || n < COUNT { n += 1; unsafe { words.add(index as usize).write_volatile(n); } }
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints");
+    if let Some((index, argument)) = mind::process::worker() { return work(index, argument); }
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault]");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
@@ -133,6 +177,7 @@ fn main(_info: &'static BootInfo) {
         "fill" => fill_all(),
         "endpoints" => endpoints(),
         "child" => child(),
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS"),
+        "workers" => workers(mib.min(7), words.next().unwrap_or("")),
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT]"),
     }
 }

@@ -133,9 +133,12 @@ pub fn spawn_raw(name: &[u8], image: Image, grants: &[Grant], flags: usize, quot
 
 /// `spawn_raw` with a screen, in front for `front`, the task that has the focus now; the focus returns to it when the
 /// new task ends. `Error::Other(ERR_FOCUS)` when `front` is not in front: nothing is started (issue 160).
-pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota, front: u64) -> Result<u64> {
+pub fn spawn_in_front(name: &[u8], image: Image, grants: &[Grant], quota: Quota, front: u64) -> Result<u64> { spawn_in_front_with(name, image, grants, 0, quota, front) }
+
+/// `spawn_in_front` with further `flags` (SPAWN_WORKERS).
+pub fn spawn_in_front_with(name: &[u8], image: Image, grants: &[Grant], flags: usize, quota: Quota, front: u64) -> Result<u64> {
     if front >> 32 != 0 { return Err(crate::sys::Error::Other(ERR_FOCUS)); }
-    spawn_packed(name, image, grants, SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
+    spawn_packed(name, image, grants, flags | SPAWN_SCREEN | SPAWN_FOREGROUND, quota, front)
 }
 
 /// `spawn_raw`, or `spawn_in_front` when `front` is not 0, with a text input (SPAWN_TEXT, 000-KRN-0094): the PID and the
@@ -161,6 +164,21 @@ pub fn alive(pid: u64) -> bool { call(SYSCALL_TASK_ALIVE, pid as usize, 0) == 1 
 
 /// Sends the exit notice of `pid` (a task this process spawned) to `endpoint`, which this process can receive on.
 pub fn watch(pid: u64, endpoint: crate::ipc::Endpoint) -> Result<()> { crate::sys::check(crate::sys::call(SYSCALL_TASK_WATCH, pid as usize, endpoint.0)).map(drop) }
+
+/// Starts a worker (262-KRN-0163): a copy of this program on another CPU, holding exactly `grants` (copied or moved into
+/// its fixed slots), with `argument` in its `worker()`; `stack` bytes of stack, 0 for what the ELF asks. Only a program
+/// its launcher started with SPAWN_WORKERS may (`Error::Rights`); one live worker per online CPU (`Error::Other(ERR_LIMIT)`).
+/// The worker ends when this program ends; `watch` gives its exit notice.
+pub fn start_worker(argument: u64, stack: usize, grants: &[Grant]) -> Result<u64> {
+    check(syscall(SYSCALL_WORKER_START, argument as usize, stack, [0, 0, grants.as_ptr() as usize, grants.len()]).result).map(|pid| pid as u64)
+}
+
+/// In a worker: its index among its creator's workers (1, 2, …) and its argument word; None in any other task.
+pub fn worker() -> Option<(u64, u64)> {
+    let at = (crate::sys::info_address() + WORKER_OFFSET) as *const u64;
+    let (index, argument) = unsafe { (at.read_volatile(), at.add(1).read_volatile()) };
+    (index != 0).then_some((index, argument))
+}
 
 /// What a program may ask its launcher for (`request!`); the launcher decides, the request grants nothing (MC-3.11).
 pub const REQUEST_CONSOLE: u32 = 1; // no screen: output goes to the shell's console
