@@ -29,6 +29,12 @@ impl Pages {
     }
 }
 
+/// The bytes of the memory capability `handle` (CAP_INFO), or None for another kind.
+pub fn size(handle: usize) -> Option<usize> {
+    let raw = syscall(SYSCALL_CAP_INFO, handle, 0, [0; 4]);
+    (raw.result == CAP_KIND_MEMORY).then_some(raw.msg[2])
+}
+
 /// Whether nobody can write the memory `handle` names (no writable capability, mapping or DMA region): SHARE_RO.
 pub fn sealed(handle: usize) -> bool {
     let raw = syscall(SYSCALL_CAP_INFO, handle, 0, [0; 4]);

@@ -104,12 +104,15 @@ impl Heap {
         if small { space.map_small(address, physical, size, true) } else { space.map(address, physical, size, true, false) }.ok()
     }
 
-    // Mappings of foreign memory count against their own quota and don't eat into the private heap.
+    // Mappings of foreign memory count against their own limit and don't eat into the private heap: the larger of
+    // SHARED_MAX_BYTES and the task's memory quota, so a program can map an object as large as it may hold (262-KRN-0162).
+    fn shared_limit(&self) -> usize { SHARED_MAX_BYTES.max(self.limit) }
+
     pub fn map_shared(&mut self, space: &mut Space, physical: usize, requested: usize, caching: crate::paging::Caching, writable: bool, node: u64) -> Option<usize> {
         let device = caching == crate::paging::Caching::Device;
         if requested == 0 || physical % PAGE != 0 { return None; }
         let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
-        if size > SHARED_MAX_BYTES - self.shared { return None; }
+        if size > self.shared_limit().saturating_sub(self.shared) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
         match caching {
@@ -245,6 +248,21 @@ mod tests {
         assert_eq!(heap.revoke(&mut space, &[7], false, false), (true, 0), "an ended task gets no page in the lease's place");
         assert!(space.readable(mapped).is_none() && !heap.made_from(7));
         assert!(heap.map_shared(&mut space, foreign.ptr() as usize, SHARED_MAX_BYTES, crate::paging::Caching::Memory, true, 9).is_some(), "shared quota returned");
+    }
+
+    #[test]
+    fn the_shared_limit_is_the_larger_of_its_own_and_the_memory_quota() {
+        // 262-KRN-0162: a task with a quota above SHARED_MAX_BYTES may map foreign memory up to its quota, and no more.
+        let quota = SHARED_MAX_BYTES + 2 * LARGE;
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::with_limit(quota));
+        let foreign = 0x40_0000_0000;
+        let mapped = heap.map_shared(&mut space, foreign, SHARED_MAX_BYTES + LARGE, crate::paging::Caching::Memory, false, 7).unwrap();
+        assert!(heap.map_shared(&mut space, foreign, 2 * LARGE, crate::paging::Caching::Memory, false, 8).is_none(), "past the quota");
+        assert!(heap.map_shared(&mut space, foreign, LARGE, crate::paging::Caching::Memory, false, 8).is_some());
+        assert!(heap.free(&mut space, mapped).is_some() && heap.shared_bytes() == LARGE);
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::with_limit(LARGE));
+        assert!(heap.map_shared(&mut space, foreign, SHARED_MAX_BYTES, crate::paging::Caching::Memory, false, 7).is_some(), "a small quota keeps SHARED_MAX_BYTES");
+        assert!(heap.map_shared(&mut space, foreign, PAGE, crate::paging::Caching::Memory, false, 8).is_none());
     }
 
     #[test]
