@@ -1,0 +1,56 @@
+# 750-KRN-0120 — Writable `vfs` scopes for a boot service, kept across its restarts — done
+
+**Type:** `vfs_server`, `init` · **Owner:** kernel session (`vfs_server` since 175) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
+
+## Problem
+
+`vfs_server` lets only the shell's `BADGE_USER` client write; services get read-only clients. The Effector gateway must write its audit trail, delivered files and installed applications, which other programs, the shell and the loader read. It must not write anywhere else on `data/`. A private directory in `system/` (351-KRN-0040) covers its journal, not these. The agent track's request of 2026-10-09 is in [requests-KRN.md](../issues/requests-KRN.md).
+
+`vfs.wit` 2.2 already has `scope(dir, writable)`: a client confined to one directory, which may change files there if the caller may. Two parts are missing for a boot service:
+- a scope works for the first task that uses it and ends with that task, so a restarted service has none;
+- no case shows rename and flush within a scope, and a refusal outside it.
+
+## Plan
+
+1. **`init` makes the scopes.** From its own client with the user's rights on `data/`, `init` opens each directory named in the service's arm, creates it if missing, and asks `scope(dir, true)` for each; the service gets one slot a directory.
+2. **A restart gets new ones.** When `init` restarts the service, it asks again; the old scopes ended with the old task.
+3. **Inside a scope:** create, write, rename within the scope, flush and delete. A path outside it, and a rename out of it, is refused with the error a missing file gets, so a scope does not tell what lies outside.
+4. **No `vfs.wit` change** is expected. If one is needed, it is a minor version.
+
+## Progress (2026-10-20)
+
+Plan steps 1 and 2 are made for one service, `link` (800-KRN-0128): at each start `init` mints a `BADGE_USER` client from `vfs_server`'s keeper, opens `data/link/` (made if missing), asks `scope(dir, true)`, moves the scope into the service's `SLOT_VFS` and drops its own client. The link track's QEMU suite shows a file written and read in the scope and a name outside it refused. A general list of scopes per service in `init`'s arms, and the `isolation` case with a restart, are left.
+
+## Acceptance criteria
+
+- [x] A new `isolation` case (x86 and aarch64): a test service with a writable scope creates, renames and flushes files under its directory, and is refused everywhere else, a rename out of the scope included. (In the `modes` suite, with `tests/gateway_stub` as the gateway: the gateway's scope exists only in a mode.)
+- [x] After `init` restarts it, the service writes through its new scopes, and the old ones are refused. (The second start writes through its new scope and finds the first one's files; the first scope ends with its task, `[VFS] SCOPE … ENDED`, so nothing can use it.)
+
+## Progress (2026-10-21)
+
+800-KRN-0128 is done (`main` 8def173). Its last point, a name outside `data/link/` refused by `vfs_server` and not only by `link`, moves here: the `isolation` case above shows it for a scope.
+
+## Progress (2026-10-22)
+
+Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb):
+
+- **The Effector gateway's delivery scope.** At each start `init` reads the `deliver` root of the owner's `data/effector/policy` (`Policy::deliver`, 750-KRN-0121) and puts a writable scope of it in `effector_gw`'s `SLOT_FILE`; none without the line. The policy's parser refuses a root outside `data/` or in a protected tree.
+- **The check** is in the `modes` suite, with `tests/gateway_stub` in the gateway's place, under `deliver data/inbox/`:
+  - in the scope a file is written, flushed, renamed and read back;
+  - a name and a rename that climb out are refused;
+  - restarted by the shell, the gateway gets a new scope, which finds the first one's files, and `vfs_server` ends the first one (`[VFS] SCOPE … ENDED`).
+
+  Passed on x86 and aarch64 in this session's container (QEMU TCG). The criteria name the `isolation` suite; the gateway runs only in a mode, which the `modes` suite boots on both architectures.
+- **For EFF:** the gateway's writer names paths relative to the scope's root (`a.txt`, not `data/inbox/a.txt`).
+
+## Resolution
+
+- **General:** `init`'s `scope` and `scopes_of` make a writable scope from its own `BADGE_USER` client at each start of a service (`init/src/main.rs`); `link` (800-KRN-0128) and `effector_gw` use it.
+- **The gateway's:** a scope of the owner's policy's `deliver` root in `SLOT_FILE` (7), none without the line.
+- **Inside it,** `vfs_server` refuses a name and a rename that climb out, and a rename onto a name that exists.
+- **Checked** by the `modes` suite on x86 and aarch64. Landed in round 13 with EFF's request (`LANDING/2026-10-22T1958Z-EFF-…`): every group of gate `land-e93c47af` passed, `main` e93c47af.
+- **Not made:** a scope for installed applications (`data/apps/`). It comes with [750-EFF-0008](../issues/750-EFF-0008-application-packages.md) when that task needs it.
+
+## Related
+
+[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), [750](../issues/750-effector-agent.md), `idl/vfs.wit` 2.2 (`scope`), 351-KRN-0040 (a private directory for `keystore`).

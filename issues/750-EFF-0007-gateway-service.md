@@ -59,3 +59,31 @@ The gateway's decisions and effects are built as a library, apart from IPC, so t
   - **Answered `unsupported` when the policy allows them:** packages (0008), updates (0009), reboot (0010), the screen, test scripts (501).
 - **Tests:** `tests/effector_gateway_host.rs`, 9 host tests against a fake machine, in `scripts/host_tests.sh`.
 - **Still open:** the service binary (`decode`, the generated replies, `Machine` over `init`'s grants), which needs 750-KRN-0119's boot image, badges and slots, 0120's writable scope and 0121's lifecycle client; the session's use of it in place of its own denial; the `effector` suite's gateway checks and the `isolation` row.
+## Progress — 2026-10-22
+
+- **The service binary, `effector_gw/src/main.rs`.** It serves `idl/effector.wit` through `decode` and the generated replies. Its `Machine` acts over `init`'s grants:
+  - `sysinfo` for memory;
+  - `init`'s lifecycle client for the services and `start`/`stop`/`restart`;
+  - the log ring, and the newest `log:bootNNNN.log`;
+  - a reading client for the policy and the file roots;
+  - the writable scope for deliveries, written to `<path>.part` and renamed;
+  - its private directory for the audit file.
+- **How it starts.** It serves only when `init` starts it with `--service`; from the shell it says so and ends (the `effector` QEMU suite checks that).
+- **A missing grant fails its requests.** Without the private directory, no audit line can be written, so every request is refused (MC-10.6).
+- **The badges and slots** are one table in `libmind/src/effector.rs` (`mind::effector`), for `init` (750-KRN-0119) and the shell (750-APP-0093). A client with any other badge gets nothing (`Badge::Other`, a tenth host test).
+- **Built** for x86_64 and aarch64 (`02_build.sh`). It is not run as a service yet: that needs 750-KRN-0119's boot image and arms, 0120's writable scope, 0121's lifecycle client, and `vfs_server`'s badges for `system/effector_gw`.
+- **Still open:**
+  - the session handing commands to it, instead of denying them;
+  - the QEMU check of each request in a mode.
+- **Later the same day: the first action through the gateway, `collect_file`.**
+  - The session asks `effector_gw` to open the path and uploads the bytes to `/api/commands/file` with their SHA-256.
+  - The answer is `completed`, or `failed` with the gateway's reason. It is journaled before its ACK and runs once only.
+  - Host tests in `effector_session` (22), `effector_journal` (4) and `effector_wire` (9).
+  - The `effector` QEMU suite on x86_64: a 50 000-byte file under the policy's `collect` root is uploaded and answered `completed`. One outside it is answered `failed: denied` and not sent. Both are audited.
+  - KRN's 0153 (screen), 0121 (lifecycle) and 0120 (delivery scope) are made on their branch (d69f0ad6). The gateway's writer then names paths relative to the scope.
+
+## Progress — 2026-10-22, the screen and the counters
+
+- **`open-screen`**: the compositor's copy (750-KRN-0153) shrunk to fit 1280x800 and written as a PNG (`effector_gw/src/png.rs`, host-tested against MIND's decoder and zlib), within the policy's `max-bytes` and 2 MiB; audited. The copy lands in the gateway's receive slot: a slot beyond the task's table is refused by the kernel (`Invalid`).
+- **`sample`** (`effector.wit` 1.1) for telemetry ([750-EFF-0014](750-EFF-0014-telemetry.md)).
+- **Delivery and service control** run through 750-KRN-0120's scope and 0121's client in the QEMU suite: a 68 000-byte file under `data/inbox/`, a path outside it refused, `sysmon` restarted.

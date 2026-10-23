@@ -1043,7 +1043,7 @@ fn the_mouse_in_menus_and_the_editor() {
 fn names(panel: &Panel) -> Vec<String> { panel.items.iter().map(|e| e.name.clone()).collect() }
 
 // The block store in memory (300-APP-0038): blocks by CID, names with their versions, the owner's pins; `listing`:
-// whether it can list its names (blockstore.wit 1.3 cannot).
+// whether it can list its names (blockstore.wit 1.4 can, 1.3 cannot).
 #[derive(Default)]
 struct StoreInner { blocks: std::collections::HashMap<cid::Cid, Vec<u8>>, names: std::collections::BTreeMap<String, (u64, cid::Cid)>, pins: Vec<cid::Cid>, listing: bool, commits: usize }
 #[derive(Clone, Default)]

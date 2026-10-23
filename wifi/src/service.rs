@@ -1,5 +1,5 @@
-//! `wifi`'s `Station` over the station service's client (`wlan`, idl/wifi.wit 1.0, 550-NET-0018).
-use crate::station::{Link, Network, Reason, Refusal, Security, Station};
+//! `wifi`'s `Station` over the station service's client (`wlan`, idl/wifi.wit 1.1, 550-NET-0018).
+use crate::station::{Channel, Country, CountryState, CountryStatus, Link, Network, Reason, Refusal, Security, Standing, Station};
 use alloc::vec::Vec;
 use mind::idl::wifi;
 use mind::ipc::Endpoint;
@@ -28,6 +28,11 @@ fn security(s: wifi::Security) -> Security {
         wifi::Security::Open => Security::Open, wifi::Security::Wep => Security::Wep, wifi::Security::Wpa2 => Security::Wpa2,
         wifi::Security::Wpa3 => Security::Wpa3, wifi::Security::Enterprise => Security::Enterprise, wifi::Security::Other => Security::Other,
     }
+}
+
+fn status(s: &wifi::CountryStatus) -> CountryStatus {
+    let state = match s.state { wifi::CountryState::None => CountryState::None, wifi::CountryState::Applied => CountryState::Applied, wifi::CountryState::Failed => CountryState::Failed };
+    CountryStatus { asked: s.asked.as_str().into(), applied: s.applied.as_str().into(), state, radio: s.radio, kept: s.kept, catalogue: s.catalogue.as_str().into() }
 }
 
 fn reason(r: wifi::Reason) -> Reason {
@@ -60,4 +65,14 @@ impl Station for Service {
     }
     fn leave(&mut self) -> Result<(), Refusal> { answer(wifi::leave(self.0)) }
     fn forget(&mut self, ssid: &[u8]) -> Result<bool, Refusal> { answer(wifi::forget(self.0, ssid)) }
+    fn countries(&mut self, from: u16) -> Result<(u16, Vec<Country>), Refusal> {
+        let page = answer(wifi::countries(self.0, from))?;
+        Ok((page.total, page.page.as_slice().iter().map(|c| Country { code: c.code.as_str().into(), send: c.send, listen: c.listen }).collect()))
+    }
+    fn channels(&mut self, code: &str) -> Result<Vec<Channel>, Refusal> {
+        let standing = |s: wifi::Standing| match s { wifi::Standing::Send => Standing::Send, wifi::Standing::Listen => Standing::Listen, wifi::Standing::Barred => Standing::Barred, wifi::Standing::Radio => Standing::Radio };
+        Ok(answer(wifi::channels(self.0, code))?.as_slice().iter().map(|c| Channel { number: c.number, standing: standing(c.standing), eirp: c.eirp }).collect())
+    }
+    fn country(&mut self) -> Result<CountryStatus, Refusal> { wifi::country(self.0).map(|s| status(&s)).map_err(|_| Refusal::Lost) }
+    fn set_country(&mut self, code: &str) -> Result<CountryStatus, Refusal> { answer(wifi::set_country(self.0, code)).map(|s| status(&s)) }
 }

@@ -901,13 +901,18 @@ impl Scheduler {
             if !changed { break; }
         }
         let (current, mut wait) = (self.current, false);
+        let mut sinks = Vec::new();
         for (slot, task) in self.tasks.iter_mut().enumerate() {
             // Exited tasks too: one may still run on its CPU until that CPU switches away.
             let Some(task) = task.as_mut() else { continue };
             // A space live on another CPU keeps its page tables until that CPU has switched address space.
             let remote = task.cpu != cpu && current[task.cpu] == slot;
-            if task.heap.revoke(&mut task.space, &ids[1..known], !remote) && remote { self.flush[task.cpu] = true; wait = true; unsafe { cpu::wake(task.cpu); } }
+            let (changed, made) = task.heap.revoke(&mut task.space, &ids[1..known], !remote, task.state != State::Exited);
+            if made > 0 { sinks.push((slot, made)); }
+            if changed && remote { self.flush[task.cpu] = true; wait = true; unsafe { cpu::wake(task.cpu); } }
         }
+        // A revoked lease's place is the borrower's own page, charged like its page tables, past a quota if need be (000-KRN-0152).
+        for (slot, made) in sinks { self.walk_payers(slot, |task| task.memory_tree += made * HEAP_PAGE_SIZE); }
         (removed, wait)
     }
     // A named capability that may only be moved but is being copied.
@@ -1665,6 +1670,12 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 }
                 Event::Wake => if slot == 0 || s.flush[cpu] || s.tasks[slot].as_ref().is_some_and(|t| t.state == State::Exited) { s.select(sp, cpu) } else { sp },
                 Event::Fault { code, error, pc, address } => {
+                    // A page replaced while this CPU reached it (a revoked lease, 000-KRN-0152): mapped by now, so retried.
+                    if let Some(write) = context::missing_page(code, error) {
+                        let space = &s.tasks[slot].as_ref().unwrap().space;
+                        let mapped = if write { space.writable(address as usize) } else { space.readable(address as usize) };
+                        if mapped.is_some() { space.forget_cached(); return sp; }
+                    }
                     let pid = s.tasks[slot].as_ref().unwrap().pid; let at = s.fault_cursor % s.faults.len();
                     s.faults[at] = Some(FaultInfo { pid, cpu: cpu as u64, vector: code, error, rip: pc, address });
                     s.fault_cursor += 1; s.terminate(slot, true, EXIT_FAULT | (code as usize) << 8); s.select(sp, cpu)

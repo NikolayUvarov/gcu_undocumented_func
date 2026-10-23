@@ -1,12 +1,12 @@
 # Requests for the network track (NET), not numbered yet
 
-**Owner:** network track · **Status:** open (`wlan` joining a remembered network by itself became [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), 2026-10-22; the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](550-NET-0018-the-station-service.md), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](550-NET-0028-rates-the-radio-has.md), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20; a parser session that ends before its helper (109-KRN-0133) became [109-NET-0037](../issues-done/109-NET-0037-a-parser-session-waits-for-its-helper.done), 2026-10-21) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
+**Owner:** network track · **Status:** open (`wlan` joining a remembered network by itself became [550-NET-0041](../issues-done/550-NET-0041-wlan-joins-a-remembered-network-by-itself.done), 2026-10-22; the stack's third card in slot 4, which the kernel track prepared as 550-KRN-0097, is taken into [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), 2026-10-12; the raw-frame interface became [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done), 2026-10-12; the list of the stack's sockets became [000-NET-0013](../issues-done/000-NET-0013-the-stacks-sockets.done), 2026-10-12; a read-only client of a card became [000-NET-0015](../issues-done/000-NET-0015-a-card-read-only-client.done), 2026-10-12; HTTP for a service and its pins became [750-NET-0019](../issues-done/750-NET-0019-http-for-services.done) and [750-NET-0020](../issues-done/750-NET-0020-tls-with-two-pins.done), JSON in the parser service [750-NET-0021](../issues-done/750-NET-0021-json-in-the-parser-service.done), a TLS client without the device certificate [351-NET-0022](../issues-done/351-NET-0022-tls-without-the-device-certificate.done), 2026-10-12; a flow for a long-running service became [750-NET-0014](../issues-done/750-NET-0014-the-bounds-of-a-flow.done), 2026-10-12; the aarch64 boot-slot check's dirty volume is gone since the test boots raw FAT images ([000-KRN-0067](../issues-done/000-KRN-0067-the-aarch64-boot-test-on-pcu.done)): `tests/aarch64_smoke.py` passed whole on `main` a4b3312, 2026-10-12; the station offering only the rates the radio has became [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done), and the download that hung once at its resume [351-NET-0029](../issues-done/351-NET-0029-download-calls-with-a-deadline.done), 2026-10-14; the stack and the station waiting for ever on a card or a radio became [550-NET-0030](../issues-done/550-NET-0030-the-stack-and-the-station-do-not-wait-for-ever.done), 2026-10-14; the download's check of a complete file that was silent for 300 s on i9 (audit H13) became [351-NET-0034](../issues-done/351-NET-0034-the-download-check-flushed-bounded-and-logged.done), and the country chosen from the whole regulatory catalogue [550-NET-0035](550-NET-0035-the-stations-country.md), 2026-10-20; the kernel track's note on the station's start is taken: the `net` suite's station checks are written, 2026-10-20; the stack revoking a frame ring the driver may already map (000-KRN-0129) became [000-NET-0036](000-NET-0036-an-unanswered-frame-ring-stays-lent.md), 2026-10-20; a parser session that ends before its helper (109-KRN-0133) became [109-NET-0037](../issues-done/109-NET-0037-a-parser-session-waits-for-its-helper.done), 2026-10-21) · **Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request
 
 The network track numbers its own tasks (`NNN-NET-MMMM`), so requests from other tracks wait here. The network track turns each into a task and removes it from this file, and the file goes when it is empty.
 
 ## Several network interfaces (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](550-NET-0018-the-station-service.md), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** a card's link going down and coming back is [550-NET-0023](../issues-done/550-NET-0023-a-cards-link-down-and-up.done); the station is the stack's third card, in slot 4 ([550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), with `init`'s part as 550-KRN-0097); the default card's rule, the user's choice through the policy and each card's kind are [550-NET-0025](../issues-done/550-NET-0025-the-default-card.done) (2026-10-12). Left: the USB Ethernet driver's card (550-DRV-0005) and its QEMU check, and which card a flow may use in the broker's grants (105's remainder).
 
 ### Problem
 
@@ -33,7 +33,7 @@ In QEMU with `virtio_net` and the USB Ethernet driver on `usb-net`, both cards g
 
 ## An 802.11 station and WPA2-PSK (550)
 
-**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](550-NET-0018-the-station-service.md), and remembered networks kept by `keystore` [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (2026-10-12).
+**Recorded by:** the kernel track (KRN), 2026-10-08, for main task [550](550-network-on-real-hardware.md) at the maintainer's request. **Progress:** the keys, the handshakes and CCMP are [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), the station's logic (scanning, joining, data) [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), the station service `wlan` with its configuration interface `idl/wifi.wit` 1.0 (agreed with the tools track) [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), and remembered networks kept by `keystore` [550-NET-0024](../issues-done/550-NET-0024-remembered-wi-fi-networks.done) (2026-10-12).
 
 ### Problem
 
@@ -59,62 +59,3 @@ The MacBook Pro's Wi-Fi is expected to be a Broadcom BCM4331, a SoftMAC chip ([5
 ### Acceptance criteria
 
 The host tests pass with the standard's vectors. On the MacBook Pro, with 550-DRV-0006, the station joins a WPA2-PSK network, `netstack` gets a lease, and the shell's `https` fetches a page.
-
-## A notice: 109-NET-0010 is done by the kernel track (109)
-
-**Recorded by:** the kernel track (KRN), 2026-10-12, at the maintainer's request ("109-NET-0010 задачу ожидаем исполнения от тебя").
-
-### What was done
-
-The kernel session built both parts on its branch `claude/youthful-mendel-mf1soy`, and they reach `main` through the gate:
-
-- **109-KRN-0096 (the loader starts a helper):** `idl/loader.wit` 1.8 gains `helper(parse, served)`. The loader starts a copy of `parse` whose only capability is the caller's endpoint, with a bounded quota and a per-owner limit.
-- **109-NET-0010 itself:** `parse --session` answers on that endpoint alone and ends when its client does or after 30 s idle; `mind::parse::Session` owns such a copy, and `download` uses one, falling back to the shared service. The `net` suite's `session_parsers_check` shows two downloads with a parser each.
-
-### What is asked of the network track
-
-- **Do not build it again.** The request "A program started with no standard clients, for a parser per session (109-NET-0010)" in `issues/requests-KRN.md` on the network branch is covered by 109-KRN-0096: drop it when merging `main`.
-- **Review and own.** The parser and `download` are the network track's: revise them as the track sees fit. The updater's checks on its own parser wait in `issues/requests-UPD.md`.
-
-## An echo request's size and payload, for `ping -s` and `-p` (000-APP-0095)
-
-**Recorded by:** the tools track (APP), 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode").
-
-### Problem
-
-- `socket.wit` `ping(address, timeout-ms)` sends 8 bytes of data, `MINDCORE` (`netstack`, `Stack::ping`). The caller cannot choose the size or the payload.
-- The reply is matched by its sequence alone. Its data is not compared with what was sent, and its size and TTL are not told.
-- So the shell's `ping` has `-c`, `-i`, `-w` and `-f` (000-APP-0095), but `-s size` and `-p pattern` say they wait for the stack.
-
-### Plan (a proposal; the network track decides)
-
-- **A new call in `socket.wit` 2.6**, for example `ping-with(address, timeout-ms, size, pattern)`:
-  - `size` is the data's bytes, 0 to 1472 (one frame on a 1500-byte MTU), or more if the stack fragments;
-  - `pattern` is up to 16 bytes, repeated over the data;
-  - the old `ping` stays, as `ping-with` with 8 bytes of `MINDCORE`.
-- **The answer:**
-  - the time;
-  - the reply's data size and TTL;
-  - whether its data matched what was sent.
-- **The budget:** a grant's `icmp` rule counts the bytes as a UDP rule does, so that a large size does not escape `bytes` in the policy.
-
-### What the tools track does then
-
-- `ping -s <size> -p <hex>` through it, and the reply's line with its size and TTL, `BAD DATA` when it did not match.
-- The `net` suite's check with a 1000-byte request to the gateway.
-
-## An echo request to a neighbour that never answers may hold the card's ICMP queue (000-APP-0095)
-
-**Recorded by:** the tools track (APP), 2026-10-20, while writing `ping`'s checks. **Found by reading the code; not reproduced.**
-
-### Problem
-
-- `Stack::ping` queues each echo request on the card's ICMP socket (`send_slice`).
-- smoltcp 0.14 (`storage/packet_buffer.rs`, `dequeue_with`) leaves a packet in the queue when its dispatch fails. A destination whose neighbour is not found fails with `NeighborPending` on every poll.
-- So a request to an address on the card's own network that no host has would stay at the head of the queue, ARP asked again once a second. The requests after it, to any address, would wait behind it. Once the 8 places are taken, `ping` would answer `Again`.
-- No suite sends one: the shell's `ping` checks use the gateway and an address beyond it.
-
-### Plan (a proposal; the network track decides)
-
-- **A check first:** in the `net` suite, `ping 10.0.2.200` (slirp answers ARP only for its own addresses), then `ping 10.0.2.2`, which should still answer.
-- **If it holds the queue:** drop a request whose neighbour is not found by its deadline, for example by giving each request its own ICMP socket, or by closing and opening the card's socket when a request ends in `Timeout`.

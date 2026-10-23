@@ -43,12 +43,12 @@ From LNK's question "flow grants for the programs `link` starts, in its develope
 ## Progress (2026-10-22)
 
 - **The broker's part is in `main`** through landing round 8 (`claude/relaxed-meitner-5bmhpz` a1488f4d, merged as 50bc8bd6; candidate aa50204e gated in full): `netpolicy.wit` 1.2 `denied`, `BADGE_LAUNCH` and `may_change_policy` in `libmind/src/network.rs`, the refusals in `netpolicy`, and `tests/netpolicy_host.rs`.
-- **Left:** `init` minting `link`'s client with `BADGE_LAUNCH` ([800-KRN-0142](../issues/800-KRN-0142-the-links-launch-only-policy-client.md)), then the QEMU check.
+- **Left:** `init` minting `link`'s client with `BADGE_LAUNCH` ([800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.done)), then the QEMU check.
 
 ## Resolution
 
 - **The broker's part** is in `main` through landing round 8: `netpolicy.wit` 1.2 `denied`, `BADGE_LAUNCH` and `may_change_policy` in `libmind/src/network.rs`, the refusals and their log lines in `netpolicy`. `tests/netpolicy_host.rs` checks the refusal of `add`, `remove` and `revoke` from any client whose badge is not 0, and that the policy is unchanged.
-- **`init`'s part** is [800-KRN-0142](../issues/800-KRN-0142-the-links-launch-only-policy-client.md), in `main` through landing round 9. Its `link` suite shows, in QEMU on x86:
+- **`init`'s part** is [800-KRN-0142](800-KRN-0142-the-links-launch-only-policy-client.done), in `main` through landing round 9. Its `link` suite shows, in QEMU on x86:
   - `link`'s slot 19 badged 1;
   - `link run netcheck ping:10.0.2.2` answering OK;
   - the broker logging that grant `, ASKED BY A LAUNCH-ONLY CLIENT`.

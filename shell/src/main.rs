@@ -9,6 +9,7 @@ extern crate alloc;
 
 mod bmp;
 mod clients;
+mod clockzone;
 mod console;
 mod files;
 mod keymap;
@@ -44,7 +45,7 @@ use mind::script::Interpreter;
 use mind::sys::Error;
 
 // The shell's commands (`help`); `help <name>` shows the lines that name it.
-const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time from the RTC; date set YYYY-MM-DD HH:MM[:SS]: set the clock (it keeps no time zone)\n- battery: the battery's charge, on the mains or not, the time left or to full, voltage, current, capacity and cycles (the battery service, where the firmware names one)\n- cd [directory], pwd: the current directory, named in the prompt (MIND diag>): paths that name no volume start there, in every command and in a program's arguments; cd alone: the boot disk's root; cd ..: up\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- > <file>, >> <file>: after a command, what it prints goes into the file (>> adds to it), taken from the current directory; a line that starts ERROR: stays on the screen (ls data > ram:list.txt, dmesg >> data/boot.txt)\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card with its kind (WIRED, WI-FI) and DEFAULT, PREFERRED or DOWN; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netstat [-i]: the open sockets (protocol, ports, remote address, TCP state, bytes each way, the program), then the cards; -i: the cards alone\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping [-c count] [-i seconds] [-w seconds] [-f] <host>: echo requests, 3 a second apart, each waiting 1 s for its reply (-c 0: until Esc); -f: the next at once, a dot for each one lost, 100 by default\n- nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [-d seconds] [file]: the screen as a BMP (data/media/screen-NNN.bmp, ram: when data/ cannot be written); -d: that many seconds later, the shell going on; Ctrl+Alt+F6: one at once, whatever is in front\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too; autorun.msh at the boot volume's root runs once at start\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): ANOTHER WINDOW OF THE SHELL EACH TIME (SHELL, SHELL 2…), EACH A SESSION OF ITS OWN; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5 AND ON). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES A COMMAND, A PROGRAM OR A PATH (AGAIN: THE CHOICES), ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
+const HELP: &str = "- help [command or program]: these lines; with a name, what that command or program does (a program also answers <name> --help)\n- list [-l] [mask]: programs on the disk and services; -l: what each program does; a mask keeps the names that match (list a*, list -l *mon*)\n- run <name> [args] [&]: new instance\n- <name> [args]: run a program in the foreground (say hello, listen 3)\n- boot: run app\n- cpus: online processors, busy and idle time, the vector state each task keeps (FPU=XSAVE+AVX, +AVX512, +AMX)\n- free: the machine's memory (the frame pool programs run in), then the kernel's arena by use\n- physmap: physical memory map\n- pmap <id>: address space of a task\n- stat <id>: task details\n- stat <tasks|cpus|memory|physmap|vmap PID|caps PID|endpoints|irqs|devices>: kernel statistics\n- caps <id>: capabilities of a task; caps: the caps tool (derivation tree, what a revoke removes)\n- endpoints, irqs, devices: kernel objects\n- time: the time of day, the uptime, the monotonic clock and its resolution (clock: the clock program, full screen)\n- date: calendar date and time in the time zone; date set YYYY-MM-DD HH:MM[:SS]: set the clock, in that zone (the RTC keeps UTC); date zone [+HH:MM|-HH:MM|UTC]: the zone every clock shows, kept in data/clock.conf (no summer time)\n- battery: the battery's charge, on the mains or not, the time left or to full, voltage, current, capacity and cycles (the battery service, where the firmware names one)\n- cd [directory], pwd: the current directory, named in the prompt (MIND diag>): paths that name no volume start there, in every command and in a program's arguments; cd alone: the boot disk's root; cd ..: up\n- ls [path], cat <file>: files (ram: is the RAM disk; log: the boot disk's log partition, with each boot's system log; models: the model disk, read-only)\n- write <file> <text>, mkdir, rm, mv <from> <to>, sync: change files on ram:, on log: and in data/\n- > <file>, >> <file>: after a command, what it prints goes into the file (>> adds to it), taken from the current directory; a line that starts ERROR: stays on the screen (ls data > ram:list.txt, dmesg >> data/boot.txt)\n- faults: recent process faults\n- ps: tasks\n- quotas: task and endpoint quotas (used/limit)\n- budget <pid> <ms> <period ms>: CPU budget (0: no limit)\n- fg <id>: foreground\n- kill <id>: terminate\n- logs <id>: buffered output\n- logger <text>: a line in the system log (dmesg shows it)\n- net [arp <ip>]: network card (MAC, link, counters); ARP query while the stack is stopped\n- ip [offload on|off]: address, gateway and DNS server, every card with its kind (WIRED, WI-FI) and DEFAULT, PREFERRED or DOWN; transmit checksum offload\n- netgrants, netrevoke <program>: flow grants of the network policy broker\n- netstat [-i]: the open sockets (protocol, ports, remote address, TCP state, bytes each way, the program), then the cards; -i: the cards alone\n- netpolicy [add <line> | remove <line>]: the network policy's lines; a change after you agree to it, kept on the disk\n- ping [-c count] [-i seconds] [-w seconds] [-f] <host>: echo requests, 3 a second apart, each waiting 1 s for its reply (-c 0: until Esc); -f: the next at once, a dot for each one lost, 100 by default\n- nslookup <name> [server[:port]], fetch <host>[:port] [path]: network\n- https [-c] <host>[:port] [path] [name]: HTTPS GET, server certificate verified (-c: offer the device certificate)\n- tls cert: the device certificate (PEM)\n- tpm [seal <text>]: the TPM (manufacturer, interface); seal: a check that the shell may not seal\n- release <file>: a release channel file or a boot manifest as the parser service reads it, shown only if its answer makes the file\n- heap\n- clear\n- keymap [us|ru] [--switch both|ctrl-shift|alt-shift|caps|none]: keyboard layout and layout switch\n- voice on [--wav file] [seconds], voice off, voice listen: voice control (F12: speak, Esc: cancel; asks before stopping a service or rebooting)\n- screenshot [-d seconds] [file]: the screen as a BMP (data/media/screen-NNN.bmp, ram: when data/ cannot be written); -d: that many seconds later, the shell going on; Ctrl+Alt+F6: one at once, whatever is in front\n- reboot [-f] [--off], poweroff [-f], shutdown [-f]: write cached files to the disks, stop the services (not with -f) and restart the machine; --off, poweroff and shutdown turn it off (ACPI S5 on x86, PSCI on aarch64)\n- check [group …], kbench [group …] [--quick], bench [group …] [--quick]: a self-test, the kernel's and the components' performance, each a table; the full log on log: (also in wm's menu, Tests and performance)\n- msh <file> [args], msh -c \"code\", msh --check <file>: scripts (docs/msh.md); let, if, for, while, fn and try work at the prompt too; autorun.msh at the boot volume's root runs once at start\n- stop\nCTRL+ALT+F5 OR SHELL IN WM'S MENU (A RIGHT CLICK ON THE DESKTOP, ALT+P): ANOTHER WINDOW OF THE SHELL EACH TIME (SHELL, SHELL 2…), EACH A SESSION OF ITS OWN; IT TAKES EVERY COMMAND BUT FG (REBOOT, POWEROFF AND STOP ASK FIRST); PROGRAMS STARTED THERE OPEN IN WINDOWS (PS: CONSOLE=5 AND ON). CONSOLE IN WM IS A TERMINAL FOR PROGRAMS WITH WHAT WM HOLDS, NOT A SECOND SHELL: THE SHELL ALONE HOLDS THE OPERATOR'S AUTHORITY.\nCTRL+Z: SHELL, KEEP RUNNING. ESC: EXIT FOREGROUND APP. CTRL+ALT+F1…F4: CONSOLES 1-4, EACH WITH ITS OWN LINE, HISTORY AND PROGRAMS (THE SERIAL LINE IS CONSOLE 1).\nKEYS: ←/→ HOME/END DEL EDIT THE LINE, ↑/↓ HISTORY, TAB COMPLETES A COMMAND, A PROGRAM OR A PATH (AGAIN: THE CHOICES), ESC CLEARS, SHIFT+PGUP/PGDN SCROLL, CTRL+L CLEARS THE SCREEN, CTRL+SHIFT OR ALT+SHIFT: EN/RU.\n";
 
 // Words the shell completes with Tab besides program names.
 const BOOT_LOG_LINES: usize = 24;
@@ -99,8 +100,9 @@ struct Shell {
     active: usize, shown: usize, // the console the shell works in now, and the one on the screen
     windows: [Option<mind::windowed::Window>; WINDOWS], room: (usize, usize), // the shell's windows, and the cells each has memory for (the screen's)
     windowed: Option<u64>, // the program the window's session last started in a window of its own
-    commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044), made at the first lend
+    commands: Option<Endpoint>, // the shell's commands for a window manager (idl/shell.wit, 211-APP-0044): init's, else made at the first lend
     managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
+    unasked: bool, // while a line from the link's client runs (800-APP-0102): no question in the shell's window
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
@@ -229,8 +231,8 @@ impl Shell {
         Ok((WINDOW + at, id))
     }
 
-    // A client of the shell's commands for a program that asks for it (REQUEST_SHELL): the endpoint is made the first
-    // time; the caller lends the client and drops it.
+    // A client of the shell's commands for a program that asks for it (REQUEST_SHELL): init's endpoint, else one made
+    // the first time; the caller lends the client and drops it.
     fn commands_client(&mut self) -> Result<usize, Error> {
         let endpoint = match self.commands { Some(endpoint) => endpoint, None => { let endpoint = Endpoint::create()?; self.commands = Some(endpoint); endpoint } };
         mind::ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0) // grant: `run`'s buffer travels with the call
@@ -261,7 +263,10 @@ impl Shell {
                     let (year, month, day) = mind::rtc::civil_from_days(date);
                     let line = alloc::format!("date set {:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, seconds / 3600, seconds / 60 % 60, seconds % 60);
                     let manager = self.managers.contains(&message.sender);
+                    // The fields are local time, in the zone the clocks show (shell.wit 1.9, 000-APP-0099); the RTC keeps UTC.
+                    let utc = mind::rtc::zone().utc(date, seconds);
                     let result = if seconds >= 86_400 || mind::rtc::days_from_civil(year, month, day) != Some(date) { Err(commands::Error::Invalid) } else if manager {
+                        let Some((date, seconds)) = utc else { let _ = commands::reply_set_clock(call, Err(commands::Error::Invalid)); continue };
                         match mind::idl::rtc::set(Endpoint::RTC, date, seconds) {
                             Ok(Ok(())) => Ok(()),
                             Ok(Err(mind::idl::rtc::Error::Invalid)) => Err(commands::Error::Invalid),
@@ -276,6 +281,32 @@ impl Shell {
                     let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
                     self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
                     let _ = commands::reply_set_clock(call, result);
+                }
+                commands::Request::SetZone { west, minutes } => {
+                    // As the clock (shell.wit 1.9, 000-APP-0099): at once for the window manager the shell started, else
+                    // `date zone` asked in the shell's window.
+                    let zone = i32::try_from(minutes).ok().and_then(|m| mind::rtc::Zone::from_minutes(if west { -m } else { m }));
+                    let manager = self.managers.contains(&message.sender);
+                    let line = alloc::format!("date zone {}", zone.map(|z| alloc::format!("{}", z)).unwrap_or_default());
+                    let result = match zone {
+                        None => Err(commands::Error::Invalid),
+                        // The rtc service first, then the answer; the file after it, which a slow disk (the MacBook Pro's)
+                        // may take longer over than the window manager waits.
+                        Some(zone) if manager => clockzone::apply(zone).map_err(|_| commands::Error::Unavailable),
+                        Some(_) => self.client_line(&line, message.sender).and_then(|out| {
+                            if core::str::from_utf8(&out).unwrap_or("").contains("ZONE UTC") { Ok(()) } else { Err(commands::Error::Unavailable) }
+                        }),
+                    };
+                    let verdict = match &result { Ok(()) => "RAN", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
+                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"{}", message.sender, verdict, line, if manager { " AT ONCE: ITS WINDOW MANAGER'S SETTINGS" } else { "" }));
+                    let applied = manager && result.is_ok();
+                    let _ = commands::reply_set_zone(call, result);
+                    if let (true, Some(zone)) = (applied, zone) {
+                        // On the serial line, as the notes before it, and in the system log, which the link reads.
+                        let kept = clockzone::keep(zone);
+                        self.note(format_args!("{}", kept));
+                        mind::println!("[SHELL] {}", kept);
+                    }
                 }
                 commands::Request::Battery => {
                     // A copy of the shell's battery client (shell.wit 1.4, 211-APP-0070): the service only reads, and
@@ -308,9 +339,17 @@ impl Shell {
                     let _ = commands::reply_net_counters(call, counters.as_ref().map(|list| list.as_slice()).map_err(|e| *e));
                 }
                 commands::Request::Run { line } => {
-                    let result = self.client_line(line.as_str(), message.sender);
+                    // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
+                    let link = message.badge == mind::process::BADGE_SHELL_LINK;
+                    let result = self.line_for(line.as_str(), message.sender, if link { clients::Client::Link } else { clients::Client::Program });
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
-                    self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    if link {
+                        // The command's word alone in the system log: its arguments may be the user's (as `link` logs it).
+                        let word = line.as_str().split_whitespace().next().unwrap_or("");
+                        mind::println!("[SHELL] FOR THE LINK THE SHELL {} {}", verdict, word.to_ascii_uppercase());
+                    } else {
+                        self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
+                    }
                     let answer = result.as_ref().map(|bytes| { let mut from = bytes.len().saturating_sub(ANSWER_MAX); while from < bytes.len() && bytes[from] & 0xC0 == 0x80 { from += 1; } &bytes[from..] });
                     let _ = commands::reply_run(call, answer.map_err(|e| *e));
                 }
@@ -321,14 +360,20 @@ impl Shell {
     // A command line from a client of the shell's commands (`console` in a window manager, 211-APP-0044), run on the
     // shell's authority as if typed: what it printed. One that changes the machine runs in the shell's window, shown as
     // typed there with the client's PID, once the user agrees (reboot, poweroff and stop ask themselves).
-    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> {
+    fn client_line(&mut self, line: &str, client: u64) -> Result<alloc::vec::Vec<u8>, commands::Error> { self.line_for(line, client, clients::Client::Program) }
+
+    // A client's line, as `kind` may have it run: at once, after the user agrees in the shell's window, or not at all.
+    fn line_for(&mut self, line: &str, client: u64, kind: clients::Client) -> Result<alloc::vec::Vec<u8>, commands::Error> {
         let line = line.trim();
         let word = line.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
-        let taken = clients::taken(line);
+        let taken = clients::taken_by(line, kind);
         if taken == clients::Taken::Refused { return Err(commands::Error::Refused); }
         if taken == clients::Taken::Now {
+            // The link's line runs with no question in the shell's window: no one is there to answer (800-APP-0102).
+            self.unasked = kind == clients::Client::Link;
             let outer = self.term.capture.replace(alloc::vec::Vec::new());
             self.command(line.as_bytes());
+            self.unasked = false;
             return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
         }
         self.note(format_args!("FOR PID {} THE SHELL ASKS IN ITS WINDOW: \"{}\"", client, line));
@@ -922,7 +967,7 @@ impl Shell {
                 }
             }
         } else if !args.is_empty() && [&b"cpus"[..], b"faults", b"ps", b"quotas", b"clear", b"stop", b"heap", b"time", b"date", b"free", b"physmap", b"irqs", b"devices", b"endpoints", b"battery"].iter().any(|c| is(c))
-                  && !(is(b"date") && args.split(|&b| b == b' ').next() == Some(&b"set"[..])) {
+                  && !(is(b"date") && matches!(args.split(|&b| b == b' ').next(), Some(b"set" | b"zone"))) {
             self.report("THIS COMMAND TAKES NO ARGUMENTS");
         } else if is(b"help") {
             if args.is_empty() { let _ = write!(self.term, "{}", HELP); } else { programs::help(&mut self.term, args, HELP); }
@@ -967,10 +1012,10 @@ impl Shell {
             self.term.clear();
         } else if is(b"reboot") {
             // Keys in the shell's window come through the window manager: it asks first.
-            if is_window(self.active) && !msh::ask(self, "RESTART THE MACHINE?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "RESTART THE MACHINE?") { return; }
             power::reboot(&mut self.term, args);
         } else if is(b"poweroff") || is(b"shutdown") {
-            if is_window(self.active) && !msh::ask(self, "TURN THE MACHINE OFF?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "TURN THE MACHINE OFF?") { return; }
             power::poweroff(&mut self.term, args);
         } else if is(b"voice") {
             self.voice_command(args);
@@ -984,28 +1029,38 @@ impl Shell {
             let _ = writeln!(self.term, "SCREENSHOT IN {} S{}", asked.delay_ms / 1000, if file.is_empty() { String::new() } else { alloc::format!(": {}", file) });
             self.shot = Some((mind::time::uptime_ms() as u64 + asked.delay_ms, file));
         } else if is(b"stop") {
-            if is_window(self.active) && !msh::ask(self, "HALT THE SYSTEM?") { return; }
+            if is_window(self.active) && !self.unasked && !msh::ask(self, "HALT THE SYSTEM?") { return; }
             files::flush_all(); // what vfs_server still caches goes to the disks first
             let _ = writeln!(self.term, "SYSTEM HALTED. CPU GOING TO SLEEP...");
             control::halt();
         } else if is(b"battery") {
             power::battery(&mut self.term);
         } else if is(b"date") {
-            // `date set`: the shell's rtc client carries the setting badge (rtc.wit 1.2, 211-APP-0042).
+            // `date zone [offset]` (000-APP-0099): the zone the clocks show the time in, kept in data/clock.conf.
+            if let Some(rest) = args.strip_prefix(b"zone") {
+                let text = core::str::from_utf8(rest).unwrap_or("").trim();
+                if text.is_empty() { let _ = writeln!(self.term, "ZONE: {} (THE RTC KEEPS UTC; DATE ZONE +03:00 SETS IT)", mind::rtc::zone()); return; }
+                let Some(zone) = mind::rtc::Zone::parse(text) else { self.report("USAGE: DATE ZONE [+HH:MM | -HH:MM | UTC] (UTC-12:00 TO UTC+14:00, NO SUMMER TIME)"); return; };
+                match clockzone::set(zone) { Ok(line) => { let _ = writeln!(self.term, "{}", line); } Err(why) => { self.report(why); return; } }
+            }
+            // `date set`: the shell's rtc client carries the setting badge (rtc.wit 1.2, 211-APP-0042); the time typed
+            // is local, in the zone, and the RTC keeps UTC (rtc.wit 1.3).
             if let Some(setting) = args.strip_prefix(b"set") {
                 let text = core::str::from_utf8(setting).unwrap_or("");
                 let Some((days, seconds)) = mind::rtc::parse_setting(text) else { self.report("USAGE: DATE SET YYYY-MM-DD HH:MM[:SS] (2000-01-01 TO 2099-12-31)"); return; };
+                let zone = mind::rtc::zone();
+                let Some((days, seconds)) = zone.utc(days, seconds) else { self.report("THAT TIME IS BEFORE 2000-01-01 UTC, WHICH THE CLOCK DOES NOT TAKE"); return; };
                 match mind::idl::rtc::set(Endpoint::RTC, days, seconds) {
-                    Ok(Ok(())) => { let _ = writeln!(self.term, "CLOCK SET. IT KEEPS NO TIME ZONE: THIS IS THE TIME IT SHOWS."); }
+                    Ok(Ok(())) => { let _ = writeln!(self.term, "CLOCK SET, IN {} (THE RTC KEEPS UTC).", zone); }
                     Ok(Err(mind::idl::rtc::Error::Rights)) => { self.report("ONLY THE SHELL'S RTC CLIENT MAY SET THE CLOCK"); return; }
                     Ok(Err(mind::idl::rtc::Error::Invalid)) => { self.report("THE CLOCK REFUSED THAT TIME"); return; }
                     Ok(Err(mind::idl::rtc::Error::Unavailable)) | Err(_) => { self.report("RTC NOT AVAILABLE"); return; }
                 }
             }
-            // Calendar time from the rtc service (idl/rtc.wit 1.1), without a time zone.
-            match (mind::rtc::date(), mind::rtc::seconds_since_midnight()) {
-                (Some((y, m, d)), Some(s)) => { let _ = writeln!(self.term, "DATE: {:04}-{:02}-{:02} {:02}:{:02}:{:02} (RTC, NO TIME ZONE)", y, m, d, s / 3600, s / 60 % 60, s % 60); }
-                _ => self.report("RTC NOT AVAILABLE"),
+            // Calendar time from the rtc service (idl/rtc.wit 1.3), in the zone it holds.
+            match mind::rtc::local_date_time() {
+                Some(((y, m, d), s)) => { let _ = writeln!(self.term, "DATE: {:04}-{:02}-{:02} {:02}:{:02}:{:02} {}", y, m, d, s / 3600, s / 60 % 60, s % 60, mind::rtc::zone()); }
+                None => self.report("RTC NOT AVAILABLE"),
             }
         } else if is(b"net") {
             net::command(&mut self.term, args);
@@ -1037,8 +1092,8 @@ impl Shell {
         } else if is(b"time") {
             // One line (`clock` is the clock program, full screen): the time of day from the RTC, then the kernel's clock.
             let (ns, resolution, hz) = mind::time::clock_info();
-            let _ = match mind::rtc::seconds_since_midnight() {
-                Some(s) => write!(self.term, "TIME: {:02}:{:02}:{:02} ", s / 3600, s / 60 % 60, s % 60),
+            let _ = match mind::rtc::local_date_time() {
+                Some((_, s)) => write!(self.term, "TIME: {:02}:{:02}:{:02} ", s / 3600, s / 60 % 60, s % 60),
                 None => write!(self.term, "TIME: --:--:-- "),
             };
             let _ = writeln!(self.term, "UPTIME MS={} MONOTONIC NS={} RESOLUTION NS={} TSC HZ={}", mind::time::uptime_ms(), ns, resolution, hz);
@@ -1208,19 +1263,28 @@ impl Events {
     fn clear(&mut self) { self.len = 0; }
 }
 
+// The commands endpoint init made for the shell (ABI 15, 800-KRN-0148, for 800-APP-0102): the receive side of its
+// keeper in SLOT_COMMANDS, whose client badged BADGE_SHELL_LINK `link` holds in developer mode. Without one (a launch
+// that does not give it) the shell makes its own at its first lend, as before.
+fn given_commands() -> Option<Endpoint> {
+    let (kind, _, rights) = mind::dev::cap_info(SLOT_COMMANDS);
+    (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_COMMANDS))
+}
+
 // The shell's state on the heap: the commands and scripts it runs need the 64 KiB stack (issue 094).
 #[inline(never)]
 fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box<Shell> {
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: None, managers: alloc::vec::Vec::new(), owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), managers: alloc::vec::Vec::new(), unasked: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, safe: safe::Safe::default(), shot: None })
 }
 
 mind::entry!(main);
 fn main(info: &'static BootInfo) {
     let mut start = start::Start::new(mind::time::uptime_ms() as u64);
+    programs::boot_slot(info.boot_slot.slot);
     let term = Console::new(mind::gfx::Screen::new(info), Uart::open(SLOT_SERIAL));
     if !term.has_screen() { start.stop(); mind::println!("[SHELL] NO SCREEN TO DRAW ON: THE SERIAL LINE ONLY"); }
     step(&mut start, "THE SCREEN AND THE SERIAL LINE (THE KERNEL)");
@@ -1250,6 +1314,8 @@ fn main(info: &'static BootInfo) {
     let mut events = Events::new();
     // The start script: tried once a second after the first frame, for a minute at most (000-APP-0079).
     let (mut autorun, autorun_until) = (Some(0u64), mind::time::uptime_ms() as u64 + 60_000);
+    // The time zone from data/clock.conf, tried as the start script is, before it (000-APP-0099).
+    let mut zone_next = Some(0u64);
     loop {
         for index in 0..SESSIONS { if shell.activate(index) { shell.tend(); } }
         shell.tend_window();
@@ -1305,7 +1371,10 @@ fn main(info: &'static BootInfo) {
         }
         // The start script, once, after the first frame (or at once without a screen) (000-APP-0079).
         let now = mind::time::uptime_ms() as u64;
-        if let Some(next) = autorun.filter(|&next| start.drawn() && now >= next) {
+        if let Some(next) = zone_next.filter(|&next| now >= next) {
+            zone_next = match clockzone::load(now >= autorun_until) { clockzone::Load::Later => Some(next.max(now) + 1000), clockzone::Load::Done => None };
+        }
+        if let Some(next) = autorun.filter(|&next| zone_next.is_none() && start.drawn() && now >= next) {
             autorun = match msh::autorun(&mut shell, now >= autorun_until) {
                 msh::Autorun::Later => Some(next.max(now) + 1000),
                 msh::Autorun::Done(ran) => { if ran { shell.prompt(); } None }

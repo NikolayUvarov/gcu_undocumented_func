@@ -1,6 +1,6 @@
 # The Effector agent's policy
 
-**Version:** 1 (2026-10-21) · **Task:** [750-EFF-0003](../../issues-done/750-EFF-0003-interface-and-policy.done) · **Code:** `effector_gw/src/policy.rs`, tested by `tests/effector_policy_host.rs` · **Constitution:** MC-3.8, MC-3.11, MC-7.5, MC-10.7
+**Version:** 1 (2026-10-21) · **Task:** [750-EFF-0003](../../issues-done/750-EFF-0003-interface-and-policy.done) · **Code:** `libmind/src/effector/policy.rs` (`mind::effector::policy`, which `effector_gw` and `init` both use since 750-KRN-0121), tested by `tests/effector_policy_host.rs` · **Constitution:** MC-3.8, MC-3.11, MC-7.5, MC-10.7
 
 The policy says what the Effector server may make this machine do. The owner writes it; the server never can.
 

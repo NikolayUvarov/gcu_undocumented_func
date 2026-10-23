@@ -1,6 +1,6 @@
 # 211-APP-0090 — Horizontal scrolling from a trackpad
 
-**Type:** tools (`wm`, `view`, `edit`, `fm`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** `KRN`: the across field in an absolute pointer event ([requests-KRN.md](requests-KRN.md), "An across field in absolute pointer events") · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-12.4
+**Type:** tools (`wm`, `view`, `edit`, `fm`) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** open (planned) · **Blocked by:** — (the across field is in `main` with ABI 15: [211-KRN-0150](../issues-done/211-KRN-0150-an-across-field-in-absolute-pointer-events.done), `pointer_across`) · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track G · **Constitution:** MC-12.4
 
 **Recorded by:** the kernel track (KRN), 2026-10-09, in `requests-APP.md`, for [211-DRV-0018](211-DRV-0018-macbook-trackpad-gestures.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 

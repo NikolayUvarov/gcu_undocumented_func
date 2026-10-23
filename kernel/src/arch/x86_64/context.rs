@@ -178,6 +178,9 @@ pub unsafe fn initial(saved: usize, entry: usize, stack_top: usize) {
     *(saved as *mut usize) = saved + 64 + area;
 }
 
+/// A task's data access to a page that was not present (a #PF without P, I/D or RSVD): whether it was a write.
+pub fn missing_page(code: u64, error: u64) -> Option<bool> { (code == 14 && error & 0b11001 == 0).then_some(error & 2 != 0) }
+
 // What an entry into the kernel was, decoded from the saved state (the generic kernel knows no vector numbers).
 pub enum Event {
     Stop, // another CPU stops this one

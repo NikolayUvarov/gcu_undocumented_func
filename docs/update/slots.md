@@ -1,6 +1,6 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 0.7 (2026-10-22): the applications in the slot with the services (351-UPD-0023); 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
 The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater stages a release in the other slot, activates it with a trial record and writes the confirmed record ([updater.md](updater.md)).
 
@@ -8,10 +8,10 @@ The bootloader can boot either of two copies of the system, slots A and B. Which
 
 | Path | Holds |
 |---|---|
-| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services and the build's `MANIFEST` and `MANIFEST.SIG`. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
+| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services, the applications and the build's `MANIFEST` and `MANIFEST.SIG` (351-UPD-0023). The loader opens an application from the booted slot when the slot holds any (351-KRN-0151); a slot staged before holds none, and the root's run. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
 | `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each |
 | `EFI/BOOT/` | the bootloader, outside the slots (351-UPD-0010 updates it) |
-| the root | the applications, the licences and the voice model, shared by both slots |
+| the root | the licences and the voice model, shared by both slots |
 
 A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The volumes of most QEMU suites keep that layout, and so does a USB image unless it is made with `make_usb_image.py --slots` ([write-disk.md](../write-disk.md), 351-UPD-0016). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), and slot A is confirmed.
 
@@ -95,7 +95,6 @@ The suites with a root volume show that a volume without records boots as before
 ## Not provided yet
 
 - **A confirmation the updater is told of.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The updater learns of the confirmation only by outliving the deadline, so the record reaches the disk about two minutes after the boot ([updater.md](updater.md)).
-- **Applications in the slots.** They stay at the root, shared, so a release can put a service under an application built against another version of its interface, and a fallback runs the newer applications on the older services. On the MacBook Pro a release with `shell.wit` 1.8 under a `wm` built against 1.9 could not set the time zone (2026-10-22). Decided: a release carries its applications in its slot, and the loader opens them from the booted slot ([351-UPD-0023](../../issues/351-UPD-0023-applications-in-the-releases-slot.md); the loader's part is requested from `KRN`).
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.
 - **Slot images by default.** `make_usb_image.py` lays the build out in slots only with `--slots` ([write-disk.md](../write-disk.md)); `files` still reads the kernel at the root ([requests-APP.md](../../issues/requests-APP.md)).
 - **A cut during the bootloader's own write, on real media** (351-ASR-0005).

@@ -26,4 +26,4 @@ Nothing short and outward-facing says why MIND Core exists. The Constitution is 
 
 ## Related
 
-[850](850-the-cultural-code.md), [850-PHI-0002](850-PHI-0002-the-canons-maxims-in-lore-1-6.md).
+[850](850-the-cultural-code.md), [850-PHI-0002](../issues-done/850-PHI-0002-the-canons-maxims-in-lore-1-6.done).

@@ -2,7 +2,7 @@
 #![no_main]
 // The updater (351-UPD-0007, idl/update.wit, docs/update/updater.md; MC-9.2–9.4, MC-3.11): turns a published release
 // into a staged, verified slot and nothing more. It checks a channel's signature with the release key built into it, a
-// manifest's with the boot key, and every boot file it stages by size and SHA-256; the parser service reads the
+// manifest's with the boot key, and every file it stages by size and SHA-256; the parser service reads the
 // metadata (MC-11.11). It writes only the slot that did not boot and the boot records (vfs_server's update zone), and
 // confirms a trial boot on the disk once the kernel's deadline has passed without a restart. Holds: its endpoint, the
 // clock, the boot disk's client badged for the update zone, the parser, init's client badged for a restart, the log,
@@ -29,7 +29,8 @@ use mind::ipc::Endpoint;
 use mind::parse::{read_channel, read_manifest, Refused, Session};
 use mind::release::{self, Channel, CHANNEL_MAX, MANIFEST_MAX};
 use slots::{Record, RECORD};
-use source::{sha256, Source};
+use plan::Kind;
+use source::{copy, sha256, Source};
 
 #[cfg(target_arch = "x86_64")]
 const ARCH: &str = "x86_64";
@@ -113,15 +114,18 @@ fn channel_of(file: &[u8], parser: Endpoint) -> Result<Channel, Error> {
     Ok(channel)
 }
 
-/// The boot files of a manifest: the kernel and the services the bootloader loads, by name, size and SHA-256.
-fn boot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error> {
+/// The files of a manifest a slot holds, by name, size and SHA-256: the kernel, the services the bootloader loads and
+/// the applications, which go with them (351-UPD-0023). The licences and data stay at the root.
+fn slot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error> {
     let mut files = Vec::new();
     read_manifest(parser, text, |file| files.push(*file)).map_err(refused)?;
-    files.retain(|f| f.path.as_str() == "kernel.elf" || BOOT_FILES.contains(&f.path.as_str()));
+    files.retain(|f| kind(f.path.as_str()) != Kind::Shared);
     // The bootloader loads neither a slot without these.
     if !["kernel.elf", "init.elf"].iter().all(|name| files.iter().any(|f| f.path.as_str() == *name)) { return Err(Error::Malformed); }
     Ok(files)
 }
+
+fn kind(path: &str) -> Kind { plan::kind(path, &BOOT_FILES) }
 
 fn slot_name(slot: u8) -> &'static str { if slot == b'A' { "A" } else { "B" } }
 
@@ -235,9 +239,11 @@ impl Updater {
         if mind::sha256::digest(&manifest) != digest { return Err(Error::Digest); }
         let signature = source.small(&format!("{}/MANIFEST.SIG", release), 64, &mut parser)?;
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
-        let files = boot_files(&manifest, parser.endpoint())?;
+        let files = slot_files(&manifest, parser.endpoint())?;
         let slot = self.other();
-        mind::println!("[UPDATER] FETCH: VERSION {} INTO SLOT {}: {} BOOT FILES, MANIFEST {}", channel.version, slot, files.len(), short(&digest));
+        let applications = files.iter().filter(|f| kind(f.path.as_str()) == Kind::Application).count();
+        mind::println!("[UPDATER] FETCH: VERSION {} INTO SLOT {}: {} BOOT FILES AND {} APPLICATIONS, MANIFEST {}", channel.version, slot,
+                       files.len() - applications, applications, short(&digest));
         // The channel goes first and comes back last: a slot holds one only once all of it is there. A boot file the
         // manifest does not list goes too (the bootloader refuses a slot with one); a listed one is resumed.
         let dir = Dir::create(&format!("MIND/{}", slot)).map_err(|_| Error::Write)?;
@@ -253,10 +259,22 @@ impl Updater {
             let started = mind::time::uptime_ms();
             let path = format!("MIND/{}/{}", slot, f.path.as_str());
             let mut file = File::open_mode(&path, MODE_WRITE | MODE_CREATE).map_err(|_| Error::Write)?;
+            let whole = |file: &File| file.size() as u64 == f.size && sha256(file) == Some(f.digest);
+            // An application the volume holds as the manifest lists it is copied whole, not fetched (351-UPD-0023).
+            if kind(f.path.as_str()) == Kind::Application && !whole(&file) {
+                if let Some((from, held)) = self.held(f) {
+                    file.truncate(0).map_err(|_| Error::Write)?;
+                    if copy(&held, &mut file, 0, f.size as usize).is_ok() && file.flush().is_ok() && whole(&file) {
+                        mind::println!("[UPDATER] FETCH: {} OF {}: {}, {} BYTES COPIED FROM {} IN {} MS", index + 1, files.len(), f.path.as_str(), f.size, from,
+                                       mind::time::uptime_ms() - started);
+                        continue;
+                    }
+                    file.truncate(0).map_err(|_| Error::Write)?;
+                }
+            }
             let blob = format!("blobs/{}", f.digest.iter().map(|b| format!("{:02x}", b)).collect::<String>());
             let resumed = file.size() > 0;
             fetched += source.file(&blob, &mut file, f.size, &mut parser)?;
-            let whole = |file: &File| file.size() as u64 == f.size && sha256(file) == Some(f.digest);
             // What was there before may be another file's start: fetched again whole, once.
             if !whole(&file) && resumed {
                 file.truncate(0).map_err(|_| Error::Write)?;
@@ -281,6 +299,15 @@ impl Updater {
         Ok(channel.version)
     }
 
+    /// A copy of file `f` the volume holds as the manifest lists it, the running slot's or the root's, and which it is.
+    fn held(&self, f: &release::File) -> Option<(&'static str, File)> {
+        let running = (self.slot != 0).then(|| (if self.slot == b'A' { "SLOT A" } else { "SLOT B" }, format!("MIND/{}/{}", slot_name(self.slot), f.path.as_str())));
+        running.into_iter().chain([("THE ROOT", String::from(f.path.as_str()))]).find_map(|(from, path)| {
+            let file = File::open(&path).ok()?;
+            (file.size() as u64 == f.size && sha256(&file) == Some(f.digest)).then_some((from, file))
+        })
+    }
+
     /// The other slot checked as the bootloader will check it, and the version its kept channel shows.
     fn verify_other(&self) -> Result<(u64, u64), Error> {
         let slot = self.other();
@@ -293,8 +320,12 @@ impl Updater {
         };
         let (manifest, signature) = (read("MANIFEST", MANIFEST_MAX)?, read("MANIFEST.SIG", 64)?);
         if !verified(&keys::BOOT_KEY, &manifest, &signature) { return Err(Error::Signature); }
+        // The metadata first: a session's own parser ends after 30 s without a request, less than hashing a slot takes
+        // on a slow machine (parse's IDLE_MS).
         let parser = parser();
-        let files = boot_files(&manifest, parser.endpoint())?;
+        let files = slot_files(&manifest, parser.endpoint())?;
+        let shown = self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint());
+        drop(parser);
         for name in BOOT_FILES.iter().chain(["kernel.elf"].iter()) {
             let path = format!("MIND/{}/{}", slot, name);
             match (files.iter().find(|f| f.path.as_str() == *name), File::open(&path)) {
@@ -304,7 +335,26 @@ impl Updater {
                 _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, name); return Err(Error::Digest); }
             }
         }
-        match self.kept_version(slot, Some(mind::sha256::digest(&manifest)), parser.endpoint()) { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
+        // A slot that holds applications holds every one the manifest lists, and none it does not (351-UPD-0023). One
+        // staged before holds none, and the root's serve it.
+        let mut held = Vec::new();
+        Dir::open(&format!("MIND/{}", slot)).and_then(|dir| dir.list(|entry| if !entry.is_dir && kind(entry.name_str()) == Kind::Application {
+            held.push(String::from(entry.name_str()));
+        })).map_err(|_| Error::NotStaged)?;
+        if !held.is_empty() {
+            let listed = |name: &str| files.iter().find(|f| kind(f.path.as_str()) == Kind::Application && f.path.as_str().eq_ignore_ascii_case(name));
+            if let Some(name) = held.iter().find(|name| listed(name).is_none()) {
+                mind::println!("[UPDATER] SLOT {}: {} IS NOT IN THE MANIFEST", slot, name);
+                return Err(Error::Digest);
+            }
+            for f in files.iter().filter(|f| kind(f.path.as_str()) == Kind::Application) {
+                if !File::open(&format!("MIND/{}/{}", slot, f.path.as_str())).is_ok_and(|file| file.size() as u64 == f.size && sha256(&file) == Some(f.digest)) {
+                    mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, f.path.as_str());
+                    return Err(Error::Digest);
+                }
+            }
+        }
+        match shown { (0, _) => Err(Error::NotStaged), shown => Ok(shown) }
     }
 
     // Asks init to restart the machine; init answers first.

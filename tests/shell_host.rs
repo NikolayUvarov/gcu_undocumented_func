@@ -97,7 +97,8 @@ fn a_console_in_a_window_follows_its_size() {
 
 #[test]
 fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
-    use clients::{taken, Taken};
+    use clients::{taken_by, Client, Taken};
+    let taken = |line: &str| taken_by(line, Client::Program);
     // At once: what system information gives any program that asks for it.
     for line in ["ps", " QUOTAS ", "free", "ip", "netgrants", "date", "netpolicy", "sync", "endpoints"] { assert_eq!(taken(line), Taken::Now, "{}", line); }
     // What a command or program does (000-APP-0054): text only.
@@ -109,6 +110,24 @@ fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
                  "msh /diag/quick.msh", "msh ram:x.msh"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
     // The screen's own commands, code typed for msh, programs and statements are refused.
     for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh -c \"print(1)\"", "msh --check x.msh", "msh x.msh a", "msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
+}
+
+#[test]
+fn the_links_client_gets_at_once_what_a_program_is_asked_but_not_the_policy() {
+    // 800-APP-0102, for 800-LNK-0015: no one is at the shell's window for the link's client in developer mode. What reads
+    // and, by the maintainer's choice (a) of 2026-10-22, what changes the machine run at once.
+    use clients::{taken_by, Client, Taken};
+    let link = |line: &str| taken_by(line, Client::Link);
+    for line in ["ps", "ip", "net", "netgrants", "date", "netpolicy", "help kill", "netstat -i", "ping -c 1 10.0.2.2", "nslookup ya.ru", "logs 7", "stat caps 7",
+                 "pmap 7", "caps 3", "kill 7", "stop", "reboot", "reboot -f", "poweroff", "shutdown -f", "budget 7 5 10", "date set 2026-10-22 12:00", "logger hello",
+                 "tpm", "fetch ya.ru /", "https ya.ru", "ps > data/ps.txt", "logs 7 >> ram:logs.txt"] { assert_eq!(link(line), Taken::Now, "{}", line); }
+    // Never over the link: a change of the network policy (800-NET-0038), the machine's modes, scripts, the screen's own
+    // commands, programs and statements.
+    for line in ["netpolicy add allow x", "netpolicy remove allow x", "netrevoke fetch", "mode", "mode maintenance", "msh /diag/quick.msh", "msh -c \"print(1)\"",
+                 "fg 1", "keymap ru", "screenshot", "voice on", "run fm", "fm", "caps", "let x = 1", "clear", "", "date 1", "date zone +03:00", "netrevoke fetch > ram:x",
+                 "ls > ram:x"] { assert_eq!(link(line), Taken::Refused, "{:?}", line); }
+    // A program's client is still asked for the same lines.
+    for line in ["kill 7", "reboot", "netpolicy add allow x", "ps > data/ps.txt"] { assert_eq!(taken_by(line, Client::Program), Taken::Asked, "{}", line); }
 }
 
 #[test]
@@ -152,7 +171,8 @@ fn output_lines_go_to_the_file_and_errors_to_the_screen() {
 #[test]
 fn a_client_is_asked_before_its_output_goes_into_a_file() {
     // 000-APP-0074: `>` writes a file in the shell's name, so a command taken at once is asked; a refused one stays so.
-    use clients::{taken, Taken};
+    use clients::{taken_by, Client, Taken};
+    let taken = |line: &str| taken_by(line, Client::Program);
     assert_eq!(taken("ps"), Taken::Now);
     assert_eq!(taken("ps > data/ps.txt"), Taken::Asked);
     assert_eq!(taken("logs 7 >> ram:logs.txt"), Taken::Asked);

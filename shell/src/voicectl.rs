@@ -457,7 +457,8 @@ impl Shell {
         let listened = core::mem::take(&mut self.voice.listening) && !core::mem::take(&mut self.voice.cancelled);
         if listened && (heard || self.voice.dialogue.pending.is_some()) {
             let heard = Heard { understood, text: phrase.as_str(), intent: intent.as_str(), slots: slots.as_str() };
-            let facts = Facts { seconds: mind::rtc::seconds_since_midnight(), date: mind::rtc::date(), free_bytes: control::kernel_heap().1 };
+            let local = mind::rtc::local_date_time(); // the time spoken is the zone's (000-APP-0099)
+            let facts = Facts { seconds: local.map(|(_, s)| s as usize), date: local.map(|(d, _)| d), free_bytes: control::kernel_heap().1 };
             let (mut say, then, action) = self.voice.dialogue.decide(&heard, &facts);
             let ru = russian(phrase.as_str()) || (phrase.as_str().is_empty() && russian(text(&say)));
             match (heard.understood, phrase.as_str().is_empty()) {
