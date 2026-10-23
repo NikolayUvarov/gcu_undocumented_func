@@ -71,7 +71,15 @@ Nothing of it exists (survey of 2026-10-08):
 
 | Task | Track | What |
 |---|---|---|
-| [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | `UPD` | Minimum version, expiry, key roles, rotation and revocation, the compromise protocol (MC-9.4, 9.6) |
+| [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | `UPD` | Minimum version, expiry, key roles, rotation and revocation, the compromise protocol (MC-9.4, 9.6): split into the eight tasks below |
+| [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) | `UPD`, with `KRN`/`PRT` | The manifest signs its version; boot records (format 2) keep the floor; the bootloader refuses a slot below it (MC-9.4) |
+| [351-UPD-0025](351-UPD-0025-expiry-and-the-offline-policy.md) | `UPD` | A device past its metadata's expiry keeps running and refuses to update; `status` and `linkupdate` show it (MC-9.4) |
+| [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | `UPD` | A key file naming each role's keys, signed by a root threshold built into the updater and the bootloader (MC-9.5, 9.6) |
+| [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | `UPD` | The highest key-file version kept; root rotation by both thresholds; a revoked key's channels refused (MC-9.5, 9.6) |
+| [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md) | `UPD` | A timestamp file with a short expiry, so a server cannot freeze a device on an old channel (MC-9.4, B.5) |
+| [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md) | `UPD`, with `KRN`/`PRT` | The bootloader checks the slot's key file against the root and the manifest with the boot key it names (MC-9.5, 9.6) |
+| [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md) | `UPD` | A recovery order signed by its own threshold lowers the floor, logged and never replayed (MC-9.4, 9.6, B.5) |
+| [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | `UPD` | `docs/update/keys.md` (EN, RU): each role's lifecycle and the compromise protocol (MC-9.6, 11.9) |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | `UPD` with `PRT` | A version floor in a TPM 2.0 counter, read and raised by the bootloader through UEFI's TCG2 protocol: rollback stopped also for someone with the disk |
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | `UPD` with `PRT` | Secure Boot with our own keys and old bootloaders revoked, so the floor cannot be bypassed by booting other code |
 | [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure (two UEFI boot entries, `BootNext`) |
