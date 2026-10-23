@@ -1,6 +1,6 @@
 # Remote build and test machines through Effector
 
-**Version:** 1.1 (2026-10-23): Effector sets no time limit on work, the maintainer's word (rule 3); 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
+**Version:** 1.2 (2026-10-23): a reservation's lease is no limit; an operation still ends at its `timeout_seconds` until the service stops cutting commands; work in parts of an hour or two, the maintainer's word (rule 3); 1.1 (2026-10-23): 1.0 (2026-10-10) · **For:** every agent and person working on MIND Core ([AGENTS.md](../AGENTS.md)) · **Constitution:** [v1.6](../constitution/EN/MIND_CORE_Constitution_v1.6.md) MC-12.1, MC-12.9 (evidence names its configuration) · **Russian version:** [effector_RU.md](effector_RU.md) (kept in sync; the English text is the reference)
 
 The maintainer lends agents real machines for builds and tests through **Effector**, a service that runs commands on registered computers.
 
@@ -162,10 +162,11 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
    - Set `queue_ttl_seconds` for the queue you see (`GET /api/v1/operations?agent_id=…&status=active`). The wait counts against it, and an operation that waits longer expires.
    - Short read-only checks (versions, free space, a log's tail) are not sequential. They still take a queue: with one queue they wait for the running operation.
 2. **Nothing outlives its operation.** No `nohup`, `&`, `setsid`, `screen`, `tmux` or `systemd-run` for work. A detached job runs outside the queue and collides with the next agent's build or test.
-3. **Effector sets no time limit on work** (the maintainer, 2026-10-23).
-   - **A queue reservation's 1 to 60 minutes is a lease, not a limit.** It is there only so that a reservation someone forgot frees itself. Renew it as often as the work needs: the service limits neither the total time nor the number of renewals (its help, on reservations).
-   - **An operation ends at the `timeout_seconds` its sender gives it** (the API takes 1 to 3600). Choose it for the work on that machine. Work that needs more goes as several operations in a row, for example one QEMU group or one build each, or under a reservation you renew.
-   - **A `timeout` is the sender's own deadline, not Effector's limit.** Never report it as one: say which `timeout_seconds` the operation had and what it had done by then.
+3. **Time** (the maintainer, 2026-10-23).
+   - **A queue reservation's 1 to 60 minutes is a lease, not a limit on the work.** It is there only so that a reservation someone forgot frees itself. Renew it as often as the work needs: the service limits neither the total time nor the number of renewals (its help, on reservations).
+   - **One operation, one command, still ends at its `timeout_seconds`** (the API takes 1 to 3600): the server ends it with `agent did not acknowledge the operation before timeout_seconds elapsed`. The maintainer is updating the service so that it no longer cuts a command short.
+   - **Split the work into parts of about an hour, two at most:** for example one QEMU group or one build each, queued one after another. On a slow machine a group that takes longer goes to a faster one, or into smaller parts.
+   - **A `timeout` says the part outran its time, not that the change is wrong.** Report it as such: which `timeout_seconds` the operation had and what it had done by then.
 4. **Each track works in its own directory:** `/home/un/mind-core/<TRK>/` (for example `/home/un/mind-core/NET/`), with its own clone and its own `target/` directories.
    - Never build in, clean or change another track's directory.
    - The kernel track's clone is still at `/home/un/mind-core/gcu_undocumented_func` and moves to `KRN/`.
