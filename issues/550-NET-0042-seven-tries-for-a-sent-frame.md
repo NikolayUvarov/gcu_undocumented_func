@@ -35,4 +35,4 @@ Made on `claude/youthful-mendel-mf1soy` (b9c2278d). The `net` suite passed on x8
 
 ## Related
 
-[550-NET-0018](550-NET-0018-the-station-service.md), 550-DRV-0036 (the counting driver), `idl/wlanhw.wit` (`send`).
+[550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), 550-DRV-0036 (the counting driver), `idl/wlanhw.wit` (`send`).

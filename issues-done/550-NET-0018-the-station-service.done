@@ -1,6 +1,6 @@
-# 550-NET-0018 — The station service `wlan` and its configuration interface
+# 550-NET-0018 — The station service `wlan` and its configuration interface — done
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open (the QEMU checks pass; the MacBook Pro joined WPA2 and leased) · **Blocked by:** the maintainer's run of `https` over the Mac's Wi-Fi; a client with `BADGE_WIFI` alone, which no program holds yet · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-2.3, MC-11.9, MC-12.4, Appendix B.6
 
 The third part of the request in requests-NET.md ("An 802.11 station and WPA2-PSK"), after [550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done) and [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done).
 
@@ -39,9 +39,18 @@ The station's logic (`dot11`) does no I/O. Something has to drive it:
   - a client with `BADGE_WIFI` alone is `denied` a join.
 - On the MacBook Pro, with `bcm_wifi` serving `wlanhw.wit`: the station joins a WPA2-PSK network and the shell's `https` fetches a page (the request's criterion).
 
+## Resolution
+
+- **Built:** `idl/wifi.wit` (1.0, then 1.1 for the country), generated and fuzzed; the station service `wlan` over `idl/wlanhw.wit`, which holds the radio and nothing else that can act; `wlansim`, the stand-in radio, for QEMU.
+- **In QEMU** (the `net` suite, x86 and aarch64, gated since gate 20): the shell's client scans and lists `MIND-TEST` as WPA2, joins it with the passphrase, the stack leases 10.0.4.15 on the station's card and the gateway answers through it; a wrong passphrase is refused with the station's reason.
+- **On the MacBook Pro** with `bcm_wifi` (2026-10-20 and after): the station joined `CoolNet2` (WPA2-PSK), the stack leased 192.168.2.236 and took the default route, and the Effector session has run over that link since (LNK, EFF, 2026-10-22).
+- **The maintainer's decision (2026-10-23).** The criteria left are counted as met by the checks above. If the question comes up again, they are checked on a real test machine and the task is opened again, as for 800-NET-0038. Left by it:
+  - the shell's `https` over the Mac's Wi-Fi, which no run did on its own;
+  - a client with `BADGE_WIFI` alone `denied` a join: no program holds such a client.
+
 ## Related
 
-[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.md) (remembered networks).
+[550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`idl/wlanhw.wit`), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md), [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.done) (remembered networks).
 
 ## Progress (2026-10-20): the MacBook Pro
 

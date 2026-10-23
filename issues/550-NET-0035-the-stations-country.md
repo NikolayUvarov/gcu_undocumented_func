@@ -121,4 +121,4 @@ Numbered 0035, after [351-NET-0034](../issues-done/351-NET-0034-the-download-che
 
 ## Related
 
-[550-NET-0018](550-NET-0018-the-station-service.md), [550-NET-0028](550-NET-0028-rates-the-radio-has.md), [550-APP-0082](550-APP-0082-wifi-country-selector.md), 213-DRV-0032, [requests-DRV.md](requests-DRV.md).
+[550-NET-0018](../issues-done/550-NET-0018-the-station-service.done), [550-NET-0028](../issues-done/550-NET-0028-rates-the-radio-has.done), [550-APP-0082](550-APP-0082-wifi-country-selector.md), 213-DRV-0032, [requests-DRV.md](requests-DRV.md).

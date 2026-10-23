@@ -38,4 +38,4 @@
 
 ## Related
 
-[550-APP-0078](550-APP-0078-wifi-join-without-a-screen.md) (`wifi join` without a screen), [550-ASR-0007](550-ASR-0007-wifi-join-tests.md) (the hardware tests), [000-APP-0079](000-APP-0079-the-shells-start-script.md) (the start script), [550-NET-0018](550-NET-0018-the-station-service.md) (the station).
+[550-APP-0078](550-APP-0078-wifi-join-without-a-screen.md) (`wifi join` without a screen), [550-ASR-0007](550-ASR-0007-wifi-join-tests.md) (the hardware tests), [000-APP-0079](000-APP-0079-the-shells-start-script.md) (the start script), [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) (the station).
