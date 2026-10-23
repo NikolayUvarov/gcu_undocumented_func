@@ -82,7 +82,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`: 16 bytes, a 64-bit handle; `SPAWN_*`, quotas) → PID; `SPAWN_FOREGROUND` with a PID: in front, see the focus rules below (`ERR_FOCUS`); `SPAWN_TEXT`: the task gets a text input, and its writer (`CAP_KIND_TEXT`) goes to the spawner, its handle in `arg2` (`ERR_NO_SLOT` without room for it; 000-KRN-0094) [spawn privilege] |
+| 13 | `SPAWN` | name and grants, see `common/abi.rs` (`Grant`: 16 bytes, a 64-bit handle; `SPAWN_*`, quotas) → PID; `SPAWN_FOREGROUND` with a PID: in front, see the focus rules below (`ERR_FOCUS`); `SPAWN_TEXT`: the task gets a text input, and its writer (`CAP_KIND_TEXT`) goes to the spawner, its handle in `arg2` (`ERR_NO_SLOT` without room for it; 000-KRN-0094). The task's stack is what its ELF's `PT_GNU_STACK` asks: `p_memsz` in whole pages, at least `STACK_MIN_BYTES` (64 KiB); an ELF asking more than `STACK_MAX_BYTES` (8 MiB) is refused. An unmapped page lies below it. A linker script with `PHDRS` sets the size with a `NOLOAD` section placed in that header (`memtest/memstack.ld`; 262-KRN-0164) [spawn privilege] |
 | 28 | `TASK_ALIVE` | `arg1` = PID → 1 if it exists [none] |
 | 48 | `TASK_WATCH` | `arg1` = PID of an own child, `arg2` = endpoint with read right; its exit arrives there as a `MSG_FLAG_EXIT` message; at once for a child that has already ended, also one already reclaimed while it is among the last `EXIT_STATUSES` that ended (800-KRN-0138) |
 | 52 | `SCHED_SET` | `arg1` = PID, `arg2` = budget µs per period (0: none), `msg[0]` = period µs (≥ 10 000), `msg[1]` = band [lifecycle owner or process control] |

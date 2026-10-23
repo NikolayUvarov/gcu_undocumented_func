@@ -411,6 +411,9 @@ pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH
 
 // HEAP_MAX_BYTES is the default memory quota of a task (SPAWN); blocks are heap blocks and mappings together.
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
+// A task's stack is what its ELF's PT_GNU_STACK asks (p_memsz, the linker's -z stack-size=), in whole pages, at least
+// STACK_MIN_BYTES; an ELF asking more than STACK_MAX_BYTES is refused. An unmapped guard page lies below it (262-KRN-0164).
+pub const STACK_MIN_BYTES: usize = 64 * 1024; pub const STACK_MAX_BYTES: usize = 8 * 1024 * 1024;
 // Separate limit for mapped foreign memory (frame, IPC buffers, shared read-only objects).
 pub const SHARED_MAX_BYTES: usize = 256 * 1024 * 1024;
 

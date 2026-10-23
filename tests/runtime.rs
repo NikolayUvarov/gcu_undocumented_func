@@ -241,6 +241,22 @@ fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
 }
 
 #[test]
+fn the_stack_is_what_pt_gnu_stack_asks_within_its_bounds() {
+    // 262-KRN-0164: no PT_GNU_STACK gives the least; memstack asks 4 MiB; whole pages; more than the most is refused.
+    assert_eq!(elf::Image::parse(&std::fs::read("usb_root/app.elf").unwrap()).unwrap().stack, abi::STACK_MIN_BYTES);
+    let data = std::fs::read("usb_root/memstack.elf").unwrap();
+    assert_eq!(elf::Image::parse(&data).unwrap().stack, 4 << 20);
+    let (table, count) = (u64::from_le_bytes(data[32..40].try_into().unwrap()) as usize, u16::from_le_bytes([data[56], data[57]]) as usize);
+    let header = (0..count).map(|i| table + i * 56).find(|&at| data[at..at + 4] == 0x6474_e551u32.to_le_bytes()).unwrap();
+    for (asked, stack) in [(0, Some(abi::STACK_MIN_BYTES)), (5000, Some(abi::STACK_MIN_BYTES)), ((1 << 20) + 1, Some((1 << 20) + 4096)),
+                           (abi::STACK_MAX_BYTES, Some(abi::STACK_MAX_BYTES)), (abi::STACK_MAX_BYTES + 1, None), (usize::MAX, None)] {
+        let mut changed = data.clone();
+        changed[header + 40..header + 48].copy_from_slice(&(asked as u64).to_le_bytes());
+        assert_eq!(elf::Image::parse(&changed).ok().map(|image| image.stack), stack, "{asked}");
+    }
+}
+
+#[test]
 fn input_event_words_round_trip() {
     let word = abi::input_event(0x1E, abi::KEY_CHAR, abi::MOD_SHIFT | abi::MOD_CTRL, true, 'Ж' as u32);
     assert_eq!((abi::event_byte(word), abi::event_key(word), abi::event_mods(word), abi::event_pressed(word), abi::event_char(word)), (0x1E, abi::KEY_CHAR, 3, true, 'Ж' as u32));
