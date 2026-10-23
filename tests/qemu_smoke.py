@@ -727,7 +727,7 @@ def big_memory_check(vm):
         raise AssertionError(f"the blocks' frames did not come back: {frames_free(vm)} of {frames}")
     # The reserve holds (issue 169, MC-5.5): with a line above the pool, memtest takes all it can in GiB blocks and others
     # fill what is left; the frame pool keeps init's reserve, and a service restarts meanwhile.
-    require(vm.command("write data/memory.conf memtest 16384"), "WROTE 13 BYTES")
+    require(vm.command("write data/memory.conf memtest 16384"), "WROTE 14 BYTES")
     output = vm.command("run memtest big 16384 hold &")
     holders = [int(re.search(r"STARTED PID=(\d+)", output)[1])]
     log = vm.program_logs(holders[0], "BIG HELD", tries=2400)
