@@ -24,6 +24,7 @@ header h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--dim); }
 .dot.on { background: var(--ok); } .dot.off { background: var(--bad); } .dot.wait { background: var(--warn); }
 #traffic b { color: var(--text); font-weight: 600; } #traffic.moving b { color: var(--run); }
+#lease { color: var(--warn); } #lease[hidden] { display: none; }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
 .cmds { overflow: auto; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
@@ -63,6 +64,7 @@ small { color: var(--dim); }
   <h1>effector485</h1>
   <span class="pill" title="the cable's other end"><span id="linkdot" class="dot"></span><span id="linktext">…</span></span>
   <span class="pill" id="queue"></span>
+  <span class="pill" id="lease" hidden><span class="dot wait"></span><span id="leasetext"></span></span>
   <span class="pill" id="seen"></span>
   <span class="pill" id="traffic" title="the cable since the daemon started: sent ↑ and received ↓, the speed over the last seconds, how busy the line is"></span>
   <span class="pill" title="this page's live feed (WebSocket)"><span id="feeddot" class="dot wait"></span><span id="feedtext">connecting</span></span>
@@ -136,7 +138,7 @@ small { color: var(--dim); }
 // The page reads the daemon's state through its WebSocket feed and acts through the same JSON API the command line uses.
 const $ = s => document.querySelector(s);
 const OUT_KEPT = 1 << 20;
-let ws = null, key = "", ops = [], link = null, following = null, outAt = 0, outText = "", lastLogNext = null, samples = [];
+let ws = null, key = "", ops = [], link = null, lease = null, following = null, outAt = 0, outText = "", lastLogNext = null, samples = [];
 try { key = sessionStorage.getItem("effector485-key") || ""; } catch (e) {}
 
 function toast(text) {
@@ -172,7 +174,8 @@ const on = {
     $("#linkdot").className = "dot " + (m.online ? "on" : "off");
     $("#linktext").textContent = `${m.port}: ${m.online ? m.name : "offline" + (m.error ? " — " + m.error : "")}`;
     $("#queue").textContent = `queued ${m.queued} · running ${m.running}`;
-    showSeen();
+    lease = m.reservation || null;
+    showSeen(); showLease();
   },
   ops(m) { ops = m.ops; render(); },
   traffic(m) {
@@ -205,7 +208,17 @@ function showSeen() {
   const age = Math.max(0, Math.round(Date.now() / 1000 - link.last_seen));
   $("#seen").textContent = `seen ${age < 5 ? "now" : age + " s ago"}`;
 }
-setInterval(showSeen, 1000);
+// A lease (800-LNK-0021): who holds the machine, why and until when; nothing while it is free.
+function showLease() {
+  const el = $("#lease");
+  el.hidden = !lease;
+  if (!lease) return;
+  const left = Math.max(0, Math.ceil((lease.expires_at - Date.now() / 1000) / 60));
+  const until = new Date(lease.expires_at * 1000).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" });
+  $("#leasetext").textContent = `reserved by ${lease.owner || "a session"}: ${lease.reason}, until ${until} (${left} min left)`;
+  el.title = `${lease.session_id}: other sessions' operations that change the machine wait; reads pass`;
+}
+setInterval(() => { showSeen(); showLease(); }, 1000);
 
 function what(o) {
   const p = o.params || {};
@@ -224,6 +237,7 @@ function outcome(o) {
   const r = o.result || {};
   if (r.error) return r.error;
   if (r.exit_code !== undefined) return `exit ${r.exit_code}`;
+  if (o.waiting) return `#${o.position} in queue, waits: ${o.waiting.message}`;
   return o.position ? `#${o.position} in queue` : "";
 }
 function render() {
@@ -235,7 +249,8 @@ function render() {
     tr.onclick = () => follow(o.id);
     const cell = (text, cls) => { const td = document.createElement("td"); td.textContent = text ?? ""; if (cls) td.className = cls; tr.append(td); return td; };
     cell(clock(o.created_at)); cell(o.id); cell(o.kind);
-    const w = what(o) || ""; cell(w.length > 120 ? w.slice(0, 117) + "…" : w, "what");
+    const w = what(o) || ""; const wt = cell(w.length > 120 ? w.slice(0, 117) + "…" : w, "what");
+    if (o.waiting) { const n = document.createElement("div"); n.className = "note"; n.textContent = "waits: " + o.waiting.message; wt.append(n); }
     const st = cell(""); const chip = document.createElement("span"); chip.className = "st " + o.status;
     chip.textContent = o.status + (o.cancelling ? " (cancelling)" : ""); chip.title = outcome(o); st.append(chip);
     cell(o.reason, "reason");

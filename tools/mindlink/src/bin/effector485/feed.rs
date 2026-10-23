@@ -1,5 +1,5 @@
 //! The page's live feed over a WebSocket (`GET /api/v1/stream`): the cable's state, the operations and the output of
-//! the one the page follows. It must never slow the cable's work: a feed never waits for the state's lock (a busy lock
+//! the one the page follows, and the lease that holds the machine. It must never slow the cable's work: a feed never waits for the state's lock (a busy lock
 //! skips a tick), looks at it only when the change counter moved, holds it only to copy a few fields, and writes to the
 //! browser after letting it go. A browser that stops reading is dropped, and few feeds run at once.
 use crate::json::{self, obj, s, Value};
@@ -46,11 +46,12 @@ impl Drop for Place {
 struct Copy { link: Value, ops: Option<Vec<Value>>, output: Option<(String, u64, u64, Vec<u8>)> }
 
 fn copy(st: &State, follow: Option<&(String, u64)>, list: bool) -> Copy {
-    let l = &st.link;
+    let (l, now) = (&st.link, crate::ops::now());
     let link = obj(vec![
         ("type", s("link")), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("name", s(&l.name)),
         ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)),
         ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
+        ("reservation", st.lease_at(now).map_or(Value::Null, |lease| lease.json(now))),
     ]);
     let ops = list.then(|| {
         let mut queued = 0;
@@ -63,6 +64,7 @@ fn copy(st: &State, follow: Option<&(String, u64)>, list: bool) -> Copy {
                 ("position", p.map_or(Value::Null, |p| Value::Num(p as f64))), ("created_at", time(Some(o.created))),
                 ("started_at", time(o.started)), ("finished_at", time(o.finished)), ("result", o.result.clone()),
                 ("output_bytes", Value::Num(o.output_bytes as f64)), ("cancelling", Value::Bool(o.cancel.is_some())),
+                ("waiting", st.waiting(o, now).unwrap_or(Value::Null)),
             ])
         }).collect()
     });

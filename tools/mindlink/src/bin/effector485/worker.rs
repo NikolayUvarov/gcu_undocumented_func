@@ -1,5 +1,6 @@
 //! The cable's one master: queued operations carried out one at a time, and between them the programs they started
-//! followed: their output read, their end seen, a cancel or a time limit turned into STOP.
+//! followed: their output read, their end seen, a cancel or a time limit turned into STOP. While a lease is held, only
+//! its holder's operations and reads start; the programs started before it are still followed.
 use crate::json::{s, Value};
 use crate::ops::{now, State, RUN_TIMEOUT};
 use crate::port::Port;
@@ -89,6 +90,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
                     if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
                     if st.link.error != e || st.link.online { st.changed(); }
                     (st.link.online, st.link.error) = (false, e);
+                    st.expire(now());
                     drop(st);
                     std::thread::sleep(Duration::from_secs(3));
                     continue;
@@ -105,7 +107,11 @@ pub fn work(state: Shared, spec: String, o: Options) {
         if lost.is_none() {
             let next = {
                 let mut st = state.lock().unwrap();
-                let next = st.ops.iter_mut().find(|o| o.status == "queued").map(|op| {
+                // The first queued that a lease lets through: its holder's and reads overtake the others', which wait.
+                let at = now();
+                let first = (0..st.ops.len()).find(|&i| st.ops[i].status == "queued" && st.may_run(&st.ops[i], at));
+                let next = first.map(|i| {
+                    let op = &mut st.ops[i];
                     (op.status, op.started) = ("running".into(), Some(now()));
                     (op.id.clone(), op.kind.clone(), op.params.clone())
                 });
@@ -141,6 +147,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
         } else {
             st.link.last_seen = now();
         }
+        st.expire(now());
         st.save();
     }
 }
