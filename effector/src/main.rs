@@ -136,6 +136,14 @@ impl http::Source for Inline {
 struct Running {
     id: String, agent_id: String, action: String, program: String, payload: String, expires_unix: Option<u64>,
     received: Time, bench: Box<bench::Bench>, file: Option<File>,
+    conditions: bench::Conditions, baseline_until: usize, sample_at: usize,
+}
+
+/// The machine's processor time and the agent's own, from the gateway's counters.
+fn cpu_now() -> Option<bench::Cpu> {
+    let s = gateway::sample(GATEWAY).ok().filter(|s| s.cpus > 0)?;
+    let own = s.services.as_slice().iter().find(|l| l.name.as_str() == "effector").map_or(0, |l| l.run_ns);
+    Some(bench::Cpu { busy_ns: s.busy_ns, idle_ns: s.idle_ns, own_ns: own })
 }
 
 /// The benchmark's file in the private directory.
@@ -535,7 +543,10 @@ impl Agent {
         self.running = Some(Box::new(Running {
             id: String::from(id), agent_id: String::from(agent_id), action: String::from(action), program: String::from(program),
             payload: String::from(payload), expires_unix, received: time(), bench: Box::new(bench::Bench::new(duration)), file,
+            conditions: bench::Conditions::default(), baseline_until: now() + 1000, sample_at: 0,
         }));
+        // A baseline second first: what the machine did before the run (the server's cpu_before_percent).
+        if let (Some(r), Some(c)) = (self.running.as_mut(), cpu_now()) { r.conditions.begin(c); }
         mind::println!("EFFECTOR: STARTED {} performance_measure ({} S)", id, duration);
     }
 
@@ -543,14 +554,20 @@ impl Agent {
     #[inline(never)]
     fn bench_step(&mut self, session: &mut Session) {
         let Some(r) = self.running.as_mut() else { return };
+        if now() < r.baseline_until { return; }
+        if r.sample_at == 0 || now() >= r.sample_at {
+            if let Some(c) = cpu_now() { if r.sample_at == 0 { r.conditions.baseline(c) } else { r.conditions.sample(c) } }
+            r.sample_at = now() + 1000;
+        }
         let mut clock = || now() as u64;
         let done = r.bench.step(&mut clock, BENCH_SLICE_MS, &mut BenchFile(&mut r.file));
         if !done { return; }
-        let r = self.running.take().unwrap();
+        let mut r = self.running.take().unwrap();
+        if let Some(c) = cpu_now() { r.conditions.sample(c); }
         let _ = fs::remove(&self.path("bench"));
         let cpus = self.last.as_ref().map_or(1, |c| c.cpus);
         let mut buf = alloc::vec![0u8; 4096];
-        let kept = r.bench.result(&mut buf, cpus, &self.cpu_model, wire::arch(), env!("CARGO_PKG_VERSION")).ok()
+        let kept = r.bench.result(&mut buf, cpus, &self.cpu_model, wire::arch(), env!("CARGO_PKG_VERSION"), Some(&r.conditions)).ok()
             .is_some_and(|json| self.keep_result(&r.id, json));
         let answer = if kept { session::Final::Reported } else { session::Final::Failed(session::Failure::Io) };
         let command = session::Command { id: &r.id, agent_id: &r.agent_id, action: &r.action, program: &r.program, payload: &r.payload, expires_unix: r.expires_unix };

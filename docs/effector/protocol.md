@@ -45,7 +45,8 @@ Everything 1.1 did stays.
 - **`performance_measure`**: the agents' fixed benchmarks `effector_bogomips_v1` on one thread, `effector_memcpy_v1`
   and `effector_seqio_v1`, run a slice at a time between heartbeats; the result carries the fields the server's
   `AcceptPerformance` checks. A task's 16 MiB of memory makes MIND's copy move 4 MiB buffers (8 MiB on Linux) and
-  leaves out `memory_latency` (16 MiB exactly); no `cpu_parallel` (the session has no threads) and no `load`.
+  leaves out `memory_latency` (16 MiB exactly); no `cpu_parallel` (the session has no threads). `load` gives the
+  conditions: a baseline second's busy share, the run's, and the run's less the agent's own, from the gateway's counters.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).

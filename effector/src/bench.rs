@@ -31,6 +31,42 @@ pub fn batch(mut state: u64) -> u64 {
     state
 }
 
+/// The machine's processor time when sampled (the gateway's counters): busy and idle over every CPU, and the agent's
+/// own, in ns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cpu { pub busy_ns: u64, pub idle_ns: u64, pub own_ns: u64 }
+
+/// What else ran around the benchmark (the server's `load`, as the Linux agent's performance_load.go reckons it): the
+/// machine's busy share in a baseline second before, its share over the run, and that share less the agent's own.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Conditions { start: Option<Cpu>, first: Option<Cpu>, last: Option<Cpu>, before: Option<u64>, pub samples: u32 }
+
+impl Conditions {
+    /// The baseline second begins.
+    pub fn begin(&mut self, c: Cpu) { self.start = Some(c); }
+    /// The baseline second ends and the run begins.
+    pub fn baseline(&mut self, c: Cpu) {
+        self.before = self.start.and_then(|s| share(s, c)).map(|(cpu, _)| cpu);
+        self.first = Some(c);
+        self.last = Some(c);
+    }
+    /// A sample during the run, about each second.
+    pub fn sample(&mut self, c: Cpu) {
+        if self.last.and_then(|l| share(l, c)).is_some() { self.samples += 1; }
+        self.last = Some(c);
+    }
+    /// The run's busy share and the share less the agent's own, in thousandths of a percent.
+    fn over_run(&self) -> Option<(u64, u64)> { share(self.first?, self.last?) }
+}
+
+/// The busy share between two samples, and the busy share less the agent's own, in thousandths of a percent.
+fn share(a: Cpu, b: Cpu) -> Option<(u64, u64)> {
+    let busy = b.busy_ns.checked_sub(a.busy_ns)? as u128;
+    let total = busy + b.idle_ns.checked_sub(a.idle_ns)? as u128;
+    let own = (b.own_ns.saturating_sub(a.own_ns) as u128).min(busy);
+    (total > 0).then(|| ((busy * 100_000 / total) as u64, ((busy - own) * 100_000 / total) as u64))
+}
+
 /// The machine's file for the disk phase.
 pub trait Disk {
     /// Writes `data` at `offset` (0 starts the file again); false if it failed.
@@ -154,7 +190,7 @@ impl Bench {
     }
 
     /// The result as the server takes it (Effector's AcceptPerformance): rates in thousandths, durations in seconds.
-    pub fn result<'b>(&self, buf: &'b mut [u8], logical: u16, cpu_model: &str, arch: &str, version: &str) -> Result<&'b [u8], crate::json::Error> {
+    pub fn result<'b>(&self, buf: &'b mut [u8], logical: u16, cpu_model: &str, arch: &str, version: &str, conditions: Option<&Conditions>) -> Result<&'b [u8], crate::json::Error> {
         // Thousandths per second; never 0, which the server refuses for a measured rate.
         let per_s = |amount: u128, ms: u64| ((amount * 1000 * 1000 / ms.max(1) as u128) as u64).max(1);
         let mut w = Writer::new(buf);
@@ -181,6 +217,23 @@ impl Bench {
         if self.copied > 0 {
             w.field_str("memory_benchmark", MEMORY)?;
             w.field_decimal("memory_mib_per_second", (per_s(self.copied as u128, self.copy_ms) >> 20).max(1))?;
+        }
+        if let Some(c) = conditions {
+            // One slot, the measurement's own: no other queue ran beside it.
+            w.key("load")?;
+            w.object()?;
+            w.field_u64("samples", c.samples as u64)?;
+            w.field_u64("occupied_queues_start", 1)?;
+            w.field_u64("occupied_queues_max", 1)?;
+            w.field_u64("other_queues_max", 0)?;
+            if let Some(before) = c.before { w.field_decimal("cpu_before_percent", before)?; }
+            let run = c.over_run();
+            if let Some((cpu, background)) = run {
+                w.field_decimal("cpu_average_percent", cpu)?;
+                w.field_decimal("background_cpu_average_percent", background)?;
+            }
+            w.field_bool("under_load", c.before.is_some_and(|b| b >= 10_000) || run.is_some_and(|(_, bg)| bg >= 10_000))?;
+            w.end()?;
         }
         if !self.disk_failed && self.written > 0 && self.read > 0 {
             w.field_str("disk_benchmark", DISK)?;

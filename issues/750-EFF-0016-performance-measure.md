@@ -17,8 +17,11 @@
 3. **The result is kept** in `system/effector/result` and journaled as `reported` before its ACK.
 4. **Left out,** all optional to the server:
    - the pointer chase, which the server takes only over exactly 16 MiB, a task's whole memory;
-   - the parallel CPU phase, which needs threads the session has not;
-   - the load sampling.
+   - the parallel CPU phase, which needs threads the session has not. Asked of KRN, with the memory, on 2026-10-23.
+5. **The conditions** (the server's `load`, added 2026-10-23):
+   - the machine's busy share in a baseline second;
+   - its share over the run, sampled each second from the gateway's counters;
+   - that share less the agent's own.
 
 ## Acceptance criteria
 
