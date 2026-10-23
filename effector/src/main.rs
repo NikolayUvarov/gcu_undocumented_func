@@ -721,6 +721,8 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     fs::use_scope(Endpoint(SLOT_FILE), &dir);
     // The owner's token, read while the owner's directory is in reach; a service keeps it in its private directory.
     let owner_token = read_file(&alloc::format!("{}/token", dir), config::TOKEN_MAX + 2);
+    // The owner's agent ID, so a machine written afresh stays the agent the server knows (kept privately at first start).
+    let owner_id = read_file(&alloc::format!("{}/agent_id", dir), 80);
 
     let config = match read_file(conf, config::FILE_MAX).map(|b| config::Config::parse(&b)) {
         Some(Ok(c)) => c,
@@ -744,6 +746,13 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let id_path = agent.path("agent_id");
     match read_file(&id_path, 80) {
         Some(bytes) => match config::agent_id(&bytes) { Some(id) => agent.agent_id = String::from(id), None => fail(format_args!("agent_id IS MALFORMED")) },
+        None if service && owner_id.is_some() => {
+            let Some(id) = owner_id.as_deref().and_then(config::agent_id) else { fail(format_args!("{}/agent_id IS MALFORMED", OWNER_DIR)) };
+            let written = File::open_mode(&id_path, MODE_WRITE | MODE_CREATE).and_then(|mut f| { f.write_at(0, id.as_bytes())?; f.write_at(id.len(), b"\n")?; f.flush() });
+            if written.is_err() { fail(format_args!("CANNOT WRITE {}", id_path)); }
+            agent.agent_id = String::from(id);
+            mind::println!("EFFECTOR: AGENT ID {} FROM {}/agent_id, KEPT IN {}", id, OWNER_DIR, SESSION_DIR);
+        }
         None => {
             let Some(random) = mind::random::u64() else { fail(format_args!("NO RANDOM SOURCE FOR THE AGENT ID")) };
             let mut out = [0u8; 21];

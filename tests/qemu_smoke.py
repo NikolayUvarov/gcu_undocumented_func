@@ -7232,9 +7232,9 @@ def effector_suite(args, disk):
     (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
     # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
     (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
-    # The agent's ID, as an earlier start would have left it in the session's private directory.
-    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
-    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
+    # The owner's agent ID: the session keeps it in its private directory at the first start, so a disk written afresh
+    # stays the agent the server knows.
+    (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
@@ -7260,7 +7260,7 @@ def effector_suite(args, disk):
         out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
         time.sleep(20)  # heartbeats to measure, beside the commands
         out = session()
-        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT ID mind-test FROM data/effector/agent_id, KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)

@@ -152,7 +152,8 @@ its private `system/effector`:
 | `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), and `token none` for a server that asks no agent token. Any other line refuses the file (`effector/src/config.rs`) |
 | `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
 | `token` → `system/effector/token` | the agent | moved from `data/effector/token` at the first start; the owner may then remove the copy |
-| `agent_id` | the agent, once, in `system/effector` | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
+| `agent_id` | the owner (optional), in `data/effector` | the agent's ID the server knows (1–64 of `[A-Za-z0-9_-]`): taken at a start that finds none in `system/effector`, so a disk written afresh keeps it |
+| `agent_id` | the agent, once, in `system/effector` | the owner's, or `mind_` and 16 hex digits from the random source |
 | `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK, and a `done` line once it needs no more ACK (`effector/src/journal.rs`); compacted at each start through `journal.new` |
 | `artifact` | the agent, in `system/effector` | the screenshot or log of the answer waiting for its ACK, after a line naming its command, size and SHA-256; removed once acknowledged |
 | `executed` | the agent, in `system/effector` | the count of commands answered, kept across restarts for telemetry |
