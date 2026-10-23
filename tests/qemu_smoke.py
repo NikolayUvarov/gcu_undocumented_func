@@ -4143,10 +4143,7 @@ def modes_suite(args):
         return
     for words, expected in ((b"# the operator's\ndevelopment\nturbo\n", "DEVELOPMENT (data/mode.conf)"), (None, "NORMAL (NO data/mode.conf)")):
         with tempfile.TemporaryDirectory(prefix="smoke-modes-", dir=ROOT / IMAGE) as temp:
-            # The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
-            extra = {"data/mode.conf": words, "netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
-                     "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
-                     "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY} if words else None
+            extra = {**MODES_EFFECTOR_FILES, "data/mode.conf": words} if words else None
             image, _, _ = raw_fat_image(Path(temp), extra=extra)
             vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
             try:
@@ -4175,6 +4172,17 @@ def modes_suite(args):
                 if not words:
                     # 750-KRN-0119: without a mode neither Effector service runs, and init refuses to start one.
                     assert "effector" not in vm.services() and "effector_gw" not in vm.services(), vm.services()
+                    # 750-KRN-0143: and no process holds an Effector grant: init's named client, the session's or the
+                    # gateway's private files (init itself, which mints every grant, aside).
+                    servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
+                    files = vm.services()["vfs_server"]
+                    for name, pid in vm.services().items():
+                        if pid == 1:
+                            continue
+                        caps = vm.command(f"stat caps {pid}", raw=True)
+                        for badge, ep in re.findall(r"^SLOT=\d+ GEN=\d+ KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M):
+                            server = servers.get(int(ep))
+                            assert not (server == 1 and badge == "6") and not (server == files and badge in ("6", "7")), (name, caps)
                     vm.command("run effector_gw")
                     require(vm.command("dmesg -s init", raw=True), "[INIT] effector_gw NOT STARTED: NO MODE IS ON")
                     assert "effector_gw" not in vm.services(), vm.services()
@@ -4182,17 +4190,79 @@ def modes_suite(args):
             finally:
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
+    modes_lifecycle_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
-          "session's token kept in its private directory, and without one neither runs nor starts; the shell alone holds "
-          "init's mode client, in SLOT_MODE; check reads the modes and is refused a change, which init logs with its clause "
-          "(MC-12.6)", flush=True)
+          "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
+          "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
+          "change, which init logs with its clause (MC-12.6)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
 GATEWAY_POLICY = b"effector-policy 1\nagent on\nservice sysmon restart\ndeliver data/inbox/\n"
+# The session's owner directory and its flow (750-KRN-0119): a server nobody answers, so it stays and retries.
+MODES_EFFECTOR_FILES = {"netpolicy.txt": b"effector 10.0.2.2 tcp 9 600 1000\n",
+                        "data/effector/effector.conf": b"effector-config 1\nserver https://10.0.2.2:9/effector\npin leaf:" + b"0" * 64 + b"\nhostname mind-qemu\n",
+                        "data/effector/token": b"mind-effector-test-token\n", "data/effector/policy": GATEWAY_POLICY}
+
+
+def modes_lifecycle_check(args):
+    """750-KRN-0143: in the development mode init starts each Effector service again after it is killed, and the mode
+    holds over three reboots; a safe start (000-KRN-0076) with the maintenance mode on starts both services."""
+    cpu = ["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"]
+
+    def both(vm):
+        for _ in range(90):
+            services = vm.services()
+            if "effector_gw" in services and "effector" in services:
+                return services
+            time.sleep(1)
+        raise AssertionError((vm.services(), vm.command("dmesg -s init", raw=True)[-1500:]))
+
+    with tempfile.TemporaryDirectory(prefix="smoke-modes-reboots-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": b"development\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, extra=cpu)
+        try:
+            for name in ("effector_gw", "effector"):
+                pid = both(vm)[name]
+                require(vm.command(f"kill {pid}", raw=True), "KILLED PID=")
+                for _ in range(60):
+                    if vm.services().get(name, pid) != pid:
+                        break
+                    time.sleep(1)
+                require(vm.command("dmesg -s init", raw=True), f"[INIT] {name} RESTARTED PID=")
+            both(vm)
+            for _ in range(3):
+                vm.send("reboot\n")
+                vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=120)
+                vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+                vm.expect("MIND> ", timeout=120)
+                require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+                both(vm)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-modes-reboots-{args.cpus}cpu.log").write_text(vm.log)
+    with tempfile.TemporaryDirectory(prefix="smoke-modes-safe-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={**MODES_EFFECTOR_FILES, "data/mode.conf": b"maintenance\n"})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, extra=cpu)
+        try:
+            # A reset within the minute after READY leaves the run's mark, so the next boot is a safe start.
+            vm.qmp("system_reset")
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START: THE LAST RUN DID NOT END AS ASKED")
+            require(log, "[INIT] MODE: MAINTENANCE (data/mode.conf)")
+            both(vm)
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-modes-safe-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the modes over a run (750-KRN-0143): init starts each Effector service again after it is killed, three "
+          "reboots keep the development mode, and a safe start with the maintenance mode on starts both", flush=True)
 
 
 def gateway_stub_check(args):
