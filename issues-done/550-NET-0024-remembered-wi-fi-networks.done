@@ -1,8 +1,8 @@
-# 550-NET-0024 — Remembered Wi-Fi networks, kept by `keystore`
+# 550-NET-0024 — Remembered Wi-Fi networks, kept by `keystore` — done
 
-**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open · **Blocked by:** — for the code; `KRN` for `keystore`'s client in `wlan` ([requests-KRN.md](requests-KRN.md), "The Wi-Fi station in the boot services") · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.4, Appendix B.6
+**Type:** network (service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-11.9, MC-12.4, Appendix B.6
 
-From the request "An 802.11 station and WPA2-PSK" in requests-NET.md: "The passphrase or PMK of a remembered network is kept by `keystore`, which could derive each association's keys for the station without handing out the PMK (MC-11.9)". `idl/wifi.wit` 1.0 has `remember` and `forget`; [550-NET-0018](550-NET-0018-the-station-service.md)'s `wlan` answered `unsupported` and remembered nothing.
+From the request "An 802.11 station and WPA2-PSK" in requests-NET.md: "The passphrase or PMK of a remembered network is kept by `keystore`, which could derive each association's keys for the station without handing out the PMK (MC-11.9)". `idl/wifi.wit` 1.0 has `remember` and `forget`; [550-NET-0018](550-NET-0018-the-station-service.done)'s `wlan` answered `unsupported` and remembered nothing.
 
 ## Problem
 
@@ -50,9 +50,19 @@ A network's PMK opens all its traffic, other stations' too, for anyone who recor
   - a client of `keystore` without the badge is `denied` the Wi-Fi calls.
 - **On the MacBook Pro:** a remembered network is joined again after a reboot (with 550-NET-0018's criterion).
 
+## Resolution
+
+- **Built:** `keystore.wit` 1.1 and the remembered networks kept by `keystore`, whose PMKs stay there while the station gets each handshake's keys; `wifi join` with no passphrase for a remembered network; `forget`.
+- **Host tests** (`wpa`, `dot11`, the IDL fuzzer) as the criteria list them.
+- **In QEMU** (the `net` suite, x86 and aarch64, gated since gate 23): a join with `remember` is kept; after `keystore` and `wlan` restart, the network is joined with no passphrase, and `keystore` logs each handshake's keys for the station's PID; `forget` drops it, and a join with no passphrase is then refused. Since 550-NET-0041 (round 10) the restarted station joins it by itself.
+- **On the MacBook Pro** (2026-10-20): the join of `CoolNet2` from `wm` was kept by `keystore`.
+- **The maintainer's decision (2026-10-23).** The criteria left are counted as met by the checks above. If the question comes up again, they are checked on a real test machine and the task is opened again, as for 800-NET-0038. Left by it:
+  - a client of `keystore` without the badge `denied` the Wi-Fi calls: no program a test controls holds one;
+  - the Mac joining a remembered network again after a reboot, which no run recorded.
+
 ## Related
 
-[550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), [550-NET-0018](550-NET-0018-the-station-service.md), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-NET-0006](351-NET-0006-device-key-sealed-by-a-tpm.md), [550-APP-0033](550-APP-0033-wifi-setup-program.md).
+[550-NET-0016](../issues-done/550-NET-0016-wpa2-psk-library.done), [550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done), [550-NET-0018](550-NET-0018-the-station-service.done), [351-NET-0005](../issues-done/351-NET-0005-persistent-device-key.done), [351-NET-0006](../issues/351-NET-0006-device-key-sealed-by-a-tpm.md), [550-APP-0033](../issues/550-APP-0033-wifi-setup-program.md).
 
 ## Progress (2026-10-20): the MacBook Pro
 

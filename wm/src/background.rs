@@ -1,6 +1,7 @@
 //! The desktop background of `wm` (000-APP-0047, 000-APP-0050), as `data/wm.conf` chooses it: the dim `░` cells as
-//! before (`none`), a moving low-contrast pattern of one of four kinds (`abstract`, the default) or an image (BMP, PNG
-//! or baseline JPEG), with the time, the date and the CPU load drawn over it, pale. The pattern's speed, contrast and
+//! before (`none`), a moving low-contrast pattern of one of four kinds (`abstract`, the default), an image (BMP, PNG
+//! or baseline JPEG) or the image lit and dimmed by the moving pattern (`combined`, 000-APP-0100), with the time, the
+//! date and the CPU load drawn over it, pale. The pattern's speed, contrast and
 //! complexity and the information's brightness are set too. It is drawn into a frame of pixels that `wm` copies to the
 //! desktop's cells nothing covers. Host-tested in tests/wm_host.rs.
 use crate::{jpegdec, png};
@@ -9,8 +10,16 @@ use alloc::{format, string::String, vec, vec::Vec};
 /// Where `wm` keeps the configuration, among the user's files.
 pub const FILE: &str = "data/wm.conf";
 
+/// `Combined`: the image, made brighter and darker where the pattern is (000-APP-0100).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Picture { None, Abstract, Image(String) }
+pub enum Picture { None, Abstract, Image(String), Combined(String) }
+
+impl Picture {
+    /// The image's file, alone or under the pattern.
+    pub fn file(&self) -> Option<&str> { match self { Picture::Image(f) | Picture::Combined(f) => Some(f), _ => None } }
+    /// The same kind with the image `file`: under the pattern if it was, else alone.
+    pub fn with_file(&self, file: String) -> Picture { if matches!(self, Picture::Combined(_)) { Picture::Combined(file) } else { Picture::Image(file) } }
+}
 
 /// The abstract pattern's kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +75,7 @@ impl Default for Config {
 
 impl Config {
     /// `key = value` lines (or parts of a line between `;`), `#` starting a comment: `background = none | abstract |
-    /// image <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
+    /// image <file> | combined <file>`, `pattern = waves | rings | aurora | blobs`, `speed = 1..50`, `contrast = 0..100`,
     /// `complexity = 1..5`, `info = 0..100`, `show = time, seconds, date, cpu, memory, battery, net` (or `none`; a file that never
     /// names `memory` or `seconds`, written before it could be chosen, shows it, 000-APP-0064, 000-APP-0068),
     /// `time-size = 50 | 75 | 100 | … | 300`, `text-size = 50 | 100 | … | 300` (percent), `face = digital | analog`,
@@ -93,7 +102,8 @@ impl Config {
                             ("none", "") => config.picture = Picture::None,
                             ("abstract", "") => config.picture = Picture::Abstract,
                             ("image", file) if !file.is_empty() => config.picture = Picture::Image(String::from(file)),
-                            _ => wrong("background is none, abstract or image <file>"),
+                            ("combined", file) if !file.is_empty() => config.picture = Picture::Combined(String::from(file)),
+                            _ => wrong("background is none, abstract, image <file> or combined <file>"),
                         }
                     }
                     "pattern" => match PATTERNS.iter().find(|p| p.0 == value) {
@@ -161,7 +171,8 @@ impl Config {
 
     /// The configuration as `parse` reads it back.
     pub fn format(&self) -> String {
-        let picture = match &self.picture { Picture::None => String::from("none"), Picture::Abstract => String::from("abstract"), Picture::Image(file) => format!("image {}", file) };
+        let picture = match &self.picture { Picture::None => String::from("none"), Picture::Abstract => String::from("abstract"), Picture::Image(file) => format!("image {}", file),
+                                            Picture::Combined(file) => format!("combined {}", file) };
         let shown: Vec<&str> = [(self.time, "time"), (self.seconds, "seconds"), (self.date, "date"), (self.cpu, "cpu"), (self.memory, "memory"), (self.battery, "battery"), (self.net, "net")].iter().filter(|s| s.0).map(|s| s.1).collect();
         let place = PLACES.iter().find(|p| p.1 == self.place).map_or("bottom-right", |p| p.0);
         let pattern = PATTERNS.iter().find(|p| p.1 == self.pattern).map_or("waves", |p| p.0);
@@ -169,8 +180,9 @@ impl Config {
         let pointer = self.pointer.map_or(String::from("auto"), |s| format!("{}", s));
         let colour = crate::pointer::COLOURS.get(self.pointer_colour).map_or("white", |c| c.0);
         format!("# wm's desktop background (000-APP-0047, 000-APP-0050), scale and pointer (000-APP-0061)\n\
-                 # background = none | abstract | image <file> (BMP, PNG or JPEG); pattern = waves | rings | aurora | blobs\n\
-                 # speed = 1..50; contrast = 0..100; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
+                 # background = none | abstract | image <file> (BMP, PNG or JPEG) | combined <file> (the image under the pattern)\n\
+                 # pattern = waves | rings | aurora | blobs; speed = 1..50; complexity = 1..5; info = 0..100 (the brightness of what is shown)\n\
+                 # contrast = 0..100 (combined: the image's brightness from 100 - contrast to 100 + contrast percent)\n\
                  # show = time, seconds, date, cpu, memory, battery, net | none; place = top-left | top-right | center | bottom-left | bottom-right\n\
                  # time-size = 50 | 75 | 100 | 125 | 150 | 200 | 250 | 300; text-size = 50 | 100 | 150 | 200 | 250 | 300 (percent)\n\
                  # face = digital | analog (a dial with hands, and gauges of the CPU load, the memory in use and the battery)\n\
@@ -236,12 +248,39 @@ pub fn ink(info: u8) -> (u32, u32, u32) {
     (text, mix(MID, text, 160), mix(MID, SHADE, (k * 2).min(255)))
 }
 
-// Each 2 × 2 block of the frame the palette's colour `level` gives at its top-left pixel.
-fn fill(frame: &mut [u32], width: usize, height: usize, palette: &[u32], level: impl Fn(usize, usize) -> usize) {
+// How a block is painted from the pattern's level there (0 to 255): the palette's colour, or the picture's pixels with
+// their brightness times the gain, in 256ths (000-APP-0100).
+enum Paint<'a> { Palette(&'a [u32]), Shade(&'a [u32], &'a [u32]) }
+
+// A colour's channels times `gain` 256ths, each at most 255.
+fn brighten(colour: u32, gain: u32) -> u32 {
+    let channel = |shift: u32| ((colour >> shift & 0xFF) * gain >> 8).min(0xFF) << shift;
+    channel(16) | channel(8) | channel(0)
+}
+
+/// The combined background's gain at each of the pattern's levels, in 256ths: from 100 - contrast percent of the
+/// image's brightness at the darkest level to 100 + contrast at the lightest, the image as it is between them.
+pub fn gains(contrast: u8) -> Vec<u32> {
+    let c = contrast.min(CONTRAST.1) as i32;
+    (0..256).map(|k: i32| (256 + (2 * k - 255) * c * 256 / (255 * 100)) as u32).collect()
+}
+
+// Each 2 × 2 block of the frame painted from the level `level` gives at its top-left pixel.
+fn fill(frame: &mut [u32], width: usize, height: usize, paint: &Paint, level: impl Fn(usize, usize) -> usize) {
     for y in (0..height).step_by(2) {
         for x in (0..width).step_by(2) {
-            let colour = palette[level(x, y).min(255)];
-            for row in y..(y + 2).min(height) { for pixel in frame[row * width + x..row * width + (x + 2).min(width)].iter_mut() { *pixel = colour; } }
+            let level = level(x, y).min(255);
+            let (left, right) = (x, (x + 2).min(width));
+            match *paint {
+                Paint::Palette(palette) => {
+                    let colour = palette[level];
+                    for row in y..(y + 2).min(height) { for pixel in frame[row * width + left..row * width + right].iter_mut() { *pixel = colour; } }
+                }
+                Paint::Shade(base, gains) => {
+                    let gain = gains[level];
+                    for row in y..(y + 2).min(height) { for i in row * width + left..row * width + right { frame[i] = brighten(base[i], gain); } }
+                }
+            }
         }
     }
 }
@@ -249,9 +288,21 @@ fn fill(frame: &mut [u32], width: usize, height: usize, palette: &[u32], level: 
 /// Frame `phase` of the pattern `config` chooses into `frame` (`width` × `height` pixels, row after row), between its
 /// contrast's colours. The phase counts eighths of a table step: 16 a second at speed 1.
 pub fn pattern(frame: &mut [u32], width: usize, height: usize, config: &Config, phase: u32) {
-    if width == 0 || height == 0 { return; }
     let (dark, light) = colours(config.contrast);
     let palette: Vec<u32> = (0..256).map(|k| mix(dark, light, k)).collect();
+    draw(frame, width, height, config, phase, &Paint::Palette(&palette));
+}
+
+/// The picture `base` (as large as `frame`) into `frame`, made lighter where frame `phase` of the pattern is light and
+/// darker where it is dark, as far as `gains` of the contrast says (000-APP-0100).
+pub fn combined(frame: &mut [u32], base: &[u32], width: usize, height: usize, config: &Config, phase: u32) {
+    if base.len() < width * height || frame.len() < width * height { return; }
+    draw(frame, width, height, config, phase, &Paint::Shade(base, &gains(config.contrast)));
+}
+
+// Frame `phase` of the pattern, each block painted from its level as `paint` says.
+fn draw(frame: &mut [u32], width: usize, height: usize, config: &Config, phase: u32, paint: &Paint) {
+    if width == 0 || height == 0 { return; }
     let k = config.complexity.clamp(COMPLEXITY.0, COMPLEXITY.1) as usize;
     let p = phase as usize;
     let (w, h) = (width as i64, height as i64);
@@ -259,7 +310,7 @@ pub fn pattern(frame: &mut [u32], width: usize, height: usize, config: &Config, 
     let swing = |middle: i64, span: i64, a: usize| middle + span * at(a) as i64 / 127;
     match config.pattern {
         // Four sines crossing at slants; complexity 2 puts one period across the screen.
-        Pattern::Waves => fill(frame, width, height, &palette, |x, y| {
+        Pattern::Waves => fill(frame, width, height, paint, |x, y| {
             let (u, v) = (x * PERIOD * k / (2 * width), y * PERIOD * k / (2 * height));
             let sum = at((v * 2 + PERIOD * 4).wrapping_sub(p / 16)) + at(u + p / 8) + at(u + v + p / 12) + at((u * 3 / 2 + PERIOD * 4 - v).wrapping_sub(p / 24));
             ((sum + 508) * 255 / 1016) as usize
@@ -273,7 +324,7 @@ pub fn pattern(frame: &mut [u32], width: usize, height: usize, config: &Config, 
                 (swing(w / 2, w * 3 / 8, a), swing(h / 2, h * 3 / 8, a * 2 / 3 + PERIOD / 4))
             }).collect();
             let rings = ((k + 1) * PERIOD) as u64;
-            fill(frame, width, height, &palette, |x, y| {
+            fill(frame, width, height, paint, |x, y| {
                 let sum: i32 = centres.iter().map(|&(cx, cy)| {
                     let (dx, dy) = (x as i64 - cx, y as i64 - cy);
                     let d = ((dx * dx + dy * dy) as u64).isqrt() * rings / height as u64;
@@ -284,7 +335,7 @@ pub fn pattern(frame: &mut [u32], width: usize, height: usize, config: &Config, 
         }
         // Curtains of light hanging from the top, bending and swaying, some brighter than others, fading downwards;
         // complexity + 1 of them across the screen.
-        Pattern::Aurora => fill(frame, width, height, &palette, |x, y| {
+        Pattern::Aurora => fill(frame, width, height, paint, |x, y| {
             let (u, v) = (x * PERIOD * (k + 1) / width, y * PERIOD / (2 * height));
             let s = (u as i32 + at(v * 2 + u / 4 + p / 24) * 3 / 4 + PERIOD as i32) as usize;
             let ray = (at(s + p / 8) + at(s * 3 + p / 6) / 3).max(0) as usize; // 0..=169
@@ -302,7 +353,7 @@ pub fn pattern(frame: &mut [u32], width: usize, height: usize, config: &Config, 
                 (swing(w / 2, w / 2 - r / 2, a), swing(h / 2, h / 2 - r / 2, b))
             }).collect();
             let r2 = (r * r) as u64;
-            fill(frame, width, height, &palette, |x, y| {
+            fill(frame, width, height, paint, |x, y| {
                 let field: u64 = blobs.iter().map(|&(bx, by)| { let (dx, dy) = (x as i64 - bx, y as i64 - by); r2 * 256 / ((dx * dx + dy * dy) as u64 + r2) }).sum();
                 field as usize
             })
@@ -711,14 +762,18 @@ impl Backdrop {
 
     /// Another configuration: the picture read again only when it is another.
     pub fn change(&mut self, config: Config, image: &mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Option<String> {
-        // An image that could not be read is tried again.
-        let same = config.picture == self.config.picture && !(matches!(config.picture, Picture::Image(_)) && self.base.is_none());
+        // An image that could not be read is tried again; the same image alone or under the pattern is kept.
+        let same = match (config.picture.file(), self.config.picture.file()) {
+            (Some(new), Some(old)) => new == old && self.base.is_some(),
+            (None, None) => config.picture == self.config.picture,
+            _ => false,
+        };
         self.config = config;
         if same { return None; }
         // The old picture goes before the new one is read.
         (self.frame, self.base) = (Vec::new(), None);
         let mut problem = None;
-        if let Picture::Image(file) = &self.config.picture {
+        if let Some(file) = self.config.picture.file() {
             let mut base = vec![DARK; self.width * self.height];
             match image(file).ok_or("not found, or larger than wm reads (32 MiB)").and_then(|data| cover(&data, &mut base, self.width, self.height)) {
                 Ok(()) => self.base = Some(base),
@@ -748,10 +803,14 @@ impl Backdrop {
         self.carry = total % 1000;
     }
 
-    /// Draws the frame again: the pattern at its phase (or the picture), the information over it.
+    /// Draws the frame again: the pattern at its phase (or the picture, or both), the information over it.
     pub fn render(&mut self, info: &Info, glyph: Glyph) {
         if !self.shown() { return; }
-        match &self.base { Some(base) => self.frame.copy_from_slice(base), None => pattern(&mut self.frame, self.width, self.height, &self.config, self.phase) }
+        match &self.base {
+            Some(base) if matches!(self.config.picture, Picture::Combined(_)) => combined(&mut self.frame, base, self.width, self.height, &self.config, self.phase),
+            Some(base) => self.frame.copy_from_slice(base),
+            None => pattern(&mut self.frame, self.width, self.height, &self.config, self.phase),
+        }
         let info = Info { cpu: &self.cpu, ..*info };
         overlay(&mut self.frame, self.width, self.height, self.unit, self.zoom, &self.config, &info, glyph);
     }
@@ -790,6 +849,6 @@ impl Backdrop {
         }
     }
 
-    /// The pattern moves (a picture does not): `abstract`, or a picture that could not be read.
-    pub fn moving(&self) -> bool { self.shown() && self.base.is_none() }
+    /// The pattern moves (a picture alone does not): `abstract`, `combined`, or a picture that could not be read.
+    pub fn moving(&self) -> bool { self.shown() && (self.base.is_none() || matches!(self.config.picture, Picture::Combined(_))) }
 }

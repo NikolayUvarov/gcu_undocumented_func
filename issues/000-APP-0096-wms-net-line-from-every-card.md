@@ -50,6 +50,18 @@
 - **A loaded machine** (gate 25, PCU at a load of about 11): the first rate over Wi-Fi did not come within the suite's 90 s twice, and passed alone. The bound is 250 ms and the suite waits 180 s (2026-10-21), in `main` with landing round 2, `main` 1d841622 (2026-10-21): the kernel session's gate of candidate 97c4a4c1.
 - **Left:** the MacBook Pro over Wi-Fi: the line moves while a download runs.
 
+## Progress (2026-10-21): the Mac says `NET: NO CARD`
+
+- **The maintainer's report:** "we using wifi but i still see no card", on the MacBook Pro, its Wi-Fi working.
+- **What the line means:** the shell answered `net-counters` with an empty list, which it gives when the network stack's `interfaces` lists no card.
+- **What the link could read** (LNK, for ASR and DRV, 2026-10-21 19:00 UTC): `wm` did not run in the boot read. `netstack` had the station as card 2, with DHCP and the default route on it. `ip`, `netstat` and `ps` are the shell's commands, which the link does not reach.
+- **For the next run:**
+  - the shell logs an empty answer once: `[SHELL] NET-COUNTERS: THE STACK LISTS NO INTERFACE (<n> CARDS, <m> UP)`;
+  - `wm` logs each reason for no rate once: `[WM] NET: NO CARD (THE BACKGROUND'S NET LINE)`.
+
+  So the log the link reads says which side has no card.
+- **Settings' `Net` row** said `(no counters yet)` from before this task. It now says `every card's frames a second, in and out`.
+
 ## Related
 
-[000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](550-NET-0018-the-station-service.md) (the station's card).
+[000-APP-0049](000-APP-0049-network-traffic-on-wms-background.md) (the line, the card client), [000-NET-0015](000-NET-0015-a-card-read-only-client.md) (`BADGE_COUNTERS`), [550-NET-0018](../issues-done/550-NET-0018-the-station-service.done) (the station's card).

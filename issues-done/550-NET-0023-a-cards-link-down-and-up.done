@@ -31,7 +31,7 @@ In the `net` suite's two-card check (x86, aarch64):
 
 ## Related
 
-[105](105-multiple-network-cards.done), [550-NET-0018](../issues/550-NET-0018-the-station-service.md), [requests-NET.md](../issues/requests-NET.md) ("Several network interfaces").
+[105](105-multiple-network-cards.done), [550-NET-0018](550-NET-0018-the-station-service.done), [requests-NET.md](../issues/requests-NET.md) ("Several network interfaces").
 
 ## Resolution
 

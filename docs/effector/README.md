@@ -11,7 +11,7 @@ The agent is two boot services on the network path of Appendix B.6
 ([750](../../issues/750-effector-agent.md)). They talk only through
 [`idl/effector.wit`](../../idl/effector.wit) 1.1, which `effector_gw` serves.
 The grants below are those of
-[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md),
+[750-KRN-0119](../../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done),
 0120, 0121 and 0153, and the table below "As boot services" says which slot
 holds which. Those not built yet (the updater's client, the reboot badge, the
 test account) are marked as later.
@@ -31,7 +31,7 @@ every request. `init` does this since 750-KRN-0143.
 | Service | Holds | Parses | Never holds |
 |---|---|---|---|
 | `effector`, the session | one `netpolicy` flow to the configured server; a `tls` client (`connect-pins`); a `parse` client; `rtc`; a read-only `vfs` view of `data/effector/` (the owner's configuration); its private directory `system/effector/` (the AgentToken, the agent ID, the ACK journal); the gateway's endpoint with the session badge | only HTTP framing: heads and JSON bodies go to `parse` (MC-11.11, [airlock](../network/airlock.md)) | any local authority: lifecycle, the log read badge, writable files outside its private directory, the updater, the reboot badge, the screen |
-| `effector_gw`, the gateway | a lifecycle client limited to named services ([750-KRN-0121](../../issues/750-KRN-0121-a-lifecycle-client-for-named-services.md)); the log read badge; `sysinfo`; a `vfs` client writable in `data/effector/` (the audit) and `data/apps/` ([750-KRN-0120](../../issues/750-KRN-0120-writable-scopes-for-a-service.md)) and in the delivery root; read-only clients for the policy's roots and `log:`; a client of `updater` without the channel ([750-UPD-0020](../../issues/750-UPD-0020-the-gateways-client-of-the-updater.md)); `init`'s reboot badge; screen capture; later the test account's spawn right (501); its private directory `system/effector_gw/` | nothing from the network: only typed requests, checked by the generated decoder (MC-2.4), and the owner's [policy](policy.md) | the network, `tls`, `parse`, the device key, the AgentToken |
+| `effector_gw`, the gateway | a lifecycle client limited to named services ([750-KRN-0121](../../issues-done/750-KRN-0121-a-lifecycle-client-for-named-services.done)); the log read badge; `sysinfo`; a `vfs` client writable in `data/effector/` (the audit) and `data/apps/` ([750-KRN-0120](../../issues-done/750-KRN-0120-writable-scopes-for-a-service.done)) and in the delivery root; read-only clients for the policy's roots and `log:`; a client of `updater` without the channel ([750-UPD-0020](../../issues/750-UPD-0020-the-gateways-client-of-the-updater.md)); `init`'s reboot badge; screen capture; later the test account's spawn right (501); its private directory `system/effector_gw/` | nothing from the network: only typed requests, checked by the generated decoder (MC-2.4), and the owner's [policy](policy.md) | the network, `tls`, `parse`, the device key, the AgentToken |
 | the shell (the owner) | the gateway's endpoint with the owner badge: `reload-policy`, `audit`, `status` | — | — |
 
 **If `effector` is taken over** (a parser or framing bug, a hostile answer it
@@ -136,7 +136,7 @@ as-yet-unwritten MIND client. No real endpoint is registered by these tests.
 ## Running the session (750-EFF-0006, first slice)
 
 `effector` is the session service's first slice. Since
-[750-KRN-0119](../../issues/750-KRN-0119-boot-images-and-grants-for-effector.md)
+[750-KRN-0119](../../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done)
 (ABI 16) it and `effector_gw` are boot images that `init` starts only in the
 development or maintenance mode (`data/mode.conf`, 750-EFF-0013); no program
 runs by their names. It heartbeats, polls, hands the actions below to

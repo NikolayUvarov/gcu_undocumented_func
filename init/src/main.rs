@@ -35,7 +35,7 @@ const HOLDS: [&str; BOOT_IMAGES] = [
     "the radio's client; keystore's client for the station's keys", "clients of the network card drivers and of the Wi-Fi station",
     "network stack clients: minting source and policy control; a VFS client", "nothing but its endpoint", "the key service's signer client; RTC and VFS clients", "the key service's client for SSH logins; no network of its own", "its own program client",
     "observe privilege", "TLS and VFS clients; a network grant; a lifecycle client that may restart the machine; the firmware's variables; a loader client for helpers only",
-    "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; only in a mode",
+    "the log to read, sysinfo, the screen to capture and the volumes to read; its private directory; a lifecycle client limited to the owner's policy; a scope of its delivery root to write; only in a mode",
     "RTC; a network grant; TLS without the device certificate; the parser; the gateway; its private directory and data/effector/ to read; only in a mode",
     "screen; process control; input; the serial line"];
 const CLIENT: u8 = CAP_WRITE | CAP_GRANT;
@@ -667,7 +667,8 @@ impl Init {
             // The Effector agent's gateway (750-KRN-0119, `mind::effector`), only in a mode: the memory and the log to read,
             // the volumes to read, its private directory (`private_dir_of`), the screen to capture, as the shell's
             // `screenshot` (750-KRN-0153; the compositor shows its red dot meanwhile), a lifecycle client limited to what the
-            // owner's policy names (BADGE_NAMED, 750-KRN-0121) and a writable scope of its delivery root (`spawn`, 0120).
+            // owner's policy names, and a reboot when it says so (BADGE_NAMED, 750-KRN-0121, 0154), and a writable scope of
+            // its delivery root (`spawn`, 0120).
             "effector_gw" => {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "effector_gw")?, ALL);
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
@@ -1061,8 +1062,12 @@ impl Init {
                 let result = if service { Err(refused(sender, badge, "STOP", format_args!("STOP PID {}, A SERVICE", pid), "MC-6.8")) } else if !mind::process::alive(pid) { Err(E::NotFound) } else { mind::control::kill(pid).map_err(|_| E::NotFound) };
                 idl_init::reply_stop_task(call, result)
             }
-            // Only the updater's badged client and link's developer client may restart the machine (351-KRN-0022, 800-KRN-0144).
-            Request::Reboot if !matches!(badge, mind::process::BADGE_REBOOT | mind::process::BADGE_DEVELOPER) => {
+            // The gateway's named client restarts the machine only as the owner's policy allows (750-KRN-0154).
+            Request::Reboot if badge == mind::process::BADGE_NAMED && !self.named_reboot(sender) => {
+                idl_init::reply_reboot(call, Err(idl_init::Error::Denied))
+            }
+            // Otherwise only the updater's badged client and link's developer client may (351-KRN-0022, 800-KRN-0144).
+            Request::Reboot if !matches!(badge, mind::process::BADGE_REBOOT | mind::process::BADGE_DEVELOPER | mind::process::BADGE_NAMED) => {
                 idl_init::reply_reboot(call, Err(refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE"), "MC-3.8")))
             }
             Request::Reboot => { idl_init::reply_reboot(call, Ok(()))?; self.reboot() }
@@ -1144,6 +1149,19 @@ impl Init {
             refused(sender, badge, word, format_args!("{} {}: {}", word, name, why), "MC-3.4");
         }
         why.is_none()
+    }
+
+    // The gateway's named client restarts the machine only when the owner's policy says `reboot on`, read at the request.
+    fn named_reboot(&mut self, sender: u64) -> bool {
+        let badge = mind::process::BADGE_NAMED;
+        let why = match self.effector_policy() {
+            None => Some("NO OWNER'S POLICY"),
+            Some(policy) => policy.decide(Ask::Reboot).err().map(|_| "NOT IN THE OWNER'S POLICY"),
+        };
+        match why {
+            Some(why) => { refused(sender, badge, "REBOOT", format_args!("RESTART THE MACHINE: {}", why), "MC-3.4"); false }
+            None => { mind::println!("[INIT] REBOOT BY PID {} (BADGE {}): THE OWNER'S POLICY ALLOWS IT", sender, badge); true }
+        }
     }
 
     // The modes data/mode.conf names (750-KRN-0143): `development` and `maintenance`; other words are logged and left out.

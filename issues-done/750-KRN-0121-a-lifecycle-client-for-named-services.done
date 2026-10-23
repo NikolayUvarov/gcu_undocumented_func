@@ -1,10 +1,10 @@
-# 750-KRN-0121 — A lifecycle client limited to named services
+# 750-KRN-0121 — A lifecycle client limited to named services — done
 
-**Type:** `init` (`init.wit` 1.7) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
+**Type:** `init` (`init.wit` 1.7) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [750](../issues/750-effector-agent.md) · **Constitution:** MC-3.4, MC-3.7
 
 ## Problem
 
-`init`'s lifecycle client (`BADGE_LIFECYCLE`) may start, stop and restart every boot service. The Effector gateway needs that only for the few services the owner names in its policy. The whole authority would be a broad retained authority needing a justification (MC-3.7); an attenuated grant is the better answer (MC-3.4). The agent track's request of 2026-10-09 is in [requests-KRN.md](requests-KRN.md).
+`init`'s lifecycle client (`BADGE_LIFECYCLE`) may start, stop and restart every boot service. The Effector gateway needs that only for the few services the owner names in its policy. The whole authority would be a broad retained authority needing a justification (MC-3.7); an attenuated grant is the better answer (MC-3.4). The agent track's request of 2026-10-09 is in [requests-KRN.md](../issues/requests-KRN.md).
 
 ## Plan
 
@@ -31,6 +31,14 @@ Made on `claude/youthful-mendel-mf1soy` (84fb0826, with 9127f31e and dbe24fcb), 
 - **The shell's `svc`** works as before: the `services` suite passed on x86 with this change, in this session's container.
 - **Left:** the gate, with EFF's joint landing request.
 
+## Resolution
+
+- `init` serves `run`, `stop` and `restart` from a client badged `BADGE_NAMED` (6) only as the owner's `data/effector/policy` allows, read at each request with `mind::effector::policy` (`init/src/main.rs`, `named`). `init.wit` 1.7.
+- Always refused: `init`, the shell, the Effector services, `stop-task` and `reboot`, each with its reason and MC-3.4 in the log.
+- The gateway holds the client in slot 11, only in a mode.
+- Checked by the `modes` suite with `tests/gateway_stub` (x86, aarch64), and `svc` by the `services` suite. Landed in round 13 with EFF's request (`LANDING/2026-10-22T1958Z-EFF-…`): every group of gate `land-e93c47af` passed, `main` e93c47af.
+- The gateway's reboot under the owner's `reboot on` is a task of its own: [750-KRN-0154](750-KRN-0154-the-gateways-reboot-by-the-owners-policy.done).
+
 ## Related
 
-[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.md), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md), [750](750-effector-agent.md).
+[750-KRN-0119](750-KRN-0119-boot-images-and-grants-for-effector.done), [173-KRN-0035](../issues/173-KRN-0035-init-reads-the-service-configuration.md), [750](../issues/750-effector-agent.md).

@@ -1166,10 +1166,18 @@ def shell_suite(vm):
     vm.send_bytes(b"\r")
     vm.expect("LINK=JOINED MIND-Lab 02:4D:49:4E:44:01")
     assert "horse" not in vm.log, "the passphrase stays off the serial line"
+    # 550-APP-0082: c opens the stand-in's catalogue, typing finds Uzbekistan, Enter asks for it (the network is left first).
+    vm.send_bytes(b"c")
+    vm.expect("MODE=COUNTRIES 5 OF 5")
+    vm.send_bytes(b"uz")
+    vm.expect("MODE=COUNTRIES 1 OF 5 AT UZ")
+    vm.send_bytes(b"\r")
+    vm.expect("LINK=OFF COUNTRY=UZ")
     vm.send_bytes(b"q")
     vm.expect("SHELL RESUMED.")
     time.sleep(.2); vm.collect(); vm.output = ""
-    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots", flush=True)
+    print("PASS: wifi without a station says so; wifi --demo joins MIND-Lab with a passphrase shown as dots, and its country "
+          "list finds UZ and applies it", flush=True)
     # battery (211-APP-0070): QEMU's firmware names no embedded controller, so no battery service runs.
     require(vm.command("battery"), "NO BATTERY SERVICE")
     require(vm.command("battery now"), "THIS COMMAND TAKES NO ARGUMENTS")
@@ -1182,8 +1190,27 @@ def shell_suite(vm):
     for wrong in ("2031-02-30 08:30", "2100-01-01 00:00", "2031-05-17"):
         require(vm.command(f"date set {wrong}"), "USAGE: DATE SET YYYY-MM-DD HH:MM[:SS]")
     require(vm.command("date sit"), "THIS COMMAND TAKES NO ARGUMENTS")
+    # The time zone (000-APP-0099): the RTC keeps UTC, every clock shows it with the zone the rtc service holds (rtc.wit
+    # 1.3); date zone sets it and keeps it in data/clock.conf; date set takes the zone's time. Back to UTC at the end.
+    require(vm.command("date zone"), "ZONE: UTC (THE RTC KEEPS UTC")
+    minute = lambda text, zone: (lambda m: m and int(m[1]) * 60 + int(m[2]))(re.search(rf"DATE: \d{{4}}-\d\d-\d\d (\d\d):(\d\d):\d\d {re.escape(zone)}\s", text))
+    utc = minute(vm.command("date"), "UTC")
+    require(vm.command("date zone +03:00"), "ZONE UTC+03:00, KEPT IN data/clock.conf")
+    east = minute(vm.command("date"), "UTC+03:00")
+    assert utc is not None and east is not None and (east - utc) % 1440 in (180, 181), (utc, east)
+    require(vm.command("cat data/clock.conf"), "zone UTC+03:00")
+    require(vm.service_logs("rtc", "[RTC] ZONE"), "[RTC] ZONE UTC+03:00 SET BY PID")
+    require(vm.command("date set 2031-05-17 09:00:00"), "CLOCK SET, IN UTC+03:00 (THE RTC KEEPS UTC)")
+    require(vm.command("date"), "DATE: 2031-05-17 09:00:0")
+    require(vm.command("date zone -05:30"), "ZONE UTC-05:30, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 00:30:0")  # 06:00 UTC
+    for wrong in ("+15:00", "3", "Moscow", "+03:60"):
+        require(vm.command(f"date zone {wrong}"), "USAGE: DATE ZONE")
+    require(vm.command("date zone UTC"), "ZONE UTC, KEPT IN data/clock.conf")
+    require(vm.command("date"), "DATE: 2031-05-17 06:00:0")
     require(vm.command(f"date set {datetime.datetime.now():%Y-%m-%d %H:%M:%S}"), "CLOCK SET")
-    print("PASS: date set: the clock set by the shell and read back; impossible dates refused", flush=True)
+    print("PASS: date set: the clock set by the shell and read back; impossible dates refused; date zone shifted every "
+          "reading by UTC+03:00 and UTC-05:30, kept it in data/clock.conf, and date set took the zone's time", flush=True)
     # cd and pwd (000-APP-0066): the prompt names the directory, and paths without a volume start there (a script by its
     # name, ls); a directory that is not there is refused; cd .. goes up. Tab completes a path from the directory it
     # names.
@@ -3279,13 +3306,20 @@ def fm_store_check(vm):
     keys(b"\x1b[19~", "DIALOG=DELETE")  # F8
     vm.send_bytes(b"\r")
     status_line(vm, "JOB=NONE", whole=True)
+    # 300-APP-0101: the panel lists every name the store has (blockstore.wit 1.4), those blocks published too: copy, and
+    # list/n00 to list/n17 in two pages of the store's list.
+    to("copy")
+    to("list")
+    keys(b"\r", "RIGHT=/store:list ")
+    to("n17")
     vm.send_bytes(b"\x1b[21~")  # F10
     require(vm.expect("EXITED. SHELL RESUMED."), "[FM] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
     log = vm.service_logs("blockstore", "REMOVED fmnote.txt")
     require(log, f"PUBLISHED fmnote.txt VERSION 1 ROOT {cid_raw(text)}")
     require(log, "REMOVED fmnote.txt VERSION")
-    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8", flush=True)
+    print("PASS: fm's store: panel: a file copied there is published as an object, viewed, and unpublished with F8; the "
+          "names blocks published are listed, 18 of them in a directory", flush=True)
 
 
 def free_port():
@@ -3746,7 +3780,7 @@ def services_suite(vm):
     require(output, "view — text and hex viewer.")
     assert "STARTED" not in output, output
     # The shell's commands answer the same keys with their lines of help; fm /? shows fm's text unstarted (000-APP-0054).
-    for line, want in (("date -h", "- date: calendar date and time from the RTC"), ("date /?", "- date: calendar date"),
+    for line, want in (("date -h", "- date: calendar date and time in the time zone"), ("date /?", "- date: calendar date"),
                        ("ls --help", "- ls [path], cat <file>: files"), ("ps -help", "- ps: tasks"), ("kill /H", "- kill <id>: terminate")):
         output = vm.command(line)
         require(output, want)
@@ -4030,6 +4064,8 @@ def link_suite(args):
             require(link(port, "runs"), "stopped\tdata/link/t/mt.elf")
             logged = vm.command("dmesg -s link", raw=True)
             assert re.search(r"\[LINK\] RUN \d+: STARTED data/link/t/mt.elf AS PID \d+", logged), "the start is logged"
+            # A run's arguments are logged whole after its start (the maintainer's word, 2026-10-22).
+            assert re.search(r"\[LINK\] RUN \d+: ARGUMENTS --help", logged), "the arguments are logged"
             require(logged, f"[LINK] RUN {held} STOPPED: data/link/t/mt.elf")
             assert re.search(r"\[LINK\] RUN \d+ ENDED: data/link/t/ck.elf \(PID \d+, EXIT 3,", logged), logged[-2000:]
 
@@ -4060,7 +4096,12 @@ def link_suite(args):
                 require(link(port, "sh", "ps"), "link")
                 # Never from the link, whatever the developer mode allows (800-NET-0038).
                 require(link(port, "sh", "netpolicy", "add", "netcheck", "10.0.2.9", "icmp", ok=False), "refused")
-                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy", vm.command("dmesg -s link", raw=True)), "the word alone is logged"
+                # The whole line is logged (the maintainer's word, 2026-10-22), but not a secret `tpm seal` takes.
+                link(port, "sh", "tpm", "seal", "link-suite-secret-7", ok=None)
+                logged = vm.command("dmesg -s link", raw=True)
+                assert re.search(r"\[LINK\] COMMAND \d+: netpolicy add netcheck 10\.0\.2\.9 icmp", logged), "the whole line is logged"
+                assert re.search(r"\[LINK\] COMMAND \d+: tpm seal \[THE SECRET IS NOT LOGGED\]", logged), "tpm seal is logged"
+                assert "link-suite-secret-7" not in logged, "the secret stayed out of the log"
             # 800-LNK-0016 and 800-KRN-0144: rtc started again from a copy of its own image, unverified, then from its boot
             # image; logd is never replaced.
             if "REBOOT" in powers:
@@ -4159,9 +4200,11 @@ def gateway_stub_check(args):
     client badged BADGE_NAMED restarts sysmon, which the policy names, and nothing else: not a stop or a run of it, not
     logd, init or the gateway itself, no stop-task, no reboot; each refusal logged with MC-3.4. The writable scope of
     data/inbox/ takes a file written, flushed, renamed and read back, and refuses a name and a rename that climb out.
-    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends."""
+    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends.
+    750-KRN-0154: with `reboot on` in the policy the gateway's reboot restarts the machine, which comes back in the
+    development mode with the scope's files kept."""
     with tempfile.TemporaryDirectory(prefix="smoke-gateway-", dir=ROOT / IMAGE) as temp:
-        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY}
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY, "data/inbox/reboot-now": b"1\n"}
         image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
         try:
@@ -4173,16 +4216,19 @@ def gateway_stub_check(args):
                     time.sleep(1)
                 raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
-                 "RESTART effector_gw DENIED; STOP-TASK DENIED; REBOOT DENIED")
+                 "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             refusals = vm.command("dmesg -s init", raw=True)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
-                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)"):
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)",
+                         r"REBOOT REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART THE MACHINE: NOT IN THE OWNER'S POLICY \(MC-3\.4\)"):
                 assert re.search(line, refusals), (line, refusals[-2000:])
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
             stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
             files = vm.command("dmesg -s vfs_server", raw=True)
             scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
             assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
@@ -4196,9 +4242,33 @@ def gateway_stub_check(args):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
-    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121): its lifecycle client restarts what the owner's policy names "
-          "and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
-          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends", flush=True)
+    # 750-KRN-0154: the owner allows the reboot. The stub asks it at its first start; QEMU restarts the machine.
+    with tempfile.TemporaryDirectory(prefix="smoke-gateway-reboot-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-now": b"1\n"}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, prompt=False,
+                extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=240)
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+            # The first start's files were written before the reboot, and its request was taken away before it asked.
+            for _ in range(60):
+                out = vm.command("dmesg -s effector_gw", raw=True)
+                if "[GATEWAY-STUB] REBOOT NOT ASKED" in out:
+                    break
+                time.sleep(1)
+            require(out, "[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            require(out, "[GATEWAY-STUB] REBOOT NOT ASKED")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-gateway-reboot-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
+          "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
+          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
+          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode", flush=True)
 
 
 def effector_grants_check(vm):
@@ -5180,8 +5250,8 @@ def update_suite(args):
         require(log, "[UPDATER] SLOT A, VERSION 5; THE NEWER RECORD: SLOT A CONFIRMED")
         # 109-KRN-0133: on a disk with boot slots the loader starts the parser helper from the booted slot's copy.
         assert "PARSER: THE SHARED SERVICE" not in log, log
-        # 351-KRN-0151: slot A, laid out without applications, runs the root's.
-        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM THE ROOT: THE BOOTED SLOT HOLDS NONE")
+        # 351-UPD-0023 with 351-KRN-0151: slot A is laid out with release 5's applications, and they run from there.
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
         (server / "channels/stable").write_bytes(forged)
         logged("[UPDATER] CHECK: REFUSED: Signature", 60)
         (server / "channels/stable").write_bytes(channel(4, 1, "2099-01-01T00:00:00Z"))
@@ -5260,16 +5330,29 @@ def update_suite(args):
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
-    # Only the application release 6 changed came from the server; the others were copied from the volume's root.
+    # Only the application release 6 changed came from the server; the others were copied from slot A.
     asked = {path for path, _ in https.requests}
     assert f"/blobs/{changed}" in asked and not asked & {f"/blobs/{digest}" for name, digest in applications if digest != changed}, asked
+    # The record a fallback or a rollback leaves, slot A confirmed, as the next sequence: slot A boots release 5 with its
+    # own applications, the uptime release 6 changed among them (351-UPD-0023).
+    assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
+    boot_slots.write_next(image, slot="A", confirmed=True)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        require(vm.service_logs("updater", "[UPDATER] SLOT A"), "[UPDATER] SLOT A, VERSION 5")
+        require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), "[LOADER] APPLICATIONS FROM MIND/A/")
+        require(vm.command("uptime", raw=True), "NAME=uptime FOREGROUND")
+        assert "PANIC" not in vm.log, vm.log[-2000:]
+    finally:
+        vm.close()
+        (Path(tempfile.gettempdir()) / f"mind-core-update-back-{args.cpus}cpu.log").write_text(vm.log)
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
-          "the one it changed fetched and the others copied from the volume, and the trial runs them from there; the file "
-          "system is consistent", flush=True)
+          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
+          "slot A, release 5 runs its own; the file system is consistent", flush=True)
 
 
 def mindlink_tool():
@@ -5377,16 +5460,21 @@ def slot_applications_check(args):
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
     sign_manifest.sign_volume(volume)
-    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout"))
+    image = boot_slots.Image.create(temp / "slotapps.img", boot_slots.layout(volume, temp / "layout", with_applications=False))
     cpu = ["-cpu", "qemu64,+rdrand"] if args.arch == "x86_64" else []
+
+    # 351-APP-0103: the shell's `help <name>` reads the file the loader would start.
+    about = "uptime, load averages over 1, 5 and 15 minutes"
 
     def boot(expect, runs, unknown):
         vm = VM(args, str(image.path), raw=True, snapshot=False, rtc="utc", ahci=args.arch == "x86_64", extra=[*cpu, "-nic", "none"])
         try:
             require(vm.service_logs("loader", "[LOADER] APPLICATIONS FROM"), expect)
             require(vm.command(runs, raw=True), f"NAME={runs} FOREGROUND")
+            require(vm.command(f"help {runs}", raw=True), about)
             if unknown:
                 require(vm.command(unknown, raw=True), "UNKNOWN COMMAND")
+                require(vm.command(f"help {unknown}", raw=True), f"NO COMMAND OR PROGRAM CALLED {unknown}")
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -5397,7 +5485,7 @@ def slot_applications_check(args):
     boot("[LOADER] APPLICATIONS FROM MIND/A/", "probe", "uptime")
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: a slot without applications runs the root's; one that holds any runs its own, and only "
-          "those (351-KRN-0151)", flush=True)
+          "those (351-KRN-0151), and help reads them where they run (351-APP-0103)", flush=True)
 
 
 def tone_power(samples, rate, start, hz):
@@ -6515,9 +6603,13 @@ def wifi_join_check(vm):
     run("wifi leave", 30, "[WIFI] LEFT")
     run("wifi status", 30, "[WIFI] STATUS OFF")
     run("wifi join", 30, "usage: wifi")
+    # 550-APP-0082: wlan answers wifi.wit 1.1's country calls; built without a catalogue (550-NET-0035 stage A), it says so.
+    run("wifi country", 30, "[WIFI] COUNTRY: NO CATALOGUE IN THIS STATION")
+    run("wifi country uz", 30, "[WIFI] COUNTRY UZ NOT SET: NO CATALOGUE IN THIS STATION")
+    run("wifi countries", 30, "[WIFI] COUNTRIES: NO CATALOGUE IN THIS STATION")
     assert "mind test passphrase" not in vm.log and "not the passphrase" not in vm.log, "the passphrases stay off the serial line"
     print("PASS: wifi join without a screen: a file naming another network refused, a wrong passphrase refused with the "
-          "station's reason, MIND-TEST joined, wifi status and wifi leave", flush=True)
+          "station's reason, MIND-TEST joined, wifi status and wifi leave; wifi country: no catalogue in this station", flush=True)
     # 550-NET-0028: wlansim's radio has no OFDM on 2.4 GHz, so the station offered 1 to 11 Mb/s alone and sent at nothing else.
     sim = vm.service_logs("wlansim", "[WLANSIM] ECHO TO")
     offers = set(re.findall(r"\[WLANSIM\] OFFERED RATES([^\n]*)", sim))
@@ -7874,7 +7966,8 @@ def wm_suite(vm):
         mode, focus, rects = state()
         assert focus == shell and rects[shell][2:] == (80, 24), rects
         typed("ps", "TASK(S); SHELL PID=")
-        typed("date", "(RTC, NO TIME ZONE)")
+        rows = typed("date", "DATE: ")  # in the zone, UTC here (000-APP-0099)
+        assert any(re.search(r"DATE: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC", row) for row in rows), rows
         clock_pid = int(started["clock"]) + BASE
         typed(f"logs {clock_pid}", f"LOGS PID={clock_pid}")
         # A program started there opens a window of its own in wm, and the session goes on.
@@ -8079,10 +8172,26 @@ def wm_suite(vm):
     # screen took. Under emulation it says how long, not how fast a real machine is.
     frame = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE, (\d+) MS AT MOST, (\d+) FRAMES IN \d+ S \((\d+)X(\d+) BLOCKS OF \d PX\)", "".join(seen))
     assert frame and int(frame[1]) <= int(frame[2]) and int(frame[3]) >= 1, "".join(seen)[-2000:]
+    # The image under the pattern (000-APP-0100): each half keeps its colour's shares, lit and dimmed where the
+    # curtains are, and the light moves; its first frame's time too.
+    mark = len(seen)
+    out, screen, colour = desktop_alone("background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60", again=.5)
+    require(out, "[WM] BACKGROUND background = combined data/sky.bmp; pattern = aurora; speed = 20; contrast = 60;")
+    points = [(px, py) for py in range(48, 400, 8) for px in range(0, 1280, 8) if not 600 <= px < 680]
+    shares = lambda c, px: c[0] > c[1] > c[2] if px < 640 else c[2] > c[1] > c[0]
+    kept = sum(shares(colour(px, py), px) for px, py in points)
+    assert kept >= len(points) * 95 // 100, (kept, len(points))
+    reds = {colour(px, py)[0] for px, py in points if px < 600}
+    assert max(reds) - min(reds) > 40, sorted(reds)  # lit and dimmed, not the picture as it is
+    lit = max(max(abs(a - b) for a, b in zip(colour(px, py), colour(px, py, 1))) for px, py in points)
+    assert lit > 16, lit
+    both = re.search(r"\[WM\] BACKGROUND FRAME (\d+) MS ON AVERAGE", "".join(seen[mark:]))
+    assert both, "".join(seen[mark:])[-2000:]
     require(vm.command("rm data/wm.conf"), "OK")
     require(vm.command('write ram:fmrun.msh print("FM RAN IT")'), "WROTE")  # for fm's Enter on a script (000-APP-0067)
     print("PASS: wm background: data/wm.conf's none keeps the desktop's ░ cells; a BMP, a PNG and a JPEG cover the "
-          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms", flush=True)
+          f"desktop; the aurora pattern at speed 20 moves fast, its first frame drawn in {frame[1]} ms; combined, the "
+          f"picture keeps its colours under the moving light ({kept} of {len(points)} points), its frame in {both[1]} ms", flush=True)
     seen.clear()  # the PIDs and windows below are the next wm's
     read[0] = len(vm.log)
 
@@ -8457,7 +8566,7 @@ def wm_suite(vm):
                 time.sleep(.3)
                 screen = screen_text(vm)
                 vm.serial(enter=False)
-                found = re.search(r"The clock \(it keeps no time zone\): (\d{4})-", "".join(screen))
+                found = re.search(r"The clock, UTC(?:[+-]\d\d:\d\d)?: (\d{4})-", "".join(screen))
                 if found and (want is None or int(found[1]) == want):
                     return int(found[1])
             raise AssertionError((want, screen))
@@ -8466,7 +8575,7 @@ def wm_suite(vm):
             known = {m[0] for m in windows_re.findall("".join(seen))}
             year = page()
             keys("right" if step > 0 else "left")
-            keys(*["down"] * 6, text="SETTINGS=Date and time:Set the clock")
+            keys(*["down"] * 7, text="SETTINGS=Date and time:Set the clock")
             keys("ret", text=f"[WM] SET CLOCK {year + step:04}-")
             until(f'THE SHELL RAN "date set {year + step:04}-')
             assert re.search(rf'THE SHELL RAN "date set {year + step:04}-[^"]*" AT ONCE', "".join(seen)), "".join(seen)[-2000:]
@@ -8480,8 +8589,19 @@ def wm_suite(vm):
 
         year = set_year(1)
         set_year(-1)
+        # The zone row (000-APP-0099): → and ← set it through the shell at once, kept in data/clock.conf; the page's clock
+        # line names it. Back to UTC, which the suites after this one expect.
+        page()
+        keys(*["down"] * 6, text="SETTINGS=Date and time:Time zone")
+        for key_name, zone in (("right", "UTC+00:30"), ("left", "UTC")):
+            keys(key_name, text=f"[WM] SET ZONE {zone}: The clocks show {zone} now, kept in data/clock.conf")
+            until(f'THE SHELL RAN "date zone {zone}" AT ONCE')
+            until(f"[SHELL] ZONE {zone}, KEPT IN data/clock.conf")  # the file after the answer: a slow disk does not hold wm
+            screen_has(f"The clock, {zone}: ")
+        assert last_state().startswith("MODE=SETTINGS"), last_state()
+        keys("esc", text="MODE=NORMAL")
         print(f"PASS: wm settings: the date page set the year to {year + 1} and back at once through the shell, with no question "
-              "and no window of the shell's; the page stayed open and showed it", flush=True)
+              "and no window of the shell's; the page stayed open and showed it; its zone row set UTC+00:30 and UTC again", flush=True)
 
     def every_entry_reacts():
         # 000-APP-0056: Enter on each entry of the menu, reached with the keys, starts its program (in a window of its
@@ -8635,7 +8755,7 @@ def wm_suite(vm):
                 keys("down", text=f"SETTINGS=Background:{row}")
             if row == "Image file":
                 # Enter with nothing typed browses data/ for the picture (000-APP-0072); Esc goes back, Enter on a
-                # picture sets it; the picture row puts none back.
+                # picture sets it; the picture row puts none back, through combined.
                 keys("ret", text="BROWSE=data:..")
                 screen_has("Choose the picture (BMP, PNG, JPEG): data")
                 keys("esc", text="SETTINGS=Background:Image file")
@@ -8649,6 +8769,7 @@ def wm_suite(vm):
                 keys("ret", text="[WM] SETTINGS background = image data/sky.jpg;")
                 assert last_state().endswith("SETTINGS=Background:Image file"), last_state()
                 keys("up", text="SETTINGS=Background:Picture")
+                keys("right", text="[WM] SETTINGS background = combined data/sky.jpg;")  # under the pattern (000-APP-0100)
                 keys("right", text="[WM] SETTINGS ")
                 assert re.findall(r"\[WM\] SETTINGS ([^\n]*); SAVED", seen[-1])[-1] == kept, (row, seen[-1])
                 keys("down", text="SETTINGS=Background:Image file")
@@ -8668,6 +8789,7 @@ def wm_suite(vm):
         keys("up", text="SETTINGS=Network")
         keys("ret", text="SETTINGS=Network:Wi-Fi")
         screen_has("console netpolicy")
+        screen_has("wifi --countries")  # the country beside Wi-Fi (550-APP-0082)
         keys("ret", text="[WM] STARTED wifi PID")
         pid = re.findall(r"\[WM\] STARTED wifi PID (\d+)", "".join(seen))[-1]
         while not any(m[1] == pid for m in windows_re.findall("".join(seen))):
@@ -8917,6 +9039,7 @@ def wm_suite(vm):
     assert last_state().endswith("SETTINGS=Background"), last_state()
     keys("ret")
     keys("right", text="[WM] SETTINGS background = image data/background.bmp")
+    keys("right", text="[WM] SETTINGS background = combined data/background.bmp")  # the image under the pattern (000-APP-0100)
     keys("right", text="[WM] SETTINGS background = none")
     require("".join(seen), "background = none; pattern = waves; speed = 1; contrast = 20; complexity = 2; info = 30; show = time, seconds, date, cpu, memory; time-size = 100; text-size = 100; face = digital; place = bottom-right; scale = auto; pointer = auto; pointer-colour = white; SAVED")
     keys("esc")

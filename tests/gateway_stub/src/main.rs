@@ -1,8 +1,9 @@
 #![no_std]
 #![no_main]
-//! Test-only stand-in for the Effector gateway (QEMU `modes` suite, 750-KRN-0120, 0121): reports what init's lifecycle
-//! client badged BADGE_NAMED lets it do under the owner's policy, and what its writable scope of the delivery root lets it
-//! write, at each start. Never packaged into the normal OS; the real gateway is 750-EFF-0007.
+//! Test-only stand-in for the Effector gateway (QEMU `modes` suite, 750-KRN-0120, 0121, 0154): reports what init's
+//! lifecycle client badged BADGE_NAMED lets it do under the owner's policy, what its writable scope of the delivery root
+//! lets it write, at each start, and whether a reboot it asks is served. Never packaged into the normal OS; the real
+//! gateway is 750-EFF-0007.
 use mind::abi::*;
 use mind::idl::{init, vfs};
 use mind::ipc::Endpoint;
@@ -16,9 +17,21 @@ fn said<T>(answer: mind::sys::Result<Result<T, init::Error>>) -> &'static str {
 fn lifecycle() {
     let client = Endpoint(SLOT_LIFECYCLE);
     let run = match init::run(client, "sysmon") { Ok(_) => "OK", Err(mind::sys::Error::Rights) => "DENIED", Err(_) => "REFUSED OTHERWISE" };
-    mind::println!("[GATEWAY-STUB] RESTART sysmon {}; STOP sysmon {}; RUN sysmon {}; RESTART logd {}; RESTART init {}; RESTART effector_gw {}; STOP-TASK {}; REBOOT {}",
+    mind::println!("[GATEWAY-STUB] RESTART sysmon {}; STOP sysmon {}; RUN sysmon {}; RESTART logd {}; RESTART init {}; RESTART effector_gw {}; STOP-TASK {}",
         said(init::restart(client, "sysmon")), said(init::stop(client, "sysmon")), run, said(init::restart(client, "logd")),
-        said(init::restart(client, "init")), said(init::restart(client, "effector_gw")), said(init::stop_task(client, 1)), said(init::reboot(client)));
+        said(init::restart(client, "init")), said(init::restart(client, "effector_gw")), said(init::stop_task(client, 1)));
+}
+
+// A reboot asked once: when the suite left `reboot-now` in the delivery root, removed first so the next start does not ask.
+fn reboot() {
+    let files = Endpoint(SLOT_FILE);
+    let asked = match vfs::root(files, "") {
+        Ok(Ok(root)) => { let removed = matches!(vfs::remove(files, root, "reboot-now"), Ok(Ok(()))); let _ = vfs::close(files, root); removed }
+        _ => false,
+    };
+    if !asked { mind::println!("[GATEWAY-STUB] REBOOT NOT ASKED"); return; }
+    mind::println!("[GATEWAY-STUB] REBOOT ASKED");
+    mind::println!("[GATEWAY-STUB] REBOOT {}", said(init::reboot(Endpoint(SLOT_LIFECYCLE))));
 }
 
 // The delivery scope: this start's number kept in `starts`, a file written, flushed and renamed in the scope, and a name
@@ -63,5 +76,6 @@ mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     lifecycle();
     scope();
+    reboot();
     loop { mind::time::sleep(1000); }
 }

@@ -13,6 +13,7 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `hwdocs/socs/bcm2711.pins` | Transcribed from "BCM2711 ARM Peripherals" (Raspberry Pi Ltd, RP-008248-DS-1), section 5.3, table 94: the pins' alternate functions and pulls at reset | facts about the hardware; no text or figures copied | not in the system image; put on a disk with `make_usb_image.py --hwdocs` |
 | `hwdocs/boards/rpi4b.board` | Transcribed from "Raspberry Pi 4 Model B Reduced Schematics" (Raspberry Pi Ltd, RP-008345-DS-1), connector J8: which GPIO is at which header position | as above | as above |
 | `hwdocs/socs/pl061.pins` | Arm's "PrimeCell GPIO (PL061) Technical Reference Manual" (DDI 0190B): eight pins, no multiplexing | as above | as above |
+| `wifi/src/countries.rs` | The two-letter codes and usual English names of tzdata 2026b's `iso3166.tab` (ISO 3166-1 alpha-2, as of ISO/TC 46 N1127), converted to a table | **public domain**, as the file says | Readable names for the station's country codes in `wifi` (550-APP-0082); embedded in `wifi.elf` |
 
 Code adapted from another project:
 

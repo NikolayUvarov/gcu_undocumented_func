@@ -26,7 +26,7 @@ It builds everything and writes `dist/mind-core-usb.img` (568 MiB). Its MBR has 
 
 The script checks every file it packed and both partitions, and prints the image's SHA-256. `--force` replaces an older image; without it an existing image is kept.
 
-With `--slots` the kernel, the services and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
+With `--slots` the kernel, the services, the applications (351-UPD-0023) and the signed manifest go into slot A (`MIND/A/`), confirmed in `MIND/BOOT0`, so that the updater can fill slot B ([docs/update/updater.md](update/updater.md)). `--channel FILE` keeps a release's signed channel file in slot A, and then the updater knows the running version; its manifest must be this build's. `--update FILE` puts an `update.txt` at the root.
 
 Optional: boot exactly this image in QEMU first, as a USB stick:
 
@@ -137,7 +137,7 @@ For the first test, disconnect the PC's other disks and USB sticks: the programs
     - **On the MacBook Pro on 2026-10-21 it worked from Recovery.**
     - After it, `mindlink reboot` came back into MIND Core in about 9 s, with no key pressed, and the Wi-Fi joined again.
   - **From macOS itself it is refused.** With the partition mounted, `bless` answered `Could not set boot device property: 0xe00002e2`. That is `kIOReturnNotPermitted`, from macOS's System Integrity Protection (from 10.11), and `bless --getBoot` still named macOS's volume.
-  - **A rewrite loses it:** after the disk is written again, the Mac starts macOS once more (seen 2026-10-21). Run the commands again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the commands are the same. Updates through the link do not rewrite the disk.
+  - **A rewrite may lose it.** On 2026-10-21 the Mac started macOS after the disk was written again; on 2026-10-22 it started the disk. If it starts macOS, run the commands again from Recovery. A disk written with `--slots` (section 5) keeps the bootloader where it was, so the commands are the same. Updates through the link do not rewrite the disk.
   - **To make macOS the default again:** System Preferences (System Settings), Startup Disk, macOS's disk.
 - **The internal disk.** It keeps its own EFI partition:
   - the bootloader reads only the disk it was started from ([211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done));

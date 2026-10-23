@@ -38,8 +38,10 @@ const BROKER: Endpoint = Endpoint(SLOT_WINDOW);
 const RECEIVE: usize = 9; // leases, wake endpoints and the program client arrive here
 const SCOPE: usize = 13; // a file client confined to one directory, for a program that asks for one file
 const SYNC_MS: usize = 250;
-// How long wm waits for the shell to answer its menu's Shell item and to set the clock.
+// How long wm waits for the shell to answer its menu's Shell item; and to set the clock or the zone, which the shell may
+// answer only after a command it runs or the cards' counters (a slow network stack) end.
 const SHELL_MS: u32 = 2000;
+const SETTING_MS: u32 = 8000;
 // The time and the CPU load are drawn again each second (the pattern as often as its speed asks).
 const INFO_MS: usize = 1000;
 /// How long the shell may take to give the cards' counters, and how long it is not asked again after it did not: a
@@ -420,6 +422,16 @@ fn save(config: &Config) -> bool {
     mind::fs::File::create(background::FILE).and_then(|mut file| file.write_at(0, text.as_bytes())).is_ok_and(|n| n == text.len())
 }
 
+// Why a call of the shell's got no answer, after `what`: no answer in time (a command holds the shell), or a call the
+// shell rejected as unknown, which a shell older than `since` (shell.wit) does, so wm and the shell are of two builds.
+fn shell_failed(what: &str, call: &str, since: &str, waited_ms: u32, error: mind::sys::Error) -> String {
+    match error {
+        mind::sys::Error::Other(mind::abi::ERR_TIMEOUT) => format!("{}: the shell did not answer in {} s (a command running in its window?)", what, waited_ms / 1000),
+        mind::sys::Error::Invalid => format!("{}: the shell does not know {}, so it is older than this wm (shell.wit {}): the two come from different builds", what, call, since),
+        error => format!("{}: the shell does not answer ({:?})", what, error),
+    }
+}
+
 // The CPUs' busy and idle time so far, summed (system information, as `load` reads it).
 // Why the net line has no new frames: the shell did not answer in time (the line stays), or no source gives them.
 enum NetMissing { Slow, Why(&'static str) }
@@ -508,6 +520,13 @@ fn draw_pointer(screen: &Screen, x: usize, y: usize, size: (usize, usize), colou
 }
 
 mind::entry!(main);
+
+// The date page's clock as the clocks show it: local, and its zone (000-APP-0099).
+fn show_clock(settings: &mut wm::settings::Settings) {
+    let local = mind::rtc::local_date_time();
+    settings.set_now(local.map(|(date, _)| date), local.map(|(_, seconds)| seconds as usize));
+    settings.zone = mind::rtc::zone().minutes();
+}
 fn main(info: &'static BootInfo) {
     mind::about!("wm — window manager: programs in windows side by side (text and pixel windows), moved, resized and snapped.\nUsage: wm [program ...]   (wm fm fm clock dzen-clock; with arguments: wm fm data, edit ram:a.txt)\nAlt+Tab next window, Alt+arrows halves, Alt+1..4 quarters, Alt+Enter maximize, Alt+F full screen, Alt+L the windows,\nAlt+M move/resize, Alt+W close, Alt+R run, Alt+H keys, Alt+Q leave (the programs keep running), Alt+X close all.\nThe mouse drags titles and corners.");
     if !holds(SLOT_WINDOW) { mind::println!("[WM] NO WINDOW BROKER CLIENT: START WM FROM THE SHELL"); return; }
@@ -586,6 +605,7 @@ fn main(info: &'static BootInfo) {
     // The frames as last read, and the traffic's line made from the two last samples (000-APP-0049); until when the
     // shell is not asked again after it did not answer in time (000-APP-0096).
     let (mut net_sample, mut net_text, mut net_logged): (Option<(u64, u64, u64)>, Option<String>, bool) = (None, None, false);
+    let mut net_why: Option<&'static str> = None; // the last reason without a rate the log named
     let mut shell_quiet_until = 0usize;
     let mut net_from: Option<&'static str> = None;
     let has_battery = holds(SLOT_BATTERY);
@@ -634,7 +654,7 @@ fn main(info: &'static BootInfo) {
                         Ok(Err(mind::idl::shell::Error::Busy)) => String::from("The shell has 32 windows open: close one to open another"),
                         Ok(Err(mind::idl::shell::Error::NoMemory)) => String::from("The shell has no memory for another window: close one"),
                         Ok(Err(error)) => format!("The shell could not open its window: {:?}", error),
-                        Err(_) => String::from("The shell does not answer: it may be busy with a command (Ctrl+Alt+F5 opens its window too)"),
+                        Err(error) => shell_failed("No shell window", "new-window", "1.8", SHELL_MS, error) + " (Ctrl+Alt+F5 opens one too)",
                     };
                     mind::println!("[WM] SHELL WINDOW: {}", text);
                     manager.wm.notice = Some(text);
@@ -660,19 +680,41 @@ fn main(info: &'static BootInfo) {
                     let (y, mo, d) = mind::rtc::civil_from_days(date);
                     let when = format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, mo, d, seconds / 3600, seconds / 60 % 60, seconds % 60);
                     let text = if !holds(SLOT_SHELL) { String::from("Setting the clock needs the shell's commands, which wm does not hold") } else {
-                        match mind::idl::wire::with_timeout(SHELL_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_clock(Endpoint(SLOT_SHELL), date, seconds)) {
                             Ok(Ok(())) => format!("The clock is set to {}", when),
                             Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", when),
                             Ok(Err(mind::idl::shell::Error::Unavailable)) => String::from("The clock is not set: the RTC service does not answer"),
                             Ok(Err(error)) => format!("The clock is not set ({:?})", error),
-                            Err(_) => String::from("The clock is not set: the shell does not answer"),
+                            Err(error) => shell_failed("The clock is not set", "set-clock", "1.2", SETTING_MS, error),
                         }
                     };
                     mind::println!("[WM] SET CLOCK {}: {}", when, text);
                     // The background reads the RTC anew for a while, and the page at once.
                     fresh_clock = mind::time::uptime_ms() + FRESH_MS;
                     if let Mode::Settings(settings) = &mut manager.wm.mode {
-                        settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                        show_clock(settings);
+                        settings.message = Some(text.clone());
+                    }
+                    manager.wm.notice = Some(text);
+                    last_sync = 0;
+                }
+                Action::SetZone { west, minutes } => {
+                    // The zone through the shell, at once as the clock (shell.wit 1.9, 000-APP-0099); every clock shows it
+                    // from its next reading of the RTC, this page and the background at once.
+                    let zone = wm::settings::zone_name(if west { -(minutes as i32) } else { minutes as i32 });
+                    let text = if !holds(SLOT_SHELL) { String::from("Setting the zone needs the shell's commands, which wm does not hold") } else {
+                        match mind::idl::wire::with_timeout(SETTING_MS, || mind::idl::shell::set_zone(Endpoint(SLOT_SHELL), west, minutes)) {
+                            Ok(Ok(())) => format!("The clocks show {} now, kept in data/clock.conf", zone),
+                            Ok(Err(mind::idl::shell::Error::Invalid)) => format!("The clock does not take {}", zone),
+                            Ok(Err(error)) => format!("The zone is not set ({:?})", error),
+                            Err(error) => shell_failed("The zone is not set", "set-zone", "1.9", SETTING_MS, error),
+                        }
+                    };
+                    mind::println!("[WM] SET ZONE {}: {}", zone, text);
+                    fresh_clock = mind::time::uptime_ms() + FRESH_MS;
+                    clock = mind::rtc::Clock::new();
+                    if let Mode::Settings(settings) = &mut manager.wm.mode {
+                        show_clock(settings);
                         settings.message = Some(text.clone());
                     }
                     manager.wm.notice = Some(text);
@@ -754,7 +796,7 @@ fn main(info: &'static BootInfo) {
             if settings.page == wm::settings::DATE && now >= next_clock {
                 // The RTC itself, not the background's clock, which reads it once a minute: the shell may just have set it.
                 next_clock = now + INFO_MS;
-                settings.set_now(mind::rtc::date(), mind::rtc::seconds_since_midnight());
+                show_clock(settings);
                 relayout = true;
             }
         }
@@ -794,7 +836,11 @@ fn main(info: &'static BootInfo) {
                             (net_sample, net_text, net_from) = (Some(sample), Some(line), Some(from));
                         }
                         Err(NetMissing::Slow) => shell_quiet_until = now + SHELL_QUIET_MS,
-                        Err(NetMissing::Why(line)) => (net_sample, net_text, net_from) = (None, Some(String::from(line)), None),
+                        Err(NetMissing::Why(line)) => {
+                            // Each reason once in the log: the background's pixels are not text.
+                            if net_why != Some(line) { mind::println!("[WM] {} (THE BACKGROUND'S NET LINE)", line); net_why = Some(line); }
+                            (net_sample, net_text, net_from) = (None, Some(String::from(line)), None)
+                        }
                     }
                 }
                 if backdrop.config.memory {

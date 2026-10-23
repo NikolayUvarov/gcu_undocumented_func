@@ -5,7 +5,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::io::AsRawHandle;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// The bytes this process sent and received on its lines: `effector485` shows them, with the speed (800-LNK-0018).
+pub static SENT: AtomicU64 = AtomicU64::new(0);
+pub static RECEIVED: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 #[derive(Default)]
@@ -88,7 +93,7 @@ impl linkproto::Line for Port {
     fn write(&mut self, bytes: &[u8]) -> bool {
         if self.failed { return false; }
         let r = match &mut self.stream { Stream::Serial { file, .. } => file.write_all(bytes), Stream::Tcp(s) => s.write_all(bytes) };
-        if r.is_err() { self.failed = true; }
+        if r.is_err() { self.failed = true; } else { SENT.fetch_add(bytes.len() as u64, Ordering::Relaxed); }
         !self.failed
     }
 
@@ -111,7 +116,7 @@ impl linkproto::Line for Port {
             }
         };
         match r {
-            Ok(n) => n,
+            Ok(n) => { RECEIVED.fetch_add(n as u64, Ordering::Relaxed); n }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut | ErrorKind::Interrupted) => 0,
             Err(_) => { self.failed = true; 0 }
         }
