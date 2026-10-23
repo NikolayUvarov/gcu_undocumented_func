@@ -13,7 +13,7 @@ extern crate alloc;
 
 use alloc::{boxed::Box, string::String, vec::Vec};
 use effector::session::{self, Accepted, Artifact, Outcome, Session, Time};
-use effector::{config, journal, telemetry, wire};
+use effector::{bench, config, journal, telemetry, wire};
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_FILE, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS, SLOT_VFS};
 use mind::effector::{OWNER_DIR, SESSION_DIR, SLOT_GATEWAY};
 use mind::idl::codec::Text;
@@ -30,6 +30,7 @@ const PARSER: Endpoint = Endpoint(SLOT_PARSE);
 const GATEWAY: Endpoint = Endpoint(SLOT_GATEWAY);
 const ACTION_S: u64 = 120; // a gateway request's budget when the command names none, from when it is handed over
 const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
+const BENCH_SLICE_MS: u64 = 200; // performance_measure runs this long between heartbeats
 const REBOOT_DELAY_MS: u32 = 10_000; // the gateway asks init to restart this long after it answers: time to keep and send the result
 const BODY_MAX: usize = 16384;
 // A request waits this long for a byte: TCP resends a segment lost twice at 3 s (1 + 2 s, smoltcp's RTO), so a burst of
@@ -131,6 +132,20 @@ impl http::Source for Inline {
     }
 }
 
+/// A `performance_measure` under way (750-EFF-0016): its command, kept until its result is, and when it came.
+struct Running {
+    id: String, agent_id: String, action: String, program: String, payload: String, expires_unix: Option<u64>,
+    received: Time, bench: Box<bench::Bench>, file: Option<File>,
+}
+
+/// The benchmark's file in the private directory.
+struct BenchFile<'a>(&'a mut Option<File>);
+impl bench::Disk for BenchFile<'_> {
+    fn write_at(&mut self, offset: u64, data: &[u8]) -> bool { self.0.as_mut().is_some_and(|f| f.write_at(offset as usize, data).ok() == Some(data.len())) }
+    fn flush(&mut self) -> bool { self.0.as_ref().is_some_and(|f| f.flush().is_ok()) }
+    fn read_at(&mut self, offset: u64, out: &mut [u8]) -> usize { self.0.as_ref().and_then(|f| f.read_at(offset as usize, out).ok()).unwrap_or(0) }
+}
+
 /// What the artifact file's first line says: `<command> <size> <sha256> <truncated 0|1> <name>`.
 struct Kept { command: String, size: usize, sha256: String, truncated: bool, name: String, start: usize }
 
@@ -175,6 +190,7 @@ struct Agent {
     load_at: usize,
     busy_since: Option<String>,
     held: Option<(String, String)>, // the command taken this run whose answer waits, and its action
+    running: Option<Box<Running>>,
 }
 
 impl Agent {
@@ -300,6 +316,8 @@ impl Agent {
 
     #[inline(never)]
     fn heartbeat(&mut self, stopping: bool, waiting: Option<session::Id>) -> Outcome {
+        // A benchmark under way holds the one slot as an answer waiting does.
+        let waiting = waiting.or_else(|| self.running.as_ref().and_then(|r| session::Id::command(&r.id).ok()));
         let mut buf = [0u8; 1536];
         let mut stamp = [0u8; 20];
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
@@ -309,7 +327,11 @@ impl Agent {
             (None, true) => { self.busy_since = None; self.held = None; }
             _ => {}
         }
-        let action = match (&self.held, waiting) { (Some((held, action)), Some(w)) if held == w.as_str() => action.as_str(), _ => "" };
+        let action = match (&self.held, &self.running, waiting) {
+            (_, Some(r), Some(w)) if r.id == w.as_str() => r.action.as_str(),
+            (Some((held, action)), _, Some(w)) if held == w.as_str() => action.as_str(),
+            _ => "",
+        };
         let busy = waiting.as_ref().zip(self.busy_since.as_deref()).map(|(w, since)| wire::Busy { since, command: w.as_str(), action });
         let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: self.config.hostname(), arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load };
         let Ok(body) = wire::heartbeat(&mut buf, &h) else { return Outcome::Permanent };
@@ -322,6 +344,10 @@ impl Agent {
 
     #[inline(never)]
     fn ack(&mut self, ack: &session::Ack) -> Outcome {
+        if ack.record.result == session::Final::Reported {
+            if let Some(outcome) = self.ack_result(ack) { return outcome; }
+            mind::println!("EFFECTOR: THE RESULT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
+        }
         if let session::Final::Captured(kind) = ack.record.result {
             if let Some(outcome) = self.ack_artifact(ack, kind) { return outcome; }
             mind::println!("EFFECTOR: THE ARTIFACT OF {} IS GONE: ANSWERED io", ack.record.id.as_str());
@@ -358,6 +384,21 @@ impl Agent {
         Some(session::outcome(status, ok))
     }
 
+    /// The ACK of a measured result, from the private file it was kept in; `None` if that file does not hold it.
+    #[inline(never)]
+    fn ack_result(&mut self, ack: &session::Ack) -> Option<Outcome> {
+        let bytes = read_file(&self.path("result"), 8192)?;
+        let end = bytes.iter().position(|&b| b == b'\n')?;
+        if &bytes[..end] != ack.record.id.as_str().as_bytes() { return None; }
+        let json = core::str::from_utf8(&bytes[end + 1..]).ok()?;
+        let mut buf = alloc::vec![0u8; 8192];
+        let body = wire::ack(&mut buf, ack.record.id.as_str(), json).ok()?.to_vec();
+        let Some(status) = self.request(Method::Post, "/api/commands/ack", "", Some(&body)) else { return Some(Outcome::Retry) };
+        let ok = status == 200 && self.answer(wire::ok_answer).is_ok();
+        mind::println!("EFFECTOR: ACK {} completed WITH ITS MEASUREMENT {}", ack.record.id.as_str(), if ok { "ACCEPTED" } else { "NOT ACCEPTED" });
+        Some(session::outcome(status, ok))
+    }
+
     /// An answer that needs no more ACK: its `done` line, and its artifact removed.
     #[inline(never)]
     fn finished(&self, record: &session::Record) {
@@ -367,6 +408,7 @@ impl Agent {
         let written = File::open_mode(&path, MODE_WRITE).and_then(|mut f| { let at = f.size(); f.write_at(at, &line[..n])?; f.flush() });
         if written.is_err() { mind::println!("EFFECTOR: JOURNAL: THE DONE LINE OF {} WAS NOT WRITTEN", record.id.as_str()); }
         if matches!(record.result, session::Final::Captured(_)) { let _ = fs::remove(&self.path("artifact")); }
+        if record.result == session::Final::Reported { let _ = fs::remove(&self.path("result")); }
     }
 
     /// The journal written again whole (a record was dropped to make room): to `journal.new`, then put in its place.
@@ -408,7 +450,8 @@ impl Agent {
         let mut took_command = false;
         // While an answer waits for its ACK the agent takes no new command: the server delivers each command once, so
         // `at_capacity=1` asks it to hold them (contract 1.0) rather than hand over one that would be refused.
-        let mut query = alloc::format!("?agent_id={}{}", self.agent_id, if session.busy() { "&at_capacity=1" } else { "" });
+        let full = session.busy() || self.running.is_some();
+        let mut query = alloc::format!("?agent_id={}{}", self.agent_id, if full { "&at_capacity=1" } else { "" });
         // The load on every poll too (Effector ahelp, "Load gate").
         if let Some(l) = self.load { let _ = core::fmt::write(&mut query, format_args!("&load_percent={}.{:03}", l.percent / 1000, l.percent % 1000)); }
         let outcome = match self.request(Method::Get, "/api/commands/poll", &query, None) {
@@ -422,21 +465,15 @@ impl Agent {
                         // An action the gateway serves runs once, for a new command in time whose answer the journal
                         // has room for; any other is denied.
                         let gateway_ok = mind::dev::cap_info(SLOT_GATEWAY).0 == CAP_KIND_ENDPOINT;
+                        // The benchmark runs a slice at a time between heartbeats; its answer is kept when it ends.
+                        if action == "performance_measure" && self.running.is_none() && session.runnable(&command, time()) {
+                            self.start_bench(id, agent_id, action, program, payload, *expires_unix);
+                            continue;
+                        }
+                        if self.running.as_ref().is_some_and(|r| &r.id == id) { continue; }
                         let done = if gateway_ok && session.runnable(&command, time()) { self.act(id, action, program, payload, initiator, reason) } else { None };
                         let received = match done { Some(done) => session.receive_with(command, time(), done), None => session.receive(command, time()) };
-                        match received {
-                            Ok(Accepted::Store(store)) => {
-                                let durable = if store.rewrite { self.rewrite_journal(session) } else { self.append_journal(&store.record) };
-                                if durable { self.count_executed(); self.held = Some((String::from(id.as_str()), String::from(action.as_str()))); }
-                                let result = store.record.result;
-                                let why = if let session::Final::Failed(f) = result { f.name() } else { "" };
-                                mind::println!("EFFECTOR: {} {} {}{}{}{}", result.status().to_ascii_uppercase(), id, action, if why.is_empty() { "" } else { ": " }, why, if durable { "" } else { " (JOURNAL WRITE FAILED)" });
-                                let _ = session.stored(store, durable);
-                            }
-                            Ok(Accepted::Replay) => mind::println!("EFFECTOR: REPEATED {}: THE SAVED ANSWER AGAIN", id),
-                            Ok(Accepted::InProgress) => {}
-                            Err(e) => mind::println!("EFFECTOR: COMMAND {} REFUSED: {:?}", id, e),
-                        }
+                        self.keep_answer(session, received, id, action);
                     }
                     Outcome::Accepted
                 }
@@ -472,6 +509,60 @@ impl Agent {
         };
         let _ = gateway::close(GATEWAY, opened.handle);
         result
+    }
+
+    /// A command's answer made durable before its ACK (MC-6.6), and said in one line.
+    fn keep_answer(&mut self, session: &mut Session, received: Result<Accepted, session::Error>, id: &str, action: &str) {
+        match received {
+            Ok(Accepted::Store(store)) => {
+                let durable = if store.rewrite { self.rewrite_journal(session) } else { self.append_journal(&store.record) };
+                if durable { self.count_executed(); self.held = Some((String::from(id), String::from(action))); }
+                let result = store.record.result;
+                let why = if let session::Final::Failed(f) = result { f.name() } else { "" };
+                mind::println!("EFFECTOR: {} {} {}{}{}{}", result.status().to_ascii_uppercase(), id, action, if why.is_empty() { "" } else { ": " }, why, if durable { "" } else { " (JOURNAL WRITE FAILED)" });
+                let _ = session.stored(store, durable);
+            }
+            Ok(Accepted::Replay) => mind::println!("EFFECTOR: REPEATED {}: THE SAVED ANSWER AGAIN", id),
+            Ok(Accepted::InProgress) => {}
+            Err(e) => mind::println!("EFFECTOR: COMMAND {} REFUSED: {:?}", id, e),
+        }
+    }
+
+    /// `performance_measure` begun (750-EFF-0016): the server's `duration_seconds`, else 60.
+    fn start_bench(&mut self, id: &str, agent_id: &str, action: &str, program: &str, payload: &str, expires_unix: Option<u64>) {
+        let duration = self.parsed(payload.as_bytes(), wire::duration_seconds).ok().flatten().unwrap_or(60);
+        let file = File::open_mode(&self.path("bench"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE).ok();
+        self.running = Some(Box::new(Running {
+            id: String::from(id), agent_id: String::from(agent_id), action: String::from(action), program: String::from(program),
+            payload: String::from(payload), expires_unix, received: time(), bench: Box::new(bench::Bench::new(duration)), file,
+        }));
+        mind::println!("EFFECTOR: STARTED {} performance_measure ({} S)", id, duration);
+    }
+
+    /// The benchmark's next slice; when it ends, its result is kept and journaled like any answer.
+    #[inline(never)]
+    fn bench_step(&mut self, session: &mut Session) {
+        let Some(r) = self.running.as_mut() else { return };
+        let mut clock = || now() as u64;
+        let done = r.bench.step(&mut clock, BENCH_SLICE_MS, &mut BenchFile(&mut r.file));
+        if !done { return; }
+        let r = self.running.take().unwrap();
+        let _ = fs::remove(&self.path("bench"));
+        let cpus = self.last.as_ref().map_or(1, |c| c.cpus);
+        let mut buf = alloc::vec![0u8; 4096];
+        let kept = r.bench.result(&mut buf, cpus, &self.cpu_model, wire::arch(), env!("CARGO_PKG_VERSION")).ok()
+            .is_some_and(|json| self.keep_result(&r.id, json));
+        let answer = if kept { session::Final::Reported } else { session::Final::Failed(session::Failure::Io) };
+        let command = session::Command { id: &r.id, agent_id: &r.agent_id, action: &r.action, program: &r.program, payload: &r.payload, expires_unix: r.expires_unix };
+        let received = session.receive_with(command, r.received, answer);
+        self.keep_answer(session, received, &r.id, &r.action);
+    }
+
+    /// A measured result kept in the private `result` file, after a line naming its command, until it is acknowledged.
+    fn keep_result(&self, id: &str, json: &[u8]) -> bool {
+        let Ok(mut f) = File::open_mode(&self.path("result"), MODE_WRITE | MODE_CREATE | fs::MODE_TRUNCATE) else { return false };
+        let head = alloc::format!("{}\n", id);
+        f.write_at(0, head.as_bytes()).ok() == Some(head.len()) && f.write_at(head.len(), json).ok() == Some(json.len()) && f.flush().is_ok()
     }
 
     /// The action of a command the gateway serves, or `None` for one it does not (answered `denied`).
@@ -764,7 +855,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
-        load: None, load_at: 0, busy_since: None, held: None });
+        load: None, load_at: 0, busy_since: None, held: None, running: None });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -851,6 +942,7 @@ fn main(_info: &'static BootInfo) {
             if agent.telemetry_at == 0 { agent.telemetry_at = now() + 5000; }
             if now() >= agent.telemetry_at { agent.telemetry(); agent.telemetry_at = now() + telemetry::PERIOD_MS as usize; }
         }
+        agent.bench_step(&mut session);
         match session.poll(now() as u64) {
             Ok(Some(attempt)) => {
                 let (outcome, took_command) = agent.poll(&mut session);

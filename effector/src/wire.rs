@@ -295,6 +295,17 @@ pub fn timeout_seconds(values: &[Value<'_>]) -> Result<Option<u64>, Error> {
     }
 }
 
+/// A `performance_measure` payload's `duration_seconds` (Effector's PerformanceOperation, 1–300), if it names one.
+pub fn duration_seconds(values: &[Value<'_>]) -> Result<Option<u64>, Error> {
+    root(values)?;
+    let [d] = members(values, 0, ["duration_seconds"])?;
+    match d.map(|i| values[i]) {
+        None => Ok(None),
+        Some(v) if v.kind == Kind::Number => v.text.parse::<u64>().ok().filter(|s| (1..=300).contains(s)).map(Some).ok_or(Error::Bounds),
+        Some(_) => Err(Error::Type),
+    }
+}
+
 /// A `collect_logs` payload: JSON with `path` (Effector's CollectLogOperation), or the path itself.
 pub fn log_path<'a>(values: &[Value<'a>]) -> Result<&'a str, Error> {
     root(values)?;

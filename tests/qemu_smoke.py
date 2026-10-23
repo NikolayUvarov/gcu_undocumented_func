@@ -7579,16 +7579,16 @@ def effector_suite(args, disk):
         assert f"{collect_id}" in audit and f"{outside_id}" in audit, audit[-2000:]
         print(f"PASS: collect_file through the gateway: {len(report)} bytes under the policy's root uploaded with their SHA-256 "
               "and acknowledged completed; a file outside it refused (failed: denied) and not sent; both in the gateway's audit", flush=True)
-        effector_actions_check(vm, server, agent, until)
+        effector_actions_check(vm, server, agent, until, beats)
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(11 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(12 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (11 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (12 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -7610,7 +7610,7 @@ def effector_suite(args, disk):
         (Path(tempfile.gettempdir()) / f"mind-core-effector-{args.cpus}cpu.log").write_text(vm.log)
 
 
-def effector_actions_check(vm, server, agent, until):
+def effector_actions_check(vm, server, agent, until, beats):
     """750-EFF-0007, 0014: the gateway's other actions as the suite's policy allows them, and the agent's telemetry."""
     # The screen as a PNG, inline in the ACK as the server's other agents send it; the gateway audits the capture.
     shot_id = server.queue(agent, "screenshot")
@@ -7654,6 +7654,25 @@ def effector_actions_check(vm, server, agent, until):
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")
     print(f"PASS: collect_logs sent the system log inline; deliver_file wrote {len(delivery)} bytes under the policy's root and "
           "refused a path outside it; restart_service restarted sysmon, which the policy names", flush=True)
+    # performance_measure (750-EFF-0016): the agents' fixed benchmarks run a slice at a time between heartbeats, the agent
+    # busy with it meanwhile; a result the server's AcceptPerformance takes.
+    perf_id = server.queue(agent, "performance_measure", {"duration_seconds": 12, "timeout_seconds": 90})
+    begun = time.monotonic()
+    out = until(f"EFFECTOR: ACK {perf_id} completed WITH ITS MEASUREMENT ACCEPTED", 120)
+    require(out, f"EFFECTOR: STARTED {perf_id} performance_measure (12 S)")
+    r = server.operation(perf_id)["result"]
+    assert r["status"] == "completed" and r["benchmark"] == "effector_bogomips_v1" and re.fullmatch(r"[0-9a-f]{16}", r["checksum"]), r
+    assert r["bogomips"] > 0 and 0 < r["duration_seconds"] <= 300 and r["iterations"] > 0 and r["worker_threads"] == 1 and r["logical_processors"] >= 1, r
+    assert r["memory_benchmark"] == "effector_memcpy_v1" and r["memory_mib_per_second"] > 0, r
+    assert r["disk_benchmark"] == "effector_seqio_v1" and r["disk_read_mib_per_second"] > 0 and r["disk_write_mib_per_second"] > 0, r
+    assert 0 < r["total_duration_seconds"] <= 360 and "cpu_parallel" not in r and "memory_latency" not in r, r
+    during = [b for b in list(server.beats) if b.get("busy") and b["executing_commands"][0]["action"] == "performance_measure"]
+    assert during, "the agent busy with the benchmark"
+    window = [t for t in beats if t >= begun]
+    assert len(window) > 3 and max(b - a for a, b in zip(window, window[1:])) < 5.0, "heartbeats went on during the benchmark"
+    print(f"PASS: performance_measure: {r['bogomips']} million iterations/s on one thread, {r['memory_mib_per_second']} MiB/s copied, "
+          f"disk {r['disk_write_mib_per_second']}/{r['disk_read_mib_per_second']} MiB/s written/read; heartbeats under 5 s apart while it "
+          "ran, the agent busy with it", flush=True)
     # Telemetry: schema 1 every 30 s, as the server checks it; rates from the second sample on.
     deadline = time.monotonic() + 75
     while time.monotonic() < deadline and sum(1 for t in list(server.telemetry) if "cpu_percent" in t["sample"]["system"]) < 1:

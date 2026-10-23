@@ -82,14 +82,15 @@ impl Artifact {
 
 /// A command's answer: denied (no gateway action for it), expired, or what the gateway did. `Captured`: completed with
 /// an artifact the agent keeps until the answer is acknowledged; its result is built from that file, not `result_json`.
+/// `Reported`: completed with a result the agent measured (`performance_measure`), kept the same way.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Final { Denied, Expired, Completed, Captured(Artifact), Failed(Failure) }
+pub enum Final { Denied, Expired, Completed, Captured(Artifact), Reported, Failed(Failure) }
 impl Final {
     pub fn status(self) -> &'static str {
-        match self { Self::Denied => "denied", Self::Expired => "expired", Self::Completed | Self::Captured(_) => "completed", Self::Failed(_) => "failed" }
+        match self { Self::Denied => "denied", Self::Expired => "expired", Self::Completed | Self::Captured(_) | Self::Reported => "completed", Self::Failed(_) => "failed" }
     }
     pub fn reason(self) -> &'static str {
-        match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired", Self::Completed | Self::Captured(_) => "", Self::Failed(f) => f.name() }
+        match self { Self::Denied => "action_not_allowed", Self::Expired => "command_expired", Self::Completed | Self::Captured(_) | Self::Reported => "", Self::Failed(f) => f.name() }
     }
     /// The result as a JSON text; a `Captured` answer whose artifact is gone is answered as the `io` failure it is.
     pub fn result_json(self) -> &'static str {
@@ -97,7 +98,7 @@ impl Final {
             Self::Denied => r#"{"status":"denied","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"action_not_allowed"}"#,
             Self::Expired => r#"{"status":"expired","exit_code":1,"stdout":"","stderr":"","truncated":false,"run_as":"effector","error":"command_expired"}"#,
             Self::Completed => r#"{"status":"completed","exit_code":0,"stdout":"","stderr":"","truncated":false,"run_as":"effector"}"#,
-            Self::Captured(_) => failed!("io"),
+            Self::Captured(_) | Self::Reported => failed!("io"),
             Self::Failed(f) => match f {
                 Failure::Denied => failed!("denied"), Failure::NoPolicy => failed!("no-policy"), Failure::NotFound => failed!("not-found"),
                 Failure::Bounds => failed!("bounds"), Failure::Digest => failed!("digest"), Failure::Busy => failed!("busy"),

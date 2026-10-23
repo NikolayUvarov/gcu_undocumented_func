@@ -247,6 +247,10 @@ every request (MC-10.6).
   command is denied: MIND runs none.
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
+- **`performance_measure`** (no policy line: it reads and changes nothing): the Effector agents' fixed benchmarks
+  (`effector/src/bench.rs`) run 200 ms at a time between heartbeats, so the agent stays online and busy with it; the
+  result is kept in `system/effector/result` and journaled `reported` before its ACK. A task's 16 MiB of memory makes
+  the copy move 4 MiB buffers (8 MiB on Linux) and leaves the pointer chase out; the parallel CPU phase needs threads.
 - **An action runs once**, for a new command that has not expired and whose answer the journal has room for.
 - **Its budget** is the command's `timeout_seconds`, apart from its term in the server's queue; **its answer** is sent
   until the server takes it, even after that term (the server keeps a late one); **meanwhile** the heartbeat says the
