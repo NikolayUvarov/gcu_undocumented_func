@@ -78,6 +78,13 @@ Options come before the command; what follows the command is its own, a program'
 
 Each file moved is reported with its size, time, rate and SHA-256. A refusal or a missing answer is reported with its reason, and the exit status is 1.
 
+**The mark on MIND Core's screen** (800-LNK-0020). While a master is heard over the link, MIND Core's `link` lights a ring with a dot in the screen's top right corner:
+- **red** with `dev` in `link.conf`: the master can change the machine;
+- **yellow** without it: the master can only read;
+- **grey** once the master has been quiet for 5 s. The mark goes away when `link` stops.
+
+The compositor draws the mark, so no screen capture holds it and no other program can light it (800-KRN-0156). `effector485` keeps the line warm with a POLL every 2 s, so the mark stays lit between its operations. A `mindlink` command lights it only while it runs.
+
 ## The converters on Windows
 
 `mindlink.exe` drives a converter as Windows names it, with no usbipd:

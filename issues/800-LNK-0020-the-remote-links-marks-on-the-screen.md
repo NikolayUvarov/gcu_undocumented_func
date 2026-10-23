@@ -50,6 +50,28 @@ Nothing on the Mac's screen says that either path is connected, or what it may d
 
 The capture dot (issue 165) is already a red filled circle in the top right corner, meaning "the screen is being captured". The network Effector's red mark is also a red filled circle. `KRN` is asked to keep the two apart, by their places and by anything else the maintainer agrees to, such as an outline on the Effector's mark.
 
+## Progress
+
+- **2026-10-23, the compositor's marks are made** (800-KRN-0156, landed in round 18):
+  - `display.wit` 1.2 `remote(state)`;
+  - `link` holds the compositor's client in slot 15, badged `BADGE_REMOTE_LINK`;
+  - the ring with a dot sits at (width − 72, 18), the Effector agent's filled circle at (width − 96, 18);
+  - each shows 3 s past the last call.
+- **2026-10-23, `link` lights its mark.** Every second it calls `remote()`:
+  - `Changing` with `dev`, `Reading` without it;
+  - `Unconnected` once no request has come for 5 s;
+  - it logs each change as `[LINK] MARK: …`. With no grant, as with an older `init`, it says so once and stops asking.
+- **2026-10-23, `effector485` keeps the line warm.** A link-protocol POLL goes out every 2 s while the daemon is idle. The other end does not log it, as it logs a hello. The console's traffic line ignores moves of up to 512 bytes in 5 s.
+- **The QEMU `link` suite checks it.** The suite runs with `dev`:
+  - `[LINK] MARK: Changing` and the compositor's `REMOTE MARK Link: Changing`;
+  - then `Unconnected` on both after 8 s of quiet;
+  - then `Changing` again at the next request.
+- **`docs/link/mindlink.md`** and its Russian version say what the mark means.
+- **Still open:**
+  - the MacBook, which needs a stick or a slot with KRN's round 18;
+  - the Effector agent's side (`EFF`'s 750-EFF-0015);
+  - the maintainer's choice on telling the red Effector mark from the red capture dot.
+
 ## Related
 
 [800-LNK-0017](800-LNK-0017-effector485-page.md), [800-LNK-0019](800-LNK-0019-the-link-as-the-owners-console.md), 750-EFF-0012, [165](../issues-done/165-display-client-for-programs.done), [158](158-video-capture.md).
