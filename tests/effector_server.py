@@ -305,6 +305,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     self._error(429, "fixture agent limit")
                     return
                 fixture.agents[agent] = data
+                fixture.beats.append(data)
                 fixture.changed.notify_all()
                 self._reply(200, {"status": "ok"})
             elif self.route == "/api/commands/ack":
@@ -428,6 +429,7 @@ class EffectorFixture:
         self.commands, self.results, self.agents, self.files, self.uploads, self.faults = {}, {}, {}, {}, {}, {}
         self.deployment_results = []
         self.telemetry = collections.deque()
+        self.beats = collections.deque(maxlen=MAX_REQUESTS)
         self.activated = True
         self.server = self.thread = self.directory = None
 

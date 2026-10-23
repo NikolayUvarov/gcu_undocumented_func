@@ -154,24 +154,30 @@ fn permanent_ack_refusal_retains_result_and_does_not_become_executable() {
 }
 
 #[test]
-fn expiry_stops_retries_without_erasing_the_result_or_following_wall_clock_changes() {
+fn a_late_answer_is_still_sent_past_the_commands_term_until_taken_or_refused() {
+    // The term bounds the wait in the server's queue; the server keeps a late report (Effector ahelp, late_acknowledgement).
     let mut s = online(&[]);
     let record = store(&mut s, Command { expires_unix: Some(1006), ..command("one") }, time(0));
     let ack = s.next_ack(time(0)).unwrap().unwrap();
     s.ack_done(ack, Outcome::Retry, 2000, 0).unwrap();
-    assert_eq!(s.next_ack(Time { monotonic_ms: 6000, unix_seconds: Some(900) }), Ok(None));
-    assert_eq!(s.record(0), Some(record));
+    let late = s.next_ack(Time { monotonic_ms: 60_000, unix_seconds: Some(1060) }).unwrap().expect("retried past the term");
+    assert_eq!(late.record, record);
+    assert!(s.busy(), "busy until the server takes or refuses it");
+    s.ack_done(late, Outcome::Accepted, 60_000, 0).unwrap();
     assert!(!s.busy());
+    assert_eq!(s.record(0), Some(record));
 }
 
 #[test]
-fn expired_delivery_gets_an_explicit_result_but_no_retry_past_its_term() {
+fn an_expired_delivery_gets_an_explicit_result_retried_until_taken() {
     let mut s = online(&[]);
     let record = store(&mut s, Command { expires_unix: Some(999), ..command("one") }, time(0));
     assert_eq!(record.result, Final::Expired);
     let ack = s.next_ack(time(0)).unwrap().unwrap();
     s.ack_done(ack, Outcome::Retry, 0, 0).unwrap();
-    assert_eq!(s.next_ack(time(5000)), Ok(None));
+    let again = s.next_ack(time(10_000)).unwrap().expect("retried");
+    s.ack_done(again, Outcome::Permanent, 10_000, 0).unwrap();
+    assert!(!s.busy(), "a permanent refusal ends the retries");
     assert_eq!(s.record(0), Some(record));
 }
 

@@ -134,7 +134,7 @@ fn grep_scans_lines() {
 
 #[test]
 fn grep_options_and_files() {
-    assert!(grep::parse("pattern").is_err(), "a path or -r is needed");
+    assert!(grep::parse("pattern").unwrap().paths.is_empty(), "no path: the text input (000-APP-0074)");
     assert!(grep::parse("-x a b").is_err());
     let options = grep::parse("-rl txt ram:docs").unwrap();
     assert!(options.recursive && options.names_only && !options.numbers);

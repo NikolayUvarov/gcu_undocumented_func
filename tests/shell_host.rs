@@ -20,6 +20,12 @@ mod safe;
 mod netstat;
 #[path = "../shell/src/ping.rs"]
 mod ping;
+#[path = "../shell/src/modes.rs"]
+mod modes;
+#[path = "../shell/src/pick.rs"]
+mod pick;
+#[path = "../shell/src/pipe.rs"]
+mod pipe;
 use ring::{Position, Ring, LINES};
 
 fn ring(stride: usize, cols: usize, rows: usize) -> Ring<Vec<u32>> { Ring::new(vec![0; LINES * stride], stride, cols, rows) }
@@ -109,7 +115,8 @@ fn a_client_gets_the_observing_commands_at_once_and_asks_for_the_others() {
                  "logs 7", "stat caps 7", "pmap 7", "caps 3", "logger hello", "ping ya.ru", "nslookup ya.ru", "fetch ya.ru /", "https ya.ru",
                  "msh /diag/quick.msh", "msh ram:x.msh"] { assert_eq!(taken(line), Taken::Asked, "{}", line); }
     // The screen's own commands, code typed for msh, programs and statements are refused.
-    for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh -c \"print(1)\"", "msh --check x.msh", "msh x.msh a", "msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
+    for line in ["fg 1", "boot", "keymap ru", "screenshot", "voice on", "msh -c \"print(1)\"", "msh --check x.msh", "msh x.msh a", "msh", "run fm", "fm", "caps", "let x = 1", "clear", "", "kill7", "date 1",
+                 "mode", "mode maintenance on"] { assert_eq!(taken(line), Taken::Refused, "{:?}", line); }
 }
 
 #[test]
@@ -243,7 +250,7 @@ fn netstat_rows_line_up_under_the_header() {
 #[test]
 fn ping_takes_its_count_interval_wait_and_fast_mode() {
     let plain = ping::parse("10.0.2.2").unwrap();
-    assert_eq!(plain, ping::Asked { host: "10.0.2.2", count: 3, interval_ms: 1000, wait_ms: 1000, fast: false });
+    assert_eq!(plain, ping::Asked { host: "10.0.2.2", count: 3, interval_ms: 1000, wait_ms: 1000, fast: false, size: None, pattern: [0; 16], pattern_len: 0 });
     let asked = ping::parse("-c 5 -i 0.2 -w 1.5 ya.ru").unwrap();
     assert_eq!((asked.host, asked.count, asked.interval_ms, asked.wait_ms), ("ya.ru", 5, 200, 1500));
     assert_eq!(ping::parse("10.0.2.2 -C 0 -I .05").map(|a| (a.count, a.interval_ms)), Ok((0, 50)));
@@ -254,8 +261,17 @@ fn ping_takes_its_count_interval_wait_and_fast_mode() {
                   "-x h", "a b"] {
         assert!(ping::parse(wrong).is_err(), "{:?}", wrong);
     }
-    assert!(ping::parse("-s 64 h").unwrap_err().contains("NETWORK STACK"));
-    assert!(ping::parse("-p ff h").unwrap_err().contains("NETWORK STACK"));
+    // -s and -p (socket.wit 2.6 ping-with): 0 to 1472 data bytes, 1 to 16 pattern bytes in pairs of hex digits.
+    let sized = ping::parse("-f -c 1000 -s 1472 -p a55a0f 10.0.2.2").unwrap();
+    assert_eq!((sized.size, sized.pattern(), sized.sized(), sized.fast), (Some(1472), &[0xa5, 0x5a, 0x0f][..], true, true));
+    assert_eq!(ping::parse("-s 0 h").map(|a| (a.size, a.pattern_len)), Ok((Some(0), 0)));
+    assert_eq!(ping::parse("-p 0xFF h").map(|a| (a.size, a.pattern().to_vec())), Ok((Some(56), vec![0xff])), "-p alone: 56 bytes");
+    assert_eq!(ping::parse("-P 00112233445566778899aabbccddeeff h").map(|a| a.pattern_len), Ok(16));
+    for wrong in ["-s 1473 h", "-s -1 h", "-s h", "-p abc h", "-p zz h", "-p 00112233445566778899aabbccddeeff00 h", "-p h", "-p 0x h"] {
+        assert!(ping::parse(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(ping::parse("-s 1473 h").unwrap_err().contains("1472"));
+    assert!(!ping::parse("h").unwrap().sized());
 }
 
 #[test]
@@ -279,4 +295,58 @@ fn ping_ends_with_its_tally() {
     let mut lost = ping::Tally::default();
     for _ in 0..3 { lost.lost(); }
     assert_eq!(line(&lost, false), "PING: 3 SENT, 0 RECEIVED, 100% LOST\n");
+    // A reply whose data are not what was sent (-s, -p) is received, and named apart.
+    tally.bad_data();
+    assert_eq!(line(&tally, false), "PING: 4 SENT, 3 RECEIVED, 25% LOST, TIME 100/340/800 US (LEAST/MEAN/MOST), 1 WITH BAD DATA\n");
+}
+
+#[test]
+fn mode_shows_the_modes_and_turns_one_on_or_off() {
+    // 750-EFF-0013: `mode`, `mode development|maintenance on|off [reason]`.
+    use modes::{parse, Asked, Which};
+    assert_eq!(parse(""), Ok(Asked::Show));
+    assert_eq!(parse("maintenance on the Mac's Wi-Fi tests"), Ok(Asked::Set { which: Which::Maintenance, on: true, reason: "the Mac's Wi-Fi tests" }));
+    assert_eq!(parse("DEVELOPMENT  OFF"), Ok(Asked::Set { which: Which::Development, on: false, reason: "" }));
+    for wrong in ["turbo on", "maintenance", "maintenance up", "on maintenance"] { assert_eq!(parse(wrong), Err(modes::USAGE), "{:?}", wrong); }
+    assert!(parse(&format!("maintenance on {}", "x".repeat(121))).unwrap_err().contains("120"));
+    let line = |d, m, by, reason| { let mut out = String::new(); modes::line(&mut out, d, m, by, reason); out };
+    assert_eq!(line(false, false, "disk", ""), "MODE: NORMAL (NO EFFECTOR SERVICES), SET BY disk\n");
+    assert_eq!(line(false, true, "operator", "tests"), "MODE: MAINTENANCE, SET BY operator: tests\n");
+    assert_eq!(line(true, true, "mind", ""), "MODE: DEVELOPMENT AND MAINTENANCE, SET BY mind\n");
+    // The question names the mode and what the agent may do; the normal mode puts nothing above the prompt.
+    let mut asked = String::new();
+    modes::question(&mut asked, Which::Maintenance);
+    assert!(asked.starts_with("TURN THE MAINTENANCE MODE ON?") && asked.contains("DATA/EFFECTOR/POLICY") && asked.contains("MODE MAINTENANCE OFF"), "{}", asked);
+    let mut notice = String::new();
+    assert!(!modes::notice(&mut notice, false, false, "disk") && notice.is_empty());
+    assert!(modes::notice(&mut notice, true, false, "disk") && notice.starts_with("THE DEVELOPMENT MODE IS ON (SET BY disk)"), "{}", notice);
+}
+
+#[test]
+fn fg_takes_a_programs_name_and_lists_several() {
+    // The maintainer's request of 2026-10-22: fg <name>; the PIDs when several answer.
+    let tasks = [(1, "clock"), (2, "clock"), (3, "app"), (4, "app2"), (5, "wm"), (6, "dzen-clock")];
+    let found = |text| pick::matching(text, tasks.iter().copied()).collect::<Vec<_>>();
+    assert_eq!(found("wm"), vec![(5, "wm")]);
+    assert_eq!(found("WM"), vec![(5, "wm")], "any case");
+    // A name some are called keeps to them; else those whose name holds the text.
+    assert_eq!(found("clock"), vec![(1, "clock"), (2, "clock")]);
+    assert_eq!(found("app"), vec![(3, "app")]);
+    assert_eq!(found("dzen"), vec![(6, "dzen-clock")]);
+    assert_eq!(found("lock"), vec![(1, "clock"), (2, "clock"), (6, "dzen-clock")]);
+    assert_eq!(found("nosuch"), vec![]);
+    let picked = |text| pick::picked(pick::matching(text, tasks.iter().copied()));
+    assert_eq!((picked("wm"), picked("clock"), picked("nosuch")), (pick::Picked::One(5), pick::Picked::Several, pick::Picked::None));
+}
+
+#[test]
+fn a_pipe_splits_a_line_between_the_command_and_the_program() {
+    // 000-APP-0074: `command | program`, the command's output the program's text input.
+    assert_eq!(pipe::split("ps | grep wm"), Ok(Some(pipe::Split { writer: "ps", reader: "grep wm" })));
+    assert_eq!(pipe::split("ps"), Ok(None));
+    assert_eq!(pipe::split("write ram:x \"a | b\""), Ok(None), "a | inside quotes is text");
+    for wrong in ["| grep x", "ps |", "ps || grep x", "ps | grep a | grep b", "ps | grep x &", "run clock & | grep x"] {
+        assert!(pipe::split(wrong).is_err(), "{:?}", wrong);
+    }
+    assert!(pipe::split("ps | grep a | grep b").unwrap_err().contains("ONE |"));
 }

@@ -1,11 +1,12 @@
 /// The screen through the compositor (issue 086). `init` gives `compositor` a service endpoint and the shell a client of
 /// it in SLOT_DISPLAY (kernel issue 151); the shell's `screenshot` uses it, and the video gateway lights the camera
-/// mark with it (1.1).
-package mind:display@1.1.0;
+/// mark with it (1.1); `link` and the Effector gateway light the marks of who can reach the machine from outside (1.2).
+package mind:display@1.2.0;
 
 interface display {
-    /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy.
-    enum error { no-screen, no-memory }
+    /// Why a capture failed: no task has a screen in front yet, or there is no memory for the copy; `denied`: a
+    /// `remote` from a client with no mark of its own (1.2).
+    enum error { no-screen, no-memory, denied }
     /// The screen's size in pixels and its stride (pixels per row, at least the width).
     record mode { width: u32, height: u32, stride: u32 }
 
@@ -16,4 +17,10 @@ interface display {
     /// A camera stream is open: the compositor shows the camera mark for 1.5 s after the last call. The video gateway
     /// calls it while any stream is open (issue 158, 1.1); nothing turns the mark off sooner.
     camera: func();
+    /// What a remote path may do now: nothing, as it is not connected; read; or change the machine.
+    enum remote-state { unconnected, reading, changing }
+    /// The caller's remote mark (1.2, 800-KRN-0156), shown for 3 s after the last call, grey, yellow or red for its
+    /// state: a ring with a dot for a client badged `BADGE_REMOTE_LINK` (link's), a filled circle for one badged
+    /// `BADGE_REMOTE_EFFECTOR` (the Effector gateway's), both in `mind::display`. Other clients get `denied`.
+    remote: func(state: remote-state) -> result<_, error>;
 }

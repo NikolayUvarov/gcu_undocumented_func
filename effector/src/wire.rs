@@ -20,7 +20,7 @@ pub enum Error { Shape, Duplicate, Missing, Type, Bounds, Write }
 
 impl From<crate::json::Error> for Error { fn from(_: crate::json::Error) -> Self { Error::Write } }
 
-/// What the heartbeat says (contract 1.0's minimal heartbeat).
+/// What the heartbeat says (contract 1.0's minimal heartbeat; 1.2: the command held and the load).
 #[derive(Clone, Copy, Debug)]
 pub struct Heartbeat<'a> {
     pub agent_id: &'a str,
@@ -29,6 +29,27 @@ pub struct Heartbeat<'a> {
     pub agent_version: &'a str,
     pub stopping: bool,
     pub agent_time: Option<&'a str>,
+    /// The command the agent holds until the server takes its answer: its one slot is occupied meanwhile, so the server
+    /// does not take idle reports for an unconfirmed execution (Effector ahelp, `agent_execution_unconfirmed`).
+    pub busy: Option<Busy<'a>>,
+    /// The one-minute load, for the server's load gate.
+    pub load: Option<Load>,
+}
+
+/// The command held: since when (RFC 3339), its ID and action.
+#[derive(Clone, Copy, Debug)]
+pub struct Busy<'a> { pub since: &'a str, pub command: &'a str, pub action: &'a str }
+
+/// The load as the server reads it on Linux (Effector ahelp, "Load gate"): 100 x the one-minute load average / the
+/// cores, and the average itself, both in thousandths.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Load { pub percent: u64, pub average: u64, pub cores: u16 }
+
+impl Load {
+    /// From the load average x 100 and the online cores; none without cores.
+    pub fn new(average_x100: u32, cores: u16) -> Option<Self> {
+        (cores > 0).then(|| Self { percent: average_x100 as u64 * 1000 / cores as u64, average: average_x100 as u64 * 10, cores })
+    }
 }
 
 pub fn arch() -> &'static str { if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" } }
@@ -45,14 +66,27 @@ pub fn heartbeat<'b>(buf: &'b mut [u8], h: &Heartbeat<'_>) -> Result<&'b [u8], E
     w.field_str("agent_version", h.agent_version)?;
     w.key("programs")?; w.array()?; w.end()?;
     w.field_str("system_state", if h.stopping { "shutting_down" } else { "running" })?;
-    w.field_bool("busy", false)?;
+    w.field_bool("busy", h.busy.is_some())?;
+    if let Some(b) = h.busy {
+        w.field_str("busy_since", b.since)?;
+        w.key("executing_commands")?; w.array()?;
+        w.object()?; w.field_str("command_id", b.command)?; w.field_str("action", b.action)?; w.field_str("started_at", b.since)?; w.end()?;
+        w.end()?;
+    }
     w.field_u64("max_concurrent_commands", 1)?;
-    w.field_u64("occupied_queues", 0)?;
-    w.field_u64("free_slots", 1)?;
+    w.field_u64("occupied_queues", h.busy.is_some() as u64)?;
+    w.field_u64("free_slots", h.busy.is_none() as u64)?;
     w.field_bool("config_auto_update_enabled", false)?;
     w.field_str("transport_mode", "https_only")?;
     w.field_str("transport", "https")?;
+    // Its actions run within their fixed budget: no reservation extends one (Effector ahelp, build 232, the fixed mode).
+    w.field_bool("renewable_execution_timeout", false)?;
     if let Some(t) = h.agent_time { w.field_str("agent_time", t)?; }
+    if let Some(l) = h.load {
+        w.key("load")?; w.object()?;
+        w.field_decimal("load_percent", l.percent)?; w.field_decimal("load_average", l.average)?; w.field_u64("cpu_cores", l.cores as u64)?;
+        w.end()?;
+    }
     w.end()?;
     Ok(w.finish()?)
 }
@@ -239,6 +273,37 @@ pub fn deliver<'a>(values: &[Value<'a>]) -> Result<Deliver<'a>, Error> {
     if sha256.len() != 64 || !sha256.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Err(Error::Type); }
     let overwrite = match overwrite.map(|i| values[i].kind) { None | Some(Kind::False) => false, Some(Kind::True) => true, Some(_) => return Err(Error::Type) };
     Ok(Deliver { path, size, sha256, overwrite })
+}
+
+/// An `exec_v1` payload's command (Effector's ExecOperation). MIND runs none: the agent maps only `reboot` to the
+/// gateway's restart, under the owner's `reboot on`; every other command is denied.
+pub fn exec_command<'a>(values: &[Value<'a>]) -> Result<&'a str, Error> {
+    root(values)?;
+    let [command] = members(values, 0, ["command"])?;
+    string(values, command)
+}
+
+/// A command's own execution budget (`timeout_seconds`, 1–3600) when its payload names one; it is apart from the
+/// command's term in the server's queue (Effector ahelp, "Reservation lease, queue waiting and command runtime").
+pub fn timeout_seconds(values: &[Value<'_>]) -> Result<Option<u64>, Error> {
+    root(values)?;
+    let [t] = members(values, 0, ["timeout_seconds"])?;
+    match t.map(|i| values[i]) {
+        None => Ok(None),
+        Some(v) if v.kind == Kind::Number => v.text.parse::<u64>().ok().filter(|s| (1..=3600).contains(s)).map(Some).ok_or(Error::Bounds),
+        Some(_) => Err(Error::Type),
+    }
+}
+
+/// A `performance_measure` payload's `duration_seconds` (Effector's PerformanceOperation, 1–300), if it names one.
+pub fn duration_seconds(values: &[Value<'_>]) -> Result<Option<u64>, Error> {
+    root(values)?;
+    let [d] = members(values, 0, ["duration_seconds"])?;
+    match d.map(|i| values[i]) {
+        None => Ok(None),
+        Some(v) if v.kind == Kind::Number => v.text.parse::<u64>().ok().filter(|s| (1..=300).contains(s)).map(Some).ok_or(Error::Bounds),
+        Some(_) => Err(Error::Type),
+    }
 }
 
 /// A `collect_logs` payload: JSON with `path` (Effector's CollectLogOperation), or the path itself.

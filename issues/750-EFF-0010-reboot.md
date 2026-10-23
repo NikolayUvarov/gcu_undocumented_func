@@ -27,3 +27,10 @@
 ## Related
 
 `idl/init.wit` (`reboot`), [750-EFF-0006](750-EFF-0006-session-service.md).
+
+## Progress — 2026-10-23, the server's `exec` of `reboot`
+
+- **The trigger.** The Effector server has no reboot operation, but it sends its `exec` as `exec_v1`. At the maintainer's word ("выполнение команды reboot не достаточно?"), the agent maps exactly the command `reboot` to the gateway's `reboot`. Every other command stays denied.
+- **The gateway** admits it only under `reboot on` and audits it. It answers, then asks `init` 10 s later through its lifecycle client (750-KRN-0154). `init` checks the owner's policy again.
+- **Meanwhile the session** keeps its answer and sends it, `completed`. If the ACK does not get out before the restart, the journal sends it after.
+- **Tested:** the gateway's host tests; the `effector` suite's refusal under a policy without `reboot on`. The restart itself is to be seen on the MacBook, once its owner adds `reboot on`.
