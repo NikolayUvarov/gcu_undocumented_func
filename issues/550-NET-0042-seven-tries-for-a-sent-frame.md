@@ -1,6 +1,6 @@
 # 550-NET-0042 — Seven tries for a frame the station sends
 
-**Type:** `wlan` · **Owner:** network track (the kernel session) · **Priority:** P1 · **Status:** open · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1
+**Type:** `wlan` · **Owner:** network track (the kernel session) · **Priority:** P1 · **Status:** in `main` (2026-10-23, c9531fac); the MacBook Pro's run left · **Blocked by:** — · **Main task:** [550](550-network-on-real-hardware.md) · **Constitution:** MC-12.1
 
 From DRV's request of 2026-10-22 (`NET/2026-10-22T2011Z-DRV-wlan-attempts-4-to-7-…` on `internal-dev-messages`).
 
@@ -21,12 +21,17 @@ From DRV's request of 2026-10-22 (`NET/2026-10-22T2011Z-DRV-wlan-attempts-4-to-7
 
 ## Acceptance criteria
 
-- [ ] The `net` suite passes on x86 and aarch64 with 7 tries (`wlansim` answers the tries it is asked for).
+- [x] The `net` suite passes on x86 and aarch64 with 7 tries (`wlansim` answers the tries it is asked for).
 - [ ] On the MacBook Pro, the station's sent frames are lost less often than with 4 tries. This is evidence for that machine and that access point only (MC-12.1).
 
 ## Progress (2026-10-22)
 
 Made on `claude/youthful-mendel-mf1soy` (b9c2278d). The `net` suite passed on x86 with it, in this session's container (QEMU TCG); aarch64 and the Mac are left.
+
+## Progress (2026-10-23)
+
+- **In `main`** c9531fac, landing round 14. Every group of gate `land-c9531fac` passed (the `no-i9` preset, on un-rizen and PCU), the `net` suite on x86 ("x86: boot, display, network, TLS, shell, memory, clock") and on aarch64 ("aarch64: files, network and TLS") among them.
+- **Left:** the MacBook Pro's run with `main`'s `wlan`, DRV's to record. DRV's numbers above came from its counting driver, which set the tries itself.
 
 ## Related
 
