@@ -2510,10 +2510,25 @@ def workers_check(vm):
     output = memtest(f"workers {cpus + 1}")
     require(output, f"[MEMTEST] WORKER {cpus + 1} REFUSED Other")
     require(output, f"[MEMTEST] WORKERS {cpus} STARTED, {cpus} COUNTED 200000 EACH")
-    output = memtest("workers 3 fault")
+    faulting = min(3, cpus)  # one CPU allows one worker, which then faults
+    output = memtest(f"workers {faulting} fault")
     require(output, "ENDED Fault(")
-    require(output, "[MEMTEST] WORKERS 3 STARTED, 2 COUNTED 200000 EACH")
-    # Held: the program and its workers each on a CPU of its own, then all gone when the program is killed.
+    require(output, f"[MEMTEST] WORKERS {faulting} STARTED, {faulting - 1} COUNTED 200000 EACH")
+    if cpus > 1:
+        held_check(vm, cpus)
+    # kbench times a worker's start and a call a worker answers, once the owner names it.
+    require(vm.command("write data/memory.conf kbench 64"), "WROTE 10 BYTES")
+    vm.send("kbench workers --quick\n")
+    output = vm.expect("MIND> ", timeout=300, after="kbench workers --quick\n")
+    rows = bench_rows(output, ["worker start", "worker call and reply"])
+    require(output, "kbench: 2 measurements, 0 failed")
+    require(vm.command("rm data/memory.conf"), "OK")
+    held = f"held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them" if cpus > 1 else "one CPU: no held check"
+    print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; {held}; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
+
+
+def held_check(vm, cpus):
+    """Held: the program and its workers each on a CPU of its own, then all gone when the program is killed."""
     creator = int(re.search(r"STARTED PID=(\d+)", vm.command(f"run memtest workers {cpus - 1} hold &"))[1])
     log = vm.program_logs(creator, f"WORKER {cpus - 1} PID=")
     workers = [int(pid) for pid in re.findall(r"\[MEMTEST\] WORKER \d+ PID=(\d+)", log)]
@@ -2528,14 +2543,6 @@ def workers_check(vm):
         time.sleep(.25)
     else:
         raise AssertionError(f"workers {workers} outlived their creator: {task_rows(vm)}")
-    # kbench times a worker's start and a call a worker answers, once the owner names it.
-    require(vm.command("write data/memory.conf kbench 64"), "WROTE 10 BYTES")
-    vm.send("kbench workers --quick\n")
-    output = vm.expect("MIND> ", timeout=300, after="kbench workers --quick\n")
-    rows = bench_rows(output, ["worker start", "worker call and reply"])
-    require(output, "kbench: 2 measurements, 0 failed")
-    require(vm.command("rm data/memory.conf"), "OK")
-    print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
 
 
 def isolation_suite(vm):
