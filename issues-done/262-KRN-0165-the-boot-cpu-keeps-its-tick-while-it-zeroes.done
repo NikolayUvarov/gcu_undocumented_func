@@ -1,8 +1,8 @@
-# 262-KRN-0165 — The boot CPU keeps its tick while it zeroes a large block
+# 262-KRN-0165 — The boot CPU keeps its tick while it zeroes a large block — done
 
-**Type:** kernel (`scheduler.rs`, `arch/*/interrupts.rs`, `arch/*/context.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-2.13, MC-5.6
+**Type:** kernel (`scheduler.rs`, `arch/*/interrupts.rs`, `arch/*/context.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [262](../issues/262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-2.13, MC-5.6
 
-Found while checking [262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done)'s reserve criterion (2026-10-23).
+Found while checking [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done)'s reserve criterion (2026-10-23).
 
 ## Problem
 
@@ -54,6 +54,18 @@ Made on `claude/youthful-mendel-mf1soy` (f918d2d6, 61105fbd, 053262be):
     - host test `the_pieces_cover_a_block_once_and_none_is_larger_than_2_mib`.
 - **What is left.** The tasks of the CPU that zeroes still wait for the block: in the same runs the shell answered `uptime` in up to 12.8 s (x86) and 11.5 s (aarch64), because starting `uptime` goes through services on CPU 0. That needs a system call the kernel can leave, which is not planned. These are QEMU's emulation figures; a machine's are not measured (MC-12.1).
 
+## Resolution
+
+Landed in round 25 (`main` d76708cd, 2026-10-23); every gate group passed on that commit, i9's on rz-2 while i9 was out (QEMU, x86 and aarch64).
+- **What was made differs from the plan in two points.**
+  - The pieces are 2 MiB, not 16 MiB.
+  - Between pieces the CPU opens its interrupts for one instruction (`interrupts::window`) instead of reading the LAPIC's IRR or the timer's `ISTATUS`. Whatever is pending is taken through the usual entry, and `between_pieces` keeps the books only: the tick's timers and uptime on CPU 0, a device line raised for its driver, a wake sent again once the zeroing ends.
+- **The criterion** (4 CPUs, a 10 ms sleep on CPU 1 while CPU 0 zeroes 3 GiB): 26 ms on x86 and 31 ms on aarch64 in this session's container, against 4461 ms before.
+  - In the gate it is part of `big_memory_check` (x86 `bigmem`; aarch64 `normal` at 6 GiB), which requires the longest sleep to stay under 1 s.
+  - The sleeper runs until it is killed. Rounds 23 and 24 were returned because on PCU it had ended before its log was read.
+- **Where:** `kernel/src/scheduler.rs`, `kernel/src/user_heap.rs` (`pieces`), `kernel/src/arch/*/interrupts.rs` (`window`), `memtest` (`naps`), `tests/qemu_smoke.py`; `docs/profile/clocks.md` and `kernel-objects.md`.
+- **What is left,** as `docs/profile/clocks.md` states: the tasks of the CPU that zeroes still wait for the block, since the kernel does not leave a system call for another task. These are QEMU's emulation figures; a machine's are not measured (MC-12.1).
+
 ## Related
 
-[262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done), [000-KRN-0100](../issues-done/000-KRN-0100-the-tsc-measured-again.done), 000-KRN-0083 (the 1 ms tick), [262](262-model-runtime-on-the-machines-full-hardware.md).
+[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done), [000-KRN-0100](000-KRN-0100-the-tsc-measured-again.done), 000-KRN-0083 (the 1 ms tick), [262](../issues/262-model-runtime-on-the-machines-full-hardware.md).
