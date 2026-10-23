@@ -23,7 +23,7 @@
 ## Acceptance criteria
 
 - [x] Host tests (`tests/effector_bench_host.rs`): the CPU loop is the Linux agent's; a run in slices gives a result with every field the server checks; a failed disk leaves the disk numbers out.
-- [ ] The `effector` QEMU suite on x86_64 and aarch64: a 12 s run accepted with every field, heartbeats under 5 s apart meanwhile.
+- [x] The `effector` QEMU suite on x86_64 and aarch64: a 12 s run accepted with every field, heartbeats under 5 s apart meanwhile (after the disk moved to 64 KiB pieces).
 - [ ] On the MacBook: the card shows a saved measurement.
 
 ## Related
