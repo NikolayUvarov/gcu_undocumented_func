@@ -262,15 +262,17 @@ fn work(index: u64, argument: u64) {
     while mode == 1 || n < COUNT { n += 1; unsafe { words.add(index as usize).write_volatile(n); } }
 }
 
-// Sleeps of 10 ms for `ms` and the longest one: while another CPU zeroes a large block, the boot CPU's tick still ends
-// them (262-KRN-0165).
+// Sleeps of 10 ms for `ms` (0: until killed), and the longest so far once a second: while another CPU zeroes a large
+// block, the boot CPU's tick still ends them (262-KRN-0165).
 fn naps(ms: u64) {
-    let end = mind::time::monotonic_ns() + ms * 1_000_000;
-    let (mut longest, mut count) = (0, 0);
-    while mind::time::monotonic_ns() < end {
+    let start = mind::time::monotonic_ns();
+    let (mut longest, mut count, mut shown) = (0, 0, start);
+    while ms == 0 || mind::time::monotonic_ns() < start + ms * 1_000_000 {
         let before = mind::time::monotonic_ns();
         mind::time::sleep(10);
-        longest = longest.max(mind::time::monotonic_ns() - before); count += 1;
+        let now = mind::time::monotonic_ns();
+        longest = longest.max(now - before); count += 1;
+        if now - shown >= 1_000_000_000 { shown = now; mind::println!("[MEMTEST] NAPS {} LONGEST {} MS", count, longest / 1_000_000); }
     }
     mind::println!("[MEMTEST] NAPS {} LONGEST {} MS", count, longest / 1_000_000);
 }

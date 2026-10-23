@@ -706,9 +706,8 @@ def big_memory_check(vm):
     cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
     if vm.cpus > 1:
         first = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 60000 &"))[1])
-        sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 20000 &"))[1])
+        sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 0 &"))[1])
         require(vm.command(f"kill {first}"), f"KILLED PID={first}")
-        # Its CPU while it lives: on a slow host it ends before the blocks are held.
         assert cpu_of(sleeper) == 1, cpu_of(sleeper)
     output = vm.command("run memtest big 3072 hold &")
     pid = int(re.search(r"STARTED PID=(\d+)", output)[1])
@@ -725,7 +724,10 @@ def big_memory_check(vm):
     nap = None
     if sleeper:
         assert cpu_of(pid) == 0, cpu_of(pid)
-        nap = int(re.search(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=400))[1])
+        # It sleeps until killed, printing its longest sleep so far once a second: read once the blocks are held.
+        time.sleep(2)
+        nap = max(int(n) for n in re.findall(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=40)))
+        require(vm.command(f"kill {sleeper}"), f"KILLED PID={sleeper}")
         assert nap < 1000, f"a 10 ms sleep on CPU 1 took {nap} ms while CPU 0 zeroed"
     # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
     stat = vm.command(f"stat {pid}")  # not raw: the suite's PIDs are counted from the first program (to_real)
