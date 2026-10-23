@@ -62,6 +62,7 @@ const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
+const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
@@ -808,6 +809,8 @@ impl Init {
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
             // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
             "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
+            // The Effector session measures memory as the other agents do, beside its own heap (750-KRN-0158).
+            "effector" => Quota { memory_mib: EFFECTOR_MEMORY_MIB, ..Quota::default() },
             // On top of the default, three screens: the compositor's shadow copy of the framebuffer, and the two sealed
             // copies `record` holds, the frame it codes and the one before (211-KRN-0095); 20 MiB each at 2880 × 1800.
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + 3 * self.screen_mib, ..Quota::default() },
