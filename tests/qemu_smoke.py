@@ -10419,7 +10419,8 @@ def boot_suite(args, disk):
         target.write_bytes(Path(args.loader_abi_kernel).read_bytes())
         sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
-        line = f"KERNEL STOPPED: THE BOOTLOADER IS OF ABI {abi}, THIS KERNEL OF ABI {abi + 1}. WRITE BOTH FROM ONE BUILD."
+        handoff = int(re.search(r"pub const BOOT_HANDOFF_VERSION: u32 = (\d+);", (ROOT / "common/abi.rs").read_text())[1])
+        line = f"KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {handoff}, THIS KERNEL TAKES {handoff + 1} TO {handoff + 1}. WRITE BOTH FROM ONE BUILD."
         try:
             out = vm.expect(line, timeout=60)
             assert "INIT STARTED" not in out, out[-2000:]
@@ -10429,7 +10430,7 @@ def boot_suite(args, disk):
             vm.close()
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
-        print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
+        print("PASS: a bootloader of another handoff version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
     if args.trial_kernel:
         trial_check(args, disk)
     if args.bar_kernel:

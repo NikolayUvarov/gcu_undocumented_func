@@ -98,10 +98,11 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             serial_only("KERNEL STOPPED: INVALID BOOT INFORMATION POINTER.\n");
             cpu::halt_here();
         };
-        let own = if cfg!(feature = "loader-abi-test") { abi::ABI_VERSION + 1 } else { abi::ABI_VERSION };
-        if version != own {
-            if version == 10 || version == abi::ABI_VERSION { screen::init_early(raw_info); }
-            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER IS OF ABI {}, THIS KERNEL OF ABI {}. WRITE BOTH FROM ONE BUILD.\n", version, own));
+        // The loader's handoff version, apart from the system calls' ABI (351-KRN-0166); the test kernel takes only a later one.
+        let (oldest, newest) = if cfg!(feature = "loader-abi-test") { (abi::BOOT_HANDOFF_VERSION + 1, abi::BOOT_HANDOFF_VERSION + 1) } else { (abi::BOOT_HANDOFF_OLDEST, abi::BOOT_HANDOFF_VERSION) };
+        if version < oldest || version > newest {
+            if version == 10 || abi::handoff_accepted(version) { screen::init_early(raw_info); }
+            let _ = core::fmt::Write::write_fmt(&mut Fatal::begin(), format_args!("\nKERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {}, THIS KERNEL TAKES {} TO {}. WRITE BOTH FROM ONE BUILD.\n", version, oldest, newest));
             cpu::halt_here();
         }
         let info = &*raw_info;
