@@ -50,7 +50,13 @@ fn a_run_in_slices_gives_a_result_the_server_takes() {
     assert!(b.iterations > 0 && b.copied > 0 && b.written > 0 && b.read > 0 && disk.flushed);
     assert!(b.cpu_ms >= 1000 && b.cpu_ms < 1100, "{}", b.cpu_ms);
     let mut buf = vec![0u8; 4096];
-    let body = String::from_utf8(b.result(&mut buf, 8, "Intel(R) Core(TM) i7-3615QM", "x64", "0.1.0").unwrap().to_vec()).unwrap();
+    let mut c = Conditions::default();
+    c.begin(Cpu { busy_ns: 0, idle_ns: 0, own_ns: 0 });
+    c.baseline(Cpu { busy_ns: 400_000_000, idle_ns: 7_600_000_000, own_ns: 0 }); // 5% busy in the baseline second
+    c.sample(Cpu { busy_ns: 2_400_000_000, idle_ns: 13_600_000_000, own_ns: 1_000_000_000 });
+    c.sample(Cpu { busy_ns: 4_400_000_000, idle_ns: 19_600_000_000, own_ns: 2_000_000_000 }); // the run: 25% busy, 12.5% the agent's
+    let body = String::from_utf8(b.result(&mut buf, 8, "Intel(R) Core(TM) i7-3615QM", "x64", "0.1.0", Some(&c)).unwrap().to_vec()).unwrap();
+    assert!(body.contains(r#""load":{"samples":2,"occupied_queues_start":1,"occupied_queues_max":1,"other_queues_max":0,"cpu_before_percent":5.000,"cpu_average_percent":25.000,"background_cpu_average_percent":12.500,"under_load":true}"#), "{body}");
     reader::walk(body.as_bytes(), &mut |_, _| Ok(())).expect("valid JSON");
     for field in [r#""status":"completed""#, r#""benchmark":"effector_bogomips_v1""#, r#""worker_threads":1"#, r#""logical_processors":8"#,
                   r#""memory_benchmark":"effector_memcpy_v1""#, r#""disk_benchmark":"effector_seqio_v1""#] {
@@ -69,6 +75,6 @@ fn a_disk_that_fails_leaves_the_disk_numbers_out() {
     let mut disk = File { fail: true, ..File::default() };
     while !b.step(&mut now, 100, &mut disk) {}
     let mut buf = vec![0u8; 4096];
-    let body = String::from_utf8(b.result(&mut buf, 1, "", "arm64", "0.1.0").unwrap().to_vec()).unwrap();
+    let body = String::from_utf8(b.result(&mut buf, 1, "", "arm64", "0.1.0", None).unwrap().to_vec()).unwrap();
     assert!(!body.contains("disk_benchmark") && body.contains("memory_benchmark"), "{body}");
 }
