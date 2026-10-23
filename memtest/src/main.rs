@@ -11,12 +11,15 @@
 // `memtest workers <n> [hold|fault]` starts n workers of itself (262-KRN-0163) on one shared page, each counting into its
 // own word once the page says go; it reports each one's count and how it ended. hold: they count until memtest is
 // killed; fault: the last one faults instead of counting.
+// `memtest load <path> [workers]` reads a file into a block of its own in one `fill` call (262-KRN-0162), times it beside
+// read's 16 KiB calls over its first 64 MiB, then maps the block again through a read-only child of its capability and
+// prints its SHA-256 from there; its workers map read-only children: all but the last hash it, the last writes and faults.
 use mind::abi::{BootInfo, CAP_READ};
 use mind::idl::loader;
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::{Mapping, Pages};
 
-mind::request!(REQUEST_CONSOLE, memory: QUOTA_MIB);
+mind::request!(REQUEST_CONSOLE | REQUEST_FILES, memory: QUOTA_MIB);
 
 const QUOTA_MIB: u32 = 160;
 const MIB: usize = 1024 * 1024;
@@ -180,8 +183,76 @@ fn workers(count: usize, mode: &str) {
     mind::println!("[MEMTEST] WORKERS {} STARTED, {} COUNTED {} EACH", started, counted, COUNT);
 }
 
+// A SHA-256 digest in lower-case hex (memtest has no heap allocator).
+fn hex<'a>(digest: &[u8; 32], out: &'a mut [u8; 64]) -> &'a str {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    for (i, b) in digest.iter().enumerate() { out[2 * i] = DIGITS[(b >> 4) as usize]; out[2 * i + 1] = DIGITS[(b & 15) as usize]; }
+    core::str::from_utf8(out).unwrap_or("")
+}
+
+const LOAD: u64 = 3; // a worker's mode for `load`: argument = LOAD | workers << 8 | file bytes << 16
+
+fn load(path: &str, count: usize) {
+    let Ok(file) = mind::fs::File::open(path) else { return mind::println!("[MEMTEST] LOAD: NO FILE {}", path) };
+    let size = file.size();
+    let Some(pages) = Pages::new(size.max(1).next_multiple_of(4096)) else { return mind::println!("[MEMTEST] LOAD: OUT OF MEMORY FOR {} BYTES", size) };
+    let Ok(lent) = pages.share() else { return mind::println!("[MEMTEST] LOAD: SHARE FAILED") };
+    let started = mind::time::monotonic_ns();
+    let filled = file.fill(0, lent);
+    let fill_ms = (mind::time::monotonic_ns() - started) / 1_000_000;
+    let Ok(filled) = filled else { return mind::println!("[MEMTEST] LOAD: FILL FAILED {:?}", filled) };
+    // The same file's first 64 MiB through read's 16 KiB calls, for the time and the bytes.
+    let part = size.min(64 * MIB);
+    let Some(mut scratch) = Pages::new(part.max(1)) else { return mind::println!("[MEMTEST] LOAD: OUT OF MEMORY FOR THE READ") };
+    let started = mind::time::monotonic_ns();
+    let read = file.read_at(0, &mut scratch.as_mut_slice()[..part]);
+    let read_ms = (mind::time::monotonic_ns() - started) / 1_000_000;
+    let same = matches!(read, Ok(n) if n == part) && scratch.as_slice()[..part] == pages.as_slice()[..part];
+    drop(scratch);
+    // The block through a read-only child of its capability (an object of 1 GiB is past MEM_DETACH's 256 MiB in all).
+    let object = lent;
+    let Ok(read_only) = ipc::mint(object, CAP_READ, 0, 0) else { return mind::println!("[MEMTEST] LOAD: MINT FAILED") };
+    let Ok(view) = Mapping::new(read_only) else { return mind::println!("[MEMTEST] LOAD: MAP FAILED") };
+    let digest = mind::sha256::digest(&view.as_slice()[..size]);
+    mind::println!("[MEMTEST] LOAD {} BYTES IN ONE FILL: {} MS; READ'S 16 KIB CALLS: {} MS FOR {} MIB, THE SAME BYTES={}; SHA256 {}",
+        filled, fill_ms, read_ms, part / MIB, same, hex(&digest, &mut [0; 64]));
+    if count == 0 { return; }
+    // The workers: a read-only child of the object each, and a page of their own for the hashes.
+    let (Some(results), Ok(notices)) = (Pages::new(4096), Endpoint::create()) else { return mind::println!("[MEMTEST] LOAD: NO RESULT PAGE") };
+    let Ok(shared) = results.share() else { return mind::println!("[MEMTEST] LOAD: SHARE FAILED") };
+    let (mut started, mut faulted) = (0, 0);
+    for index in 1..=count {
+        let Ok(child) = ipc::mint(object, CAP_READ, 0, 0) else { break };
+        let grants = [mind::process::grant(RECEIVED, child, u8::MAX), mind::process::grant(RECEIVED + 1, shared, u8::MAX)];
+        match mind::process::start_worker(LOAD | (count as u64) << 8 | (size as u64) << 16, 0, &grants) {
+            Ok(pid) => { let _ = mind::process::watch(pid, notices); started += 1; }
+            Err(e) => mind::println!("[MEMTEST] LOAD: WORKER {} REFUSED {:?}", index, e),
+        }
+        let _ = ipc::drop_cap(child);
+    }
+    for _ in 0..started {
+        match notices.recv_timeout(0, 600_000) {
+            Ok(received) => if let Some(exit) = received.exit { if matches!(mind::process::Exit::from_reason(exit.reason), mind::process::Exit::Fault(_)) { faulted += 1; } },
+            Err(e) => { mind::println!("[MEMTEST] LOAD: NO EXIT NOTICE {:?}", e); break }
+        }
+    }
+    let hashes = results.as_slice();
+    let agreed = (1..count).filter(|&i| hashes[i * 32..(i + 1) * 32] == digest).count();
+    mind::println!("[MEMTEST] LOAD WORKERS: {} SAW THE SAME SHA256, {} FAULTED ON A WRITE", agreed, faulted);
+}
+
+// A load worker: maps the object read-only; all but the last hash it into the result page, the last writes to it.
+fn load_work(index: u64, argument: u64) {
+    let (count, size) = ((argument >> 8 & 0xFF) as usize, (argument >> 16) as usize);
+    let (Ok(object), Ok(mut results)) = (Mapping::new(RECEIVED), Mapping::new(RECEIVED + 1)) else { return };
+    if index as usize == count { unsafe { object.as_ptr::<u8>().write_volatile(1) } } // a fault on purpose
+    let digest = mind::sha256::digest(&object.as_slice()[..size]);
+    results.as_mut_slice()[index as usize * 32..(index as usize + 1) * 32].copy_from_slice(&digest);
+}
+
 // A worker: maps the page, waits for go, then counts into its word (or faults, or counts on for ever).
 fn work(index: u64, argument: u64) {
+    if argument & 0xFF == LOAD { return load_work(index, argument); }
     let Ok(mapping) = Mapping::new(RECEIVED) else { return };
     let words = mapping.as_ptr::<u64>();
     while unsafe { words.add(GO).read_volatile() } == 0 { mind::time::sleep(1); }
@@ -194,7 +265,7 @@ fn work(index: u64, argument: u64) {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     if let Some((index, argument)) = mind::process::worker() { return work(index, argument); }
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault] | memtest big <MiB> [hold]");
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault] | memtest big <MiB> [hold] | memtest load <path> [workers]");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
@@ -206,6 +277,7 @@ fn main(_info: &'static BootInfo) {
         "endpoints" => endpoints(),
         "child" => child(),
         "workers" => workers(mib.min(7), words.next().unwrap_or("")),
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT] | MEMTEST BIG <MiB>"),
+        "load" => { let path = mind::process::args_str().split_whitespace().nth(1).unwrap_or(""); load(path, words.next().and_then(|s| s.parse().ok()).unwrap_or(0).min(7)) }
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT] | MEMTEST BIG <MiB> | MEMTEST LOAD <PATH> [WORKERS]"),
     }
 }

@@ -735,6 +735,48 @@ def big_memory_check(vm):
     print(f"PASS: large pages (262-KRN-0161): the 3 GiB took {kernel // 1024} KiB of kernel bytes with their page tables; kbench read a GiB at random in {rows['large pages'][0]:.0f} ns a read in large pages and {rows['4 KiB pages'][0]:.0f} ns in 4 KiB pages (QEMU, not a machine's figure)", flush=True)
 
 
+def fill_suite(args):
+    """262-KRN-0162: a 1 GiB file of a FAT32 model disk read into a program's memory object in one vfs.wit 2.4 `fill`
+    call, timed beside read's 16 KiB calls over its first 64 MiB; the object mapped read-only, its SHA-256 the host's; a
+    worker hashes it through a read-only mapping of its own and gets the same, and another's write faults."""
+    import copy
+    size = 1 << 30
+    with tempfile.TemporaryDirectory(prefix="mind-fill-") as temp:  # outside the image: vvfat serves the boot disk
+        tree, image = Path(temp) / "models", Path(temp) / "models.img"
+        (tree / "big").mkdir(parents=True)
+        (tree / "MANIFEST.json").write_bytes(b'{"models": []}\n')
+        digest, block = hashlib.sha256(), hashlib.shake_256(b"262-KRN-0162").digest(1 << 20)
+        with open(tree / "big/weights.bin", "wb") as f:
+            for i in range(size >> 20):
+                chunk = i.to_bytes(8, "little") + block[8:]
+                digest.update(chunk)
+                f.write(chunk)
+        subprocess.run([sys.executable, str(ROOT / "scripts/fat32.py"), str(image), str(tree)], check=True, capture_output=True)
+        (tree / "big/weights.bin").unlink()
+        machine = copy.copy(args)
+        if gibibytes(getattr(args, "memory", None)) < 3:
+            machine.memory = "3G"
+        vm = VM(machine, IMAGE, extra=["-drive", f"if=none,id=models,format=raw,readonly=on,file={image}", "-device", "virtio-blk-pci,drive=models"])
+        try:
+            require(vm.command("dmesg -s vfs_server", raw=True), "AS MODELS:")
+            vm.command("mkdir data")
+            require(vm.command("write data/memory.conf memtest 1400"), "WROTE 13 BYTES")
+            command = "memtest load models:big/weights.bin 2"
+            vm.send(command + "\n")
+            output = vm.expect("MIND> ", timeout=1800, after=command + "\n")
+            loaded = re.search(r"\[MEMTEST\] LOAD (\d+) BYTES IN ONE FILL: (\d+) MS; READ'S 16 KIB CALLS: (\d+) MS FOR (\d+) MIB, THE SAME BYTES=(\w+); SHA256 ([0-9a-f]{64})", output)
+            assert loaded and int(loaded[1]) == size and loaded[5] == "true", output[-3000:]
+            assert loaded[6] == digest.hexdigest(), (loaded[6], digest.hexdigest())
+            require(output, "[MEMTEST] LOAD WORKERS: 1 SAW THE SAME SHA256, 1 FAULTED ON A WRITE")
+            require(vm.command("rm data/memory.conf"), "OK")
+        finally:
+            vm.close()
+    fill_ms, read_ms, part = int(loaded[2]), int(loaded[3]), int(loaded[4])
+    print(f"PASS: fill (262-KRN-0162): 1 GiB of the model disk read into a program's object in one call in {fill_ms / 1000:.1f} s "
+          f"({size / (1 << 20) / max(fill_ms, 1) * 1000:.0f} MiB/s), read's 16 KiB calls {part / max(read_ms, 1) * 1000:.0f} MiB/s over {part} MiB; "
+          f"mapped read-only, its SHA-256 the host's; a worker's read-only mapping gave the same, another's write faulted (QEMU, not a machine's figure)", flush=True)
+
+
 def hardware_report_check(vm):
     """174-KRN-0038: init asks the kernel for the hardware report at boot; without a log volume it writes nothing (ram:
     and data/ are the user's) and says how large the report was. usb_image_smoke.py reads one from a log volume."""
@@ -2532,10 +2574,25 @@ def workers_check(vm):
     output = memtest(f"workers {cpus + 1}")
     require(output, f"[MEMTEST] WORKER {cpus + 1} REFUSED Other")
     require(output, f"[MEMTEST] WORKERS {cpus} STARTED, {cpus} COUNTED 200000 EACH")
-    output = memtest("workers 3 fault")
+    faulting = min(3, cpus)  # one CPU allows one worker, which then faults
+    output = memtest(f"workers {faulting} fault")
     require(output, "ENDED Fault(")
-    require(output, "[MEMTEST] WORKERS 3 STARTED, 2 COUNTED 200000 EACH")
-    # Held: the program and its workers each on a CPU of its own, then all gone when the program is killed.
+    require(output, f"[MEMTEST] WORKERS {faulting} STARTED, {faulting - 1} COUNTED 200000 EACH")
+    if cpus > 1:
+        held_check(vm, cpus)
+    # kbench times a worker's start and a call a worker answers, once the owner names it.
+    require(vm.command("write data/memory.conf kbench 64"), "WROTE 10 BYTES")
+    vm.send("kbench workers --quick\n")
+    output = vm.expect("MIND> ", timeout=300, after="kbench workers --quick\n")
+    rows = bench_rows(output, ["worker start", "worker call and reply"])
+    require(output, "kbench: 2 measurements, 0 failed")
+    require(vm.command("rm data/memory.conf"), "OK")
+    held = f"held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them" if cpus > 1 else "one CPU: no held check"
+    print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; {held}; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
+
+
+def held_check(vm, cpus):
+    """Held: the program and its workers each on a CPU of its own, then all gone when the program is killed."""
     creator = int(re.search(r"STARTED PID=(\d+)", vm.command(f"run memtest workers {cpus - 1} hold &"))[1])
     log = vm.program_logs(creator, f"WORKER {cpus - 1} PID=")
     workers = [int(pid) for pid in re.findall(r"\[MEMTEST\] WORKER \d+ PID=(\d+)", log)]
@@ -2550,14 +2607,6 @@ def workers_check(vm):
         time.sleep(.25)
     else:
         raise AssertionError(f"workers {workers} outlived their creator: {task_rows(vm)}")
-    # kbench times a worker's start and a call a worker answers, once the owner names it.
-    require(vm.command("write data/memory.conf kbench 64"), "WROTE 10 BYTES")
-    vm.send("kbench workers --quick\n")
-    output = vm.expect("MIND> ", timeout=300, after="kbench workers --quick\n")
-    rows = bench_rows(output, ["worker start", "worker call and reply"])
-    require(output, "kbench: 2 measurements, 0 failed")
-    require(vm.command("rm data/memory.conf"), "OK")
-    print(f"PASS: workers (262-KRN-0163): none without the owner's line; {cpus} counted on a shared page and one more refused; one that faulted ended alone; held, the program and its {cpus - 1} workers ran on {cpus} CPUs, and killing it ended them; kbench: a worker starts in {rows['worker start'][0] / 1e6:.1f} ms and answers a call in {rows['worker call and reply'][0] / 1000:.1f} µs", flush=True)
 
 
 def isolation_suite(vm):
@@ -10392,7 +10441,7 @@ def main():
     parser.add_argument("--trial-kernel", help="test-only kernel built with --features trial-test (boot suite, 351-KRN-0014)")
     parser.add_argument("--bar-kernel", help="test-only kernel built with --features bar-move-test (boot suite, 211-KRN-0021)")
     parser.add_argument("--kernel", help="run the suites with this kernel, in a copy of the image directory (e.g. --features x2apic-test)")
-    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem")
+    parser.add_argument("--suites", help="comma-separated subset (giveup, 500-ASR-0012, only when named, with --isolation-elf): boot,display,net,tls,effector,netbench,devicetree (aarch64),efivar,windows,wm,tablet,usb,normal,memory,dzen,services,store,storefaults,ahci,audio,tts,listen,keys,shell,tools,vfs,edit,disk,busy,smp,isolation,heap,block,updater,hda,ehci,stack,workers,bigmem,fill")
     parser.add_argument("--bench-mib", type=int, default=4, help="MiB moved each way by the netbench suite")
     parser.add_argument("--bench-runs", type=int, default=1, help="netbench runs per offload setting")
     parser.add_argument("--tap", help="netbench suite over this tap interface (host address 10.0.2.2/24) instead of user networking")
@@ -10468,6 +10517,9 @@ def main():
             continue
         if suite == "modes":
             modes_suite(args)
+            continue
+        if suite == "fill":
+            fill_suite(args)
             continue
         if suite == "vfs":
             vfs_suite(args)

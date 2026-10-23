@@ -1,6 +1,6 @@
 # 262-KRN-0162 — A file read once into a memory object, mapped read-only by a program and its workers
 
-**Type:** `vfs_server`, IDL (`vfs.wit` 2.4), kernel (the shared-mapping limit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md) · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-4.2, MC-11.11, MC-12.4
+**Type:** `vfs_server`, IDL (`vfs.wit` 2.4), kernel (the shared-mapping limit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-4.2, MC-11.11, MC-12.4
 
 From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md), item 3.
 
@@ -16,7 +16,7 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
    - The program lends a memory object of its own, so the bytes are charged to it (MC-3.13), not to `vfs_server`.
    - `vfs_server` writes the file's bytes from `offset` into the object, as many as fit, and answers how many.
    - No 16 KiB limit: one call for the whole object.
-2. **The program then maps the object read-only** and lends it read-only (`CAP_READ`) to its workers. So one copy of the weights is in memory, shared by all.
+2. **The program then maps the object read-only** (a read-only child of its capability) and lends it read-only (`CAP_READ`) to its workers. So one copy of the weights is in memory, shared by all. `MEM_DETACH` is not the way: its objects hold 256 MiB in all.
 3. **The program checks the bytes** against the model's hash (262: model files are untrusted input, MC-11.11).
 4. **The shared-mapping limit** becomes the larger of 256 MiB and the task's memory quota, so a program and its workers can map the object whole.
 5. **Files up to 4 GiB − 1 byte,** FAT32's limit. A larger model is published as several files (GGUF's splits), each read into its own object.
@@ -25,12 +25,27 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
 
 ## Acceptance criteria
 
-- [ ] A QEMU suite (x86 and aarch64):
+- [x] A QEMU suite (x86 and aarch64):
   - a test program fills a 1 GiB object from a file of the model disk in one call;
   - it maps the object read-only, and its bytes match the file's SHA-256;
   - its workers map it read-only, and a write by one of them faults;
   - the time is stated beside that of `read`'s 16 KiB calls.
-- [ ] `docs/idl` lists `vfs.wit` 2.4, and `docs/api` the call.
+- [x] `docs/idl` lists `vfs.wit` 2.4, and `docs/api` the call.
+
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy`:
+- **`vfs.wit` 2.4** `fill(file, offset: u64, target: borrow<memory>) -> result<u64, error>`, bindings regenerated.
+- **`vfs_server`** maps the lent object 64 MiB at a time, through a child capability of each window, and reads the file into it with the FAT read it already has (whole runs of clusters per block request); it holds no more than one window of the object at a time, and the bytes stay the client's.
+- **`mind::fs::File::fill`** lends a writable child of the caller's capability (with the grant right, which a copy needs) and revokes it once vfs_server answers; `mind::mem::size` reads a memory capability's size.
+- **The kernel:** a task may map foreign memory up to the larger of 256 MiB and its memory quota (`user_heap.rs`, host test `the_shared_limit_is_the_larger_of_its_own_and_the_memory_quota`). A worker's quota is its creator's, so its workers can map the object whole.
+- **`memtest load <path> [workers]`** and the `fill` suite (`tests/qemu_smoke.py`, in the gate's two "RAM above 4 GiB" groups): a 1 GiB file of a FAT32 model disk (`scripts/fat32.py`) read in one call; the same file's first 64 MiB through `read`'s 16 KiB calls; the object mapped read-only through a read-only child, its SHA-256 the host's; one worker hashes it through its own read-only mapping and gets the same, the other writes and faults.
+- **Checked** (this session's container, QEMU TCG, 4 CPUs):
+  - x86: 1 GiB in one call in 38.8 s (26 MiB/s); `read`'s 16 KiB calls 5 MiB/s;
+  - aarch64 (`virt`, 6 GiB): 1 GiB in 165.5 s (6 MiB/s); `read`'s calls 2 MiB/s;
+  - on both, the SHA-256 the host's, the worker's the same, the other's write faulted; the host tests whole.
+- **What the numbers say, and do not.** Under emulation both paths are slow; the ratio says what the calls cost there. A machine's figure comes from a run on it (MC-12.1).
+- **Left:** the landing.
 
 ## Related
 

@@ -156,7 +156,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 |---|---|
 | `sys` | `syscall`, `Error`, `Result`, `check` |
 | `ipc` | `Endpoint` (send, call, recv with timeouts), `Message`, `Received`, `mint`, `mint_badged`, `revoke`, `reply`, `save_reply` |
-| `mem` | `Pages` (own heap block: share, detach), `Mapping`, `sealed` |
+| `mem` | `Pages` (own heap block: share, detach; `new_small`: 4 KiB pages only), `Mapping`, `size` (of a memory capability), `sealed` |
 | `firmware` | `get`, `set`: the firmware's UEFI variables (`GLOBAL`, `BOOT_VARIABLE`: `BootNext`, `BootOrder`, `Boot####`) through `FIRMWARE_VARIABLE` with the privilege in `SLOT_FIRMWARE`, which a program gets for `REQUEST_FIRMWARE` when the user allows it (351-KRN-0027; `efivar`) |
 | `process` | `exit`, `spawn` (a launch session with one grant), `spawn_with_args`, `spawn_fed` (with `SPAWN_TEXT`: the PID and the writer of its text input, 000-KRN-0094), `start_worker` and `worker` (262-KRN-0163), `args`, `watch`, `alive`; `request!` and `REQUEST_*`: what a program asks its launcher for; `about!`: what the program does — the first statement of `main` in every application, printed for `--help` and kept in the `.mind_about` section, which the shell's `help <name>` reads with `section` |
 | `time` | `sleep`, `uptime_ms`, `monotonic_ns` |
@@ -165,7 +165,7 @@ Senders wait on an endpoint in the order they sent, each until a receiver takes 
 | `keys` | `Key`, `Code`, `Event`: key words for programs; PS/2 scan-code decoder with US/Russian layouts (`Ps2`), VT100/xterm and UTF-8 decoder for the serial line (`Vt`) |
 | `tui` | text UI on the 8×16 font: cell grid with diffs, frames, lists, tables, menus, dialogs, input lines, graphs |
 | `gfx` | `Screen`: pixels, text, rectangles on the task's screen |
-| `fs`, `audio`, `tts`, `rtc` | clients of the VFS (`File`; `Dir` with `list`, `rename`, `remove`, `volume`, `check`, `scope`; `list`), audio, speech and clock services (`rtc::unix_time`) |
+| `fs`, `audio`, `tts`, `rtc` | clients of the VFS (`File`, with `fill`: the file read into a memory object of the caller's in one call, vfs.wit 2.4, 262-KRN-0162; `Dir` with `list`, `rename`, `remove`, `volume`, `check`, `scope`; `list`), audio, speech and clock services (`rtc::unix_time`) |
 | `network` | badges of network stack clients (operator, policy, flow grants) and of the key service's signer |
 | `http` | HTTP/1.1 downloads (351-NET-0001, [docs/network/downloads.md](../network/downloads.md)): `Url::parse`, `get` (a GET from an offset, `Range` when not 0, the body into a `Sink` over the caller's `Transport`, the head parsed by a `Parser` and checked against what was asked), `Got` (how far it got: a cut is not an error, the caller resumes from `end`); a chunked body, a redirect or another status is refused; `parse_head` and `Local`, the parser in the process (host tests) |
 | `parse` | the parser service's client (109-NET-0008, `idl/parse.wit`): `Service(endpoint)`, an `http::Parser` that has the service parse each response head, and the typed record's conversions; `read_channel` and `read_manifest` (351-NET-0011), which take the service's reading of a release file only if it encodes again to exactly the file (`Refused::Lied` otherwise) |
