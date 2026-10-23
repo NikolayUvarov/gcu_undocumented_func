@@ -37,7 +37,7 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](../issues/requ
 2. **Limits and accounting (MC-3.13, MC-5.1).**
    - At most one worker per online CPU, for each task.
    - Each worker counts against its creator's task quota. Its image, stack and kernel structures are charged to its creator's memory quota.
-   - The loader gives a program named in `data/memory.conf` ([262-KRN-0160](../issues/262-KRN-0160-large-private-memory-for-a-named-program.md)) a task quota of the online CPUs. Other programs get none, as now.
+   - The loader gives a program named in `data/memory.conf` ([262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done)) a task quota of the online CPUs. Other programs get none, as now.
 3. **Placement.** A worker goes to the online CPU with the fewest tasks of its band, and not to its creator's CPU or a sibling's while another is free.
 4. **Lifetime.**
    - A worker ends when its creator ends, as a child of `init` does when `init` stops it.
@@ -79,7 +79,7 @@ Made on `claude/youthful-mendel-mf1soy`:
   - A task started with `SPAWN_WORKERS` keeps its program: a boot image's index, or a copy of its ELF charged with its image.
   - A worker is made by the same path as `SPAWN`, from that program, with the granted capabilities (the grant reading is one method for both calls now); its index and argument are at `WORKER_OFFSET` of its info page.
   - A worker goes to a CPU without its creator or a sibling while one is free; at most one per online CPU; it ends when its creator ends.
-- **The loader** reads the owner's `data/memory.conf` at each run: a program named there gets its line's MiB, a task quota for workers and `SPAWN_WORKERS` (the window beyond 928 MiB is [262-KRN-0160](../issues/262-KRN-0160-large-private-memory-for-a-named-program.md)'s).
+- **The loader** reads the owner's `data/memory.conf` at each run: a program named there gets its line's MiB, a task quota for workers and `SPAWN_WORKERS` (the window beyond 928 MiB is [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.done)'s).
 - **`libmind`:** `process::start_worker`, `process::worker`, `process::spawn_in_front_with`.
 - **Tests:**
   - `memtest workers <n> [hold|fault]`, and `workers_check` in the `smp` suite (also `--suites workers`);

@@ -50,11 +50,20 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
 // the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
 // addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161).
-// The bootloader writes it into BootInfo, the
-// kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
-// for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
+// The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
+// bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
+// version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
 pub const ABI_VERSION: u32 = 19;
+// The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
+// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes any version from
+// BOOT_HANDOFF_OLDEST on, since earlier loaders wrote their ABI there and BootInfo has not changed since ABI 16's images
+// (750-KRN-0119). A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far (MC-12.4).
+// Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
+// refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
+pub const BOOT_HANDOFF_VERSION: u32 = 19;
+pub const BOOT_HANDOFF_OLDEST: u32 = 16;
+pub const fn handoff_accepted(version: u32) -> bool { version >= BOOT_HANDOFF_OLDEST && version <= BOOT_HANDOFF_VERSION }
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
@@ -68,6 +77,11 @@ impl BootInfo {
     pub unsafe fn read_abi_version(info: *const Self) -> Option<u32> {
         if info.is_null() || (info as usize) % core::mem::align_of::<Self>() != 0 { return None; }
         Some(core::ptr::addr_of!((*info).abi_version).read())
+    }
+    /// What a kernel that refuses the handoff still reads (351-KRN-0167): whether the boot is a trial, and the ACPI root;
+    /// the caller supplies an ABI 10 or later record.
+    pub unsafe fn read_refused(info: *const Self) -> (bool, u64) {
+        (core::ptr::addr_of!((*info).boot_slot.trial).read() != 0, core::ptr::addr_of!((*info).acpi_rsdp).read())
     }
 }
 // Both supported architectures have 64-bit pointers; changing this offset breaks the ABI 10 rejection path.

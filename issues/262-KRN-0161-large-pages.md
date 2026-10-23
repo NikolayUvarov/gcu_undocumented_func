@@ -43,4 +43,4 @@ Made on `claude/youthful-mendel-mf1soy` (ed9dac59), ABI 19:
 
 ## Related
 
-[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md), [262](262-model-runtime-on-the-machines-full-hardware.md), [176](176-test-and-performance-utilities.md) (`kbench`).
+[262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done), [262](262-model-runtime-on-the-machines-full-hardware.md), [176](176-test-and-performance-utilities.md) (`kbench`).

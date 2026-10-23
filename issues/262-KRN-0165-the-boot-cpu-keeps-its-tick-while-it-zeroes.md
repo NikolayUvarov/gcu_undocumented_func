@@ -2,7 +2,7 @@
 
 **Type:** kernel (`scheduler.rs`, `arch/*/interrupts.rs`, `arch/*/context.rs`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-2.13, MC-5.6
 
-Found while checking [262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md)'s reserve criterion (2026-10-23).
+Found while checking [262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done)'s reserve criterion (2026-10-23).
 
 ## Problem
 
@@ -56,4 +56,4 @@ Made on `claude/youthful-mendel-mf1soy` (f918d2d6, 61105fbd, 053262be):
 
 ## Related
 
-[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md), [000-KRN-0100](../issues-done/000-KRN-0100-the-tsc-measured-again.done), 000-KRN-0083 (the 1 ms tick), [262](262-model-runtime-on-the-machines-full-hardware.md).
+[262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done), [000-KRN-0100](../issues-done/000-KRN-0100-the-tsc-measured-again.done), 000-KRN-0083 (the 1 ms tick), [262](262-model-runtime-on-the-machines-full-hardware.md).

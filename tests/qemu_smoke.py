@@ -703,10 +703,12 @@ def big_memory_check(vm):
     # 262-KRN-0165: sleeps on another CPU end on time while the boot CPU zeroes. Applications go to the first CPU with the
     # fewest of them: a first sleeper takes CPU 0 and leaves it, so the second stays on CPU 1 and the blocks go to CPU 0.
     sleeper = None
+    cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
     if vm.cpus > 1:
         first = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 60000 &"))[1])
-        sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 20000 &"))[1])
+        sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 0 &"))[1])
         require(vm.command(f"kill {first}"), f"KILLED PID={first}")
+        assert cpu_of(sleeper) == 1, cpu_of(sleeper)
     output = vm.command("run memtest big 3072 hold &")
     pid = int(re.search(r"STARTED PID=(\d+)", output)[1])
     # The shell is served while the blocks are taken and zeroed on another CPU.
@@ -721,9 +723,11 @@ def big_memory_check(vm):
     assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
     nap = None
     if sleeper:
-        cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
-        assert (cpu_of(pid), cpu_of(sleeper)) == (0, 1), (cpu_of(pid), cpu_of(sleeper))
-        nap = int(re.search(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=400))[1])
+        assert cpu_of(pid) == 0, cpu_of(pid)
+        # It sleeps until killed, printing its longest sleep so far once a second: read once the blocks are held.
+        time.sleep(2)
+        nap = max(int(n) for n in re.findall(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=40)))
+        require(vm.command(f"kill {sleeper}"), f"KILLED PID={sleeper}")
         assert nap < 1000, f"a 10 ms sleep on CPU 1 took {nap} ms while CPU 0 zeroed"
     # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
     stat = vm.command(f"stat {pid}")  # not raw: the suite's PIDs are counted from the first program (to_real)
@@ -10451,17 +10455,33 @@ def boot_suite(args, disk):
         target.write_bytes(Path(args.loader_abi_kernel).read_bytes())
         sign_manifest.sign_volume(disk)
         vm = VM(args, disk.relative_to(ROOT).as_posix(), prompt=False)
-        line = f"KERNEL STOPPED: THE BOOTLOADER IS OF ABI {abi}, THIS KERNEL OF ABI {abi + 1}. WRITE BOTH FROM ONE BUILD."
+        handoff = int(re.search(r"pub const BOOT_HANDOFF_VERSION: u32 = (\d+);", (ROOT / "common/abi.rs").read_text())[1])
+        line = f"KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION {handoff}, THIS KERNEL TAKES {handoff + 1} TO {handoff + 1}. WRITE BOTH FROM ONE BUILD."
         try:
             out = vm.expect(line, timeout=60)
             assert "INIT STARTED" not in out, out[-2000:]
             screen = "\n".join(screen_text(vm))
             assert line in screen, screen
+            # Outside a trial it stays stopped: a restart would end QEMU (-no-reboot).
+            time.sleep(2)
+            vm.collect()
+            assert vm.process.poll() is None and "RESTARTING" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
         target.write_bytes(kernel)
         sign_manifest.sign_volume(disk)
-        print("PASS: a bootloader of another ABI version: the kernel stops before init, with the reason on COM1 and on the screen", flush=True)
+        print("PASS: a bootloader of another handoff version: outside a trial the kernel stops before init and stays stopped, "
+              "with the reason on COM1 and on the screen", flush=True)
+
+        def restarting(image, until):
+            vm = VM(args, str(image), raw=True, snapshot=False, prompt=False, reboot=True)
+            try:
+                vm.expect(until, timeout=180)
+                return ANSI.sub("", vm.log)
+            finally:
+                vm.close()
+        with tempfile.TemporaryDirectory(prefix="mind-refused-") as temp:
+            boot_slots_check.refused_trial(restarting, temp, disk, args.loader_abi_kernel, "x86")
     if args.trial_kernel:
         trial_check(args, disk)
     if args.bar_kernel:
