@@ -5572,12 +5572,13 @@ def linkupdate_suite(args):
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
-        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33).
+        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33); slot 15
+        # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)
         servers = {int(ep): int(server) for ep, server in re.findall(r"^EP=(\d+) .*SERVER=(\d+)", vm.command("endpoints", raw=True), re.M)}
         granted = {int(slot) for slot, ep in re.findall(r"^SLOT=(\d+) GEN=\d+ KIND=1 .* EP=(\d+)", caps, re.M) if servers.get(int(ep)) != pids["link"]}
-        assert {2, 3, 12} <= granted <= {2, 3, 5, 12}, caps
+        assert {2, 3, 12, 15} <= granted <= {2, 3, 5, 12, 15}, caps
         started = time.monotonic()
         for path in files:
             link.put(server / path, path)
