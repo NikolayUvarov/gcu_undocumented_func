@@ -53,6 +53,9 @@ pub fn advance(ticks: u64) -> bool {
 }
 pub fn milliseconds() -> u64 { TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS) }
 
+/// Lets the interrupts pending on this CPU in, from kernel code that runs with them off (262-KRN-0165).
+pub unsafe fn window() { asm!("msr daifclr, #2", "isb", "msr daifset, #2", options(nostack)); }
+
 pub fn without<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let daif: u64;

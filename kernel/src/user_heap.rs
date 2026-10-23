@@ -33,6 +33,9 @@ pub const LARGE: usize = 2 * 1024 * 1024;
 pub const HUGE: usize = 1 << 30;
 fn alignment(size: usize) -> usize { if size >= HUGE { HUGE } else if size >= LARGE { LARGE } else { PAGE } }
 
+// The pieces a large block is zeroed in, its CPU taking its interrupts between them (262-KRN-0165).
+pub fn pieces(len: usize) -> impl Iterator<Item = core::ops::Range<usize>> { (0..len).step_by(LARGE).map(move |at| at..(at + LARGE).min(len)) }
+
 // Frames for a block of `size`, as aligned as the pool allows; zeroed or not (the caller then zeroes them).
 fn frames(size: usize, zeroed: bool) -> Option<Region> {
     let mut align = alignment(size);
@@ -208,6 +211,19 @@ impl Heap {
 mod tests {
     use super::*;
     use crate::abi::HEAP_MAX_BYTES;
+
+    #[test]
+    fn the_pieces_cover_a_block_once_and_none_is_larger_than_2_mib() {
+        for len in [0, 1, PAGE, LARGE - PAGE, LARGE, LARGE + PAGE, 64 * LARGE + 3 * PAGE, HUGE] {
+            let mut end = 0;
+            for piece in pieces(len) {
+                assert_eq!(piece.start, end);
+                assert!(!piece.is_empty() && piece.len() <= LARGE);
+                end = piece.end;
+            }
+            assert_eq!(end, len);
+        }
+    }
 
     #[test]
     fn holes_are_reused_and_frees_are_checked() {

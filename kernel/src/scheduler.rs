@@ -1744,6 +1744,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             // A checked read of a register the CPU may not have (the hardware report) resumes as "absent".
             Event::KernelFault { pc, .. } if crate::arch::report::resume_after_fault(pc).is_some() => { context::resume_at(sp, crate::arch::report::resume_after_fault(pc).unwrap()); return sp; }
             Event::KernelFault { code, pc, error } => { use core::fmt::Write; let _ = write!(crate::Fatal::begin(), "KERNEL EXCEPTION VECTOR={} RIP={:016X} ERROR={:016X}\n", code, pc, error); cpu::halt_all(); }
+            _ if ZEROING[cpu].load(Ordering::Relaxed) => return between_pieces(cpu, event, sp),
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
         }
@@ -1780,12 +1781,39 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             s.wake_idle(cpu, false);
             (next, s.zeroing[cpu].take())
         });
-        // A large block is zeroed with this CPU's interrupts off but the lock let go, so the other CPUs go on (262-KRN-0160).
+        // A large block is zeroed with the lock let go, so the other CPUs go on (262-KRN-0160), in pieces between which this
+        // CPU takes its interrupts, so the boot CPU's tick still ends sleeps and deadlines (262-KRN-0165).
         match zeroing {
-            Some(job) => { core::ptr::write_bytes(job.memory.ptr(), 0, job.memory.len()); locked(|| scheduler().place_zeroed(job)); next }
+            Some(job) => {
+                for piece in crate::user_heap::pieces(job.memory.len()) {
+                    core::ptr::write_bytes(job.memory.ptr().add(piece.start), 0, piece.len());
+                    ZEROING[cpu].store(true, Ordering::Relaxed); interrupts::window(); ZEROING[cpu].store(false, Ordering::Relaxed);
+                }
+                // A wake taken meanwhile (a TLB flush, a task made ready here) is raised again for the frame resumed.
+                if WOKEN_ZEROING[cpu].swap(false, Ordering::Relaxed) { cpu::wake(cpu); }
+                locked(|| scheduler().place_zeroed(job)); next
+            }
             None => next,
         }
     }
+}
+
+// Each CPU's mark while it takes interrupts between the pieces of a block it zeroes (262-KRN-0165), and whether a wake
+// came then. Such an interrupt only keeps the books: the frame under it is the kernel's, never a task's to switch from.
+static ZEROING: [AtomicBool; cpu::MAX] = [const { AtomicBool::new(false) }; cpu::MAX];
+static WOKEN_ZEROING: [AtomicBool; cpu::MAX] = [const { AtomicBool::new(false) }; cpu::MAX];
+unsafe fn between_pieces(cpu: usize, event: Event, sp: usize) -> usize {
+    locked(|| {
+        let s = scheduler(); s.accounting.interrupts[cpu] += 1;
+        match event {
+            Event::Irq(irq) => s.raise_irq(irq),
+            Event::Clock => if cpu == 0 { s.timers(cpu, false) },
+            Event::Tick => { cpu::TICKS[cpu].fetch_add(1, Ordering::Relaxed); if cpu == 0 { s.timers(cpu, true) } }
+            _ => WOKEN_ZEROING[cpu].store(true, Ordering::Relaxed),
+        }
+        s.wake_idle(cpu, false);
+    });
+    sp
 }
 
 // Called from the BSP idle loop: reclaims memory of exited tasks.
