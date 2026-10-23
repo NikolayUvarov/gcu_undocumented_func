@@ -690,7 +690,8 @@ def big_memory_check(vm):
     """262-KRN-0160: a program the owner names in data/memory.conf takes more than the 928 MiB window of before, in
     blocks of 1 GiB that each come zeroed (outside the scheduler's lock) and lie on a GiB boundary, every page written
     and read back; the shell answers while it does; without the owner's line the program stays within its own request;
-    the frames come back when it ends. 262-KRN-0161: the blocks lie in large pages, so the program's page tables take a
+    the frames come back when it ends; holding all it can, it leaves init's reserve, and a service restarts meanwhile.
+    262-KRN-0161: the blocks lie in large pages, so the program's page tables take a
     few pages, and kbench reads a GiB at random in large pages and in 4 KiB pages."""
     def memtest(args):
         vm.send(f"memtest {args}\n")
@@ -724,6 +725,37 @@ def big_memory_check(vm):
         time.sleep(.25)
     else:
         raise AssertionError(f"the blocks' frames did not come back: {frames_free(vm)} of {frames}")
+    # The reserve holds (issue 169, MC-5.5): with a line above the pool, memtest takes all it can in GiB blocks and others
+    # fill what is left; the frame pool keeps init's reserve, and a service restarts meanwhile.
+    require(vm.command("write data/memory.conf memtest 16384"), "WROTE 13 BYTES")
+    output = vm.command("run memtest big 16384 hold &")
+    holders = [int(re.search(r"STARTED PID=(\d+)", output)[1])]
+    log = vm.program_logs(holders[0], "BIG HELD", tries=2400)
+    require(log, "[MEMTEST] BIG: OUT OF MEMORY AFTER ")
+    most, rest = int(re.search(r"BIG HELD (\d+) MiB", log)[1]), 0
+    for _ in range(4):
+        output = vm.command("run memtest fill &")
+        started = re.search(r"STARTED PID=(\d+)", output)
+        if not started:
+            require(output, "OUT OF MEMORY")  # not even an image and a stack fit above the reserve
+            break
+        holders.append(int(started[1]))
+        filled = int(re.search(r"FILLED (\d+) KiB", vm.program_logs(holders[-1], "FILLED"))[1])
+        rest += filled
+        if filled < 1024 * 1024:  # below its 64 blocks of 16 MiB: it ran out
+            break
+    left = frames_free(vm)
+    assert RECOVERY_RESERVE - 1024 * 1024 <= left < RECOVERY_RESERVE + 1024 * 1024, (left, RECOVERY_RESERVE)
+    require(vm.command("svc restart rtc"), "rtc restarted: PID")
+    assert re.search(r"\d{4}-\d\d-\d\d", vm.command("date")), "the restarted rtc does not serve"
+    for holder in holders:
+        require(vm.command(f"kill {holder}"), f"KILLED PID={holder}")
+    for _ in range(40):
+        if frames_free(vm) >= frames - 1024 * 1024:
+            break
+        time.sleep(.25)
+    else:
+        raise AssertionError(f"the holders' frames did not come back: {frames_free(vm)} of {frames}")
     # kbench's pages group: the same GiB read at random in large pages and in 4 KiB pages (ALLOC_SMALL_PAGES).
     require(vm.command("write data/memory.conf kbench 1100"), "WROTE 12 BYTES")
     vm.send("kbench pages --quick\n")
@@ -732,6 +764,7 @@ def big_memory_check(vm):
     require(output, "kbench: 2 measurements, 0 failed")
     require(vm.command("rm data/memory.conf"), "OK")
     print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
+    print(f"PASS: the reserve held (262-KRN-0160): with a line of 16 GiB, memtest took {most} MiB in GiB blocks and {rest // 1024} MiB more in small ones, {left // 1024} KiB of the frame pool stayed (reserve {RECOVERY_RESERVE // 1024} KiB), and rtc restarted and served meanwhile", flush=True)
     print(f"PASS: large pages (262-KRN-0161): the 3 GiB took {kernel // 1024} KiB of kernel bytes with their page tables; kbench read a GiB at random in {rows['large pages'][0]:.0f} ns a read in large pages and {rows['4 KiB pages'][0]:.0f} ns in 4 KiB pages (QEMU, not a machine's figure)", flush=True)
 
 
