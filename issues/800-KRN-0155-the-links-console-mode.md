@@ -1,6 +1,6 @@
 # 800-KRN-0155 — The link's console: a word of `data/mode.conf`, counted only with `dev`
 
-**Type:** `init`, IDL (`init.wit` 1.8) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — (for 800-LNK-0019) · **Constitution:** MC-3.11, MC-10.2, MC-12.6
+**Type:** `init`, IDL (`init.wit` 1.8) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` 344aa298; `set-mode` keeping the word left) · **Blocked by:** — · **Main task:** — (for 800-LNK-0019) · **Constitution:** MC-3.11, MC-10.2, MC-12.6
 
 From LNK's request of 2026-10-23 (`KRN/2026-10-23T0223Z-LNK-a-mode-word-link-console-in-init.md` on `internal-dev-messages`), after the maintainer's word on the MacBook Pro's rewrite: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link".
 

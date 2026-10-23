@@ -690,7 +690,8 @@ def big_memory_check(vm):
     """262-KRN-0160: a program the owner names in data/memory.conf takes more than the 928 MiB window of before, in
     blocks of 1 GiB that each come zeroed (outside the scheduler's lock) and lie on a GiB boundary, every page written
     and read back; the shell answers while it does; without the owner's line the program stays within its own request;
-    the frames come back when it ends."""
+    the frames come back when it ends. 262-KRN-0161: the blocks lie in large pages, so the program's page tables take a
+    few pages, and kbench reads a GiB at random in large pages and in 4 KiB pages."""
     def memtest(args):
         vm.send(f"memtest {args}\n")
         return vm.expect("MIND> ", timeout=600, after=f"memtest {args}\n")
@@ -710,6 +711,12 @@ def big_memory_check(vm):
     held = time.monotonic() - began
     require(log, "[MEMTEST] BIG HELD 3072 MiB IN 3 BLOCKS ZEROED=true INTACT=true GIB ALIGNED=true")
     assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
+    # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
+    stat = vm.command(f"stat {pid}", raw=True)
+    kernel = re.search(r" KERNEL=(\d+) ", stat)
+    assert kernel, stat
+    kernel = int(kernel[1])
+    assert kernel < 1 << 20, kernel
     require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     for _ in range(40):
         if frames_free(vm) >= frames - 1024 * 1024:
@@ -717,8 +724,15 @@ def big_memory_check(vm):
         time.sleep(.25)
     else:
         raise AssertionError(f"the blocks' frames did not come back: {frames_free(vm)} of {frames}")
+    # kbench's pages group: the same GiB read at random in large pages and in 4 KiB pages (ALLOC_SMALL_PAGES).
+    require(vm.command("write data/memory.conf kbench 1100"), "WROTE 12 BYTES")
+    vm.send("kbench pages --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="kbench pages --quick\n")
+    rows = bench_rows(output, ["large pages", "4 KiB pages"])
+    require(output, "kbench: 2 measurements, 0 failed")
     require(vm.command("rm data/memory.conf"), "OK")
     print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
+    print(f"PASS: large pages (262-KRN-0161): the 3 GiB took {kernel // 1024} KiB of kernel bytes with their page tables; kbench read a GiB at random in {rows['large pages'][0]:.0f} ns a read in large pages and {rows['4 KiB pages'][0]:.0f} ns in 4 KiB pages (QEMU, not a machine's figure)", flush=True)
 
 
 def hardware_report_check(vm):

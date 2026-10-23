@@ -47,12 +47,14 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // it also adds KEY_PRINT_SCREEN (000-KRN-0149) and an absolute pointer event's horizontal wheel steps (211-KRN-0150).
 // ABI 16 adds the Effector agent's two boot images, `effector_gw` and `effector`, which run only in a mode (750-KRN-0119).
 // ABI 17: CAP_REVOKE leaves a borrower one zeroed page of its own at each page it mapped from the lease, so a late access
-// reads zeros and writes there instead of faulting (000-KRN-0152).
+// reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
+// the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
+// addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161).
 // The bootloader writes it into BootInfo, the
 // kernel stops on another one, writes its own into every task's BootInfo, and libmind refuses to run a program built
 // for another one. ABI 11 preserves ABI 10's prefix and checks its version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 18;
+pub const ABI_VERSION: u32 = 19;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
@@ -411,6 +413,9 @@ pub const MSG_FLAG_EXIT: usize = 4; // exit notice of a watched task (TASK_WATCH
 
 // HEAP_MAX_BYTES is the default memory quota of a task (SPAWN); blocks are heap blocks and mappings together.
 pub const HEAP_PAGE_SIZE: usize = 4096; pub const HEAP_MAX_BLOCKS: usize = 64; pub const HEAP_MAX_BYTES: usize = 16 * 1024 * 1024;
+// ALLOC's arg2 holds flags: ALLOC_SMALL_PAGES maps the block in 4 KiB pages only, not 2 MiB and 1 GiB ones, as for a
+// measurement of what large pages give (262-KRN-0161, ABI 19). Any other bit refuses the call.
+pub const ALLOC_SMALL_PAGES: usize = 1;
 // A task's stack is what its ELF's PT_GNU_STACK asks (p_memsz, the linker's -z stack-size=), in whole pages, at least
 // STACK_MIN_BYTES; an ELF asking more than STACK_MAX_BYTES is refused. An unmapped guard page lies below it (262-KRN-0164).
 pub const STACK_MIN_BYTES: usize = 64 * 1024; pub const STACK_MAX_BYTES: usize = 8 * 1024 * 1024;
