@@ -185,6 +185,7 @@ pub fn run(radio: &mut Radio) -> ! {
     let good = |r: &Radio| r.counts.frames.iter().map(|k| k[0]).fold(0u32, u32::wrapping_add);
     let mut last_good = (good(radio), mind::time::uptime_ms() as u64);
     let mut tally = Tally::new(radio);
+    let say_lna_at = mind::time::uptime_ms() as u64 + 2000;
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         radio.poll();
@@ -200,6 +201,7 @@ pub fn run(radio: &mut Radio) -> ! {
             }
         }
         tally.tick(radio);
+        if radio.lna_was.is_some() && mind::time::uptime_ms() as u64 >= say_lna_at { radio.say_lna(); }
         if radio.waiting() != 0 {
             for call in waiters.iter_mut().filter_map(Option::take) { let _ = wlanhw::reply_wait(call, radio.waiting() as u32); }
         }
