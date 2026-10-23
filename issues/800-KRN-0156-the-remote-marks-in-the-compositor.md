@@ -37,7 +37,22 @@ From LNK's request of 2026-10-23 (`KRN/2026-10-23T0252Z-LNK-two-marks-in-the-com
 - [ ] A QEMU suite (x86 and aarch64):
   - the link's and the Effector's marks drawn in their places in each colour, while called, and gone 3 s after the last call;
   - an unbadged client's `remote` refused.
-- [ ] `docs/idl` lists `display.wit` 1.2, and `docs/profile/bootstrap.md` the two grants.
+- [x] `docs/idl` lists `display.wit` 1.2, and `docs/profile/bootstrap.md` the two grants.
+
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy` (b140a321):
+- **The compositor** draws both marks in their fixed places and logs each change of state, `OFF` and each refusal.
+- **`mind::display`** holds the badges, the places and the shapes.
+- **`init`** lends `link` its badged client in slot 15, and badges `effector_gw`'s.
+- **Checked:**
+  - host tests (`tests/remote_marks_host.rs`): only the two badges light a mark; the places do not overlap; the ring's and the disc's pixels;
+  - the `modes` suite (x86 and aarch64, this session's container): `tests/gateway_stub` lights the Effector's mark red, yellow and grey; the screen's pixel at its centre has each colour (QEMU's `screendump`); it goes after the last call; the compositor logs each state;
+  - the `link` suite (x86): `link` holds the compositor's client in slot 15.
+- **Left:**
+  - the link's mark on the screen, once `link` calls `remote` (800-LNK-0020): its suite reads it;
+  - an unbadged client's refusal end to end; the host test shows the rule;
+  - the outline on the Effector's mark, the maintainer's word.
 
 ## Related
 
