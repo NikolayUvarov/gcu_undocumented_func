@@ -1,6 +1,6 @@
 # 000-APP-0106 — The shell survives a caller that gave up, and gives `wm` its screen back after a restart
 
-**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "`wm` must not fall in such cases", 2026-10-22) · **Status:** open · **Blocked by:** — for the shell's part; the rule for every server is `KRN`'s (ASR's request to KRN, 2026-10-22) · **Main task:** — · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.1, MC-12.3
+**Type:** tools (`shell`, `wm`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "`wm` must not fall in such cases", 2026-10-22) · **Status:** open: the shell's part done on the tools branch; ASR's `giveup` suite left · **Blocked by:** — for the shell's part; the rule for every server is in `main` (000-KRN-0152, e93c47af); ASR's suite 500-ASR-0012 is not in `main` yet · **Main task:** — · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.1, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-22, from LNK's report (`APP/2026-10-22T1601Z-…`: the fault answering `net-counters`), EFF's report (`APP/2026-10-22T1639Z-…`: the fault after `netpolicy add` in a script) and ASR's request (`APP/2026-10-22T1606Z-…`).
 
@@ -39,6 +39,22 @@
 - **Docs:** `docs/tools/README.md` and `README_RU.md`.
 
 The suite shows the behaviour on QEMU only (MC-12.1). On the MacBook Pro it is shown when the maintainer's next run has the fault's conditions.
+
+## Progress (2026-10-23)
+
+- **The shell's part** is on the tools branch: 4b69a22e, 4846ce00 and f69d1a16; the suite's fix is 5c556d68.
+  - `caller_waits` checks the lent capability before `run`, `boot-notice` and `net-counters` answer.
+  - A restarted shell gives the one `wm` that runs the screen (`give_back_wm`).
+  - From `init.wit`'s `starts`, the second start runs no `autorun.msh`.
+- **The `wm` suite's step** passed on 11b6ad01, with `main` 2f85e06a and ABI 17, in the local "x86: keys, shell, tools" group:
+  - the shell is killed while `wm` runs;
+  - the new shell logs `WM (PID n) RAN BEFORE THIS SHELL STARTED: THE SCREEN IS ITS AGAIN`;
+  - `wm`'s close all closes its one window;
+  - `dmesg -s shell` shows `START 2 OF THIS BOOT: AUTORUN.MSH RAN AT THE FIRST, NOT AGAIN`.
+- **The rule for every server** is in `main` with 000-KRN-0152 (ABI 17, e93c47af): a revoked lease leaves its borrower a zeroed page. The shell's check stays, so a call the caller gave up on gets no answer written.
+- **Left:**
+  - ASR's `giveup` suite (500-ASR-0012) in `main`, run on this code;
+  - the MacBook Pro's run under the fault's conditions (MC-12.1).
 
 ## Related
 
