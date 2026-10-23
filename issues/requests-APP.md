@@ -33,6 +33,13 @@ Notes read and kept as they are (the other tracks' changes stand, and the tools 
 - a launch session holding every launch slot (000-KRN-0101);
 - `check`, `bench` and `kbench` stopping when their console is gone (176-KRN-0103).
 
+## The channel the updater holds, in `update status`, for 351-UPD-0025
+
+Recorded by the update track (UPD), 2026-10-23.
+- **What is new.** `idl/update.wit` 1.1 (in `main` f2f598b4) adds `metadata`: the channel the updater holds, its version, minimum and expiry, whether the expiry has passed, and whether it came from the source ([updater.md](../docs/update/updater.md), "Metadata past its expiry").
+- **The request.** 351-APP-0029's `update status` shows it.
+- **Why.** It would be the first program to call `metadata` on the platform, which [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done)'s resolution names as left.
+
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
