@@ -703,10 +703,13 @@ def big_memory_check(vm):
     # 262-KRN-0165: sleeps on another CPU end on time while the boot CPU zeroes. Applications go to the first CPU with the
     # fewest of them: a first sleeper takes CPU 0 and leaves it, so the second stays on CPU 1 and the blocks go to CPU 0.
     sleeper = None
+    cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
     if vm.cpus > 1:
         first = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 60000 &"))[1])
         sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 20000 &"))[1])
         require(vm.command(f"kill {first}"), f"KILLED PID={first}")
+        # Its CPU while it lives: on a slow host it ends before the blocks are held.
+        assert cpu_of(sleeper) == 1, cpu_of(sleeper)
     output = vm.command("run memtest big 3072 hold &")
     pid = int(re.search(r"STARTED PID=(\d+)", output)[1])
     # The shell is served while the blocks are taken and zeroed on another CPU.
@@ -721,8 +724,7 @@ def big_memory_check(vm):
     assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
     nap = None
     if sleeper:
-        cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
-        assert (cpu_of(pid), cpu_of(sleeper)) == (0, 1), (cpu_of(pid), cpu_of(sleeper))
+        assert cpu_of(pid) == 0, cpu_of(pid)
         nap = int(re.search(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=400))[1])
         assert nap < 1000, f"a 10 ms sleep on CPU 1 took {nap} ms while CPU 0 zeroed"
     # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
