@@ -88,6 +88,20 @@ Evidence for the MacBook Pro's BCM4331 only (MC-12.1). Other boards with this ch
   - Three replaces of `bcm_wifi` under traffic each found the core clean (reset status 0) and came up. Before 550-KRN-0157, three in a row had wedged it.
   - EFF is asked to build its next release trees on this one, so a later slot update keeps both.
 
+- **2026-10-23, 06:50 UTC:** EFF's release cb89a488 went into slot A without this change or 0157, built before EFF had read DRV's note. Four hours on it (11:27 back to 06:55 UTC):
+  - 2.0% of data frames lost after 7 tries, 1.9 tries a frame;
+  - 2 `Transport` errors.
+- **2026-10-23, 11:30 UTC:** slot B 202610231113 (7b4401c2): EFF's cb89a488 with this change, KRN's 0157 and NET's 550-NET-0043 (15 tries). Four hours on it:
+  - **1 data frame lost of 33,244** (0.003%), at 2.0 tries a frame.
+  - **One burst, about 10 minutes, from 13,650 s:**
+    - 2.5 to 4 tries a frame, the rate down to 1–2 Mbit/s;
+    - 80 to 96 of 97 beacons still heard;
+    - **no frame lost.**
+
+    The Effector agent still logged 7 `Transport` errors, mostly sending its 6 KB telemetry at 1 Mbit/s within its 3 s limit. That is EFF's, as told on 2026-10-23 at 02:50.
+  - **For an hour (3,004 to 6,784 s) no frame's level was read.** Every core's power byte was at or above 0, while reception was sound (about 630 good frames each 10 s, none lost). The beacons were not counted then, as their level was required.
+- **2026-10-23, the counts fixed.** A beacon now counts whether or not its level was read, and the mean is of those whose level was. The CCK line adds `NO LEVEL n (LAST xx xx xx)`, the raw bytes of the last such frame, so the next time shows what the receive header held.
+
 ## Related
 
 [550-DRV-0036](550-DRV-0036-the-radios-traffic-in-the-log.md), [550-DRV-0029](550-DRV-0029-bcm4331-receives-ofdm.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md), 550-KRN-0157.

@@ -137,8 +137,9 @@ fn ofdm_lines(seconds: u64, k: &Counts, b: &Counts) {
 }
 
 /// The network's beacons over a period: heard against due by their interval, their mean signal, and those missed in runs;
-/// then every good CCK frame by signal. A strong sender's frames missed one by one are a receiver that missed them; no
-/// frame below some level is how weak a sender it still hears (550-DRV-0036).
+/// then every good CCK frame by signal, and those with no level. A strong sender's frames missed one by one are a receiver
+/// that missed them; no frame below some level is how weak a sender it still hears (550-DRV-0036). A beacon counts as
+/// heard whether or not its level was read; the mean is of those whose level was.
 fn beacon_line(seconds: u64, ms: u32, k: &Counts, b: &Counts) {
     let d = |x: u32, y: u32| x.wrapping_sub(y);
     let mean = |sum: i32, base: i32, n: u32| if n == 0 { 0 } else { sum.wrapping_sub(base) / n as i32 };
@@ -146,11 +147,13 @@ fn beacon_line(seconds: u64, ms: u32, k: &Counts, b: &Counts) {
     let due = if k.beacon_tu == 0 { 0 } else { ms as u64 * 1000 / (k.beacon_tu as u64 * 1024) };
     let runs = |i: usize| d(k.missed_runs[i], b.missed_runs[i]);
     mind::println!("[BCM] {} S BEACONS OF THE NETWORK: {} OF {} DUE, MEAN {} DBM; MISSED {}, IN RUNS OF 1: {}, 2-4: {}, 5+: {}; RING FULL {}",
-                   seconds, heard, due, mean(k.beacon_power, b.beacon_power, heard), d(k.missed, b.missed), runs(0), runs(1), runs(2),
+                   seconds, heard, due, mean(k.beacon_power, b.beacon_power, d(k.beacons_level, b.beacons_level)), d(k.missed, b.missed), runs(0), runs(1), runs(2),
                    d(k.ring_full, b.ring_full));
     let bin = |i: usize| d(k.cck_bins[i], b.cck_bins[i]);
-    mind::println!("[BCM] {} S CCK FRAMES BY DBM: >=-50 {}, -60 {}, -70 {}, -80 {}, LESS {}; MEAN {} DBM",
-                   seconds, bin(0), bin(1), bin(2), bin(3), bin(4), mean(k.cck_power, b.cck_power, d(k.cck_heard, b.cck_heard)));
+    let raw = k.no_level_raw;
+    mind::println!("[BCM] {} S CCK FRAMES BY DBM: >=-50 {}, -60 {}, -70 {}, -80 {}, LESS {}; MEAN {} DBM; NO LEVEL {} (LAST {:02X} {:02X} {:02X})",
+                   seconds, bin(0), bin(1), bin(2), bin(3), bin(4), mean(k.cck_power, b.cck_power, d(k.cck_heard, b.cck_heard)),
+                   d(k.no_level, b.no_level), raw[0], raw[1], raw[2]);
 }
 
 /// A line built without a heap.
