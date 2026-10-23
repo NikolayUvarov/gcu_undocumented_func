@@ -23,6 +23,19 @@ Split from [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for
 - [ ] Without `reboot on`, its `reboot` is refused with the reason, and the machine runs on.
 - [ ] `stop-task` stays refused for the gateway.
 
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy`:
+- **`init`** (`named_reboot`) serves `reboot` from the `BADGE_NAMED` client when the owner's policy allows it, read at the request.
+  - It logs `[INIT] REBOOT BY PID n (BADGE 6): THE OWNER'S POLICY ALLOWS IT`.
+  - Otherwise it refuses with `[INIT] REBOOT REFUSED: … MAY NOT RESTART THE MACHINE: NOT IN THE OWNER'S POLICY (MC-3.4)`, or `NO OWNER'S POLICY`.
+- **`tests/gateway_stub`** asks a reboot when the suite leaves `reboot-now` in its delivery root, and removes it first.
+- **The `modes` suite:**
+  - without `reboot on`, the reboot is refused with that line, and the machine runs on;
+  - with it, QEMU restarts the machine once, and the next boot comes up in the development mode; the stub's second start finds the first one's files and asks nothing.
+- **`docs/profile/bootstrap.md`** says so.
+- **Run:** x86, in this session's container (QEMU TCG); aarch64 is running.
+
 ## Related
 
 [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-KRN-0121](../issues-done/750-KRN-0121-a-lifecycle-client-for-named-services.done), [750-EFF-0010](750-EFF-0010-reboot.md), `idl/init.wit` (`reboot`), `libmind/src/effector/policy.rs` (`Ask::Reboot`).

@@ -4261,9 +4261,11 @@ def gateway_stub_check(args):
     client badged BADGE_NAMED restarts sysmon, which the policy names, and nothing else: not a stop or a run of it, not
     logd, init or the gateway itself, no stop-task, no reboot; each refusal logged with MC-3.4. The writable scope of
     data/inbox/ takes a file written, flushed, renamed and read back, and refuses a name and a rename that climb out.
-    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends."""
+    Restarted by the shell, the gateway gets a new scope, which finds what the first left, and the first one ends.
+    750-KRN-0154: with `reboot on` in the policy the gateway's reboot restarts the machine, which comes back in the
+    development mode with the scope's files kept."""
     with tempfile.TemporaryDirectory(prefix="smoke-gateway-", dir=ROOT / IMAGE) as temp:
-        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY}
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY, "data/inbox/reboot-now": b"1\n"}
         image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
         vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
         try:
@@ -4275,16 +4277,19 @@ def gateway_stub_check(args):
                     time.sleep(1)
                 raise AssertionError((line, out[-1500:], vm.command("dmesg -s init", raw=True)[-1500:]))
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
-                 "RESTART effector_gw DENIED; STOP-TASK DENIED; REBOOT DENIED")
+                 "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             refusals = vm.command("dmesg -s init", raw=True)
             for line in (r"RESTART REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART logd: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
                          r"RUN REFUSED: PID \d+ \(BADGE 6\) MAY NOT RUN sysmon: NOT IN THE OWNER'S POLICY \(MC-3\.4\)",
-                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)"):
+                         r"STOP REFUSED: PID \d+ \(BADGE 6\) MAY NOT STOP PID 1 \(MC-3\.4\)",
+                         r"REBOOT REFUSED: PID \d+ \(BADGE 6\) MAY NOT RESTART THE MACHINE: NOT IN THE OWNER'S POLICY \(MC-3\.4\)"):
                 assert re.search(line, refusals), (line, refusals[-2000:])
             require(vm.command("svc restart effector_gw"), "effector_gw restarted: PID")
             stub("[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] REBOOT NOT ASKED")
             files = vm.command("dmesg -s vfs_server", raw=True)
             scopes = re.findall(r"\[VFS\] SCOPE (0x[0-9a-f]+) FOR :/inbox \(WRITABLE\)", files)
             assert len(scopes) >= 2 and scopes[0] != scopes[-1], files[-2000:]
@@ -4298,9 +4303,33 @@ def gateway_stub_check(args):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-gateway-{args.cpus}cpu.log").write_text(vm.log)
-    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121): its lifecycle client restarts what the owner's policy names "
-          "and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
-          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends", flush=True)
+    # 750-KRN-0154: the owner allows the reboot. The stub asks it at its first start; QEMU restarts the machine.
+    with tempfile.TemporaryDirectory(prefix="smoke-gateway-reboot-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/effector/policy": GATEWAY_POLICY + b"reboot on\n", "data/inbox/reboot-now": b"1\n"}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, reboot=True, prompt=False,
+                extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            vm.expect("MIND CORE KERNEL: REBOOT VIA", timeout=240)
+            vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120)
+            vm.expect("MIND> ", timeout=120)
+            require(vm.command("dmesg -s init", raw=True), "[INIT] MODE: DEVELOPMENT (data/mode.conf)")
+            # The first start's files were written before the reboot, and its request was taken away before it asked.
+            for _ in range(60):
+                out = vm.command("dmesg -s effector_gw", raw=True)
+                if "[GATEWAY-STUB] REBOOT NOT ASKED" in out:
+                    break
+                time.sleep(1)
+            require(out, "[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            require(out, "[GATEWAY-STUB] REBOOT NOT ASKED")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-gateway-reboot-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
+          "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
+          "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
+          "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode", flush=True)
 
 
 def effector_grants_check(vm):
