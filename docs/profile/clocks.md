@@ -18,7 +18,7 @@
 - Network time: the RTC is set by hand (`date set`).
 - Sleeping with resolution better than 1 ms, or scheduling better than the 10 ms time slice: `WAIT` and IPC timeouts end on the tick, and a task made ready waits for its CPU's time slice to end unless that CPU is idle.
 - A tickless idle: the boot CPU takes its tick every millisecond even when nothing runs.
-- Sleeps and IPC deadlines while the boot CPU zeroes a large block (more than 64 MiB) with its interrupts off: they all wait for its tick, about 0.1 s a GiB expected on a machine (not measured) and seconds under QEMU's emulation (262-KRN-0160).
+- Tasks of a CPU that zeroes a large block (more than 64 MiB): they wait until the block is zeroed, about 0.1 s a GiB expected on a machine (not measured) and seconds under QEMU's emulation, since the kernel does not leave a system call for another task. Between the block's 2 MiB pieces the CPU takes its interrupts, bookkeeping only: the boot CPU's tick still ends the sleeps and IPC deadlines of the other CPUs (262-KRN-0165).
 - IPC timeouts no shorter than asked: they may end up to a millisecond early (000-KRN-0065 covers `WAIT` only).
 - Accuracy of the TSC calibration beyond the reference: the ACPI PM timer (3.579545 MHz) over 50 ms at boot, then over 60 s; without a PM timer, five PIT ticks and no second measure. The LAPIC timer's rate is measured once, over the 50 ms.
 - A TSC whose rate changes after 60 s: not measured again.
