@@ -26,6 +26,23 @@ pub struct Heap {
     limit: usize, // the task's memory quota: private and retained bytes together
 }
 
+// Large blocks are aligned for large pages where the pool allows (262-KRN-0160, 0161): from 2 MiB on to 2 MiB, from
+// 1 GiB on to 1 GiB, in both their addresses.
+pub const LARGE: usize = 2 * 1024 * 1024;
+pub const HUGE: usize = 1 << 30;
+fn alignment(size: usize) -> usize { if size >= HUGE { HUGE } else if size >= LARGE { LARGE } else { PAGE } }
+
+// Frames for a block of `size`, as aligned as the pool allows; zeroed or not (the caller then zeroes them).
+fn frames(size: usize, zeroed: bool) -> Option<Region> {
+    let mut align = alignment(size);
+    loop {
+        let memory = if zeroed { Region::task(size, align) } else { Region::task_unzeroed(size, align) };
+        if let Ok(memory) = memory { return Some(memory); }
+        if align == PAGE { return None; }
+        align = if align == HUGE { LARGE } else { PAGE };
+    }
+}
+
 impl Heap {
     #[cfg(test)]
     pub fn new() -> Self {
@@ -36,12 +53,13 @@ impl Heap {
     }
 
     fn find_hole(&self, size: usize) -> Option<usize> {
-        let mut address = USER_HEAP + PAGE;
+        let align = alignment(size);
+        let mut address = (USER_HEAP + PAGE).next_multiple_of(align);
         loop {
             let end = address.checked_add(size + PAGE)?;
             if end > USER_END { return None; }
             if let Some(block) = self.blocks.iter().flatten().find(|b| address < b.address + b.size + PAGE && end > b.address) {
-                address = block.address + block.size + PAGE;
+                address = (block.address + block.size + PAGE).next_multiple_of(align);
             } else { break; }
         }
         Some(address)
@@ -53,10 +71,30 @@ impl Heap {
         if size > self.limit.saturating_sub(self.bytes + self.retained) { return None; }
         let slot = self.blocks.iter().position(Option::is_none)?;
         let address = self.find_hole(size)?;
-        let memory = Region::task(size, PAGE).ok()?;
+        let memory = frames(size, true)?;
         space.map(address, memory.ptr() as usize, size, true, false).ok()?;
         self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false, sink: false });
         self.bytes += size;
+        Some(address)
+    }
+
+    // A large block in two steps (262-KRN-0160): `reserve` checks the quota and a free slot and counts the block's bytes;
+    // the caller takes its frames (`frames_unzeroed`) and zeroes them outside the scheduler's lock; then `place` maps
+    // them, or `unreserve` gives the bytes back.
+    pub fn reserve(&mut self, requested: usize) -> Option<usize> {
+        let size = requested.checked_add(PAGE - 1)? & !(PAGE - 1);
+        if size == 0 || size > self.limit.saturating_sub(self.bytes + self.retained) || self.blocks.iter().all(Option::is_some) { return None; }
+        self.bytes += size;
+        Some(size)
+    }
+    pub fn frames_unzeroed(size: usize) -> Option<Region> { frames(size, false) }
+    pub fn unreserve(&mut self, size: usize) { self.bytes -= size; }
+    pub fn place(&mut self, space: &mut Space, memory: Region) -> Option<usize> {
+        let size = memory.len();
+        let slot = self.blocks.iter().position(Option::is_none)?;
+        let address = self.find_hole(size)?;
+        space.map(address, memory.ptr() as usize, size, true, false).ok()?;
+        self.blocks[slot] = Some(Block { address, physical: memory.ptr() as usize, memory: Some(memory), size, node: 0, writable: true, device: false, sink: false });
         Some(address)
     }
 

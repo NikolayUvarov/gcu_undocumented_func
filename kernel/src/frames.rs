@@ -54,9 +54,14 @@ pub fn ready() -> bool { READY.load(Ordering::Acquire) }
 
 /// Zeroed frames for `layout`, or None when no range has room.
 pub fn allocate(layout: Layout) -> Option<NonNull<u8>> {
-    let pointer = locked(|pool| pool.heaps.iter_mut().find_map(|heap| heap.allocate_first_fit(layout).ok()))?;
+    let pointer = allocate_unzeroed(layout)?;
     unsafe { core::ptr::write_bytes(pointer.as_ptr(), 0, layout.size()); }
     Some(pointer)
+}
+
+/// Frames for `layout` as they are: the caller zeroes them before any task can see them (262-KRN-0160).
+pub fn allocate_unzeroed(layout: Layout) -> Option<NonNull<u8>> {
+    locked(|pool| pool.heaps.iter_mut().find_map(|heap| heap.allocate_first_fit(layout).ok()))
 }
 
 /// # Safety

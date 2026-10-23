@@ -80,6 +80,10 @@ enum Source<'a> { Boot(usize), Image(&'a [u8]) }
 // What a task started with SPAWN_WORKERS keeps of its program for WORKER_START: a boot image's index, or a copy of the
 // ELF and its length (262-KRN-0163).
 enum Program { Boot(usize), File(Region, usize) }
+// A heap block of more than ZERO_APART bytes: taken and charged under the scheduler's lock, zeroed after the CPU lets go
+// of it, then mapped for its task under the lock again; the task stays in its ALLOC meanwhile (262-KRN-0160).
+const ZERO_APART: usize = 64 * 1024 * 1024;
+struct Zeroing { slot: usize, pid: u64, memory: Region }
 // A worker being started: its creator, its index and argument word, and its stack in bytes (0: what the ELF asks).
 #[derive(Clone, Copy)]
 struct Worker { creator: (usize, u64), index: u64, argument: u64, stack: usize }
@@ -175,6 +179,7 @@ struct Scheduler {
     next_node: u64, // capability identities are never reused
     next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
     held: Option<(usize, u64, u64)>, // (slot, PID, since ns): the focused task kept from running while its frame is copied
+    zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -232,7 +237,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, zeroing: [const { None }; cpu::MAX] }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -1118,6 +1123,18 @@ impl Scheduler {
         Ok((caps, nodes, moves))
     }
 
+    // A large block zeroed outside the lock goes to its task, if the task did not end meanwhile: mapped, its address the
+    // ALLOC's result; without room in its window its bytes go back, and the result stays 0 (262-KRN-0160).
+    unsafe fn place_zeroed(&mut self, job: Zeroing) {
+        let Zeroing { slot, pid, memory } = job;
+        let size = memory.len();
+        if !self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) { return; } // its bytes left with it
+        let task = self.tasks[slot].as_mut().unwrap();
+        let address = task.heap.place(&mut task.space, memory);
+        if address.is_none() { task.heap.unreserve(size); self.uncharge(slot, size); }
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), address.unwrap_or(0));
+    }
+
     // WORKER_START: a copy of the caller's own program on another CPU, with exactly the granted capabilities and no
     // privilege; at most one live worker per online CPU, each counted in the caller's task quota (262-KRN-0163).
     unsafe fn worker_start(&mut self, slot: usize, request: &SyscallMailbox) -> Result<usize, usize> {
@@ -1381,6 +1398,15 @@ impl Scheduler {
                 }
             }
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
+                // A large block is zeroed outside the lock (its result is written then, by `place_zeroed`).
+                Some(size) if size > ZERO_APART => if !self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) || !self.charge(slot, size) { Ok(0) } else {
+                    let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
+                    match task.heap.reserve(size).map(|size| (size, crate::user_heap::Heap::frames_unzeroed(size))) {
+                        Some((_, Some(memory))) => { self.zeroing[cpu] = Some(Zeroing { slot, pid: task.pid, memory }); Ok(0) }
+                        Some((reserved, None)) => { task.heap.unreserve(reserved); self.uncharge(slot, size); Ok(0) }
+                        None => { self.uncharge(slot, size); Ok(0) }
+                    }
+                },
                 Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
                     let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
                     match task.heap.allocate(&mut task.space, size) { Some(address) => Ok(address), None => { self.uncharge(slot, size); Ok(0) } }
@@ -1720,7 +1746,7 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
             Event::Syscall => if let Some(next) = unlocked_syscall(cpu, sp) { return next; },
             _ => {}
         }
-        locked(|| {
+        let (next, zeroing) = locked(|| {
             let s = scheduler(); let slot = s.current[cpu]; s.accounting.interrupts[cpu] += 1;
             let next = (|| match event {
                 Event::Irq(irq) => { s.raise_irq(irq); s.select(sp, cpu) }
@@ -1751,8 +1777,13 @@ pub extern "C" fn interrupt(sp: usize) -> usize {
                 }
             })();
             s.wake_idle(cpu, false);
-            next
-        })
+            (next, s.zeroing[cpu].take())
+        });
+        // A large block is zeroed with this CPU's interrupts off but the lock let go, so the other CPUs go on (262-KRN-0160).
+        match zeroing {
+            Some(job) => { core::ptr::write_bytes(job.memory.ptr(), 0, job.memory.len()); locked(|| scheduler().place_zeroed(job)); next }
+            None => next,
+        }
     }
 }
 

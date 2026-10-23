@@ -5,6 +5,8 @@
 // quota, and frees everything; `memtest hold <MiB>` keeps them until killed. `memtest share <MiB>` fills a block, seals it (a read-only memory object), maps it and
 // starts a second memtest that maps the same object; both check the contents. `memtest fill` takes all the heap it can
 // get, in ever smaller blocks down to 64 KiB, and keeps it until killed (issue 169: the recovery reserve stops it).
+// `memtest big <MiB>` takes them in blocks of up to 1 GiB, each as one ALLOC (262-KRN-0160), checks that every page
+// came zeroed, writes and reads back a word in each page, and says whether each whole GiB lies on a GiB boundary.
 // `memtest workers <n> [hold|fault]` starts n workers of itself (262-KRN-0163) on one shared page, each counting into its
 // own word once the page says go; it reports each one's count and how it ended. hold: they count until memtest is
 // killed; fault: the last one faults instead of counting.
@@ -29,6 +31,29 @@ fn fill(memory: &mut [u8], first: usize) {
 }
 fn intact(memory: &[u8], first: usize) -> bool {
     memory.chunks_exact(8).enumerate().all(|(i, chunk)| u64::from_le_bytes(chunk.try_into().unwrap()) == word(first + i))
+}
+
+fn big(mib: usize) {
+    const GIB: usize = 1024 * MIB;
+    let mut blocks: [Option<Pages>; 64] = [const { None }; 64];
+    let (mut taken, mut zeroed, mut aligned, mut n) = (0, true, true, 0);
+    while taken < mib * MIB && n < blocks.len() {
+        let size = (mib * MIB - taken).min(GIB);
+        let Some(pages) = Pages::new(size) else { mind::println!("[MEMTEST] BIG: OUT OF MEMORY AFTER {} MiB", taken / MIB); break };
+        let words = pages.address() as *mut u64;
+        for page in 0..size / 4096 { unsafe {
+            let at = words.add(page * 512 + page % 512);
+            zeroed &= at.read_volatile() == 0;
+            at.write_volatile(word(taken / 8 + page));
+        } }
+        aligned &= size < GIB || pages.address() % GIB == 0;
+        blocks[n] = Some(pages); taken += size; n += 1;
+    }
+    let mut first = 0;
+    let intact = blocks[..n].iter().flatten().all(|p| { let words = p.address() as *const u64; let ok = (0..p.len() / 4096).all(|page| unsafe { words.add(page * 512 + page % 512).read_volatile() } == word(first / 8 + page)); first += p.len(); ok });
+    mind::println!("[MEMTEST] BIG HELD {} MiB IN {} BLOCKS ZEROED={} INTACT={} GIB ALIGNED={}", taken / MIB, n, zeroed, intact, aligned);
+    for block in blocks.iter_mut() { block.take(); }
+    mind::println!("[MEMTEST] BIG FREED");
 }
 
 fn alloc(mib: usize, hold: bool) {
@@ -167,17 +192,18 @@ fn work(index: u64, argument: u64) {
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     if let Some((index, argument)) = mind::process::worker() { return work(index, argument); }
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault]");
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault] | memtest big <MiB>");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
         "alloc" => alloc(mib, false),
+        "big" => big(mib),
         "hold" => alloc(mib, true),
         "share" => share(mib),
         "fill" => fill_all(),
         "endpoints" => endpoints(),
         "child" => child(),
         "workers" => workers(mib.min(7), words.next().unwrap_or("")),
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT]"),
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT] | MEMTEST BIG <MiB>"),
     }
 }
