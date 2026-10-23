@@ -94,6 +94,7 @@ On Windows, `05_write_usb_windows.ps1` writes USB disks only (README, "Write the
 - After the write it copies the proprietary files and the desktop pictures onto the disk, and the test files its options ask for: `--link-dev`, `--keep-wifi`, `--wifi-ofdm` and others, listed in the script's header.
 - **`--slots`** writes an image with boot slots and an `update.txt` that takes releases from `data/link/rel/`. After that one write, `scripts/link_update.py` updates the machine over the link (351-KRN-0141).
 - **`--mode=maintenance`** puts `data/mode.conf` with that one line on the disk, so `init` starts in the maintenance mode and runs the Effector agent's services (750-KRN-0143). `--mode=development` and `--mode=development,maintenance` work the same way.
+- **`link-console`** may stand beside them, with `--link-dev`: for example, `--mode=maintenance,link-console`. `init` then takes the link as the owner's console (800-KRN-0155, 800-LNK-0019). Without `dev` in `link.conf`, `init` leaves the word out, so the script refuses it without `--link-dev`. Only the disk's word turns it on or off: `mode` in the shell keeps it as it is.
 - `--list` shows the USB disks and their numbers.
 - It builds the repository it lives in, also when it is started through a symbolic link from outside that repository.
 

@@ -47,6 +47,14 @@ The maintainer's word, 2026-10-23: "effector and effector485 have to have equal 
 
 Evidence for the configurations named only (MC-12.1). What the cable may do in the mode is the shell's and `init`'s to enforce. This task claims no more than they grant (MC-12.3).
 
+## Progress
+
+- **2026-10-23, `KRN`'s part is made** (800-KRN-0155, `fast-test` 889f5bae, landing in round 16):
+  - `init` takes `link-console` in `data/mode.conf` when `link.conf` has `dev`, and leaves it out otherwise;
+  - `init.wit` 1.8 adds `link-console()`.
+- **2026-10-23, the script writes the word.** `scripts/build_and_write.sh --mode=` takes `link-console` beside `development` and `maintenance`, for example `--mode=maintenance,link-console`. It refuses the word without `--link-dev`, as `init` would leave it out. `docs/write-disk.md` and its Russian version say so.
+- **Still waiting:** `APP`'s part, the shell taking the link's lines as the console's, so scripts still cannot run over the cable. Then the QEMU link suite's checks.
+
 ## Related
 
 [800-LNK-0015](800-LNK-0015-shell-commands-over-the-link.md), [800-LNK-0014](800-LNK-0014-build-and-write-in-the-repository.md) (`--mode=`), [750-KRN-0143](750-KRN-0143-init-follows-the-development-and-maintenance-modes.md), [750-EFF-0013](750-EFF-0013-development-and-maintenance-modes.md), `shell/src/clients.rs`, [docs/effector/README.md](../docs/effector/README.md).
