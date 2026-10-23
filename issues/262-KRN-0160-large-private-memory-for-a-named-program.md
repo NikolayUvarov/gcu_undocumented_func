@@ -1,6 +1,6 @@
 # 262-KRN-0160 — Tens of GiB of private memory for a program the owner names
 
-**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (in `main` a2a1062e; the reserve criterion left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
+**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (in `main` a2a1062e; the reserve criterion made on `claude/youthful-mendel-mf1soy`, landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
 
 From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](262-KRN-0161-large-pages.md) to [262-KRN-0164](../issues-done/262-KRN-0164-stacks-larger-than-64-kib.done).
 
@@ -44,7 +44,7 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
   - its memory goes back to the pool when it ends.
 - [x] Host tests: a large block is aligned as stated; a refused block leaves nothing mapped or charged.
 - [x] While a program takes 3 GiB, the shell on another CPU answers.
-- [ ] While it holds its memory, a service restarts (`svc restart`), so the reserve held.
+- [x] While it holds its memory, a service restarts (`svc restart`), so the reserve held.
 - [x] `docs/profile` states the window, the alignment, the zeroing and the owner's file, and what is not done (blocks of several runs; above 64 GiB).
 
 ## Related
@@ -67,8 +67,14 @@ Made on `claude/youthful-mendel-mf1soy` (a2b80aa2, d43aedd0):
 - **What the numbers say, and do not.** Under emulation, zeroing a GiB takes seconds, and the CPU that zeroes takes no interrupts meanwhile, so tasks pinned to it wait (the shell's longest answers). The other CPUs go on: before, the zeroing held the one lock and every CPU waited. A real machine zeroes a GiB in about 0.1 s; not measured yet (MC-12.1).
 - **In `main`** a2a1062e (landing round 21, 2026-10-23): the gate `land-a2a1062e` passed every group, x86 and aarch64, with `big_memory_check` in the two "RAM above 4 GiB" groups.
 - **`docs/profile`** (`kernel-objects.md`, the private heap block) states the window, the alignment, the zeroing outside the lock, the owner's file and what is not done.
+- **The reserve criterion** (made on `claude/youthful-mendel-mf1soy`, 4473895e to f132563a):
+  - **The check.** `big_memory_check` gives `memtest` a line of 16 GiB, more than the pool. It takes GiB blocks until one is refused, and `memtest fill` takes the rest in small blocks.
+  - **What it requires.** The frame pool keeps init's 32 MiB reserve. A killed `rtc` is restarted by init from the reserve and serves. The frames come back after the kill.
+  - **`svc` itself does not start then.** It is an application, and the reserve is the system band's (issue 169). So the restart is init's own, after a kill, as in `recovery_reserve`. A `svc` that runs in the system band would be another task.
+  - **The check found a fault in the clock (x86).** While the boot CPU zeroes a large block with its interrupts off, it takes no tick, so the PM timer's reads, one a second, can be more than its 4.7 s wrap apart. The TSC's rate measured again at 60 s (000-KRN-0100) then lost the hidden wraps: it read 3444 MHz instead of 2700. The clock ran 22% slow after that, and the shell stalled 52 s. Each PM read now keeps its TSC, and the TSC counts the wraps between two reads (`clock.rs`, `pm_elapsed`).
+  - **Checked** (this session's container, QEMU TCG, 4 CPUs, 6 GiB). On x86: 3072 MiB in GiB blocks and 2865 MiB in small ones, 32 807 KiB left, `rtc` restarted and served; the TSC skew kernel's `clock` suite also passed. On aarch64: 3072 MiB and 2885 MiB, 32 798 KiB left, `rtc` restarted and served. Emulated runs, for this container only (MC-12.1).
 - **Left:**
-  - the reserve criterion (a service restarting while the program holds its memory);
+  - while the boot CPU zeroes a large block, every sleep and IPC deadline of the system waits for its tick (about 5 s a GiB under TCG; about 0.1 s a GiB expected on a machine, not measured): zeroing in pieces between which the boot CPU takes its tick, or on another CPU, is not done;
   - a machine with 8 GiB or more and a program of 6 GiB;
   - blocks of several runs, if a fragmented pool refuses large blocks in practice;
   - quotas above 64 GiB (an ABI change).
