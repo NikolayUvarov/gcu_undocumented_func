@@ -77,6 +77,6 @@ From the request "`wlan` joins a remembered network by itself, at start and afte
 
 ## Related
 
-- [550-NET-0018](../issues/550-NET-0018-the-station-service.md): the station service.
-- [550-NET-0024](../issues/550-NET-0024-remembered-wi-fi-networks.md): remembered networks kept by `keystore`.
+- [550-NET-0018](550-NET-0018-the-station-service.done): the station service.
+- [550-NET-0024](550-NET-0024-remembered-wi-fi-networks.done): remembered networks kept by `keystore`.
 - 550-ASR-0007 and 000-APP-0079: the start script on the MacBook Pro, which ASR keeps for its pings and end marker.

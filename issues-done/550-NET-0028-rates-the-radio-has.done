@@ -1,6 +1,6 @@
-# 550-NET-0028 — The station offers only the rates the radio has: 802.11b while `bcm_wifi` hears no OFDM
+# 550-NET-0028 — The station offers only the rates the radio has: 802.11b while `bcm_wifi` hears no OFDM — done
 
-**Type:** network (library, service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** open (the QEMU criterion holds) · **Blocked by:** the maintainer: the hardware criterion asks for a radio without OFDM, and the MacBook Pro's `bcm_wifi` names OFDM now · **Main task:** [550](550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-12.4, Appendix B.6
+**Type:** network (library, service, interface) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P1 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track D · **Constitution:** MC-12.4, Appendix B.6
 
 From the request "The station offers only the rates the radio can receive" in requests-NET.md (recorded by the kernel track at the maintainer's word, from the drivers track's runs of 550-DRV-0028 on the MacBook Pro).
 
@@ -48,6 +48,14 @@ Left: the MacBook Pro's run.
 
 Built: `idl/wlanhw.wit` 1.1, `dot11`, `wlan` and `wlansim`, for x86_64 and aarch64. The host tests pass (`dot11`: 12, two of them new). The QEMU check and the MacBook Pro's run wait for 550-KRN-0097.
 
+## Resolution
+
+- **Built:** `wlanhw.wit` 1.1 `bands` bit 2; a station on a radio without OFDM on 2.4 GHz offers 1 to 11 Mb/s alone, claims no short slot and never sends at an OFDM rate; `wlansim` refuses an OFDM frame.
+- **Host tests** (`dot11/tests/station.rs`) as the criteria list them.
+- **In QEMU** (the `net` suite, x86 and aarch64, gated since gate 20): the station offered 1, 2, 5.5 and 11 Mb/s alone, `wlansim` refused none of its frames, and the lease and the gateway's ping came.
+- **On the MacBook Pro** (2026-10-20): the station joined `CoolNet2` and DHCP answered, but `bcm_wifi` now names OFDM, so the radio without it is the QEMU stand-in's alone.
+- **The maintainer's decision (2026-10-23).** The criteria left are counted as met by the checks above. If the question comes up again, they are checked on a real test machine and the task is opened again, as for 800-NET-0038. Left by it: a join on real hardware whose radio has no OFDM on 2.4 GHz.
+
 ## Related
 
-[550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done) (the station), [550-NET-0018](550-NET-0018-the-station-service.md) (`wlan`, `wlansim`), [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`wlanhw.wit` 1.0), [550-DRV-0027](550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0028](550-DRV-0028-bcm4331-transmit-power.md).
+[550-NET-0017](../issues-done/550-NET-0017-the-stations-logic.done) (the station), [550-NET-0018](550-NET-0018-the-station-service.done) (`wlan`, `wlansim`), [550-NET-0012](../issues-done/550-NET-0012-the-radio-interface.done) (`wlanhw.wit` 1.0), [550-DRV-0027](../issues/550-DRV-0027-bcm4331-frame-service.md), [550-DRV-0028](../issues/550-DRV-0028-bcm4331-transmit-power.md).
