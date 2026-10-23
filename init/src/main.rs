@@ -429,6 +429,8 @@ impl Init {
                 self.lend(&mut grants, SLOT_DEV0, "usb_serial")?;
                 // An application's loader client: link starts programs from data/link/ for the master (800-KRN-0132).
                 self.lend(&mut grants, SLOT_LOADER, "loader")?;
+                // The compositor's client that lights the link's mark on the screen, and nothing else of it (800-KRN-0156).
+                grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_LINK)?, CLIENT);
                 let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
                 let words = core::str::from_utf8(&words[..length]).unwrap_or("");
@@ -674,7 +676,8 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
                 grants.add(mind::effector::SLOT_READER, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
-                self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
+                // The screen, badged so that the gateway lights the Effector agent's mark too (800-KRN-0156).
+                grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_EFFECTOR)?, CLIENT);
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NAMED)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
