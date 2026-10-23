@@ -7509,9 +7509,9 @@ def effector_suite(args, disk):
     (disk / "data" / "secret" / "s.txt").write_text("not under a collect root\n")
     # The rogue server's configuration names the good server's pin: kept apart until the owner puts it in place.
     (disk / "data" / "rogue.conf").write_text(conf(rogue.port))
-    # The agent's ID, as an earlier start would have left it in the session's private directory.
-    (disk / "system" / "effector").mkdir(parents=True, exist_ok=True)
-    (disk / "system" / "effector" / "agent_id").write_text(agent + "\n")
+    # The owner's agent ID: the session keeps it in its private directory at the first start, so a disk written afresh
+    # stays the agent the server knows.
+    (disk / "data" / "effector" / "agent_id").write_text(agent + "\n")
     entropy_cpu = "max" if args.arch == "aarch64" else "qemu64,+rdrand"
     vm = VM(args, disk.relative_to(ROOT).as_posix(), rtc="utc", extra=["-nic", "none", "-netdev", "user,id=n0", "-device", "virtio-net-pci,netdev=n0", "-cpu", entropy_cpu])
 
@@ -7537,7 +7537,7 @@ def effector_suite(args, disk):
         out = until(f"EFFECTOR: ACK {unknown_id} denied ACCEPTED")
         time.sleep(20)  # heartbeats to measure, beside the commands
         out = session()
-        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
+        for line in ("EFFECTOR: THE TOKEN IS KEPT IN system/effector", "EFFECTOR: AGENT ID mind-test FROM data/effector/agent_id, KEPT IN system/effector", "EFFECTOR: AGENT mind-test TO 10.0.2.2/effector (0 SAVED RESULTS, 0 TO ACKNOWLEDGE)",
                      "EFFECTOR: CONNECTED TO 10.0.2.2 (PINNED)", f"EFFECTOR: DENIED {exec_id} exec_v1", f"EFFECTOR: FAILED {restart_id} restart_service: denied",
                      f"EFFECTOR: DENIED {unknown_id} powershell_v1", f"EFFECTOR: ACK {exec_id} denied NOT ACCEPTED", f"EFFECTOR: ACK {exec_id} denied ACCEPTED"):
             require(out, line)
@@ -7548,11 +7548,20 @@ def effector_suite(args, disk):
         assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
+        # While the failed ACK waited, the one slot was occupied: the server takes no idle report for it (Effector ahelp).
+        held = [b for b in list(server.beats) if b.get("busy")]
+        assert any(b["executing_commands"][0]["command_id"] == exec_id and b["occupied_queues"] == 1 and b["free_slots"] == 0 and b["busy_since"] for b in held), held[-3:]
+        assert not record["busy"] and record["free_slots"] == 1, record
+        # The load, in the heartbeat and the poll, once a telemetry sample has counted the cores.
+        loaded = [b["load"] for b in list(server.beats) if "load" in b]
+        assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
+        assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
               f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
-              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
+              "name refused by the gateway, a failed ACK retried with the agent busy meanwhile; the load in the heartbeat and "
+              f"the poll ({loaded[-1]['load_percent']}% of {loaded[-1]['cpu_cores']} cores); the token kept in its private directory", flush=True)
         # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
         # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
         collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})
@@ -7574,12 +7583,12 @@ def effector_suite(args, disk):
         # Restarted: the journal read back, every answer already acknowledged; a redelivered command gets its saved
         # answer again, not a new one.
         require(vm.command("svc restart effector"), "effector")
-        until("(10 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
+        until("(11 SAVED RESULTS, 0 TO ACKNOWLEDGE)", 60)
         server.redeliver(restart_id)
         out = until(f"EFFECTOR: REPEATED {restart_id}: THE SAVED ANSWER AGAIN", 60)
         assert out.count(f"EFFECTOR: FAILED {restart_id}") == 1, out[-3000:]
         until(f"EFFECTOR: ACK {restart_id} failed ACCEPTED", 30)
-        print("PASS: restarted by svc, the agent reads its journal back (10 saved results, none to acknowledge again) and "
+        print("PASS: restarted by svc, the agent reads its journal back (11 saved results, none to acknowledge again) and "
               "answers a redelivered command with the saved answer, journaled once", flush=True)
         # The owner puts a configuration whose server is not the pinned one in place: refused, nothing sent to it.
         require(vm.command("mv data/effector/effector.conf data/effector/good.conf"), "OK")
@@ -7634,6 +7643,12 @@ def effector_actions_check(vm, server, agent, until):
     server.queue(agent, "deliver_file", {"path": "data/elsewhere.txt", "max_bytes": 10, "size": 1, "sha256": hashlib.sha256(b"x").hexdigest()}, command_id="deliver-2")
     until("EFFECTOR: ACK deliver-2 failed ACCEPTED")
     assert server.operation("deliver-2")["result"]["error"] == "denied", server.operation("deliver-2")
+    # The server's `exec` of `reboot` maps to the gateway's restart, which this policy (no `reboot on`) refuses; any other
+    # command stays denied (the first part's exec_v1).
+    reboot_id = server.queue(agent, "exec_v1", {"command": "reboot", "run_as": "service", "session": "service", "timeout_seconds": 300})
+    until(f"EFFECTOR: ACK {reboot_id} failed ACCEPTED")
+    assert server.operation(reboot_id)["result"]["error"] == "denied", server.operation(reboot_id)
+    require(vm.command("dmesg -s effector_gw", raw=True), f"{reboot_id} reboot?in?10000?ms denied refused")
     # A service the policy names restarted through init's lifecycle client (750-KRN-0121).
     sysmon_id = server.queue(agent, "restart_service", {"timeout_seconds": 180}, program="sysmon")
     until(f"EFFECTOR: ACK {sysmon_id} completed ACCEPTED")

@@ -162,7 +162,7 @@ impl Lane {
 #[derive(Clone, Copy)]
 struct Saved { record: Record, durable: bool, done: bool, sequence: u64 }
 #[derive(Clone, Copy)]
-struct Pending { slot: usize, first: bool, deadline_ms: Option<u64> }
+struct Pending { slot: usize }
 
 pub struct Session {
     agent: Id, records: [Option<Saved>; RECORDS_MAX], pending: Option<Pending>, saving: Option<Store>,
@@ -260,6 +260,12 @@ impl Session {
 
     pub fn registered(&self) -> bool { self.registered }
 
+    /// The command whose answer waits for the server, the oldest first: the agent's one slot is occupied meanwhile.
+    pub fn waiting(&self) -> Option<Id> {
+        let pending = self.pending.and_then(|p| self.records[p.slot]).map(|s| (s.sequence, s.record.id));
+        pending.or_else(|| self.records.iter().flatten().filter(|s| !s.done).min_by_key(|s| s.sequence).map(|s| (s.sequence, s.record.id))).map(|(_, id)| id)
+    }
+
     /// A slot for a new record, and whether a record is dropped for it. A full journal makes room by dropping its
     /// oldest record that is acknowledged and past its command's expiry: a redelivery after that is answered
     /// `expired`, never run. Nothing else is ever dropped.
@@ -282,7 +288,7 @@ impl Session {
             if saved.record.identity != identity { return Err(Error::Conflict); }
             if let Some(pending) = self.pending { return if pending.slot == slot { Ok(Accepted::InProgress) } else { Err(Error::Busy) }; }
             if !saved.durable { return Err(Error::Journal); }
-            self.pending = Some(Pending { slot, first: true, deadline_ms: deadline(saved.record.expires_unix, now)? });
+            self.pending = Some(Pending { slot });
             self.ack.reset(now.monotonic_ms); Ok(Accepted::Replay)
         } else {
             if self.busy() { return Err(Error::Busy); }
@@ -293,7 +299,7 @@ impl Session {
             self.store_sequence = self.store_sequence.checked_add(1).ok_or(Error::Sequence)?;
             let store = Store { sequence: self.store_sequence, slot, record, rewrite };
             self.records[slot] = Some(Saved { record, durable: false, done: false, sequence: self.store_sequence });
-            self.pending = Some(Pending { slot, first: true, deadline_ms });
+            self.pending = Some(Pending { slot });
             self.saving = Some(store); self.ack.reset(now.monotonic_ms);
             Ok(Accepted::Store(store))
         }
@@ -310,17 +316,13 @@ impl Session {
         for _ in 0..RECORDS_MAX {
             if self.pending.is_none() {
                 let Some(slot) = self.records.iter().position(|s| s.is_some_and(|s| s.durable && !s.done)) else { return Ok(None); };
-                let record = self.records[slot].unwrap().record;
-                self.pending = Some(Pending { slot, first: false, deadline_ms: deadline(record.expires_unix, now)? });
+                self.pending = Some(Pending { slot });
                 self.ack.reset(now.monotonic_ms);
             }
+            // The command's term bounds its wait in the server's queue, not its report: a late answer is still sent until
+            // the server takes it or refuses it for good (Effector ahelp, "Reservation lease, queue waiting and command runtime").
             let pending = self.pending.unwrap();
-            if self.ack.active.is_none() && !pending.first && pending.deadline_ms.is_some_and(|d| now.monotonic_ms >= d) {
-                self.records[pending.slot].as_mut().unwrap().done = true;
-                self.pending = None; continue;
-            }
             let Some(attempt) = self.ack.begin(now.monotonic_ms)? else { return Ok(None); };
-            self.pending.as_mut().unwrap().first = false;
             return Ok(Some(Ack { attempt, record: self.records[pending.slot].unwrap().record }));
         }
         Ok(None)
