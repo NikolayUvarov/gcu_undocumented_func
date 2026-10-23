@@ -1,13 +1,13 @@
-# 262-KRN-0162 — A file read once into a memory object, mapped read-only by a program and its workers
+# 262-KRN-0162 — A file read once into a memory object, mapped read-only by a program and its workers — done
 
-**Type:** `vfs_server`, IDL (`vfs.wit` 2.4), kernel (the shared-mapping limit) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-4.2, MC-11.11, MC-12.4
+**Type:** `vfs_server`, IDL (`vfs.wit` 2.4), kernel (the shared-mapping limit) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** [262](../issues/262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-4.2, MC-11.11, MC-12.4
 
-From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md), item 3.
+From the tools track's request of 2026-10-23 in [requests-KRN.md](../issues/requests-KRN.md), item 3.
 
 ## Problem
 
 - **What a program does today.** It reads a model through `vfs.wit`'s `read`: at most 16 KiB a call, so about 250 000 calls for 4 GB.
-- **What it costs.** It needs a heap of the file's size beside the bytes it reads, and each worker of [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md) would read its own copy.
+- **What it costs.** It needs a heap of the file's size beside the bytes it reads, and each worker of [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done) would read its own copy.
 - **The shared-mapping limit.** A task may map at most 256 MiB of foreign memory (`SHARED_MAX_BYTES`), which a model's weights pass.
 
 ## Plan
@@ -21,7 +21,7 @@ From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.m
 4. **The shared-mapping limit** becomes the larger of 256 MiB and the task's memory quota, so a program and its workers can map the object whole.
 5. **Files up to 4 GiB − 1 byte,** FAT32's limit. A larger model is published as several files (GGUF's splits), each read into its own object.
 6. **A file shared by several programs** (one copy for all, kept by `vfs_server`) is not part of this task. It waits for a measurement that it is needed.
-7. **The store's models** are [251-STO-0015](251-STO-0015-a-model-read-into-memory.md)'s, the storage track's; this task covers files of volumes.
+7. **The store's models** are [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md)'s, the storage track's; this task covers files of volumes.
 
 ## Acceptance criteria
 
@@ -47,6 +47,13 @@ Made on `claude/youthful-mendel-mf1soy`:
 - **What the numbers say, and do not.** Under emulation both paths are slow; the ratio says what the calls cost there. A machine's figure comes from a run on it (MC-12.1).
 - **Left:** the landing.
 
+## Resolution
+
+- **`vfs.wit` 2.4 `fill`** reads a file into a memory object the client lends, in one call (`idl/vfs.wit`, `vfs_server/src/main.rs`: 64 MiB windows through child capabilities); `mind::fs::File::fill` and `mind::mem::size` in libmind.
+- **The kernel** lets a task map foreign memory up to the larger of 256 MiB and its memory quota (`kernel/src/user_heap.rs`), so a program's workers map the object whole.
+- **The `fill` suite** (`tests/qemu_smoke.py`, `memtest load`) in the gate's two "RAM above 4 GiB" groups: a 1 GiB file of a FAT32 model disk read in one call, its SHA-256 the host's, one worker's read-only mapping the same, another worker's write faulted, and the time beside `read`'s 16 KiB calls.
+- **Gate:** the landing gate `land-a2a1062e` passed every group, x86 and aarch64, on `main` a2a1062e (2026-10-23). Its times are QEMU's emulation (TCG), not a machine's (MC-12.1).
+
 ## Related
 
-[262-KRN-0160](262-KRN-0160-large-private-memory-for-a-named-program.md), [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.md), [251-STO-0015](251-STO-0015-a-model-read-into-memory.md), [251](251-model-cache-and-model-disk.md) (the model disk).
+[262-KRN-0160](../issues/262-KRN-0160-large-private-memory-for-a-named-program.md), [262-KRN-0163](262-KRN-0163-workers-on-several-cpus.done), [251-STO-0015](../issues/251-STO-0015-a-model-read-into-memory.md), [251](../issues/251-model-cache-and-model-disk.md) (the model disk).

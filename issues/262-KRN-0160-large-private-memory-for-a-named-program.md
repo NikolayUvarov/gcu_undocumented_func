@@ -1,8 +1,8 @@
 # 262-KRN-0160 — Tens of GiB of private memory for a program the owner names
 
-**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (made on `claude/youthful-mendel-mf1soy`; landing left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
+**Type:** kernel, `init`, `loader` · **Owner:** kernel session · **Priority:** P1 · **Status:** open (in `main` a2a1062e; the reserve criterion left) · **Blocked by:** — · **Main task:** [262](262-model-runtime-on-the-machines-full-hardware.md) · **Constitution:** MC-3.13, MC-5.1, MC-5.5, MC-12.6
 
-From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](262-KRN-0161-large-pages.md) to [262-KRN-0164](262-KRN-0164-stacks-larger-than-64-kib.md).
+From the tools track's request of 2026-10-23 in [requests-KRN.md](requests-KRN.md) ("Memory and CPUs for large models", item 1), for 262's stage 1. Its other items are [262-KRN-0161](262-KRN-0161-large-pages.md) to [262-KRN-0164](../issues-done/262-KRN-0164-stacks-larger-than-64-kib.done).
 
 ## Problem
 
@@ -45,7 +45,7 @@ A 7B-parameter model in 4 bits takes about 4 GB, a 70B one about 40 GB, and its 
 - [x] Host tests: a large block is aligned as stated; a refused block leaves nothing mapped or charged.
 - [x] While a program takes 3 GiB, the shell on another CPU answers.
 - [ ] While it holds its memory, a service restarts (`svc restart`), so the reserve held.
-- [ ] `docs/profile` states the window, the alignment, the zeroing and the owner's file, and what is not done (blocks of several runs; above 64 GiB).
+- [x] `docs/profile` states the window, the alignment, the zeroing and the owner's file, and what is not done (blocks of several runs; above 64 GiB).
 
 ## Related
 
@@ -65,6 +65,8 @@ Made on `claude/youthful-mendel-mf1soy` (a2b80aa2, d43aedd0):
   - host test `large_blocks_are_aligned_and_a_refused_one_leaves_nothing`;
   - `big_memory_check` (in the `normal` suite when the machine has more than 4 GiB, and as `--suites bigmem`): 3 GiB in 3 blocks, zeroed, on GiB boundaries, every page written and read back in 10 s (x86) and 12 s (aarch64); the shell answered `uptime` five times meanwhile, at most 8.9 s (x86) and 10.8 s (aarch64) each; without the line, the first GiB is refused; the frames came back after the kill.
 - **What the numbers say, and do not.** Under emulation, zeroing a GiB takes seconds, and the CPU that zeroes takes no interrupts meanwhile, so tasks pinned to it wait (the shell's longest answers). The other CPUs go on: before, the zeroing held the one lock and every CPU waited. A real machine zeroes a GiB in about 0.1 s; not measured yet (MC-12.1).
+- **In `main`** a2a1062e (landing round 21, 2026-10-23): the gate `land-a2a1062e` passed every group, x86 and aarch64, with `big_memory_check` in the two "RAM above 4 GiB" groups.
+- **`docs/profile`** (`kernel-objects.md`, the private heap block) states the window, the alignment, the zeroing outside the lock, the owner's file and what is not done.
 - **Left:**
   - the reserve criterion (a service restarting while the program holds its memory);
   - a machine with 8 GiB or more and a program of 6 GiB;
