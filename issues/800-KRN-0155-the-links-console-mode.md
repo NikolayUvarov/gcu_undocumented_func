@@ -27,11 +27,21 @@ From LNK's request of 2026-10-23 (`KRN/2026-10-23T0223Z-LNK-a-mode-word-link-con
 
 ## Acceptance criteria
 
-- [ ] The `modes` suite (x86 and aarch64):
+- [x] The `modes` suite (x86 and aarch64):
   - without `dev`, the word is left out with its line, and `link-console` answers false;
   - with `dev` in `link.conf`, the boot line names the link's console, and `link-console` answers true.
 - [ ] `set-mode` keeps the word in the file.
-- [ ] `docs/idl` lists `init.wit` 1.8.
+- [x] `docs/idl` lists `init.wit` 1.8.
+
+## Progress (2026-10-23)
+
+Made on `claude/youthful-mendel-mf1soy` (bc23dcf1):
+- **`init`** reads the word, counts it with `dev` alone (`link_dev`), names it in the boot line, keeps it in `write_modes`, and answers `link-console`.
+- **`init.wit` 1.8,** with the bindings regenerated.
+- **The check, in the `modes` suite** (x86 and aarch64, this session's container, QEMU TCG):
+  - without `link.conf`, the word is left out with its reason, and `tests/gateway_stub` gets `LINK CONSOLE OFF`;
+  - with `dev`, the boot line is `MODE: DEVELOPMENT AND LINK CONSOLE`, across a reboot, and the stub gets `LINK CONSOLE ON`.
+- **Left:** `set-mode` keeping the word, checked once the shell's `mode` (750-APP-0105) is in `main`; only a `BADGE_MODE` client can call it.
 
 ## Related
 
