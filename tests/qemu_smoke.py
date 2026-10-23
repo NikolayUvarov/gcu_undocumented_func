@@ -4249,6 +4249,8 @@ def modes_suite(args):
                     require(vm.command("mode development off", raw=True), "MODE: MAINTENANCE, SET BY operator: operator")
                     require(vm.command("cat data/mode.conf", raw=True), "maintenance")
                     require(vm.command("mode turbo on", raw=True), "USAGE: MODE")
+                    print("PASS: modes: the shell's mode shows the mode set by disk, turns one on after the operator agrees "
+                          "and off at once; init logs the change with the shell's badge (750-EFF-0013)", flush=True)
                 assert "PANIC" not in vm.log, vm.log[-2000:]
             finally:
                 vm.close()
@@ -4260,8 +4262,7 @@ def modes_suite(args):
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
           "Effector grant; the shell alone holds init's mode client, in SLOT_MODE; check reads the modes and is refused a "
-          "change, which init logs with its clause (MC-12.6); the shell's mode turns one on after the operator agrees and off "
-          "at once (750-EFF-0013)", flush=True)
+          "change, which init logs with its clause (MC-12.6)", flush=True)
 
 
 # The owner's Effector policy the modes suite writes (750-KRN-0120, 0121): sysmon may be restarted, deliveries go to data/inbox/.
