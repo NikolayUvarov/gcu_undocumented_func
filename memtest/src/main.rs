@@ -262,10 +262,23 @@ fn work(index: u64, argument: u64) {
     while mode == 1 || n < COUNT { n += 1; unsafe { words.add(index as usize).write_volatile(n); } }
 }
 
+// Sleeps of 10 ms for `ms` and the longest one: while another CPU zeroes a large block, the boot CPU's tick still ends
+// them (262-KRN-0165).
+fn naps(ms: u64) {
+    let end = mind::time::monotonic_ns() + ms * 1_000_000;
+    let (mut longest, mut count) = (0, 0);
+    while mind::time::monotonic_ns() < end {
+        let before = mind::time::monotonic_ns();
+        mind::time::sleep(10);
+        longest = longest.max(mind::time::monotonic_ns() - before); count += 1;
+    }
+    mind::println!("[MEMTEST] NAPS {} LONGEST {} MS", count, longest / 1_000_000);
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
     if let Some((index, argument)) = mind::process::worker() { return work(index, argument); }
-    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault] | memtest big <MiB> [hold] | memtest load <path> [workers]");
+    mind::about!("memtest — test program of task memory beyond the kernel arena: large heaps and shared read-only objects.\nUsage: memtest alloc <MiB> | memtest hold <MiB> | memtest share <MiB> | memtest fill | memtest endpoints | memtest workers <n> [hold|fault] | memtest big <MiB> [hold] | memtest load <path> [workers] | memtest naps <ms>");
     let mut words = mind::process::args_str().split_whitespace();
     let (command, mib) = (words.next().unwrap_or(""), words.next().and_then(|s| s.parse::<usize>().ok()).unwrap_or(16));
     match command {
@@ -277,7 +290,8 @@ fn main(_info: &'static BootInfo) {
         "endpoints" => endpoints(),
         "child" => child(),
         "workers" => workers(mib.min(7), words.next().unwrap_or("")),
+        "naps" => naps(mib as u64),
         "load" => { let path = mind::process::args_str().split_whitespace().nth(1).unwrap_or(""); load(path, words.next().and_then(|s| s.parse().ok()).unwrap_or(0).min(7)) }
-        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT] | MEMTEST BIG <MiB> | MEMTEST LOAD <PATH> [WORKERS]"),
+        _ => mind::println!("USAGE: MEMTEST ALLOC <MiB> | MEMTEST HOLD <MiB> | MEMTEST SHARE <MiB> | MEMTEST FILL | MEMTEST ENDPOINTS | MEMTEST WORKERS <n> [HOLD|FAULT] | MEMTEST BIG <MiB> | MEMTEST LOAD <PATH> [WORKERS] | MEMTEST NAPS <MS>"),
     }
 }

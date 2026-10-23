@@ -700,6 +700,13 @@ def big_memory_check(vm):
     require(memtest("big 2048"), "[MEMTEST] BIG: OUT OF MEMORY AFTER 0 MiB")
     vm.command("mkdir data")
     require(vm.command("write data/memory.conf memtest 3200"), "WROTE 13 BYTES")
+    # 262-KRN-0165: sleeps on another CPU end on time while the boot CPU zeroes. Applications go to the first CPU with the
+    # fewest of them: a first sleeper takes CPU 0 and leaves it, so the second stays on CPU 1 and the blocks go to CPU 0.
+    sleeper = None
+    if vm.cpus > 1:
+        first = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 60000 &"))[1])
+        sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 20000 &"))[1])
+        require(vm.command(f"kill {first}"), f"KILLED PID={first}")
     output = vm.command("run memtest big 3072 hold &")
     pid = int(re.search(r"STARTED PID=(\d+)", output)[1])
     # The shell is served while the blocks are taken and zeroed on another CPU.
@@ -712,6 +719,12 @@ def big_memory_check(vm):
     held = time.monotonic() - began
     require(log, "[MEMTEST] BIG HELD 3072 MiB IN 3 BLOCKS ZEROED=true INTACT=true GIB ALIGNED=true")
     assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
+    nap = None
+    if sleeper:
+        cpu_of = lambda p: int(re.search(r" CPU=(\d+) ", vm.command(f"stat {p}"))[1])
+        assert (cpu_of(pid), cpu_of(sleeper)) == (0, 1), (cpu_of(pid), cpu_of(sleeper))
+        nap = int(re.search(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=400))[1])
+        assert nap < 1000, f"a 10 ms sleep on CPU 1 took {nap} ms while CPU 0 zeroed"
     # Its kernel bytes (task record, context, info pages, page tables): in 4 KiB pages the 3 GiB would take 6 MiB of tables.
     stat = vm.command(f"stat {pid}")  # not raw: the suite's PIDs are counted from the first program (to_real)
     kernel = re.search(r" KERNEL=(\d+) ", stat)
@@ -772,7 +785,8 @@ def big_memory_check(vm):
     rows = bench_rows(output, ["large pages", "4 KiB pages"])
     require(output, "kbench: 2 measurements, 0 failed")
     require(vm.command("rm data/memory.conf"), "OK")
-    print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
+    slept = f", and a 10 ms sleep on CPU 1 in at most {nap} ms while CPU 0 zeroed (262-KRN-0165)" if nap is not None else ""
+    print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile{slept}; none without the owner's line; the frames came back", flush=True)
     print(f"PASS: the reserve held (262-KRN-0160): with a line of 16 GiB, memtest took {most} MiB in GiB blocks and {rest // 1024} MiB more in small ones, {left // 1024} KiB of the frame pool stayed (reserve {RECOVERY_RESERVE // 1024} KiB); `svc` could not start, and init restarted a killed rtc, which served", flush=True)
     print(f"PASS: large pages (262-KRN-0161): the 3 GiB took {kernel // 1024} KiB of kernel bytes with their page tables; kbench read a GiB at random in {rows['large pages'][0]:.0f} ns a read in large pages and {rows['4 KiB pages'][0]:.0f} ns in 4 KiB pages (QEMU, not a machine's figure)", flush=True)
 
