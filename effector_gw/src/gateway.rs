@@ -72,6 +72,8 @@ pub trait Machine {
     fn screen(&mut self, max: u64) -> Result<Vec<u8>, Fail>;
     /// The telemetry counters.
     fn sample(&mut self) -> Sample;
+    /// The one-minute load average x 100 (0: unknown).
+    fn load(&mut self) -> u32;
 }
 
 enum Out { Bytes(Vec<u8>), File(String) }
@@ -155,6 +157,11 @@ impl Gateway {
     /// The telemetry counters, for the session and the owner.
     pub fn sample(&mut self, m: &mut dyn Machine, badge: Badge) -> Sample {
         if badge == Badge::Other { Sample::default() } else { m.sample() }
+    }
+
+    /// The one-minute load average x 100, for the session's heartbeat and poll and for the owner.
+    pub fn load(&mut self, m: &mut dyn Machine, badge: Badge) -> u32 {
+        if badge == Badge::Other { 0 } else { m.load() }
     }
 
     pub fn service_control(&mut self, m: &mut dyn Machine, badge: Badge, o: &Origin<'_>, name: &str, action: policy::Action) -> Result<ServiceState, Fail> {

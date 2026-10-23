@@ -7271,11 +7271,20 @@ def effector_suite(args, disk):
         assert result and result["status"] == "failed" and result["result"]["error"] == "denied", result  # logd: not in the policy
         record = server.agents[agent]
         assert record["os_version"] == "mindcore" and record["arch"] == ("arm64" if args.arch == "aarch64" else "x64") and record["hostname"] == "mind-qemu", record
+        # While the failed ACK waited, the one slot was occupied: the server takes no idle report for it (Effector ahelp).
+        held = [b for b in list(server.beats) if b.get("busy")]
+        assert any(b["executing_commands"][0]["command_id"] == exec_id and b["occupied_queues"] == 1 and b["free_slots"] == 0 and b["busy_since"] for b in held), held[-3:]
+        assert not record["busy"] and record["free_slots"] == 1, record
+        # The load, in the heartbeat and the poll, once a telemetry sample has counted the cores.
+        loaded = [b["load"] for b in list(server.beats) if "load" in b]
+        assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
+        assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
               f"at most {max(gaps):.1f} s apart; two commands answered denied after journaling, a service the policy does not "
-              "name refused by the gateway, a failed ACK retried; the token kept in its private directory", flush=True)
+              "name refused by the gateway, a failed ACK retried with the agent busy meanwhile; the load in the heartbeat and "
+              f"the poll ({loaded[-1]['load_percent']}% of {loaded[-1]['cpu_cores']} cores); the token kept in its private directory", flush=True)
         # collect_file through the gateway: a file under the policy's root uploaded whole with its SHA-256; one outside
         # it refused by the policy; both journaled and acknowledged (750-EFF-0007).
         collect_id = server.queue(agent, "collect_file", {"kind": "collect_file", "path": "data/reports/r.bin", "max_bytes": 1048576})

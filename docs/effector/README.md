@@ -243,6 +243,9 @@ every request (MC-10.6).
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
 - **An action runs once**, for a new command that has not expired and whose answer the journal has room for.
+- **Its budget** is the command's `timeout_seconds`, apart from its term in the server's queue; **its answer** is sent
+  until the server takes it, even after that term (the server keeps a late one); **meanwhile** the heartbeat says the
+  agent is busy with it, and every heartbeat and poll carries the load (contract 1.2, from the server's `ahelp`).
 
 **Telemetry** (750-EFF-0014): every 30 s, a schema 1 sample to `/api/telemetry` (`effector/src/telemetry.rs`), from the
 gateway's `sample` (`effector.wit` 1.1) and the session's view of the network cards. Rates (processor load, each

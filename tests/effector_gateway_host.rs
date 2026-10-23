@@ -63,6 +63,7 @@ impl Machine for Fake {
         self.screens += 1;
         if self.screen.len() as u64 > max { Err(Fail::Bounds) } else { Ok(self.screen.clone()) }
     }
+    fn load(&mut self) -> u32 { 150 }
     fn sample(&mut self) -> Sample {
         Sample { cpus: 2, busy_ns: 5, idle_ns: 7, uptime_ms: self.now, memory_total: 1000, memory_free: 900,
                  services: vec![Load { name: "sysmon".into(), state: Some(ServiceState::Running), pid: 9, run_ns: 1, started_ns: 2, memory: 3 }],
@@ -233,6 +234,7 @@ fn the_sample_is_for_the_session_and_the_owner() {
     assert_eq!((s.cpus, s.memory_free, s.services.len(), s.volumes.len()), (2, 900, 1, 1));
     assert_eq!(g.sample(&mut m, Badge::Owner), s);
     assert_eq!(g.sample(&mut m, Badge::Other), Sample::default());
+    assert_eq!((g.load(&mut m, Badge::Session), g.load(&mut m, Badge::Owner), g.load(&mut m, Badge::Other)), (150, 150, 0));
 }
 
 #[test]

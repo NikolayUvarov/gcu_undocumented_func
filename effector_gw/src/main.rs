@@ -296,6 +296,11 @@ impl Machine for Host {
         encoded
     }
 
+    fn load(&mut self) -> u32 {
+        if !present(SLOT_SYSINFO) { return 0; }
+        match sysinfo::load(Endpoint(SLOT_SYSINFO)) { Ok(Ok(l)) => l.one, _ => 0 }
+    }
+
     fn sample(&mut self) -> Sample {
         let mut s = Sample { uptime_ms: mind::time::uptime_ms() as u64, ..Sample::default() };
         s.services = self.boot_services().into_iter().map(|(name, state, pid)| Load { name, state: Some(state), pid, ..Load::default() }).collect();
@@ -405,6 +410,7 @@ fn main(_info: &'static BootInfo) {
                 let r = gw.open_screen(m, badge, &origin(&o)).map(|t| transfer(&t)).map_err(error);
                 wit::reply_open_screen(reply, r.as_ref().map_err(|e| *e))
             }
+            wit::Request::Load => wit::reply_load(reply, gw.load(m, badge)),
             wit::Request::Sample => {
                 let s = gw.sample(m, badge);
                 let mut services = List::default();

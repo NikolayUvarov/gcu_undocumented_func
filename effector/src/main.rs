@@ -28,7 +28,8 @@ mind::request!(REQUEST_CONSOLE | REQUEST_NETWORK | REQUEST_PARSE | REQUEST_TLS |
 const TLS: Endpoint = Endpoint(SLOT_TLS);
 const PARSER: Endpoint = Endpoint(SLOT_PARSE);
 const GATEWAY: Endpoint = Endpoint(SLOT_GATEWAY);
-const ACTION_MS: u64 = 120_000; // a gateway request's deadline, from when it is handed over
+const ACTION_S: u64 = 120; // a gateway request's budget when the command names none, from when it is handed over
+const LOAD_MS: usize = 10_000; // the load is read this often for the heartbeat and the poll
 const BODY_MAX: usize = 16384;
 const REQUEST_MS: usize = 3000;
 const CONNECT_MS: u32 = 10_000;
@@ -140,13 +141,14 @@ fn failure(e: gateway::Error) -> session::Failure {
     }
 }
 
-/// The command's origin as the gateway audits it; a field cut to fit says so.
-fn origin(id: &str, initiator: &str, reason: &str) -> gateway::Origin {
+/// The command's origin as the gateway audits it; a field cut to fit says so. `budget_s`: the command's own execution
+/// budget, apart from its term in the server's queue.
+fn origin(id: &str, initiator: &str, reason: &str, budget_s: u64) -> gateway::Origin {
     fn cut(s: &str, n: usize) -> &str { let mut e = s.len().min(n); while !s.is_char_boundary(e) { e -= 1; } &s[..e] }
     gateway::Origin {
         command: Text::new(cut(id, 64)).unwrap_or_default(), initiator: Text::new(cut(initiator, 128)).unwrap_or_default(),
         reason: Text::new(cut(reason, 512)).unwrap_or_default(), truncated: initiator.len() > 128 || reason.len() > 512,
-        deadline_ms: now() as u64 + ACTION_MS,
+        deadline_ms: now() as u64 + budget_s * 1000,
     }
 }
 
@@ -166,6 +168,10 @@ struct Agent {
     executed: u64,
     executed_total: u64,
     cpu_model: String,
+    load: Option<wire::Load>,
+    load_at: usize,
+    busy_since: Option<String>,
+    held: Option<(String, String)>, // the command taken this run whose answer waits, and its action
 }
 
 impl Agent {
@@ -290,11 +296,19 @@ impl Agent {
     }
 
     #[inline(never)]
-    fn heartbeat(&mut self, stopping: bool) -> Outcome {
-        let mut buf = [0u8; 1024];
+    fn heartbeat(&mut self, stopping: bool, waiting: Option<session::Id>) -> Outcome {
+        let mut buf = [0u8; 1536];
         let mut stamp = [0u8; 20];
         let agent_time = mind::rtc::unix_time().map(|t| wire::rfc3339_utc(t, &mut stamp));
-        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: self.config.hostname(), arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time };
+        // Busy from the first heartbeat that finds an answer waiting, until the server takes it.
+        match (waiting, self.busy_since.is_some()) {
+            (Some(_), false) => { let mut since = [0u8; 20]; self.busy_since = Some(String::from(mind::rtc::unix_time().map_or("1970-01-01T00:00:00Z", |t| wire::rfc3339_utc(t, &mut since)))); }
+            (None, true) => { self.busy_since = None; self.held = None; }
+            _ => {}
+        }
+        let action = match (&self.held, waiting) { (Some((held, action)), Some(w)) if held == w.as_str() => action.as_str(), _ => "" };
+        let busy = waiting.as_ref().zip(self.busy_since.as_deref()).map(|(w, since)| wire::Busy { since, command: w.as_str(), action });
+        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: self.config.hostname(), arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load };
         let Ok(body) = wire::heartbeat(&mut buf, &h) else { return Outcome::Permanent };
         let body: Vec<u8> = body.to_vec();
         let Some(status) = self.request(Method::Post, "/api/heartbeat", "", Some(&body)) else { return Outcome::Retry };
@@ -391,7 +405,9 @@ impl Agent {
         let mut took_command = false;
         // While an answer waits for its ACK the agent takes no new command: the server delivers each command once, so
         // `at_capacity=1` asks it to hold them (contract 1.0) rather than hand over one that would be refused.
-        let query = alloc::format!("?agent_id={}{}", self.agent_id, if session.busy() { "&at_capacity=1" } else { "" });
+        let mut query = alloc::format!("?agent_id={}{}", self.agent_id, if session.busy() { "&at_capacity=1" } else { "" });
+        // The load on every poll too (Effector ahelp, "Load gate").
+        if let Some(l) = self.load { let _ = core::fmt::write(&mut query, format_args!("&load_percent={}.{:03}", l.percent / 1000, l.percent % 1000)); }
         let outcome = match self.request(Method::Get, "/api/commands/poll", &query, None) {
             None => Outcome::Retry,
             Some(200) => match self.answer(|v| wire::commands(v).map(|c| (c.count, c.activation_required, c.list.map(|d| d.map(|d| (String::from(d.command.id), String::from(d.command.agent_id), String::from(d.command.action), String::from(d.command.program), String::from(d.command.payload), d.command.expires_unix, String::from(d.initiator), String::from(d.reason))))))) {
@@ -408,7 +424,7 @@ impl Agent {
                         match received {
                             Ok(Accepted::Store(store)) => {
                                 let durable = if store.rewrite { self.rewrite_journal(session) } else { self.append_journal(&store.record) };
-                                if durable { self.count_executed(); }
+                                if durable { self.count_executed(); self.held = Some((String::from(id.as_str()), String::from(action.as_str()))); }
                                 let result = store.record.result;
                                 let why = if let session::Final::Failed(f) = result { f.name() } else { "" };
                                 mind::println!("EFFECTOR: {} {} {}{}{}{}", result.status().to_ascii_uppercase(), id, action, if why.is_empty() { "" } else { ": " }, why, if durable { "" } else { " (JOURNAL WRITE FAILED)" });
@@ -431,12 +447,12 @@ impl Agent {
     /// `collect_file` through the gateway (750-EFF-0007): opened there (the owner's policy decides, the gateway audits),
     /// then its bytes uploaded with their SHA-256 as the server's `/api/commands/file` takes them.
     #[inline(never)]
-    fn collect_file(&mut self, id: &str, payload: &str, initiator: &str, reason: &str) -> session::Final {
+    fn collect_file(&mut self, id: &str, payload: &str, o: &gateway::Origin) -> session::Final {
         use session::{Failure, Final};
         let Ok((path, max)) = self.parsed(payload.as_bytes(), |v| wire::collect(v).map(|c| (String::from(c.path), c.max_bytes))) else {
             return Final::Failed(Failure::Malformed);
         };
-        let opened = match gateway::open_file(GATEWAY, &origin(id, initiator, reason), &path) {
+        let opened = match gateway::open_file(GATEWAY, o, &path) {
             Ok(Ok(t)) => t,
             Ok(Err(e)) => return Final::Failed(failure(e)),
             Err(_) => return Final::Failed(Failure::Unsupported),
@@ -459,17 +475,21 @@ impl Agent {
     #[inline(never)]
     fn act(&mut self, id: &str, action: &str, program: &str, payload: &str, initiator: &str, reason: &str) -> Option<session::Final> {
         use session::{Failure, Final};
+        // The command's own budget, else the server's default for its kind (services 180 s, screenshots 30 s).
+        let default = match action { "start_service" | "stop_service" | "restart_service" => 180, "screenshot" => 30, _ => ACTION_S };
+        let budget = if payload.trim_start().starts_with('{') { self.parsed(payload.as_bytes(), wire::timeout_seconds).ok().flatten() } else { None }.unwrap_or(default);
+        let o = origin(id, initiator, reason, budget);
         let service = |a| {
             // The server names a program; on MIND Core a program the owner's policy lets be controlled is a boot service.
-            let r = gateway::service_control(GATEWAY, &origin(id, initiator, reason), program, a);
+            let r = gateway::service_control(GATEWAY, &o, program, a);
             match r { Ok(Ok(_)) => Final::Completed, Ok(Err(e)) => Final::Failed(failure(e)), Err(_) => Final::Failed(Failure::Unsupported) }
         };
         Some(match action {
-            "collect_file" => self.collect_file(id, payload, initiator, reason),
-            "deliver_file" => self.deliver_file(id, payload, initiator, reason),
-            "collect_logs" => self.collect_logs(id, payload, initiator, reason),
+            "collect_file" => self.collect_file(id, payload, &o),
+            "deliver_file" => self.deliver_file(id, payload, &o),
+            "collect_logs" => self.collect_logs(id, payload, &o),
             "screenshot" => {
-                let opened = gateway::open_screen(GATEWAY, &origin(id, initiator, reason));
+                let opened = gateway::open_screen(GATEWAY, &o);
                 self.capture(id, opened, Artifact::Screen, "screenshot.png")
             }
             "start_service" => service(gateway::ServiceAction::Start),
@@ -482,14 +502,13 @@ impl Agent {
     /// `collect_logs`: `ring` (the system log) and `boot` (the last boot's log) through `open-log`, any other path
     /// through `open-file`; the text goes back inline, as the other agents' logs do.
     #[inline(never)]
-    fn collect_logs(&mut self, id: &str, payload: &str, initiator: &str, reason: &str) -> session::Final {
+    fn collect_logs(&mut self, id: &str, payload: &str, o: &gateway::Origin) -> session::Final {
         let path = if payload.trim_start().starts_with('{') {
             match self.parsed(payload.as_bytes(), |v| wire::log_path(v).map(String::from)) { Ok(p) => p, Err(_) => return session::Final::Failed(session::Failure::Malformed) }
         } else { String::from(payload.trim()) };
-        let o = origin(id, initiator, reason);
         let (opened, name) = match path.as_str() {
-            "ring" | "boot" => (gateway::open_log(GATEWAY, &o, &path), alloc::format!("{}.log", path)),
-            p => (gateway::open_file(GATEWAY, &o, p), String::from(p.rsplit(['/', ':']).next().unwrap_or("collected.log"))),
+            "ring" | "boot" => (gateway::open_log(GATEWAY, o, &path), alloc::format!("{}.log", path)),
+            p => (gateway::open_file(GATEWAY, o, p), String::from(p.rsplit(['/', ':']).next().unwrap_or("collected.log"))),
         };
         self.capture(id, opened, Artifact::Log, &name)
     }
@@ -540,12 +559,12 @@ impl Agent {
     /// `deliver_file`: the bytes downloaded from `/api/commands/file` straight into the gateway, which checks their size
     /// and SHA-256 before the file takes its name under the policy's delivery root (750-KRN-0120).
     #[inline(never)]
-    fn deliver_file(&mut self, id: &str, payload: &str, initiator: &str, reason: &str) -> session::Final {
+    fn deliver_file(&mut self, id: &str, payload: &str, o: &gateway::Origin) -> session::Final {
         use session::{Failure, Final};
         let Ok((path, size, sha256, overwrite)) = self.parsed(payload.as_bytes(), |v| wire::deliver(v).map(|d| (String::from(d.path), d.size, String::from(d.sha256), d.overwrite))) else {
             return Final::Failed(Failure::Malformed);
         };
-        let handle = match gateway::deliver_begin(GATEWAY, &origin(id, initiator, reason), &path, size, &sha256, overwrite) {
+        let handle = match gateway::deliver_begin(GATEWAY, o, &path, size, &sha256, overwrite) {
             Ok(Ok(h)) => h,
             Ok(Err(e)) => return Final::Failed(failure(e)),
             Err(_) => return Final::Failed(Failure::Unsupported),
@@ -731,7 +750,8 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
     let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false,
-        telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model() });
+        telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
+        load: None, load_at: 0, busy_since: None, held: None });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
     match kept.as_deref().and_then(config::token).or_else(|| owner_token.as_deref().and_then(config::token)) {
         _ if agent.config.no_token() => mind::println!("EFFECTOR: NO AGENT TOKEN (token none): THE SERVER ASKS NONE"),
@@ -790,7 +810,7 @@ fn main(_info: &'static BootInfo) {
         if session.shutdown_done() || stopped_at.is_some_and(|s| now() > s + 10_000) { break; }
         match session.heartbeat(ms) {
             Ok(Some(attempt)) => {
-                let outcome = agent.heartbeat(session.stopping());
+                let outcome = agent.heartbeat(session.stopping(), session.waiting());
                 let _ = session.heartbeat_done(attempt, outcome, now() as u64, jitter());
             }
             Ok(None) => {}
@@ -806,6 +826,12 @@ fn main(_info: &'static BootInfo) {
             }
             Ok(None) => {}
             Err(e) => mind::println!("EFFECTOR: ACK SCHEDULE: {:?}", e),
+        }
+        // The load every 10 s, for the heartbeat and the poll; the cores from the last telemetry sample.
+        if now() >= agent.load_at && mind::dev::cap_info(SLOT_GATEWAY).0 == CAP_KIND_ENDPOINT {
+            let cores = agent.last.as_ref().map_or(0, |c| c.cpus);
+            agent.load = gateway::load(GATEWAY).ok().and_then(|l| wire::Load::new(l, cores));
+            agent.load_at = now() + LOAD_MS;
         }
         // Telemetry every 30 s once the server knows the agent, the first 5 s after.
         if session.registered() && !session.stopping() {

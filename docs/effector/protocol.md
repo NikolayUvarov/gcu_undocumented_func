@@ -23,7 +23,7 @@ Publishing this subset was approved by the maintainer on 2026-10-09
 **1.1 (2026-10-22):** `token none` in `effector.conf`, for a server that asks no agent token. Nothing else
 changed; a configuration without that line behaves as under 1.0.
 
-**1.2 (2026-10-22):** the actions the gateway serves, on routes and fields the reviewed server already has
+**1.2 (2026-10-22, the server's runtime rules added 2026-10-23):** the actions the gateway serves, on routes and fields the reviewed server already has
 (sst-test-deploy `server/artifacts.go`, `server/file_transfer.go`, `server/telemetry_store.go`, `docs/monitoring.md`).
 Everything 1.1 did stays.
 
@@ -42,6 +42,17 @@ Everything 1.1 did stays.
 - **Telemetry**: `POST /api/telemetry`, schema 1, every 30 s, the server's `204` expected. Counters only: processors,
   memory, uptime, the boot services' processes, the volumes, the network cards, and the commands answered (this run
   and in all, kept in `system/effector/executed`).
+- **The server's rules for reservations and runtime** (its `ahelp`, build 229, 2026-10-23):
+  - a command's `expires_at` is its term in the server's queue, not a deadline for its run or its report: once delivered,
+    its answer is sent until the server takes it or refuses it for good, and the server keeps a late one
+    (`late_acknowledgement`);
+  - its own execution budget is its payload's `timeout_seconds` (1–3600), the gateway's deadline for it; without one,
+    the server's default for its kind (services 180 s, screenshots 30 s, others 120 s);
+  - while an answer waits for the server, the heartbeat says so (`busy`, `busy_since`, `executing_commands`,
+    `occupied_queues` 1, `free_slots` 0), so idle reports never close the command as `agent_execution_unconfirmed`;
+  - every heartbeat carries `load` (`load_percent` = 100 x the one-minute load average / cores, `load_average`,
+    `cpu_cores`) and every poll `load_percent`, so the server holds operations that ask for a `load_gate`
+    (`effector.wit` 1.2 `load`).
 - **The journal** adds a line `ID IDENTITY done -` once an answer needs no more ACK, so a restart does not acknowledge it
   again. When full, it drops its oldest record that is acknowledged and past its command's expiry; unacknowledged work
   is still never forgotten, and an action runs only when its answer has room.
