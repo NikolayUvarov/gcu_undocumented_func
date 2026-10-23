@@ -24,7 +24,7 @@
 
 - [x] Host tests (`tests/effector_bench_host.rs`): the CPU loop is the Linux agent's; a run in slices gives a result with every field the server checks; a failed disk leaves the disk numbers out.
 - [x] The `effector` QEMU suite on x86_64 and aarch64: a 12 s run accepted with every field, heartbeats under 5 s apart meanwhile (after the disk moved to 64 KiB pieces).
-- [ ] On the MacBook: the card shows a saved measurement.
+- [x] On the MacBook (2026-10-23, operation `20261023051204.958726827_000057`): `completed` in 50 s, saved by the server as the endpoint's `performance`: 202.3 million iterations/s on one thread, 1758 MiB/s copied, 3.1 MiB/s written and 33.1 MiB/s read on the boot stick.
 
 ## Related
 

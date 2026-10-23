@@ -90,3 +90,13 @@ The first run on real hardware.
 - **Telemetry on `hesere.uz`** (`GET /api/v1/monitoring`, 02:28 UTC): `Intel(R) Core(TM) i7-3615QM CPU @ 2.30GHz`, 8 CPUs, 5.8% busy, 8 160 358 400 bytes of memory, the boot, `ram` and `log` volumes, card 2 wireless with its MAC, 47 services with their PIDs, processor time and memory; the server counted the agent's traffic by `X-Effector-Agent-ID`.
 - **A screenshot asked through the server's API** (operation `20261023022853.806949911_000330`): `completed` in 4 s, a 1280x800 PNG of 124 829 bytes, SHA-256 `e39c9096…`, which the downloaded artifact matches; it shows the machine's console.
 - **Still seen:** about one transport error in 10–15 s on this Wi-Fi (DRV's 802.11b losses); requests and the ACK went through on reconnects.
+
+## Progress — 2026-10-23, two slot updates over the link, no rewrite
+
+- **How.** The MacBook took two releases through `scripts/link_update.py` over `effector485`, each with a trial restart that `init` confirmed: slot B at 04:40 UTC, slot A at 05:11.
+  - The release tree is this branch plus the commits of the other tracks on the stick's `fast-test` 0d73c076 (LNK, DRV, APP).
+  - Against the stick, only the agent and the gateway differ.
+- **`data/` and `system/` stayed.** The agent kept its ID and the owner's settings.
+- **What hesere 232 shows since:** telemetry, `load` in every heartbeat (19.5% of 8 cores), `busy:false` with `free_slots:1` when idle.
+- **`performance_measure`** completed in 50 s and is saved as the endpoint's measurement (750-EFF-0016).
+- **Still open on the server side:** file transfer for MIND is off on hesere (`mindcore_directories` empty). It is Effector task 81-mindcore-04.
