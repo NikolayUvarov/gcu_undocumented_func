@@ -463,6 +463,16 @@ def task_rows(vm):
         if m[1] not in SERVICES}
 
 
+def task_rows_reaped(vm, seconds=5):
+    """task_rows once the programs that ended are reaped: the boot CPU reaps when it is idle, later under load (000-KRN-0168)."""
+    deadline = time.monotonic() + seconds
+    rows = task_rows(vm)
+    while any(row[1] == "EXITED" for row in rows.values()) and time.monotonic() < deadline:
+        time.sleep(.2)
+        rows = task_rows(vm)
+    return rows
+
+
 def center_pixel(vm):
     _, size, _, pixels = vm.screenshot().split(b"\n", 3)
     width, height = map(int, size.split())
@@ -969,7 +979,7 @@ def normal_suite(vm):
     vm.expect(f"PID={first + 10} NAME=app FOREGROUND")
     vm.hmp("sendkey esc")
     vm.serial()
-    assert task_rows(vm) == {}
+    assert task_rows_reaped(vm) == {}
     vm.keys("run clock &\n")
     vm.serial()
     clock = first + 11
@@ -990,7 +1000,7 @@ def normal_suite(vm):
     assert clock in task_rows(vm), "PS/2 fg/Ctrl+Z must preserve the task"
     vm.keys(f"kill {clock}\n")
     vm.serial()
-    assert task_rows(vm) == {}
+    assert task_rows_reaped(vm) == {}
     # Idle: the CPU sleeps in HLT (one sample may catch it handling a tick, so a few are taken). QEMU shows no WFI
     # state for aarch64: there the emulator's own processor time over a second shows the CPU mostly asleep.
     if vm.arch == "aarch64":
@@ -1113,7 +1123,7 @@ def keys_suite(vm):
     time.sleep(.1); vm.collect(); vm.output = ""
     log = vm.service_logs("ps2_kbd", "[KBD] LAYOUT EN")
     require(log, "[KBD] LAYOUT RU"); require(log, "[KBD] MOUSE ON THE AUXILIARY PORT WITH A WHEEL")
-    assert task_rows(vm) == {}
+    assert task_rows_reaped(vm) == {}
     assert heap_used(vm) == baseline
     # keymap (issue 085): the layout and its switch through the shell's keyboard client (idl/keyboard.wit).
     require(vm.command("keymap"), "LAYOUT: US  SWITCH: CTRL+SHIFT OR ALT+SHIFT  LAYOUTS: US RU")
@@ -1229,7 +1239,7 @@ def consoles_check(vm):
     vm.expect("MIND> ps")
     vm.send_bytes(b"\x1b")
     time.sleep(.5); vm.collect(); vm.output = ""
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     print("PASS: virtual consoles: Ctrl+Alt+F2 opens console 2 while keys has the keyboard, keys never sees the switch keys; "
           "wintest keeps running there while console 1 is shown and its output is there after; each console its own history; ps names the console", flush=True)
 
@@ -1465,7 +1475,7 @@ def line_faces_check(vm):
         assert len(updates) >= int(seconds) - 1, (command, updates)
         vm.send_bytes(b"\x1b")
         vm.expect("MIND> ")
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     print("PASS: clock --line and dzen-clock --line run as console programs: one line on the screen, written again every second; Esc stops them", flush=True)
     rtc_load_check(vm)
 
@@ -2356,7 +2366,7 @@ def console_check(vm):
     vm.send_bytes(b"exit\r")
     require(vm.expect("EXITED. SHELL RESUMED."), "[CONSOLE] DONE")
     time.sleep(.1); vm.collect(); vm.output = ""
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     # Only the task in front hands over the focus (issue 160): console in the background starts top in the background
     # too, and the shell keeps the keys.
     console = int(re.search(r"PID=(\d+) NAME=console BACKGROUND", vm.command("run console top &"))[1])
@@ -2372,7 +2382,7 @@ def console_check(vm):
     assert rows[top][2] == "BG" and rows[console][2] == "BG", rows
     require(vm.command(f"kill {top}"), "KILLED")
     require(vm.command(f"kill {console}"), "KILLED")
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     print("PASS: console: uptime and grep print into its terminal, an unknown program is named, ps and ls of its own, shell commands named, exit returns to the shell; "
           "in the background it cannot give its program the focus", flush=True)
 
@@ -5945,7 +5955,7 @@ def audio_suite(vm, wav):
     played = vm.command("beep 440 200 0 100 880 300")
     require(played, "[BEEP] PLAYED 3 NOTES, 600 MS")
     require(played, "[BEEP] DONE")
-    assert task_rows(vm) == {}, "beep ended with its sound"
+    assert task_rows_reaped(vm) == {}, "beep ended with its sound"
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
@@ -9551,7 +9561,7 @@ def wm_suite(vm):
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(wait("RESUMED.", lines=0).replace("\n", ""), "CLOSE ALL: 3 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     for _ in range(20):
         if heap_used(vm) == baseline:
             break
@@ -9849,7 +9859,7 @@ def tablet_suite(vm, wav):
     vm.hmp("sendkey alt-x"); vm.serial(enter=False)
     require(logged(vm, start, "RESUMED.", timeout=12).replace("\n", ""), "CLOSE ALL: 4 WINDOWS")
     time.sleep(1); vm.collect(); vm.output = ""
-    assert task_rows(vm) == {}, task_rows(vm)
+    assert task_rows_reaped(vm) == {}, task_rows(vm)
     vm.close()
     import struct, wave
     with wave.open(str(wav)) as audio:
