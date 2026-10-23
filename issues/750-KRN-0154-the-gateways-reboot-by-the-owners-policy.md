@@ -19,9 +19,9 @@ Split from [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for
 
 ## Acceptance criteria
 
-- [ ] In the `modes` suite (x86 and aarch64), the gateway's stand-in under `reboot on` reboots the machine, and the next boot comes up in the same mode.
-- [ ] Without `reboot on`, its `reboot` is refused with the reason, and the machine runs on.
-- [ ] `stop-task` stays refused for the gateway.
+- [x] In the `modes` suite (x86 and aarch64), the gateway's stand-in under `reboot on` reboots the machine, and the next boot comes up in the same mode.
+- [x] Without `reboot on`, its `reboot` is refused with the reason, and the machine runs on.
+- [x] `stop-task` stays refused for the gateway.
 
 ## Progress (2026-10-23)
 
@@ -34,7 +34,7 @@ Made on `claude/youthful-mendel-mf1soy`:
   - without `reboot on`, the reboot is refused with that line, and the machine runs on;
   - with it, QEMU restarts the machine once, and the next boot comes up in the development mode; the stub's second start finds the first one's files and asks nothing.
 - **`docs/profile/bootstrap.md`** says so.
-- **Run:** x86, in this session's container (QEMU TCG); aarch64 is running.
+- **Run:** the `modes` suite passed on x86 and aarch64 (the reboot through PSCI `SYSTEM_RESET`), in this session's container (QEMU TCG).
 
 ## Related
 
