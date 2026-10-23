@@ -1,6 +1,6 @@
-# 000-APP-0095 — `ping`: the number of requests, their interval and wait, a fast mode; the size and the payload next
+# 000-APP-0095 — `ping`: the number of requests, their interval and wait, a fast mode; the size and the payload next — done
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: `-c`, `-i`, `-w` and `-f` in `main` since 2a33a71b (2026-10-20), each line's place since 1d841622 (2026-10-21); `-s` and `-p` on the tools branch since 2026-10-22, over the network track's `ping-with` (000-NET-0040, in `main` since ffe91c55) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** done (2026-10-23) · **Blocked by:** — · **Main task:** — · **Roadmap:** track D, G · **Constitution:** MC-12.3
 
 **Recorded by:** the tools track, 2026-10-20, at the maintainer's request ("ping utility lacks number of probes parameter and delay and size and payload and fast mode. Add them.").
 
@@ -68,6 +68,24 @@ Its last line gives no loss or times, and nothing stops a run.
 - **Tests:** host tests (`tests/shell_host.rs`: the options, their limits, the tally); the `net` suite: 2 requests of 1000 bytes of `a55a0f`, 20 of 1472 bytes with `-f`, one of 0 bytes, `-s 1473` and `-p abc` refused.
 - **Where:** made on `claude/000-APP-0095-ping-size` (the tools branch with NET's branch merged in), and brought onto the tools branch once 000-NET-0040 was in `main`.
 
+## Resolution
+
+- **`-c`, `-i`, `-w`, `-f` and each line's place** are in `main` since 2a33a71b and 1d841622 (the progress sections above).
+- **`-s` and `-p`** (1b6ffc73, over the network track's `socket.wit` 2.6 `ping-with`, 000-NET-0040):
+  - `-s` gives 0 to 1472 data bytes; `-p` gives 1 to 16 bytes in hexadecimal, repeated over them, 56 bytes with `-p` alone;
+  - each line names the reply's size, and `BAD DATA` when its data differ; the tally counts those.
+- **Host tests:** `tests/shell_host.rs` covers the options and their bounds, `-f`'s defaults, decimals and the tally.
+- **The `net` suite** checks:
+  - `ping -c 2 -i 0.2 -s 1000 -p a55a0f 10.0.2.2`: two replies of 1000 bytes, their data as sent;
+  - 20 requests of 1472 bytes with `-f`, and one of 0 bytes;
+  - `-s 1473` and `-p abc` refused, beside the earlier steps.
+- **Where it passed:** on the tools branch's 11b6ad01 (with `main` 2f85e06a, ABI 17), 2026-10-22.
+  - On x86 in the local "x86: boot, display, network, TLS, shell, memory, clock" group.
+  - On aarch64, the `net` suite in "aarch64: files, network and TLS" on DESKTOP-i7-930-wsl-u24 through Effector. That group's operation reached its hour after `net`, `tls`, `effector` and `updater`. Its `linkupdate` and `modes` were run again alone, and passed.
+  - The same group passed whole, locally, on 20b10b80.
+- **Not shown: the TTL.** The stack's ICMP socket does not hand it over.
+- That evidence is for QEMU only (MC-12.1).
+
 ## Related
 
-[000-NET-0040](../issues-done/000-NET-0040-an-echo-of-a-chosen-size-and-pattern.done) (the size and payload, from requests-NET.md), [000-APP-0031](../issues-done/000-APP-0031-netstat.done) (`netstat`).
+[000-NET-0040](000-NET-0040-an-echo-of-a-chosen-size-and-pattern.done) (the size and payload, from requests-NET.md), [000-APP-0031](000-APP-0031-netstat.done) (`netstat`).
