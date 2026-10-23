@@ -275,4 +275,23 @@ mod tests {
         assert!(space.readable(block).is_none() && heap.free(&mut space, block).is_none());
         assert!(heap.allocate(&mut space, 4096).is_some());
     }
+
+    #[test]
+    fn large_blocks_are_aligned_and_a_refused_one_leaves_nothing() {
+        // 262-KRN-0160: from 2 MiB on, a block lies on a 2 MiB boundary in both its addresses, after a small one too.
+        let (mut space, mut heap) = (Space::new().unwrap(), Heap::new());
+        let small = heap.allocate(&mut space, PAGE).unwrap();
+        let large = heap.allocate(&mut space, 3 * LARGE).unwrap();
+        assert!(large > small && large % LARGE == 0 && space.readable(large).unwrap() % LARGE == 0);
+        // In two steps: reserved bytes count, a refused reservation counts nothing, a placed block is mapped and aligned.
+        let before = heap.bytes();
+        assert!(heap.reserve(HEAP_MAX_BYTES).is_none() && heap.bytes() == before);
+        let size = heap.reserve(2 * LARGE).unwrap();
+        assert_eq!(heap.bytes(), before + size);
+        let placed = heap.place(&mut space, Heap::frames_unzeroed(size).unwrap()).unwrap();
+        assert!(placed % LARGE == 0 && space.readable(placed + size - 1).is_some() && heap.bytes() == before + size);
+        assert!(heap.free(&mut space, placed).is_some() && heap.bytes() == before);
+        heap.reserve(LARGE).map(|size| heap.unreserve(size));
+        assert_eq!(heap.bytes(), before);
+    }
 }

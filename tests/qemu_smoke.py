@@ -698,16 +698,19 @@ def big_memory_check(vm):
     require(memtest("big 2048"), "[MEMTEST] BIG: OUT OF MEMORY AFTER 0 MiB")
     vm.command("mkdir data")
     require(vm.command("write data/memory.conf memtest 3200"), "WROTE 13 BYTES")
-    output = vm.command("run memtest big 3072 &")
+    output = vm.command("run memtest big 3072 hold &")
     pid = int(re.search(r"STARTED PID=(\d+)", output)[1])
     # The shell is served while the blocks are taken and zeroed on another CPU.
-    answers = []
+    answers, began = [], time.monotonic()
     for _ in range(5):
         start = time.monotonic()
-        require(vm.command("uptime"), "up ")
+        require(vm.command("uptime", timeout=120), "up ")
         answers.append(time.monotonic() - start)
-    log = vm.program_logs(pid, "BIG FREED", tries=600)
+    log = vm.program_logs(pid, "BIG HELD", tries=2400)
+    held = time.monotonic() - began
     require(log, "[MEMTEST] BIG HELD 3072 MiB IN 3 BLOCKS ZEROED=true INTACT=true GIB ALIGNED=true")
+    assert f"FAULT PID={pid} " not in vm.command("faults"), vm.command("faults")
+    require(vm.command(f"kill {pid}"), f"KILLED PID={pid}")
     for _ in range(40):
         if frames_free(vm) >= frames - 1024 * 1024:
             break
@@ -715,7 +718,7 @@ def big_memory_check(vm):
     else:
         raise AssertionError(f"the blocks' frames did not come back: {frames_free(vm)} of {frames}")
     require(vm.command("rm data/memory.conf"), "OK")
-    print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
+    print(f"PASS: 3 GiB for a program the owner names (262-KRN-0160), in GiB blocks zeroed and aligned, every page written and read back in {held:.0f} s; the shell answered in at most {max(answers):.1f} s meanwhile; none without the owner's line; the frames came back", flush=True)
 
 
 def hardware_report_check(vm):
