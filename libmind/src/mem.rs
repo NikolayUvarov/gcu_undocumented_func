@@ -9,6 +9,10 @@ impl Pages {
     pub fn new(bytes: usize) -> Option<Self> {
         match call(SYSCALL_ALLOC, bytes, 0) { 0 => None, address => Some(Self { address, length: bytes }) }
     }
+    /// The same in 4 KiB pages only, not 2 MiB and 1 GiB ones (ALLOC_SMALL_PAGES): to measure what large pages give.
+    pub fn new_small(bytes: usize) -> Option<Self> {
+        match call(SYSCALL_ALLOC, bytes, ALLOC_SMALL_PAGES) { 0 => None, address => Some(Self { address, length: bytes }) }
+    }
     pub fn address(&self) -> usize { self.address }
     pub fn len(&self) -> usize { self.length }
     pub fn is_empty(&self) -> bool { self.length == 0 }

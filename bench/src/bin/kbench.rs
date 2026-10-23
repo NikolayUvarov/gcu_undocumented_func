@@ -3,7 +3,8 @@
 // kbench [group …] [--quick]: the kernel's performance (176-KRN-0062). Each measurement is repeated; the screen shows
 // its median with a bar on a log scale, its minimum and its 99th percentile, and log:kbenchNNNN.txt every statistic
 // with a histogram. The IPC and process groups talk to copies of kbench it starts (`kbench --child`), the workers group
-// to workers of itself (262-KRN-0163), which it may start only when the owner names it in data/memory.conf.
+// to workers of itself (262-KRN-0163), which it may start only when the owner names it in data/memory.conf; the pages group
+// takes a GiB, which it may only with that line too (262-KRN-0161).
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
@@ -18,11 +19,11 @@ use mind::mem::Pages;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO);
 
-const GROUPS: [(&str, &str); 7] = [
+const GROUPS: [(&str, &str); 8] = [
     ("syscall", "System calls"), ("ipc", "IPC, two processes"), ("caps", "Capabilities"),
-    ("memory", "Memory"), ("timer", "The timer"), ("process", "Processes"), ("workers", "Workers, other CPUs"),
+    ("memory", "Memory"), ("pages", "Random reads in 1 GiB"), ("timer", "The timer"), ("process", "Processes"), ("workers", "Workers, other CPUs"),
 ];
-const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process|workers …] [--quick]";
+const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|pages|timer|process|workers …] [--quick]";
 const MIB: usize = 1024 * 1024;
 const PAGE: usize = 4096;
 
@@ -121,6 +122,30 @@ fn memory(run: &mut Run) {
     run.note(format!("1 MiB taken, touched and freed at {} (median)", rate));
 }
 
+// Reads at random places of a GiB, each place found from the word read before, so that no read overlaps the next: in
+// 2 MiB and 1 GiB pages, then in 4 KiB pages (ALLOC_SMALL_PAGES), the same memory touched beforehand (262-KRN-0161).
+fn pages(run: &mut Run) {
+    const SPAN: usize = 1 << 30;
+    let n = run.reps(200);
+    let mut medians = Vec::new();
+    for (name, small) in [("large pages", false), ("4 KiB pages", true)] {
+        let Some(mut block) = (if small { Pages::new_small(SPAN) } else { Pages::new(SPAN) }) else {
+            return run.note(String::from("pages: not measured, a GiB is beyond kbench's quota (name it in data/memory.conf)"));
+        };
+        for page in block.as_mut_slice().chunks_mut(PAGE) { unsafe { core::ptr::write_volatile(page.as_mut_ptr(), 1) }; }
+        let words = block.address() as *const u64;
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut samples = batches(n, 1024, || {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            x ^= unsafe { core::ptr::read_volatile(words.add((x as usize >> 3) % (SPAN / 8))) };
+        });
+        medians.push(run.row(name, &mut samples, 1024).median);
+    }
+    if let [large, small] = medians[..] {
+        run.note(format!("pages: a random read over 1 GiB takes {} in large pages and {} in 4 KiB pages (medians, this machine only)", report::duration(large), report::duration(small)));
+    }
+}
+
 fn timer(run: &mut Run) {
     for (ms, full) in [(1usize, 100usize), (10, 50)] {
         let n = run.reps(full);
@@ -195,7 +220,7 @@ fn workers(run: &mut Run) {
 
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, the timer, processes, workers.\nUsage: kbench [syscall|ipc|caps|memory|timer|process|workers …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
+    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, large pages, the timer, processes, workers.\nUsage: kbench [syscall|ipc|caps|memory|pages|timer|process|workers …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
     let args = mind::process::args_str().trim();
     if args == "--child" || mind::process::worker().is_some() { return child::serve(); }
     let words: Vec<&str> = args.split_whitespace().collect();
@@ -211,6 +236,7 @@ fn main(info: &'static mind::BootInfo) {
             "ipc" => ipc(&mut run),
             "caps" => caps(&mut run),
             "memory" => memory(&mut run),
+            "pages" => pages(&mut run),
             "timer" => timer(&mut run),
             "workers" => workers(&mut run),
             _ => processes(&mut run),

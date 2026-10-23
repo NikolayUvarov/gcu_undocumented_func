@@ -83,7 +83,7 @@ enum Program { Boot(usize), File(Region, usize) }
 // A heap block of more than ZERO_APART bytes: taken and charged under the scheduler's lock, zeroed after the CPU lets go
 // of it, then mapped for its task under the lock again; the task stays in its ALLOC meanwhile (262-KRN-0160).
 const ZERO_APART: usize = 64 * 1024 * 1024;
-struct Zeroing { slot: usize, pid: u64, memory: Region }
+struct Zeroing { slot: usize, pid: u64, memory: Region, small: bool }
 // A worker being started: its creator, its index and argument word, and its stack in bytes (0: what the ELF asks).
 #[derive(Clone, Copy)]
 struct Worker { creator: (usize, u64), index: u64, argument: u64, stack: usize }
@@ -1126,11 +1126,11 @@ impl Scheduler {
     // A large block zeroed outside the lock goes to its task, if the task did not end meanwhile: mapped, its address the
     // ALLOC's result; without room in its window its bytes go back, and the result stays 0 (262-KRN-0160).
     unsafe fn place_zeroed(&mut self, job: Zeroing) {
-        let Zeroing { slot, pid, memory } = job;
+        let Zeroing { slot, pid, memory, small } = job;
         let size = memory.len();
         if !self.tasks[slot].as_ref().is_some_and(|t| t.pid == pid && t.state != State::Exited) { return; } // its bytes left with it
         let task = self.tasks[slot].as_mut().unwrap();
-        let address = task.heap.place(&mut task.space, memory);
+        let address = task.heap.place(&mut task.space, memory, small);
         if address.is_none() { task.heap.unreserve(size); self.uncharge(slot, size); }
         core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.mailbox(slot)).result), address.unwrap_or(0));
     }
@@ -1397,19 +1397,20 @@ impl Scheduler {
                     }
                 }
             }
+            SYSCALL_ALLOC if request.arg2 & !ALLOC_SMALL_PAGES != 0 => Ok(0),
             SYSCALL_ALLOC => match request.arg1.checked_add(HEAP_PAGE_SIZE - 1).map(|n| n & !(HEAP_PAGE_SIZE - 1)).filter(|&n| n > 0) {
                 // A large block is zeroed outside the lock (its result is written then, by `place_zeroed`).
                 Some(size) if size > ZERO_APART => if !self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) || !self.charge(slot, size) { Ok(0) } else {
                     let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
                     match task.heap.reserve(size).map(|size| (size, crate::user_heap::Heap::frames_unzeroed(size))) {
-                        Some((_, Some(memory))) => { self.zeroing[cpu] = Some(Zeroing { slot, pid: task.pid, memory }); Ok(0) }
+                        Some((_, Some(memory))) => { self.zeroing[cpu] = Some(Zeroing { slot, pid: task.pid, memory, small: request.arg2 & ALLOC_SMALL_PAGES != 0 }); Ok(0) }
                         Some((reserved, None)) => { task.heap.unreserve(reserved); self.uncharge(slot, size); Ok(0) }
                         None => { self.uncharge(slot, size); Ok(0) }
                     }
                 },
                 Some(size) if self.leaves_reserve(task.band == BAND_APPLICATION as u8, size) && self.charge(slot, size) => {
                     let task = (*(*tasks).ptr(slot)).as_mut().unwrap();
-                    match task.heap.allocate(&mut task.space, size) { Some(address) => Ok(address), None => { self.uncharge(slot, size); Ok(0) } }
+                    match task.heap.allocate(&mut task.space, size, request.arg2 & ALLOC_SMALL_PAGES != 0) { Some(address) => Ok(address), None => { self.uncharge(slot, size); Ok(0) } }
                 }
                 _ => Ok(0),
             },

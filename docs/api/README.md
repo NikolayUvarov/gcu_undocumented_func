@@ -1,6 +1,6 @@
 # MIND Core API
 
-**Version:** ABI 18 (`ABI_VERSION` in `common/abi.rs`; 262-KRN-0163) · **Stability:** unstable, see [Stability](#stability)
+**Version:** ABI 19 (`ABI_VERSION` in `common/abi.rs`; 262-KRN-0161) · **Stability:** unstable, see [Stability](#stability)
 
 Programs reach MIND Core through three layers:
 
@@ -44,7 +44,7 @@ This is the full list: every `SYSCALL_*` constant of `common/abi.rs`, which rema
 
 | No. | Name | Arguments → result |
 |---|---|---|
-| 8 | `ALLOC` | `arg1` = bytes → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`). The heap window is the rest of the task's 512 GiB top-level entry. A block of 2 MiB or more lies on a 2 MiB boundary, one of 1 GiB or more on a 1 GiB boundary, in its address and, where the pool allows, in its frames; a block of more than 64 MiB is zeroed after the kernel lets go of its lock, so other CPUs go on meanwhile (262-KRN-0160) |
+| 8 | `ALLOC` | `arg1` = bytes, `arg2` = 0 or `ALLOC_SMALL_PAGES` (any other bit: 0) → address of a new zeroed heap block from the frame pool, 0 on failure (the memory quota of the task and of every payer above it, `HEAP_MAX_BLOCKS`). The heap window is the rest of the task's 512 GiB top-level entry. A block of 2 MiB or more lies on a 2 MiB boundary, one of 1 GiB or more on a 1 GiB boundary, in its address and, where the pool allows, in its frames; a block of more than 64 MiB is zeroed after the kernel lets go of its lock, so other CPUs go on meanwhile (262-KRN-0160). The block is mapped in the largest pages that lie whole in it with both their addresses on their boundary: 1 GiB pages where the CPU has them (x86-64: `CPUID 80000001h` EDX bit 26; aarch64: always), else 2 MiB pages, else 4 KiB pages; with `ALLOC_SMALL_PAGES`, 4 KiB pages only (262-KRN-0161) |
 | 9 | `FREE` | `arg1` = block address; memory still referenced elsewhere is kept until released and stays charged to the owner |
 | 15 | `MEM_SHARE` | `arg1` = address of an own heap block → handle of a memory capability (read, write, grant) |
 | 16 | `MEM_MAP` | `arg1` = memory, DMA or MMIO handle → mapped address; `arg2` = size. Read-only without `CAP_WRITE`; MMIO uncached |
