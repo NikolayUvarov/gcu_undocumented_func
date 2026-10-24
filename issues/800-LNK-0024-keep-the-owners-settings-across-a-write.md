@@ -43,6 +43,13 @@ What the boot volume holds that the owner sets (from the programs' paths in `mai
 
 The saved files may hold keys and the agent's token: never printed, logged or committed.
 
+## Progress
+
+- **2026-10-24, the first write with `--keep-settings`** (11:08 UTC, the new script).
+  - **What it kept:** the time zone (`TIME ZONE UTC+03:00 FROM data/clock.conf` on the new stick), the agent's `policy` and `agent_id`.
+  - **What it could not keep:** `effector.conf`, which was not on the old stick. The stick had been pulled from the running Mac, and `vfs_server` had not yet written `start.msh`'s `rm` and `mv` to it. A reboot after the next `start.msh` showed the file kept.
+  - **What followed:** KRN is asked to flush after a rename or a remove. EFF is asked to end `start.msh` with `sync`. `docs/write-disk.md` (EN, RU) says to shut down or reboot before taking the disk out.
+
 ## Related
 
 [800-LNK-0023](800-LNK-0023-keep-the-effector-agent-across-a-write.md), 800-LNK-0014.
