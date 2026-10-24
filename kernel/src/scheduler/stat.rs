@@ -227,7 +227,7 @@ impl Scheduler {
                 let (holder, holders) = holder(&|c| *c == Capability::Interrupt(line));
                 let mut endpoints = [0u32; IRQ_SHARERS];
                 for (out, b) in endpoints.iter_mut().zip(self.irq_bind[line as usize].iter().flatten()) { *out = b.ep as u32; }
-                out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: interrupts::irq_masked(line) as u32, holders,
+                out.push(StatIrq { line: line as u32, endpoint: endpoints[0], masked: (interrupts::irq_masked(line) || (line as usize).checked_sub(MSI_FIRST).is_some_and(|v| self.storms[v].masked)) as u32, holders,
                     holder, count: self.accounting.irqs[line as usize], endpoints });
             },
             STAT_DEVICES => for device in self.devices.iter() {

@@ -248,6 +248,27 @@ pub unsafe fn msi(device: &Device, index: usize) -> Option<()> {
     Some(())
 }
 
+/// Masks or unmasks MSI-X entry `entry` (its vector control), or the device's MSI for `entry` u16::MAX: its mask bit
+/// with per-vector masking, else its enable bit (000-KRN-0077). False without the capability.
+pub unsafe fn msi_mask(device: &Device, entry: u16, masked: bool) -> bool {
+    if entry != u16::MAX {
+        let Some(at) = msix_entry(device, entry) else { return false };
+        let control = (at as *mut u32).add(3);
+        control.write_volatile(control.read_volatile() & !1 | masked as u32);
+        return true;
+    }
+    let Some(cap) = capability(device, 0x05) else { return false };
+    let header = config(device, cap);
+    let control = header >> 16;
+    if control & 0x100 != 0 {
+        let at = cap + if control & 0x80 != 0 { 16 } else { 12 };
+        write(device.bus, device.device, device.function, at, config(device, at) & !1 | masked as u32);
+    } else {
+        write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | (if masked { control & !1 } else { control | 1 }) << 16);
+    }
+    true
+}
+
 /// The device's MSI as programmed: enabled, address, data (the test kernel's check).
 #[cfg(feature = "bar-move-test")]
 pub unsafe fn msi_state(device: &Device) -> Option<(bool, u64, u32)> {

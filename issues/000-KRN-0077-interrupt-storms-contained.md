@@ -1,6 +1,6 @@
 # 000-KRN-0077 — Interrupt storms contained
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made on `claude/youthful-mendel-mf1soy`; the gate left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
 
 ## Problem
 
@@ -12,10 +12,41 @@ A device whose interrupt line stays asserted, or whose MSI fires without end, ke
 - **What follows.** The kernel logs `IRQ <n> STORM: MASKED` and sends the bound driver an IRQ event that says so; `init` then restarts or quarantines the driver as for a fault. A line with no driver stays masked.
 - **Unmasking.** The driver asks for the line again (`IRQ_ACK`); a second storm within a minute keeps it masked until a restart.
 
+## What the code already did, and the gap (2026-10-24)
+
+- **A line cannot storm.** The interrupt entry masks a device line at the controller as it delivers it: on x86 the PIC line (`context::event`), on aarch64 the GIC's SPI. The line is unmasked only when every driver bound to it has called `IRQ_ACK`, or when its one waiter calls `IRQ_WAIT` again. A level line that stays asserted therefore interrupts no faster than its driver takes it. A driver that never acknowledges leaves the line masked for good. A line without a driver is masked.
+- **An MSI can storm.** MSIs and MSI-X vectors are not masked at delivery (`set_irq_masked` ignores lines from 16 on). A device that sends messages without end keeps the boot CPU, where they are aimed, in the kernel's interrupt path, whatever its driver does.
+- **So the plan changes** to what the gap needs, without an ABI change:
+  - **What counts.** A storm counts the messages that find the last one not yet taken. For a bound driver, that is its pending interrupt; without one, a pending interrupt and no waiter.
+  - **When it masks.** At `STORM_LOST` (1000) such messages within `STORM_MS` (100 ms), the kernel masks the vector at the device: the MSI-X entry's vector control, the MSI's mask bit, or, without one, its enable bit. It logs `MSI <line> STORM: …, MASKED UNTIL ITS DRIVER TAKES THE LAST`, at most every 10 s a vector.
+  - **When it unmasks.** It unmasks the vector when the driver takes that interrupt, or calls `IRQ_WAIT` or `IRQ_BIND`. Messages then come no faster than the driver reads them, as a line's do.
+  - **No permanent mask, no restart by `init`.** A driver that keeps up is never slowed, and a device that does not stop costs no more than its driver's pace.
+  - **Where to see it.** `stat irqs` shows such a vector as `MASKED=1`.
+
+The first acceptance criterion (a driver that never acknowledges a level line) holds already, by the line's mask at delivery. It is replaced by the MSI case below (2026-10-24, before any of it was claimed).
+
 ## Acceptance criteria
 
-- **A QEMU check.** A test driver that never acknowledges a level-triggered line leaves the system responsive. The shell answers, the line is logged as masked, and the driver is restarted or quarantined.
+- **A QEMU check (x86).**
+  - The test kernel (`bar-move-test`) raises QEMU's `edu` device's MSI from CPU 1 without end, with nothing to take it.
+  - The storm is logged and the vector masked.
+  - `stat irqs` shows it masked, with a count that no longer grows.
+  - The shell answers.
 - **Profile and docs.** The profile names the bound.
+
+## Progress (2026-10-24)
+
+Made on `claude/youthful-mendel-mf1soy` (cca4dc50 and the commit after it):
+- **The kernel.**
+  - `Scheduler::storm` and `calm` (`kernel/src/scheduler.rs`), and `pci::msi_mask`.
+  - `stat irqs` reports `MASKED=1` for a vector masked for a storm.
+  - `docs/profile/kernel-objects.md` names the bound.
+- **The test kernel.** `bar-move-test` grants the edu device's MSI and BAR at boot, as before for the BAR check. From 10 s on, CPU 1 raises the device's interrupt for 2 ms at each pass through idle, and does not sleep then, since an idle CPU gets no tick.
+- **Checked** (this session's container, QEMU TCG, x86, the boot suite's bar check run alone):
+  - the vector was masked after 1000 messages not taken in 83 ms;
+  - `stat irqs` read `MASKED=1` with the count at 1002 twice, 2 s apart;
+  - `uptime` answered in 0.4 s.
+- **Not checked:** aarch64 (the same code; its MSIs go through the GIC's v2m frame or ITS), and a driver that takes the interrupt late, which unmasks it.
 
 ## Related
 
