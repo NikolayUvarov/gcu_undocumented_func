@@ -4,6 +4,7 @@ PHDRS {
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
     dynamic PT_DYNAMIC FLAGS(6);
+    stack PT_GNU_STACK FLAGS(6);
 }
 SECTIONS {
     . = 0;
@@ -21,5 +22,8 @@ SECTIONS {
     .data : { *(.data .data.*) *(.got .got.*) } :data
     .dynamic : { *(.dynamic) } :data :dynamic
     .bss (NOLOAD) : { *(.bss .bss.*) } :data
+    /* init's stack, PT_GNU_STACK's size (262-KRN-0164): 256 KiB, as its boot frame holds every service's plan and a
+       service's start goes deep (173-KRN-0035); no memory of the image. */
+    .stack (NOLOAD) : { . = . + 0x40000; } :stack
     /DISCARD/ : { *(.eh_frame) }
 }
