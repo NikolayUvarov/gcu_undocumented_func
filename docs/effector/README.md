@@ -258,6 +258,16 @@ every request (MC-10.6).
   until the server takes it, even after that term (the server keeps a late one); **meanwhile** the heartbeat says the
   agent is busy with it, and every heartbeat and poll carries the load (contract 1.2, from the server's `ahelp`).
 
+**The agent's mark on the screen** (750-EFF-0015): `effector_gw` calls the compositor's `remote` (`display.wit` 1.2)
+each second, so a filled circle beside the link's ring shows who can reach the machine through the agent:
+- grey while the session is not connected, not activated, or has not reported for 3 s;
+- red when the owner's policy lets it change the machine (a delivery, services, packages, an update past its check, a
+  reboot, tests);
+- yellow when it may only read.
+
+The session reports its connection each heartbeat (`effector.wit` 1.3 `connection`). The mark goes 3 s after the
+gateway stops.
+
 **Telemetry** (750-EFF-0014): every 30 s, a schema 1 sample to `/api/telemetry` (`effector/src/telemetry.rs`), from the
 gateway's `sample` (`effector.wit` 1.1) and the session's view of the network cards. Rates (processor load, each
 service's processor time) need two samples of the same boot and process, so the first sample has none; a value MIND

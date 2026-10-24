@@ -54,4 +54,4 @@ In QEMU (x86 with OVMF, aarch64 with AAVMF), on a disk with both slots:
 
 ## Related
 
-[351](351-self-update.md), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0166](../issues-done/351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [173-KRN-0036](173-KRN-0036-safe-start.md), `docs/update/slots.md`, `docs/write-disk.md`.
+[351](351-self-update.md), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0166](../issues-done/351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [173-KRN-0036](../issues-done/173-KRN-0036-safe-start.done), `docs/update/slots.md`, `docs/write-disk.md`.

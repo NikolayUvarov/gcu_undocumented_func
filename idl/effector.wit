@@ -12,7 +12,10 @@
 ///
 /// 1.2 (750-EFF-0014): `load`, the one-minute load average the session reports in every heartbeat and poll, so the
 /// server holds the operations that ask for a load gate (Effector's ahelp, "Load gate for builds and gates").
-package mind:effector@1.2.0;
+///
+/// 1.3 (750-EFF-0015): `connection`, what the session reports each heartbeat of its link to the server, so the gateway
+/// lights the agent's mark on the screen: grey unless connected and activated, then red or yellow by the policy.
+package mind:effector@1.3.0;
 
 interface effector {
     /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -119,4 +122,7 @@ interface effector {
     sample: func() -> sample;
     /// The one-minute load average x 100 (runnable tasks, as `sysinfo.load` gives it; 1.2). Allowed to both clients.
     load: func() -> u32;
+    /// The session's link to the server (1.3): connected, and activated by the server's owner. The session only; it
+    /// changes only the agent's mark on the screen.
+    connection: func(connected: bool, active: bool);
 }

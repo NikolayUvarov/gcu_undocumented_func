@@ -1,6 +1,6 @@
-# 173-KRN-0036 — A safe start: the service configuration ignored when a key is held at the bootloader
+# 173-KRN-0036 — A safe start: the service configuration ignored when a key is held at the bootloader — done
 
-**Type:** kernel (ABI) and bootloader · **Owner:** `KRN`, with `PRT` (the bootloader's lines) · **Priority:** P2 · **Status:** in progress · **Blocked by:** — · **Main task:** [173](173-boot-services-configuration.md) · **Constitution:** MC-6.1, MC-12.4
+**Type:** kernel (ABI) and bootloader · **Owner:** `KRN`, with `PRT` (the bootloader's lines) · **Priority:** P2 · **Status:** done (2026-10-24) · **Blocked by:** — · **Main task:** [173](../issues/173-boot-services-configuration.md) · **Constitution:** MC-6.1, MC-12.4
 
 ## Problem
 
@@ -33,6 +33,15 @@ The test passes on x86 and aarch64. Without the key the configuration applies as
   - This safe start is apart from the one after a run that did not end (000-KRN-0076). That one still reads the file, since it starts by itself and must not undo what the owner turned off.
 - **Tests.** The host test `boot_abi` pins the range 16 to 20 and `boot_flags` zeroed before 20. The `modes` suite boots the file of 173-KRN-0035's test with S typed at the loader: the file is ignored, `windows` starts before `sysmon` again, `tts` and `video_gw` run, and `configuration` says `ignored`. Without the key the same file applies, as the first check shows.
 
+## Resolution
+
+Landed in round 31 (`main` 26f5bd50, gate on bc6ec61d green: every group of `scripts/ci_local.sh --list`; the wm group failed once on i9 by its timing threshold and passed when run again alone on rz).
+
+- **The key:** Esc or S within a second of the loader's line, the loader's `safe_start` (`bootloader/src/main.rs`); not "held during the pause" as the plan said, since the pause is off unless `data/pause.txt` asks for it.
+- **The flag:** `BootInfo.boot_flags` with `BOOT_SAFE`, handoff 20 (`common/abi.rs`); the kernel takes loaders from 16 on and zeroes the field for one older than 20.
+- **init:** the file not read, every service started in its order; `init.wit` 1.10 `configuration` says `ignored`.
+- **Tests:** the `modes` suite on x86 and aarch64 boots 173-KRN-0035's file with S typed at the loader (ignored) and without (applied); the host test `boot_abi`.
+
 ## Related
 
-[173](173-boot-services-configuration.md), [173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done).
+[173](../issues/173-boot-services-configuration.md), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.done).
