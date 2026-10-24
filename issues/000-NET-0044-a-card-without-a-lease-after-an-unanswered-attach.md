@@ -47,6 +47,10 @@
   - Every `attach` logs its outcome: `FRAME RING ATTACHED`, `FRAME RING REFUSED (…)`, `FRAME RING LENT, NO ANSWER IN n MS`, or `NO TIME LEFT IN ITS TURN TO LEND THE FRAME RING`.
   - A `kick` without an answer logs `A KICK HAD NO ANSWER IN n MS` or `NO TIME LEFT IN ITS TURN TO KICK THE DRIVER`, once until the driver answers again.
 - **The suite** names the card's mode when no lease came, with the stack's and the driver's lines. It keeps the VM's log (`mind-core-net-cards-<modern|legacy>-<cpus>cpu.log`).
+- **Run** (x86, QEMU TCG in this session's container, 4 CPUs, three busy loops beside it, load about 3.8): the check alone, 20 times each card, on 7876ea4a.
+  - All 40 got their lease and answered ping, each in about 11 s.
+  - Every `attach` was answered (`FRAME RING ATTACHED`). No kick went unanswered, and no turn ran out of time.
+  - The failure did not come back, so the cause is not confirmed. The criterion asks for 20 passes under the load that reproduced it, and that load is not known.
 - **Not done:** `virtio_net` logging a late answer. It answers each call as it reads it, so a late answer is time in its queue, which only the stack sees.
 
 ## Related
