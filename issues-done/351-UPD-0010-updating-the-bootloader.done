@@ -1,6 +1,6 @@
-# 351-UPD-0010 — Updating the bootloader itself
+# 351-UPD-0010 — Updating the bootloader itself — done
 
-**Type:** update (boot) · **Owner:** `UPD` (the kernel session since 2026-10-24), with `PRT` · **Priority:** P1 (the maintainer, 2026-10-24: the MacBook Pro's next stick is written once this is done) · **Status:** open · **Blocked by:** — · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.4
+**Type:** update (boot) · **Owner:** `UPD` (the kernel session since 2026-10-24), with `PRT` · **Priority:** P1 (the maintainer, 2026-10-24: the MacBook Pro's next stick is written once this is done) · **Status:** done (2026-10-24) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) · **Constitution:** MC-9.1, MC-9.3, MC-12.4
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner. Taken up by the kernel session with the track on 2026-10-24, after EFF's request of 2026-10-23 (`UPD/2026-10-23T1856Z-EFF-updating-the-bootloader-351-upd-0010-and-the-macbook.md`).
 
@@ -52,6 +52,20 @@ In QEMU (x86 with OVMF, aarch64 with AAVMF), on a disk with both slots:
 - **Updates carry the loader.** `link_update.py` and the updater stage the loader into the slot. The `linkupdate` check's slot holds the build's loader.
 - **Compatibility.** A slot without a loader, and one whose loader is the root's own, boots as before.
 
+## Resolution
+
+Landed in round 32 (`main` b608d41b, the gate on e95ae841 green: every group of `scripts/ci_local.sh --list`).
+
+- **The loader** (`bootloader/src/main.rs`): `chain` checks a slot's `BOOTX64.EFI` (`BOOTAA64.EFI`) against the slot's manifest and starts it with `MIND-CHAIN 1 <slot> <trial> <safe>` in its load options; `chained` reads them; `own_digest` names the file the firmware started. The volume's file system is opened without taking it (`own_file_system`), as the first loader holds it open.
+- **The writers and the updater:** `boot_slots.py layout`, `make_usb_image.py --slots`, the updater (`plan::Kind::Loader`, `in_slot`; checked in `apply`) and `link_update.py`.
+- **Tests:** `own_loaders` in `tests/boot_slots_check.py`, in the x86 `boot` suite and `tests/aarch64_smoke.py`; release 6 of the `update` and `linkupdate` checks carries a loader of its own, and its trial boots through it on both architectures; `tests/updater_host.rs`, `tests/link_update_test.py`.
+- **The criteria as met.** Two differ in how, not in what, from the plan's wording:
+  - *A newer loader:* the slot's loader is the build's with bytes past its sections, another file that loads the same, not one built with a test feature. The check shows the chain: the first loader's line, the slot loader's own, then the kernel. It does not show a loader whose code differs (`docs/update/slots.md`, "Not provided yet").
+  - *A loader that fails:* the slot's loader cannot load its slot (a service of it damaged) and returns; slot A boots at once and B has no tries left. One not as its manifest lists it is never started.
+  - *A hang:* the machine is reset while the slot's loader waits in its photo pause; the next boot is slot A's.
+  - *Updates carry the loader*, and *compatibility* (a slot without one, and one holding the same file) as planned.
+- **Not done here:** a run on hardware. The MacBook Pro's stick is written once more with this loader at `EFI/BOOT/`; from then on a release's loader comes through the link with it.
+
 ## Related
 
-[351](351-self-update.md), [351-UPD-0006](../issues-done/351-UPD-0006-slots-and-boot-records.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0166](../issues-done/351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [173-KRN-0036](../issues-done/173-KRN-0036-safe-start.done), `docs/update/slots.md`, `docs/write-disk.md`.
+[351](../issues/351-self-update.md), [351-UPD-0006](351-UPD-0006-slots-and-boot-records.done), [351-UPD-0012](../issues/351-UPD-0012-secure-boot-with-our-own-keys.md), [351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [173-KRN-0036](173-KRN-0036-safe-start.done), `docs/update/slots.md`, `docs/write-disk.md`.

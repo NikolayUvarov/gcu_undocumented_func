@@ -82,7 +82,7 @@ Nothing of it exists (survey of 2026-10-08):
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | `UPD` | `docs/update/keys.md` (EN, RU): each role's lifecycle and the compromise protocol (MC-9.6, 11.9) |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | `UPD` with `PRT` | A version floor in a TPM 2.0 counter, read and raised by the bootloader through UEFI's TCG2 protocol: rollback stopped also for someone with the disk |
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | `UPD` with `PRT` | Secure Boot with our own keys and old bootloaders revoked, so the floor cannot be bypassed by booting other code |
-| [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure: each slot carries its loader, which the one at `EFI/BOOT/` checks and starts (not `BootNext`, which a Mac does not follow) |
+| [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (done) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure: each slot carries its loader, which the one at `EFI/BOOT/` checks and starts (not `BootNext`, which a Mac does not follow) |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | `ASR` (open) | The update threat model (rollback, freeze, mix-and-match, endless data, slow retrieval) and fuzzing of the metadata parser |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md): staging and pins | `STO` | Once the block store has a durable medium: releases staged as objects, with the last-known-good pinned against collection (MC-9.3) |
 
