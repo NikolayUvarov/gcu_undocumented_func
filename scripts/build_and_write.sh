@@ -2,7 +2,7 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--mode=<modes>] <disk number>   |   --list
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--mode=<modes>] <disk number>   |   --list
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
@@ -43,6 +43,12 @@
 #                  The network policy as changed on the machine (system/netpolicy/netpolicy.txt, `netpolicy add`) is
 #                  kept too, in ~/.config/mind/netpolicy: put back as the new image's shipped policy with the same
 #                  lines added and removed, so a rule like `netcheck <gateway> icmp` need not be typed again.
+#   --keep-effector keep the Effector agent across the write (800-LNK-0023): before it, data/effector/ (its
+#                  configuration, the owner's policy) and system/effector/ (its ID, journal, token and the answers
+#                  still waiting for their ACK) are saved from the volume MIND CORE into
+#                  ~/.config/mind/effector (700, files 600; a fresh disk uses what was saved last), and after it put
+#                  back and read back. With --mode=maintenance the agent then comes up as the same endpoint, with no
+#                  owner step. The files may hold the agent's token: never printed or committed.
 set -euo pipefail
 
 # The clone changes under the script (checkout, pull), and bash reads a script as it runs: so it runs from a copy.
@@ -65,7 +71,7 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
-COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; IMAGE_FILE=
+COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; KEEP_EFFECTOR=0; IMAGE_FILE=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --commit) COMMIT="${2:?usage: $0 --commit <id> <disk number>}"; shift 2 ;;
@@ -81,6 +87,7 @@ while [[ $# -gt 0 ]]; do
         --link-run) LINK_RUN=1; shift ;;
         --link-dev) LINK_RUN=1; LINK_DEV=1; shift ;;
         --keep-wifi) KEEP_WIFI=1; shift ;;
+        --keep-effector) KEEP_EFFECTOR=1; shift ;;
         --mode=*) m="${1#--mode=}"; words=()
                   for w in ${m//,/ }; do
                       [[ $w == development || $w == maintenance || $w == link-console ]] || { echo "--mode=<modes>: development, maintenance, link-console, comma-separated: $w" >&2; exit 1; }
@@ -256,13 +263,60 @@ put_keystore() {
     return $status
 }
 
+# The Effector agent's files (800-LNK-0023), carried across a write as keystore's are: the owner's configuration and
+# policy in data/effector/, the agent's own state in system/effector/. Only the owner's shell writes them on the machine.
+EFFECTOR_KEEP="${EFFECTOR_KEEP:-$HOME/.config/mind/effector}"
+# Copies the volume at $1's agent files into $EFFECTOR_KEEP, whole or not at all; echoes how many files.
+keep_effector_from() {
+    local vol=$1 next="$EFFECTOR_KEEP.next" n
+    [[ -d $vol/data/effector || -d $vol/system/effector ]] || return 1
+    rm -rf "$next"; (umask 077; mkdir -p "$next/data" "$next/system")
+    [[ -d $vol/data/effector ]] && (umask 077; cp -r "$vol/data/effector/." "$next/data/")
+    [[ -d $vol/system/effector ]] && (umask 077; cp -r "$vol/system/effector/." "$next/system/")
+    find "$next" -type d -exec chmod 700 {} + && find "$next" -type f -exec chmod 600 {} +
+    n=$(find "$next" -type f | wc -l)
+    rm -rf "${EFFECTOR_KEEP:?}" && mv "$next" "$EFFECTOR_KEEP" && echo "$n"
+}
+# Puts $EFFECTOR_KEEP's files on the volume at $1 and reads them back.
+put_effector_to() {
+    local vol=$1
+    mkdir -p "$vol/data/effector" "$vol/system/effector"
+    cp -r "$EFFECTOR_KEEP/data/." "$vol/data/effector/" && cp -r "$EFFECTOR_KEEP/system/." "$vol/system/effector/" && sync || return 1
+    local f
+    while IFS= read -r f; do cmp -s "$EFFECTOR_KEEP/data/$f" "$vol/data/effector/$f" || return 1; done < <(cd "$EFFECTOR_KEEP/data" && find . -type f)
+    while IFS= read -r f; do cmp -s "$EFFECTOR_KEEP/system/$f" "$vol/system/effector/$f" || return 1; done < <(cd "$EFFECTOR_KEEP/system" && find . -type f)
+}
+save_effector() {
+    local letter dir n
+    letter=$(winps "\$ProgressPreference = 'SilentlyContinue'; \$p = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' -and \$_.DriveLetter } | Select-Object -First 1; if (\$p) { \$p.DriveLetter }" | tr -d '\r\n')
+    if [[ ! $letter =~ ^[A-Z]$ ]]; then echo "keep-effector: disk $DISK has no volume MIND CORE now; what was saved before will be put back"; return 0; fi
+    dir=$(mktemp -d)
+    sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
+    if n=$(keep_effector_from "$dir"); then echo "keep-effector: $n file(s) of $letter:\\data\\effector and \\system\\effector saved in $EFFECTOR_KEEP"
+    else echo "keep-effector: $letter: holds no Effector agent; what was saved before will be put back"; fi
+    sudo umount "$dir"; rmdir "$dir"
+}
+put_effector() {
+    [[ -d $EFFECTOR_KEEP/data || -d $EFFECTOR_KEEP/system ]] || { echo "keep-effector: nothing saved in $EFFECTOR_KEEP: put the agent's files in once (the owner's start.msh), then write with --keep-effector" >&2; return 1; }
+    local letter dir status=0
+    letter=$(winps "${PS_LETTER//__MANIFEST__/$(sha256sum "$MANIFEST_FILE" | cut -d' ' -f1)}" | tr -d '\r\n')
+    [[ $letter =~ ^[A-Z]$ ]] || { echo "keep-effector: no volume MIND CORE holding this build (its MANIFEST) within 60 s" >&2; return 1; }
+    dir=$(mktemp -d)
+    sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
+    if put_effector_to "$dir"; then echo "keep-effector: the Effector agent's $(find "$EFFECTOR_KEEP" -type f | wc -l) file(s) put back on $letter:, read back"
+    else echo "keep-effector: the Effector agent's files NOT put back" >&2; status=1; fi
+    sudo umount "$dir"; rmdir "$dir"
+    winps "\$ProgressPreference = 'SilentlyContinue'; Write-VolumeCache -DriveLetter $letter" > /dev/null || true
+    return $status
+}
+
 if [[ "${1:-}" == "--list" ]]; then
     winps "\$ProgressPreference = 'SilentlyContinue'; & '$WRITER_WIN' -List" | tr -d '\r'
     exit 0
 fi
 [[ ($LINK_RUN == 1 || $SLOTS == 1) && -z $LINK_BAUD ]] && LINK_BAUD=460800
 [[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--mode=<modes>] <disk number> | --list}"
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--mode=<modes>] <disk number> | --list}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 
 cd "$REPO"
@@ -306,6 +360,7 @@ case "$IMAGE_WIN" in
 esac
 
 if [[ $KEEP_WIFI == 1 ]]; then save_keystore || echo ">>> The remembered Wi-Fi networks NOT saved from disk $DISK." >&2; fi
+if [[ $KEEP_EFFECTOR == 1 ]]; then save_effector || echo ">>> The Effector agent's files NOT saved from disk $DISK." >&2; fi
 echo ">>> Opening an elevated PowerShell to write $IMAGE_WIN to disk $DISK (UAC, then type ERASE $DISK)."
 # -NoExit keeps the window open so the result stays readable; -Wait returns here when it is closed.
 winps "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File','\"$WRITER_WIN\"','-DiskNumber','$DISK','-Image','\"$IMAGE_WIN\"'"
@@ -319,3 +374,4 @@ for flag in "${FLAGS[@]}"; do put_flag "$flag" || echo ">>> data/${flag%%:*} NOT
 if [[ $WIFIJOIN == 1 ]]; then put_wifijoin || echo ">>> The Wi-Fi network NOT put on the disk." >&2; fi
 if [[ -n $LINK_BAUD ]]; then put_link "$LINK_BAUD" || echo ">>> link.conf NOT put on the disk." >&2; fi
 if [[ $KEEP_WIFI == 1 ]]; then put_keystore || echo ">>> The remembered Wi-Fi networks NOT put on the disk." >&2; fi
+if [[ $KEEP_EFFECTOR == 1 ]]; then put_effector || echo ">>> The Effector agent's files NOT put on the disk." >&2; fi
