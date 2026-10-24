@@ -6,7 +6,7 @@ Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the ma
 
 ## Problem
 
-The bootloader checks the manifest with one boot key built into it. Changing that key needs a new bootloader, and the bootloader itself is not updated yet ([351-UPD-0010](351-UPD-0010-updating-the-bootloader.md)). A compromised boot key cannot be revoked through the key file the updater reads.
+The bootloader checks the manifest with one boot key built into it. Changing that key still needs a new loader at `EFI/BOOT/`: since [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) a slot carries its own loader, but the one at `EFI/BOOT/` checks it against the slot's manifest with its own built-in key. A compromised boot key cannot be revoked through the key file the updater reads.
 
 ## Plan
 
@@ -26,4 +26,4 @@ The bootloader checks the manifest with one boot key built into it. Changing tha
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).

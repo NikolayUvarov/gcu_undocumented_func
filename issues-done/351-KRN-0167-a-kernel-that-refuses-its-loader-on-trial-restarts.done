@@ -57,4 +57,4 @@ Landed in round 26 (`main` 6bf90421, 2026-10-23); every gate group passed on tha
 
 ## Related
 
-[351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md), [351](../issues/351-self-update.md).
+[351-KRN-0166](351-KRN-0166-the-loaders-handoff-versioned-apart-from-the-system-call-abi.done), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351-UPD-0010](351-UPD-0010-updating-the-bootloader.done), [351](../issues/351-self-update.md).
