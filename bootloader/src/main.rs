@@ -59,7 +59,7 @@ struct ConsoleOutDevice { _opaque: u8 }
 // own volume, at most PHOTO_PAUSE_MAX_S. No file, or 0, no pause: it slowed every boot once no photo was needed (the
 // maintainer, 2026-10-12, 211-KRN-0089).
 fn photo_pause_s(services: &BootServices, image: Handle) -> u32 {
-    let Ok(mut sfs) = services.get_image_file_system(image) else { return 0 };
+    let Some(mut sfs) = own_file_system(services, image) else { return 0 };
     let Ok(mut root) = sfs.open_volume() else { return 0 };
     let mut buffer = [0u8; 64];
     let Ok(text) = read_file(&mut root, "DATA\\", "PAUSE.TXT", &mut buffer) else { return 0 };
@@ -71,7 +71,7 @@ fn photo_pause_s(services: &BootServices, image: Handle) -> u32 {
 // (at most LINK_WORDS_MAX bytes, whole words), for init to start the link to another machine.
 fn link_conf(services: &BootServices, image: Handle) -> (u32, [u8; abi::LINK_WORDS_MAX]) {
     let mut words = [0u8; abi::LINK_WORDS_MAX];
-    let Ok(mut sfs) = services.get_image_file_system(image) else { return (0, words) };
+    let Some(mut sfs) = own_file_system(services, image) else { return (0, words) };
     let Ok(mut root) = sfs.open_volume() else { return (0, words) };
     let mut buffer = [0u8; 512];
     let Ok(text) = read_file(&mut root, "", "LINK.CONF", &mut buffer) else { return (0, words) };
@@ -168,6 +168,21 @@ fn fail(system_table: &mut SystemTable<Boot>, file: &str, reason: &str) -> ! {
     show_text(system_table);
     let _ = writeln!(system_table.stdout(), "BOOT ERROR: {}: {}", file, reason);
     halt()
+}
+
+// The file system of this loader's own volume, opened without taking it: the loader that started this one holds it too
+// (351-UPD-0010).
+fn own_file_system(services: &BootServices, image: Handle) -> Option<uefi::table::boot::ScopedProtocol<'_, uefi::proto::media::fs::SimpleFileSystem>> {
+    let device = loaded_image(services, image)?.device()?;
+    let params = OpenProtocolParams { handle: device, agent: image, controller: None };
+    unsafe { services.open_protocol(params, OpenProtocolAttributes::GetProtocol) }.ok()
+}
+
+// A slot's own loader that cannot boot its slot says why and returns to the loader that started it (351-UPD-0010).
+fn back(system_table: &SystemTable<Boot>, chained: Chained, file: &str, reason: &str) -> Status {
+    let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: {}: {}; BACK TO THE LOADER AT EFI/BOOT/\r", chained.slot as char, file, reason);
+    say(system_table, format_args!("SLOT {}: {}: {}; BACK TO THE LOADER AT EFI/BOOT/", chained.slot as char, file, reason));
+    Status::LOAD_ERROR
 }
 
 // Apple's console control (211-KRN-0015): a Mac's firmware keeps its console in graphics mode, where text never shows.
@@ -310,6 +325,103 @@ fn write_record(root: &mut uefi::proto::media::file::Directory, name: &str, data
 const RECORD_FILES: [&str; 2] = ["MIND\\BOOT0", "MIND\\BOOT1"];
 fn slot_dir(slot: u8) -> &'static str { if slot == b'A' { "MIND\\A\\" } else { "MIND\\B\\" } }
 
+// The loader on this processor: as a manifest lists it (the one at EFI/BOOT/), and its name in a slot (351-UPD-0010).
+#[cfg(target_arch = "x86_64")] const LOADER: (&str, &str) = ("EFI/BOOT/BOOTX64.EFI", "BOOTX64.EFI");
+#[cfg(target_arch = "aarch64")] const LOADER: (&str, &str) = ("EFI/BOOT/BOOTAA64.EFI", "BOOTAA64.EFI");
+// What a loader tells the slot's loader it starts, as its UCS-2 load options: "MIND-CHAIN 1 <slot> <trial> <safe>".
+const CHAIN: &str = "MIND-CHAIN 1";
+
+// A slot's loader started by the loader at EFI/BOOT/ (351-UPD-0010): the slot, whether on trial, whether a safe start.
+#[derive(Clone, Copy)]
+struct Chained { slot: u8, trial: bool, safe: bool }
+
+fn loaded_image(services: &BootServices, image: Handle) -> Option<uefi::table::boot::ScopedProtocol<'_, uefi::proto::loaded_image::LoadedImage>> {
+    let params = OpenProtocolParams { handle: image, agent: services.image_handle(), controller: None };
+    unsafe { services.open_protocol(params, OpenProtocolAttributes::GetProtocol) }.ok()
+}
+
+// The chain this loader was started with, from its load options; None for any other options, or none.
+fn chained(services: &BootServices, image: Handle) -> Option<Chained> {
+    let loaded = loaded_image(services, image)?;
+    let bytes = loaded.load_options_as_bytes()?;
+    let mut text = [0u8; 32];
+    let mut len = 0;
+    for pair in bytes.chunks_exact(2) {
+        let c = u16::from_le_bytes([pair[0], pair[1]]);
+        if c == 0 { break; }
+        if c > 0x7f || len == text.len() { return None; }
+        text[len] = c as u8; len += 1;
+    }
+    let mut words = core::str::from_utf8(&text[..len]).ok()?.strip_prefix(CHAIN)?.split(' ');
+    let flag = |word: Option<&str>| match word { Some("0") => Some(false), Some("1") => Some(true), _ => None };
+    let (empty, slot, trial, safe) = (words.next(), words.next(), flag(words.next())?, flag(words.next())?);
+    let slot = match (empty, slot, words.next()) { (Some(""), Some("A"), None) => b'A', (Some(""), Some("B"), None) => b'B', _ => return None };
+    Some(Chained { slot, trial, safe })
+}
+
+// The SHA-256 of the file this loader was started from: by the path the firmware names, else EFI/BOOT/'s.
+fn own_digest(services: &BootServices, image: Handle, root: &mut uefi::proto::media::file::Directory, buffer: &mut [u8]) -> Option<[u8; 32]> {
+    use uefi::proto::device_path::DevicePathNodeEnum;
+    let (mut path, mut len, mut readable) = ([0u8; 63], 0, true);
+    if let Some(file) = loaded_image(services, image).as_ref().and_then(|loaded| loaded.file_path()) {
+        // A path in several nodes is joined by backslashes; the root's own is left out.
+        for node in file.node_iter() {
+            let Ok(DevicePathNodeEnum::MediaFilePath(name)) = node.as_enum() else { continue };
+            for c in core::iter::once(b'\\' as u16).chain(name.path_name().iter()).take_while(|&c| c != 0) {
+                if c == b'\\' as u16 && (len == 0 || path[len - 1] == b'\\') { continue; }
+                readable &= c <= 0x7f && len < path.len();
+                if readable { path[len] = c as u8; len += 1; }
+            }
+        }
+    }
+    let named = core::str::from_utf8(&path[..len]).ok().filter(|p| readable && !p.is_empty());
+    let data = named.and_then(|p| read_file(root, "", p, buffer).ok().map(|d| d.len()))
+        .or_else(|| read_file(root, "EFI\\BOOT\\", LOADER.1, buffer).ok().map(|d| d.len()))?;
+    use sha2::{Digest, Sha256};
+    Some(Sha256::digest(&buffer[..data]).into())
+}
+
+// The slot's own loader (351-UPD-0010). None in the slot (one staged before), or the same file as this one: Ok, this
+// loader loads the slot. Another: checked against the slot's signed manifest and started from the bytes checked, told
+// the slot, the trial and the safe start; it returns only when it could not load its slot, and that is the error.
+fn chain(services: &BootServices, image: Handle, root: &mut uefi::proto::media::file::Directory, to: Chained, own: Option<[u8; 32]>,
+         file_buf: &mut [u8], manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
+    use uefi::proto::device_path::{build, DevicePath};
+    use uefi::table::boot::LoadImageSource;
+    let dir = slot_dir(to.slot);
+    let data = match read_file(root, dir, LOADER.1, file_buf) { Err("file not found") => return Ok(()), other => other.map_err(|e| (LOADER.0, e))? };
+    use sha2::{Digest, Sha256};
+    let digest: [u8; 32] = Sha256::digest(data).into();
+    if own == Some(digest) { return Ok(()); }
+    let mut signature = [0u8; 128];
+    let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
+    let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
+    verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?.check(LOADER.0, data).map_err(|e| (LOADER.0, e))?;
+    // The full path of the file: this loader's device, then the file, so that the slot's loader reads its own volume.
+    let mut name = [0u16; 64];
+    let mut full = [core::mem::MaybeUninit::<u8>::uninit(); 512];
+    let device = loaded_image(services, image).and_then(|loaded| loaded.device()).ok_or((LOADER.0, "this loader's device is not known"))?;
+    let params = OpenProtocolParams { handle: device, agent: image, controller: None };
+    let device_path = unsafe { services.open_protocol::<DevicePath>(params, OpenProtocolAttributes::GetProtocol) }.map_err(|_| (LOADER.0, "this loader's device has no path"))?;
+    let mut builder = build::DevicePathBuilder::with_buf(&mut full);
+    for node in device_path.node_iter() { builder = builder.push(&node).map_err(|_| (LOADER.0, "a device path too long"))?; }
+    let file_name = path16(if to.slot == b'A' { "\\MIND\\A\\" } else { "\\MIND\\B\\" }, LOADER.1, &mut name).map_err(|e| (LOADER.0, e))?;
+    let path = builder.push(&build::media::FilePath { path_name: file_name }).and_then(|b| b.finalize()).map_err(|_| (LOADER.0, "a device path too long"))?;
+    let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: STARTING ITS OWN LOADER, SHA-256 {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\r", to.slot as char,
+                     digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]);
+    let handle = services.load_image(image, LoadImageSource::FromBuffer { buffer: data, file_path: Some(path) })
+        .map_err(|e| (LOADER.0, if e.status() == Status::SECURITY_VIOLATION { "Secure Boot refuses it" } else { "the firmware does not load it" }))?;
+    let mut options = [0u16; 24];
+    for (unit, byte) in options.iter_mut().zip(CHAIN.bytes().chain([b' ', to.slot, b' ', b'0' + to.trial as u8, b' ', b'0' + to.safe as u8])) { *unit = byte as u16; }
+    let started = match loaded_image(services, handle) {
+        Some(mut loaded) => { unsafe { loaded.set_load_options(options.as_ptr().cast(), core::mem::size_of_val(&options) as u32) }; drop(loaded); services.start_image(handle) }
+        None => Err(Status::LOAD_ERROR.into()),
+    };
+    let _ = services.unload_image(handle);
+    let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: ITS LOADER RETURNED ({:?})\r", to.slot as char, started.err().map(|e| e.status()));
+    Err((LOADER.0, "it returned: it could not load its slot"))
+}
+
 // Reads the kernel and the boot services from `dir` ("" or a slot's directory), checks each against the signed
 // manifest there and loads them; on an error nothing stays allocated but a kernel that failed to relocate.
 fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Directory, dir: &str, file_buf: &mut [u8], manifest_buf: &mut [u8])
@@ -362,7 +474,8 @@ fn load_set(services: &BootServices, root: &mut uefi::proto::media::file::Direct
 // The slots (351-UPD-0006): follows the newer valid boot record, counts down a trial's tries on the disk before the
 // slot runs, and falls back to the other slot when one is not confirmed in time or does not verify. Returns the slot
 // loaded and whether it runs on trial; None for a volume without boot records, which boots from its root.
-fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Directory, file_buf: &mut [u8], manifest_buf: &mut [u8])
+// A slot with a loader of its own other than this one is loaded by that loader (351-UPD-0010).
+fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uefi::proto::media::file::Directory, file_buf: &mut [u8], manifest_buf: &mut [u8])
     -> Option<Result<(u64, [ProgramImage; abi::BOOT_IMAGES], u8, bool, [u8; 32], LaunchRecord), (&'static str, &'static str)>> {
     let mut present = [false; 2];
     let mut records = [None; 2];
@@ -400,11 +513,14 @@ fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Dire
             }
         }
     }
+    let own = own_digest(services, image, root, file_buf);
     let mut last = ("boot volume", "no slot to boot");
     for (k, &slot) in order.iter().enumerate() {
         if slot == 0 { continue; }
         let trial = k == 0 && written.is_some();
-        match load_set(services, root, slot_dir(slot), file_buf, manifest_buf) {
+        let set = chain(services, image, root, Chained { slot, trial, safe }, own, file_buf, manifest_buf)
+            .and_then(|()| load_set(services, root, slot_dir(slot), file_buf, manifest_buf));
+        match set {
             Ok((entry, programs, digest, launch)) => return Some(Ok((entry, programs, slot, trial, digest, launch))),
             Err((file, reason)) => {
                 let _ = writeln!(Serial, "\r\nBOOT: SLOT {}: {}: {}\r", slot as char, file, reason);
@@ -424,35 +540,57 @@ fn load_slots(services: &BootServices, root: &mut uefi::proto::media::file::Dire
 fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     BOOT_TABLE.store(system_table.as_ptr().cast_mut(), Relaxed);
     show_text(&system_table);
-    say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME"));
+    // Started by the loader at EFI/BOOT/ for its slot (351-UPD-0010): that one chose the slot and asked for the pause
+    // and the safe start's key.
+    let chained = chained(system_table.boot_services(), image);
+    match chained {
+        None => say(&system_table, format_args!("STARTED; READING THE KERNEL AND THE SERVICES FROM ITS OWN VOLUME")),
+        Some(c) => {
+            let _ = writeln!(Serial, "\r\nBOOT: SLOT {}'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/{}\r", c.slot as char, if c.trial { ", ON TRIAL" } else { "" });
+            say(&system_table, format_args!("SLOT {}'S OWN LOADER STARTED; READING ITS KERNEL AND SERVICES", c.slot as char));
+        }
+    }
     // When asked, time to read what the firmware printed above this line before the loader's own lines push it out of
     // the small text console (the MacBook Pro, 2026-10-09).
     let pause_s = photo_pause_s(system_table.boot_services(), image);
     let (link_present, link_words) = link_conf(system_table.boot_services(), image);
-    if pause_s > 0 {
+    if pause_s > 0 && chained.is_none() {
         say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", pause_s));
         system_table.boot_services().stall(pause_s as usize * 1_000_000);
     }
-    let safe = safe_start(&mut system_table);
+    let safe = match chained { Some(c) => c.safe, None => safe_start(&mut system_table) };
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {
             // The volume this loader was read from (211-KRN-0012), not the first one the firmware lists: that may be
             // another disk's EFI partition, such as a Mac's internal disk.
-            let mut sfs = boot_services.get_image_file_system(image).map_err(|_| ("boot volume", "no file system on the loader's device"))?;
+            let mut sfs = own_file_system(boot_services, image).ok_or(("boot volume", "no file system on the loader's device"))?;
             let mut root = sfs.open_volume().map_err(|_| ("boot volume", "cannot open"))?;
             let file_buf_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, FILE_BUFFER_PAGES).map_err(|_| ("file buffer", "out of memory"))?;
             let file_buf = unsafe { core::slice::from_raw_parts_mut(file_buf_addr as *mut u8, FILE_BUFFER_PAGES * 4096) };
             let manifest_addr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MANIFEST_PAGES).map_err(|_| ("MANIFEST", "out of memory"))?;
             let manifest_buf = unsafe { core::slice::from_raw_parts_mut(manifest_addr as *mut u8, MANIFEST_PAGES * 4096) };
-            // A volume with boot records boots a slot; one without, as before them, its root (351-UPD-0006).
-            match load_slots(boot_services, &mut root, file_buf, manifest_buf) {
-                Some(slot) => slot.map(|(entry, programs, slot, trial, digest, launch)| (entry, programs, Some((slot, trial)), digest, launch)),
-                None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, None, digest, launch)),
+            // A volume with boot records boots a slot; one without, as before them, its root (351-UPD-0006). A slot's
+            // own loader loads its slot, and gives its buffers back when it cannot: the loader that started it goes on.
+            let set = match chained {
+                Some(c) => load_set(boot_services, &mut root, slot_dir(c.slot), file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, Some((c.slot, c.trial)), digest, launch)),
+                None => match load_slots(boot_services, image, safe, &mut root, file_buf, manifest_buf) {
+                    Some(slot) => slot.map(|(entry, programs, slot, trial, digest, launch)| (entry, programs, Some((slot, trial)), digest, launch)),
+                    None => load_set(boot_services, &mut root, "", file_buf, manifest_buf).map(|(entry, programs, digest, launch)| (entry, programs, None, digest, launch)),
+                },
+            };
+            if set.is_err() && chained.is_some() {
+                let _ = unsafe { boot_services.free_pages(file_buf_addr, FILE_BUFFER_PAGES) };
+                let _ = unsafe { boot_services.free_pages(manifest_addr, MANIFEST_PAGES) };
             }
+            set
         })()
     };
-    let (kernel_entry, programs, slot, digest, launch) = match loaded { Ok(loaded) => loaded, Err((file, reason)) => fail(&mut system_table, file, reason) };
+    let (kernel_entry, programs, slot, digest, launch) = match (loaded, chained) {
+        (Ok(loaded), _) => loaded,
+        (Err((file, reason)), Some(c)) => return back(&system_table, c, file, reason),
+        (Err((file, reason)), None) => fail(&mut system_table, file, reason),
+    };
     // Where the system came from and which copy runs, for the kernel and vfs_server (211-KRN-0012, 351-KRN-0014).
     let boot_volume = boot_volume(system_table.boot_services(), image);
     let boot_slot = BootSlot { slot: match slot { Some((b'A', _)) => BOOT_SLOT_A, Some(_) => BOOT_SLOT_B, None => BOOT_SLOT_ROOT },
@@ -464,7 +602,11 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
     }
     say(&system_table, format_args!("KERNEL AND {} SERVICES READ", programs.iter().filter(|p| p.len > 0).count()));
     let display = select_display(&system_table);
-    let (fb_ptr, mode) = match display { Ok(display) => display, Err(reason) => fail(&mut system_table, "display", reason) };
+    let (fb_ptr, mode) = match (display, chained) {
+        (Ok(display), _) => display,
+        (Err(reason), Some(c)) => return back(&system_table, c, "display", reason),
+        (Err(reason), None) => fail(&mut system_table, "display", reason),
+    };
     let (pixel_format, pixel_masks) = match (mode.pixel_format(), mode.pixel_bitmask()) {
         (PixelFormat::Rgb, _) => (PIXEL_RGB, [0; 3]),
         (PixelFormat::Bitmask, Some(m)) => (PIXEL_BITMASK, [m.red, m.green, m.blue]),

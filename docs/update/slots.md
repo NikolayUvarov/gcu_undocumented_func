@@ -1,6 +1,6 @@
 # Slots A and B: boot records, a trial and the fallback
 
-**Version:** 0.7 (2026-10-22): the applications in the slot with the services (351-UPD-0023); 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
+**Version:** 0.8 (2026-10-24): each slot carries its own loader, which the loader at `EFI/BOOT/` checks and starts (351-UPD-0010); 0.7 (2026-10-22): the applications in the slot with the services (351-UPD-0023); 0.6 (2026-10-10): the updater stages a slot and confirms a trial on the disk (351-UPD-0007); 0.5: a sequence number that cannot count down is refused (351-UPD-0015); 0.4 (2026-10-09): the updater's client holds the zone's badge (351-KRN-0022); 0.3: the update zone in `vfs_server` (351-UPD-0008) · **Track:** `UPD`, task [351-UPD-0006](../../issues-done/351-UPD-0006-slots-and-boot-records.done) · **Constitution:** MC-9.1, 9.3 · Russian: [slots_RU.md](slots_RU.md)
 
 The bootloader can boot either of two copies of the system, slots A and B. Which one it boots is chosen by a boot record on the disk. A new slot runs on trial: it has a number of tries to be confirmed, and after them the bootloader goes back to the last confirmed slot. A slot that does not verify against its signed manifest is not booted. This gives an update its activation point, the record, and a configuration to return to (MC-9.3). The bootloader side is implemented and tested in QEMU. The running system knows its slot and whether it is on trial, and init confirms a healthy trial boot; the updater stages a release in the other slot, activates it with a trial record and writes the confirmed record ([updater.md](updater.md)).
 
@@ -8,12 +8,12 @@ The bootloader can boot either of two copies of the system, slots A and B. Which
 
 | Path | Holds |
 |---|---|
-| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services, the applications and the build's `MANIFEST` and `MANIFEST.SIG` (351-UPD-0023). The loader opens an application from the booted slot when the slot holds any (351-KRN-0151); a slot staged before holds none, and the root's run. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
+| `MIND/A/`, `MIND/B/` | `kernel.elf`, the boot services, the applications, the slot's own loader `BOOTX64.EFI` (`BOOTAA64.EFI` on aarch64, 351-UPD-0010) and the build's `MANIFEST` and `MANIFEST.SIG` (351-UPD-0023). The loader opens an application from the booted slot when the slot holds any (351-KRN-0151); a slot staged before holds none, and the root's run. The bootloader checks the slot's kernel and services against that manifest by name ([README.md](README.md)) |
 | `MIND/BOOT0`, `MIND/BOOT1` | the two boot records, one sector each |
-| `EFI/BOOT/` | the bootloader, outside the slots (351-UPD-0010 updates it) |
+| `EFI/BOOT/` | the loader the firmware starts, outside the slots. An update never rewrites it: it starts a slot's own loader ([below](#a-slots-own-loader-351-upd-0010)) |
 | the root | the licences and the voice model, shared by both slots |
 
-A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The volumes of most QEMU suites keep that layout, and so does a USB image unless it is made with `make_usb_image.py --slots` ([write-disk.md](../write-disk.md), 351-UPD-0016). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), and slot A is confirmed.
+A volume without `MIND/BOOT0` and `MIND/BOOT1` boots from its root, as before slots. The volumes of most QEMU suites keep that layout, and so does a USB image unless it is made with `make_usb_image.py --slots` ([write-disk.md](../write-disk.md), 351-UPD-0016). `scripts/boot_slots.py layout VOLUME OUT [--both]` makes a slot volume from a build: its boot set moves into slot A (and is copied into B with `--both`), the loader is copied there from `EFI/BOOT/`, and slot A is confirmed.
 
 ## The boot record
 
@@ -44,6 +44,30 @@ A record of another size, magic or format, with a bad CRC, an unknown slot or fl
 5. **No valid record:** it tries slot A, then slot B.
 
 A slot "verifies" as in [README.md](README.md): its manifest's signature, then the size and SHA-256 of each image. What it loaded is printed as the launch record, followed by `BOOT: SLOT <x> LOADED`. The console shows the slot too. If no slot verifies, the boot stops with `BOOT ERROR` and the last reason.
+
+## A slot's own loader (351-UPD-0010)
+
+The loader at `EFI/BOOT/` is the file the firmware starts, and the one `bless` names on a Mac ([write-disk.md](../write-disk.md), section 6). An update never rewrites it. Each slot carries its own copy of the loader instead, `MIND/<slot>/BOOTX64.EFI`, listed in the slot's signed manifest as `EFI/BOOT/BOOTX64.EFI`, so a release brings its own loader.
+
+1. **The loader at `EFI/BOOT/`** chooses the slot and counts a trial's try as above, before anything else.
+2. **A slot with no loader of its own** (one staged before this), **or with the same file:** the loader loads the slot itself, as above. "The same" means its SHA-256 is that of the file the firmware started, read by the path the firmware names (else `EFI/BOOT/`'s).
+3. **Another loader** is checked against the slot's manifest: the signature first, then the loader's size and SHA-256. One that is not as listed is never started, and the slot counts as one that does not verify (`BOOT: SLOT B: EFI/BOOT/BOOTX64.EFI: not as the manifest says`).
+4. **It is started from the bytes checked:** `LoadImage` from a buffer, with the file's device path so that it reads its own volume (`BOOT: SLOT B: STARTING ITS OWN LOADER, SHA-256 …`). Its load options tell it the slot, the trial and a safe start: `MIND-CHAIN 1 B 1 0` in UCS-2.
+5. **The slot's loader** says so (`BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/, ON TRIAL`).
+   - It reads no record and writes none. It asks for neither the first pause nor the safe start's key: the first loader did.
+   - It loads its slot against the slot's manifest, as above.
+6. **If it cannot,** it says why (`…; BACK TO THE LOADER AT EFI/BOOT/`), gives its buffers back and returns.
+   - The loader at `EFI/BOOT/` then treats the slot as one that does not verify. A trial's record is left with no tries, and the fallback slot boots at once.
+   - A loader the firmware refuses to load (Secure Boot, [secure-boot.md](secure-boot.md)) is the same case.
+7. **A slot's loader that hangs, or a reset while it runs:** the try was counted before it started, so the next boot past the trial's tries is the fallback's.
+
+Load options of any other form, or none, mean the firmware started the loader: it chooses the slot itself. The options choose only among the slots of its own volume, each checked against its signed manifest.
+
+A slot's kernel thus always gets the handoff of its own build's loader. `EFI/BOOT/BOOTX64.EFI` itself changes only with a new disk, and a loader there from before this task boots every slot itself.
+
+**Who puts the loader in a slot:**
+- `make_usb_image.py --slots` and `boot_slots.py layout` copy the build's loader into slot A (and B with `--both`): the same file as at `EFI/BOOT/`, so a new disk starts no second loader;
+- the updater and `scripts/link_update.py` stage the release's loader into the slot with its kernel and services ([updater.md](updater.md)).
 
 ## Writing a record
 
@@ -88,11 +112,21 @@ The tests run on x86 (`boot` suite) and aarch64 (`tests/aarch64_smoke.py`). Each
   - the choice between two records.
 - Host tests (`tests/vfs_zone_host.rs`) cover the update zone: what the updater's badge and every other badge may change below the boot root, and that a record write changes exactly one sector of the volume.
 - A USB image made with `make_usb_image.py --slots --channel` boots from slot A, `vfs_server` names slot B as the update zone, and the updater reads the running version from the channel kept in slot A (`tests/usb_image_smoke.py`, x86).
-- The updater itself moves a slot volume from release 5 in slot A to release 6 in slot B: fetched over HTTPS, booted on trial through `init`'s restart and confirmed on the disk past the kernel's deadline; refused releases leave the records as they were (the `update` check, x86 and aarch64, [updater.md](updater.md)). Its records are host-tested against the bootloader's choice (`tests/updater_host.rs`).
+- **A slot's own loader** (351-UPD-0010; `own_loaders`, x86 and aarch64). Slot B holds the build's loader with bytes past its sections: another file, which loads the same, listed in B's manifest.
+  - B boots through it on trial. Its try is counted once, by the loader at `EFI/BOOT/`, before the slot's loader starts. Once confirmed, B boots through it again.
+  - A reset while it waits (its pause for a photo) leaves the trial spent, and the next boot is slot A's.
+  - With a service of B damaged it returns. Slot A boots at once, and B is left with no tries.
+  - One that is not as B's manifest lists it is never started, and slot A boots.
+  - A slot without a loader of its own boots through the loader at `EFI/BOOT/`, as before.
+  - In the other checks both slots hold the build's loader, the same file as `EFI/BOOT/`'s, and no second loader is started.
+- The updater itself moves a slot volume from release 5 in slot A to release 6 in slot B: fetched over HTTPS, booted on trial through `init`'s restart and confirmed on the disk past the kernel's deadline; refused releases leave the records as they were (the `update` check, x86 and aarch64, [updater.md](updater.md)). Release 6 there, and in the `linkupdate` check, carries a loader of its own (bytes past its sections): the updater stages it into slot B, and the trial boots through it. Its records are host-tested against the bootloader's choice (`tests/updater_host.rs`).
 
 The suites with a root volume show that a volume without records boots as before.
 
 ## Not provided yet
+
+- **A slot's own loader on hardware.** It is tried in QEMU only (OVMF, AAVMF). A machine starts slots' loaders once its disk is written with a loader from this task at `EFI/BOOT/`: the MacBook Pro's stick is written once more for that. Apple's firmware's `LoadImage` from a buffer is not tried.
+- **A loader that differs in what it does.** The checks start a loader whose bytes differ, not its code.
 
 - **A confirmation the updater is told of.** Since 351-KRN-0014 the bootloader passes the slot, the trial flag, the manifest's digest and a 120 s deadline in `BootInfo`. init confirms a trial boot when every boot service started and the boot volume is mounted, and the kernel restarts an unconfirmed one at the deadline, so a hang or a boot without its volume uses up a try by itself. The updater learns of the confirmation only by outliving the deadline, so the record reaches the disk about two minutes after the boot ([updater.md](updater.md)).
 - **Rollback protection.** A fallback boots the other slot whatever its version (351-UPD-0009, 0011). The records are not signed: whoever can write the volume can choose a slot, but only one that verifies against a manifest signed with the boot key.

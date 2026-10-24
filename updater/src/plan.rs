@@ -3,17 +3,23 @@
 // the bootloader's own encoding.
 use super::slots::{Record, SEQUENCE_LAST};
 
-/// What a file a manifest lists is to a slot (351-UPD-0023): the kernel or a boot service the bootloader loads, an
-/// application the slot carries with them, or a file of the root shared by both slots (licences, data).
+/// What a file a manifest lists is to a slot (351-UPD-0023): the kernel or a boot service the bootloader loads, the
+/// loader the slot carries for itself (351-UPD-0010), an application the slot carries with them, or a file of the root
+/// shared by both slots (licences, data, another processor's loader).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind { Boot, Application, Shared }
+pub enum Kind { Boot, Loader, Application, Shared }
 
-/// `boot` is the bootloader's list of boot services (BOOT_FILES); a volume's names may come back in another case.
-pub fn kind(path: &str, boot: &[&str]) -> Kind {
+/// `boot` is the bootloader's list of boot services (BOOT_FILES), `loader` the loader's path for this processor
+/// (`EFI/BOOT/BOOTX64.EFI`); a volume's names may come back in another case.
+pub fn kind(path: &str, boot: &[&str], loader: &str) -> Kind {
     if path.eq_ignore_ascii_case("kernel.elf") || boot.iter().any(|name| name.eq_ignore_ascii_case(path)) { return Kind::Boot; }
+    if path.eq_ignore_ascii_case(loader) { return Kind::Loader; }
     let elf = path.len() > 4 && path.as_bytes()[path.len() - 4..].eq_ignore_ascii_case(b".elf");
     if elf && !path.contains('/') { Kind::Application } else { Kind::Shared }
 }
+
+/// A slot's file's name in the slot: the loader's without its `EFI/BOOT/` (`BOOTX64.EFI`), the others as listed.
+pub fn in_slot(path: &str) -> &str { path.rsplit('/').next().unwrap_or(path) }
 
 /// Whether metadata expiring at `expires` (seconds since 1970) is past at `now`; a clock that cannot be read shows
 /// nothing current (MC-9.4, 351-UPD-0025).

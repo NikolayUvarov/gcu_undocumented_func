@@ -3,11 +3,13 @@
 
 A volume with slots keeps the kernel, the boot services and the signed manifest in MIND/A/ and MIND/B/, and two boot
 records, MIND/BOOT0 and MIND/BOOT1, of one sector each. The bootloader follows the record with the higher sequence
-number, counts a trial's tries down on the other record before the slot runs, and falls back to the other slot.
+number, counts a trial's tries down on the other record before the slot runs, and falls back to the other slot. Each
+slot holds its own copy of the loader too, BOOTX64.EFI (BOOTAA64.EFI), which the loader at EFI/BOOT/ starts for it when
+it is another file (351-UPD-0010).
 
 Usage:
-    boot_slots.py layout VOLUME OUT [--both]   OUT: VOLUME (a signed build) with its boot set and applications in slot A, and in B too
-                                               with --both; slot A confirmed
+    boot_slots.py layout VOLUME OUT [--both]   OUT: VOLUME (a signed build) with its boot set, loader and applications in slot A, and
+                                               in B too with --both; slot A confirmed
     boot_slots.py show VOLUME|IMAGE            the two records of a directory or a raw disk image (MBR, FAT)
     boot_slots.py stage IMAGE SLOT [--tries N] the record that boots SLOT on trial, N tries (default 3), falling back
                                                to the slot now booted
@@ -35,6 +37,8 @@ SEQUENCE_LAST = 2**64 - 3  # the largest sequence a record may hold, as bootload
 # The kernel and the services the bootloader loads (BOOT_FILES in the ABI), and the manifest it checks them against.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
 SIGNED = ("MANIFEST", "MANIFEST.SIG")
+# The loader as a volume and its manifest hold it, and its name in a slot (351-UPD-0010).
+LOADERS = {"EFI/BOOT/BOOTX64.EFI": "BOOTX64.EFI", "EFI/BOOT/BOOTAA64.EFI": "BOOTAA64.EFI"}
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
 
 
@@ -61,14 +65,20 @@ def boot_set(volume):
     return [name for name in ("kernel.elf", *BOOT_FILES, *SIGNED) if (Path(volume) / name).is_file()]
 
 
+def loaders(volume):
+    """The loaders a volume holds at EFI/BOOT/, each (path, its name in a slot): the build's, which a slot carries too."""
+    return [(path, name) for path, name in LOADERS.items() if (Path(volume) / path).is_file()]
+
+
 def applications(volume):
     """A volume's applications, which go into the slot with its services (351-UPD-0023): every other *.elf at its root."""
     return sorted(p.name for p in Path(volume).glob("*.elf") if p.is_file() and p.name != "kernel.elf" and p.name not in BOOT_FILES)
 
 
-def layout(volume, out, both=False, with_applications=True):
-    """OUT: a copy of VOLUME with its boot set and its applications moved into slot A (and copied to B), slot A
-    confirmed; without `with_applications` they stay at the root, as in a slot an updater staged before 351-UPD-0023."""
+def layout(volume, out, both=False, with_applications=True, with_loader=True):
+    """OUT: a copy of VOLUME with its boot set and its applications moved into slot A (and copied to B), and its loader
+    copied there, slot A confirmed; without `with_applications` they stay at the root, as in a slot an updater staged
+    before 351-UPD-0023; without `with_loader` the slot holds none, as one staged before 351-UPD-0010."""
     volume, out = Path(volume), Path(out)
     shutil.copytree(volume, out)
     moved = boot_set(volume) + (applications(volume) if with_applications else [])
@@ -76,6 +86,8 @@ def layout(volume, out, both=False, with_applications=True):
         (out / "MIND" / slot).mkdir(parents=True)
         for name in moved:
             shutil.copyfile(volume / name, out / "MIND" / slot / name)
+        for path, name in loaders(volume) if with_loader else []:
+            shutil.copyfile(volume / path, out / "MIND" / slot / name)
     for name in moved:
         (out / name).unlink()
     (out / FILES[0]).write_bytes(record(1, "A", confirmed=True))
@@ -110,6 +122,9 @@ class Image:
     def read(self, name):
         result = subprocess.run(["mtype", "-i", self.drive, f"::{name}"], capture_output=True, env=MTOOLS_ENV)
         return result.stdout if result.returncode == 0 else None
+
+    def remove(self, name):
+        subprocess.run(["mdel", "-i", self.drive, f"::{name}"], check=True, env=MTOOLS_ENV, capture_output=True)
 
     def write(self, name, data):
         temp = self.path.with_name(self.path.name + ".write")
