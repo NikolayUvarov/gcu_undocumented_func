@@ -32,6 +32,10 @@ pub trait Sectors {
     fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool {
         out.chunks_exact_mut(SECTOR).enumerate().all(|(i, sector)| self.read(lba + i as u32, sector.try_into().unwrap()))
     }
+    /// Writes whole sectors of `data` from `lba` on; a cache may write them past itself in one request (000-KRN-0078).
+    fn write_run(&mut self, lba: u32, data: &[u8]) -> bool {
+        data.chunks_exact(SECTOR).enumerate().all(|(i, sector)| self.write(lba + i as u32, sector.try_into().unwrap()))
+    }
 }
 
 /// A volume can be mounted through a borrowed disk (`Volume::reformat` re-reads its geometry that way).
@@ -43,6 +47,7 @@ impl<S: Sectors> Sectors for &mut S {
     fn writable(&self) -> bool { (**self).writable() }
     fn discard(&mut self) { (**self).discard() }
     fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool { (**self).read_run(lba, out) }
+    fn write_run(&mut self, lba: u32, data: &[u8]) -> bool { (**self).write_run(lba, data) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -606,9 +611,20 @@ impl<S: Sectors> Volume<S> {
         let mut done = 0;
         while done < data.len() {
             let position = offset as usize + done;
-            let cluster = self.cluster_at(node.cluster, position / per)?;
-            let within = position % per;
+            let (index, within) = (position / per, position % per);
+            let cluster = self.cluster_at(node.cluster, index)?;
             let lba = self.sector_of(cluster) + (within / SECTOR) as u32;
+            let whole = (data.len() - done) / SECTOR * SECTOR;
+            if within % SECTOR == 0 && whole > 0 {
+                // Whole sectors, as far as the clusters after this one lie next to it, in one run.
+                let (mut span, mut last) = (per - within, cluster);
+                while span < whole && self.cluster_at(node.cluster, index + (last - cluster) as usize + 1)? == last + 1 { (span, last) = (span + per, last + 1); }
+                let take = span.min(whole);
+                self.changing()?;
+                if !self.disk.write_run(lba, &data[done..done + take]) { return Err(Error::Io); }
+                done += take;
+                continue;
+            }
             let at = within % SECTOR; let take = (SECTOR - at).min(data.len() - done);
             let mut sector = if take == SECTOR { [0u8; SECTOR] } else { self.read_sector(lba)? };
             sector[at..at + take].copy_from_slice(&data[done..done + take]);

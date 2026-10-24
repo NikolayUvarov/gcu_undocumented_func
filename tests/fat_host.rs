@@ -758,7 +758,7 @@ fn the_first_fat_change_keeps_the_dirty_bit() {
 }
 
 // Counts the reads that reach the medium.
-struct Counted { image: Image, sectors: usize, runs: usize }
+struct Counted { image: Image, sectors: usize, runs: usize, writes: usize }
 impl Sectors for Counted {
     fn read(&mut self, lba: u32, out: &mut [u8; SECTOR]) -> bool { self.sectors += 1; self.image.read(lba, out) }
     fn write(&mut self, lba: u32, data: &[u8; SECTOR]) -> bool { self.image.write(lba, data) }
@@ -770,6 +770,10 @@ impl Sectors for Counted {
         let at = lba as usize * SECTOR;
         match self.image.data.get(at..at + out.len()) { Some(s) => { out.copy_from_slice(s); true } None => false }
     }
+    fn write_run(&mut self, lba: u32, data: &[u8]) -> bool {
+        self.writes += 1;
+        data.chunks_exact(SECTOR).enumerate().all(|(i, sector)| self.image.write(lba + i as u32, sector.try_into().unwrap()))
+    }
 }
 
 // 000-KRN-0078: a file written in 16 KiB pieces, as `bench` writes, on 512-byte clusters, as `format` makes a RAM disk:
@@ -778,7 +782,7 @@ impl Sectors for Counted {
 fn a_file_written_in_pieces_walks_its_chain_once() {
     let mut image = Image { data: vec![0; 16384 * SECTOR], writable: true, flushes: 0 };
     fat::format(&mut image, "RAM", STAMP).unwrap();
-    let mut v = Volume::mount(Counted { image, sectors: 0, runs: 0 }).ok().unwrap();
+    let mut v = Volume::mount(Counted { image, sectors: 0, runs: 0, writes: 0 }).ok().unwrap();
     assert_eq!((v.bits(), v.cluster_bytes()), (16, 512));
     let root = v.root();
     let mut node = v.create(&root, "big.bin", false, STAMP).unwrap();
@@ -788,6 +792,8 @@ fn a_file_written_in_pieces_walks_its_chain_once() {
     let (reads, clusters) = (v.disk.sectors - before, data.len() / 512);
     // About four a cluster: found free, its entry in each FAT copy, the step to it (130 a cluster before 000-KRN-0078).
     assert!(reads <= 5 * clusters, "{} sector reads to write {} clusters", reads, clusters);
+    // The data of each piece in one run: its clusters lie next to each other on a fresh volume.
+    assert_eq!(v.disk.writes, data.len() / 16384);
     // An overwrite inside it and an append after a read elsewhere: the same bytes as a model.
     let mut model = data.clone();
     v.write(&mut node, 1000, &[9; 3000], STAMP).unwrap();
@@ -812,7 +818,7 @@ fn reads_in_runs_and_from_anywhere() {
     // FAT is walked once, not again for every piece.
     if !tools() { return; }
     let path = temp("runs");
-    let mut v = Volume::mount(Counted { image: mkfs(&path, 32, 40), sectors: 0, runs: 0 }).ok().unwrap();
+    let mut v = Volume::mount(Counted { image: mkfs(&path, 32, 40), sectors: 0, runs: 0, writes: 0 }).ok().unwrap();
     let root = v.root();
     let per = v.cluster_bytes() as usize;
     let (mut a, mut b) = (v.create(&root, "a.bin", false, STAMP).unwrap(), v.create(&root, "b.bin", false, STAMP).unwrap());
