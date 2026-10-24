@@ -68,7 +68,8 @@ Reads are as before (39–54 MiB/s). Writes to the USB stick are three times fas
 - **Checked:**
   - the x86 `vfs`, `block`, `disk`, `store` and `bench` suites: rc=0;
   - host tests `fat` (18, with `a_file_written_in_pieces_walks_its_chain_once`: the reads bounded, one write run a piece, the bytes as a model, the volume clean) and `vfs_zone`.
-- **Left:** the gate, and `bench files` on the MacBook Pro.
+- **The gate:** passed in round 28 (`main` d5fd42db), every group but i9's, which is offline.
+- **Left:** `bench files` on the MacBook Pro.
 
 ## Related
 

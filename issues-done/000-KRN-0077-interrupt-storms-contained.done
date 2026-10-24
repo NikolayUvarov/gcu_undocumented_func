@@ -1,6 +1,6 @@
-# 000-KRN-0077 — Interrupt storms contained
+# 000-KRN-0077 — Interrupt storms contained — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made on `claude/youthful-mendel-mf1soy`; the gate left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-24) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
 
 ## Problem
 
@@ -48,6 +48,13 @@ Made on `claude/youthful-mendel-mf1soy` (cca4dc50 and the commit after it):
   - `uptime` answered in 0.4 s.
 - **Not checked:** aarch64 (the same code; its MSIs go through the GIC's v2m frame or ITS), and a driver that takes the interrupt late, which unmasks it.
 
+## Resolution
+
+- **Landed** in round 28 (`main` d5fd42db). An MSI or MSI-X vector whose messages find the last one not yet taken 1000 times within 100 ms is masked at the device until its driver takes that one. This uses `Scheduler::storm` and `calm` and `pci::msi_mask`.
+- `stat irqs` shows such a vector as `MASKED=1`, and `docs/profile/kernel-objects.md` names the bound.
+- **The x86 QEMU check:** the boot suite's bar check, with the `bar-move-test` kernel. It ran in the round-28 gate (`x86: boot, display, network, TLS, shell, memory, clock`, rz) and passed: the storm logged, the vector masked, the count no longer growing, the shell answering.
+- **Not checked:** aarch64, the same code, where MSIs go through the GIC's v2m frame or ITS. Nor a driver that takes the interrupt late, which unmasks it. A machine was not run: these are QEMU's emulation figures (MC-12.1).
+
 ## Related
 
-[000-KRN-0076](000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).
+[000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md).

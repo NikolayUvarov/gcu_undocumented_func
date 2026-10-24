@@ -1,6 +1,6 @@
 # 800-APP-0108 — In the `link-console` mode, the shell takes the link's lines as the console's
 
-**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link", 2026-10-23) · **Status:** open · **Blocked by:** [800-KRN-0155](800-KRN-0155-the-links-console-mode.md) in `main` (`init.wit` 1.8 `link-console`; on `claude/youthful-mendel-mf1soy` c10b15b5, in the landing queue for round 16) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.3, MC-12.6
+**Type:** tools (`shell`) · **Owner:** tools track (`APP`) · **Priority:** P1 (the maintainer: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link", 2026-10-23) · **Status:** open · **Blocked by:** [800-KRN-0155](../issues-done/800-KRN-0155-the-links-console-mode.done) in `main` (`init.wit` 1.8 `link-console`; on `claude/youthful-mendel-mf1soy` c10b15b5, in the landing queue for round 16) · **Main task:** [800](800-mind-link.md) · **Roadmap:** the development of MIND Core on real hardware · **Constitution:** MC-3.11, MC-12.3, MC-12.6
 
 **Recorded by:** the tools track, 2026-10-23, from LNK's request (`APP/2026-10-23T0223Z-LNK-the-links-lines-as-the-consoles-in-link-console-mode.md` on `internal-dev-messages`), for 800-LNK-0019.
 

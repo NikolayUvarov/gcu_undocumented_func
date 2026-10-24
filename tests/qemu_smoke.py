@@ -7541,12 +7541,15 @@ def net_suite(args, disk):
                 report = vm.service_logs("init", "LEGACY DEVICES FOUND")
                 require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
                 assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
-            require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+            # 000-NET-0044: a card without a lease names its mode, and the stack's and the driver's lines.
+            stack = vm.service_logs("netstack", "[NETSTACK] DHCP")
+            assert "[NETSTACK] DHCP 10.0.2.15/24" in stack, (mode, stack[-2000:], vm.service_logs("virtio_net")[-1500:])
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             if mode == "MODERN MSI-X":
                 _msix_only(vm)
         finally:
             vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
