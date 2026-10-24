@@ -35,7 +35,7 @@ The tests above pass, and a disabled service still starts with `svc start`.
 - **The boot.** init reads the file at the first service it may change, once the boot volume is mounted, through a reader's client of its own.
   - A service the file turns off, or that needs one that is, is prepared as a safe start's are, and `svc start` starts it. Its clients answer `ERR_PEER` until then: the shell, the updater, the station and the Effector session now get clients of prepared services as of running ones.
   - One that waits starts as soon as what it waits for was tried. The log names each line refused, the counts, what waits for what and what is off and why. A disabled service does not count against the boot's health.
-  - A safe start still reads the file: it leaves off what the file does as well as its own; ignoring the file is [173-KRN-0036](../issues/173-KRN-0036-safe-start.md)'s key.
+  - A safe start still reads the file: it leaves off what the file does as well as its own; ignoring the file is [173-KRN-0036](173-KRN-0036-safe-start.done)'s key.
 - **`boot-plan`** in `init.wit` 1.9 (1.4 was taken by `boot`): each service's place, enabled, essential, what it waited for, and why it did not start (`disabled`, `needs <service>`, `no device`, `no image`, `safe start`, `mode`, `no link.conf`, `failed`).
 - **init's stack.** init now asks for 256 KiB in `PT_GNU_STACK` (`init/linker.ld`), and the boot loop is a function of its own.
   - Its boot frame holds every service's plan. It was 43 KiB before this change, and a mode's start of `effector_gw` reached 60 of its 64 KiB.
@@ -61,4 +61,4 @@ The tests above pass, and a disabled service still starts with `svc start`.
 
 ## Related
 
-[173](../issues/173-boot-services-configuration.md), [173-KRN-0036](../issues/173-KRN-0036-safe-start.md).
+[173](../issues/173-boot-services-configuration.md), [173-KRN-0036](173-KRN-0036-safe-start.done).
