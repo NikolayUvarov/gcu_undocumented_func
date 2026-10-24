@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 
 pub type Shared = Arc<Mutex<State>>;
 
+/// The state, even when a thread panicked holding it: one failed request must not stop the daemon (800-LNK-0022).
+pub fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> { state.lock().unwrap_or_else(|e| e.into_inner()) }
+
 pub struct Options { pub baud: u32, pub timeout: Option<u32>, pub tries: u32, pub payload: usize }
 
 pub fn explain(e: Error) -> String {
@@ -65,7 +68,7 @@ fn connect(spec: &str, o: &Options) -> Result<(Client<Port>, String), String> {
 
 /// Runs `f` on operation `id`, if it is still kept.
 fn with<T>(state: &Shared, id: &str, f: impl FnOnce(&mut crate::ops::Op) -> T) -> Option<T> {
-    let mut st = state.lock().unwrap();
+    let mut st = lock(&state);
     let i = st.find(id)?;
     let r = f(&mut st.ops[i]);
     st.touch();
@@ -80,13 +83,13 @@ pub fn work(state: Shared, spec: String, o: Options) {
             match connect(&spec, &o) {
                 Ok((c, name)) => {
                     eprintln!("effector485: {spec}: {name}");
-                    let mut st = state.lock().unwrap();
+                    let mut st = lock(&state);
                     (st.link.online, st.link.name, st.link.last_seen, st.link.error) = (true, name, now(), String::new());
                     st.changed();
                     link = Some(c);
                 }
                 Err(e) => {
-                    let mut st = state.lock().unwrap();
+                    let mut st = lock(&state);
                     if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
                     if st.link.error != e || st.link.online { st.changed(); }
                     (st.link.online, st.link.error) = (false, e);
@@ -99,14 +102,14 @@ pub fn work(state: Shared, spec: String, o: Options) {
         }
         let c = link.as_mut().unwrap();
         let mut lost = None;
-        let runs: Vec<String> = state.lock().unwrap().ops.iter().filter(|o| o.status == "running" && o.run.is_some()).map(|o| o.id.clone()).collect();
+        let runs: Vec<String> = lock(&state).ops.iter().filter(|o| o.status == "running" && o.run.is_some()).map(|o| o.id.clone()).collect();
         for id in &runs {
             spoke = Instant::now();
             if let Err(e) = follow(c, &state, id) { if line_lost(e) { lost = Some(e); break; } }
         }
         if lost.is_none() {
             let next = {
-                let mut st = state.lock().unwrap();
+                let mut st = lock(&state);
                 // The first queued that a lease lets through: its holder's and reads overtake the others', which wait.
                 let at = now();
                 let first = (0..st.ops.len()).find(|&i| st.ops[i].status == "queued" && st.may_run(&st.ops[i], at));
@@ -138,7 +141,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
                 None => std::thread::sleep(Duration::from_millis(if runs.is_empty() { 200 } else { 100 })),
             }
         }
-        let mut st = state.lock().unwrap();
+        let mut st = lock(&state);
         if let Some(e) = lost {
             eprintln!("effector485: {spec}: {}", explain(e));
             (st.link.online, st.link.error) = (false, explain(e));
@@ -148,6 +151,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
             st.link.last_seen = now();
         }
         st.expire(now());
+        st.prune();
         st.save();
     }
 }
