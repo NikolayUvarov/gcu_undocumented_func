@@ -1,6 +1,6 @@
-# 000-KRN-0168 — The suites wait for an ended program to be reaped
+# 000-KRN-0168 — The suites wait for an ended program to be reaped — done
 
-**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2
+**Type:** tests (`tests/qemu_smoke.py`) · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-24) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-12.2
 
 Found in landing round 25 (2026-10-23).
 
@@ -23,8 +23,13 @@ Found in landing round 25 (2026-10-23).
 
 ## Acceptance criteria
 
-- [ ] The ten checks use the wait; the `keys` suite and a suite with each other check pass on x86 (QEMU).
-- [ ] The next gates show no failure of these checks.
+- [x] The ten checks use the wait; the `keys` suite and a suite with each other check pass on x86 (QEMU).
+- [x] The next gates show no failure of these checks.
+
+## Resolution
+
+- `task_rows_reaped` in `tests/qemu_smoke.py` (landed in round 27, `main` 4ed925ab) waits at most 5 s while the only rows left have `EXITED`. All ten checks use it.
+- The gates of rounds 27 (4ed925ab) and 28 (d5fd42db) ran every group with no failure, `x86: keys, shell, tools` included, on rz without a rerun.
 
 ## Related
 
