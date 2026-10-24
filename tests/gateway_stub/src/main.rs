@@ -84,7 +84,8 @@ fn remote_mark() {
     mind::println!("[GATEWAY-STUB] REMOTE MARK STOPPED");
 }
 
-// This boot's plan (173-KRN-0035): a line a service, in the order init tried them; any client of init may ask.
+// This boot's plan (173-KRN-0035): a line a service, in the order init tried them, then where it came from; any
+// client of init may ask.
 fn boot_plan() {
     match init::boot_plan(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(plan)) => for s in plan.as_slice() {
@@ -93,7 +94,12 @@ fn boot_plan() {
         },
         _ => mind::println!("[GATEWAY-STUB] PLAN FAILED"),
     }
-    mind::println!("[GATEWAY-STUB] PLAN END");
+    // Where the plan came from (173-KRN-0036).
+    let source = match init::configuration(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(init::Configuration::Absent)) => "ABSENT", Ok(Ok(init::Configuration::Read)) => "READ",
+        Ok(Ok(init::Configuration::Ignored)) => "IGNORED", Ok(Ok(init::Configuration::Unreadable)) => "UNREADABLE", _ => "FAILED",
+    };
+    mind::println!("[GATEWAY-STUB] PLAN END, CONFIGURATION {}", source);
 }
 
 mind::entry!(main);

@@ -196,11 +196,16 @@ MIND Core is pre-1.0. The system call numbers, records and service interfaces ca
 
 ### The loader's handoff (351-KRN-0166)
 
-The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (19) in the word ABI 10 put the ABI in. The kernel
+The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (20) in the word ABI 10 put the ABI in. The kernel
 takes any version from `BOOT_HANDOFF_OLDEST` (16) to its own: `BootInfo` and the boot images have not changed since ABI 16,
 and loaders before this wrote their ABI there. A change of system calls (ABI 17 to 19) therefore needs no new loader; a
 change of `BootInfo` or `BOOT_FILES` sets both versions above every ABI so far, and the kernel then refuses older loaders
 with `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`. Programs keep checking `ABI_VERSION`.
+
+A field added at the end, which the kernel reads only from the version that brought it, raises `BOOT_HANDOFF_VERSION`
+alone. Handoff 20 adds `boot_flags` (173-KRN-0036): `BOOT_SAFE` when Esc or S was pressed at the loader, before or within
+the second it waits after `ESC OR S WITHIN 1 S`. init then ignores `data/services.txt`. For an older loader the kernel
+zeroes the field, which such a loader left as padding.
 
 Every handoff keeps ABI 10's record in front: the framebuffer, `acpi_rsdp`, the version word and `boot_slot`. A kernel that
 refuses the handoff therefore still shows why on the screen and reads whether the boot is a trial. On a trial it adds
