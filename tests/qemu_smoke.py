@@ -10213,10 +10213,26 @@ def bar_move_check(args, disk):
             # 550-KRN-0091: the edu device's MSI (it has no MSI-X), granted: on, at the local APIC, with its vector.
             msi = re.search(r"PCI TEST: MSI OF (\w+) AS LINE (\d+): (ON|OFF), ADDRESS ([0-9A-F]+), DATA ([0-9A-F]+)", out)
             assert msi and msi[3] == "ON" and int(msi[4], 16) >> 20 == 0xFEE and int(msi[5], 16) == 0x40 + int(msi[2]) - 16, out[-3000:]
+            # 000-KRN-0077: from 10 s on, CPU 1 raises edu's interrupt without end and nothing takes it: the vector is masked
+            # at the device for a storm, its count stops, and the shell answers.
+            deadline, pattern = time.monotonic() + 120, re.compile(r"MSI (\d+) STORM: (\d+) MESSAGES NOT TAKEN IN (\d+) MS, MASKED UNTIL ITS DRIVER TAKES THE LAST")
+            while not (storm := pattern.search(vm.log)):
+                assert time.monotonic() < deadline and vm.process.poll() is None, vm.log[-3000:]
+                vm.collect(); time.sleep(.2)
+            assert storm[1] == msi[2], (storm[0], msi[0])
+            vm.expect("MIND> ", timeout=90)
+            line = lambda: re.search(rf"^IRQ {msi[2]} ENDPOINT=\d+ MASKED=(\d) HOLDER=\d+ HOLDERS=\d+ COUNT=(\d+)", vm.command("stat irqs", raw=True), re.M)
+            first = line(); time.sleep(2); second = line()
+            assert first and second and first[1] == second[1] == "1" and first[2] == second[2], (first and first[0], second and second[0])
+            started = time.monotonic()
+            require(vm.command("uptime", raw=True), "UPTIME MS=")
+            answered = time.monotonic() - started
+            assert answered < 5, answered
         finally:
             vm.close()
     print(f"PASS: a BAR in another kind of device's page moves to a page of its own when granted ({packed[2]} to {moved[3]}), and the device answers there; "
-          f"a device's MSI is programmed when granted (line {msi[2]}, data {msi[5]})", flush=True)
+          f"a device's MSI is programmed when granted (line {msi[2]}, data {msi[5]}); raised without end with nothing to take it, it is "
+          f"masked for a storm ({storm[2]} messages not taken in {storm[3]} ms), its count stays at {second[2]}, and the shell answers in {answered:.1f} s", flush=True)
 
 
 def trial_check(args, disk):

@@ -24,6 +24,11 @@ const GHOSTS_MAX: usize = 256; // removed nodes kept for revocation; a drop beyo
 static MIRROR_LOGS: AtomicBool = AtomicBool::new(cfg!(target_arch = "aarch64"));
 use context::{Event, MSI_FIRST}; const MSI_VECTORS: usize = 16; const LINES: usize = MSI_FIRST + MSI_VECTORS;
 const MSI_WHOLE: u16 = u16::MAX; // in `msi`: a device's MSI, not an MSI-X entry
+// An MSI storm (000-KRN-0077): this many messages that found the last one not yet taken, within STORM_MS.
+const STORM_LOST: u32 = 1000; const STORM_MS: u64 = 100; const STORM_SAY_MS: u64 = 10_000;
+// An MSI vector's storm count and whether it is masked at the device for one.
+#[derive(Clone, Copy)] struct Storm { since: u64, lost: u32, masked: bool, said: Option<u64> }
+impl Storm { const NONE: Self = Self { since: 0, lost: 0, masked: false, said: None }; }
 const DMA_LIMIT: usize = 16 * 1024 * 1024; // all DMA regions handed out through PLATFORM_DMA, from the kernel arena
 
 // Identity of a capability in the derivation tree: a copy or mint is a child of its source; a move keeps the node.
@@ -180,6 +185,7 @@ struct Scheduler {
     next_wake: u64, next_expiry: u64, // the earliest sleep's end (ns) and IPC deadline (ms) set since the last pass, or MAX
     held: Option<(usize, u64, u64)>, // (slot, PID, since ns): the focused task kept from running while its frame is copied
     zeroing: [Option<Zeroing>; cpu::MAX], // each CPU's large block to zero once it lets go of the lock (262-KRN-0160)
+    storms: [Storm; MSI_VECTORS],
 }
 
 static mut SCHEDULER: Option<Scheduler> = None;
@@ -237,7 +243,7 @@ fn copy_out(space: &paging::Space, address: usize, bytes: &[u8]) -> bool {
 pub fn init(info: &BootInfo) -> Result<(), &'static str> {
     let devices = unsafe { pci::enumerate() };
     let mut endpoints = alloc::vec![false; ENDPOINTS]; endpoints[..FIRST_ENDPOINT].fill(true);
-    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, zeroing: [const { None }; cpu::MAX] }); }
+    unsafe { *core::ptr::addr_of_mut!(SCHEDULER) = Some(Scheduler { boot: *info, tasks: Table::new(), current: [0; cpu::MAX], idle_sp: [0; cpu::MAX], faults: [None; 16], fault_cursor: 0, next_pid: 1, foreground: 0, focus_owner: 0, listeners: [None; INPUT_LISTENERS], notices: [0; 8], notice_count: 0, exited_console: None, ended: [(0, 0, 0); EXIT_STATUSES], ended_next: 0, dirty: true, endpoints, endpoint_owner: alloc::vec![None; ENDPOINTS], irq_bind: [[None; IRQ_SHARERS]; LINES], irq_pending: [false; LINES], msi: [None; MSI_VECTORS], send_seq: 0, flush: [false; cpu::MAX], woken: [false; cpu::MAX], readied: Cpus::NONE, on_cpu: [const { Vec::new() }; cpu::MAX], accounting: Accounting::new(), cursor: [[0; 2]; cpu::MAX], orphans: Vec::new(), exits: Vec::new(), exits_lost: 0, ghosts: Vec::with_capacity(GHOSTS_MAX), devices, dma: Vec::new(), reserve: 0, composited: 0, next_node: 1, next_wake: u64::MAX, next_expiry: u64::MAX, held: None, zeroing: [const { None }; cpu::MAX], storms: [Storm::NONE; MSI_VECTORS] }); }
     #[cfg(feature = "bar-move-test")]
     unsafe { (*core::ptr::addr_of_mut!(SCHEDULER)).as_mut().unwrap().bar_move_test(); }
     Ok(())
@@ -718,6 +724,8 @@ impl Scheduler {
             Ok(_) => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI NOT AN INTERRUPT\n")),
             Err(code) => say(format_args!("MIND CORE KERNEL: PCI TEST: MSI REFUSED ({:X})\n", code)),
         }
+        // 000-KRN-0077: its registers, for CPU 1 to raise its interrupt without end (`storm_test`); nobody takes it.
+        if let Ok(Capability::Mmio(base, _)) = self.platform_cap(PLATFORM_DEVICE_BAR, edu, 0) { STORM_TEST.store(base, Ordering::Relaxed); }
     }
 
     // A free 4 KiB page for a BAR moved off a shared one (211-KRN-0021): within the span the firmware gave bus 0's
@@ -1028,17 +1036,45 @@ impl Scheduler {
         self.accounting.irqs[irq] += 1;
         // Every driver on a shared line hears it; the line stays masked until each has acknowledged.
         if self.irq_bind[irq].iter().any(Option::is_some) {
+            let mut taken = false; // by a binder: received now, or the first it has pending
             for i in 0..IRQ_SHARERS {
                 let Some(mut b) = self.irq_bind[irq][i] else { continue };
                 b.unacked = true;
-                if let Some(receiver) = self.blocked(State::BlockedRecv(b.ep)) { self.notify_irq(receiver, irq); } else { b.pending = true; }
+                if let Some(receiver) = self.blocked(State::BlockedRecv(b.ep)) { self.notify_irq(receiver, irq); taken = true; } else { taken |= !b.pending; b.pending = true; }
                 self.irq_bind[irq][i] = Some(b);
             }
+            if !taken { self.storm(irq); }
             return;
         }
         let mut woken = false;
         for task in self.tasks.iter_mut().flatten() { if task.state == State::BlockedIrq(irq as u8) { task.state = State::Ready; woken = true; self.readied.mark(task.cpu); } }
-        if !woken { self.irq_pending[irq] = true; }
+        if !woken { if self.irq_pending[irq] { self.storm(irq); } self.irq_pending[irq] = true; }
+    }
+
+    // An MSI that came while the last one was not taken. STORM_LOST of them within STORM_MS mask the vector at the
+    // device until its driver takes that one, so a device that never stops sends no faster than its driver reads, as a
+    // line does (000-KRN-0077).
+    unsafe fn storm(&mut self, irq: usize) {
+        let Some(vector) = irq.checked_sub(MSI_FIRST).filter(|&v| v < MSI_VECTORS) else { return };
+        let now = interrupts::milliseconds();
+        let mut s = self.storms[vector];
+        if now >= s.since + STORM_MS { (s.since, s.lost) = (now, 0); }
+        s.lost += 1;
+        if !s.masked && s.lost >= STORM_LOST {
+            if let Some((device, entry)) = self.msi[vector] { s.masked = pci::msi_mask(&self.devices[device], entry, true); }
+            if s.masked && s.said.is_none_or(|said| now >= said + STORM_SAY_MS) {
+                s.said = Some(now);
+                let _ = core::fmt::Write::write_fmt(&mut crate::PanicSerial, format_args!("MIND CORE KERNEL: MSI {} STORM: {} MESSAGES NOT TAKEN IN {} MS, MASKED UNTIL ITS DRIVER TAKES THE LAST\n", irq, s.lost, now - s.since));
+            }
+        }
+        self.storms[vector] = s;
+    }
+
+    // The driver takes the line's interrupt or waits for the next: a vector masked for a storm is unmasked.
+    unsafe fn calm(&mut self, irq: usize) {
+        let Some(vector) = irq.checked_sub(MSI_FIRST).filter(|&v| v < MSI_VECTORS && self.storms[v].masked) else { return };
+        if let Some((device, entry)) = self.msi[vector] { pci::msi_mask(&self.devices[device], entry, false); }
+        self.storms[vector].masked = false;
     }
 
     // Ok(Some(sp)): caller is blocked, switch; Ok(None): return 0 immediately.
@@ -1065,7 +1101,7 @@ impl Scheduler {
         let Some(Capability::Endpoint(ep, rights, _)) = self.cap(slot, request.arg1) else { return Err(ERR_INVALID); };
         if rights & CAP_READ == 0 { return Err(ERR_RIGHTS); }
         let bound = (0..LINES).find_map(|line| (0..IRQ_SHARERS).find(|&i| self.irq_bind[line][i].is_some_and(|b| b.ep == ep && b.pending)).map(|i| (line, i)));
-        if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.notify_irq(slot, irq); return Ok(None); }
+        if let Some((irq, i)) = bound { if let Some(b) = self.irq_bind[irq][i].as_mut() { b.pending = false; } self.calm(irq); self.notify_irq(slot, irq); return Ok(None); }
         // An emptied queue of exit notices holds no heap memory (800-KRN-0138).
         if let Some(index) = self.exits.iter().position(|e| e.0 == ep) { let (_, pid, reason) = self.exits.remove(index); if self.exits.is_empty() { self.exits = Vec::new(); } self.notify_exit(slot, pid, reason); return Ok(None); }
         let sender = (1..self.tasks.len()).filter(|&i| self.tasks[i].as_ref().is_some_and(|t| t.state == State::BlockedSend(ep))).min_by_key(|&i| self.tasks[i].as_ref().unwrap().send_seq);
@@ -1599,7 +1635,7 @@ impl Scheduler {
             }
             SYSCALL_IRQ_WAIT => match self.cap(slot, request.arg1) {
                 Some(Capability::Interrupt(irq)) if self.irq_bind[irq as usize].iter().all(Option::is_none) => {
-                    interrupts::set_irq_masked(irq, false);
+                    interrupts::set_irq_masked(irq, false); self.calm(irq as usize);
                     if core::mem::take(&mut self.irq_pending[irq as usize]) { Ok(0) } else {
                         core::ptr::write_volatile(core::ptr::addr_of_mut!((*ptr).result), 0);
                         task.state = State::BlockedIrq(irq); return self.select(sp, cpu);
@@ -1615,6 +1651,7 @@ impl Scheduler {
                         Some(i) => {
                             line[i] = Some(IrqBinding { ep, slot, pid, pending: false, unacked: false });
                             if line.iter().flatten().all(|b| !b.unacked) { interrupts::set_irq_masked(irq, false); }
+                            self.calm(irq as usize);
                             Ok(0)
                         }
                         None => Err(ERR_NO_SLOT),
@@ -1819,4 +1856,18 @@ unsafe fn between_pieces(cpu: usize, event: Event, sp: usize) -> usize {
 // Called from the BSP idle loop: reclaims memory of exited tasks.
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
-pub fn idle() { interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); let c = cpu::id(); s.on_cpu[c].iter().any(|&i| i < s.tasks.len() && (s.ready(i, c, BAND_SYSTEM as u8) || s.ready(i, c, BAND_APPLICATION as u8))) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }
+// Test-only (000-KRN-0077): the edu device's registers; from 10 s on, CPU 1 raises its interrupt for 2 ms at each pass
+// through idle, far faster than anyone takes it.
+#[cfg(feature = "bar-move-test")]
+static STORM_TEST: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "bar-move-test")]
+fn storm_test() {
+    let base = STORM_TEST.load(Ordering::Relaxed);
+    if base == 0 || cpu::id() != 1 || interrupts::milliseconds() < 10_000 { return; }
+    let until = interrupts::milliseconds() + 2;
+    while interrupts::milliseconds() < until { unsafe { core::ptr::write_volatile((base + 0x60) as *mut u32, 1); } }
+}
+
+pub fn idle() {
+    #[cfg(feature = "bar-move-test")]
+    storm_test(); interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); let c = cpu::id(); s.on_cpu[c].iter().any(|&i| i < s.tasks.len() && (s.ready(i, c, BAND_SYSTEM as u8) || s.ready(i, c, BAND_APPLICATION as u8))) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }
