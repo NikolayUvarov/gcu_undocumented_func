@@ -1,6 +1,6 @@
 # 800-KRN-0155 — The link's console: a word of `data/mode.conf`, counted only with `dev`
 
-**Type:** `init`, IDL (`init.wit` 1.8) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` 344aa298; `set-mode` keeping the word left) · **Blocked by:** — · **Main task:** — (for 800-LNK-0019) · **Constitution:** MC-3.11, MC-10.2, MC-12.6
+**Type:** `init`, IDL (`init.wit` 1.8) · **Owner:** kernel session · **Priority:** P2 · **Status:** open (in `main` 344aa298; the check of `set-mode` keeping the word made on `claude/youthful-mendel-mf1soy`, landing left) · **Blocked by:** — · **Main task:** — (for 800-LNK-0019) · **Constitution:** MC-3.11, MC-10.2, MC-12.6
 
 From LNK's request of 2026-10-23 (`KRN/2026-10-23T0223Z-LNK-a-mode-word-link-console-in-init.md` on `internal-dev-messages`), after the maintainer's word on the MacBook Pro's rewrite: "effector and effector485 have to have equal rights in maintenance mode, or we need an additional mode line for the 485 debug link".
 
@@ -30,7 +30,7 @@ From LNK's request of 2026-10-23 (`KRN/2026-10-23T0223Z-LNK-a-mode-word-link-con
 - [x] The `modes` suite (x86 and aarch64):
   - without `dev`, the word is left out with its line, and `link-console` answers false;
   - with `dev` in `link.conf`, the boot line names the link's console, and `link-console` answers true.
-- [ ] `set-mode` keeps the word in the file.
+- [x] `set-mode` keeps the word in the file.
 - [x] `docs/idl` lists `init.wit` 1.8.
 
 ## Progress (2026-10-23)
@@ -42,6 +42,14 @@ Made on `claude/youthful-mendel-mf1soy` (bc23dcf1):
   - without `link.conf`, the word is left out with its reason, and `tests/gateway_stub` gets `LINK CONSOLE OFF`;
   - with `dev`, the boot line is `MODE: DEVELOPMENT AND LINK CONSOLE`, across a reboot, and the stub gets `LINK CONSOLE ON`.
 - **Left:** `set-mode` keeping the word, checked once the shell's `mode` (750-APP-0105) is in `main`; only a `BADGE_MODE` client can call it.
+
+## Progress (2026-10-24)
+
+The shell's `mode` (750-APP-0105) is in `main`, so the last criterion is checked (19e82bc6).
+- **The check.** In the `modes` suite, the boot with `dev` in `link.conf` and `link-console` in `data/mode.conf`:
+  - after the gateway's reboot, `mode maintenance on`, agreed;
+  - `data/mode.conf` then holds `development`, `maintenance` and `link-console`.
+- **Run:** x86 in this session's container, QEMU TCG: the suite passed. aarch64 runs it in the gate ("aarch64: files, network and TLS").
 
 ## Related
 
