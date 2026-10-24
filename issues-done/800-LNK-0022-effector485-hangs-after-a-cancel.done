@@ -1,6 +1,6 @@
-# 800-LNK-0022 — effector485 hung after a cancel: `save` pruned inside a route, and the poisoned lock stopped every request
+# 800-LNK-0022 — effector485 hung after a cancel: `save` pruned inside a route, and the poisoned lock stopped every request — done
 
-**Type:** bug · **Owner:** `LNK` · **Priority:** P0 · **Status:** in progress (2026-10-24) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-10.2, MC-12.1
+**Type:** bug · **Owner:** `LNK` · **Priority:** P0 · **Status:** done (2026-10-24) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-10.2, MC-12.1
 
 ## Problem
 
@@ -26,8 +26,24 @@
 ## Acceptance criteria
 
 - [x] The host tests above pass, with the rest of `tools/mindlink`'s.
-- [ ] The daemon on the maintainer's Windows machine runs this build, and a cancel of a queued operation under a lease answers.
+- [x] The daemon on the maintainer's Windows machine runs this build, and a cancel of a queued operation under a lease answers.
+
+## Resolution
+
+The fix is in `claude/LNK-link` 79741a16, and in `fast-test` 70feee04:
+- `tools/mindlink/src/bin/effector485/ops.rs`: `prune` is split from `save`;
+- `worker.rs`: `lock`, and the prune between operations;
+- `main.rs`: answers built before the save, and the two tests;
+- `feed.rs`: a poisoned lock is taken back;
+- `docs/link/effector485.md` and its Russian version: the WSL note.
+
+**On the maintainer's machine (2026-10-24, 08:08 UTC):**
+- the daemon was restarted with this build once EFF's lease was released;
+- under a lease, a non-holder's `mkdir` was queued as `terminal_reserved`, then cancelled;
+- the cancel answered `cancelled`, the endpoints still answered, and the lease was released.
+
+The state then held about 1,600 operations, past the 500 ended kept. Before the fix, the same cancel hung the daemon twice.
 
 ## Related
 
-[800-LNK-0011](800-LNK-0011-effector485.md), [800-LNK-0021](800-LNK-0021-effector485-reservations.md).
+[800-LNK-0011](../issues/800-LNK-0011-effector485.md), [800-LNK-0021](../issues/800-LNK-0021-effector485-reservations.md).
