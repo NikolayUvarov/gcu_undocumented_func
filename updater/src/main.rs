@@ -36,6 +36,11 @@ use source::{copy, sha256, Source};
 const ARCH: &str = "x86_64";
 #[cfg(target_arch = "aarch64")]
 const ARCH: &str = "aarch64";
+// The loader as a manifest lists it for this processor; a slot carries its copy (351-UPD-0010).
+#[cfg(target_arch = "x86_64")]
+const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
+#[cfg(target_arch = "aarch64")]
+const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
@@ -114,8 +119,8 @@ fn channel_of(file: &[u8], parser: Endpoint) -> Result<Channel, Error> {
     Ok(channel)
 }
 
-/// The files of a manifest a slot holds, by name, size and SHA-256: the kernel, the services the bootloader loads and
-/// the applications, which go with them (351-UPD-0023). The licences and data stay at the root.
+/// The files of a manifest a slot holds, by name, size and SHA-256: the kernel, the services the bootloader loads, its
+/// loader (351-UPD-0010) and the applications, which go with them (351-UPD-0023). The licences and data stay at the root.
 fn slot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error> {
     let mut files = Vec::new();
     read_manifest(parser, text, |file| files.push(*file)).map_err(refused)?;
@@ -125,7 +130,7 @@ fn slot_files(text: &[u8], parser: Endpoint) -> Result<Vec<release::File>, Error
     Ok(files)
 }
 
-fn kind(path: &str) -> Kind { plan::kind(path, &BOOT_FILES) }
+fn kind(path: &str) -> Kind { plan::kind(path, &BOOT_FILES, LOADER) }
 
 fn slot_name(slot: u8) -> &'static str { if slot == b'A' { "A" } else { "B" } }
 
@@ -280,14 +285,14 @@ impl Updater {
         self.staged = 0;
         let mut stale = Vec::new();
         dir.list(|entry| if !entry.is_dir { stale.push(String::from(entry.name_str())); }).map_err(|_| Error::Write)?;
-        let listed = |name: &str| files.iter().any(|f| f.path.as_str().eq_ignore_ascii_case(name));
+        let listed = |name: &str| files.iter().any(|f| plan::in_slot(f.path.as_str()).eq_ignore_ascii_case(name));
         for name in stale.iter().filter(|name| ["CHANNEL", "MANIFEST", "MANIFEST.SIG"].iter().any(|kept| kept.eq_ignore_ascii_case(name)) || !listed(name)) {
             dir.remove(name).map_err(|_| Error::Write)?;
         }
         let mut fetched = 0;
         for (index, f) in files.iter().enumerate() {
             let started = mind::time::uptime_ms();
-            let path = format!("MIND/{}/{}", slot, f.path.as_str());
+            let path = format!("MIND/{}/{}", slot, plan::in_slot(f.path.as_str()));
             let mut file = File::open_mode(&path, MODE_WRITE | MODE_CREATE).map_err(|_| Error::Write)?;
             let whole = |file: &File| file.size() as u64 == f.size && sha256(file) == Some(f.digest);
             // An application the volume holds as the manifest lists it is copied whole, not fetched (351-UPD-0023).
@@ -364,6 +369,14 @@ impl Updater {
                 (None, Err(_)) => {}
                 _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, name); return Err(Error::Digest); }
             }
+        }
+        // Its loader as the manifest lists it, and none it does not list (351-UPD-0010): the bootloader starts no other.
+        // A slot staged before holds none, and the loader at EFI/BOOT/ loads it.
+        let loader = files.iter().find(|f| kind(f.path.as_str()) == Kind::Loader);
+        match (loader, File::open(&format!("MIND/{}/{}", slot, plan::in_slot(LOADER)))) {
+            (Some(f), Ok(file)) if file.size() as u64 == f.size && sha256(&file) == Some(f.digest) => {}
+            (_, Err(_)) => {}
+            _ => { mind::println!("[UPDATER] SLOT {}: {} IS NOT AS THE MANIFEST LISTS IT", slot, plan::in_slot(LOADER)); return Err(Error::Digest); }
         }
         // A slot that holds applications holds every one the manifest lists, and none it does not (351-UPD-0023). One
         // staged before holds none, and the root's serve it.
