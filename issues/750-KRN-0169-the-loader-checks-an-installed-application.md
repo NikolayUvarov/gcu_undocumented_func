@@ -1,6 +1,6 @@
 # 750-KRN-0169 — The loader checks an installed application before it runs it; the gateway's `data/apps/` scope
 
-**Type:** `loader`, `init` · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — (the install itself is [750-EFF-0008](750-EFF-0008-application-packages.md)) · **Main task:** [750](750-effector-agent.md) · **Constitution:** MC-9.1, MC-9.2, MC-3.11
+**Type:** `loader`, `init` · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** — (the install itself is [750-EFF-0008](750-EFF-0008-application-packages.md)) · **Main task:** [750](750-effector-agent.md) · **Roadmap:** stage V · **Constitution:** MC-9.1, MC-9.2, MC-3.11
 
 Recorded by the kernel track on 2026-10-24, for the loader's part of [750-UPD-0019](750-UPD-0019-signed-application-packages.md) (draft 0.2, "The loader's check"). The Effector server project asked for it (`ALL/2026-10-24T0904Z-EFF-server-accepts-package-draft-0-2-point-3.md`, point 3).
 
