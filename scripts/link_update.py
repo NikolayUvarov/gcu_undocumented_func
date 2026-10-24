@@ -53,6 +53,11 @@ def boot_file(name):
     return name == "kernel.elf" or name in boot_slots.BOOT_FILES
 
 
+def loader(name, arch):
+    """The loader the manifest lists for `arch`: the updater stages it into the slot too (351-UPD-0010)."""
+    return boot_slots.LOADERS.get(name) == {"x86_64": "BOOTX64.EFI", "aarch64": "BOOTAA64.EFI"}[arch]
+
+
 def application(name):
     """A listed program at the volume's root that is no boot file: the updater stages it into the slot (351-UPD-0023).
     The licences, the voice model and data stay at the root."""
@@ -60,11 +65,12 @@ def application(name):
 
 
 def release_files(manifest, arch, version):
-    """What the updater reads of a release, in the order it is put: the boot files' blobs, the applications' (351-KRN-0151),
-    then the manifest and its signature. A blob two files share goes once. The channel, `channels/stable`, goes last and
-    is not in the list."""
+    """What the updater reads of a release, in the order it is put: the boot files' blobs, the loader's (351-UPD-0010),
+    the applications' (351-KRN-0151), then the manifest and its signature. A blob two files share goes once. The channel,
+    `channels/stable`, goes last and is not in the list."""
     files = release.manifest_files(manifest)
-    blobs = [digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if application(name)]
+    blobs = ([digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if loader(name, arch)]
+             + [digest for name, _, digest in files if application(name)])
     return [f"blobs/{digest}" for digest in dict.fromkeys(blobs)] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
 
 

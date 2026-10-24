@@ -6,7 +6,7 @@ mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
 
-use plan::{confirm, expired, kind, may_stage, newest, other, trial_of_other, Kind};
+use plan::{confirm, expired, in_slot, kind, may_stage, newest, other, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -91,14 +91,20 @@ fn a_sequence_that_could_not_count_on_is_not_written() {
 
 #[test]
 fn a_manifest_splits_into_boot_files_applications_and_shared_files() {
-    let boot = ["init.elf", "shell.elf"];
-    assert_eq!(kind("kernel.elf", &boot), Kind::Boot);
-    assert_eq!(kind("init.elf", &boot), Kind::Boot);
-    assert_eq!(kind("SHELL.ELF", &boot), Kind::Boot, "a volume's name in another case");
-    assert_eq!(kind("wm.elf", &boot), Kind::Application);
-    assert_eq!(kind("UPTIME.ELF", &boot), Kind::Application);
-    for shared in ["EFI/BOOT/BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf"] {
-        assert_eq!(kind(shared, &boot), Kind::Shared, "{}", shared);
+    let (boot, loader) = (["init.elf", "shell.elf"], "EFI/BOOT/BOOTX64.EFI");
+    let kind = |path| kind(path, &boot, loader);
+    assert_eq!(kind("kernel.elf"), Kind::Boot);
+    assert_eq!(kind("init.elf"), Kind::Boot);
+    assert_eq!(kind("SHELL.ELF"), Kind::Boot, "a volume's name in another case");
+    assert_eq!(kind("wm.elf"), Kind::Application);
+    assert_eq!(kind("UPTIME.ELF"), Kind::Application);
+    // 351-UPD-0010: this processor's loader goes into the slot, as BOOTX64.EFI; another processor's stays shared.
+    assert_eq!(kind("EFI/BOOT/BOOTX64.EFI"), Kind::Loader);
+    assert_eq!(kind("efi/boot/bootx64.efi"), Kind::Loader);
+    assert_eq!(in_slot("EFI/BOOT/BOOTX64.EFI"), "BOOTX64.EFI");
+    assert_eq!(in_slot("kernel.elf"), "kernel.elf");
+    for shared in ["EFI/BOOT/BOOTAA64.EFI", "EFI/BOOT/BOOTX64.EFI.old", "BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf"] {
+        assert_eq!(kind(shared), Kind::Shared, "{}", shared);
     }
 }
 

@@ -29,6 +29,7 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | Damage on the block store's medium, injected from the host into its bytes in guest RAM (QMP `pmemsave`, gdbstub writes at the RAM's base 0x4000_0000): a corrupt chunk refused when read and when mounting, a collection refused meanwhile, a put repairs it; a damaged header loses its record alone; a damaged name record counted and the version before it current; a damaged commit changes no name (300-STO-0005, 304); a killed store restarted by `init`, and a medium it cannot mount answered with the reason while programs start (305) | `storefaults` suite on `virt` (CI group "files, network and TLS") |
 | Signed boot volumes (350-UPD-0003): `BOOTAA64.EFI` checks the manifest's signature and every image it loads before loading; the launch record names the manifest, the key and the images checked | every aarch64 suite and `aarch64_smoke.py` (signed volumes) |
 | Slots A and B (351-UPD-0006), as on x86: a trial and its confirmation, an unconfirmed trial's fallback to slot A, a slot with a damaged service not loaded, a torn record ignored, the file system consistent after the bootloader's writes | `aarch64_smoke.py` (`tests/boot_slots_check.py`) |
+| A slot's own loader (351-UPD-0010), as on x86: started on trial and once confirmed, a reset in it, one that cannot load its slot and one not as listed falling back to slot A, a slot without one booting as before | `aarch64_smoke.py` (`own_loaders` in `tests/boot_slots_check.py`) |
 
 ## Not covered by any test
 

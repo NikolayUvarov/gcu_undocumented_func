@@ -5691,9 +5691,10 @@ def updater_parser_check(vm, https):
 
 def update_releases(temp, arch, changed=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
-    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6. Returns the
-    volumes, the server, release 5's channel, release 6's and that one with its signature changed, release 6's manifest,
-    its boot files (name, digest) and a channel maker."""
+    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
+    the loader, so that slot B boots through its own (351-UPD-0010). Returns the volumes, the server, release 5's channel,
+    release 6's and that one with its signature changed, release 6's manifest, its boot files (name, digest) with the
+    loader's last, and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
@@ -5704,6 +5705,8 @@ def update_releases(temp, arch, changed=None):
     if changed:
         with open(newer / changed, "ab") as elf:  # bytes past the ELF's segments: another file, loaded the same
             elf.write(b"release 6 of the update suite\0")
+    with open(newer / BOOT_EFI, "ab") as loader:  # bytes past the PE's sections: another file, loaded the same
+        loader.write(b"release 6's loader\0")
     commit, toolchain, locks = sign_manifest.build_inputs()
     sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
     server = temp / "server"
@@ -5713,6 +5716,7 @@ def update_releases(temp, arch, changed=None):
     good = (server / "channels/stable").read_bytes()
     manifest6 = (newer / "MANIFEST").read_bytes()
     boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
+    boot_files += [(boot_slots.LOADERS[name], digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == BOOT_EFI]
 
     def channel(version, minimum, expires):
         body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
@@ -5736,7 +5740,7 @@ def update_suite(args):
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
     volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf")
-    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+    largest = max(boot_files[:-1], key=lambda f: (newer / f[0]).stat().st_size)
     # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
     applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
                     if name.endswith(".elf") and "/" not in name and name != "kernel.elf" and name not in boot_slots.BOOT_FILES]
@@ -5840,8 +5844,9 @@ def update_suite(args):
         print(f"TIME: the updater staged {len(fetched)} files; the slowest: {slowest}", flush=True)
         for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
             print(f"TIME: the resume: {line}", flush=True)
-        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
-                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+        # 351-UPD-0010: release 6's loader, another file, staged into slot B with it and started for it.
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
+                     "BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/, ON TRIAL", f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
         blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
@@ -5891,7 +5896,8 @@ def update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
+          "restart and slot B's own loader, release 6's, and confirmed on the disk by the updater as soon as init confirmed it; "
+          "its applications are in slot B, "
           "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
           "is consistent", flush=True)
@@ -5970,8 +5976,9 @@ def linkupdate_suite(args):
         out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
-        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
-                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+        # 351-UPD-0010: release 6's loader, another file, staged into slot B with it and started for it.
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
+                     "BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/, ON TRIAL", f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
         # After the restart link serves again on the same line: the script's follower reads the new boot's log.
         require(link_update.follow(link, 120, say=lambda line: None, before=before), "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
@@ -5988,8 +5995,9 @@ def linkupdate_suite(args):
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; an expired channel and one with a changed "
-          "signature are refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
-          "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
+          "signature are refused with no boot record written; the channel as published is taken from that directory into slot B with "
+          "release 6's loader, booted on trial through init's restart and that loader, and confirmed on the disk; mindlink's log "
+          "shows each step", flush=True)
 
 
 def slot_applications_check(args):
@@ -10537,6 +10545,9 @@ def boot_suite(args, disk):
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
         boot_slots_check.run(boot_image, temp, disk, "x86", args.updater_elf)
+    # 351-UPD-0010: a slot's own loader, started by the loader at EFI/BOOT/.
+    with tempfile.TemporaryDirectory(prefix="mind-loaders-") as temp:
+        boot_slots_check.own_loaders(boot_image, temp, disk, "x86")
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
