@@ -140,7 +140,7 @@ pub fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>, changes: Arc<Atomi
         let c = match state.try_lock() {
             Ok(st) => copy(&st, follow.as_ref(), now != seen),
             Err(TryLockError::WouldBlock) => continue,
-            Err(TryLockError::Poisoned(_)) => return,
+            Err(TryLockError::Poisoned(p)) => copy(&p.into_inner(), follow.as_ref(), now != seen),
         };
         // The lock is let go: what follows waits on the browser alone.
         (seen, beat, more) = (now, Instant::now(), false);

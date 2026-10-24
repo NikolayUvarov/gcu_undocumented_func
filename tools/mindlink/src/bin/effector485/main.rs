@@ -186,7 +186,7 @@ fn same_site(r: &http::Request, bound: &str) -> Result<(), &'static str> {
 }
 
 fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
-    let mut st = state.lock().unwrap();
+    let mut st = worker::lock(state);
     let t = now();
     st.expire(t);
     match (r.method.as_str(), r.path.as_str()) {
@@ -215,7 +215,7 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
                 },
             };
             match st.submit(&request, session) {
-                Ok(Submitted::New(i)) => { st.save(); (201, st.view(i, t)) }
+                Ok(Submitted::New(i)) => { let v = st.view(i, t); st.save(); (201, v) }
                 Ok(Submitted::Again(i)) => (200, st.view(i, t)),
                 Err(e) => (400, error(&e)),
             }
@@ -249,7 +249,7 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             let (Some(id), Some(key), Some(reason)) = (request.str("operation_id"), request.str("idempotency_key"), request.str("reason")) else {
                 return (400, error("a cancel needs \"operation_id\", its own \"idempotency_key\" and a \"reason\""));
             };
-            match st.cancel(id, key, reason) { Ok(i) => { st.save(); (200, st.view(i, t)) } Err((code, e)) => (code, error(&e)) }
+            match st.cancel(id, key, reason) { Ok(i) => { let v = st.view(i, t); st.save(); (200, v) } Err((code, e)) => (code, error(&e)) }
         }
         ("GET", "/api/v1/terminal-reservations") => (200, obj(vec![("reservations", Value::Arr(st.lease_at(t).map(|l| l.json(t)).into_iter().collect()))])),
         ("POST", "/api/v1/terminal-reservations") => {
@@ -417,5 +417,52 @@ fn wait(at: &str, key: Option<&str>, id: &str) {
         ("completed", Some(c)) if c != 0.0 => std::process::exit((c as i32).clamp(1, 255)),
         ("completed", _) => {}
         _ => std::process::exit(1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 800-LNK-0022: a cancel that makes one ended operation too many answers for that operation; the daemon then still
+    // answers. Before, `save` pruned inside the route, the index moved, and the read past the end poisoned the lock.
+    #[test]
+    fn a_cancel_at_the_ended_limit() {
+        let dir = std::env::temp_dir().join(format!("effector485-prune-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let mut st = State::load(&dir, "test").unwrap();
+        for n in 0..=500 {
+            let r = json::parse(&format!(r#"{{"kind":"hello","idempotency_key":"k{n}","reason":"r"}}"#)).unwrap();
+            let Ok(Submitted::New(i)) = st.submit(&r, None) else { panic!("submit {n}") };
+            st.ops[i].finish("completed");
+        }
+        let r = json::parse(r#"{"kind":"mkdir","name":"x","idempotency_key":"last","reason":"r"}"#).unwrap();
+        let Ok(Submitted::New(_)) = st.submit(&r, None) else { panic!("the queued one") };
+        let id = st.ops.last().unwrap().id.clone();
+        let state = Arc::new(Mutex::new(st));
+        let ask = |method: &str, path: &str, body: &str| route(&state, &http::Request {
+            method: method.into(), path: path.into(), query: Vec::new(), key: None, body: body.into(), origin: None, host: None,
+            websocket: None, session: None, pin: None,
+        });
+        let (code, v) = ask("POST", "/api/v1/operations/cancel", &format!(r#"{{"operation_id":"{id}","idempotency_key":"c","reason":"r"}}"#));
+        assert_eq!((code, v.str("id"), v.str("status")), (200, Some(id.as_str()), Some("cancelled")));
+        // The worker prunes between operations, where no index is held.
+        worker::lock(&state).prune();
+        assert_eq!(worker::lock(&state).ops.iter().filter(|o| o.ended()).count(), 500);
+        assert_eq!(ask("GET", "/api/v1/endpoints", "").0, 200);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // One request that panics while holding the state must not stop the daemon's other requests.
+    #[test]
+    fn a_poisoned_lock_is_taken_back() {
+        let dir = std::env::temp_dir().join(format!("effector485-poison-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let state = Arc::new(Mutex::new(State::load(&dir, "test").unwrap()));
+        let s2 = state.clone();
+        let _ = std::thread::spawn(move || { let _g = s2.lock().unwrap(); panic!("a failed request"); }).join();
+        assert!(state.is_poisoned());
+        assert_eq!(worker::lock(&state).ops.len(), 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

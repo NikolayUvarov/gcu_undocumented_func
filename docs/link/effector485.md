@@ -146,6 +146,7 @@ effector485 release
 
 - **`reserve --minutes N --reason R [--owner O]`** prints `SESSION:PIN` alone on its first line, and the lease's end on stderr.
 - **`submit … --reservation SESSION:PIN`**, or `EFFECTOR485_RESERVATION` without the flag, sends the two headers; `cancel` sends them too.
+- **From WSL to `effector485.exe`,** pass the flag. WSL hands a variable to a Windows program only when `WSLENV` names it, so `EFFECTOR485_RESERVATION` alone does not arrive (or set `WSLENV=EFFECTOR485_RESERVATION`). Without it, your own operations wait behind your own lease.
 - **`renew [SESSION:PIN] [--minutes N]`** and **`release [SESSION:PIN]`** take the lease from there when it is not given.
 - **`reservations`** lists the lease: session, owner, reason, end, seconds left.
 

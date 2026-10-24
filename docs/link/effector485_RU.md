@@ -146,6 +146,7 @@ effector485 release
 
 - **`reserve --minutes N --reason R [--owner O]`** печатает `SESSION:PIN` одной первой строкой, а конец аренды — в stderr.
 - **`submit … --reservation SESSION:PIN`** или, без флага, `EFFECTOR485_RESERVATION` посылает оба заголовка; `cancel` посылает их тоже.
+- **Из WSL в `effector485.exe`** передавайте флаг. WSL передаёт переменную Windows-программе, только если её называет `WSLENV`, поэтому одна `EFFECTOR485_RESERVATION` не доходит (или задайте `WSLENV=EFFECTOR485_RESERVATION`). Без этого ваши же операции ждут за вашей же бронью.
 - **`renew [SESSION:PIN] [--minutes N]`** и **`release [SESSION:PIN]`** берут аренду оттуда же, когда она не указана.
 - **`reservations`** показывает аренду: сессию, владельца, причину, конец, сколько секунд осталось.
 

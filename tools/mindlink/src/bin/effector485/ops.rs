@@ -247,16 +247,22 @@ impl State {
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
     pub fn save(&mut self) {
         if !self.dirty { return; }
-        let ended: Vec<usize> = (0..self.ops.len()).filter(|&i| self.ops[i].ended()).collect();
-        if ended.len() > ENDED_KEPT {
-            let drop: std::collections::HashSet<usize> = ended[..ended.len() - ENDED_KEPT].iter().copied().collect();
-            let mut i = 0;
-            self.ops.retain(|_| { i += 1; !drop.contains(&(i - 1)) });
-        }
         let text = Value::Arr(self.ops.iter().map(|o| o.json(None, true)).collect()).text();
         let part = self.file.with_extension("json.part");
         if std::fs::write(&part, text).and_then(|_| std::fs::rename(&part, &self.file)).is_ok() { self.dirty = false; }
         else { eprintln!("effector485: {} could not be written", self.file.display()); }
+    }
+
+    /// The oldest ended operations dropped beyond ENDED_KEPT. It moves every later index, so only the worker calls it,
+    /// between operations, where no index is held: a route that pruned inside `save` read past the end and poisoned
+    /// the state's lock (800-LNK-0022).
+    pub fn prune(&mut self) {
+        let ended: Vec<usize> = (0..self.ops.len()).filter(|&i| self.ops[i].ended()).collect();
+        if ended.len() <= ENDED_KEPT { return; }
+        let drop: std::collections::HashSet<usize> = ended[..ended.len() - ENDED_KEPT].iter().copied().collect();
+        let mut i = 0;
+        self.ops.retain(|_| { i += 1; !drop.contains(&(i - 1)) });
+        self.touch();
     }
 
     pub fn touch(&mut self) { self.dirty = true; self.changed(); }
