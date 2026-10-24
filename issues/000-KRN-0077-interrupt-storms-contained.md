@@ -1,6 +1,6 @@
 # 000-KRN-0077 — Interrupt storms contained
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** in progress (made on `claude/youthful-mendel-mf1soy`; the gate left) · **Blocked by:** — · **Roadmap:** track A · **Constitution:** MC-6.3
 
 ## Problem
 
@@ -33,6 +33,20 @@ The first acceptance criterion (a driver that never acknowledges a level line) h
   - `stat irqs` shows it masked, with a count that no longer grows.
   - The shell answers.
 - **Profile and docs.** The profile names the bound.
+
+## Progress (2026-10-24)
+
+Made on `claude/youthful-mendel-mf1soy` (cca4dc50 and the commit after it):
+- **The kernel.**
+  - `Scheduler::storm` and `calm` (`kernel/src/scheduler.rs`), and `pci::msi_mask`.
+  - `stat irqs` reports `MASKED=1` for a vector masked for a storm.
+  - `docs/profile/kernel-objects.md` names the bound.
+- **The test kernel.** `bar-move-test` grants the edu device's MSI and BAR at boot, as before for the BAR check. From 10 s on, CPU 1 raises the device's interrupt for 2 ms at each pass through idle, and does not sleep then, since an idle CPU gets no tick.
+- **Checked** (this session's container, QEMU TCG, x86, the boot suite's bar check run alone):
+  - the vector was masked after 1000 messages not taken in 83 ms;
+  - `stat irqs` read `MASKED=1` with the count at 1002 twice, 2 s apart;
+  - `uptime` answered in 0.4 s.
+- **Not checked:** aarch64 (the same code; its MSIs go through the GIC's v2m frame or ITS), and a driver that takes the interrupt late, which unmasks it.
 
 ## Related
 

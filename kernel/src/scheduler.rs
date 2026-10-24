@@ -1857,17 +1857,21 @@ unsafe fn between_pieces(cpu: usize, event: Event, sp: usize) -> usize {
 pub fn reap() { locked(|| unsafe { scheduler().reap() }) }
 
 // Test-only (000-KRN-0077): the edu device's registers; from 10 s on, CPU 1 raises its interrupt for 2 ms at each pass
-// through idle, far faster than anyone takes it.
+// through idle, far faster than anyone takes it, and does not sleep (an idle CPU gets no tick to wake it).
 #[cfg(feature = "bar-move-test")]
 static STORM_TEST: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "bar-move-test")]
-fn storm_test() {
+fn storm_test() -> bool {
     let base = STORM_TEST.load(Ordering::Relaxed);
-    if base == 0 || cpu::id() != 1 || interrupts::milliseconds() < 10_000 { return; }
+    if base == 0 || cpu::id() != 1 || interrupts::milliseconds() < 10_000 { return false; }
     let until = interrupts::milliseconds() + 2;
     while interrupts::milliseconds() < until { unsafe { core::ptr::write_volatile((base + 0x60) as *mut u32, 1); } }
+    true
 }
 
 pub fn idle() {
     #[cfg(feature = "bar-move-test")]
-    storm_test(); interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); let c = cpu::id(); s.on_cpu[c].iter().any(|&i| i < s.tasks.len() && (s.ready(i, c, BAND_SYSTEM as u8) || s.ready(i, c, BAND_APPLICATION as u8))) }); if ready { cpu::reschedule(); } else { cpu::wait_for_interrupt(); } }); }
+    let storming = storm_test();
+    #[cfg(not(feature = "bar-move-test"))]
+    let storming = false;
+    interrupts::without(|| unsafe { let ready = locked(|| { let s = scheduler(); let c = cpu::id(); s.on_cpu[c].iter().any(|&i| i < s.tasks.len() && (s.ready(i, c, BAND_SYSTEM as u8) || s.ready(i, c, BAND_APPLICATION as u8))) }); if ready { cpu::reschedule(); } else if !storming { cpu::wait_for_interrupt(); } }); }

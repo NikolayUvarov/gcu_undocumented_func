@@ -10225,7 +10225,7 @@ def bar_move_check(args, disk):
             first = line(); time.sleep(2); second = line()
             assert first and second and first[1] == second[1] == "1" and first[2] == second[2], (first and first[0], second and second[0])
             started = time.monotonic()
-            require(vm.command("uptime", raw=True), "UPTIME MS=")
+            assert re.search(r"^up \d+:\d\d:\d\d, load ", vm.command("uptime", raw=True, timeout=10), re.M)
             answered = time.monotonic() - started
             assert answered < 5, answered
         finally:
