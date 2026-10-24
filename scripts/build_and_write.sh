@@ -2,7 +2,7 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--mode=<modes>] <disk number>   |   --list
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number>   |   --list
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
@@ -49,8 +49,16 @@
 #                  ~/.config/mind/effector (700, files 600; a fresh disk uses what was saved last), and after it put
 #                  back and read back. With --mode=maintenance the agent then comes up as the same endpoint, with no
 #                  owner step. The files may hold the agent's token: never printed or committed.
-#                  With --keep-wifi or --keep-effector, the old disk must be inserted before the write, not only when
-#                  the writer asks: if it is not, the script asks for it and waits (OLD_DISK_WAIT, 600 s; Enter skips).
+#   --keep-settings keep everything the owner set on the machine (800-LNK-0024): --keep-wifi and --keep-effector,
+#                  and the rest of data/ and system/: the time zone (data/clock.conf), the desktop (data/wm.conf and
+#                  its picture), data/memory.conf, data/services.txt, data/mode.conf, installed apps, the owner's files.
+#                  Saved into ~/.config/mind/settings (700/600) and put back first, so an option given now (--mode=
+#                  and the others) still wins. Not kept: what the script puts itself (data/firmware, data/wallpapers,
+#                  the test flags wifitest.txt, wifi-ofdm.txt, wifijoin.txt) and data/link (the link's scratch, old
+#                  releases).
+#                  With --keep-wifi, --keep-effector or --keep-settings, the old disk must be inserted before the write,
+#                  not only when the writer asks: if it is not, the script asks for it and waits (OLD_DISK_WAIT, 600 s;
+#                  Enter skips).
 set -euo pipefail
 
 # The clone changes under the script (checkout, pull), and bash reads a script as it runs: so it runs from a copy.
@@ -73,7 +81,7 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
-COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; KEEP_EFFECTOR=0; IMAGE_FILE=
+COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --commit) COMMIT="${2:?usage: $0 --commit <id> <disk number>}"; shift 2 ;;
@@ -90,6 +98,7 @@ while [[ $# -gt 0 ]]; do
         --link-dev) LINK_RUN=1; LINK_DEV=1; shift ;;
         --keep-wifi) KEEP_WIFI=1; shift ;;
         --keep-effector) KEEP_EFFECTOR=1; shift ;;
+        --keep-settings) KEEP_SETTINGS=1; KEEP_WIFI=1; KEEP_EFFECTOR=1; shift ;;
         --mode=*) m="${1#--mode=}"; words=()
                   for w in ${m//,/ }; do
                       [[ $w == development || $w == maintenance || $w == link-console ]] || { echo "--mode=<modes>: development, maintenance, link-console, comma-separated: $w" >&2; exit 1; }
@@ -339,13 +348,70 @@ put_effector() {
     return $status
 }
 
+# Everything else the owner set (800-LNK-0024): data/ and system/ but for what other options carry with their own
+# care (keystore, the network policy's merge, the agent) and what the script puts itself.
+SETTINGS_KEEP="${SETTINGS_KEEP:-$HOME/.config/mind/settings}"
+SETTINGS_SKIP_DATA=(effector firmware wallpapers link wifitest.txt wifi-ofdm.txt wifijoin.txt)
+SETTINGS_SKIP_SYSTEM=(keystore netpolicy effector)
+# Copies the volume at $1's settings into $SETTINGS_KEEP, whole or not at all; echoes how many files.
+keep_settings_from() {
+    local vol=$1 next="$SETTINGS_KEEP.next" sub x args
+    [[ -d $vol/data || -d $vol/system ]] || return 1
+    rm -rf "$next"; (umask 077; mkdir -p "$next/data" "$next/system")
+    for sub in data system; do
+        [[ -d $vol/$sub ]] || continue
+        args=()
+        if [[ $sub == data ]]; then for x in "${SETTINGS_SKIP_DATA[@]}"; do args+=("--exclude=./$x"); done
+        else for x in "${SETTINGS_SKIP_SYSTEM[@]}"; do args+=("--exclude=./$x"); done; fi
+        (cd "$vol/$sub" && tar cf - "${args[@]}" .) | (umask 077; cd "$next/$sub" && tar xf - --no-same-owner) || { rm -rf "$next"; return 1; }
+    done
+    find "$next" -type d -exec chmod 700 {} + && find "$next" -type f -exec chmod 600 {} +
+    rm -rf "${SETTINGS_KEEP:?}" && mv "$next" "$SETTINGS_KEEP" && find "$SETTINGS_KEEP" -type f | wc -l
+}
+# Puts $SETTINGS_KEEP's files on the volume at $1 and reads each back.
+put_settings_to() {
+    local vol=$1 sub f
+    for sub in data system; do
+        mkdir -p "$vol/$sub" && cp -r "$SETTINGS_KEEP/$sub/." "$vol/$sub/" || return 1
+    done
+    sync
+    while IFS= read -r f; do cmp -s "$SETTINGS_KEEP/$f" "$vol/$f" || { echo "keep-settings: $f differs on the disk" >&2; return 1; }; done < <(cd "$SETTINGS_KEEP" && find . -type f)
+}
+save_settings() {
+    local letter=$OLD_LETTER dir n
+    if [[ ! $letter =~ ^[A-Z]$ ]]; then
+        if [[ -d $SETTINGS_KEEP ]]; then echo "keep-settings: disk $DISK not inserted; what was saved before will be put back"
+        else echo ">>> keep-settings: disk $DISK not inserted and nothing saved before: the settings will NOT be kept" >&2; fi
+        return 0
+    fi
+    dir=$(mktemp -d)
+    sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
+    if n=$(keep_settings_from "$dir"); then
+        echo "keep-settings: $n file(s) of $letter:\\data and \\system saved in $SETTINGS_KEEP ($(du -sh "$SETTINGS_KEEP" | cut -f1)): $(ls "$SETTINGS_KEEP/data" | tr '\n' ' ')"
+    else echo "keep-settings: $letter: holds no settings; what was saved before will be put back"; fi
+    sudo umount "$dir"; rmdir "$dir"
+}
+put_settings() {
+    [[ -d $SETTINGS_KEEP ]] || { echo "keep-settings: nothing saved in $SETTINGS_KEEP" >&2; return 1; }
+    local letter dir status=0
+    letter=$(winps "${PS_LETTER//__MANIFEST__/$(sha256sum "$MANIFEST_FILE" | cut -d' ' -f1)}" | tr -d '\r\n')
+    [[ $letter =~ ^[A-Z]$ ]] || { echo "keep-settings: no volume MIND CORE holding this build (its MANIFEST) within 60 s" >&2; return 1; }
+    dir=$(mktemp -d)
+    sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
+    if put_settings_to "$dir"; then echo "keep-settings: $(find "$SETTINGS_KEEP" -type f | wc -l) file(s) put back on $letter:, read back"
+    else echo "keep-settings: the settings NOT all put back" >&2; status=1; fi
+    sudo umount "$dir"; rmdir "$dir"
+    winps "\$ProgressPreference = 'SilentlyContinue'; Write-VolumeCache -DriveLetter $letter" > /dev/null || true
+    return $status
+}
+
 if [[ "${1:-}" == "--list" ]]; then
     winps "\$ProgressPreference = 'SilentlyContinue'; & '$WRITER_WIN' -List" | tr -d '\r'
     exit 0
 fi
 [[ ($LINK_RUN == 1 || $SLOTS == 1) && -z $LINK_BAUD ]] && LINK_BAUD=460800
 [[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--mode=<modes>] <disk number> | --list}"
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number> | --list}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 
 cd "$REPO"
@@ -391,10 +457,13 @@ esac
 if [[ $KEEP_WIFI == 1 || $KEEP_EFFECTOR == 1 ]]; then find_old_volume; fi
 if [[ $KEEP_WIFI == 1 ]]; then save_keystore || echo ">>> The remembered Wi-Fi networks NOT saved from disk $DISK." >&2; fi
 if [[ $KEEP_EFFECTOR == 1 ]]; then save_effector || echo ">>> The Effector agent's files NOT saved from disk $DISK." >&2; fi
+if [[ $KEEP_SETTINGS == 1 ]]; then save_settings || echo ">>> The settings NOT saved from disk $DISK." >&2; fi
 echo ">>> Opening an elevated PowerShell to write $IMAGE_WIN to disk $DISK (UAC, then type ERASE $DISK)."
 # -NoExit keeps the window open so the result stays readable; -Wait returns here when it is closed.
 winps "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoExit','-NoProfile','-ExecutionPolicy','Bypass','-File','\"$WRITER_WIN\"','-DiskNumber','$DISK','-Image','\"$IMAGE_WIN\"'"
 echo ">>> The writer's window was closed."
+# The owner's settings first: what the script puts after them (firmware, pictures, --mode= and the others) wins.
+if [[ $KEEP_SETTINGS == 1 ]]; then put_settings || echo ">>> The settings NOT all put on the disk." >&2; fi
 if [[ $HAVE_PROPRIETARY == 1 ]]; then scripts/proprietary.sh copy || echo ">>> Proprietary files NOT copied: run scripts/proprietary.sh copy once the disk shows MIND CORE." >&2; fi
 # Desktop pictures (wallpapers/README.md): not in the image either, copied to data/wallpapers/ and read back.
 if [[ -z $IMAGE_FILE && -x scripts/disk_copy.sh ]] && compgen -G "wallpapers/*.jpg" > /dev/null; then
