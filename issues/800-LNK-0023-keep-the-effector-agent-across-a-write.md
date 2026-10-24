@@ -31,6 +31,15 @@ EFF's request (`LNK/2026-10-24T0811Z-EFF-…build-and-write-keeps-the-effector-a
 
 The saved files may hold the agent's token: never printed, logged or committed.
 
+## Progress
+
+- **2026-10-24, the first write with `--keep-effector` kept nothing.** The maintainer inserts the disk only when the writer's window asks for it, and both saves ran before that. They found no volume `MIND CORE` on disk 4 and went on quietly.
+  - `--keep-wifi` has the same flaw, but its earlier save was still good, so the Wi-Fi keys came back.
+  - The agent's three files were put on the new volume by hand, from EFF's kit (`data/effector/{effector.conf, policy, agent_id}`, as `start.msh` puts them), and read back.
+- **The fix.** Before the saves, the script looks for the old disk's `MIND CORE` once. If it is not there, it asks for the disk and waits up to `OLD_DISK_WAIT` (600 s); Enter goes on without it.
+  - When nothing was saved before either, `--keep-effector` now says loudly that the agent is not kept.
+  - Checked on the host with a stand-in for Windows: the disk found on the third poll, and the wait ended at its time when it never came.
+
 ## Related
 
 [800-LNK-0014](800-LNK-0014-build-and-write-in-the-repository.md), 750-EFF-0012, 750-EFF-0013.
