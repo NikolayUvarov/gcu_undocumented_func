@@ -14,7 +14,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:init";
-pub const VERSION: (u8, u8, u8) = (1, 8, 0);
+pub const VERSION: (u8, u8, u8) = (1, 9, 0);
 const MAJOR: usize = 1;
 
 /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -78,6 +78,20 @@ impl Wire for ModeState {
     const MAX: usize = <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<120> as Wire>::MAX;
     fn encode(&self, w: &mut Writer) -> Option<()> { self.development.encode(w)?; self.maintenance.encode(w)?; self.by.encode(w)?; self.reason.encode(w)?; Some(()) }
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { development: Wire::decode(r)?, maintenance: Wire::decode(r)?, by: Wire::decode(r)?, reason: Wire::decode(r)? }) }
+}
+
+/// This boot's plan (1.9, 173-KRN-0035): the services in the order init tried them, as data/services.txt set it:
+/// its place (init 0, then 1 the first tried), whether the file leaves it enabled, whether it is essential (the file
+/// cannot turn it off or move it), the service it waited for (`after`, empty if none), and why it did not start at
+/// boot: empty if it did, `disabled`, `needs <service>` (one the file turns off), `no device`, `no image`, `safe
+/// start`, `mode` (an Effector service, no mode on), `no link.conf` or `failed`. What runs now is `list`'s. Any
+/// client may ask.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Planned { pub name: Text<16>, pub place: u8, pub enabled: bool, pub essential: bool, pub after: Text<16>, pub off: Text<32> }
+impl Wire for Planned {
+    const MAX: usize = <Text<16> as Wire>::MAX + <u8 as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX + <Text<16> as Wire>::MAX + <Text<32> as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.name.encode(w)?; self.place.encode(w)?; self.enabled.encode(w)?; self.essential.encode(w)?; self.after.encode(w)?; self.off.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, place: Wire::decode(r)?, enabled: Wire::decode(r)?, essential: Wire::decode(r)?, after: Wire::decode(r)?, off: Wire::decode(r)? }) }
 }
 
 /// Starts boot service `name`, lifting a quarantine and resetting its restart budget; returns its PID. Errors: busy
@@ -238,6 +252,19 @@ pub fn link_console(endpoint: Endpoint) -> Result<core::result::Result<bool, Err
     Ok(Ok(wire::field(&reply, 0, 16, 1) != 0))
 }
 
+pub fn boot_plan(endpoint: Endpoint) -> Result<core::result::Result<List<Planned, 64>, Error>> {
+    let mut buffer = Pages::new(8192).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 12 | MAJOR << 8, &buffer, length)?;
+    if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
+    let length = wire::buffer_reply(&reply, 4674, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<Planned, 64> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+}
+
 /// A request to the `init` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -252,6 +279,7 @@ pub enum Request {
     SetMode { which: Mode, on: bool, reason: Text<120> },
     Replace { name: Text<16>, path: Text<64> },
     LinkConsole,
+    BootPlan,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -337,6 +365,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::LinkConsole, Call::words(request, cap)))
         }
+        12 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 4674, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::BootPlan, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -384,4 +419,8 @@ pub fn reply_replace(call: Call, value: core::result::Result<(), Error>) -> Resu
 pub fn reply_link_console(call: Call, value: core::result::Result<bool, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_boot_plan(call: Call, value: core::result::Result<&[Planned], Error>) -> Result<()> {
+    let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
+    wire::reply_buffer(call, |w| codec::encode_slice::<Planned, 64>(value, w))
 }
