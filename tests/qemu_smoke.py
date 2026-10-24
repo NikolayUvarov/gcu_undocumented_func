@@ -4631,6 +4631,14 @@ def gateway_stub_check(args):
             require(out, "[GATEWAY-STUB] SCOPE START 2: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
             require(out, "[GATEWAY-STUB] REBOOT NOT ASKED")
             require(out, "[GATEWAY-STUB] LINK CONSOLE ON")
+            # 800-KRN-0155: a mode set through init (the shell's `mode`) keeps the word in the file.
+            vm.send("mode maintenance on the modes suite\n")
+            require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
+            vm.send_bytes(b"y")
+            require(vm.expect("MIND> ", timeout=30), "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            kept = vm.command("cat data/mode.conf", raw=True)
+            for word in ("development", "maintenance", "link-console"):
+                assert re.search(rf"^{word}$", kept.replace("\r", ""), re.M), (word, kept)
             assert "PANIC" not in vm.log, vm.log[-2000:]
         finally:
             vm.close()
@@ -4639,8 +4647,8 @@ def gateway_stub_check(args):
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
           "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
-          "answers whether the link's console is on, which needs `dev` in link.conf (800-KRN-0155); the gateway lights the "
-          "Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
+          "answers whether the link's console is on, which needs `dev` in link.conf, and keeps the word when a mode is set (800-KRN-0155); "
+          "the gateway lights the Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
 
 
 def effector_grants_check(vm):
