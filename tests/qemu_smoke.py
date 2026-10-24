@@ -4467,6 +4467,7 @@ def modes_suite(args):
     modes_lifecycle_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
+        services_config_check(args)
     print("PASS: modes: init reads data/mode.conf once the boot volume is there (the development mode; an unknown word left "
           "out; the normal mode without the file); in the mode effector_gw and effector run with exactly their grants, the "
           "session's token kept in its private directory, and without one neither runs nor starts, and no process holds an "
@@ -4649,6 +4650,79 @@ def gateway_stub_check(args):
           "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
           "answers whether the link's console is on, which needs `dev` in link.conf, and keeps the word when a mode is set (800-KRN-0155); "
           "the gateway lights the Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
+
+
+def services_config_check(args):
+    """173-KRN-0035: data/services.txt written on the host turns tts and video_gw off and starts windows after sysmon; init
+    logs the plan, the services it leaves off are prepared and `svc start` starts one; init.wit's boot-plan (asked by the
+    gateway's stand-in, run in the development mode) reports it. A file that turns off logd, names an unknown service and
+    has a malformed line boots as without it, the log naming the three lines."""
+    def plan_of(vm):
+        for _ in range(90):
+            out = vm.command("dmesg -s effector_gw", raw=True)
+            if "[GATEWAY-STUB] PLAN END" in out:
+                break
+            time.sleep(1)
+        rows = re.findall(r"\[GATEWAY-STUB\] PLAN (\d+) ([\w#-]+) (ENABLED|DISABLED) (ESSENTIAL|CONFIGURABLE) AFTER '([\w#-]*)' OFF '([^']*)'", out)
+        assert rows and "[GATEWAY-STUB] PLAN END" in out, out[-2000:]
+        return {name: (int(place), state, kind, after, off) for place, name, state, kind, after, off in rows}
+
+    text = b"# 173-KRN-0035: no speakers, no camera\ndisable tts\ndisable video_gw\nafter windows sysmon\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-services-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/services.txt": text}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            log = vm.command("dmesg -s init", raw=True)
+            for line in ("[INIT] data/services.txt: 2 OFF, 0 OFF AS THEY NEED ONE OF THEM, 1 WAIT FOR ANOTHER",
+                         "[INIT] windows WAITS FOR sysmon (data/services.txt)",
+                         "[INIT] tts OFF BY data/services.txt: PREPARED, `svc start tts` STARTS IT",
+                         "[INIT] video_gw OFF BY data/services.txt: PREPARED, `svc start video_gw` STARTS IT"):
+                require(log, line)
+            assert "REFUSED" not in log.partition("[INIT] READY")[0], log[-3000:]
+            assert log.index("[INIT] STARTED sysmon PID") < log.index("[INIT] STARTED windows PID") < log.index("[INIT] STARTED updater PID"), log[-3000:]
+            assert "[INIT] STARTED tts PID" not in log and "[INIT] STARTED video_gw PID" not in log, log[-3000:]
+            running = vm.services()
+            assert "tts" not in running and "video_gw" not in running and {"windows", "sysmon", "logd"} <= set(running), running
+            plan = plan_of(vm)
+            assert plan["tts"][1:] == ("DISABLED", "CONFIGURABLE", "", "disabled"), plan["tts"]
+            assert plan["video_gw"][1:] == ("DISABLED", "CONFIGURABLE", "", "disabled"), plan["video_gw"]
+            assert plan["windows"][1:] == ("ENABLED", "CONFIGURABLE", "sysmon", ""), plan["windows"]
+            assert plan["sysmon"][0] < plan["windows"][0] < plan["updater"][0], (plan["sysmon"], plan["windows"], plan["updater"])
+            assert plan["logd"][1:3] == ("ENABLED", "ESSENTIAL") and plan["init"][0] == 0, (plan["logd"], plan["init"])
+            assert plan["effector_gw"][4] == "" and plan["shell"][4] == "", (plan["effector_gw"], plan["shell"])  # the mode started it
+            assert sorted(p[0] for n, p in plan.items() if n != "init") == list(range(1, len(plan))), plan
+            # A service the file turned off still starts, as the safe start's do (000-KRN-0131).
+            require(vm.command("svc start tts"), "tts started: PID")
+            assert "tts" in vm.services(), vm.services()
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-services-{args.cpus}cpu.log").write_text(vm.log)
+    text = b"disable logd\ndisable nosuchservice\nthis is not a directive\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-services-bad-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/services.txt": text}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            log = vm.command("dmesg -s init", raw=True)
+            for line in ("[INIT] data/services.txt LINE 1 REFUSED: ESSENTIAL: INIT ALWAYS STARTS IT: disable logd",
+                         "[INIT] data/services.txt LINE 2 REFUSED: UNKNOWN SERVICE: disable nosuchservice",
+                         "[INIT] data/services.txt LINE 3 REFUSED: NOT disable, enable OR after WITH ITS NAMES: this is not a directive",
+                         "[INIT] data/services.txt: 0 OFF, 0 OFF AS THEY NEED ONE OF THEM, 0 WAIT FOR ANOTHER"):
+                require(log, line)
+            assert "WAITS FOR" not in log and "OFF BY data/services.txt" not in log, log[-3000:]
+            plan = plan_of(vm)
+            assert all(p[1] == "ENABLED" and p[3] == "" for p in plan.values()), plan
+            assert {n for n, p in plan.items() if p[4] == "disabled" or p[4].startswith("needs")} == set(), plan
+            assert {"logd", "tts", "video_gw", "windows", "sysmon"} <= set(vm.services()), vm.services()
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-services-bad-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: data/services.txt (173-KRN-0035): tts and video_gw off and prepared, windows after sysmon, boot-plan reports "
+          "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
+          "boots as without it, each line named in the log", flush=True)
 
 
 def effector_grants_check(vm):
