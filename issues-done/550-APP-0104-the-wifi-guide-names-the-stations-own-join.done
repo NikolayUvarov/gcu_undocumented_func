@@ -1,0 +1,35 @@
+# 550-APP-0104 — The `wifi` guide names the station's own join — done
+
+**Type:** tools (docs) · **Owner:** tools track (`APP`) · **Priority:** P3 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** [550](../issues/550-network-on-real-hardware.md) · **Roadmap:** track H · **Constitution:** MC-12.3
+
+**Recorded by:** the tools track, 2026-10-22, from the network track's request (worked by the kernel session) in [requests-APP.md](../issues/requests-APP.md) on that branch, for 550-NET-0041.
+
+## Problem
+
+- **What changes in `wlan`.** With 550-NET-0041, the station joins a remembered network by itself, at start and after the network is lost ([docs/network/station.md](../docs/network/station.md)).
+- **What the guide says.** `docs/tools` describes `d` (`wifi leave`) and `f` (forget) without that. A user who leaves a network may not expect the station to join it again by itself.
+
+## Plan
+
+- **One line in the `wifi` guide,** beside `d` and `f` (`docs/tools/README.md` and `README_RU.md`):
+  - the station joins a remembered network by itself;
+  - `d` stops that until the station next joins;
+  - `f` takes the network out of it.
+- **Not before the code is in `main`.** Until then the line would state a behaviour `main` does not have (MC-12.3).
+- **Later, if the network track adds it to `wifi.wit`:** a word in `wifi` to turn the station's own join off for good.
+
+## Acceptance criteria
+
+- The line is in both guides once 550-NET-0041's code is in `main`.
+- The request is taken from `requests-APP.md`.
+
+## Resolution
+
+- **The line** is in the `wifi` paragraph of [docs/tools/README.md](../docs/tools/README.md) and [README_RU.md](../docs/tools/README_RU.md), beside `d` and `f`: the station joins a remembered network by itself, at start and after the network is lost; `d` (or `wifi leave`) stops that until the station next joins one or `wlan` starts again; `f` takes the network out of it. It links [docs/network/station.md](../docs/network/station.md).
+- **Written once 550-NET-0041 was in `main`** (d5f508d3), and checked against that page's "How to stop it".
+- **The request** is taken from [requests-APP.md](../issues/requests-APP.md).
+- **Left to the network track:** a word in `wifi.wit` to turn the station's own join off for good; `wifi` gets it then.
+
+## Related
+
+- [550-NET-0041](550-NET-0041-wlan-joins-a-remembered-network-by-itself.done); [550-APP-0078](../issues/550-APP-0078-wifi-join-without-a-screen.md) (`wifi leave` without a screen).

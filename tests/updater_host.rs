@@ -6,7 +6,7 @@ mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
 
-use plan::{confirm, kind, may_stage, newest, other, trial_of_other, Kind};
+use plan::{confirm, expired, kind, may_stage, newest, other, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -100,4 +100,13 @@ fn a_manifest_splits_into_boot_files_applications_and_shared_files() {
     for shared in ["EFI/BOOT/BOOTX64.EFI", "LICENSES/MIT.txt", "data/models/x.elf", "MANIFEST", "elf", ".elf"] {
         assert_eq!(kind(shared, &boot), Kind::Shared, "{}", shared);
     }
+}
+
+#[test]
+fn metadata_is_current_only_before_its_expiry_on_a_clock_that_reads() {
+    // 351-UPD-0025: the second of its expiry is past already, and a clock that cannot be read shows nothing current.
+    assert!(!expired(1_000, Some(999)));
+    assert!(expired(1_000, Some(1_000)));
+    assert!(expired(1_000, Some(5_000)));
+    assert!(expired(u64::MAX, None));
 }

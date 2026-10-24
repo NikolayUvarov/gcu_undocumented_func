@@ -4,7 +4,7 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-package mind:init@1.7.0;
+package mind:init@1.9.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -58,4 +58,15 @@ interface init {
     /// carries the link or the log (vfs_server, logd, usb_serial, link) and the shell. Errors: not-found (no such
     /// service or file), failed (not an ELF, or the start failed).
     replace: func(name: string<16>, path: string<64>) -> result<_, error>;
+    /// Whether the link's console is on (1.8, 800-KRN-0155): the word `link-console` of data/mode.conf, counted only
+    /// with `dev` in link.conf. Only the disk's file sets it; `set-mode` keeps it. Any client may ask.
+    link-console: func() -> result<bool, error>;
+    /// This boot's plan (1.9, 173-KRN-0035): the services in the order init tried them, as data/services.txt set it:
+    /// its place (init 0, then 1 the first tried), whether the file leaves it enabled, whether it is essential (the file
+    /// cannot turn it off or move it), the service it waited for (`after`, empty if none), and why it did not start at
+    /// boot: empty if it did, `disabled`, `needs <service>` (one the file turns off), `no device`, `no image`, `safe
+    /// start`, `mode` (an Effector service, no mode on), `no link.conf` or `failed`. What runs now is `list`'s. Any
+    /// client may ask.
+    record planned { name: string<16>, place: u8, enabled: bool, essential: bool, after: string<16>, off: string<32> }
+    boot-plan: func() -> result<list<planned, 64>, error>;
 }

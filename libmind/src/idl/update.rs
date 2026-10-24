@@ -13,7 +13,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:update";
-pub const VERSION: (u8, u8, u8) = (1, 0, 0);
+pub const VERSION: (u8, u8, u8) = (1, 1, 0);
 const MAJOR: usize = 1;
 
 /// Why a request failed. `no-source`: update.txt names no source; `no-slot`: the system did not boot from a slot;
@@ -21,7 +21,7 @@ const MAJOR: usize = 1;
 /// source did not answer, or a transfer failed after its tries; `missing`: the source has no such file, or the
 /// channel no manifest for this architecture; `malformed`: the parser refused the metadata, or its answer does not
 /// make the bytes; `signature`: a channel or manifest not signed by its key; `expired`: the channel's expiry has
-/// passed, or the clock cannot be read; `older`: the channel names the running version or an older one; `digest`:
+/// passed, or the clock cannot be read (for `apply`, the channel kept with the staged release); `older`: the channel names the running version or an older one; `digest`:
 /// a file not as its manifest lists it; `write`: the slot or a boot record could not be written; `not-staged`: no
 /// verified newer release in the other slot; `no-fallback`: no slot to roll back to, or its version is not known or
 /// is below the minimum; `denied`: init refused the restart; `no-parser`: the parser service did not answer.
@@ -58,6 +58,18 @@ impl Wire for State {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { slot: Wire::decode(r)?, trial: Wire::decode(r)?, running: Wire::decode(r)?, recorded: Wire::decode(r)?, confirmed: Wire::decode(r)?, staged: Wire::decode(r)?, failure: Wire::decode(r)? }) }
 }
 
+/// The channel the updater holds, checked with the release key: the one it last read from the source, or else the
+/// one kept in the running slot (`channel` empty: none). `expired`: its expiry has passed or the clock cannot be
+/// read, so `fetch` and `apply` wait for a current channel while the system runs on and `rollback` stays possible
+/// (351-UPD-0025). `checked`: read from the source since the updater started.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Metadata { pub channel: Text<32>, pub version: u64, pub minimum: u64, pub expires: Text<20>, pub expired: bool, pub checked: bool }
+impl Wire for Metadata {
+    const MAX: usize = <Text<32> as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <Text<20> as Wire>::MAX + <bool as Wire>::MAX + <bool as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.channel.encode(w)?; self.version.encode(w)?; self.minimum.encode(w)?; self.expires.encode(w)?; self.expired.encode(w)?; self.checked.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { channel: Wire::decode(r)?, version: Wire::decode(r)?, minimum: Wire::decode(r)?, expires: Wire::decode(r)?, expired: Wire::decode(r)?, checked: Wire::decode(r)? }) }
+}
+
 /// Reads the channel and checks its signature, its form and its expiry. A version not above the running one is
 /// `older`.
 pub fn check(endpoint: Endpoint) -> Result<core::result::Result<Offer, Error>> {
@@ -84,8 +96,9 @@ pub fn fetch(endpoint: Endpoint) -> Result<core::result::Result<u64, Error>> {
     Ok(Ok(wire::field(&reply, 1, 0, 64) as u64))
 }
 
-/// Checks the other slot as the bootloader will, writes the boot record that boots it on trial with `tries` (1 to
-/// 9), falling back to the running slot, and asks init to restart the machine.
+/// Checks the other slot as the bootloader will, and that the channel kept there has not expired; writes the boot
+/// record that boots it on trial with `tries` (1 to 9), falling back to the running slot, and asks init to restart
+/// the machine.
 pub fn apply(endpoint: Endpoint, tries: u8) -> Result<core::result::Result<(), Error>> {
     let words = [3 | MAJOR << 8 | ((tries) as usize) << 16, 0];
     let reply = wire::call(endpoint, words, None)?;
@@ -117,6 +130,19 @@ pub fn status(endpoint: Endpoint) -> Result<State> {
     Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <State as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
 }
 
+/// The channel the updater holds (above); added in 1.1.
+pub fn metadata(endpoint: Endpoint) -> Result<Metadata> {
+    let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
+    let length = {
+        let mut w = Writer::new(buffer.as_mut_slice());
+        w.len()
+    };
+    let reply = wire::call_buffer(endpoint, 6 | MAJOR << 8, &buffer, length)?;
+    let length = wire::buffer_reply(&reply, 74, false, false)?;
+    let length = length.ok_or(SysError::Invalid)?;
+    Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Metadata as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? })
+}
+
 /// A request to the `update` interface that passed the receiver's schema check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Request {
@@ -125,6 +151,7 @@ pub enum Request {
     Apply { tries: u8 },
     Rollback,
     Status,
+    Metadata,
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -160,6 +187,13 @@ pub fn decode(request: &Received, cap: usize) -> core::result::Result<(Request, 
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Status, call))
         }
+        6 => {
+            let mut copy = [0u8; 1];
+            let (call, length) = wire::take_buffer(request, cap, 74, &mut copy)?;
+            let mut r = Reader::new(&copy[..length]);
+            if !r.done() { return Err(Reject::Invalid); }
+            Ok((Request::Metadata, call))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -181,5 +215,8 @@ pub fn reply_rollback(call: Call, value: core::result::Result<(), Error>) -> Res
     wire::finish(call, [0, 0])
 }
 pub fn reply_status(call: Call, value: &State) -> Result<()> {
+    wire::reply_buffer(call, |w| value.encode(w))
+}
+pub fn reply_metadata(call: Call, value: &Metadata) -> Result<()> {
     wire::reply_buffer(call, |w| value.encode(w))
 }

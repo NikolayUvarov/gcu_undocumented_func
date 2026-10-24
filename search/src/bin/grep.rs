@@ -24,8 +24,22 @@ impl Tree for Fs {
 
 mind::entry!(main);
 fn main(_info: &'static mind::BootInfo) {
-    mind::about!("grep — prints the lines of text files that match a pattern (. * [a-z] [^...] ^ $ \\).\nUsage: grep [-i] [-n] [-r] [-l] [-c] pattern [path...]\n-i ignore case, -n line numbers, -r into directories, -l file names only, -c counts only.");
+    mind::about!("grep — prints the lines of text files that match a pattern (. * [a-z] [^...] ^ $ \\).\nUsage: grep [-i] [-n] [-r] [-l] [-c] pattern [path...]\n-i ignore case, -n line numbers, -r into directories, -l file names only, -c counts only.\nWithout a path it reads its text input: ps | grep wm.");
     let options = match grep::parse(mind::process::args_str()) { Ok(options) => options, Err(usage) => { mind::println!("{}", usage); mind::process::exit_with(2) } };
+    // No path: the lines of the text input the shell gave it (`|`, 000-APP-0074); without one, the usage.
+    if options.paths.is_empty() {
+        if !mind::io::has_input() { mind::println!("{}", grep::USAGE); mind::process::exit_with(2) }
+        let mut read = |buffer: &mut [u8]| mind::io::read(buffer).map_err(|error| format!("{:?}", error));
+        let quiet = options.names_only || options.count;
+        let scan = grep::scan(&mut read, &options.pattern, &mut |number, text| if !quiet { mind::println!("{}", grep::line(&options, false, "", number, text)); });
+        let matched = match scan {
+            Ok(scan) if options.count => { mind::println!("{}", scan.matched); scan.matched > 0 }
+            Ok(scan) if scan.matched > 0 && options.names_only => { mind::println!("(THE INPUT)"); true }
+            Ok(scan) => scan.matched > 0,
+            Err(error) => { mind::println!("GREP: THE INPUT: {}", error); mind::process::exit_with(2) }
+        };
+        mind::process::exit_with(if matched { 0 } else { 1 });
+    }
     let mut failed = false;
     let mut matched = false;
     let files = grep::files(&mut Fs, &options, &mut |path, error| { failed = true; mind::println!("GREP: {}: {}", path, error) });

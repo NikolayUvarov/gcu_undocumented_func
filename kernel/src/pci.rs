@@ -182,8 +182,12 @@ impl control::Access for CommandAccess<'_> {
     fn write_command(&mut self, value: u16) { unsafe { command(self.0, value); } }
 }
 
-// Readback must confirm stopping before init clears a driver's retained DMA region.
-pub unsafe fn quiesce(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Stopped) }
+// Readback must confirm stopping before init clears a driver's retained DMA region. The BCM4331's 802.11 core is reset
+// first, as at boot: a stop while it writes what it receives would leave its agent wedged (550-KRN-0157).
+pub unsafe fn quiesce(device: &Device) -> bool {
+    if device.id == BCM4331 { bcm4331_stop_core(device.bus, device.device, device.function, device.bars[0]); }
+    control::transition(&mut CommandAccess(device), control::Mode::Stopped)
+}
 
 // New Realtek drivers install their rings before explicitly enabling bus mastering.
 pub unsafe fn registers_only(device: &Device) -> bool { control::transition(&mut CommandAccess(device), control::Mode::Registers) }
@@ -242,6 +246,27 @@ pub unsafe fn msi(device: &Device, index: usize) -> Option<()> {
     if masking { write(device.bus, device.device, device.function, data_at + 4, 0); }
     write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | ((control & !0x70) | 1) << 16);
     Some(())
+}
+
+/// Masks or unmasks MSI-X entry `entry` (its vector control), or the device's MSI for `entry` u16::MAX: its mask bit
+/// with per-vector masking, else its enable bit (000-KRN-0077). False without the capability.
+pub unsafe fn msi_mask(device: &Device, entry: u16, masked: bool) -> bool {
+    if entry != u16::MAX {
+        let Some(at) = msix_entry(device, entry) else { return false };
+        let control = (at as *mut u32).add(3);
+        control.write_volatile(control.read_volatile() & !1 | masked as u32);
+        return true;
+    }
+    let Some(cap) = capability(device, 0x05) else { return false };
+    let header = config(device, cap);
+    let control = header >> 16;
+    if control & 0x100 != 0 {
+        let at = cap + if control & 0x80 != 0 { 16 } else { 12 };
+        write(device.bus, device.device, device.function, at, config(device, at) & !1 | masked as u32);
+    } else {
+        write(device.bus, device.device, device.function, cap, (header & 0xFFFF) | (if masked { control & !1 } else { control | 1 }) << 16);
+    }
+    true
 }
 
 /// The device's MSI as programmed: enabled, address, data (the test kernel's check).

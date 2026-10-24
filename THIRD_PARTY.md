@@ -14,6 +14,7 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `hwdocs/boards/rpi4b.board` | Transcribed from "Raspberry Pi 4 Model B Reduced Schematics" (Raspberry Pi Ltd, RP-008345-DS-1), connector J8: which GPIO is at which header position | as above | as above |
 | `hwdocs/socs/pl061.pins` | Arm's "PrimeCell GPIO (PL061) Technical Reference Manual" (DDI 0190B): eight pins, no multiplexing | as above | as above |
 | `wifi/src/countries.rs` | The two-letter codes and usual English names of tzdata 2026b's `iso3166.tab` (ISO 3166-1 alpha-2, as of ISO/TC 46 N1127), converted to a table | **public domain**, as the file says | Readable names for the station's country codes in `wifi` (550-APP-0082); embedded in `wifi.elf` |
+| `nrl/reference/qwen-spline-lab-v0.1.0.zip` | Qwen Spline Lab v0.1.0, a Python/PyTorch prototype of spline and low-rank representations of a Qwen3 model's MLP blocks, Copyright (c) 2026 Qwen Spline Lab contributors; given by the maintainer on 2026-10-23 as the reference of the track `NRL` ([900](issues/900-neural-representation-lab.md)) | **MIT** (its own `LICENSE` inside the archive) | Kept unchanged, SHA-256 `5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25`; no model weights and no third-party code inside (its `docs/SOURCES.md`); not built, not run and not copied into any image |
 
 Code adapted from another project:
 

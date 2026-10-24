@@ -1,6 +1,6 @@
 # 000-NET-0039 — An echo request to a neighbour that never answers holds no other request — done
 
-**Type:** network (stack) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [000-APP-0095](../issues/000-APP-0095-ping-options.md)) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1
+**Type:** network (stack) · **Owner:** `NET` track (worked by the storage session at the maintainer's request) · **Priority:** P2 · **Status:** done (2026-10-22) · **Blocked by:** — · **Main task:** — (for [000-APP-0095](000-APP-0095-ping-options.done)) · **Roadmap:** track D · **Constitution:** MC-5.2, MC-6.1
 
 From the tools track's request "An echo request to a neighbour that never answers may hold the card's ICMP queue (000-APP-0095)" in requests-NET.md (2026-10-20), which this task takes from that file.
 
@@ -42,5 +42,5 @@ From the tools track's request "An echo request to a neighbour that never answer
 
 ## Related
 
-- [000-APP-0095](../issues/000-APP-0095-ping-options.md): `ping`'s options.
+- [000-APP-0095](000-APP-0095-ping-options.done): `ping`'s options.
 - requests-NET.md: an echo request's size and payload, the other request of 000-APP-0095.

@@ -420,10 +420,10 @@ macro_rules! types {
 types! {
     battery: Error Status;
     blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
-    display: Error Mode;
+    display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;
-    init: Error Service Boot Mode ModeState;
+    init: Error Service Boot Mode ModeState Planned;
     keyboard: Layout SwitchKey State;
     keystore: Error Purpose Usage WifiNetwork;
     loader: Error Program Needs HelperKind;
@@ -439,7 +439,7 @@ types! {
     sysinfo: Error Task Cpu Memory Range Region Capability EndpointInfo Irq Device Holder AuthorityEntry Sample Load Pool;
     tls: Error Peer PinKind Pin;
     tpm: Error Info;
-    update: Error Offer State;
+    update: Error Offer State Metadata;
     vfs: Error Entry Volume Report;
     video: Error Camera Frame;
     voice: Action Order;

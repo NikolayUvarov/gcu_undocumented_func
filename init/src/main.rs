@@ -7,6 +7,7 @@
 // application.
 mod hardware;
 mod legacy;
+mod services;
 
 use mind::abi::*;
 use mind::dev::cap_info;
@@ -62,6 +63,7 @@ const SLOT_INPUT_IRQ1: usize = 7; // virtio_input: the second device's interrupt
 const SLOT_AUDIO_IRQ1: usize = 7; // audio_gw: the second HD Audio function's interrupt
 const WINDOWS_MEMORY_MIB: u16 = 128; // the window broker's surfaces (issue 163)
 const BLOCKSTORE_MEMORY_MIB: u16 = 64; // the block store's index: up to 2^20 slots of 56 bytes (251-KRN-0071)
+const EFFECTOR_MEMORY_MIB: u16 = 48; // the agent's benchmark: a 16 MiB chase and two 8 MiB copy buffers (750-KRN-0158)
 const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and their restarts (issue 169)
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
@@ -108,15 +110,23 @@ impl Grants {
 struct Plan { grants: Grants, flags: usize, quota: Quota, args: ([u8; ARGS_KEPT], usize) }
 const ARGS_KEPT: usize = LINK_WORDS_MAX; // link.conf's words at most (800-KRN-0128)
 
+// What this boot did with a service (173-KRN-0035, init.wit 1.9 `boot-plan`): its place in the order tried (0: not
+// tried), the unit it waited for, and why it did not start.
+#[derive(Clone, Copy, Default)]
+struct Placed { place: u8, after: Option<usize>, off: Off }
+#[derive(Clone, Copy, Default, PartialEq)]
+enum Off { #[default] No, Disabled, Needs(usize), NoDevice, NoImage, Safe, Mode, NoLink, Failed }
+
 // Per boot service: PID, DMA region and the keeper of its endpoint (can mint receive rights, cannot receive itself);
 // how often it was started, whether it was stopped on request (then it is not restarted) and whether its device was
 // missing at boot.
 struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usize>; UNITS], devices: [Option<usize>; UNITS], others: [Option<usize>; UNITS], keepers: [Option<usize>; UNITS], restarts: [[u64; RESTART_BUDGET]; UNITS], quarantined: [bool; UNITS], starts: [u32; UNITS], stopped: [bool; UNITS], missing: [bool; UNITS], screen_mib: u16, store: Option<Option<&'static str>>,
               link: Option<[u8; LINK_WORDS_MAX]>,
-              boot: idl_init::Boot, modes: idl_init::ModeState,
+              boot: idl_init::Boot, modes: idl_init::ModeState, link_console: bool,
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
-              replaced: [Option<(usize, usize)>; UNITS] }
+              replaced: [Option<(usize, usize)>; UNITS],
+              placed: [Placed; UNITS] }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -298,8 +308,10 @@ impl Init {
         }
         Ok(())
     }
-    // Prepared by a safe start and not started since.
+    // Prepared by a safe start or left off by data/services.txt, and not started since.
     fn prepared(&self, index: usize) -> bool { self.plans[index].is_some() && self.pids[index] == 0 }
+    // Running, or prepared: its clients answer ERR_PEER until `svc start` starts it.
+    fn present(&self, name: &str) -> bool { let index = service_index(name); self.running(index) || self.prepared(index) }
 
     // Makes `dir` on the boot volume if it is missing, through a client with `badge` that init drops at once.
     fn make_dir(&mut self, badge: u16, dir: &str) -> Result<()> {
@@ -429,6 +441,8 @@ impl Init {
                 self.lend(&mut grants, SLOT_DEV0, "usb_serial")?;
                 // An application's loader client: link starts programs from data/link/ for the master (800-KRN-0132).
                 self.lend(&mut grants, SLOT_LOADER, "loader")?;
+                // The compositor's client that lights the link's mark on the screen, and nothing else of it (800-KRN-0156).
+                grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_LINK)?, CLIENT);
                 let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
                 let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
                 let words = core::str::from_utf8(&words[..length]).unwrap_or("");
@@ -436,7 +450,7 @@ impl Init {
                 // Developer mode, link.conf's word `dev` (800-KRN-0139, the maintainer's decision of 2026-10-21): what the
                 // shell lends its programs without asking, so whoever holds the cable may debug the machine as its user.
                 // The servers start after link: their keepers are made now and reached once they run.
-                if words.split_ascii_whitespace().any(|word| word == "dev") {
+                if self.link_dev() {
                     self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
                     // The policy broker's client that may only launch (800-KRN-0142): link has no user to ask before a change.
                     grants.add(SLOT_NETPOLICY, self.badged(&mut minted, "netpolicy", mind::network::BADGE_LAUNCH)?, CLIENT);
@@ -595,7 +609,7 @@ impl Init {
                 }
                 // The Wi-Fi station as its third card: a client without BADGE_WIFI, which serves idl/net.wit (550-KRN-0097).
                 // A prepared station's client answers ERR_PEER until it is started (000-KRN-0131).
-                if self.running(service_index("wlan")) || self.prepared(service_index("wlan")) { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
+                if self.present("wlan") { self.lend(&mut grants, WIFI_CARD, "wlan")?; }
             }
             // QEMU's stand-in radio (550-NET-0018): only the tests' images carry it, and it holds nothing but its endpoint.
             "wlansim" => grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL),
@@ -607,7 +621,7 @@ impl Init {
                     .or_else(|| RADIOS.into_iter().find(|&r| self.prepared(service_index(r)))).ok_or(Error::NotFound)?;
                 grants.add(SLOT_SERVICE, self.server(&mut minted, name)?, ALL);
                 self.lend(&mut grants, WIFI_RADIO, radio)?;
-                if self.running(service_index("keystore")) { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
+                if self.present("keystore") { grants.add(WIFI_KEYS, self.badged(&mut minted, "keystore", mind::network::BADGE_KEY_STATION)?, CLIENT); }
             }
             // The broker mints flow grants from an unbadged stack client that may badge (which itself may open nothing),
             // registers them through the stack's policy client and reads netpolicy.txt through a VFS client, whose badge
@@ -652,9 +666,9 @@ impl Init {
                 grants.add(SLOT_SERVICE, self.server(&mut minted, "updater")?, ALL);
                 self.lend(&mut grants, SLOT_RTC, "rtc")?;
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_UPDATE)?, CLIENT);
-                if self.running(service_index("tls")) { self.lend(&mut grants, SLOT_TLS, "tls")?; }
+                if self.present("tls") { self.lend(&mut grants, SLOT_TLS, "tls")?; }
                 // The parser reads the channels and manifests it fetches: it parses none itself (351-UPD-0007).
-                if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
+                if self.present("parse") { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 match self.flow(&mut minted, "updater") {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
                     None => mind::println!("[INIT] updater: NO NETWORK GRANT"),
@@ -674,7 +688,8 @@ impl Init {
                 grants.add(SLOT_VFS, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_EFFECTOR_GW)?, CLIENT);
                 grants.add(mind::effector::SLOT_READER, self.badged(&mut minted, "vfs_server", mind::fs::BADGE_READER)?, CLIENT);
                 self.lend(&mut grants, SLOT_SYSINFO, "sysmon")?;
-                self.lend(&mut grants, SLOT_DISPLAY, "compositor")?;
+                // The screen, badged so that the gateway lights the Effector agent's mark too (800-KRN-0156).
+                grants.add(SLOT_DISPLAY, self.badged(&mut minted, "compositor", mind::display::BADGE_REMOTE_EFFECTOR)?, CLIENT);
                 grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_NAMED)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
@@ -688,8 +703,8 @@ impl Init {
                     Some(flow) => grants.add(SLOT_NETWORK, flow, CLIENT),
                     None => mind::println!("[INIT] effector: NO NETWORK GRANT"),
                 }
-                if self.running(service_index("tls")) { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
-                if self.running(service_index("parse")) { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
+                if self.present("tls") { grants.add(SLOT_TLS, self.badged(&mut minted, "tls", mind::network::BADGE_TLS_NO_DEVICE)?, CLIENT); }
+                if self.present("parse") { self.lend(&mut grants, SLOT_PARSE, "parse")?; }
                 grants.add(mind::effector::SLOT_GATEWAY, self.badged(&mut minted, "effector_gw", mind::effector::BADGE_SESSION)?, CLIENT);
                 let _ = core::fmt::Write::write_str(&mut args, "--service");
             }
@@ -758,31 +773,31 @@ impl Init {
                 self.lend(&mut grants, SLOT_NETPOLICY, "netpolicy")?;
                 self.lend(&mut grants, SLOT_PARSE, "parse")?;
                 self.lend(&mut grants, SLOT_TPM, "tpm")?;
-                if self.running(service_index("battery")) { self.lend(&mut grants, SLOT_BATTERY, "battery")?; }
+                if self.present("battery") { self.lend(&mut grants, SLOT_BATTERY, "battery")?; }
                 // The station's configuration client that may join, leave and forget, lent on for REQUEST_WIFI (550-KRN-0097).
-                if self.running(service_index("wlan")) { grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT); }
+                if self.present("wlan") { grants.add(SLOT_WIFI, self.badged(&mut minted, "wlan", mind::network::BADGE_WIFI_CHANGE)?, CLIENT); }
                 // With the right to mint the BADGE_TLS_NO_DEVICE copy it lends to programs (351-NET-0022): tls's badge only narrows.
                 grants.copy(SLOT_TLS, self.keeper("tls")?, CLIENT | CAP_BADGE);
                 // The SSH service's, with the right to badge, lent on for REQUEST_SSH (351-KRN-0115); the updater's, for the
                 // shell's own `update` command and no program (351-KRN-0116).
-                if self.running(service_index("ssh")) { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
-                if self.running(service_index("updater")) { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
+                if self.present("ssh") { grants.copy(SLOT_SSH, self.keeper("ssh")?, CLIENT | CAP_BADGE); }
+                if self.present("updater") { self.lend(&mut grants, SLOT_UPDATE, "updater")?; }
                 // The client that sets the machine's modes, for the shell's `mode` command and no program (750-KRN-0143).
                 grants.add(SLOT_MODE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_MODE)?, CLIENT);
                 // Its command endpoint, kept across its restarts, so that a client init lends reaches it (800-KRN-0148).
                 grants.add(SLOT_COMMANDS, self.server(&mut minted, "shell")?, ALL);
                 self.lend(&mut grants, SLOT_WINDOWS, "windows")?;
                 grants.add(SLOT_WINDOW_MANAGER, self.badged(&mut minted, "windows", mind::window::BADGE_MANAGER)?, CLIENT);
-                if self.running(service_index("blockstore")) {
+                if self.present("blockstore") {
                     grants.add(SLOT_BLOCKSTORE, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET | mind::blockstore::BADGE_PUT | mind::blockstore::BADGE_PUBLISH)?, CLIENT);
                     // One that may only get, for programs that only read (300-KRN-0024).
                     grants.add(SLOT_BLOCKSTORE_READ, self.badged(&mut minted, "blockstore", mind::blockstore::BADGE_GET)?, CLIENT);
                 }
                 // The firmware's variables (the boot order), lent on with the user's consent (351-KRN-0027).
                 grants.add(SLOT_FIRMWARE, minted.privilege(CAP_KIND_FIRMWARE)?, 0);
-                if self.running(service_index("gpio")) { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
+                if self.present("gpio") { grants.add(SLOT_GPIO, self.badged(&mut minted, "gpio", mind::gpio::BADGE_CONTROL)?, CLIENT); }
                 // Lent on with the user's consent; a prepared gateway's client answers ERR_PEER until it is started.
-                if self.running(service_index("video_gw")) || self.prepared(service_index("video_gw")) { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; }
+                if self.present("video_gw") { self.lend(&mut grants, SLOT_CAMERA, "video_gw")?; }
             }
             _ => return Err(Error::NotFound),
         }
@@ -805,6 +820,8 @@ impl Init {
             "windows" => Quota { memory_mib: WINDOWS_MEMORY_MIB, ..Quota::default() },
             // The block store's index grows with its disk (251-STO-0013): 56 MiB at most, beside what it held before.
             "blockstore" => Quota { memory_mib: BLOCKSTORE_MEMORY_MIB, ..Quota::default() },
+            // The Effector session measures memory as the other agents do, beside its own heap (750-KRN-0158).
+            "effector" => Quota { memory_mib: EFFECTOR_MEMORY_MIB, ..Quota::default() },
             // On top of the default, three screens: the compositor's shadow copy of the framebuffer, and the two sealed
             // copies `record` holds, the frame it codes and the one before (211-KRN-0095); 20 MiB each at 2880 × 1800.
             "compositor" => Quota { memory_mib: (HEAP_MAX_BYTES >> 20) as u16 + 3 * self.screen_mib, ..Quota::default() },
@@ -1023,6 +1040,32 @@ impl Init {
         })
     }
 
+    // This boot's plan in the order tried (init first), for `boot-plan` (173-KRN-0035).
+    #[inline(never)]
+    fn boot_plan(&self) -> [idl_init::Planned; UNITS] {
+        let mut order = [0usize; UNITS];
+        for (i, o) in order.iter_mut().enumerate() { *o = i; }
+        order.sort_unstable_by_key(|&i| if i == 0 { 0 } else if self.placed[i].place == 0 { u16::MAX } else { self.placed[i].place as u16 });
+        core::array::from_fn(|n| {
+            let i = order[n];
+            let mut off = mind::util::FixedBuf::<32>::new();
+            let _ = match self.placed[i].off {
+                Off::No => Ok(()),
+                Off::Disabled => core::fmt::Write::write_str(&mut off, "disabled"),
+                Off::Needs(need) => core::fmt::Write::write_fmt(&mut off, format_args!("needs {}", unit_name(need))),
+                Off::NoDevice => core::fmt::Write::write_str(&mut off, "no device"),
+                Off::NoImage => core::fmt::Write::write_str(&mut off, "no image"),
+                Off::Safe => core::fmt::Write::write_str(&mut off, "safe start"),
+                Off::Mode => core::fmt::Write::write_str(&mut off, "mode"),
+                Off::NoLink => core::fmt::Write::write_str(&mut off, "no link.conf"),
+                Off::Failed => core::fmt::Write::write_str(&mut off, "failed"),
+            };
+            let placed = self.placed[i];
+            idl_init::Planned { name: wire_text(unit_name(i)), place: if i == 0 { 0 } else { placed.place }, enabled: !matches!(placed.off, Off::Disabled),
+                                essential: !services::configurable(unit_name(i)), after: wire_text(placed.after.map_or("", unit_name)), off: wire_text(off.as_str()) }
+        })
+    }
+
     fn serve(&mut self, request: idl_init::Request, call: wire::Call, badge: u16, sender: u64) -> Result<()> {
         use idl_init::{Error as E, Request};
         match request {
@@ -1074,6 +1117,8 @@ impl Init {
             // Asked only once the boot was confirmed or refused: requests are served after that (000-KRN-0102).
             Request::Boot => idl_init::reply_boot(call, Ok(&self.boot)),
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
+            Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
+            Request::BootPlan => idl_init::reply_boot_plan(call, Ok(&self.boot_plan()[..])),
             Request::Replace { name, path } => { let result = self.replace(name.as_str(), path.as_str(), badge, sender); idl_init::reply_replace(call, result) }
             Request::SetMode { which, on, reason } => {
                 let result = self.set_mode(which, on, reason.as_str(), badge, sender);
@@ -1106,6 +1151,13 @@ impl Init {
 
     // A client of vfs_server with the user's rights for init's own file on the boot volume, dropped after use.
     fn user_files(&mut self) -> Result<usize> { let keeper = self.keeper("vfs_server")?; Ok(ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_USER)?) }
+
+    // The link's developer mode: link.conf's word `dev`, as the bootloader read it (800-KRN-0139).
+    fn link_dev(&self) -> bool {
+        let words = self.link.unwrap_or([0; LINK_WORDS_MAX]);
+        let length = words.iter().position(|&b| b == 0).unwrap_or(words.len());
+        core::str::from_utf8(&words[..length]).unwrap_or("").split_ascii_whitespace().any(|word| word == "dev")
+    }
 
     // The owner's Effector policy (750-KRN-0121), read whole at each use, as the gateway reads it; None when it is absent,
     // too large or refused, which allows nothing.
@@ -1164,6 +1216,97 @@ impl Init {
         }
     }
 
+    // One boot service at boot: started, or prepared when data/services.txt (`off`) or a safe start leaves it off, or left
+    // out with the reason; false when its start failed. Not inlined: boot's own frame stays small, as a start goes deep.
+    #[inline(never)]
+    fn boot_one(&mut self, info: &BootInfo, index: usize, safe: bool, off: Option<Off>) -> bool {
+        let name = unit_name(index);
+        // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
+        // before the compositor takes the screen (211-PRT-0004).
+        if name == "compositor" && info.photo_pause_s > 0 {
+            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", info.photo_pause_s);
+            mind::time::sleep(info.photo_pause_s.min(PHOTO_PAUSE_MAX_S) as usize * 1000);
+        }
+        // An image the bootloader did not find (a service of the other architecture) is not started.
+        if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) {
+            self.missing[index] = true; self.placed[index].off = Off::NoImage;
+            mind::println!("[INIT] {} NOT STARTED: NO IMAGE", name);
+            return true;
+        }
+        // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
+        if MODE_SERVICES.contains(&name) { self.placed[index].off = Off::Mode; return true; }
+        // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
+        if matches!(name, "usb_serial" | "link") && self.link.is_none() {
+            self.missing[index] = true; self.placed[index].off = Off::NoLink;
+            mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name);
+            return true;
+        }
+        // Left out by a safe start, and the station whose radio is (000-KRN-0131), or by data/services.txt: prepared, not
+        // started, so that `svc start` starts it once the platform privilege is dropped.
+        let left = off.or((safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| self.running(service_index(r)))))).then_some(Off::Safe));
+        if let Some(why) = left {
+            self.placed[index].off = why;
+            match (self.prepare(index), why) {
+                (Ok(()), Off::Safe) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
+                (Ok(()), Off::Needs(need)) => mind::println!("[INIT] {} OFF: IT NEEDS {}, WHICH {} TURNS OFF; PREPARED: `svc start {}` STARTS IT", name, unit_name(need), services::FILE, name),
+                (Ok(()), _) => mind::println!("[INIT] {} OFF BY {}: PREPARED, `svc start {}` STARTS IT", name, services::FILE, name),
+                (Err(Error::NotFound), _) => {
+                    self.missing[index] = true; self.stopped[index] = true; self.placed[index].off = Off::NoDevice;
+                    mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name);
+                }
+                (Err(error), Off::Safe) => { self.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
+                (Err(error), _) => { self.stopped[index] = true; mind::println!("[INIT] {} OFF BY {}, NOT PREPARED: {:?}", name, services::FILE, error) }
+            }
+            return true;
+        }
+        match self.start(index) {
+            // From now on init's own lines (and those printed so far) go to the system log too.
+            Ok(_) if name == "logd" => {
+                // The keeper may send: init needs no client of its own.
+                if let Ok(keeper) = self.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
+                kernel_lines();
+            }
+            Ok(_) => {}
+            Err(Error::NotFound) => { self.missing[index] = true; self.placed[index].off = Off::NoDevice; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
+            Err(error) => { self.placed[index].off = Off::Failed; mind::println!("[INIT] {} FAILED: {:?}", name, error); return false; }
+        }
+        true
+    }
+
+    // data/services.txt (173-KRN-0035), through a reader's client of init's own: its plan over the units in boot order
+    // (`names`), each line refused logged with its number and why; no change when the file is absent. Its text in pages
+    // of their own, off the stack.
+    #[inline(never)]
+    fn read_services(&mut self, names: &[&str; UNITS]) -> services::Plan<UNITS> {
+        let Some(mut pages) = mind::mem::Pages::new(services::MAX + 1) else { mind::println!("[INIT] NO MEMORY TO READ {}", services::FILE); return services::Plan::none() };
+        let text = &mut pages.as_mut_slice()[..services::MAX + 1];
+        let mut length = None;
+        if let Ok(client) = self.keeper("vfs_server").and_then(|keeper| ipc::mint_badged(keeper, CLIENT, mind::fs::BADGE_READER).map_err(Into::into)) {
+            let files = Endpoint(client);
+            if let Ok(Ok(root)) = vfs::root(files, "") {
+                if let Ok(Ok(file)) = vfs::open(files, root, services::FILE, 0) {
+                    let mut done = 0;
+                    while done < text.len() {
+                        let want = (text.len() - done).min(mind::fs::CHUNK);
+                        match vfs::read(files, file, done as u32, want as u32, &mut text[done..done + want]) { Ok(Ok(got)) if got > 0 => done += got, _ => break }
+                    }
+                    length = Some(done);
+                    let _ = vfs::close(files, file);
+                }
+                let _ = vfs::close(files, root);
+            }
+            let _ = ipc::drop_cap(client);
+        }
+        let Some(length) = length else { mind::println!("[INIT] NO {}: EVERY BOOT SERVICE STARTS", services::FILE); return services::Plan::none() };
+        let plan = services::parse(&text[..length], names, |line, why, text| match line {
+            0 => mind::println!("[INIT] {}: {}", services::FILE, why),
+            _ => mind::println!("[INIT] {} LINE {} REFUSED: {}: {}", services::FILE, line, why, text),
+        });
+        let (off, needs, after) = plan.counts();
+        mind::println!("[INIT] {}: {} OFF, {} OFF AS THEY NEED ONE OF THEM, {} WAIT FOR ANOTHER", services::FILE, off, needs, after);
+        plan
+    }
+
     // The modes data/mode.conf names (750-KRN-0143): `development` and `maintenance`; other words are logged and left out.
     fn read_modes(&mut self) {
         let mut text = [0u8; 256];
@@ -1184,12 +1327,16 @@ impl Init {
             match word {
                 "development" => modes.development = true,
                 "maintenance" => modes.maintenance = true,
+                // The link's console (800-KRN-0155): the owner's word, counted only in the link's developer mode.
+                "link-console" if self.link_dev() => self.link_console = true,
+                "link-console" => mind::println!("[INIT] {}: WORD LEFT OUT: link-console (NO dev IN link.conf)", MODE_FILE),
                 other => mind::println!("[INIT] {}: WORD LEFT OUT: {}", MODE_FILE, other),
             }
         }
         self.modes = modes;
         let name = match (modes.development, modes.maintenance) { (true, true) => "DEVELOPMENT AND MAINTENANCE", (true, false) => "DEVELOPMENT", (false, true) => "MAINTENANCE", _ => "NORMAL" };
-        mind::println!("[INIT] MODE: {} ({})", name, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
+        let (name, console) = match (name, self.link_console) { ("NORMAL", true) => ("LINK CONSOLE", ""), (name, true) => (name, " AND LINK CONSOLE"), (name, false) => (name, "") };
+        mind::println!("[INIT] MODE: {}{} ({})", name, console, if length > 0 { MODE_FILE } else { "NO data/mode.conf" });
     }
 
     // data/mode.conf rewritten whole: one word a line, and who changed it last.
@@ -1198,6 +1345,7 @@ impl Init {
         let _ = core::fmt::Write::write_fmt(&mut text, format_args!("# the machine's modes, written by init (750-KRN-0143); last changed by {}\n", modes.by.as_str()));
         if modes.development { let _ = core::fmt::Write::write_str(&mut text, "development\n"); }
         if modes.maintenance { let _ = core::fmt::Write::write_str(&mut text, "maintenance\n"); }
+        if self.link_console { let _ = core::fmt::Write::write_str(&mut text, "link-console\n"); }
         let client = self.user_files()?;
         let files = Endpoint(client);
         let written = (|| -> Result<()> {
@@ -1332,6 +1480,48 @@ fn run_mark(firmware: usize) -> (bool, bool) {
     (found, mind::firmware::set_in(firmware, RUN_MARK_NAME, &RUN_MARK_GUID, mind::firmware::BOOT_VARIABLE, &[1]).is_ok())
 }
 
+// The boot services in boot order (173-KRN-0035): whether every one with its hardware started, those data/services.txt
+// leaves off aside (351-KRN-0014), and whether the boot volume was found mounted (None if the file was not looked for).
+// Not inlined: its frame is gone before the modes start the Effector services, whose start goes deep.
+#[inline(never)]
+fn boot_services(init: &mut Init, info: &BootInfo, safe: bool) -> (bool, Option<bool>) {
+    let mut healthy = true;
+    // The units in boot order (init first) and data/services.txt's plan over them, read at the first service it may
+    // change, once the boot volume is mounted (173-KRN-0035).
+    let (mut names, mut units) = (["init"; UNITS], [0usize; UNITS]);
+    for (p, unit) in core::iter::once(0).chain(boot_order()).enumerate() { names[p] = unit_name(unit); units[p] = unit; }
+    let (mut plan, mut mounted) = (None, None);
+    let (mut tried, mut waiting, mut place, mut next) = ([false; UNITS], [false; UNITS], 0u8, 1);
+    tried[0] = true;
+    loop {
+        let ready = |p: usize, plan: &Option<services::Plan<UNITS>>, tried: &[bool; UNITS]| plan.as_ref().is_none_or(|plan| plan.ready(&names, p, tried));
+        // One that waited and may start now, else the next in order, else one still waiting (never: the plan has no cycle).
+        let (p, in_order) = if let Some(q) = (1..UNITS).find(|&q| waiting[q] && ready(q, &plan, &tried)) { (q, false) }
+                            else if next < UNITS { next += 1; (next - 1, true) }
+                            else if let Some(q) = (1..UNITS).find(|&q| waiting[q]) { (q, false) }
+                            else { break };
+        waiting[p] = false;
+        if plan.is_none() && services::configurable(names[p]) {
+            let found = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
+            mounted = Some(found);
+            plan = Some(if found { init.read_services(&names) } else { mind::println!("[INIT] NO BOOT VOLUME: {} NOT READ", services::FILE); services::Plan::none() });
+        }
+        if let Some(first) = plan.as_ref().filter(|_| in_order).and_then(|plan| plan.waits_for(&names, p, &tried)) {
+            mind::println!("[INIT] {} WAITS FOR {} ({})", names[p], names[first], services::FILE);
+            waiting[p] = true;
+            continue;
+        }
+        let index = units[p];
+        place += 1;
+        init.placed[index].place = place;
+        init.placed[index].after = plan.as_ref().and_then(|plan| plan.after[p]).map(|a| units[a]);
+        let off = plan.as_ref().and_then(|plan| match (plan.off[p], plan.needs[p]) { (true, _) => Some(Off::Disabled), (_, Some(need)) => Some(Off::Needs(units[need])), _ => None });
+        healthy &= init.boot_one(info, index, safe, off);
+        tried[p] = true;
+    }
+    (healthy, mounted)
+}
+
 mind::entry!(main);
 // A service that does not answer never stops the boot or the supervision of the others (000-KRN-0075).
 fn main(info: &'static BootInfo) { wire::with_timeout(CALL_LIMIT_MS, || boot(info)) }
@@ -1341,8 +1531,7 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
-                         modes: idl_init::ModeState::default(), replaced: [None; UNITS] };
-    let order = boot_order();
+                         modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS] };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
@@ -1366,42 +1555,7 @@ fn boot(info: &'static BootInfo) {
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     let mut mark = firmware.filter(|_| marked);
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
-    let mut healthy = true; // every boot service with its hardware started (351-KRN-0014)
-    for index in order {
-        // When data/pause.txt asks (BootInfo.photo_pause_s, 211-KRN-0089), time for a photo of the kernel's lines
-        // before the compositor takes the screen (211-PRT-0004).
-        if unit_name(index) == "compositor" && info.photo_pause_s > 0 {
-            mind::println!("[INIT] A PAUSE OF {} S FOR A PHOTO OF THE SCREEN BEFORE THE COMPOSITOR TAKES IT", info.photo_pause_s);
-            mind::time::sleep(info.photo_pause_s.min(PHOTO_PAUSE_MAX_S) as usize * 1000);
-        }
-        // An image the bootloader did not find (a service of the other architecture) is not started.
-        if info.image(unit_image(index).0).is_none_or(|image| image.len == 0) { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO IMAGE", unit_name(index)); continue; }
-        let name = unit_name(index);
-        // The Effector services wait for the modes, read once the boot volume is mounted (750-KRN-0143).
-        if MODE_SERVICES.contains(&name) { continue; }
-        // The link to another machine only when the boot volume's root holds link.conf, as the bootloader read it.
-        if matches!(name, "usb_serial" | "link") && init.link.is_none() { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO LINK.CONF", name); continue; }
-        // Left out by a safe start, and the station whose radio is (000-KRN-0131): prepared, not started.
-        if safe && (SAFE_LEFT_OUT.contains(&name) || (name == "wlan" && !RADIOS.iter().any(|&r| init.running(service_index(r))))) {
-            match init.prepare(index) {
-                Ok(()) => mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, PREPARED: `svc start {}` STARTS IT", name, name),
-                Err(Error::NotFound) => { init.missing[index] = true; init.stopped[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", name); }
-                Err(error) => { init.stopped[index] = true; mind::println!("[INIT] {} LEFT OUT BY THE SAFE START, NOT PREPARED: {:?}", name, error) }
-            }
-            continue;
-        }
-        match init.start(index) {
-            // From now on init's own lines (and those printed so far) go to the system log too.
-            Ok(_) if unit_name(index) == "logd" => {
-                // The keeper may send: init needs no client of its own.
-                if let Ok(keeper) = init.keeper("logd") { mind::log::use_endpoint(Endpoint(keeper)); }
-                kernel_lines();
-            }
-            Ok(_) => {}
-            Err(Error::NotFound) => { init.missing[index] = true; mind::println!("[INIT] {} NOT STARTED: NO DEVICE", unit_name(index)); }
-            Err(error) => { healthy = false; mind::println!("[INIT] {} FAILED: {:?}", unit_name(index), error) }
-        }
-    }
+    let (healthy, mounted) = boot_services(&mut init, info, safe);
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.
     match platform::reserve_memory(RECOVERY_RESERVE_MIB << 20) {
@@ -1414,9 +1568,11 @@ fn boot(info: &'static BootInfo) {
     // kernel restarts the machine at its deadline otherwise (351-KRN-0014). Only the platform privilege may confirm.
     // What the machine is, while the platform privilege allows it: log:hwNNNN.txt and log:acpi/ (174-KRN-0038).
     if let Ok(keeper) = init.keeper("vfs_server") { hardware::report(keeper); }
-    let mounted = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
+    let mounted = mounted.unwrap_or_else(|| wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted()));
     // The machine's modes, once the boot volume is there; the Effector services follow them (750-KRN-0143).
     if mounted { init.read_modes(); init.follow_modes(); }
+    // The Effector services a mode started are part of this boot's plan (173-KRN-0035).
+    for index in MODE_SERVICES.iter().filter_map(|&name| Init::index(name)) { if init.running(index) { init.placed[index].off = Off::No; } }
     if healthy && mounted {
         if platform::confirm_boot() == Ok(true) { init.boot.confirmed = true; mind::println!("[INIT] TRIAL BOOT CONFIRMED: EVERY BOOT SERVICE STARTED, THE BOOT VOLUME MOUNTED"); }
     } else if info.boot_slot.trial != 0 {

@@ -15,6 +15,10 @@ pub fn kind(path: &str, boot: &[&str]) -> Kind {
     if elf && !path.contains('/') { Kind::Application } else { Kind::Shared }
 }
 
+/// Whether metadata expiring at `expires` (seconds since 1970) is past at `now`; a clock that cannot be read shows
+/// nothing current (MC-9.4, 351-UPD-0025).
+pub fn expired(expires: u64, now: Option<u64>) -> bool { now.is_none_or(|now| expires <= now) }
+
 /// The other slot.
 pub fn other(slot: u8) -> u8 { if slot == b'A' { b'B' } else { b'A' } }
 
