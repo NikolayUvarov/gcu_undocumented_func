@@ -24,7 +24,7 @@
 ## Acceptance criteria
 
 - [x] Host tests: the colour from the policy and the reports; grey after 3 s without one (`tests/effector_gateway_host.rs`).
-- [ ] The `effector` QEMU suite on x86_64 and aarch64: `[COMPOSITOR] REMOTE MARK Effector: Changing` once connected under a policy that delivers, `Unconnected` with the rogue server. Passed on x86_64 (2026-10-24).
+- [x] The `effector` QEMU suite on x86_64 and aarch64: `[COMPOSITOR] REMOTE MARK Effector: Changing` once connected under a policy that delivers, `Unconnected` with the rogue server. Passed on x86_64 and aarch64 (2026-10-24).
 - [ ] On the MacBook: red with today's policy.
 
 ## Related
