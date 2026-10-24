@@ -1,6 +1,6 @@
 # 000-KRN-0078 — Changed sectors written in runs, not one by one
 
-**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (made; the MacBook Pro measured; `ram:` still slow) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.3
+**Type:** kernel (`vfs_server`) · **Owner:** kernel session · **Priority:** P1 · **Status:** in progress (`ram:`'s cost found and fixed on `claude/youthful-mendel-mf1soy`; landing and the MacBook Pro left) · **Blocked by:** — · **Roadmap:** track B · **Constitution:** MC-12.3
 
 ## Problem
 
@@ -44,6 +44,31 @@ Eviction writes as `flush` does. A changed line about to be evicted is written t
 | `log:` (the USB stick) | 1.60 MiB/s | 4.42 MiB/s (451 ms) | 82 |
 
 Reads are as before (39–54 MiB/s). Writes to the USB stick are three times faster, but `ram:` gained only half. Its cost is elsewhere than the requests per sector, and it is still to be found: `ram:` writes 2 MiB in 860 ms, `data/` on the stick in 353 ms.
+
+**2026-10-24, `ram:`'s cost found** (on `claude/youthful-mendel-mf1soy`, 2454e062 and 4464d659).
+- **The cause: each write walked the file's whole FAT chain, twice** (`grows` and `write_raw`).
+  - `format` gives a RAM disk up to 32 MiB clusters of 512 bytes, so `bench`'s 2 MiB make a chain of 4096 clusters.
+  - `bench` writes in pieces of 16 KiB, so the chain was walked twice for each of 128 pieces.
+  - The host test counted 532 862 sector reads to write the file. The stick's larger clusters made its chain short, which is why it was faster.
+- **The first fix: the chain is walked once.**
+  - The volume keeps the tail of the chain written last: its first cluster, its length and its last cluster.
+  - It finds a cluster by walking on from the cursor, and appending keeps the cursor. Any other change to the FAT drops both, as it dropped the cursor.
+  - Now 16 765 reads for the same file, about four a cluster.
+- **The second fix: file data written in runs.**
+  - Whole sectors of file data go past the cache in runs of neighbouring clusters, up to `BLOCK_MAX_SECTORS` a request, as reads already did (`Sectors::write_run`; in `disk.rs` a cached copy of each sector written is dropped once its request succeeds).
+  - The volume is marked dirty first, as for any change. `docs/profile/threat-model.md` says what a power loss can leave now.
+- **Measured** (`bench --quick`, x86, QEMU TCG in this session's container; emulation figures, not a machine's):
+
+  | `ram:` | Writes | Reads |
+  |---|---|---|
+  | before (main 6bf90421) | 898 KiB/s | 16.7 MiB/s |
+  | the chain walked once | 2.12 MiB/s | 16.8 MiB/s |
+  | and the data in runs | 5.28 MiB/s | 16.8 MiB/s |
+
+- **Checked:**
+  - the x86 `vfs`, `block`, `disk`, `store` and `bench` suites: rc=0;
+  - host tests `fat` (18, with `a_file_written_in_pieces_walks_its_chain_once`: the reads bounded, one write run a piece, the bytes as a model, the volume clean) and `vfs_zone`.
+- **Left:** the gate, and `bench files` on the MacBook Pro.
 
 ## Related
 

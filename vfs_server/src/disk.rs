@@ -186,6 +186,24 @@ impl Sectors for Disk {
         true
     }
 
+    // File data in requests of up to BLOCK_MAX_SECTORS, past the cache (000-KRN-0078). A cached copy of a sector a
+    // request wrote is older than it and is dropped then, changed or not; a failed request leaves the rest cached.
+    fn write_run(&mut self, lba: u32, data: &[u8]) -> bool {
+        if self.replaced { return false; }
+        let count = data.len() / SECTOR;
+        let mut at = 0;
+        while at < count {
+            let (from, want) = (lba + at as u32, (count - at).min(BLOCK_MAX_SECTORS));
+            let chunk = &data[at * SECTOR..(at + want) * SECTOR];
+            let written = |tag: u32| tag >= from && tag - from < want as u32;
+            self.identity.retain(|&(sector, _)| !written(sector)); // as `write` does: the medium may not hold them yet
+            if self.ask(|device| (device.write(from as u64, chunk) == Ok(want)).then_some(())).is_none() { return false; }
+            for index in 0..LINES { if written(self.tags[index]) { (self.tags[index], self.dirty[index]) = (u32::MAX, false); } }
+            at += want;
+        }
+        true
+    }
+
     fn sectors(&self) -> u64 { self.device.sectors() }
     fn writable(&self) -> bool { !self.device.read_only() }
 }
@@ -206,6 +224,7 @@ impl Sectors for Shared {
     fn flush(&mut self) -> bool { self.0.borrow_mut().flush() }
     fn discard(&mut self) { self.0.borrow_mut().discard() }
     fn read_run(&mut self, lba: u32, out: &mut [u8]) -> bool { self.0.borrow_mut().read_run(lba, out) }
+    fn write_run(&mut self, lba: u32, data: &[u8]) -> bool { self.0.borrow_mut().write_run(lba, data) }
     fn sectors(&self) -> u64 { self.0.borrow().sectors() }
     fn writable(&self) -> bool { self.0.borrow().writable() }
 }
