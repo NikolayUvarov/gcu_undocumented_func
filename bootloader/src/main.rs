@@ -4,6 +4,7 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use uefi::prelude::*;
 use uefi::proto::console::gop::{GraphicsOutput, Mode, ModeInfo, PixelFormat};
+use uefi::proto::console::text::{Key, ScanCode};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, FileType};
 #[cfg(target_arch = "x86_64")]
 use uefi::proto::pi::mp::MpServices;
@@ -11,7 +12,7 @@ use uefi::table::boot::{AllocateType, BootServices, MemoryType, OpenProtocolAttr
 use core::ffi::c_void;
 use core::sync::atomic::{AtomicPtr, Ordering::Relaxed};
 #[path = "../../common/abi.rs"] mod abi;
-use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
+use abi::{BootInfo, BootSlot, BootVolume, LaunchRecord, ProgramImage, StatPhys, BOOT_HANDOFF_VERSION, PHOTO_PAUSE_MAX_S, BOOT_SLOT_A, BOOT_SLOT_B, BOOT_SLOT_ROOT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, TRIAL_DEADLINE_S, BOOT_SAFE, VOLUME_GPT, VOLUME_MBR, VOLUME_UNKNOWN}; mod elf_reloc; mod slots; mod verify;
 
 const MEMORY_MAP_PAGES: usize = 16; // firmware memory map copied for the kernel (STAT PHYSMAP)
 
@@ -82,6 +83,30 @@ fn link_conf(services: &BootServices, image: Handle) -> (u32, [u8; abi::LINK_WOR
         words[used..used + word.len()].copy_from_slice(word); used += word.len();
     }
     (1, words)
+}
+
+// How long the loader looks for the safe start's key (173-KRN-0036), after keys already pressed since the firmware
+// started; it adds this much to every boot.
+const SAFE_KEY_MS: usize = 1000;
+
+// Whether a safe start is asked (173-KRN-0036): Esc or S on the firmware's text input, pressed before or within
+// SAFE_KEY_MS. A key held repeats: the keys after it are read and dropped, so that no driver of the system gets them.
+fn safe_start(system_table: &mut SystemTable<Boot>) -> bool {
+    say(system_table, format_args!("ESC OR S WITHIN {} S: A SAFE START, data/services.txt IGNORED", SAFE_KEY_MS / 1000));
+    let safe_key = |key: Key| match key { Key::Special(code) => code == ScanCode::ESCAPE, Key::Printable(c) => matches!(char::from(c), 's' | 'S') };
+    let mut asked = false;
+    for _ in 0..SAFE_KEY_MS / 50 {
+        while let Ok(Some(key)) = system_table.stdin().read_key() { asked |= safe_key(key); }
+        if asked { break; }
+        system_table.boot_services().stall(50_000);
+    }
+    if !asked { return false; }
+    for _ in 0..4 {
+        while let Ok(Some(_)) = system_table.stdin().read_key() {}
+        system_table.boot_services().stall(50_000);
+    }
+    say(system_table, format_args!("SAFE START ASKED: init WILL IGNORE data/services.txt"));
+    true
 }
 
 fn say(system_table: &SystemTable<Boot>, args: core::fmt::Arguments) {
@@ -408,6 +433,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         say(&system_table, format_args!("A PAUSE OF {} S: THE LINES ABOVE ARE THE FIRMWARE'S", pause_s));
         system_table.boot_services().stall(pause_s as usize * 1_000_000);
     }
+    let safe = safe_start(&mut system_table);
     let loaded = {
         let boot_services = system_table.boot_services();
         (|| -> Result<_, (&'static str, &'static str)> {
@@ -458,7 +484,7 @@ fn main(image: Handle, mut system_table: SystemTable<Boot>) -> Status {
         let boot_services = system_table.boot_services();
         let heap_len = 64 * 1024 * 1024; let heap_ptr = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, heap_len / 4096).unwrap() as *mut u8; let (ap_trampoline, apic_ids, cpu_count) = processors(boot_services);
         let handoff = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, 65).unwrap() as usize; let memory_map = boot_services.allocate_pages(AllocateType::MaxAddress(0xffff_ffff), MemoryType::LOADER_DATA, MEMORY_MAP_PAGES).unwrap() as *mut StatPhys;
-        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
+        let info = BootInfo { fb_ptr, width: mode.resolution().0, height: mode.resolution().1, stride: mode.stride(), programs: core::array::from_fn(|i| programs[i]), heap_ptr, heap_len, ap_trampoline, cpu_count, apic_ids, memory_map, memory_map_len: 0, pixel_format, pixel_masks, acpi_rsdp, cpu_features: 0, abi_version: BOOT_HANDOFF_VERSION, boot_volume, boot_slot, launch, efi_runtime, device_tree, photo_pause_s: pause_s, link_present, link_words, boot_flags: if safe { BOOT_SAFE } else { 0 }, extra_programs: core::array::from_fn(|i| programs[abi::BOOT_PREFIX_IMAGES + i]) }; unsafe { (handoff as *mut BootInfo).write(info); } (handoff, handoff + 65 * 4096, cpu_count)
     };
     // When asked, time for a photo of these lines before the screen changes (211-PRT-0004).
     if pause_s > 0 {

@@ -126,7 +126,7 @@ struct Init { plans: [Option<Plan>; UNITS], pids: [u64; UNITS], dma: [Option<usi
               // What a service runs in place of its boot image until the next boot, in developer mode (800-KRN-0144): a
               // memory object init holds unmapped, and the image's length.
               replaced: [Option<(usize, usize)>; UNITS],
-              placed: [Placed; UNITS] }
+              placed: [Placed; UNITS], configuration: idl_init::Configuration }
 
 // Services: one per boot image, then the further instances (SERVICE_INSTANCES). A unit index names one of them.
 const UNITS: usize = BOOT_IMAGES + SERVICE_INSTANCES.len();
@@ -1119,6 +1119,7 @@ impl Init {
             Request::Mode => idl_init::reply_mode(call, Ok(&self.modes)),
             Request::LinkConsole => idl_init::reply_link_console(call, Ok(self.link_console)),
             Request::BootPlan => idl_init::reply_boot_plan(call, Ok(&self.boot_plan()[..])),
+            Request::Configuration => idl_init::reply_configuration(call, Ok(self.configuration)),
             Request::Replace { name, path } => { let result = self.replace(name.as_str(), path.as_str(), badge, sender); idl_init::reply_replace(call, result) }
             Request::SetMode { which, on, reason } => {
                 let result = self.set_mode(which, on, reason.as_str(), badge, sender);
@@ -1298,6 +1299,7 @@ impl Init {
             let _ = ipc::drop_cap(client);
         }
         let Some(length) = length else { mind::println!("[INIT] NO {}: EVERY BOOT SERVICE STARTS", services::FILE); return services::Plan::none() };
+        self.configuration = idl_init::Configuration::Read;
         let plan = services::parse(&text[..length], names, |line, why, text| match line {
             0 => mind::println!("[INIT] {}: {}", services::FILE, why),
             _ => mind::println!("[INIT] {} LINE {} REFUSED: {}: {}", services::FILE, line, why, text),
@@ -1481,10 +1483,11 @@ fn run_mark(firmware: usize) -> (bool, bool) {
 }
 
 // The boot services in boot order (173-KRN-0035): whether every one with its hardware started, those data/services.txt
-// leaves off aside (351-KRN-0014), and whether the boot volume was found mounted (None if the file was not looked for).
+// leaves off aside (351-KRN-0014), and whether the boot volume was found mounted (None if the file was not looked for,
+// as when `asked`, a safe start asked at the bootloader, 173-KRN-0036).
 // Not inlined: its frame is gone before the modes start the Effector services, whose start goes deep.
 #[inline(never)]
-fn boot_services(init: &mut Init, info: &BootInfo, safe: bool) -> (bool, Option<bool>) {
+fn boot_services(init: &mut Init, info: &BootInfo, safe: bool, asked: bool) -> (bool, Option<bool>) {
     let mut healthy = true;
     // The units in boot order (init first) and data/services.txt's plan over them, read at the first service it may
     // change, once the boot volume is mounted (173-KRN-0035).
@@ -1501,9 +1504,15 @@ fn boot_services(init: &mut Init, info: &BootInfo, safe: bool) -> (bool, Option<
                             else if let Some(q) = (1..UNITS).find(|&q| waiting[q]) { (q, false) }
                             else { break };
         waiting[p] = false;
+        if plan.is_none() && services::configurable(names[p]) && asked {
+            init.configuration = idl_init::Configuration::Ignored;
+            mind::println!("[INIT] SAFE START ASKED AT THE BOOTLOADER: THE SERVICE CONFIGURATION IS IGNORED ({} NOT READ)", services::FILE);
+            plan = Some(services::Plan::none());
+        }
         if plan.is_none() && services::configurable(names[p]) {
             let found = wire::with_timeout(MOUNT_LIMIT_MS, || init.boot_volume_mounted());
             mounted = Some(found);
+            if !found { init.configuration = idl_init::Configuration::Unreadable; }
             plan = Some(if found { init.read_services(&names) } else { mind::println!("[INIT] NO BOOT VOLUME: {} NOT READ", services::FILE); services::Plan::none() });
         }
         if let Some(first) = plan.as_ref().filter(|_| in_order).and_then(|plan| plan.waits_for(&names, p, &tried)) {
@@ -1531,7 +1540,8 @@ fn boot(info: &'static BootInfo) {
     let mut init = Init { plans: [None; UNITS], pids: [0; UNITS], dma: [None; UNITS], devices: [None; UNITS], others: [None; UNITS], keepers: [None; UNITS], restarts: [[0; RESTART_BUDGET]; UNITS], quarantined: [false; UNITS], starts: [0; UNITS], stopped: [false; UNITS], missing: [false; UNITS], screen_mib, store: None,
                          link: (info.link_present != 0).then_some(info.link_words),
                          boot: idl_init::Boot { slot: info.boot_slot.slot as u8, trial: info.boot_slot.trial != 0, confirmed: false },
-                         modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS] };
+                         modes: idl_init::ModeState::default(), link_console: false, replaced: [None; UNITS], placed: [Placed::default(); UNITS],
+                         configuration: idl_init::Configuration::Absent };
     // Where this build came from, so that logs of different builds are told apart (211-KRN-0044; 02_build.sh sets it).
     mind::println!("[INIT] BUILD: BRANCH {}, COMMIT {}", option_env!("MIND_BUILD_BRANCH").unwrap_or("UNKNOWN"), option_env!("MIND_BUILD_COMMIT").unwrap_or("UNKNOWN"));
     // The launch record, as the bootloader printed it on the serial line, into the system log (350-UPD-0004, MC-9.5).
@@ -1555,7 +1565,9 @@ fn boot(info: &'static BootInfo) {
     if !marked { mind::println!("[INIT] NO RUN MARK: THE FIRMWARE KEEPS NO VARIABLES FOR IT; A RUN THAT STOPS EARLY IS NOT NOTICED"); }
     let mut mark = firmware.filter(|_| marked);
     if mark.is_none() { if let Some(f) = firmware { let _ = ipc::drop_cap(f); } }
-    let (healthy, mounted) = boot_services(&mut init, info, safe);
+    // A safe start asked at the bootloader (173-KRN-0036): the service configuration is not read.
+    let asked = info.boot_flags & BOOT_SAFE != 0;
+    let (healthy, mounted) = boot_services(&mut init, info, safe, asked);
     if cfg!(target_arch = "x86_64") { legacy::report(); } // the x86 legacy hardware (docs/legacy.md)
     // Applications may not take the frames a service restart needs (MC-6.5): a reserve only the system band uses.
     match platform::reserve_memory(RECOVERY_RESERVE_MIB << 20) {

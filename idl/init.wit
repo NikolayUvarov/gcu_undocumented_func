@@ -4,7 +4,7 @@
 /// the shell cannot be stopped. A client badged `BADGE_NAMED` (`mind::process`: the Effector gateway's, 1.7, 750-KRN-0121)
 /// may `run`, `stop` and `restart` only what the owner's policy (data/effector/policy) allows, never init, the shell or the
 /// Effector services, and gets `denied` (`rights` for `run`) otherwise, and for `stop-task`; init reads the policy itself.
-package mind:init@1.9.0;
+package mind:init@1.10.0;
 
 interface init {
     /// Why a lifecycle request failed: no such service or task, it already runs or does not, it may not be stopped, its
@@ -69,4 +69,9 @@ interface init {
     /// client may ask.
     record planned { name: string<16>, place: u8, enabled: bool, essential: bool, after: string<16>, off: string<32> }
     boot-plan: func() -> result<list<planned, 64>, error>;
+    /// Where this boot's plan came from (1.10, 173-KRN-0036): `absent` (no data/services.txt: every service in its
+    /// order), `read` (the file, its refused lines aside), `ignored` (a safe start asked at the bootloader: the file not
+    /// read) or `unreadable` (no boot volume when init looked). Any client may ask.
+    enum configuration { absent, read, ignored, unreadable }
+    configuration: func() -> result<configuration, error>;
 }
