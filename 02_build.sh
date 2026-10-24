@@ -108,6 +108,7 @@ USER_CRATES=(
     "wintest:winmgr:winmgr.elf"
     "netbench:netbench:netbench.elf"
     "memtest:memtest:memtest.elf"
+    "memtest:memstack:memstack.elf"
     "bench:bench:bench.elf"
     "bench:check:check.elf"
     "bench:kbench:kbench.elf"

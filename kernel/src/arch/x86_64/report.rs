@@ -283,4 +283,5 @@ fn memory_types(out: &mut String) {
 pub fn kernel(out: &mut String) {
     let _ = writeln!(out, "  architecture      x86-64\n  interrupt mode    {}\n  vector state      XCR0 {:#X}, {} B a task and an interrupt entry", if crate::cpu::x2apic() { "x2APIC" } else { "xAPIC" }, crate::context::saved_state(), crate::context::area());
     let _ = writeln!(out, "  protection        {} (CR4)", crate::mmu::protection_names());
+    let _ = writeln!(out, "  program pages     4 KiB, 2 MiB{} (262-KRN-0161)", if crate::mmu::huge_pages() { ", 1 GiB" } else { "; no 1 GiB pages on this CPU" });
 }

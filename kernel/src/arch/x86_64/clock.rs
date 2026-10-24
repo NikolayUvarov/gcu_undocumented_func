@@ -11,11 +11,12 @@ static TSC_HZ: AtomicU64 = AtomicU64::new(0); // 0: the tick is the clock
 static TSC_BASE: AtomicU64 = AtomicU64::new(0); // TSC value at uptime 0
 static LAST: [AtomicU64; cpu::MAX] = [const { AtomicU64::new(0) }; cpu::MAX]; // never go backwards on a CPU
 const PM_HZ: u64 = 3_579_545;
-// Measuring again: the PM timer (port << 32 | mask), its ticks counted since the first measure and its last value, the
-// TSC then, and a sequence number, odd while the base and the rate change.
+// Measuring again: the PM timer (port << 32 | mask), its ticks counted since the first measure and its last value with
+// the TSC at that read, the TSC at the first measure, and a sequence number, odd while the base and the rate change.
 static PM: AtomicU64 = AtomicU64::new(0);
 static PM_TICKS: AtomicU64 = AtomicU64::new(0);
 static PM_LAST: AtomicU64 = AtomicU64::new(0);
+static PM_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_FIRST: AtomicU64 = AtomicU64::new(0);
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -58,7 +59,7 @@ pub unsafe fn start_tick() {
     let hz = if cfg!(feature = "tsc-skew-test") { hz / 100 * 109 } else { hz };
     if constant_tsc() && hz >= 1_000_000 {
         TSC_BASE.store(t1, Ordering::Relaxed); TSC_HZ.store(hz, Ordering::Release);
-        PM.store((port as u64) << 32 | mask as u64, Ordering::Relaxed); PM_LAST.store(p0 as u64, Ordering::Relaxed); TSC_FIRST.store(t0, Ordering::Relaxed);
+        PM.store((port as u64) << 32 | mask as u64, Ordering::Relaxed); PM_LAST.store(p0 as u64, Ordering::Relaxed); PM_TSC.store(t0, Ordering::Relaxed); TSC_FIRST.store(t0, Ordering::Relaxed);
     }
     interrupts::set_irq_masked(0, true);
     interrupts::tick_from_lapic();
@@ -98,8 +99,9 @@ pub fn on_second(seconds: u64) {
     if pm == 0 { return; }
     let (port, mask) = ((pm >> 32) as u16, pm as u32);
     let (now, tsc) = unsafe { (inl(port) & mask, _rdtsc()) };
-    let ticks = PM_TICKS.load(Ordering::Relaxed) + (now.wrapping_sub(PM_LAST.load(Ordering::Relaxed) as u32) & mask) as u64;
-    PM_TICKS.store(ticks, Ordering::Relaxed); PM_LAST.store(now as u64, Ordering::Relaxed);
+    let seen = (now.wrapping_sub(PM_LAST.load(Ordering::Relaxed) as u32) & mask) as u64;
+    let ticks = PM_TICKS.load(Ordering::Relaxed) + pm_elapsed(seen, tsc.wrapping_sub(PM_TSC.load(Ordering::Relaxed)), tsc_hz(), mask as u64 + 1);
+    PM_TICKS.store(ticks, Ordering::Relaxed); PM_LAST.store(now as u64, Ordering::Relaxed); PM_TSC.store(tsc, Ordering::Relaxed);
     if !matches!(seconds, 1 | 8 | 60) || ticks == 0 { return; }
     let (old, measured) = (tsc_hz(), ((tsc - TSC_FIRST.load(Ordering::Relaxed)) as u128 * PM_HZ as u128 / ticks as u128) as u64);
     if measured.abs_diff(old) * 1000 <= old || measured < 1_000_000 { return; } // within 0.1%: kept
@@ -111,6 +113,14 @@ pub fn on_second(seconds: u64) {
     SEQ.fetch_add(1, Ordering::AcqRel);
     let _ = write!(Kept, "MIND CORE KERNEL: CLOCK: TSC {} MHZ, MEASURED AGAIN OVER {} MS OF THE ACPI PM TIMER (WAS {} MHZ)\n",
                    measured / 1_000_000, ticks * 1000 / PM_HZ, old / 1_000_000);
+}
+
+// The PM timer's ticks between two reads, `seen` modulo its `span`: a gap longer than a wrap (the boot CPU's tick held
+// back while it zeroes a large block, 262-KRN-0160) hides whole wraps, which the TSC at the current rate counts.
+fn pm_elapsed(seen: u64, tsc: u64, hz: u64, span: u64) -> u64 {
+    if hz == 0 { return seen; }
+    let expected = (tsc as u128 * PM_HZ as u128 / hz as u128).min(u64::MAX as u128) as u64;
+    seen + expected.saturating_sub(seen).saturating_add(span / 2) / span * span
 }
 
 // A line kept for the hardware report alone: by then the serial line is a shell's console, and the screen a task's.

@@ -10,7 +10,7 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
   - It runs **only in the development mode or the maintenance mode**, and in a mode it is a service that runs all the time.
   - A mode is turned on explicitly, by the operator, or by the Mind when it needs help from outside.
   - A mode is set by a word and by a command, and it holds across any number of reboots.
-- **What was planned.** [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md)), with no mode.
+- **What was planned.** [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done)), with no mode.
 - **What `init` does now.** It knows no mode. The only word it follows is the link's `dev` (800-KRN-0139), which the bootloader reads from `link.conf`.
 
 ## Plan
@@ -94,4 +94,4 @@ The `modes` suite checks the modes over a run (7bd55f4c), on x86 and aarch64 in 
 
 ## Related
 
-[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).
+[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).

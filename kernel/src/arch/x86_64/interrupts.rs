@@ -178,6 +178,9 @@ pub fn milliseconds() -> u64 {
     match super::clock::tsc_hz() { 0 => TICKS.load(Ordering::Relaxed).wrapping_mul(TICK_MS), _ => super::clock::now_ns() / 1_000_000 }
 }
 
+/// Lets the interrupts pending on this CPU in, from kernel code that runs with them off (262-KRN-0165).
+pub unsafe fn window() { asm!("sti", "nop", "cli"); }
+
 pub fn without<T>(f: impl FnOnce() -> T) -> T {
     unsafe {
         let flags: u64;

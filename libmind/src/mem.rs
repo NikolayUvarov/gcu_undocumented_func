@@ -9,6 +9,10 @@ impl Pages {
     pub fn new(bytes: usize) -> Option<Self> {
         match call(SYSCALL_ALLOC, bytes, 0) { 0 => None, address => Some(Self { address, length: bytes }) }
     }
+    /// The same in 4 KiB pages only, not 2 MiB and 1 GiB ones (ALLOC_SMALL_PAGES): to measure what large pages give.
+    pub fn new_small(bytes: usize) -> Option<Self> {
+        match call(SYSCALL_ALLOC, bytes, ALLOC_SMALL_PAGES) { 0 => None, address => Some(Self { address, length: bytes }) }
+    }
     pub fn address(&self) -> usize { self.address }
     pub fn len(&self) -> usize { self.length }
     pub fn is_empty(&self) -> bool { self.length == 0 }
@@ -23,6 +27,12 @@ impl Pages {
         if result.is_ok() { core::mem::forget(self); }
         result
     }
+}
+
+/// The bytes of the memory capability `handle` (CAP_INFO), or None for another kind.
+pub fn size(handle: usize) -> Option<usize> {
+    let raw = syscall(SYSCALL_CAP_INFO, handle, 0, [0; 4]);
+    (raw.result == CAP_KIND_MEMORY).then_some(raw.msg[2])
 }
 
 /// Whether nobody can write the memory `handle` names (no writable capability, mapping or DMA region): SHARE_RO.

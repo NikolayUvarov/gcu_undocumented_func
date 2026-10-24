@@ -16,6 +16,8 @@ use mind::util::FixedBuf;
 const RECEIVED_CAP: usize = 9;
 const APP_ENDPOINTS: u16 = 4; // endpoints an application may create: loader's policy for each program
 const APP_MEMORY_MAX: u32 = 1024; // MiB of private memory a program may ask for (the frame pool limits it further)
+const MEMORY_FILE: &str = "data/memory.conf"; // the owner's lines `<program> <MiB>` (262-KRN-0160, 0163)
+const WORKERS_QUOTA: u16 = 255; // the task quota of a program named there: the kernel allows one worker per online CPU
 // Loader's own slots (granted by init): its endpoint, client endpoints passed on to applications, spawn privilege.
 const OWN_RTC: usize = 2; const OWN_VFS: usize = 3; const OWN_AUDIO: usize = 4; const OWN_TTS: usize = 6;
 const MAX_IMAGE: usize = 4 * 1024 * 1024;
@@ -129,14 +131,17 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     let screen = if console || windowed { 0 } else { SPAWN_SCREEN };
     // Each application may create a few endpoints (taken from loader's quota) and cannot spawn by itself.
     // The memory a program asks for, up to APP_MEMORY_MAX MiB; its use is charged to loader's quota too (issue 150).
-    let memory_mib = memory.min(APP_MEMORY_MAX) as u16;
+    // A program the owner names in data/memory.conf gets its line's MiB instead, and may start workers (262-KRN-0163).
+    let named = owners_memory(task.as_bytes());
+    let memory_mib = named.unwrap_or(memory.min(APP_MEMORY_MAX) as u16);
+    let (tasks, workers) = if named.is_some() { (WORKERS_QUOTA, SPAWN_WORKERS) } else { (0, 0) };
     let image = Image::Memory { cap, len: size };
     let spawn = |memory_mib: u16| {
-        let quota = Quota { tasks: 0, endpoints: APP_ENDPOINTS, memory_mib };
+        let quota = Quota { tasks, endpoints: APP_ENDPOINTS, memory_mib };
         match (front.filter(|_| screen != 0), fed) {
-            (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], if front.is_some() { 0 } else { screen }, quota, front.unwrap_or(0)),
-            (Some(owner), false) => mind::process::spawn_in_front(&text[..len], image, &grants[..count], quota, owner).map(|pid| (pid, 0)),
-            (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen, quota).map(|pid| (pid, 0)),
+            (front, true) => mind::process::spawn_fed(&text[..len], image, &grants[..count], (if front.is_some() { 0 } else { screen }) | workers, quota, front.unwrap_or(0)),
+            (Some(owner), false) => mind::process::spawn_in_front_with(&text[..len], image, &grants[..count], workers, quota, owner).map(|pid| (pid, 0)),
+            (None, false) => mind::process::spawn_raw(&text[..len], image, &grants[..count], screen | workers, quota).map(|pid| (pid, 0)),
         }
     };
     let mut result = spawn(memory_mib);
@@ -150,6 +155,18 @@ fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed
     }
     let _ = ipc::drop_cap(cap); // the kernel has already copied the image; the buffer is freed when the function returns
     result
+}
+
+// The MiB the owner's data/memory.conf gives program `task` (a line `<program> <MiB>`; `#` starts a comment), read at
+// each run; None without the file or a line for it (262-KRN-0160, 0163).
+fn owners_memory(task: &[u8]) -> Option<u16> {
+    let file = File::open(MEMORY_FILE).ok()?;
+    let mut text = [0u8; 2048];
+    let n = file.read_at(0, &mut text).ok()?;
+    core::str::from_utf8(&text[..n]).ok()?.lines().find_map(|line| {
+        let mut words = line.split('#').next()?.split_whitespace();
+        (words.next()?.as_bytes().eq_ignore_ascii_case(task)).then(|| words.next()?.parse::<u32>().ok())?
+    }).map(|mib| mib.min(QUOTA_MAX as u32 - 1) as u16)
 }
 
 // A program file read whole into memory, if it is an ELF of a size the loader takes.
