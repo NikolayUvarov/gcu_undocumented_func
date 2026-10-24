@@ -58,16 +58,22 @@ pub const ABI_VERSION: u32 = 19;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes any version from
 // BOOT_HANDOFF_OLDEST on, since earlier loaders wrote their ABI there and BootInfo has not changed since ABI 16's images
-// (750-KRN-0119). A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far (MC-12.4).
+// (750-KRN-0119). A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far (MC-12.4);
+// a field added at the end that the kernel reads only from the version that brought it raises BOOT_HANDOFF_VERSION alone.
+// Handoff 20 adds boot_flags (173-KRN-0036): the kernel zeroes it for an older loader.
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 19;
+pub const BOOT_HANDOFF_VERSION: u32 = 20;
 pub const BOOT_HANDOFF_OLDEST: u32 = 16;
 pub const fn handoff_accepted(version: u32) -> bool { version >= BOOT_HANDOFF_OLDEST && version <= BOOT_HANDOFF_VERSION }
+// BootInfo.boot_flags, from handoff 20 on: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init
+// ignores data/services.txt (173-KRN-0036).
+pub const BOOT_FLAGS_SINCE: u32 = 20;
+pub const BOOT_SAFE: u32 = 1;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
     pub extra_programs: [ProgramImage; BOOT_IMAGES - BOOT_PREFIX_IMAGES],
-    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX] }
+    pub link_present: u32, pub link_words: [u8; LINK_WORDS_MAX], pub boot_flags: u32 }
 impl BootInfo {
     pub fn image(&self, index: usize) -> Option<&ProgramImage> {
         if index < BOOT_PREFIX_IMAGES { self.programs.get(index) } else { self.extra_programs.get(index - BOOT_PREFIX_IMAGES) }
@@ -82,6 +88,10 @@ impl BootInfo {
     /// the caller supplies an ABI 10 or later record.
     pub unsafe fn read_refused(info: *const Self) -> (bool, u64) {
         (core::ptr::addr_of!((*info).boot_slot.trial).read() != 0, core::ptr::addr_of!((*info).acpi_rsdp).read())
+    }
+    /// The fields a loader of an older handoff did not write, zeroed (173-KRN-0036): boot_flags before handoff 20.
+    pub unsafe fn clear_unwritten(info: *mut Self, version: u32) {
+        if version < BOOT_FLAGS_SINCE { core::ptr::addr_of_mut!((*info).boot_flags).write(0); }
     }
 }
 // Both supported architectures have 64-bit pointers; changing this offset breaks the ABI 10 rejection path.

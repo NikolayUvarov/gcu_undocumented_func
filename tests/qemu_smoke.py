@@ -4692,15 +4692,16 @@ def services_config_check(args):
     """173-KRN-0035: data/services.txt written on the host turns tts and video_gw off and starts windows after sysmon; init
     logs the plan, the services it leaves off are prepared and `svc start` starts one; init.wit's boot-plan (asked by the
     gateway's stand-in, run in the development mode) reports it. A file that turns off logd, names an unknown service and
-    has a malformed line boots as without it, the log naming the three lines."""
-    def plan_of(vm):
+    has a malformed line boots as without it, the log naming the three lines. 173-KRN-0036: with S typed at the
+    bootloader the file is not read, every service starts and `configuration` says `ignored`."""
+    def plan_of(vm, source="READ"):
         for _ in range(90):
             out = vm.command("dmesg -s effector_gw", raw=True)
             if "[GATEWAY-STUB] PLAN END" in out:
                 break
             time.sleep(1)
         rows = re.findall(r"\[GATEWAY-STUB\] PLAN (\d+) ([\w#-]+) (ENABLED|DISABLED) (ESSENTIAL|CONFIGURABLE) AFTER '([\w#-]*)' OFF '([^']*)'", out)
-        assert rows and "[GATEWAY-STUB] PLAN END" in out, out[-2000:]
+        assert rows and f"[GATEWAY-STUB] PLAN END, CONFIGURATION {source}" in out, out[-2000:]
         return {name: (int(place), state, kind, after, off) for place, name, state, kind, after, off in rows}
 
     text = b"# 173-KRN-0035: no speakers, no camera\ndisable tts\ndisable video_gw\nafter windows sysmon\n"
@@ -4756,9 +4757,32 @@ def services_config_check(args):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-services-bad-{args.cpus}cpu.log").write_text(vm.log)
+    # 173-KRN-0036: the first file again, with S typed once the bootloader runs (Esc would also do on a keyboard).
+    text = b"# 173-KRN-0035: no speakers, no camera\ndisable tts\ndisable video_gw\nafter windows sysmon\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-services-safe-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/services.txt": text}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            vm.expect("MIND CORE BOOT: STARTED", timeout=120)
+            vm.send_bytes(b"s")
+            vm.expect("MIND CORE BOOT: SAFE START ASKED: init WILL IGNORE data/services.txt", timeout=60)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START ASKED AT THE BOOTLOADER: THE SERVICE CONFIGURATION IS IGNORED (data/services.txt NOT READ)")
+            assert "data/services.txt:" not in log and "WAITS FOR" not in log and "OFF BY data/services.txt" not in log, log[-3000:]
+            assert log.index("[INIT] STARTED windows PID") < log.index("[INIT] STARTED sysmon PID"), log[-3000:]
+            plan = plan_of(vm, "IGNORED")
+            assert all(p[1] == "ENABLED" and p[3] == "" and p[4] in ("", "no device", "no image", "no link.conf") for p in plan.values()), plan
+            assert {"tts", "video_gw", "windows", "sysmon"} <= set(vm.services()), vm.services()
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-services-safe-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: data/services.txt (173-KRN-0035): tts and video_gw off and prepared, windows after sysmon, boot-plan reports "
           "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
-          "boots as without it, each line named in the log", flush=True)
+          "boots as without it, each line named in the log; with S typed at the bootloader the file is ignored, every service "
+          "starts in its order, and init says so (173-KRN-0036)", flush=True)
 
 
 def effector_grants_check(vm):
