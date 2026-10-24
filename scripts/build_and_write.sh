@@ -49,6 +49,8 @@
 #                  ~/.config/mind/effector (700, files 600; a fresh disk uses what was saved last), and after it put
 #                  back and read back. With --mode=maintenance the agent then comes up as the same endpoint, with no
 #                  owner step. The files may hold the agent's token: never printed or committed.
+#                  With --keep-wifi or --keep-effector, the old disk must be inserted before the write, not only when
+#                  the writer asks: if it is not, the script asks for it and waits (OLD_DISK_WAIT, 600 s; Enter skips).
 set -euo pipefail
 
 # The clone changes under the script (checkout, pull), and bash reads a script as it runs: so it runs from a copy.
@@ -185,9 +187,32 @@ KEEP_DIR="${KEEP_DIR:-$HOME/.config/mind/keystore}"
 KEPT_FILES=(wifi.kept device.key wifi.country)
 # The network policy as the owner changed it (108), with the shipped policy it was changed from.
 POLICY_KEEP="${POLICY_KEEP:-$HOME/.config/mind/netpolicy}"
+# The old disk's volume MIND CORE before the write, in OLD_LETTER. The disk is often still in its machine until the
+# writer asks for it (800-LNK-0023), so the script asks for it now and waits up to OLD_DISK_WAIT seconds; Enter goes on
+# without it. Called once, before the saves.
+OLD_DISK_WAIT="${OLD_DISK_WAIT:-600}"
+OLD_LETTER=""
+find_old_volume() {
+    local ps="\$ProgressPreference = 'SilentlyContinue'; \$p = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' -and \$_.DriveLetter } | Select-Object -First 1; if (\$p) { \$p.DriveLetter }"
+    OLD_LETTER=$(winps "$ps" | tr -d '\r\n')
+    if [[ ! $OLD_LETTER =~ ^[A-Z]$ ]]; then
+        echo ">>> Insert the disk to be written (disk $DISK) now: what it keeps (--keep-wifi, --keep-effector) is saved from it before the write. Waiting up to $((OLD_DISK_WAIT / 60)) min; Enter goes on without it."
+        local end=$((SECONDS + OLD_DISK_WAIT)) tty=0
+        { exec 3< /dev/tty; } 2> /dev/null && tty=1
+        while (( SECONDS < end )); do
+            if (( tty )); then
+                if read -r -t 3 _ <&3; then echo ">>> Going on without the old disk: what was saved before is put back."; break; fi
+            else sleep 3; fi
+            OLD_LETTER=$(winps "$ps" | tr -d '\r\n')
+            [[ $OLD_LETTER =~ ^[A-Z]$ ]] && { echo ">>> Disk $DISK is here, its volume MIND CORE at $OLD_LETTER:"; break; }
+        done
+        (( tty )) && exec 3<&-
+    fi
+    [[ $OLD_LETTER =~ ^[A-Z]$ ]] || OLD_LETTER=""
+}
 save_keystore() {
     local letter dir n=0
-    letter=$(winps "\$ProgressPreference = 'SilentlyContinue'; \$p = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' -and \$_.DriveLetter } | Select-Object -First 1; if (\$p) { \$p.DriveLetter }" | tr -d '\r\n')
+    letter=$OLD_LETTER
     if [[ ! $letter =~ ^[A-Z]$ ]]; then echo "keep-wifi: disk $DISK has no volume MIND CORE now; $(ls "$KEEP_DIR" 2>/dev/null | wc -l) file(s) saved before will be put back"; return 0; fi
     dir=$(mktemp -d)
     sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
@@ -288,8 +313,12 @@ put_effector_to() {
 }
 save_effector() {
     local letter dir n
-    letter=$(winps "\$ProgressPreference = 'SilentlyContinue'; \$p = Get-Partition -DiskNumber $DISK -ErrorAction SilentlyContinue | Get-Volume | Where-Object { \$_.FileSystemLabel -eq 'MIND CORE' -and \$_.DriveLetter } | Select-Object -First 1; if (\$p) { \$p.DriveLetter }" | tr -d '\r\n')
-    if [[ ! $letter =~ ^[A-Z]$ ]]; then echo "keep-effector: disk $DISK has no volume MIND CORE now; what was saved before will be put back"; return 0; fi
+    letter=$OLD_LETTER
+    if [[ ! $letter =~ ^[A-Z]$ ]]; then
+        if [[ -d $EFFECTOR_KEEP ]]; then echo "keep-effector: disk $DISK not inserted; what was saved before will be put back"
+        else echo ">>> keep-effector: disk $DISK not inserted and nothing saved before: the agent's files will NOT be kept" >&2; fi
+        return 0
+    fi
     dir=$(mktemp -d)
     sudo mount -t drvfs "$letter:" "$dir" -o "uid=$(id -u),gid=$(id -g)" || { rmdir "$dir"; return 1; }
     if n=$(keep_effector_from "$dir"); then echo "keep-effector: $n file(s) of $letter:\\data\\effector and \\system\\effector saved in $EFFECTOR_KEEP"
@@ -359,6 +388,7 @@ case "$IMAGE_WIN" in
     \\\\*) echo "The image must be on a Windows drive (/mnt/c/...), not in the WSL file system: $IMAGE_WIN" >&2; exit 1 ;;
 esac
 
+if [[ $KEEP_WIFI == 1 || $KEEP_EFFECTOR == 1 ]]; then find_old_volume; fi
 if [[ $KEEP_WIFI == 1 ]]; then save_keystore || echo ">>> The remembered Wi-Fi networks NOT saved from disk $DISK." >&2; fi
 if [[ $KEEP_EFFECTOR == 1 ]]; then save_effector || echo ">>> The Effector agent's files NOT saved from disk $DISK." >&2; fi
 echo ">>> Opening an elevated PowerShell to write $IMAGE_WIN to disk $DISK (UAC, then type ERASE $DISK)."
