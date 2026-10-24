@@ -70,6 +70,10 @@ if [[ -z ${BUILD_AND_WRITE_COPY:-} ]]; then
 fi
 SELF="${BUILD_AND_WRITE_SELF:-}" COPY="$BUILD_AND_WRITE_COPY"
 export -n BUILD_AND_WRITE_SELF BUILD_AND_WRITE_COPY
+# The arguments as given, for a run of the new script when the pull below changes this one (800-LNK-0025).
+ORIG_ARGS=("$@")
+UPDATED="${BUILD_AND_WRITE_UPDATED:-}" RESTORE_BRANCH="${BUILD_AND_WRITE_RESTORE_BRANCH:-}"
+export -n BUILD_AND_WRITE_UPDATED BUILD_AND_WRITE_RESTORE_BRANCH
 # Only the copy itself is ever removed.
 [[ ${BASH_SOURCE[0]} == "$COPY" && $COPY != "$SELF" ]] || { echo "build_and_write: not running from its copy ($COPY)" >&2; exit 1; }
 trap 'rm -f -- "$COPY"' EXIT
@@ -424,15 +428,28 @@ if [[ -n $IMAGE_FILE ]]; then
     [[ -f $MANIFEST_FILE ]] || { echo "No MANIFEST beside $IMAGE_FILE: the steps after the write could not find its volume" >&2; exit 1; }
     echo ">>> Writing the given image $IMAGE_FILE (no build); its MANIFEST $(sha256sum "$MANIFEST_FILE" | cut -c1-16)"
 else
-git fetch origin
-if [[ -n "$COMMIT" ]]; then
-    git checkout --detach "$COMMIT"
-    trap 'git -C "$REPO" checkout -q "$BRANCH" || echo ">>> The clone stays at $COMMIT: git checkout $BRANCH there." >&2; rm -f -- "$COPY"' EXIT
-    echo ">>> Building commit $(git log -1 --format='%h %ad %s' --date=short)"
-else
-    git checkout "$BRANCH"
-    git pull --ff-only
+if [[ -z $UPDATED ]]; then
+    git fetch origin
+    if [[ -n "$COMMIT" ]]; then
+        git checkout --detach "$COMMIT"
+        trap 'git -C "$REPO" checkout -q "$BRANCH" || echo ">>> The clone stays at $COMMIT: git checkout $BRANCH there." >&2; rm -f -- "$COPY"' EXIT
+    else
+        git checkout "$BRANCH"
+        git pull --ff-only
+    fi
+    # The checkout or the pull may have changed this script: the new one runs, with the same arguments, before
+    # anything is saved or written (the maintainer's word, 2026-10-24). exec runs no EXIT trap, so the copy goes
+    # first, and with --commit the new run gives the branch back itself.
+    if [[ -f $SELF ]] && ! cmp -s -- "$SELF" "$COPY"; then
+        echo ">>> build_and_write.sh changed with the $([[ -n $COMMIT ]] && echo checkout || echo pull): running the new one"
+        rm -f -- "$COPY"
+        BUILD_AND_WRITE_UPDATED=1 BUILD_AND_WRITE_RESTORE_BRANCH="$([[ -n $COMMIT ]] && echo "$BRANCH")" exec bash "$SELF" "${ORIG_ARGS[@]}"
+    fi
+elif [[ -n $RESTORE_BRANCH ]]; then
+    trap 'git -C "$REPO" checkout -q "$RESTORE_BRANCH" || echo ">>> The clone stays at $COMMIT: git checkout $RESTORE_BRANCH there." >&2; rm -f -- "$COPY"' EXIT
 fi
+[[ -n "$COMMIT" ]] && echo ">>> Building commit $(git log -1 --format='%h %ad %s' --date=short)"
+echo ">>> build_and_write.sh $(git log -1 --format=%h -- scripts/build_and_write.sh) runs$([[ -n $UPDATED ]] && { [[ -n $RESTORE_BRANCH ]] && echo ", the commit's own" || echo ', the version the pull brought'; })"
 # Build first, then pack: make_usb_image.py lists the programs when it starts, so packing inside its own build misses new ones.
 bash ./02_build.sh
 # With --slots: the build in slot A and an update.txt that takes releases from data/link/rel/ (scripts/link_update.py).
