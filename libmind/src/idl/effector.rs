@@ -13,6 +13,9 @@
 //!
 //! 1.2 (750-EFF-0014): `load`, the one-minute load average the session reports in every heartbeat and poll, so the
 //! server holds the operations that ask for a load gate (Effector's ahelp, "Load gate for builds and gates").
+//!
+//! 1.3 (750-EFF-0015): `connection`, what the session reports each heartbeat of its link to the server, so the gateway
+//! lights the agent's mark on the screen: grey unless connected and activated, then red or yellow by the policy.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -22,7 +25,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:effector";
-pub const VERSION: (u8, u8, u8) = (1, 2, 0);
+pub const VERSION: (u8, u8, u8) = (1, 3, 0);
 const MAJOR: usize = 1;
 
 /// Why a request was not done. `denied`: the policy does not name it, or the client's badge may not ask it;
@@ -498,6 +501,14 @@ pub fn load(endpoint: Endpoint) -> Result<u32> {
     Ok(wire::field(&reply, 0, 16, 32) as u32)
 }
 
+/// The session's link to the server (1.3): connected, and activated by the server's owner. The session only; it
+/// changes only the agent's mark on the screen.
+pub fn connection(endpoint: Endpoint, connected: bool, active: bool) -> Result<()> {
+    let words = [21 | MAJOR << 8 | ((connected) as usize) << 16 | ((active) as usize) << 17, 0];
+    let reply = wire::call(endpoint, words, None)?;
+    wire::check_reply(&reply, [0, 0], false).map(drop)
+}
+
 /// Size of the scratch buffer `decode` copies a request into (the largest request).
 pub const REQUEST_MAX: usize = 32782;
 
@@ -524,6 +535,7 @@ pub enum Request<'a> {
     Audit { count: u8 },
     Sample,
     Load,
+    Connection { connected: bool, active: bool },
 }
 
 /// Checks a received message against the schema (MC-2.4): method, major version, unused bits, capability kind, and
@@ -697,6 +709,10 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             wire::body(request, cap, [0x0, 0x0], CAP_KIND_NONE, false)?;
             Ok((Request::Load, Call::words(request, cap)))
         }
+        21 => {
+            wire::body(request, cap, [0x30000, 0x0], CAP_KIND_NONE, false)?;
+            Ok((Request::Connection { connected: wire::field(&words, 0, 16, 1) != 0, active: wire::field(&words, 0, 17, 1) != 0 }, Call::words(request, cap)))
+        }
         _ => { wire::discard(request, cap); Err(Reject::Invalid) }
     }
 }
@@ -777,4 +793,7 @@ pub fn reply_sample(call: Call, value: &Sample) -> Result<()> {
 }
 pub fn reply_load(call: Call, value: u32) -> Result<()> {
     wire::finish(call, [((value) as usize) << 16, 0])
+}
+pub fn reply_connection(call: Call) -> Result<()> {
+    wire::finish(call, [0, 0])
 }

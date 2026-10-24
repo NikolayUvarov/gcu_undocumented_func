@@ -246,6 +246,24 @@ fn a_reboot_only_under_reboot_on_after_its_answer() {
 }
 
 #[test]
+fn the_mark_follows_the_sessions_reports_and_the_policy() {
+    let (mut g, mut m) = ready();
+    assert_eq!(g.mark(m.now), Mark::Unconnected, "no report yet");
+    g.connection(&mut m, Badge::Session, true, false);
+    assert_eq!(g.mark(m.now), Mark::Unconnected, "connected, not activated");
+    g.connection(&mut m, Badge::Session, true, true);
+    assert_eq!(g.mark(m.now), Mark::Changing, "the policy delivers and restarts sysmon");
+    assert_eq!(g.mark(m.now + CONNECTION_MS), Mark::Unconnected, "no report for 3 s: the session stopped or hung");
+    g.connection(&mut m, Badge::Other, false, false);
+    assert_eq!(g.mark(m.now), Mark::Changing, "another client's report is ignored");
+    m.policy = Some(b"effector-policy 1\nagent on\ncollect data/reports/\nscreen on\nlog ring\nupdate check\n".to_vec());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    assert_eq!(g.mark(m.now), Mark::Reading, "reading only: files, the screen, the log, an update's check");
+    g.connection(&mut m, Badge::Session, false, true);
+    assert_eq!(g.mark(m.now), Mark::Unconnected);
+}
+
+#[test]
 fn the_sample_is_for_the_session_and_the_owner() {
     let (mut g, mut m) = ready();
     let s = g.sample(&mut m, Badge::Session);
