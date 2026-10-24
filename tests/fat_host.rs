@@ -772,6 +772,39 @@ impl Sectors for Counted {
     }
 }
 
+// 000-KRN-0078: a file written in 16 KiB pieces, as `bench` writes, on 512-byte clusters, as `format` makes a RAM disk:
+// its chain is walked once in all, not again for every piece.
+#[test]
+fn a_file_written_in_pieces_walks_its_chain_once() {
+    let mut image = Image { data: vec![0; 16384 * SECTOR], writable: true, flushes: 0 };
+    fat::format(&mut image, "RAM", STAMP).unwrap();
+    let mut v = Volume::mount(Counted { image, sectors: 0, runs: 0 }).ok().unwrap();
+    assert_eq!((v.bits(), v.cluster_bytes()), (16, 512));
+    let root = v.root();
+    let mut node = v.create(&root, "big.bin", false, STAMP).unwrap();
+    let data = content(5, 2 << 20);
+    let before = v.disk.sectors;
+    for (i, piece) in data.chunks(16384).enumerate() { v.write(&mut node, (i * 16384) as u32, piece, STAMP).unwrap(); }
+    let (reads, clusters) = (v.disk.sectors - before, data.len() / 512);
+    // About four a cluster: found free, its entry in each FAT copy, the step to it (130 a cluster before 000-KRN-0078).
+    assert!(reads <= 5 * clusters, "{} sector reads to write {} clusters", reads, clusters);
+    // An overwrite inside it and an append after a read elsewhere: the same bytes as a model.
+    let mut model = data.clone();
+    v.write(&mut node, 1000, &[9; 3000], STAMP).unwrap();
+    model[1000..4000].fill(9);
+    let mut other = v.create(&root, "other.bin", false, STAMP).unwrap();
+    v.write(&mut other, 0, &content(6, 5000), STAMP).unwrap();
+    v.write(&mut node, model.len() as u32, &[7; 700], STAMP).unwrap();
+    model.extend([7; 700]);
+    let node = v.lookup(&root, "big.bin").unwrap();
+    let mut back = vec![0u8; model.len()];
+    assert_eq!(v.read(&node, 0, &mut back).unwrap(), model.len());
+    assert!(back == model);
+    v.flush().unwrap();
+    let report = v.check().unwrap();
+    assert!(report.clean() && report.lost == 0, "{:?}", report);
+}
+
 #[test]
 fn reads_in_runs_and_from_anywhere() {
     // Two files written a cluster at a time in turn (their chains interleave) and one written whole: read back in
