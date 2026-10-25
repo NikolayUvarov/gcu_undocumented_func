@@ -1,5 +1,5 @@
 {
-  "budget": 7000,
+  "budget": 7300,
   "unit": "lines of Rust in kernel/src, without blank lines and comments, both architectures (scripts/kernel_budget.py)",
   "measured": {
     "date": "2026-10-21",
@@ -15,6 +15,11 @@
       "date": "2026-10-21",
       "to": 7000,
       "why": "the first budget (850-KRN-0145): the measured size and about 10% of room; a raise is a commit of its own that names the mechanism and why it cannot live in user space (MC-1.2)"
+    },
+    {
+      "date": "2026-10-25",
+      "to": 7300,
+      "why": "000-KRN-0104: the derivation tree's index and revocation in steps (kernel/src/scheduler/tree.rs, about 200 lines): which capability derives from which is the kernel's own state (MC-3.3), so the walk that bounds a revocation (MC-5.4) cannot live in user space"
     }
   ]
 }
