@@ -1,6 +1,6 @@
 # 950 — Our own micro messenger: a server and a client, `msg`, in the console and full screen
 
-**Type:** main task, communication clients · **Owner:** `COM` (proposed; until the maintainer confirms it, the kernel session holds the plan) · **Priority:** P2 · **Status:** open · **Blocked by:** stage by stage, below · **Roadmap:** track G (user services), track D (session parsers) · **Constitution:** MC-3.1, MC-3.8, MC-6.6, MC-10.3, MC-11.4, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3, MC-12.4
+**Type:** main task, communication clients · **Owner:** `COM` (confirmed by the maintainer, 2026-10-25) · **Priority:** P2 · **Status:** open · **Blocked by:** stage by stage, below · **Roadmap:** track G (user services), track D (session parsers) · **Constitution:** MC-3.1, MC-3.8, MC-6.6, MC-10.3, MC-11.4, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3, MC-12.4
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request: "our own micro messenger with a server, the minimal functions of exchanging messages, for the text and console modes". Part of [docs/communications-and-agents.md](../docs/communications-and-agents.md).
 

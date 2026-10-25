@@ -239,6 +239,7 @@ print(op["status"], op.get("result", {}).get("exit_code"), op.get("result", {}).
 ## 6. Изменения на машинах
 
 | Дата | Машина | Изменение | Кто, зачем |
+| 2026-10-25 | `un-rizen_2a8b108d5593` | **Разрешение, изменений пока нет.** Сессия ядра может переключить эту машину на MIND Core: root только для записи `BootNext` на флешку MIND Core через `scripts/boot_switch.py` (000-KRN-0124), затем перезагрузка; следующая загрузка возвращает Linux. Только после слова сопровождающего, что флешка и `effector485` готовы. Второй NVMe-диск (04:00.0, чужой диск Windows) не записывается никогда. Каждый прогон получает здесь свою строку | слово сопровождающего, для 213 (сначала сеть) |
 |---|---|---|---|
 | 2026-10-09 | `PCU_585240b00e8a` | Окружение сборки для `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup в `~un/.cargo`; клон трека ядра | KRN, по просьбе сопровождающего |
 | 2026-10-10 | `PCU_585240b00e8a` | Ubuntu Cloud Archive (caracal) добавлен ради QEMU 8.2 и убран: QEMU для 22.04 в нём нет | KRN, по просьбе сопровождающего |

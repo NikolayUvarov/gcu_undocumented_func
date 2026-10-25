@@ -1,6 +1,6 @@
 # 650 — Building on the target: a git client and Rust, so the system fetches its sources and builds itself
 
-**Type:** main task · **Owner:** `DEV` track (proposed; no owner) · **Priority:** P3 · **Status:** open (proposed: the maintainer confirms the track's code and range) · **Blocked by:** stage by stage, below · **Roadmap:** none yet (a proposed track; stage 5 meets track C's reproducible builds) · **Constitution:** MC-9.1, MC-9.2, MC-12.1, MC-12.3
+**Type:** main task · **Owner:** `DEV` track (confirmed by the maintainer, 2026-10-25; no owner yet) · **Priority:** P3 · **Status:** open · **Blocked by:** stage by stage, below · **Roadmap:** none yet (a proposed track; stage 5 meets track C's reproducible builds) · **Constitution:** MC-9.1, MC-9.2, MC-12.1, MC-12.3
 
 Asked by the maintainer (2026-10-08): a small git and Rust on the target, so the system can fetch its own sources and build itself. Opened by the kernel session with the proposed track `DEV` ([TRACKS.md](../TRACKS.md)).
 
