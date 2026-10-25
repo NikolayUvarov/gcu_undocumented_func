@@ -26,6 +26,15 @@
     "cargo run --manifest-path nrl/Cargo.toml --locked --offline --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v0.json /tmp/nrl-cpu-demo-1"
   ],
   "elapsed_seconds": 0.000337353,
+  "final_branch_check": {
+    "command": "bash nrl/tools/check.sh",
+    "exit_code": 0,
+    "fast_test_staging_commit": "cb3fb7da",
+    "log": "rust-check-2026-10-25.txt",
+    "log_sha256": "3777530924813651c3cf2730149d8374faf1159737f9e717dc72b1933996f92c",
+    "test_location": "own NRL branch, not fast-test",
+    "tested_commit": "3d820f72"
+  },
   "fixture_round_trips": 2,
   "fixture_sha256": "21853060ca335db5c7fc8366ad62e1b56cb89c93f507cfc4dfc1bb847f0f4fa0",
   "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
@@ -39,7 +48,7 @@
   "recorded_date": "2026-10-25",
   "rust_tests": {
     "failed": 0,
-    "passed": 10,
+    "passed": 11,
     "scope": "host unit and differential tests; no native runtime"
   },
   "rustc": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
