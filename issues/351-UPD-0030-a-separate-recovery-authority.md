@@ -1,6 +1,6 @@
 # 351-UPD-0030 — A separate recovery authority
 
-**Type:** update (keys, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
+**Type:** update (keys, policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.6
 
 Split from [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) (the maintainer, 2026-10-23).
 
@@ -33,4 +33,4 @@ Today the only way below the floor is writing the disk by hand. And once the rel
 
 ## Related
 
-[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [305](../issues-done/305-recovery-without-the-store.done).
+[351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md), [305](../issues-done/305-recovery-without-the-store.done).

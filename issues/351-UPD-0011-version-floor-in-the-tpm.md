@@ -1,6 +1,6 @@
 # 351-UPD-0011 — A version floor that someone with the disk cannot lower: a TPM 2.0 counter
 
-**Type:** update (boot) · **Owner:** `UPD` track, with `PRT` for `bootloader/` · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) (the minimum version in the boot records), [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) (without it the counter can be bypassed) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.1
+**Type:** update (boot) · **Owner:** `UPD` track, with `PRT` for `bootloader/` · **Priority:** P2 · **Status:** open · **Blocked by:** [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) (without it the counter can be bypassed) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.1
 
 Asked by the maintainer (2026-10-08): what the limit of rollback protection is and what to do about it.
 

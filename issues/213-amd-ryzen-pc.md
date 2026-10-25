@@ -26,6 +26,23 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
 4. Runs without a person at the machine: one boot of MIND Core from Ubuntu and back ([000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md)), and a restart after a freeze by the FCH's watchdog ([213-KRN-0125](213-KRN-0125-the-amd-fch-watchdog.md)).
 5. Each run's evidence is for this machine and this build only (MC-12.1).
 
+## The next runs (the maintainer, 2026-10-25)
+
+- **The medium:** MIND Core boots from a USB stick the maintainer attaches. Linux stays on the first NVMe disk, and switching is by `BootNext` ([000-KRN-0124](000-KRN-0124-switching-between-linux-and-mind-core.md)).
+- **The second NVMe disk (04:00.0) is someone else's Windows disk.**
+  - Nothing writes it, from Linux or from MIND Core.
+  - Its one possible use is to debug reading a Windows file system, read-only, should such a task be recorded.
+  - What the code does today: `vfs_server` mounts only the boot volume the bootloader named, the log partition on the same disk, a `MIND MODELS` volume read-only and the RAM disk. Another disk's sectors are read only to find the boot volume. The block store refuses a medium that is neither blank nor its own.
+- **The order:**
+  1. the network, Wi-Fi (RTL8852BE, [213-DRV-0032](213-DRV-0032-rtl8852be-wifi.md)) and the wired card (RTL8168, [213-DRV-0031](213-DRV-0031-rtl8168-wired-network.md));
+  2. the screen, the mouse and the keyboard, checked as they are now ([213-KRN-0098](213-KRN-0098-black-screen-when-the-shell-takes-it.md) for the screen);
+  3. Bluetooth after these ([700](700-bluetooth.md)).
+- **Who:**
+  - `EFF`, and the session that debugged Wi-Fi on the MacBook Pro, connect `effector485` (MIND Link, [800](800-mind-link.md)) to this machine;
+  - that gives a path that does not depend on the network, to debug the wired and the wireless network for the Effector server's work;
+  - the maintainer says when it is ready.
+- **The kernel session reboots nothing** and uses no root on this machine without the maintainer's word for that run, recorded in docs/effector.md, section 6. While the machine runs MIND Core it runs no gate (i9 has been offline since 2026-10-24).
+
 ## Acceptance criteria
 
 The shell shows on this machine's screen; its keyboard, its first NVMe disk and its log partition work; sound plays through its analog output; each finding above is a closed task or a numbered one.
