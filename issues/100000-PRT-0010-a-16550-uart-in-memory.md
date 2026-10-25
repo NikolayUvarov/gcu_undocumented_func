@@ -1,6 +1,6 @@
-# 230-PRT-0010 — A 16550 UART in memory, as the kernel's console and the shell's
+# 100000-PRT-0010 — A 16550 UART in memory, as the kernel's console and the shell's
 
-**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** open · **Blocked by:** [230-PRT-0009](230-PRT-0009-the-board-from-the-device-tree.md) (the console from `stdout-path`) · **Main task:** [230](230-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
+**Type:** porting (the console) · **Owner:** `PRT` (the kernel session) · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand (the maintainer, 2026-10-25: the port starts then); [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md) (the console from `stdout-path`) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-12.1
 
 ## Problem
 
@@ -21,8 +21,8 @@
 - **On a platform:**
   - QEMU's `virt` has only a PL011;
   - whether another of QEMU's aarch64 machines carries a 16550 in memory is to be checked (Aspeed's AST2700 is a candidate);
-  - otherwise the first test on a platform is the PinePhone (230, stage 1).
+  - otherwise the first test on a platform is the PinePhone (100000, stage 1).
 
 ## Related
 
-[230](230-a-phone-the-pinephone-first.md), [230-PRT-0009](230-PRT-0009-the-board-from-the-device-tree.md).
+[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md).

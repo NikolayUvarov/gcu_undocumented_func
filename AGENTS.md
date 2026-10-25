@@ -27,7 +27,9 @@ Each track has a **code**, a **range of main-task numbers**, an owner, a set of 
 
 **Task numbers.**
 
-- A **main task** is `NNN`: three digits from its track's range (`issues/NNN-short-name.md`). It states a goal at the size of a roadmap step.
+- A **main task** is a number from its track's range (`issues/NNN-short-name.md`). It states a goal at the size of a roadmap step.
+  - Three digits (`NNN`) for the tracks opened before 2026-10-25.
+  - Six digits (`NNNNNN`) for the tracks opened since, as the three-digit blocks ran out (the maintainer's decision, 2026-10-25).
 - A **task** of a track is `NNN-TRK-MMMM` (`issues/NNN-TRK-MMMM-short-name.md`):
   - `NNN` is the main task it belongs to. It may be another track's main task, for example `158-DRV-0003` is the drivers track's part of the video task 158. It is `000` for a task under no main task.
   - `TRK` is the track's code.
@@ -49,7 +51,7 @@ The tracks — codes, ranges, directories, owners, branches, statuses and starti
    - the directories it will change;
    - what it needs from other tracks.
 
-   The maintainer gives it a code and a range (from 600, in blocks of 50) and records it in [TRACKS.md](TRACKS.md). Until then, propose work in messages or GitHub issues and do not create files in `issues/`.
+   The maintainer gives it a code and a range (six digits, in blocks of 1000 from 100000) and records it in [TRACKS.md](TRACKS.md). Until then, propose work in messages or GitHub issues and do not create files in `issues/`.
 
 **Branches.** The branch name carries the tool and then the track code or the task number: `<tool>/<TRK>-<name>` for a track's long-lived branch (`claude/NET-stack`), `<tool>/<NNN-TRK-MMMM>-<name>` for one task (`codex/300-STO-0002-cid`). CI runs on pushes to `main`, to `claude/**` and to branches named this way under any tool prefix, and on pull requests. An agent:
 

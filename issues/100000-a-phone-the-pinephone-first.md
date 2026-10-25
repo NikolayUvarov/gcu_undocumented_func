@@ -1,10 +1,11 @@
-# 230 — MIND Core on a phone: the PinePhone first
+# 100000 — MIND Core on a phone: the PinePhone first
 
-**Type:** porting (main task) · **Owner:** `MOB` track (open; the kernel session works stage 0 as `PRT` and `KRN` tasks) · **Priority:** P2 · **Status:** open · **Blocked by:** stage by stage, below; stage 1 needs a PinePhone at hand ([issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)) · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
+**Type:** porting (main task) · **Owner:** `MOB` track (later) · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand: the port starts then, stage 0 included (the maintainer, 2026-10-25; [issues-human, section 12](../issues-human/README.md#12-a-pinephone-to-test-on)) · **Roadmap:** track H (boards with UEFI) · **Constitution:** MC-1.3, MC-1.5, MC-5.1, MC-6.3, MC-11.3, MC-11.4, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the kernel session, 2026-10-25, at the maintainer's request:
 - the question: what MIND Core needs to run on mobile phones, and which phone to start with;
-- then: "make the track".
+- then: "make the track";
+- then: the port starts when a phone is at hand, and until then this records the intention. Its number became six digits the same day, when the three-digit blocks ran out.
 
 ## Problem
 
@@ -39,11 +40,11 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 
 ## Plan
 
-### Stage 0: without a phone, in QEMU and on the host
+### Stage 0: in QEMU and on the host, started once the phone is at hand
 
-- [230-PRT-0009](230-PRT-0009-the-board-from-the-device-tree.md): the board from the device tree.
-- [230-KRN-0171](230-KRN-0171-platform-devices-from-the-device-tree.md): platform devices from the device tree (an ABI change).
-- [230-PRT-0010](230-PRT-0010-a-16550-uart-in-memory.md): a 16550 UART in memory as the console.
+- [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md): the board from the device tree.
+- [100000-KRN-0171](100000-KRN-0171-platform-devices-from-the-device-tree.md): platform devices from the device tree (an ABI change).
+- [100000-PRT-0010](100000-PRT-0010-a-16550-uart-in-memory.md): a 16550 UART in memory as the console.
 - The phone's device tree from Linux (`sun50i-a64-pinephone-1.2.dts`) for host tests, with its licence checked and recorded in THIRD_PARTY.md.
 
 ### Stage 1: the first boot on the phone
@@ -75,7 +76,7 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 
 ### Stage 3: radios
 
-- **The modem:** main task [231](231-telephony-sms-and-calls-through-the-modem.md).
+- **The modem:** main task [100001](100001-telephony-sms-and-calls-through-the-modem.md).
 - **Wi-Fi and Bluetooth** (RTL8723CS over SDIO):
   - SDIO in the MMC driver;
   - the Wi-Fi driver is a `DRV` task, and Bluetooth goes to `BLT`;
@@ -83,7 +84,7 @@ As found on 2026-10-25 (sources at the end). Each point is checked on the phone 
 
 ### Stage 4: on a battery
 
-Main task [232](232-power-on-a-battery-idle-frequency-and-sleep.md).
+Main task [100002](100002-power-on-a-battery-idle-frequency-and-sleep.md).
 
 ### Stage 5: the interface
 
@@ -124,11 +125,11 @@ Main task [232](232-power-on-a-battery-idle-frequency-and-sleep.md).
   - the screen shows the shell, and touch moves the pointer;
   - a file written to the card is read back after a reboot;
   - the battery's level is shown.
-- **Stages 3 to 6:** as 231, 232 and the profile say.
+- **Stages 3 to 6:** as 100001, 100002 and the profile say.
 
 ## Related
 
-[205](205-aarch64-boards.md), [210-APL-0002](210-APL-0002-board-from-the-device-tree.md), [231](231-telephony-sms-and-calls-through-the-modem.md), [232](232-power-on-a-battery-idle-frequency-and-sleep.md), [207](207-gpio-service.md) (`gpio`), [700](700-bluetooth.md), [docs/profile/aarch64](../docs/profile/aarch64/README.md).
+[205](205-aarch64-boards.md), [210-APL-0002](210-APL-0002-board-from-the-device-tree.md), [100001](100001-telephony-sms-and-calls-through-the-modem.md), [100002](100002-power-on-a-battery-idle-frequency-and-sleep.md), [207](207-gpio-service.md) (`gpio`), [700](700-bluetooth.md), [docs/profile/aarch64](../docs/profile/aarch64/README.md).
 
 Sources, read on 2026-10-25:
 - [Pine64, August 2025](https://pine64.org/2025/08/14/august_2025_short_update/);
