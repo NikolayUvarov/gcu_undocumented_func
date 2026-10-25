@@ -160,8 +160,9 @@ def slots(payloads, arch, channel=None):
         if fields["manifests"].get(arch) != hashlib.sha256(payloads["MANIFEST"]).hexdigest():
             raise ValueError(f"the channel does not name this build's {arch} manifest")
         out["MIND/A/CHANNEL"] = channel
-        # The image starts at its channel's minimum, the floor the updater would set at once (351-UPD-0024).
-        out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True, floor=fields["minimum"])
+        # The floor the updater would set at once (351-UPD-0024): the channel's minimum, if slot A's manifest meets it.
+        if sign_manifest.manifest_version(payloads["MANIFEST"]) >= fields["minimum"]:
+            out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True, floor=fields["minimum"])
     return out
 
 
