@@ -96,4 +96,4 @@ Apple Silicon: the same slots work behind U-Boot's UEFI. A first stage started b
 
 ## Related
 
-[350](350-signed-boot-images.md), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.
+[350](350-signed-boot-images.md), [110](110-our-own-web-server.md) (our own web server, to serve releases), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.
