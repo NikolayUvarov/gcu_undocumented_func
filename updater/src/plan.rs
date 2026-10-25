@@ -64,3 +64,16 @@ pub fn may_stage(records: [Option<Record>; 2], running: u8, trial: bool) -> bool
 pub fn trial_of_other(records: [Option<Record>; 2], running: u8, tries: u8) -> Option<(usize, Record)> {
     next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0 })
 }
+
+/// The version floor to write (351-UPD-0024): the highest minimum seen, once the running slot is confirmed on the disk
+/// at that version or above. None leaves the floor as it is: it is never lowered, and a confirmed trial alone raises
+/// nothing, so a rollback to an earlier release at or above the minimum stays possible.
+pub fn floor_to(current: u64, minimum: u64, running: u64, confirmed: bool) -> Option<u64> {
+    (minimum > current && confirmed && running >= minimum).then_some(minimum)
+}
+
+/// The version a boot manifest's `version` header line names, 0 without one: as the bootloader reads it (351-UPD-0024).
+pub fn manifest_version(text: &[u8]) -> u64 {
+    let line = text.split(|&b| b == b'\n').take_while(|l| !l.starts_with(b"file ")).find(|l| l.starts_with(b"version "));
+    line.and_then(|l| core::str::from_utf8(&l[8..]).ok()).and_then(|v| v.parse().ok()).unwrap_or(0)
+}

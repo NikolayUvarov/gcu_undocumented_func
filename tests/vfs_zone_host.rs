@@ -79,9 +79,10 @@ fn the_updater_fills_the_slot_that_did_not_boot_and_writes_records() {
     assert_eq!(zone("mind/b/kernel.elf", BADGE_UPDATE, b), Zone::Writable);
     assert_eq!(zone("MIND/B/deeper/x", BADGE_UPDATE, b), Zone::Writable);
     assert_eq!(zone("MIND/BOOT0", BADGE_UPDATE, b), Zone::Record);
+    assert_eq!(zone("MIND/FLOOR", BADGE_UPDATE, b), Zone::Record); // the version floor (351-UPD-0024)
     assert_eq!(zone("MIND/boot1", BADGE_UPDATE, b), Zone::Record);
     // The running slot, anything else in MIND, the bootloader, the root's files and data/ stay read-only.
-    for path in ["MIND/A", "MIND/A/kernel.elf", "MIND/BOOT2", "MIND/C", "MIND/BOOT0/x", "EFI/BOOT/BOOTX64.EFI", "kernel.elf", "data", "data/x"] {
+    for path in ["MIND/A", "MIND/A/kernel.elf", "MIND/BOOT2", "MIND/C", "MIND/BOOT0/x", "MIND/FLOOR/x", "MIND/FLOORS", "EFI/BOOT/BOOTX64.EFI", "kernel.elf", "data", "data/x"] {
         assert_eq!(zone(path, BADGE_UPDATE, b), Zone::ReadOnly, "{}", path);
     }
     // Private directories stay hidden from it.

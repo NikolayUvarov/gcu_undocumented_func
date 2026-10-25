@@ -5653,7 +5653,7 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch, changed=None):
+def update_releases(temp, arch, changed=None, minimum6=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
     TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
     the loader, so that slot B boots through its own (351-UPD-0010). Returns the volumes, the server, release 5's channel,
@@ -5663,7 +5663,7 @@ def update_releases(temp, arch, changed=None):
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
-    sign_manifest.sign_volume(volume)
+    sign_manifest.sign_volume(volume, version=5)  # the version under the boot key (351-UPD-0024)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
     if changed:
@@ -5672,11 +5672,11 @@ def update_releases(temp, arch, changed=None):
     with open(newer / BOOT_EFI, "ab") as loader:  # bytes past the PE's sections: another file, loaded the same
         loader.write(b"release 6's loader\0")
     commit, toolchain, locks = sign_manifest.build_inputs()
-    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
+    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks), version=6)
     server = temp / "server"
     release_tool.publish(release_tool.stage(5, temp / "staged5", {arch: volume}), server)
     kept = (server / "channels/stable").read_bytes()
-    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server)
+    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server, minimum=minimum6)
     good = (server / "channels/stable").read_bytes()
     manifest6 = (newer / "MANIFEST").read_bytes()
     boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
@@ -5703,7 +5703,8 @@ def update_suite(args):
         return
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
-    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf")
+    # Release 6 raises the minimum to 6, as for a fix: once it is confirmed the floor is 6 (351-UPD-0024).
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf", minimum6=6)
     largest = max(boot_files[:-1], key=lambda f: (newer / f[0]).stat().st_size)
     # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
     applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
@@ -5818,6 +5819,7 @@ def update_suite(args):
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
         log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        require(log, "[UPDATER] VERSION FLOOR 1 RAISED TO 6")  # 351-UPD-0024
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
@@ -5842,6 +5844,19 @@ def update_suite(args):
     # own applications, the uptime release 6 changed among them (351-UPD-0023). The clock is 60 days on, past the expiry
     # of the channel kept there, with no network: the system runs on and says the channel expired (351-UPD-0025).
     assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
+    # 351-UPD-0024: release 6 raised the minimum to 6, so the floor is 6 and a record that boots slot A's release 5 is
+    # refused: slot B boots instead.
+    assert boot_slots.parse_floor(image.read(boot_slots.FLOOR_FILE)) == 6, image.read(boot_slots.FLOOR_FILE)
+    boot_slots.write_next(image, slot="A", fallback="B", confirmed=True)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        out = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120).replace("\r", "")
+        for line in ("BOOT: VERSION FLOOR 6", "VERSION 5 BELOW THE FLOOR 6", "BOOT: SLOT B LOADED"):
+            require(out, line)
+    finally:
+        vm.close()
+    # The floor lowered by hand, as the recovery authority would (351-UPD-0030), for the checks of release 5 that follow.
+    image.write(boot_slots.FLOOR_FILE, boot_slots.floor(1))
     boot_slots.write_next(image, slot="A", confirmed=True)
     import datetime
     later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
@@ -5862,7 +5877,8 @@ def update_suite(args):
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
           "restart and slot B's own loader, release 6's, and confirmed on the disk by the updater as soon as init confirmed it; "
           "its applications are in slot B, "
-          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
+          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
+          "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
           "is consistent", flush=True)
 
@@ -10512,6 +10528,9 @@ def boot_suite(args, disk):
     # 351-UPD-0010: a slot's own loader, started by the loader at EFI/BOOT/.
     with tempfile.TemporaryDirectory(prefix="mind-loaders-") as temp:
         boot_slots_check.own_loaders(boot_image, temp, disk, "x86")
+    # 351-UPD-0024: the version floor.
+    with tempfile.TemporaryDirectory(prefix="mind-floor-") as temp:
+        boot_slots_check.version_floor(boot_image, temp, disk, "x86")
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:
