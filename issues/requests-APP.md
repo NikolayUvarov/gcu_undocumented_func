@@ -43,7 +43,7 @@ Recorded by the update track (UPD), 2026-10-23.
 ## `run` of an installed application's path, for 750-KRN-0169
 
 Recorded by the kernel track (KRN), 2026-10-25.
-- **What is new.** The loader runs a program under `data/apps/` only as its signed package lists it, in the version `data/apps/<name>/current` names ([750-KRN-0169](750-KRN-0169-the-loader-checks-an-installed-application.md)). Its path is `data/apps/<name>/<file>` or `data/apps/<name>/<version>/<file>`, up to 63 bytes, as `loader.wit` takes (`string<64>`).
+- **What is new.** The loader runs a program under `data/apps/` only as its signed package lists it, in the version `data/apps/<name>/current` names ([750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done)). Its path is `data/apps/<name>/<file>` or `data/apps/<name>/<version>/<file>`, up to 63 bytes, as `loader.wit` takes (`string<64>`).
 - **The request.** The shell's `run` takes a program name of at most `NAME_MAX` (16) bytes and says `PROGRAM NAME TOO LONG` past it (`shell/src/main.rs`, the `run` command), so `run data/apps/memtest/memtest.elf` is refused before the loader sees it. A name with a `/` in it could take up to 63 bytes, the loader's limit, while a bare name keeps 16.
 - **Why.** Installed applications cannot be started from the shell by their real paths; the `modes` suite's check uses one-letter names to fit.
 
