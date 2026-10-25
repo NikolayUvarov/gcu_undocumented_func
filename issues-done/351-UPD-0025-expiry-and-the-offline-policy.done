@@ -37,7 +37,7 @@ MC-9.4 asks that expiry during autonomous operation follow a predefined policy, 
 
 ## Related
 
-[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0007](351-UPD-0007-updater-service.done), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351-UPD-0028](../issues/351-UPD-0028-a-short-lived-timestamp-key.md).
+[351-UPD-0009](../issues/351-UPD-0009-rollback-policy-and-key-roles.md), [351-UPD-0007](351-UPD-0007-updater-service.done), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.done), [351-UPD-0028](../issues/351-UPD-0028-a-short-lived-timestamp-key.md).
 
 ## Resolution
 

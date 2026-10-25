@@ -61,4 +61,4 @@ Landed in round 26 (`main` 6bf90421, 2026-10-23); every gate group passed on tha
 
 ## Related
 
-[351-KRN-0167](351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.done), 351-UPD-0010 ([updating the bootloader](351-UPD-0010-updating-the-bootloader.done)), [351-KRN-0141](../issues/351-KRN-0141-an-update-through-the-link.md), [351](../issues/351-self-update.md).
+[351-KRN-0167](351-KRN-0167-a-kernel-that-refuses-its-loader-on-trial-restarts.done), 351-UPD-0010 ([updating the bootloader](351-UPD-0010-updating-the-bootloader.done)), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.done), [351](../issues/351-self-update.md).

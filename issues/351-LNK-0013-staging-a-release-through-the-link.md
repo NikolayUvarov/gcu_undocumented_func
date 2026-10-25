@@ -1,6 +1,6 @@
 # 351-LNK-0013 — Staging a release through the link: `mindlink put -r` and `effector485`'s `stage`
 
-**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** — · **Main task:** [351](351-self-update.md), through [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.3
+**Type:** tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-21) · **Blocked by:** — · **Main task:** [351](351-self-update.md), through [351-KRN-0141](../issues-done/351-KRN-0141-an-update-through-the-link.done) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.3
 
 ## Problem
 
@@ -55,4 +55,4 @@ Evidence for the configurations named only (MC-12.1). `stage` reports what the u
 
 ## Related
 
-[351-KRN-0141](351-KRN-0141-an-update-through-the-link.md), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/update/updater.md](../docs/update/updater.md), [docs/link/mindlink.md](../docs/link/mindlink.md), [docs/link/effector485.md](../docs/link/effector485.md).
+[351-KRN-0141](../issues-done/351-KRN-0141-an-update-through-the-link.done), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md), [800-LNK-0011](800-LNK-0011-effector485.md), [docs/update/updater.md](../docs/update/updater.md), [docs/link/mindlink.md](../docs/link/mindlink.md), [docs/link/effector485.md](../docs/link/effector485.md).

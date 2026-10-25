@@ -68,7 +68,7 @@ A device may go longer than its channel's expiry without a current one: offline,
 A file at the root of the boot volume. Nothing in the running system writes it: it is written with the image, or on another machine.
 
 ```
-source https://updates.example.org/mind   # or a directory on a mounted volume: usb:releases
+source https://updates.example.org/mind   # or a directory: usb:releases on a mounted volume, data/link/rel on the boot volume
 pin 3c5f…                                 # https: the SHA-256 of the server's public key; without it, tlsroots.pem
 channel stable
 automatic apply                           # none (the default), check, fetch or apply
@@ -76,6 +76,7 @@ every 21600                               # seconds between automatic runs; 0 (t
 tries 3                                   # tries of a trial boot for an automatic apply (1 to 9)
 ```
 
+- **A directory source** is checked as the HTTPS one: the source only supplies bytes, and every check above is the updater's. A file whose size is not the manifest's is refused before it is copied, and the next run takes it again (351-KRN-0141).
 - **Without the file** the updater has no source and acts only when asked.
 - **The automatic run** starts once the trial (if any) is confirmed. When the source does not answer, it is tried again after 30 s.
 - **The source** may be an HTTPS server or a directory with the layout of `scripts/release.py`. Both go through the same checks.
