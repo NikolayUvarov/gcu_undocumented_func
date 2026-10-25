@@ -2806,14 +2806,15 @@ def revocation_refusal_check(vm):
     pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
     vm.send("R\n")
     output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
-    done = re.search(r"REVOKED 3001 IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
+    done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
     assert done, output[-2000:]
-    steps, made, refused = map(int, done.groups())
-    assert steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
+    removed, steps, made, refused = map(int, done.groups())
+    # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
+    assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
     faults = vm.command("faults")
     assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
     time.sleep(.1); vm.collect(); vm.output = ""
-    return f"a revocation of 3001 in {steps} steps refused {refused} mints from under it while it ran"
+    return f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
 
 
 def protection_check(vm):
