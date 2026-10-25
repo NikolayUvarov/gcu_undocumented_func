@@ -91,6 +91,7 @@ Main task [100002](100002-power-on-a-battery-idle-frequency-and-sleep.md).
 - The shell and `wm` at 720 × 1440, scaled.
 - An on-screen keyboard (a request to `APP`).
 - Rotation by the accelerometer, later.
+- **The applications:** among the first, `improve` ([100003](100003-improve-the-system-from-the-phone.md)), so that the user asks for an improvement of MIND Core from the phone and is told its status (the maintainer, 2026-10-25). The others are those of the communications plan (`msg`, `mail`, `tgtxt`, `sms` and `call`).
 
 ### Stage 6: the platform profile `aarch64/PinePhone-0`
 
@@ -101,14 +102,27 @@ Main task [100002](100002-power-on-a-battery-idle-frequency-and-sleep.md).
   - the kill switches as physical control.
 - **Its limits and its evidence,** from this phone only (MC-12.1).
 
-### Later: other phones (intention only)
+### Later: other phones (intention only; surveyed on 2026-10-25)
 
-- **Librem 5** (i.MX8MQ): a GICv3, the modem on an M.2 card, kill switches.
-- **Fairphone 5** (Qualcomm QCM6490): an unlockable bootloader and active work in mainline Linux, but Qualcomm's boot chain and closed firmware for the modem and Wi-Fi.
-- **Not:**
-  - the iPhone and Samsung's phones (closed boot chains);
-  - the PinePhone Pro (discontinued);
-  - the OnePlus 6 and 6T, whose UEFI port warns that flashing it can wipe the UFS.
+What decides is whether our UEFI bootloader can be started on the phone, with a device tree, without changing what the phone cannot get back.
+
+- **With U-Boot or Tow-Boot (UEFI and a device tree), the SoC documented in mainline Linux:**
+  - the PinePhone, on sale: this task;
+  - the PinePhone Pro (Rockchip RK3399S): discontinued in August 2025, second-hand only;
+  - the Librem 5, and its "Made in USA" form the Liberty Phone (NXP i.MX 8M): a GICv3 and the modem on an M.2 card, but a high price, and its price and support today were not confirmed;
+  - the Liberux NEXX (Rockchip RK3588S, 8 GB): crowdfunded, shipping planned for July 2026 and not confirmed, about €790 to $1485.
+- **Qualcomm, with U-Boot started by the vendor's loader (ABL) from the boot partition,** which gives an EFI environment and a device tree. Flashing it is undone by fastboot.
+  - **SDM845, second-hand:** the OnePlus 6 and 6T, the Xiaomi Poco F1, the SHIFT6mq. They are in postmarketOS's community category, and a generic SDM845 U-Boot was tested on a OnePlus 6.
+  - **QCM6490, on sale:** the Fairphone 5, which U-Boot's Qualcomm documentation names, and the SHIFTphone 8, which is close to mainline. Its UART is reached on the USB-C SBU pins once an internal switch is set; it has anti-rollback, which an unlocked bootloader ignores.
+  - **One port covers both of the QCM6490 phones.** It is the best second step after the PinePhone.
+  - **The cost:** closed firmware for the modem, Wi-Fi and the GPU (only in `proprietary/`), and the modem inside the SoC.
+- **Not now:** phones that run Linux on the vendor's Android kernel through Halium.
+  - The FuriLabs FLX1 and FLX1s (MediaTek Dimensity 900, kernel 4.19).
+  - The Volla phones (MediaTek).
+  - The Jolla C2 (Unisoc T606).
+  - The Jolla Phone of 2026 (MediaTek Dimensity 7100): its bootloader's unlocking was not confirmed.
+  - None of these documents the SoC in mainline Linux, so a port would start from the vendor's boot chain.
+- **Not at all:** the iPhone and Samsung's phones (closed boot chains); the OnePlus 6 and 6T through the EDK2 port (it warns that flashing can wipe the UFS: U-Boot is the way for them).
 
 ## Acceptance criteria
 
@@ -137,4 +151,10 @@ Sources, read on 2026-10-25:
 - [postmarketOS: Tow-Boot for UEFI on the PinePhone](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/merge_requests/3068/commits);
 - [the serial console at 115.2 kbps](https://lupyuen.codeberg.page/articles/uboot);
 - [edk2-sdm845's warning](https://github.com/wode2016501/edk2-sdm845);
-- [FOSDEM 2026 on Fairphones](https://fosdem.org/2026/schedule/event/mainline_kernel_for_fairphones_-_2026_update).
+- [FOSDEM 2026 on Fairphones](https://fosdem.org/2026/schedule/event/mainline_kernel_for_fairphones_-_2026_update);
+- [U-Boot's Qualcomm boards](https://docs.u-boot.org/en/v2025.10/board/qualcomm/board.html) and [Linaro's U-Boot for Qualcomm](https://www.linaro.org/blog/initial-u-boot-release-for-qualcomm-platforms/);
+- [postmarketOS: SDM845 generic devices](https://gitlab.postmarketos.org/postmarketOS/pmaports/-/merge_requests/4599/commits) and [its v26.06 release](https://nura.eco/blog/2026/06/21/v26.06-release/);
+- [the SHIFTphone 8 on postmarketOS's wiki](https://wiki.postmarketos.org/wiki/SHIFT_SHIFTphone_8_%28shift-otter%29) and [/e/OS on its anti-rollback](https://doc.e.foundation/devices/otter);
+- [It's FOSS on the Liberux NEXX](https://itsfoss.com/news/liberux-nexx-community/);
+- [Liliputing on the FLX1s](https://liliputing.com/flx1s-is-a-new-linux-phone-thats-mostly-a-downgrade-from-the-flx1/) and [The Register on the FLX1](https://theregister.com/2025/02/03/furiphone_flx1);
+- [the Jolla Phone of 2026 on postmarketOS's wiki](https://wiki.postmarketos.org/wiki/Jolla_Phone_2026_%28jp2601%29).
