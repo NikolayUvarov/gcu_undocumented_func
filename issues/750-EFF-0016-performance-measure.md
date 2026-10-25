@@ -32,3 +32,15 @@
 ## Related
 
 [750-EFF-0006](750-EFF-0006-session-service.md), [750-EFF-0014](750-EFF-0014-telemetry.md), `docs/effector/protocol.md` 1.2.
+
+## Progress — 2026-10-23, the conditions on the MacBook
+
+- **The run:** the third slot update (version 202610230622), then operation `20261023064407.116524958_000036`, `completed`.
+- **The conditions the server keeps:**
+  - 41 samples;
+  - 6.1% busy in the baseline second;
+  - 13.6% over the run;
+  - 7.1% less the agent's own;
+  - not under load.
+- **The numbers:** 202.4 million iterations/s, 1758 MiB/s copied, 2.9/33.4 MiB/s written/read.
+- **Still empty:** "CPU · all threads" and "RAM · latency". They wait on KRN (memory and parallel workers, `KRN/…-EFF-a-request-memory-and-workers…`).

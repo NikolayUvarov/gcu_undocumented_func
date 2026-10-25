@@ -47,6 +47,13 @@ pub struct Sample {
     pub services: Vec<Load>, pub volumes: Vec<(String, u64, u64)>,
 }
 
+/// The agent's mark on the screen (750-EFF-0015, `display.wit` 1.2's `remote-state`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark { Unconnected, Reading, Changing }
+
+/// How long a report of the session's connection holds: after it, the mark is grey (the session stopped or hung).
+pub const CONNECTION_MS: u64 = 3000;
+
 /// The authorities `init` gives the gateway (750-KRN-0119); the service binds them, the host tests fake them.
 pub trait Machine {
     fn uptime_ms(&mut self) -> u64;
@@ -90,6 +97,7 @@ pub struct Gateway {
     inc: Option<Incoming>,
     next_handle: u32,
     kept: VecDeque<String>,
+    connection: Option<(bool, bool, u64)>, // the session's last report: connected, activated, when (uptime ms)
 }
 
 impl Default for Gateway { fn default() -> Self { Self::new() } }
@@ -115,7 +123,7 @@ fn unhex(s: &str) -> Option<[u8; 32]> {
 
 impl Gateway {
     pub fn new() -> Self {
-        Self { policy: None, policy_sha256: [0; 32], policy_read_ms: 0, out: None, inc: None, next_handle: 1, kept: VecDeque::new() }
+        Self { policy: None, policy_sha256: [0; 32], policy_read_ms: 0, out: None, inc: None, next_handle: 1, kept: VecDeque::new(), connection: None }
     }
 
     pub fn policy_loaded(&self) -> bool { self.policy.is_some() }
@@ -159,6 +167,21 @@ impl Gateway {
     /// The telemetry counters, for the session and the owner.
     pub fn sample(&mut self, m: &mut dyn Machine, badge: Badge) -> Sample {
         if badge == Badge::Other { Sample::default() } else { m.sample() }
+    }
+
+    /// The session's report of its link to the server; another client's is ignored.
+    pub fn connection(&mut self, m: &mut dyn Machine, badge: Badge, connected: bool, active: bool) {
+        if badge == Badge::Session { self.connection = Some((connected, active, m.uptime_ms())); }
+    }
+
+    /// The agent's mark now: grey unless the session reported within `CONNECTION_MS` that it is connected and
+    /// activated; then red if the policy lets it change the machine, yellow if it may only read.
+    pub fn mark(&self, now_ms: u64) -> Mark {
+        match self.connection {
+            Some((true, true, at)) if now_ms.saturating_sub(at) < CONNECTION_MS =>
+                if self.policy.as_ref().is_some_and(|p| p.may_change()) { Mark::Changing } else { Mark::Reading },
+            _ => Mark::Unconnected,
+        }
     }
 
     /// The one-minute load average x 100, for the session's heartbeat and poll and for the owner.

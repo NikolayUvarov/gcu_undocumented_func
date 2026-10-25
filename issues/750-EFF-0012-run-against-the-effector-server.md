@@ -100,3 +100,14 @@ The first run on real hardware.
 - **What hesere 232 shows since:** telemetry, `load` in every heartbeat (19.5% of 8 cores), `busy:false` with `free_slots:1` when idle.
 - **`performance_measure`** completed in 50 s and is saved as the endpoint's measurement (750-EFF-0016).
 - **Still open on the server side:** file transfer for MIND is off on hesere (`mindcore_directories` empty). It is Effector task 81-mindcore-04.
+
+## Progress — 2026-10-24, the new stick and a slot update on it
+
+- **The stick:** the maintainer wrote it from `fast-test` cede9ec0, ABI 19, with 351-KRN-0166's separate handoff version. It booted slot A in the maintenance mode, and Wi-Fi joined.
+- **The rewrite wiped `data/effector`** again. The owner's settings, policy, `agent_id` and `start.msh` are in `data/link/effector/` for the owner to put in place. The agent keeps `mind_353abc18de2dbd0e` (750-EFF-0006's owner agent ID).
+- **The slot path works on the new stick.**
+  - Release 202610240755: its code equals the stick's, built from the tracks' commits on it, not from `fast-test`.
+  - It went in through `scripts/link_update.py` over `effector485`, under an `effector485` lease (800-LNK-0021).
+  - Slot B booted on trial, `init` confirmed it, and the updater recorded it: "SLOT B CONFIRMED ON THE DISK", sequence 4.
+- **Seen on the way:** a cancel of a queued operation at the daemon's operation limit poisoned its state mutex. The route saves, which prunes old operations, then reads by a stale index. Sent to LNK (`LNK/…-EFF-the-hang-is-a-panic-…`); a restart cleared it.
+- **Not tried yet:** a slot update whose kernel is of another ABI than the stick's loader, and 351-KRN-0167's restart into the fallback on a refused trial.

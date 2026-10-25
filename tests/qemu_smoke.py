@@ -7899,6 +7899,8 @@ def effector_suite(args, disk):
         loaded = [b["load"] for b in list(server.beats) if "load" in b]
         assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
         assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
+        # The agent's mark on the screen (750-EFF-0015): red, as the policy delivers files and restarts sysmon.
+        require(vm.command("dmesg -s compositor", raw=True), "[COMPOSITOR] REMOTE MARK Effector: Changing")
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
@@ -7943,8 +7945,18 @@ def effector_suite(args, disk):
             time.sleep(1)
         require(vm.command("dmesg -s tls", raw=True), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
         assert not any(r["path"].endswith("/api/heartbeat") for r in list(rogue.requests)), list(rogue.requests)
+        # Not connected now: the gateway keeps the mark lit, grey (750-EFF-0015).
+        deadline = time.monotonic() + 30
+        while not vm.command("dmesg -s compositor", raw=True).rstrip().endswith("[COMPOSITOR] REMOTE MARK Effector: Unconnected") and time.monotonic() < deadline:
+            marks = [l for l in vm.command("dmesg -s compositor", raw=True).splitlines() if "REMOTE MARK Effector" in l]
+            if marks and marks[-1].endswith("Unconnected"):
+                break
+            time.sleep(1)
+        marks = [l for l in vm.command("dmesg -s compositor", raw=True).splitlines() if "REMOTE MARK Effector" in l]
+        assert marks and marks[-1].endswith("Effector: Unconnected"), marks[-4:]
         assert token not in vm.log and token not in session(), "the token reached the log"
-        print("PASS: a server with another certificate refused before any request; the token never in the log", flush=True)
+        print("PASS: a server with another certificate refused before any request, the agent's mark grey meanwhile; the token "
+              "never in the log", flush=True)
     finally:
         stop_watch.set()
         vm.close()
