@@ -1,0 +1,33 @@
+# 900-NRL-0003 — Select and exercise a narrow portable Rust CPU backend — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** 900-NRL-0002 · **Roadmap:** G; issue 900 T02 · **Constitution:** MC-5.1, MC-5.2, MC-8.5, MC-11.2, MC-11.8, MC-12.1, MC-12.2, MC-12.3
+
+## Problem
+
+Issue [900](../issues/900-neural-representation-lab.md) needs a reproducible, narrowly scoped first Rust numerical path. This task carries T02 of the starting plan accepted by the maintainer on 2026-10-25.
+
+## Plan
+
+1. Create a small isolated workspace under nrl with portable numerical crates and host tooling.
+2. Run a CPU forward and one training step, and compile the portable path for the MIND Core target.
+3. Record the backend decision, exact dependencies, FFI and allocation boundaries; distinguish cross-compilation from an OS run.
+
+## Acceptance criteria
+
+- [x] A reproducible host command executes a forward and one finite, measured training step.
+- [x] The portable numerical crates compile without std for x86_64-unknown-none.
+- [x] The ADR records the dependency graph and limitations without claiming a full training framework or native service.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md).
+- [262](../issues/262-model-runtime-on-the-machines-full-hardware.md), APP's model service.
+- [NRL](../docs/nrl/README.md).
+
+## Resolution
+
+- `nrl/Cargo.toml` and its lockfile define the first independent workspace. `nrl-core` and `nrl-repr` are allocation-free no_std crates over explicit buffers; the std host adapter is `nrl-lab`.
+- `docs/nrl/ADR-0001-cpu-backend.md` records the narrow scalar f64 CPU decision, libm 0.2.16, the host-only serde dependencies, source/FFI inspection and alternatives not yet evaluated. Sources and licences are recorded in THIRD_PARTY.md and nrl/NOTICE.
+- The host runner executed forward, gradients and one SGD step in both fixed fixtures; the loss decreased and matched Python. `nrl/reports/cpu-f64-2026-10-25.json` records the run.
+- `cargo build --locked --offline --release -p nrl-repr` passed for x86_64-unknown-none and aarch64-unknown-none-softfloat (using the NRL manifest). These are rlibs, not a linked or running native program.
+- `nrl/README.md` and `nrl/tools/check.sh` give repeat commands. CI wiring is a separate request to KRN in issues/requests-KRN.md; no claim that the existing gate automatically runs this workspace is made. Code landing is pending.

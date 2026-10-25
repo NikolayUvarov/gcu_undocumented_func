@@ -52,3 +52,16 @@ BAR/start control, Realtek boot grants and the ABI 11 transition. This is the
 bounded integration dependency of DRV-0031/0032, not ownership of the remaining
 kernel backlog. No change is sent to the kernel owner's branch. Physical
 MacBook/Ryzen evidence and the deferred ARM gate remain open.
+
+
+## NRL: add the first Rust numerical workspace to the host checks
+
+**From:** NRL / Codex, 2026-10-25 · **For:** [900](900-neural-representation-lab.md), 900-NRL-0003 and 0004 · **Owner to number:** KRN (CI/scripts).
+
+The first independent workspace is under `nrl/`, with portable crates and a host runner. Please add its explicit checks to the appropriate CI/host-test entry points when the NRL branch is integrated:
+
+- `cargo test --manifest-path nrl/Cargo.toml --locked` (includes stored-tensor and independent numerical-gradient tests; no Python or model download).
+- `cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none`.
+- The corresponding portable build for `aarch64-unknown-none-softfloat`, in a suitable build group.
+
+`bash nrl/tools/check.sh` combines those checks and a fresh host demonstration. The workspace is not discovered by the existing host scripts. NRL changes none of the owning track's build/CI scripts itself. A cross-built rlib is not a native OS test; an nnd smoke test remains later work with APP. The recorded first checks are in `nrl/reports/cpu-f64-2026-10-25.json`.

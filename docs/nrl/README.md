@@ -1,8 +1,12 @@
 # Neural Representation Lab (track `NRL`)
 
-**Track:** `NRL`, main tasks 900–949 ([TRACKS.md](../../TRACKS.md)) · **Opened:** 2026-10-23, at the maintainer's request · **Status:** open, no owner yet
+**Track:** `NRL`, main tasks 900–949 ([TRACKS.md](../../TRACKS.md)) · **Opened:** 2026-10-23, at the maintainer's request · **Status:** active; Codex session, `codex/NRL-lab` (the maintainer, 2026-10-25)
 
 An extensible Rust system that inspects, converts, fine-tunes and runs trained neural networks on MIND Core and on a development host. Its first research question is whether spline representations make blocks smaller or faster than plain compression (`pruned`, `svd`) at a bounded loss of quality. A negative answer is a valid result.
+
+## Execution started (2026-10-25)
+
+The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v0.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression.
 
 ## What is here
 

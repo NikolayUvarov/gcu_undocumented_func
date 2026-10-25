@@ -1,0 +1,33 @@
+# 900-NRL-0002 — Specify the first numerical contracts and artifact format — done
+
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** 900-NRL-0001 · **Roadmap:** G; issue 900 T01 · **Constitution:** MC-5.1, MC-5.2, MC-8.5, MC-11.2, MC-11.8, MC-12.1, MC-12.2, MC-12.3
+
+## Problem
+
+Issue [900](../issues/900-neural-representation-lab.md) needs a reproducible, narrowly scoped first Rust numerical path. This task carries T01 of the starting plan accepted by the maintainer on 2026-10-25.
+
+## Plan
+
+1. Specify a bias-free gated block with explicit input/channel/output shapes, row-major f64 tensors and numerical tolerances.
+2. Specify uniform per-channel linear interpolation, fixed grids, linear tails and the derivative convention at knots.
+3. Separate cubic Hermite (900 T03) from the B-spline variant requested by 262; retain both as distinct work.
+4. Specify bounded data-only block artifacts, error outcomes, the host/portable boundary and APP integration.
+
+## Acceptance criteria
+
+- [x] The forward and backward semantics, layouts, limits and errors can be implemented independently.
+- [x] The artifact has an explicit schema version and refuses unknown versions and fields.
+- [x] No Qwen constants, OS authority or unsupported native integration are implicit in shared contracts.
+
+## Related
+
+- [900](../issues/900-neural-representation-lab.md).
+- [262](../issues/262-model-runtime-on-the-machines-full-hardware.md), APP's model service.
+- [NRL](../docs/nrl/README.md).
+
+## Resolution
+
+- `nrl/specs/block-v0.md` defines bias-free gated block semantics, row-major f64 layouts, fixed-grid linear interpolation, tails, knot derivatives, all trainable gradients, MSE and a single SGD step.
+- It defines bounded artifact schema `nrl.block/0`, explicit errors and buffer ownership, version refusal, parser limits and the host/service boundary.
+- Hermite and B-spline requirements remain distinct; this first contract does not close either future cubic representation or full model contracts.
+- Reviewed against the verified Python source and 900/262. This is a narrow specification, not evidence of native execution or model optimization. The remaining T01 contracts for full models are still part of issue 900.
