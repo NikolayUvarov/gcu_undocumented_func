@@ -54,7 +54,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [950](950-our-own-micro-messenger.md) | Our own micro messenger: the protocol `mmp` 1 over HTTPS with SSE, the server `msgd` (a host program), the client `msg` in the console and full screen; end to end later (the maintainer's request) | main task, `COM` | P2 | 000-NET-0047, 000-KRN-0170, 000-NET-0045 | G, D |
 | [262-KRN-0161](262-KRN-0161-large-pages.md) | 2 MiB and 1 GiB pages for a program's large blocks (APP's request, for 262) | `KRN` | P2 | — | A |
 | [263](263-self-diagnosis-and-self-optimization.md) | Self-diagnosis and self-optimization: problems found, reported to the update server or the repository with the owner's leave, fixed through a pull request where the machine has the tools, and the answer followed (the maintainer's request) | main task, `APP` | P2 | stage by stage: 260, 650, `UPD`'s report endpoint | tracks G, C |
-| [900-NRL-0004](900-NRL-0004-first-linear-spline-block.md) | Validate dense and linear-spline gated blocks against the reference | `NRL` / Codex | P1 | 900-NRL-0001, 0002, 0003 | G / 900 T03 (first slice); minimal T04 round trip |
 | [900](900-neural-representation-lab.md) | Neural Representation Lab: an extensible Rust system that inspects, converts, fine-tunes and runs trained networks; five representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`) ported from the Python reference and measured against each other; a ModelAdapter per family, a task profile per metric (the maintainer's handoff) | main task, `NRL` / Codex | P1 | — for T00–T10 on the host; T11: 262's service and native adapter | track G; Article 8 |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
@@ -271,6 +270,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [900-NRL-0004](../issues-done/900-NRL-0004-first-linear-spline-block.done) | Validate dense and linear-spline gated blocks against the reference | NRL branch; scope and verification in the Resolution |
 | [900-NRL-0003](../issues-done/900-NRL-0003-cpu-backend-spike.done) | Select and exercise a narrow portable Rust CPU backend | NRL branch; scope and verification in the Resolution |
 | [900-NRL-0002](../issues-done/900-NRL-0002-initial-contracts.done) | Specify the first numerical contracts and artifact format | NRL branch; scope and verification in the Resolution |
 | [900-NRL-0001](../issues-done/900-NRL-0001-reference-inventory.done) | Inventory and reproduce the reference, and prepare differential tensors | NRL branch; scope and verification in the Resolution |

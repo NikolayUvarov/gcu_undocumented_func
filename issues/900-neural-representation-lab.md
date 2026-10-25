@@ -406,7 +406,7 @@ These names are an interface design, **not commands that exist**. Each operation
 
 ### Starting execution (2026-10-25)
 
-The maintainer assigned NRL to the Codex session (`codex/NRL-lab`). The first tasks are [900-NRL-0001](../issues-done/900-NRL-0001-reference-inventory.done) (T00), [0002](../issues-done/900-NRL-0002-initial-contracts.done) (T01), [0003](../issues-done/900-NRL-0003-cpu-backend-spike.done) (T02), and [0004](900-NRL-0004-first-linear-spline-block.md) (the first linear-spline slice of T03, with a minimal block round trip). These do not complete all five representations, a model adapter or T11. The remaining T-rows will be numbered as their work starts.
+The maintainer assigned NRL to the Codex session (`codex/NRL-lab`). The first tasks are [900-NRL-0001](../issues-done/900-NRL-0001-reference-inventory.done) (T00), [0002](../issues-done/900-NRL-0002-initial-contracts.done) (T01), [0003](../issues-done/900-NRL-0003-cpu-backend-spike.done) (T02), and [0004](../issues-done/900-NRL-0004-first-linear-spline-block.done) (the first linear-spline slice of T03, with a minimal block round trip). These do not complete all five representations, a model adapter or T11. The remaining T-rows will be numbered as their work starts.
 
 ## 15. Acceptance criteria
 
@@ -474,3 +474,9 @@ The first pull request holds a working narrow numerical path, its tests and a cl
 - [178](178-models-on-every-accelerator.md) and [174](174-full-use-of-pc-hardware.md) (the accelerators);
 - [250](250-voice-dictation.md), [251](251-model-cache-and-model-disk.md), [252](252-neural-speech-synthesis.md) (`mind::nn` and its models);
 - [docs/nrl/HANDOFF_RU.md](../docs/nrl/HANDOFF_RU.md) (the original handoff).
+
+## Initial host slice verified (2026-10-25)
+
+On `codex/NRL-lab`, 900-NRL-0001 through 0004 are complete: the unchanged reference passed 64 CPU tests, and the first Rust block profile passed 11 host tests plus two portable release builds. Source and commands are in [NRL's README](../nrl/README.md), [reference inventory](../docs/nrl/reference-inventory.md), and the [CPU report](../nrl/reports/cpu-f64-2026-10-25.json). Code is awaiting the landing queue; these are not guarantees of the native platform.
+
+T00 is complete. T01 has its initial block/artifact contract; full-model contracts remain. T02 has the narrow CPU spike. T03 is only dense and spline-linear so far, and the block round trip is only a small part of T04. Next are channel pruning, cubic Hermite and SVD with differential checks, then model import and the independent feed-forward adapter. APP's nnd integration stays T11. CI wiring is requested from KRN in requests-KRN.md; existing scripts do not discover this workspace automatically yet.
