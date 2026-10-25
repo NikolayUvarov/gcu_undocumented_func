@@ -43,7 +43,6 @@ const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
-const FLOOR: &str = "MIND/FLOOR";
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not been confirmed, the machine would have restarted
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
@@ -162,6 +161,16 @@ impl Updater {
         })
     }
 
+    // Records of another format are not read (351-UPD-0024): said once at start; the next write replaces one.
+    fn say_other_formats(&self) {
+        for path in RECORDS {
+            let Ok(file) = File::open(path) else { continue };
+            let mut data = [0u8; RECORD];
+            if file.size() != RECORD || file.read_at(0, &mut data) != Ok(RECORD) { continue; }
+            if let Some(format) = Record::other_format(&data) { mind::println!("[UPDATER] RECORD {} OF FORMAT {}, NOT READ: WRITE THE DISK AGAIN", path, format); }
+        }
+    }
+
     // A record written whole into its file, in place, and read back.
     fn write_record(&self, (file, record): (usize, Record)) -> Result<(), Error> {
         let data = record.encode();
@@ -171,8 +180,8 @@ impl Updater {
         let mut back = [0u8; RECORD];
         let ok = File::open(RECORDS[file]).is_ok_and(|f| f.read_at(0, &mut back) == Ok(RECORD)) && Record::parse(&back) == Some(record);
         if !ok { return Err(Error::Write); }
-        mind::println!("[UPDATER] RECORD {} SEQUENCE {}: SLOT {}, FALLBACK {}, {} TRIES, {}", RECORDS[file], record.sequence, record.slot as char,
-            if record.fallback == 0 { '-' } else { record.fallback as char }, record.tries, if record.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" });
+        mind::println!("[UPDATER] RECORD {} SEQUENCE {}: SLOT {}, FALLBACK {}, {} TRIES, {}, FLOOR {}", RECORDS[file], record.sequence, record.slot as char,
+            if record.fallback == 0 { '-' } else { record.fallback as char }, record.tries, if record.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, record.floor);
         Ok(())
     }
 
@@ -450,28 +459,19 @@ impl Updater {
         }
     }
 
-    /// The version floor raised in place (351-UPD-0024), as `plan::floor_to` says. An image without `MIND/FLOOR`
-    /// keeps none: the updater may not make the file.
+    /// The version floor raised (351-UPD-0024), as `plan::raise` says: a record of its own, written like the others.
     fn raise_floor(&self) {
         if self.slot == 0 { return; }
-        let Ok(file) = File::open(FLOOR) else { return };
-        let mut data = [0u8; RECORD];
-        let current = (file.size() == RECORD && file.read_at(0, &mut data) == Ok(RECORD)).then(|| slots::parse_floor(&data)).flatten().unwrap_or(0);
-        drop(file);
-        let confirmed = plan::newest(self.records()).is_some_and(|(_, r)| r.slot == self.slot && r.confirmed);
         // The running slot's version as its manifest names it, the one the bootloader compares: never a floor above it.
         let version = File::open(&format!("MIND/{}/MANIFEST", slot_name(self.slot))).ok().filter(|f| f.size() <= MANIFEST_MAX).and_then(|f| {
             let mut text = alloc::vec![0u8; f.size()];
             (f.read_at(0, &mut text) == Ok(text.len()) && mind::sha256::digest(&text) == self.manifest).then(|| plan::manifest_version(&text))
         }).unwrap_or(0);
-        let Some(floor) = plan::floor_to(current, self.minimum, version, confirmed) else { return };
-        let encoded = slots::encode_floor(floor);
-        let written = File::open_mode(FLOOR, MODE_WRITE).is_ok_and(|mut out| out.write_at(0, &encoded) == Ok(RECORD));
-        let mut back = [0u8; RECORD];
-        if written && File::open(FLOOR).is_ok_and(|f| f.read_at(0, &mut back) == Ok(RECORD)) && slots::parse_floor(&back) == Some(floor) {
-            mind::println!("[UPDATER] VERSION FLOOR {} RAISED TO {}: A SLOT BELOW IT IS NOT BOOTED (MC-9.4)", current, floor);
-        } else {
-            mind::println!("[UPDATER] VERSION FLOOR: NOT WRITTEN");
+        let records = self.records();
+        let Some(write) = plan::raise(records, self.slot, self.minimum, version) else { return };
+        match self.write_record(write) {
+            Ok(()) => mind::println!("[UPDATER] VERSION FLOOR {} RAISED TO {}: A SLOT BELOW IT IS NOT BOOTED (MC-9.4)", plan::floor(records), write.1.floor),
+            Err(_) => mind::println!("[UPDATER] VERSION FLOOR: NOT WRITTEN"),
         }
     }
 
@@ -512,10 +512,11 @@ fn main(info: &'static BootInfo) {
         let staged = updater.kept(updater.other(), None, parser.endpoint()).map_or(0, |c| c.version);
         drop(parser);
         updater.staged = if staged > running { staged } else { 0 };
+        updater.say_other_formats();
         let recorded = plan::newest(updater.records());
         mind::println!("[UPDATER] SLOT {}{}, VERSION {}; THE NEWER RECORD: {}", slot_name(slot), if updater.trial { " ON TRIAL" } else { "" },
             if running == 0 { String::from("NOT KNOWN") } else { format!("{}", running) },
-            recorded.map_or(String::from("NONE"), |(_, r)| format!("SLOT {} {}", r.slot as char, if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" })));
+            recorded.map_or(String::from("NONE"), |(_, r)| format!("SLOT {} {}, FLOOR {}", r.slot as char, if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" }, plan::floor(updater.records()))));
         if let Some(channel) = kept { updater.hold(channel, Held::Slot(slot)); }
         updater.raise_floor();
         if updater.trial {
