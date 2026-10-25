@@ -72,7 +72,7 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | `UPD` | Minimum version, expiry, key roles, rotation and revocation, the compromise protocol (MC-9.4, 9.6): split into the eight tasks below |
-| [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) | `UPD`, with `KRN`/`PRT` | The manifest signs its version; boot records (format 2) keep the floor; the bootloader refuses a slot below it (MC-9.4) |
+| [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done) | `UPD`, with `KRN`/`PRT` | The manifest signs its version; boot records (format 2) keep the floor; the bootloader refuses a slot below it (MC-9.4) |
 | [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done) | `UPD` | A device past its metadata's expiry keeps running and refuses to update; `status` and `linkupdate` show it (MC-9.4) |
 | [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | `UPD` | A key file naming each role's keys, signed by a root threshold built into the updater and the bootloader (MC-9.5, 9.6) |
 | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | `UPD` | The highest key-file version kept; root rotation by both thresholds; a revoked key's channels refused (MC-9.5, 9.6) |
