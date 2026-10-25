@@ -406,7 +406,7 @@ These names are an interface design, **not commands that exist**. Each operation
 
 ### Starting execution (2026-10-25)
 
-The maintainer assigned NRL to the Codex session (`codex/NRL-lab`). The first tasks are [900-NRL-0001](900-NRL-0001-reference-inventory.md) (T00), [0002](900-NRL-0002-initial-contracts.md) (T01), [0003](900-NRL-0003-cpu-backend-spike.md) (T02), and [0004](900-NRL-0004-first-linear-spline-block.md) (the first linear-spline slice of T03, with a minimal block round trip). These do not complete all five representations, a model adapter or T11. The remaining T-rows will be numbered as their work starts.
+The maintainer assigned NRL to the Codex session (`codex/NRL-lab`). The first tasks are [900-NRL-0001](../issues-done/900-NRL-0001-reference-inventory.done) (T00), [0002](900-NRL-0002-initial-contracts.md) (T01), [0003](900-NRL-0003-cpu-backend-spike.md) (T02), and [0004](900-NRL-0004-first-linear-spline-block.md) (the first linear-spline slice of T03, with a minimal block round trip). These do not complete all five representations, a model adapter or T11. The remaining T-rows will be numbered as their work starts.
 
 ## 15. Acceptance criteria
 
