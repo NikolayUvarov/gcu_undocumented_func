@@ -1,6 +1,6 @@
 # 351-KRN-0141 — An update through the link: a release put into `data/link/` installed by the updater — done
 
-**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** — · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
+**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
 
 ## Problem
 
