@@ -6,7 +6,7 @@ Asked by the maintainer (2026-10-08): what the limit of rollback protection is a
 
 ## Problem
 
-Every release stays validly signed forever. So a signature alone does not stop anyone from installing an old release with a known hole. 351-UPD-0024 (from 351-UPD-0009) keeps the highest confirmed version and the channel's minimum in the boot records. That stops a network attacker and a stale mirror, but the records lie on the same disk as the slots. Someone with the disk — another OS booted from a stick, or the SSD in another machine — can write an old release and a lower minimum together. The floor has to live where it can only go up.
+Every release stays validly signed forever. So a signature alone does not stop anyone from installing an old release with a known hole. 351-UPD-0024 (from 351-UPD-0009) keeps the channel's minimum in the boot records, the floor below which a release counts as vulnerable. That stops a network attacker and a stale mirror, but the records lie on the same disk as the slots. Someone with the disk — another OS booted from a stick, or the SSD in another machine — can write an old release and a lower minimum together. The floor has to live where it can only go up.
 
 ## Plan
 
