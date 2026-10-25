@@ -58,7 +58,7 @@ python3 scripts/release.py check /srv/mind --channel stable   # on the server, o
 
 ## Setting up a server
 
-Any static web server over the directory serves a channel over HTTPS. The SSH account that publishes needs only write access to that directory. For tests, `scripts/serve_release.py DIR --cert … --key …` serves a directory over TLS 1.3 with a certificate the test gives.
+Any static web server over the directory serves a channel over HTTPS. The project's own server, `httpd`, is planned in main task [110](../../issues/110-our-own-web-server.md): first a host program for Linux, then a MIND Core service. The SSH account that publishes needs only write access to that directory. For tests, `scripts/serve_release.py DIR --cert … --key …` serves a directory over TLS 1.3 with a certificate the test gives.
 
 ## Not provided yet
 

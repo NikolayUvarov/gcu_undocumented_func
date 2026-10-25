@@ -129,6 +129,10 @@ Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`,
   - the accelerators of [178](../issues/178-models-on-every-accelerator.md) come later.
 - **`NRL`** ([900](../issues/900-neural-representation-lab.md), open) is the lab around it: representation, conversion, fine-tuning.
 
+### Our own web server (main task [110](../issues/110-our-own-web-server.md), `NET`)
+
+Added on 2026-10-25 at the maintainer's request: the server side of HTTP, `httpd`, so that the project serves its updates itself. First a host program for Linux over the release directory; then a MIND Core service, with listening sockets in `netstack` and a server role in `tls`; later a static site and a base for `msgd` and for `improve`'s intake (100003).
+
 ## The tracks
 
 | Track | Who | Takes |
