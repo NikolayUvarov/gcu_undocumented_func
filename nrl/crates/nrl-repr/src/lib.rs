@@ -288,4 +288,37 @@ mod tests {
         assert_eq!(silu(1000.0), (1000.0, 1.0));
         assert_eq!(silu(-1000.0).0, 0.0);
     }
+
+    #[test]
+    fn caller_buffer_mismatches_and_arithmetic_overflow_are_errors() {
+        let shape = Shape::new(1, 1, 1).unwrap();
+        let block = Block::new(shape, &[1.0], &[1.0], &[1.0], Activation::Silu).unwrap();
+        assert_eq!(
+            block.forward(&[0.5], &mut [0.0], &mut []),
+            Err(Error::Shape)
+        );
+        assert_eq!(
+            block.forward(&[0.5], &mut [], &mut [0.0; 3]),
+            Err(Error::Shape)
+        );
+        let mut g = [0.0];
+        let mut u = [0.0];
+        let mut d = [0.0];
+        let mut values = [];
+        let mut gradients = Gradients {
+            gate: &mut g,
+            up: &mut u,
+            down: &mut d,
+            values: &mut values,
+        };
+        assert_eq!(
+            block.backward(&[0.5], &[], &mut [0.0], &mut gradients, &mut [0.0; 3]),
+            Err(Error::Shape)
+        );
+        let huge = Block::new(shape, &[f64::MAX], &[1.0], &[1.0], Activation::Silu).unwrap();
+        assert_eq!(
+            huge.forward(&[2.0], &mut [0.0], &mut [0.0; 3]),
+            Err(Error::NonFinite)
+        );
+    }
 }

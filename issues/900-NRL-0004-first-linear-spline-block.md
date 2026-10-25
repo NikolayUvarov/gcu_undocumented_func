@@ -25,3 +25,7 @@ Issue [900](900-neural-representation-lab.md) needs a reproducible, narrowly sco
 - [900](900-neural-representation-lab.md).
 - [262](262-model-runtime-on-the-machines-full-hardware.md), APP's model service.
 - [NRL](../docs/nrl/README.md).
+
+## Progress (2026-10-25)
+
+The first block implementation is in 900-NRL-0003's backend spike. This task adds the stored-reference comparisons, independent finite differences for every input/trainable parameter, knot/tail checks, malformed artifact checks, exact round trips, and explicit buffer/overflow checks. The initial run had ten passing host tests; the final eleven-test check follows staging on fast-test, on the NRL branch only. No acceptance checkbox is closed on the strength of the added test alone.
