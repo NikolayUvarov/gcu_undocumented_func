@@ -41,7 +41,7 @@ The first run on an AMD machine (2026-10-13, `fast-test` 28d9c3d, three boots, `
   - `EFF`, and the session that debugged Wi-Fi on the MacBook Pro, connect `effector485` (MIND Link, [800](800-mind-link.md)) to this machine;
   - that gives a path that does not depend on the network, to debug the wired and the wireless network for the Effector server's work;
   - the maintainer says when it is ready.
-- **The kernel session reboots nothing** and uses no root on this machine without the maintainer's word for that run, recorded in docs/effector.md, section 6. While the machine runs MIND Core it runs no gate (i9 has been offline since 2026-10-24).
+- **Switching to MIND Core** (the maintainer's word, 2026-10-25): the kernel session sets `BootNext` to the stick with `scripts/boot_switch.py` as root and reboots, and uses root for nothing else, once the maintainer says the stick and `effector485` are ready. Each run is recorded in docs/effector.md, section 6. While the machine runs MIND Core it runs no gate: the gates go to i9 and PCU.
 
 ## Acceptance criteria
 

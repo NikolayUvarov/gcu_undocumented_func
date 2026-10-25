@@ -138,13 +138,13 @@ Added on 2026-10-25 at the maintainer's request: the server side of HTTP, `httpd
 | Track | Who | Takes |
 |---|---|---|
 | `KRN`, `NET` | the kernel session | the foundations F; 262-KRN-0161; the grants and slots every client needs, as their requests come |
-| `COM` | **proposed**: communication clients, main tasks 950–999 (the last free block); for the agent the maintainer connects | 950, our own messenger (`mmp`, `msgd`, `msg`); 253, 254 and 255, 261: the protocol modules (IMAP, submission, MIME, the Bot API, MTProto, the HTML reducer), `mail`, `tgtxt` and `www`, their suites and stand-in servers |
-| `AGT` | if a second agent joins: the agent module, working main task 260 (no range needed until it records a main task of its own) | `llm`, `ask` and `agent`; without a second agent, `COM` takes them after `mail` and `tgtxt` |
+| `COM` | **open** (confirmed by the maintainer, 2026-10-25): communication clients, main tasks 950–999; for the agent the maintainer connects | 950, our own messenger (`mmp`, `msgd`, `msg`); 253, 254 and 255, 261: the protocol modules (IMAP, submission, MIME, the Bot API, MTProto, the HTML reducer), `mail`, `tgtxt` and `www`, their suites and stand-in servers |
+| `AGT` | **open** (opened by the maintainer, 2026-10-25): the agent module, main tasks 101000–101999, with 260 moved from `APP`; for the agent the maintainer connects | `llm`, `ask` and `agent` |
 | `APP` | the tools session | the `mind::tui` widgets (a request), `wm`'s window for each program, the shell's commands that start them; 256 and the graphical stage |
 | `NRL` | open: a candidate for another agent | 900, and 262's runtime `nnd` with `APP`'s agreement |
 | `ASR` | the assessing session | fuzzing of the new parsers (MIME, HTML, SSE, the APIs' JSON, MTProto's TL), the threat model of programs that hold the user's secrets |
 
-**The handover.** 253, 254, 255, 260 and 261 were recorded by `APP`, and none is started. The maintainer decides whether they move to `COM` (and 260 to `AGT`). `APP` is told in a message on `internal-dev-messages`.
+**The handover (the maintainer's word, 2026-10-25).** 253, 254, 255 and 261, recorded by `APP` and not started, move to `COM`; 260 moves to `AGT`. `APP` is told in a message on `internal-dev-messages`.
 
 ## The order
 
@@ -166,7 +166,7 @@ Added on 2026-10-25 at the maintainer's request: the server side of HTTP, `httpd
 
 Fill in [AGENTS.md](../AGENTS.md), section 7, with:
 
-- **Track:** `COM`, communication clients. **Main tasks:** 950 (the messenger, its own), 253, 254, 255, 261 (and 260 unless `AGT` is opened), new ones from 951.
+- **Track:** `COM`, communication clients. **Main tasks:** 950 (the messenger, its own), 253, 254, 255, 261, new ones from 951.
 - **Counter:** from 0001.
 - **Directories:**
   - new programs `mail/`, `tgtxt/`, `www/`, `msg/`; the protocol crate `mmp/` and the server `tools/msgd/`;
@@ -179,3 +179,23 @@ Fill in [AGENTS.md](../AGENTS.md), section 7, with:
   - F from `KRN` and `NET`: tokens come from a file until 000-NET-0045 lands;
   - the `mind::tui` widgets from `APP`;
   - flow grants from `NET`.
+
+## The brief for the agent that takes `AGT`
+
+Fill in [AGENTS.md](../AGENTS.md), section 7, with:
+
+- **Track:** `AGT`, the agent module. **Main tasks:** 260 (moved from `APP`), new ones from 101000.
+- **Counter:** from 0001.
+- **Branch:** `<tool>/AGT-agents`.
+- **Directories:**
+  - the `libmind` module `llm`;
+  - the programs `ask/` and `agent/`;
+  - `docs/agents/`;
+  - stand-in provider servers under `tests/` (`tests/llm_stub.py`), their suites in `tests/qemu_smoke.py` and their groups in `scripts/ci_local.sh`.
+- **First:** `llm` with one wire format and its stand-in server, then `ask`; `agent` after them (260's stages).
+- **What it needs from other tracks:**
+  - HTTP with SSE and redirects from `NET` (000-NET-0047); keys from `keystore` (000-NET-0045), from a file until then;
+  - flow grants for the providers' hosts from `NET`;
+  - its data directory from `KRN` (000-KRN-0170);
+  - the `mind::tui` widgets from `APP`, for `agent`'s screen.
+

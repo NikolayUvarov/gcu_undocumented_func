@@ -239,6 +239,7 @@ Machines join, leave and change: the maintainer adds them and may move an agent 
 ## 6. Changes made to the machines
 
 | Date | Machine | Change | By, for |
+| 2026-10-25 | `un-rizen_2a8b108d5593` | **A permission, no change made yet.** The kernel session may switch this machine to MIND Core: root only to set `BootNext` to the MIND Core stick with `scripts/boot_switch.py` (000-KRN-0124), then the reboot; the next boot returns to Linux. Only once the maintainer says the stick and `effector485` are ready. The second NVMe disk (04:00.0, someone else's Windows disk) is never written. Each run gets a row of its own here | the maintainer's word, for 213 (the network first) |
 |---|---|---|---|
 | 2026-10-09 | `PCU_585240b00e8a` | Build environment for `un`: `git`, `build-essential`, `curl`, `pkg-config`, QEMU 6.2 (`qemu-system-x86`, `qemu-system-arm`, `qemu-utils`), OVMF, AAVMF, `ipxe-qemu`, `dosfstools`, `mtools`, `swtpm`, `swtpm-tools`, `sbsigntool`, `ffmpeg`; rustup in `~un/.cargo`; the kernel track's clone | KRN, at the maintainer's request |
 | 2026-10-10 | `PCU_585240b00e8a` | The Ubuntu Cloud Archive (caracal) added for QEMU 8.2 and removed again: it has no QEMU for 22.04 | KRN, at the maintainer's request |

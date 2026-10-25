@@ -1,6 +1,6 @@
 # 253 — A text messenger: Telegram through the Bot API and the user API, and WhatsApp where an API allows it
 
-**Type:** main task, tools · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open · **Blocked by:** stage by stage, below · **Roadmap:** track G (user services), track D (Babel: session parsers with minimal authority) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Type:** main task, tools · **Owner:** `COM` track (moved from `APP` at the maintainer's word, 2026-10-25) · **Priority:** P2 · **Status:** open · **Blocked by:** stage by stage, below · **Roadmap:** track G (user services), track D (Babel: session parsers with minimal authority) · **Constitution:** MC-3.1, MC-3.8, MC-10.3, MC-11.4, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-23, at the maintainer's request: a text client for Telegram, with the bot and the user API, and WhatsApp if an API is available.
 

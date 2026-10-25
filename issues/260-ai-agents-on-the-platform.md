@@ -1,6 +1,6 @@
 # 260 — AI agents on the platform: a terminal coding and operating agent that works as Claude Code and Codex do, over the providers' APIs
 
-**Type:** main task, tools · **Owner:** tools track (`APP`) · **Priority:** P1 · **Status:** open · **Blocked by:** where the API key lives (as in [253](253-telegram-and-whatsapp-text-client.md), stage 0); a flow grant for the provider's host (`NET`'s broker, as today) · **Roadmap:** track G (user services); the cognitive plane (Article 8) · **Constitution:** MC-3.1, MC-3.8, MC-3.9, MC-3.11, MC-8.1, MC-10.2, MC-10.3, MC-11.4, MC-11.5, MC-11.9, MC-12.1, MC-12.3
+**Type:** main task, tools · **Owner:** `AGT` track (moved from `APP` at the maintainer's word, 2026-10-25) · **Priority:** P1 · **Status:** open · **Blocked by:** where the API key lives (as in [253](253-telegram-and-whatsapp-text-client.md), stage 0); a flow grant for the provider's host (`NET`'s broker, as today) · **Roadmap:** track G (user services); the cognitive plane (Article 8) · **Constitution:** MC-3.1, MC-3.8, MC-3.9, MC-3.11, MC-8.1, MC-10.2, MC-10.3, MC-11.4, MC-11.5, MC-11.9, MC-12.1, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-23, at the maintainer's request: support for AI agents on the platform, working as Codex and Claude do, through their APIs.
 
