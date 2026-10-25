@@ -4,6 +4,10 @@
 
 An extensible Rust system that inspects, converts, fine-tunes and runs trained neural networks on MIND Core and on a development host. Its first research question is whether spline representations make blocks smaller or faster than plain compression (`pruned`, `svd`) at a bounded loss of quality. A negative answer is a valid result.
 
+## Execution started (2026-10-25)
+
+The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v0.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression.
+
 ## What is here
 
 - **The statement:** [issues/900-neural-representation-lab.md](../../issues/900-neural-representation-lab.md), in English. It holds:

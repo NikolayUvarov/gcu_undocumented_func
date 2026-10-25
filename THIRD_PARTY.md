@@ -14,7 +14,7 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `hwdocs/boards/rpi4b.board` | Transcribed from "Raspberry Pi 4 Model B Reduced Schematics" (Raspberry Pi Ltd, RP-008345-DS-1), connector J8: which GPIO is at which header position | as above | as above |
 | `hwdocs/socs/pl061.pins` | Arm's "PrimeCell GPIO (PL061) Technical Reference Manual" (DDI 0190B): eight pins, no multiplexing | as above | as above |
 | `wifi/src/countries.rs` | The two-letter codes and usual English names of tzdata 2026b's `iso3166.tab` (ISO 3166-1 alpha-2, as of ISO/TC 46 N1127), converted to a table | **public domain**, as the file says | Readable names for the station's country codes in `wifi` (550-APP-0082); embedded in `wifi.elf` |
-| `nrl/reference/qwen-spline-lab-v0.1.0.zip` | Qwen Spline Lab v0.1.0, a Python/PyTorch prototype of spline and low-rank representations of a Qwen3 model's MLP blocks, Copyright (c) 2026 Qwen Spline Lab contributors; given by the maintainer on 2026-10-23 as the reference of the track `NRL` ([900](issues/900-neural-representation-lab.md)) | **MIT** (its own `LICENSE` inside the archive) | Kept unchanged, SHA-256 `5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25`; no model weights and no third-party code inside (its `docs/SOURCES.md`); not built, not run and not copied into any image |
+| `nrl/reference/qwen-spline-lab-v0.1.0.zip` | Qwen Spline Lab v0.1.0, a Python/PyTorch prototype of spline and low-rank representations of a Qwen3 model's MLP blocks, Copyright (c) 2026 Qwen Spline Lab contributors; given by the maintainer on 2026-10-23 as the reference of the track `NRL` ([900](issues/900-neural-representation-lab.md)) | **MIT** (its own `LICENSE` inside the archive) | Kept unchanged, SHA-256 `5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25`; no model weights and no third-party code inside (its `docs/SOURCES.md`); not built or copied into any image; explicitly reproduced by NRL's host tools (900-NRL-0001), with generated tensors and a numerical port attributed in `nrl/NOTICE` |
 
 Code adapted from another project:
 
@@ -43,6 +43,11 @@ The [RTL8852BE serial H2C notes](hwdocs/rtl8852be-h2c-runtime.md) also compare p
 
 | Crate | Used by | Licence |
 |---|---|---|
+| `serde`, `serde_core`, `serde_derive` 1.0.229; `serde_json` 1.0.151 | NRL host-only block files and reports; [serde](https://github.com/serde-rs/serde), [serde_json](https://github.com/serde-rs/json); exact versions/checksums in `nrl/Cargo.lock` | MIT OR Apache-2.0 |
+| `proc-macro2` 1.0.107, `quote` 1.0.47, `syn` 3.0.6, `itoa` 1.0.18 | NRL host serialization/derive dependencies; [dtolnay](https://github.com/dtolnay); exact versions/checksums in `nrl/Cargo.lock` | MIT OR Apache-2.0 |
+| `unicode-ident` 1.0.27 | NRL host derive dependency; [source](https://github.com/dtolnay/unicode-ident) | (MIT OR Apache-2.0) AND Unicode-3.0 |
+| `memchr` 2.8.3 | NRL host JSON dependency; [source](https://github.com/BurntSushi/memchr) | Unlicense OR MIT |
+| `zmij` 1.0.23 | NRL host JSON float conversion; [source](https://github.com/dtolnay/zmij) | MIT |
 | `uefi` 0.27, `uefi-raw`, `uefi-macros` | `bootloader` | MPL-2.0 |
 | `linked_list_allocator` 0.10, `spinning_top`, `lock_api`, `scopeguard` | `kernel` | MIT OR Apache-2.0 |
 | `smoltcp` 0.14 (TCP/IP), `managed` 0.8 | `netstack` | 0BSD |
@@ -57,7 +62,7 @@ The [RTL8852BE serial H2C notes](hwdocs/rtl8852be-h2c-runtime.md) also compare p
 | RustCrypto: `sha1`, `pbkdf2`, `aes-kw`, `ccm` | `wpa` (WPA2-PSK for the 802.11 station, 550-NET-0016; through it also `wlan`, and `keystore` for the remembered networks, 550-NET-0024), with `aes`, `hmac`, `aead`, `cipher`, `ctr`, `inout`, `digest`, `block-buffer`, `crypto-common`, `cpufeatures` (above), `subtle`, `generic-array`, `typenum`, `cfg-if`, `version_check` (below), and `libc` in its host tests only | MIT OR Apache-2.0 |
 | `curve25519-dalek` 4, `x25519-dalek` 2, `ed25519-dalek` 2, `subtle` 2 | `tls`, `keystore`, `ssh` (the SSH client's key exchange and host key, 351-NET-0026, in the SSH service `ssh_service`, 351-NET-0027); `bootloader` and `updater` (`curve25519-dalek`, `ed25519-dalek`, `subtle`: manifest and release verification); `apppkg` (the same, for signed application packages, 750-UPD-0019), and through it `loader` (its check of an installed application, 750-KRN-0169) | **BSD-3-Clause** ([text](LICENSES/BSD-3-Clause-dalek.txt)) |
 | `num-bigint-dig`, `num-integer`, `num-iter`, `num-traits`, `rand`, `rand_chacha`, `rand_core`, `ppv-lite86`, `lazy_static`, `once_cell`, `smallvec`, `typenum`, `zerocopy` (also BSD-2-Clause) | `tls` (through `rsa` and `rustls`) | MIT OR Apache-2.0 |
-| `generic-array`, `spin`, `libm` | `tls` (through the RustCrypto crates and `rsa`); `generic-array` also `keystore`, `bootloader`, `updater` and `loader` (750-KRN-0169) | MIT |
+| `generic-array`, `spin`, `libm` | `tls` (through the RustCrypto crates and `rsa`); `generic-array` also `keystore`, `bootloader`, `updater` and `loader` (750-KRN-0169); `libm` 0.2.16 also `nrl-repr` (900-NRL-0003) | MIT |
 | `curve25519-dalek-derive`, `typenum` (also `tls` above); `fiat-crypto` (in the lock files, not compiled: only for the `fiat` backend; also BSD-1-Clause) | `tls`, `keystore`, `bootloader`, `updater`, `loader` (through `curve25519-dalek` and `generic-array`) | MIT OR Apache-2.0 |
 | `rustc_version`, `semver`, `version_check` | build time only (build scripts of `curve25519-dalek` and `generic-array`) | MIT OR Apache-2.0 |
 | `ucs2` 0.3 | `bootloader` (through `uefi`) | MPL-2.0 |
