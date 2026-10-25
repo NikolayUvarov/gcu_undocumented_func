@@ -78,9 +78,9 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             let refused = ipc(mb, abi::SYSCALL_CAP_MINT, abi::SLOT_INIT, abi::CAP_WRITE as usize, [0, 0, 0x44, 0]) == abi::ERR_INVALID;
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if refused { 8 } else { 9 }, 0]) != 0 { fail(); }
         }
-        // Mode 9 (000-KRN-0104): mints from the endpoint it got, dropping each, until its owner's revocation removes it;
+        // Mode 20 (000-KRN-0104): mints from the endpoint it got, dropping each, until its owner's revocation removes it;
         // then sends how many it made and how many were refused while the revocation ran.
-        9 => {
+        20 => {
             if got_cap != 1 || ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 6, 0]) != 0 { fail(); }
             let (mut made, mut refused) = (0usize, 0usize);
             loop {
@@ -574,7 +574,7 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 let root = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
                 spawn_child(mb, endpoint);
-                greet(mb, endpoint, 9, root, abi::CAP_WRITE as usize); // the root's first child: the walk removes it last
+                greet(mb, endpoint, 20, root, abi::CAP_WRITE as usize); // the root's first child: the walk removes it last
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
                 for _ in 0..3000 {
                     (*mb).msg = [0; 4];
