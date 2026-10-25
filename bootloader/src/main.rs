@@ -323,6 +323,31 @@ fn write_record(root: &mut uefi::proto::media::file::Directory, name: &str, data
 }
 
 const RECORD_FILES: [&str; 2] = ["MIND\\BOOT0", "MIND\\BOOT1"];
+const FLOOR_FILE: &str = "MIND\\FLOOR";
+
+// The version floor (351-UPD-0024): 0 without the file; a damaged one is said and counts as 0.
+fn version_floor(root: &mut uefi::proto::media::file::Directory) -> u64 {
+    let mut data = [0u8; slots::RECORD + 1];
+    match read_file(root, "", FLOOR_FILE, &mut data) {
+        Err("file not found") => 0,
+        Ok(data) if slots::parse_floor(data).is_some() => slots::parse_floor(data).unwrap_or(0),
+        _ => { let _ = writeln!(Serial, "\r\nBOOT: {} DAMAGED, IGNORED\r", FLOOR_FILE); 0 }
+    }
+}
+
+// A slot whose signed manifest names a version below the floor is not booted (351-UPD-0024).
+fn at_or_above(root: &mut uefi::proto::media::file::Directory, dir: &str, floor: u64, manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
+    if floor == 0 { return Ok(()); }
+    let mut signature = [0u8; 128];
+    let signature = read_file(root, dir, "MANIFEST.SIG", &mut signature).map_err(|e| ("MANIFEST.SIG", e))?;
+    let text = read_file(root, dir, "MANIFEST", manifest_buf).map_err(|e| ("MANIFEST", e))?;
+    let version = verify::Manifest::verified(text, signature).map_err(|e| ("MANIFEST", e))?.version();
+    if version < floor {
+        let _ = writeln!(Serial, "\r\nBOOT: {}: VERSION {} BELOW THE FLOOR {}\r", dir, version, floor);
+        return Err(("MANIFEST", "below the version floor (MC-9.4)"));
+    }
+    Ok(())
+}
 fn slot_dir(slot: u8) -> &'static str { if slot == b'A' { "MIND\\A\\" } else { "MIND\\B\\" } }
 
 // The loader on this processor: as a manifest lists it (the one at EFI/BOOT/), and its name in a slot (351-UPD-0010).
@@ -514,11 +539,14 @@ fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uef
         }
     }
     let own = own_digest(services, image, root, file_buf);
+    let floor = version_floor(root);
+    if floor > 0 { let _ = writeln!(Serial, "BOOT: VERSION FLOOR {}\r", floor); }
     let mut last = ("boot volume", "no slot to boot");
     for (k, &slot) in order.iter().enumerate() {
         if slot == 0 { continue; }
         let trial = k == 0 && written.is_some();
-        let set = chain(services, image, root, Chained { slot, trial, safe }, own, file_buf, manifest_buf)
+        let set = at_or_above(root, slot_dir(slot), floor, manifest_buf)
+            .and_then(|()| chain(services, image, root, Chained { slot, trial, safe }, own, file_buf, manifest_buf))
             .and_then(|()| load_set(services, root, slot_dir(slot), file_buf, manifest_buf));
         match set {
             Ok((entry, programs, digest, launch)) => return Some(Ok((entry, programs, slot, trial, digest, launch))),

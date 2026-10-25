@@ -14,7 +14,8 @@ Server layout:
 
 Usage:
     release.py stage VERSION OUT [--arch x86_64=usb_root] [--arch aarch64=aarch64_root]
-    release.py publish STAGED DEST [--channel stable] [--minimum N] [--days 30]   (DEST: a directory or host:dir)
+    release.py publish STAGED DEST [--channel stable] [--minimum N] [--days 30]   (DEST: a directory or host:dir; the
+                                                 minimum stays the published channel's, else 1: raise it only for a fix)
     release.py check DEST [--channel stable] [--now ISO-8601]
     release.py --public                     the public test release key
 
@@ -76,6 +77,9 @@ def stage(version, out, volumes, boot_public=None):
         if reason:
             raise ReleaseError(f"{arch}: {reason}")
         text = (volume / "MANIFEST").read_bytes()
+        # The boot key vouches for the version, which the bootloader's floor reads (351-UPD-0024).
+        if sm.manifest_version(text) != version:
+            raise ReleaseError(f"{arch}: the manifest names version {sm.manifest_version(text)}, not {version}: sign it with --version {version}")
         where = out / "releases" / str(version) / arch
         where.mkdir(parents=True, exist_ok=False)
         shutil.copyfile(volume / "MANIFEST", where / "MANIFEST")
@@ -198,6 +202,9 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
         if c is None:
             raise ReleaseError(f"channels/{channel} on the server: {why}")
         published = c["version"]
+    # The minimum is the floor below which a device boots nothing (351-UPD-0024): it stays as published unless the
+    # publisher raises it for a fix, so that an ordinary release can still be rolled back from.
+    carried = c["minimum"] if current is not None else 1
     if published >= version:
         raise ReleaseError(f"version {version} is not above the published {published}")
     if target.read(f"releases/{version}/x86_64/MANIFEST") or target.read(f"releases/{version}/aarch64/MANIFEST"):
@@ -205,7 +212,7 @@ def publish(staged, dest, channel="stable", minimum=None, days=30, seed=None, no
     manifests = {arch.name: hashlib.sha256((arch / "MANIFEST").read_bytes()).hexdigest() for arch in sorted((staged / "releases" / str(version)).iterdir())}
     now = now or datetime.datetime.now(datetime.timezone.utc)
     expires = (now + datetime.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    body = channel_bytes(channel, version, minimum or version, expires, manifests)
+    body = channel_bytes(channel, version, minimum or carried, expires, manifests)
     signature = sm.sign(seed or release_seed(), body)
     target.put_tree(staged / "blobs", "blobs", replace=False)
     target.put_tree(staged / "releases" / str(version), f"releases/{version}", replace=False)

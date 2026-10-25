@@ -43,6 +43,7 @@ const LOADER: &str = "EFI/BOOT/BOOTX64.EFI";
 const LOADER: &str = "EFI/BOOT/BOOTAA64.EFI";
 const CONFIG: &str = "update.txt";
 const RECORDS: [&str; 2] = ["MIND/BOOT0", "MIND/BOOT1"];
+const FLOOR: &str = "MIND/FLOOR";
 const PARSE: Endpoint = Endpoint(SLOT_PARSE);
 const MARGIN_MS: usize = 5000; // past the kernel's deadline: had the trial not been confirmed, the machine would have restarted
 const ASK_MS: usize = 1000; // while a trial waits, init is asked this often how the boot went (init.wit 1.4, 351-UPD-0021)
@@ -235,6 +236,7 @@ impl Updater {
         // A clock that cannot be read cannot show the channel current (MC-9.4: expiry handled by a set policy).
         if expired(&channel) { return Err(Error::Expired); }
         self.minimum = self.minimum.max(channel.minimum);
+        self.raise_floor();
         Ok((channel, bytes))
     }
 
@@ -441,10 +443,35 @@ impl Updater {
     fn confirm(&mut self, why: &str) {
         match plan::confirm(self.records(), self.slot) {
             Some(write) => match self.write_record(write) {
-                Ok(()) => mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why),
+                Ok(()) => { mind::println!("[UPDATER] SLOT {} CONFIRMED ON THE DISK: {}", slot_name(self.slot), why); self.raise_floor(); }
                 Err(error) => { let _ = self.fail::<()>("confirm", error); }
             },
             None => mind::println!("[UPDATER] SLOT {}: THE RECORD NEEDS NO CONFIRMATION", slot_name(self.slot)),
+        }
+    }
+
+    /// The version floor raised in place (351-UPD-0024), as `plan::floor_to` says. An image without `MIND/FLOOR`
+    /// keeps none: the updater may not make the file.
+    fn raise_floor(&self) {
+        if self.slot == 0 { return; }
+        let Ok(file) = File::open(FLOOR) else { return };
+        let mut data = [0u8; RECORD];
+        let current = (file.size() == RECORD && file.read_at(0, &mut data) == Ok(RECORD)).then(|| slots::parse_floor(&data)).flatten().unwrap_or(0);
+        drop(file);
+        let confirmed = plan::newest(self.records()).is_some_and(|(_, r)| r.slot == self.slot && r.confirmed);
+        // The running slot's version as its manifest names it, the one the bootloader compares: never a floor above it.
+        let version = File::open(&format!("MIND/{}/MANIFEST", slot_name(self.slot))).ok().filter(|f| f.size() <= MANIFEST_MAX).and_then(|f| {
+            let mut text = alloc::vec![0u8; f.size()];
+            (f.read_at(0, &mut text) == Ok(text.len()) && mind::sha256::digest(&text) == self.manifest).then(|| plan::manifest_version(&text))
+        }).unwrap_or(0);
+        let Some(floor) = plan::floor_to(current, self.minimum, version, confirmed) else { return };
+        let encoded = slots::encode_floor(floor);
+        let written = File::open_mode(FLOOR, MODE_WRITE).is_ok_and(|mut out| out.write_at(0, &encoded) == Ok(RECORD));
+        let mut back = [0u8; RECORD];
+        if written && File::open(FLOOR).is_ok_and(|f| f.read_at(0, &mut back) == Ok(RECORD)) && slots::parse_floor(&back) == Some(floor) {
+            mind::println!("[UPDATER] VERSION FLOOR {} RAISED TO {}: A SLOT BELOW IT IS NOT BOOTED (MC-9.4)", current, floor);
+        } else {
+            mind::println!("[UPDATER] VERSION FLOOR: NOT WRITTEN");
         }
     }
 
@@ -490,6 +517,7 @@ fn main(info: &'static BootInfo) {
             if running == 0 { String::from("NOT KNOWN") } else { format!("{}", running) },
             recorded.map_or(String::from("NONE"), |(_, r)| format!("SLOT {} {}", r.slot as char, if r.confirmed { "CONFIRMED" } else { "NOT CONFIRMED" })));
         if let Some(channel) = kept { updater.hold(channel, Held::Slot(slot)); }
+        updater.raise_floor();
         if updater.trial {
             let seconds = if info.boot_slot.deadline_s == 0 { TRIAL_DEADLINE_S } else { info.boot_slot.deadline_s } as usize;
             let at = seconds * 1000 + MARGIN_MS;

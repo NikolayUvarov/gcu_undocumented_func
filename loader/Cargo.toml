@@ -7,6 +7,8 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 [dependencies]
 libmind = { path = "../libmind" }
+# The check of an installed application (750-KRN-0169), without a heap.
+apppkg = { path = "../apppkg", default-features = false }
 
 [profile.release]
 panic = "abort"

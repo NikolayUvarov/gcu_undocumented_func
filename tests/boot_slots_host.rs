@@ -3,7 +3,7 @@
 #[path = "../bootloader/src/slots.rs"]
 mod slots;
 
-use slots::{crc32, plan, spent, Plan, Record, RECORD, SEQUENCE_LAST};
+use slots::{crc32, encode_floor, parse_floor, plan, spent, Plan, Record, RECORD, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
     Record { sequence, slot, fallback, tries, confirmed }
@@ -114,4 +114,20 @@ fn a_sequence_that_cannot_count_down_is_refused() {
     let (file, written) = plan([Some(edge), None]).write.unwrap();
     assert_eq!((file, written.sequence), (1, SEQUENCE_LAST + 1));
     assert_eq!(spent((file, written)).1.sequence, u64::MAX);
+}
+
+#[test]
+fn the_version_floor_round_trips_and_a_damaged_one_is_refused() {
+    // 351-UPD-0024: MIND/FLOOR, beside the records; the bootloader reads a damaged one as no floor and says so.
+    for floor in [0, 1, 6, u64::MAX] { assert_eq!(parse_floor(&encode_floor(floor)), Some(floor)); }
+    let data = encode_floor(6);
+    for bit in 0..RECORD * 8 {
+        let mut flipped = data;
+        flipped[bit / 8] ^= 1 << (bit % 8);
+        assert_eq!(parse_floor(&flipped), None, "bit {}", bit);
+    }
+    assert_eq!(parse_floor(&data[..RECORD - 1]), None);
+    // A boot record is no floor, and a floor no record.
+    assert_eq!(parse_floor(&rec(1, b'A', 0, 0, true).encode()), None);
+    assert_eq!(Record::parse(&data), None);
 }

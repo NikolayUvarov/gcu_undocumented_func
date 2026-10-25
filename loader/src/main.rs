@@ -88,16 +88,92 @@ fn debug_mode() -> bool {
 // A file error as the loader reports it: a drive that does not answer stays ERR_IO, not an invalid program (211-KRN-0050).
 fn file_error(error: fs::Error) -> Error { if error == fs::Error::Io { Error::Other(ERR_IO) } else { error.into() } }
 
+// Applications installed under data/apps/ (750-KRN-0169, 750-UPD-0019): only the version `data/apps/<name>/current`
+// names runs, and only as its signed MANIFEST lists it under a key the owner trusts for that name.
+const APPS: &str = "data/apps/"; // mind::effector::APPS_DIR and its separator
+const _: () = assert!(APPS.len() == mind::effector::APPS_DIR.len() + 1);
+#[cfg(target_arch = "x86_64")] const APP_ARCH: apppkg::Arch = apppkg::Arch::X86_64;
+#[cfg(target_arch = "aarch64")] const APP_ARCH: apppkg::Arch = apppkg::Arch::Aarch64;
+const APP_KEYS: usize = 16; // trusted keys taken for one name
+
+// An installed program: its application's name, its file in the package, and the version's directory.
+struct Installed { name: FixedBuf<32>, file: FixedBuf<64>, dir: FixedBuf<64>, version: u64 }
+
+fn refused(path: &str, why: &str) -> Error { mind::println!("[LOADER] {}: NOT RUN: {}", path, why); Error::Rights }
+
+// What a path under data/apps/ stands for: `<name>/<file>` is the current version's, `<name>/<version>/<file>` must be it.
+fn installed(path: &str) -> Result<Option<Installed>, Error> {
+    let Some(rest) = path.strip_prefix(APPS) else { return Ok(None) };
+    let (name, rest) = rest.split_once('/').ok_or_else(|| refused(path, "NOT data/apps/<name>/<file>"))?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (version, file) = match rest.split_once('/') { Some((v, f)) if digits(v) => (Some(v), f), _ => (None, rest) };
+    let name_ok = !name.is_empty() && name.len() <= apppkg::NAME_MAX && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    if !name_ok || file.is_empty() || file.split('/').any(|part| part.is_empty() || part == "." || part == "..") {
+        return Err(refused(path, "NOT data/apps/<name>/<file>"));
+    }
+    let mut current_path = FixedBuf::<64>::new();
+    let _ = write!(current_path, "{}{}/current", APPS, name);
+    let mut text = [0u8; 24];
+    let read = File::open(current_path.as_str()).ok().and_then(|f| f.read_at(0, &mut text).ok()).unwrap_or(0);
+    let current = core::str::from_utf8(&text[..read]).unwrap_or("").trim();
+    let number = current.parse::<u64>().ok().filter(|_| digits(current)).ok_or_else(|| refused(path, "NO current VERSION"))?;
+    if version.is_some_and(|v| v != current) { return Err(refused(path, "NOT THE CURRENT VERSION")); }
+    if APPS.len() + name.len() + current.len() + file.len() + 2 > 63 { return Err(refused(path, "PATH TOO LONG")); }
+    let mut app = Installed { name: FixedBuf::new(), file: FixedBuf::new(), dir: FixedBuf::new(), version: number };
+    let _ = (write!(app.name, "{}", name), write!(app.file, "{}", file), write!(app.dir, "{}{}/{}/", APPS, name, current));
+    Ok(Some(app))
+}
+
+// A whole file of at most `max` bytes into pages, after `before` (the signed prefix); None if it cannot be read whole.
+fn read_whole(path: &str, max: usize, before: &[u8]) -> Option<(Pages, usize)> {
+    let file = File::open(path).ok()?;
+    let size = file.size();
+    if size == 0 || size > max { return None; }
+    let mut pages = Pages::new(before.len() + size)?;
+    pages.as_mut_slice()[..before.len()].copy_from_slice(before);
+    (file.read_at(0, &mut pages.as_mut_slice()[before.len()..before.len() + size]).ok()? == size).then_some((pages, before.len() + size))
+}
+
+// The check before an installed program runs: its MANIFEST signed by a key the owner's policy trusts for its name, of
+// this architecture and the current version, the program as its file line lists it, and no more asked than the line says.
+fn check_installed(path: &str, app: &Installed, image: &[u8], flags: u32, memory: u32) -> Result<(), Error> {
+    let at = |name: &str| { let mut p = FixedBuf::<64>::new(); let _ = write!(p, "{}{}", app.dir.as_str(), name); p };
+    let mut signature = [0u8; 64];
+    let signed_ok = File::open(at("MANIFEST.SIG").as_str()).ok().filter(|f| f.size() == 64).and_then(|f| f.read_at(0, &mut signature).ok()) == Some(64);
+    if !signed_ok { return Err(refused(path, "NO MANIFEST.SIG OF 64 BYTES")); }
+    let (signed, length) = read_whole(at("MANIFEST").as_str(), apppkg::MANIFEST_MAX, apppkg::PREFIX).ok_or_else(|| refused(path, "NO MANIFEST"))?;
+    // The owner's policy, read whole or not at all: a policy that does not parse trusts no key.
+    let policy = read_whole(mind::effector::POLICY_FILE, mind::effector::policy::FILE_MAX, &[])
+        .and_then(|(pages, n)| mind::effector::policy::Policy::parse(&pages.as_slice()[..n]).ok())
+        .ok_or_else(|| refused(path, "THE OWNER'S POLICY CANNOT BE READ: NO KEY IS TRUSTED"))?;
+    let mut trusted = [apppkg::Trusted { key: [0; 32], name: app.name.as_str() }; APP_KEYS];
+    let mut count = 0;
+    for key in policy.keys_for(app.name.as_str()).take(APP_KEYS) { trusted[count].key = *key; count += 1; }
+    let manifest = apppkg::verify_prefixed(&signed.as_slice()[..length], &signature, &trusted[..count], APP_ARCH, u64::MAX, None, false).map_err(|e| {
+        let mut why = FixedBuf::<48>::new();
+        let _ = write!(why, "MANIFEST REFUSED ({:?})", e);
+        refused(path, why.as_str())
+    })?;
+    if manifest.name != app.name.as_str() || manifest.version != app.version { return Err(refused(path, "MANIFEST OF ANOTHER NAME OR VERSION")); }
+    let line = manifest.files().find(|f| f.path == app.file.as_str()).ok_or_else(|| refused(path, "NOT IN ITS MANIFEST"))?;
+    if !line.matches(image) { return Err(refused(path, "NOT AS ITS MANIFEST LISTS IT")); }
+    if flags & !line.requests != 0 || memory as u64 > line.memory { return Err(refused(path, "ASKS FOR MORE THAN ITS MANIFEST LINE")); }
+    Ok(())
+}
+
 // The program file of `name` and its task name; boot services and the kernel are not applications. A bare name is the
-// booted slot's when that slot holds applications (351-KRN-0151); a path names its file as it is.
-fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
+// booted slot's when that slot holds applications (351-KRN-0151); a path names its file as it is, an installed
+// application's (data/apps/) the current version's.
+fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>, Option<Installed>), Error> {
     let mut path = FixedBuf::<64>::new();
     if !name.contains(&b'/') { let _ = write!(path, "{}", apps_dir()); }
     path_for(name, &mut path)?;
+    let app = installed(path.as_str())?;
+    if let Some(app) = &app { path = FixedBuf::new(); let _ = write!(path, "{}{}", app.dir.as_str(), app.file.as_str()); }
     let task = task_name(path.as_bytes());
     // Services are started by init from bootloader images; the kernel itself is not runnable as a program.
     if task.as_bytes() == b"kernel" || BOOT_SERVICES.iter().any(|s| s.as_bytes() == task.as_bytes()) { return Err(Error::NotFound); }
-    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?, task))
+    Ok((File::open(core::str::from_utf8(path.as_bytes()).unwrap()).map_err(file_error)?, task, app))
 }
 
 // Starts `name` with the standard client endpoints and the capabilities `extra` (handles in this task, moved into the
@@ -106,9 +182,10 @@ fn open(name: &[u8]) -> Result<(File, FixedBuf<NAME_MAX>), Error> {
 // With `front`, a program with a screen starts in front for that task, which must have the focus (issue 160). With `fed`,
 // it gets a text input whose writer's handle comes back beside its PID (1.9, 000-KRN-0094), else 0.
 fn load(name: &[u8], args: &[u8], extra: &[(u8, usize)], front: Option<u64>, fed: bool) -> Result<(u64, usize), Error> {
-    let (file, task) = open(name)?;
+    let (file, task, app) = open(name)?;
     let (image, size) = read_image(&file)?;
     let (flags, memory) = { let bytes = &image.as_slice()[..size]; request_flags(&mut |at, out: &mut [u8]| { let n = out.len().min(bytes.len().saturating_sub(at)); out[..n].copy_from_slice(&bytes[at..at + n]); n }) };
+    if let Some(app) = &app { check_installed(core::str::from_utf8(name).unwrap_or("?"), app, &image.as_slice()[..size], flags, memory)?; }
     let cap = image.share()?;
     let client = CAP_WRITE | CAP_GRANT;
     let mut grants = [Grant::default(); SPAWN_GRANTS_MAX];
@@ -344,7 +421,7 @@ impl Launcher {
 
 // The raw request flags of program `name` (REQUEST_*).
 fn requests(name: &str) -> Result<u32, loader::Error> {
-    let (file, _) = open(name.as_bytes()).map_err(|error| match error { Error::NotFound => loader::Error::NotFound, Error::Other(ERR_IO) => loader::Error::Unreadable, _ => loader::Error::Invalid })?;
+    let (file, _, _) = open(name.as_bytes()).map_err(|error| match error { Error::NotFound => loader::Error::NotFound, Error::Other(ERR_IO) => loader::Error::Unreadable, _ => loader::Error::Invalid })?;
     Ok(request_flags(&mut |at, out: &mut [u8]| file.read_at(at, out).unwrap_or(0)).0)
 }
 

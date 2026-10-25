@@ -14,7 +14,9 @@ On a raw disk image with both slots and the bootloader of the build:
 - `own_loaders` (351-UPD-0010): slot B holding a loader other than the one at EFI/BOOT/ boots through it, on trial and
   once confirmed; one reset while it runs, one that cannot load its slot and one that is not as the manifest lists it
   leave the machine on slot A; a slot without a loader of its own boots as before. In `run` both slots hold the
-  build's loader, the same file, and none is started.
+  build's loader, the same file, and none is started;
+- `version_floor` (351-UPD-0024): a slot whose signed manifest names a version below `MIND/FLOOR` is not booted, the
+  other slot boots instead; one at the floor boots on trial.
 
 `boot(image, until)` boots the image and returns the console output up to `until`; the volume has no keystore
 (`quiet_volume`). Init's confirmation is 351-KRN-0014: the host writes the confirmed record here, as the updater will.
@@ -247,3 +249,44 @@ def own_loaders(boot, temp, volume, label):
     fsck(image)
     print(f"PASS ({label}): a slot without a loader of its own boots through the loader at EFI/BOOT/, as before; the "
           "file system is consistent", flush=True)
+
+
+def version_floor(boot, temp, volume, label):
+    """351-UPD-0024: slot A holds release 6, slot B release 5, each manifest signed with its version."""
+    temp = Path(temp)
+    source = quiet_volume(volume, temp / "volume")
+    sign_manifest.sign_volume(source, version=6)
+    other = temp / "other"
+    shutil.copytree(source, other)
+    sign_manifest.sign_volume(other, version=5)
+    slots = boot_slots.layout(source, temp / "slots", both=True)
+    for file in boot_slots.boot_set(other):
+        shutil.copyfile(other / file, slots / "MIND/B" / file)
+    image = boot_slots.Image.create(temp / "floor.img", slots)
+    for tree in (source, other, slots):
+        shutil.rmtree(tree)
+
+    def booted(*lines):
+        out = boot(image.path, STARTED).replace("\r", "")
+        at = 0
+        for line in lines:
+            at = out.find(line, at)
+            assert at >= 0, (line, out[-3000:])
+        assert "BOOT ERROR" not in out, out[-3000:]
+        return out
+
+    # Under floor 6 slot B's release 5 is refused before anything of it is loaded; slot A boots, B has no tries left.
+    image.write(boot_slots.FLOOR_FILE, boot_slots.floor(6))
+    staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    booted("BOOT: VERSION FLOOR 6", "BOOT: MIND\\B\\: VERSION 5 BELOW THE FLOOR 6", "BOOT: SLOT B: MANIFEST: below the version floor",
+           "BOOT: SLOT A LOADED\n", STARTED)
+    found = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert found == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, found
+    print(f"PASS ({label}): a slot whose manifest names a version below the floor is not booted; the other slot boots", flush=True)
+    # At the floor it boots: a rollback to a release at or above the minimum stays possible.
+    image.write(boot_slots.FLOOR_FILE, boot_slots.floor(5))
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    out = booted("BOOT: VERSION FLOOR 5", "BOOT: SLOT B LOADED ON TRIAL", STARTED)
+    assert "BELOW THE FLOOR" not in out, out[-3000:]
+    fsck(image)
+    print(f"PASS ({label}): a slot at the floor boots: a rollback to a release at or above the minimum stays possible", flush=True)

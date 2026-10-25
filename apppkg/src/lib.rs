@@ -5,6 +5,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "alloc")]
 extern crate alloc;
 
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -80,15 +81,24 @@ pub struct Installed { pub version: u64, pub manifest: [u8; 32] }
 /// MANIFEST.SIG under a key `trusted` holds for its name, the architecture, the release, and the version against the
 /// one installed (lower only if `downgrade`, the owner's `application-downgrade <name>`). The files are the caller's to
 /// check against `files`, each with `File::matches`.
+#[cfg(feature = "alloc")]
 pub fn verify<'a>(manifest: &'a [u8], signature: &[u8; 64], trusted: &[Trusted], arch: Arch, system: u64, installed: Option<Installed>,
                   downgrade: bool) -> Result<Manifest<'a>, Error> {
-    let parsed = parse(manifest)?;
-    let key = trusted.iter().find(|t| (t.name == "*" || t.name == parsed.name) && key_id(&t.key) == parsed.key).ok_or(Error::Untrusted)?;
-    let key = VerifyingKey::from_bytes(&key.key).map_err(|_| Error::Untrusted)?;
     let mut signed = alloc::vec::Vec::with_capacity(PREFIX.len() + manifest.len());
     signed.extend_from_slice(PREFIX);
     signed.extend_from_slice(manifest);
-    key.verify_strict(&signed, &Signature::from_bytes(signature)).map_err(|_| Error::Signature)?;
+    verify_prefixed(&signed, signature, trusted, arch, system, installed, downgrade)?;
+    parse(manifest)
+}
+
+/// `verify` for a caller without a heap (the loader, 750-KRN-0169): `signed` is `PREFIX` followed by MANIFEST's bytes.
+pub fn verify_prefixed<'a>(signed: &'a [u8], signature: &[u8; 64], trusted: &[Trusted], arch: Arch, system: u64, installed: Option<Installed>,
+                           downgrade: bool) -> Result<Manifest<'a>, Error> {
+    let manifest = signed.strip_prefix(PREFIX).ok_or(Error::Signature)?;
+    let parsed = parse(manifest)?;
+    let key = trusted.iter().find(|t| (t.name == "*" || t.name == parsed.name) && key_id(&t.key) == parsed.key).ok_or(Error::Untrusted)?;
+    let key = VerifyingKey::from_bytes(&key.key).map_err(|_| Error::Untrusted)?;
+    key.verify_strict(signed, &Signature::from_bytes(signature)).map_err(|_| Error::Signature)?;
     if parsed.arch != arch { return Err(Error::Arch); }
     if parsed.system > system { return Err(Error::System); }
     if let Some(installed) = installed {

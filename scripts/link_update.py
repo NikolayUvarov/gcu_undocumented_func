@@ -31,6 +31,7 @@ time ran out, 2 for a usage error.
 import argparse
 import datetime
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import boot_slots  # noqa: E402
 import release  # noqa: E402
+import sign_manifest  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DIR = "rel"  # below data/link/: update.txt's `source data/link/rel`
@@ -77,9 +79,13 @@ def release_files(manifest, arch, version):
 def build(root, arch, version, temp):
     """The signed build at `root` staged and published as release `version` into a server tree under `temp`."""
     staged, server = Path(temp) / "staged", Path(temp) / "server"
-    release.stage(version, staged, {arch: root})
+    # A copy signed again with the release's version, which the bootloader's floor reads (351-UPD-0024).
+    volume = Path(temp) / "volume"
+    shutil.copytree(root, volume)
+    sign_manifest.sign_volume(volume, version=version)
+    release.stage(version, staged, {arch: volume})
     release.publish(staged, server)
-    return server, (Path(root) / "MANIFEST").read_bytes()
+    return server, (volume / "MANIFEST").read_bytes()
 
 
 class Link:
