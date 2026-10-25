@@ -1,6 +1,6 @@
 # 900 — Neural Representation Lab (NRL): an extensible Rust system that inspects, converts, fine-tunes and runs trained neural networks, with spline representations as a hypothesis tested against plain compression
 
-**Type:** main task of the track `NRL` · **Owner:** Codex session, track `NRL`, `codex/NRL-lab` (the maintainer, 2026-10-25) · **Priority:** P1 · **Status:** open · **Blocked by:** — for T00–T10 on the host; T11 by the APIs of [262](262-model-runtime-on-the-machines-full-hardware.md) and the memory request in [requests-KRN.md](requests-KRN.md) · **Roadmap:** track G (user services); Article 8 (the cognitive plane); tracks A and H through [178](178-models-on-every-accelerator.md) · **Constitution:** MC-3.1, MC-3.3, MC-3.13, MC-5.1, MC-5.2, MC-8.1, MC-8.5, MC-9.1, MC-11.1, MC-11.2, MC-11.3, MC-11.5, MC-11.8, MC-11.11, MC-12.1, MC-12.2, MC-12.3
+**Type:** main task of the track `NRL` · **Owner:** Codex session, track `NRL`, `codex/NRL-lab` (the maintainer, 2026-10-25) · **Priority:** P1 · **Status:** open · **Blocked by:** — for T00–T10 on the host; T11 by the APIs of [262](262-model-runtime-on-the-machines-full-hardware.md) and its native platform adapter (memory/worker APIs: 262-KRN-0160 to 0164) · **Roadmap:** track G (user services); Article 8 (the cognitive plane); tracks A and H through [178](178-models-on-every-accelerator.md) · **Constitution:** MC-3.1, MC-3.3, MC-3.13, MC-5.1, MC-5.2, MC-8.1, MC-8.5, MC-9.1, MC-11.1, MC-11.2, MC-11.3, MC-11.5, MC-11.8, MC-11.11, MC-12.1, MC-12.2, MC-12.3
 
 **Recorded by:** the tools track, 2026-10-23, at the maintainer's request: "add this task as a separate track for neural networks". The source is the maintainer's handoff of 2026-10-23, version 1.0. It is kept as it was written, in Russian, in [docs/nrl/HANDOFF_RU.md](../docs/nrl/HANDOFF_RU.md). This issue is its statement in English, read against this repository: the Constitution of edition 1.6, the APIs that exist and the tasks that already plan the hardware.
 
@@ -67,10 +67,14 @@ The working name NRL does not mean the old package is renamed or its format brok
 - **[262](262-model-runtime-on-the-machines-full-hardware.md)** (`APP`) plans the system's model service: `nnd`, `idl/nn.wit`, `nn`, budgets, safetensors/GGUF/ONNX readers, and the CPU and GPU runtime. Its stages 4 (fine-tuning) and 5 (splines) are taken over by this track (below, section 12).
 - **[178](178-models-on-every-accelerator.md)** (`KRN`, `DRV`) plans the accelerators: all of the CPU, one accelerator interface, then the AMD GPU, Intel's NPU and the NVIDIA RTX.
 - **The kernel** saves the AVX, AVX-512 and AMX state of each task (174-KRN-0037).
-- **The limits today:**
-  - an application may ask for at most 1024 MiB (`APP_MEMORY_MAX` in `loader`);
-  - one stack of 64 KiB per task, and no threads.
-  - Larger quotas, large pages, a file mapped without a copy and several CPUs per model are asked of `KRN` for 262.
+- **Platform inventory updated 2026-10-25 (main dc2e4312):**
+  - ABI 20; rebuild programs against the current `common/abi.rs` and `libmind`.
+  - A program named by the owner in `data/memory.conf` can have a quota up to 64 GiB ([262-KRN-0160](../issues-done/262-KRN-0160-large-private-memory-for-a-named-program.done)); the ordinary default remains at most 1024 MiB.
+  - Worker processes share explicitly granted memory objects ([262-KRN-0163](../issues-done/262-KRN-0163-workers-on-several-cpus.done)); these are not shared-address-space threads.
+  - Stacks can be 64 KiB to 8 MiB ([262-KRN-0164](../issues-done/262-KRN-0164-stacks-larger-than-64-kib.done)).
+  - `vfs.wit` 2.4 `fill` reads a file into a lent memory object ([262-KRN-0162](../issues-done/262-KRN-0162-a-file-read-once-into-a-memory-object.done)); it is not arbitrary file-backed mmap.
+  - Large pages are implemented, with hardware measurements still open ([262-KRN-0161](262-KRN-0161-large-pages.md)). Recorded evidence above is QEMU's, not a native NRL run.
+  - `nnd` and `idl/nn.wit` are still planned by APP; host T00-T10 need neither.
 
 ## 4. The bounds of the first version, and later growth
 
@@ -400,7 +404,9 @@ These names are an interface design, **not commands that exist**. Each operation
 - **T11 starts with the platform contract** before training is done, but is declared done only after a real run.
 - The order of stages promises no date.
 
-When the track gets an owner, each T-row becomes a task `900-NRL-MMMM` numbered by the owner.
+### Starting execution (2026-10-25)
+
+The maintainer assigned NRL to the Codex session (`codex/NRL-lab`). The first tasks are [900-NRL-0001](900-NRL-0001-reference-inventory.md) (T00), [0002](900-NRL-0002-initial-contracts.md) (T01), [0003](900-NRL-0003-cpu-backend-spike.md) (T02), and [0004](900-NRL-0004-first-linear-spline-block.md) (the first linear-spline slice of T03, with a minimal block round trip). These do not complete all five representations, a model adapter or T11. The remaining T-rows will be numbered as their work starts.
 
 ## 15. Acceptance criteria
 
