@@ -5816,7 +5816,8 @@ def update_suite(args):
     an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
     version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
     booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
-    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
+    records then hold exactly the four writes of an update: the trial, the bootloader's count, the confirmation, and
+    the version floor raised to release 6's minimum (351-UPD-0024)."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
@@ -5836,7 +5837,8 @@ def update_suite(args):
     port = https.server_address[1]
     # The image: release 5 in slot A, confirmed, with its channel; the policy's flow and update.txt at the root.
     layout = temp / "layout"
-    boot_slots.layout(volume, layout)
+    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
@@ -5952,7 +5954,7 @@ def update_suite(args):
         (Path(tempfile.gettempdir()) / f"mind-core-update-{args.cpus}cpu.log").write_text(vm.log)
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
-    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
@@ -5965,7 +5967,7 @@ def update_suite(args):
     assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
     # 351-UPD-0024: release 6 raised the minimum to 6, so the floor is 6 and a record that boots slot A's release 5 is
     # refused: slot B boots instead.
-    assert boot_slots.parse_floor(image.read(boot_slots.FLOOR_FILE)) == 6, image.read(boot_slots.FLOOR_FILE)
+    assert boot_slots.floor_of(boot_slots.records(image.path)) == 6, boot_slots.records(image.path)
     boot_slots.write_next(image, slot="A", fallback="B", confirmed=True)
     vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
     try:
@@ -5975,8 +5977,7 @@ def update_suite(args):
     finally:
         vm.close()
     # The floor lowered by hand, as the recovery authority would (351-UPD-0030), for the checks of release 5 that follow.
-    image.write(boot_slots.FLOOR_FILE, boot_slots.floor(1))
-    boot_slots.write_next(image, slot="A", confirmed=True)
+    boot_slots.write_next(image, slot="A", confirmed=True, floor=1)
     import datetime
     later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
     vm = VM(args, str(image.path), raw=True, snapshot=False, rtc=later, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
@@ -6026,7 +6027,8 @@ def linkupdate_suite(args):
     arch = args.arch
     volume, _, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
     layout = temp / "layout"
-    boot_slots.layout(volume, layout)
+    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
     (layout / "link.conf").write_text("baud=115200\n")
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
@@ -6087,7 +6089,7 @@ def linkupdate_suite(args):
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-linkupdate-{args.cpus}cpu.log").write_text(vm.log)
     records = boot_slots.records(image.path)
-    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1}, records
     for name, digest in boot_files:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good

@@ -38,11 +38,16 @@ pub fn newest(records: [Option<Record>; 2]) -> Option<(usize, Record)> {
     }
 }
 
-/// `record` one past the newer valid one, and the file it goes to; file 0 with sequence 1 when none is valid. None when
-/// the sequence could not count on: a trial needs two more, which the bootloader writes.
+/// The version floor the records hold (351-UPD-0024): the newer valid one's, as the bootloader reads it; 0 with none.
+pub fn floor(records: [Option<Record>; 2]) -> u64 { newest(records).map_or(0, |(_, r)| r.floor) }
+
+/// `record` one past the newer valid one, and the file it goes to; file 0 with sequence 1 when none is valid. It
+/// carries the newer record's floor, or `record`'s when higher: no write of the updater lowers it. None when the sequence could not count
+/// on: a trial needs two more, which the bootloader writes.
 fn next(records: [Option<Record>; 2], record: Record) -> Option<(usize, Record)> {
     let (file, sequence) = newest(records).map_or((0, 1), |(k, r)| (1 - k, r.sequence + 1));
-    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { sequence, ..record }))
+    let floor = floor(records).max(record.floor);
+    (sequence <= SEQUENCE_LAST - 2).then_some((file, Record { sequence, floor, ..record }))
 }
 
 /// The record that confirms `running` once its trial boot was confirmed: the same slot and fallback, confirmed. None
@@ -50,7 +55,7 @@ fn next(records: [Option<Record>; 2], record: Record) -> Option<(usize, Record)>
 pub fn confirm(records: [Option<Record>; 2], running: u8) -> Option<(usize, Record)> {
     let (_, current) = newest(records)?;
     if current.slot != running || current.confirmed { return None; }
-    next(records, Record { slot: running, fallback: current.fallback, tries: 0, confirmed: true, sequence: 0 })
+    next(records, Record { slot: running, fallback: current.fallback, tries: 0, confirmed: true, sequence: 0, floor: 0 })
 }
 
 /// Whether the other slot may be written: not while the running slot is on trial and not yet confirmed on the disk,
@@ -62,14 +67,17 @@ pub fn may_stage(records: [Option<Record>; 2], running: u8, trial: bool) -> bool
 /// The record that boots the other slot on trial with `tries`, falling back to the running one: an update's activation
 /// point, and a rollback's.
 pub fn trial_of_other(records: [Option<Record>; 2], running: u8, tries: u8) -> Option<(usize, Record)> {
-    next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0 })
+    next(records, Record { slot: other(running), fallback: running, tries, confirmed: false, sequence: 0, floor: 0 })
 }
 
-/// The version floor to write (351-UPD-0024): the highest minimum seen, once the running slot is confirmed on the disk
-/// at that version or above. None leaves the floor as it is: it is never lowered, and a confirmed trial alone raises
-/// nothing, so a rollback to an earlier release at or above the minimum stays possible.
-pub fn floor_to(current: u64, minimum: u64, running: u64, confirmed: bool) -> Option<u64> {
-    (minimum > current && confirmed && running >= minimum).then_some(minimum)
+/// The record that raises the version floor (351-UPD-0024) to `minimum`, a checked channel's, once the newer record
+/// confirms `running` and its manifest names `version` at or above it: the newer record again, one on, with that
+/// floor. None leaves the floor as it is: it is never lowered, and a confirmed trial alone raises nothing, so a
+/// rollback to an earlier release at or above the minimum stays possible.
+pub fn raise(records: [Option<Record>; 2], running: u8, minimum: u64, version: u64) -> Option<(usize, Record)> {
+    let (_, current) = newest(records)?;
+    let confirmed = current.slot == running && current.confirmed;
+    (minimum > floor(records) && confirmed && version >= minimum).then(|| next(records, Record { floor: minimum, ..current })).flatten()
 }
 
 /// The version a boot manifest's `version` header line names, 0 without one: as the bootloader reads it (351-UPD-0024).

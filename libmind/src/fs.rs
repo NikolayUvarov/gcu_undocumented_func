@@ -33,8 +33,7 @@ pub const BADGE_NETPOLICY: u16 = 3;
 pub const BADGE_EFFECTOR: u16 = 6;
 pub const BADGE_EFFECTOR_GW: u16 = 7;
 /// Badge of the updater's client (351-UPD-0008): besides reading, it may fill the slot the system did not boot from
-/// (`MIND/A` or `MIND/B`) and write the boot records `MIND/BOOT0` and `MIND/BOOT1` and the version floor `MIND/FLOOR`
-/// whole, in place; nothing else.
+/// (`MIND/A` or `MIND/B`) and write the boot records `MIND/BOOT0` and `MIND/BOOT1` whole, in place; nothing else.
 pub const BADGE_UPDATE: u16 = 4;
 /// Badge of the read-only clients init lends services, and through `loader` its programs: set by init, so no holder can
 /// set another on them (a badge is set once, MC-3.4) and reach a private directory or the update zone.

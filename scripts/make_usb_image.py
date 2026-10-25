@@ -137,7 +137,6 @@ def slots(payloads, arch, channel=None):
     out.update({f"MIND/A/{name}": payloads[path] for path, name in boot_slots.LOADERS.items() if path in payloads})
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
     out["MIND/BOOT1"] = bytes(boot_slots.RECORD)
-    out[boot_slots.FLOOR_FILE] = boot_slots.floor(0)  # the version floor, raised by the updater (351-UPD-0024)
     if channel is not None:
         lines = channel.split(b"\n")
         if len(lines) != 3 or lines[2] or not lines[1].startswith(b"ed25519 "):
@@ -161,6 +160,9 @@ def slots(payloads, arch, channel=None):
         if fields["manifests"].get(arch) != hashlib.sha256(payloads["MANIFEST"]).hexdigest():
             raise ValueError(f"the channel does not name this build's {arch} manifest")
         out["MIND/A/CHANNEL"] = channel
+        # The floor the updater would set at once (351-UPD-0024): the channel's minimum, if slot A's manifest meets it.
+        if sign_manifest.manifest_version(payloads["MANIFEST"]) >= fields["minimum"]:
+            out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True, floor=fields["minimum"])
     return out
 
 
