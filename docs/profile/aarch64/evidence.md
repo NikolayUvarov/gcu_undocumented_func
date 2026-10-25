@@ -31,6 +31,7 @@ Tests are run as in [README.md](README.md) ("Building and running"); CI runs the
 | Slots A and B (351-UPD-0006), as on x86: a trial and its confirmation, an unconfirmed trial's fallback to slot A, a slot with a damaged service not loaded, a torn record ignored, the file system consistent after the bootloader's writes | `aarch64_smoke.py` (`tests/boot_slots_check.py`) |
 | A slot's own loader (351-UPD-0010), as on x86: started on trial and once confirmed, a reset in it, one that cannot load its slot and one not as listed falling back to slot A, a slot without one booting as before | `aarch64_smoke.py` (`own_loaders` in `tests/boot_slots_check.py`) |
 | The version floor (351-UPD-0024), as on x86: a slot below the floor not booted, one at it booted on trial | `aarch64_smoke.py` (`version_floor`) |
+| Installed applications (750-KRN-0169), as on x86: the current version under a trusted key runs; a changed program or MANIFEST, an untrusted name, more requests, another version not run; the gateway's stand-in confined to its scope of `data/apps/` | `qemu_smoke.py --arch aarch64 --suites modes` (`installed_apps_check`, `gateway_stub_check`) |
 
 ## Not covered by any test
 

@@ -4465,6 +4465,7 @@ def modes_suite(args):
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     modes_lifecycle_check(args)
+    installed_apps_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
         services_config_check(args)
@@ -4563,6 +4564,7 @@ def gateway_stub_check(args):
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
             refusals = vm.command("dmesg -s init", raw=True)
@@ -4647,9 +4649,74 @@ def gateway_stub_check(args):
     print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
+          "its scope of data/apps/ writes and reads back there and refuses a name outside, the owner's policy too (750-KRN-0169); "
           "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
           "answers whether the link's console is on, which needs `dev` in link.conf, and keeps the word when a mode is set (800-KRN-0155); "
           "the gateway lights the Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
+
+
+def installed_apps_check(args):
+    """750-KRN-0169: packages of the public test key laid out under data/apps/ as the gateway will (750-UPD-0019), and
+    the owner's policy trusting that key for some names. The version `current` names runs, by its short path and its
+    versioned one; the loader refuses, logging why, a program with one byte changed, a MANIFEST changed after it was
+    signed, a name the policy has no key line for, one whose line names another application, a program that asks for
+    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`:
+    the shell's `run` takes 16 bytes. Not shown: an install by the gateway."""
+    import app_package
+    arch = "aarch64" if args.arch == "aarch64" else "x86_64"
+    program = (ROOT / IMAGE / "memtest.elf").read_bytes()
+    public = sign_manifest.public_key(app_package.TEST_SEED)
+    # a: trusted, two versions; b: one byte changed; c: MANIFEST changed; d: no key line; e: the line names z; f: more requests.
+    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z"))
+    extra = {"data/effector/policy": f"effector-policy 1\nagent off\n{lines}".encode()}
+    with tempfile.TemporaryDirectory(prefix="smoke-apps-", dir=ROOT / IMAGE) as temp:
+        def package(name, version, change=None):
+            where = Path(temp) / "packages" / name / str(version)
+            where.mkdir(parents=True)
+            (where / "m").write_bytes(program)
+            text = app_package.manifest(where, name, version, arch, 0, public)
+            if change == "requests":  # one request fewer on its line than the program makes, signed so
+                flags, memory = sign_manifest.requests(program)
+                line = f"{flags:08x} {memory}\n".encode()
+                assert flags & 0x20 and text.count(line) == 1, (flags, text)
+                text = text.replace(line, f"{flags & ~0x20:08x} {memory}\n".encode())
+            (where / "MANIFEST").write_bytes(text)
+            (where / "MANIFEST.SIG").write_bytes(sign_manifest.sign(app_package.TEST_SEED, app_package.PREFIX + text))
+            if change == "byte":
+                data = bytearray(program); data[-1] ^= 1
+                (where / "m").write_bytes(bytes(data))
+            if change == "manifest":  # its memory field, after the signature
+                (where / "MANIFEST").write_bytes(text.replace(b" 160\n", b" 161\n"))
+            for path in where.iterdir():
+                extra[f"data/apps/{name}/{version}/{path.name}"] = path.read_bytes()
+            extra[f"data/apps/{name}/current"] = f"{version}\n".encode()
+        package("a", 1); package("a", 2)
+        for name, change in (("b", "byte"), ("c", "manifest"), ("d", None), ("e", None), ("f", "requests")):
+            package(name, 1, change)
+        image, _, _ = raw_fat_image(Path(temp), extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            for path in ("data/apps/a/m", "data/apps/a/2/m"):
+                started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
+                assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
+                require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
+            refusals = {"data/apps/a/1/m": "NOT THE CURRENT VERSION", "data/apps/b/m": "NOT AS ITS MANIFEST LISTS IT",
+                        "data/apps/c/m": "MANIFEST REFUSED (Signature)", "data/apps/d/m": "MANIFEST REFUSED (Untrusted)",
+                        "data/apps/e/m": "MANIFEST REFUSED (Untrusted)", "data/apps/f/m": "ASKS FOR MORE THAN ITS MANIFEST LINE"}
+            for path in refusals:
+                output = vm.command(f"run {path} naps 300 &")
+                assert "STARTED PID=" not in output, (path, output)
+            log = vm.command("dmesg -s loader", raw=True)
+            for path, why in refusals.items():
+                require(log, f"[LOADER] {path}: NOT RUN: {why}")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-apps-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: installed applications (750-KRN-0169): the version data/apps/<name>/current names runs under a key the "
+          "owner's policy trusts for its name; one byte of the program changed, its MANIFEST changed after signing, no key "
+          "line for the name, a line naming another application, more requests than its file line, another version: not "
+          "run, the loader's log saying why", flush=True)
 
 
 def services_config_check(args):
@@ -4775,7 +4842,9 @@ def effector_grants_check(vm):
     # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
     quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
     assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
-    assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/apps (WRITABLE)")
     assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw

@@ -49,12 +49,13 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // ABI 17: CAP_REVOKE leaves a borrower one zeroed page of its own at each page it mapped from the lease, so a late access
 // reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
 // the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
-// addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161).
+// addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161). ABI 20 moves SLOT_DYNAMIC to 39 for SLOT_APPS,
+// the Effector gateway's writable scope of data/apps/ (750-KRN-0169).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 19;
+pub const ABI_VERSION: u32 = 20;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
 // from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes any version from
 // BOOT_HANDOFF_OLDEST on, since earlier loaders wrote their ABI there and BootInfo has not changed since ABI 16's images
@@ -396,8 +397,11 @@ pub const SLOT_MODE: usize = 36;
 // The shell's command endpoint (idl/shell.wit), made by init and kept across the shell's restarts: the shell serves it, and
 // init mints link's client of it in developer mode (ABI 15, 800-KRN-0148).
 pub const SLOT_COMMANDS: usize = 37;
+// The Effector gateway's writable scope of data/apps/, made by init at each of its starts, where it installs signed
+// application packages; no program gets it (ABI 20, 750-KRN-0169).
+pub const SLOT_APPS: usize = 38;
 // The kernel hands out new capabilities starting from this slot; slots below it are fixed by convention.
-pub const SLOT_DYNAMIC: usize = 38;
+pub const SLOT_DYNAMIC: usize = 39;
 // The fixed slots a launcher may fill in a launch session (loader.wit `grant`); 2..6 stay the loader's own. SLOT_NET
 // carries a card's read-only client (BADGE_COUNTERS) for REQUEST_NET_COUNTERS (ABI 10, 000-NET-0015).
 pub const LAUNCH_SLOTS: [usize; 20] = [SLOT_INIT, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE, SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_NET, SLOT_NETWORK,
