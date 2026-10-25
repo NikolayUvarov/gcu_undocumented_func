@@ -1,6 +1,6 @@
 # Mail, Telegram, the web and AI agents: a plan across tracks
 
-**Version:** 0.1 (2026-10-25), the kernel session as integrator, at the maintainer's request · **Status:** a plan; the tracks named below are the maintainer's to confirm (TRACKS.md) · **Constitution:** MC-3.1, MC-3.8, MC-8.1, MC-10.3, MC-11.4, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
+**Version:** 0.2 (2026-10-25): our own micro messenger, 950; 0.1: the kernel session as integrator, at the maintainer's request · **Status:** a plan; the tracks named below are the maintainer's to confirm (TRACKS.md) · **Constitution:** MC-3.1, MC-3.8, MC-8.1, MC-10.3, MC-11.4, MC-11.5, MC-11.6, MC-11.9, MC-11.11, MC-12.1, MC-12.3
 
 ## What is asked
 
@@ -14,6 +14,7 @@ The maintainer, 2026-10-25:
 3. **Graphical programs:** the next stage. For now only the intention is stated, below.
 4. **A text agent module** that works with Claude, Gemini, Codex (OpenAI), Grok, Mistral and other well-known providers.
 5. **A module that runs neural networks.**
+6. **Our own micro messenger with a server:** the minimal functions of exchanging messages, in the text (full-screen) and the console modes (the same day).
 
 ## What there is to build on
 
@@ -64,6 +65,7 @@ The maintainer, 2026-10-25:
 | `mail` | `mail send`, `mail list`, `mail read`, `mail check`: submission (RFC 6409, implicit TLS) and IMAP4rev2, MIME parsed in a parser session | `COM` | 261, its stage 4 first |
 | `tgtxt` | `tgtxt send`, `tgtxt read [--follow]`, `tgtxt chats`, `tgtxt wait`: the Bot API (`getUpdates`, `sendMessage`, `sendDocument`, `getFile`), the update offset kept | `COM` | 253, stage 1 (`tgtxt` is the maintainer's name for 253's `tg`) |
 | `ask` | one question to a language model, the answer streamed: `ask [-p provider] [-m model] [prompt]`, for scripts | `AGT` (or `COM`) | 260 |
+| `msg` | our own messenger: `msg register`, `msg send`, `msg read [--follow]`, `msg contacts`, `msg wait`, against our server `msgd` | `COM` | [950](../issues/950-our-own-micro-messenger.md) |
 
 ### 2. Full-screen text programs (on `mind::tui`, in the console and in a `wm` window)
 
@@ -72,6 +74,7 @@ The maintainer, 2026-10-25:
 | `mail` | folders, threads, a message read as text, HTML reduced to text, remote images never fetched, a composer in `edit`, attachments, `IDLE` | `COM` | 261, stages 1 and 2 |
 | `www` | Lynx's way: the WHATWG HTML parser in a parser session, text layout, numbered links, history, bookmarks; then forms and cookies by the user's leave | `COM` | 255 |
 | `tgtxt` | the chat list, a chat, a line to write in; the bot first, then the user account through MTProto 2.0 | `COM` | 253, stages 1 and 2 |
+| `msg` | with no arguments: conversations, a conversation, a line to write in, the "delivered" and "read" marks; the same widgets as `tgtxt` | `COM` | 950 |
 | `agent` | the loop of Claude Code and Codex: the model's tool calls (read, find, edit with a diff and the user's yes, a command through the shell's client), permission modes, the audit | `AGT` (or `COM`) | 260 |
 
 Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`, the widgets they all need from `mind::tui` (a list, a scrolling text view with search, an input line with history, a status line). The widgets are a request to `APP`, which owns `mind::tui`.
@@ -81,6 +84,21 @@ Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`,
 - The graphical browser [256](../issues/256-graphical-web-browser-current-standards-only.md) stays the tools track's (`APP`), long-term.
 - `mail`, `tgtxt` and `agent` get a graphical face in a `wm` window later, on the same protocol modules. That waits for scalable fonts and text shaping, which [258](../issues/258-wysiwyg-document-editor.md) needs too.
 - No task is recorded for this stage now.
+
+### Our own messenger (main task [950](../issues/950-our-own-micro-messenger.md))
+
+- **The protocol `mmp` 1:**
+  - a crate of its own (`mmp/`, `no_std`), shared by the client, the server and the tests;
+  - JSON over HTTPS, with Server-Sent Events for what arrives;
+  - accounts made with an invitation, an Ed25519 key per account, a message sent again stored once.
+- **The server `msgd`:**
+  - a host program for Linux (`tools/msgd/`), with an append-only store;
+  - messages kept until delivered, then for a stated time;
+  - limits per account;
+  - a log that never holds a message's text.
+- **The client `msg`:** console commands first, then the full-screen screen.
+- **What stage 1 is not:** in stage 1 the server's owner can read the messages. The connection is TLS, not end to end, and this is said plainly. End-to-end encryption, small files and `msgd` as a MIND service come later.
+- **It stands on the same foundations:** 000-NET-0047 (HTTP with SSE), 000-KRN-0170 (its directory), 000-NET-0045 (its key), and a pinned key or 000-NET-0046 for the server.
 
 ### The agent module (main task 260)
 
@@ -116,7 +134,7 @@ Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`,
 | Track | Who | Takes |
 |---|---|---|
 | `KRN`, `NET` | the kernel session | the foundations F; 262-KRN-0161; the grants and slots every client needs, as their requests come |
-| `COM` | **proposed**: communication clients, main tasks 950–999 (the last free block); for the agent the maintainer connects | 253, 254 and 255, 261: the protocol modules (IMAP, submission, MIME, the Bot API, MTProto, the HTML reducer), `mail`, `tgtxt` and `www`, their suites and stand-in servers |
+| `COM` | **proposed**: communication clients, main tasks 950–999 (the last free block); for the agent the maintainer connects | 950, our own messenger (`mmp`, `msgd`, `msg`); 253, 254 and 255, 261: the protocol modules (IMAP, submission, MIME, the Bot API, MTProto, the HTML reducer), `mail`, `tgtxt` and `www`, their suites and stand-in servers |
 | `AGT` | if a second agent joins: the agent module, working main task 260 (no range needed until it records a main task of its own) | `llm`, `ask` and `agent`; without a second agent, `COM` takes them after `mail` and `tgtxt` |
 | `APP` | the tools session | the `mind::tui` widgets (a request), `wm`'s window for each program, the shell's commands that start them; 256 and the graphical stage |
 | `NRL` | open: a candidate for another agent | 900, and 262's runtime `nnd` with `APP`'s agreement |
@@ -129,8 +147,8 @@ Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`,
 1. **First, together:**
    - `KRN`/`NET`: F (0170 and 0045 first, since the secrets wait for the identity; 0046, 0047 and 0049 in parallel);
    - `COM`: the mail protocol modules and the Bot API client, against stand-in servers, with tokens from a file until 0045 lands.
-2. **Then:** `get` (`NET`), `mail` and `tgtxt` as console utilities (`COM`); `ask` (`AGT` or `COM`).
-3. **Then:** the full-screen `mail`, `tgtxt` and `www` once the `mind::tui` widgets are in; `agent` once `ask`'s provider layer holds.
+2. **Then:** `get` (`NET`), `mail`, `tgtxt` and `msg` as console utilities (`COM`), `msgd` with `msg`; `ask` (`AGT` or `COM`).
+3. **Then:** the full-screen `mail`, `tgtxt`, `msg` and `www` once the `mind::tui` widgets are in; `agent` once `ask`'s provider layer holds.
 4. **Then:** MTProto for `tgtxt`; forms and cookies for `www`; `nnd` behind `llm`.
 5. **Later:** the graphical faces (stage 3).
 
@@ -144,10 +162,10 @@ Shared by these: one HTML-to-text reducer for `mail` and `www`, MIME for `mail`,
 
 Fill in [AGENTS.md](../AGENTS.md), section 7, with:
 
-- **Track:** `COM`, communication clients. **Main tasks:** 253, 254, 255, 261 (and 260 unless `AGT` is opened), new ones from 950.
+- **Track:** `COM`, communication clients. **Main tasks:** 950 (the messenger, its own), 253, 254, 255, 261 (and 260 unless `AGT` is opened), new ones from 951.
 - **Counter:** from 0001.
 - **Directories:**
-  - new programs `mail/`, `tgtxt/`, `www/`;
+  - new programs `mail/`, `tgtxt/`, `www/`, `msg/`; the protocol crate `mmp/` and the server `tools/msgd/`;
   - new `libmind` modules: `mail`, `mime`, `telegram`, `html`;
   - their `idl/` files if any;
   - `docs/communications/`;
