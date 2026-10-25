@@ -69,6 +69,10 @@ The tracks — codes, ranges, directories, owners, branches, statuses and starti
 3. **Implement it, following the rules in CONTRIBUTING.md:**
    - comments in English, one line, the essence only;
    - code that exists only for superseded hardware is marked `LEGACY:` and listed in [docs/legacy.md](docs/legacy.md);
+   - **before the first release, no code that exists only so that an older version of our own software, format or interface keeps working** (the maintainer's decision, 2026-10-25):
+     - a new version replaces the old one instead of reading both;
+     - the old one is refused with a message naming it, which is the explicit transition (MC-12.4);
+     - a machine that has it is written again by hand;
    - generated IDL files are committed;
    - third-party code is recorded in [THIRD_PARTY.md](THIRD_PARTY.md).
    - **proprietary files** (firmware, microcode or data whose terms forbid redistribution) never enter the repository or a disk image (the maintainer's decision, 2026-10-09):
