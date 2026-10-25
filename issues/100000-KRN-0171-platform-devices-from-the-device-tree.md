@@ -1,6 +1,6 @@
-# 230-KRN-0171 — Platform devices from the device tree
+# 100000-KRN-0171 — Platform devices from the device tree
 
-**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** open · **Blocked by:** [230-PRT-0009](230-PRT-0009-the-board-from-the-device-tree.md) · **Main task:** [230](230-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
+**Type:** kernel (ABI, `init`) · **Owner:** `KRN` · **Priority:** P2 · **Status:** an intention · **Blocked by:** a PinePhone at hand (the maintainer, 2026-10-25: the port starts then); [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md) · **Main task:** [100000](100000-a-phone-the-pinephone-first.md), stage 0 · **Roadmap:** track H · **Constitution:** MC-1.3, MC-1.5, MC-3.1, MC-12.4
 
 ## Problem
 
@@ -19,7 +19,7 @@
   - it grants each driver its node's MMIO and lines;
   - a range that overlaps RAM, or another node's range, is refused.
 - **Unchanged:** DMA regions, as today.
-- **Not handed out by the kernel:** a node's clocks, resets and regulators. They belong to the drivers of the clock controller and the PMIC (230, stage 2), reached by IPC.
+- **Not handed out by the kernel:** a node's clocks, resets and regulators. They belong to the drivers of the clock controller and the PMIC (100000, stage 2), reached by IPC.
 - **The explicit transition:** the fixed indices go, with no compatibility code (AGENTS.md, section 3).
 
 ## Acceptance criteria
@@ -32,4 +32,4 @@
 
 ## Related
 
-[230](230-a-phone-the-pinephone-first.md), [230-PRT-0009](230-PRT-0009-the-board-from-the-device-tree.md), [205](205-aarch64-boards.md).
+[100000](100000-a-phone-the-pinephone-first.md), [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md), [205](205-aarch64-boards.md).

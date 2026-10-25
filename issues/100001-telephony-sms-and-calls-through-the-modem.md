@@ -1,8 +1,8 @@
-# 231 — Telephony: the modem as another computer; SMS and calls from the console
+# 100001 — Telephony: the modem as another computer; SMS and calls from the console
 
-**Type:** main task (a service and tools) · **Owner:** `MOB` track (open) · **Priority:** P2 · **Status:** open · **Blocked by:** [230](230-a-phone-the-pinephone-first.md) stage 2 (USB, and the PMIC's and the modem's power lines) · **Roadmap:** track H; track D (an external party through an adapter) · **Constitution:** MC-3.1, MC-10.3, MC-11.3, MC-11.4, MC-11.5, MC-11.11, MC-12.1, MC-12.3
+**Type:** main task (a service and tools) · **Owner:** `MOB` track (later) · **Priority:** P2 · **Status:** an intention · **Blocked by:** [100000](100000-a-phone-the-pinephone-first.md) stage 2 (USB, and the PMIC's and the modem's power lines) · **Roadmap:** track H; track D (an external party through an adapter) · **Constitution:** MC-3.1, MC-10.3, MC-11.3, MC-11.4, MC-11.5, MC-11.11, MC-12.1, MC-12.3
 
-**Recorded by:** the kernel session, 2026-10-25, with main task 230, at the maintainer's request.
+**Recorded by:** the kernel session, 2026-10-25, with main task 100000, at the maintainer's request.
 
 ## Problem
 
@@ -47,4 +47,4 @@
 
 ## Related
 
-[230](230-a-phone-the-pinephone-first.md), [207](207-gpio-service.md), [000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [950](950-our-own-micro-messenger.md) (the console tools' manner).
+[100000](100000-a-phone-the-pinephone-first.md), [207](207-gpio-service.md), [000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [950](950-our-own-micro-messenger.md) (the console tools' manner).

@@ -1,8 +1,8 @@
-# 232 — On a battery: idle CPUs, their frequency, sleep and waking
+# 100002 — On a battery: idle CPUs, their frequency, sleep and waking
 
-**Type:** main task (power) · **Owner:** `MOB` track (open), with `KRN` (the scheduler, PSCI) and `DRV` (each driver's suspend and resume) · **Priority:** P2 · **Status:** open · **Blocked by:** [230](230-a-phone-the-pinephone-first.md) stage 2 (the PMIC, the clock controller) · **Roadmap:** track H · **Constitution:** MC-1.1, MC-5.1, MC-5.3, MC-5.6, MC-6.3, MC-12.1, MC-12.3
+**Type:** main task (power) · **Owner:** `MOB` track (later), with `KRN` (the scheduler, PSCI) and `DRV` (each driver's suspend and resume) · **Priority:** P2 · **Status:** an intention · **Blocked by:** [100000](100000-a-phone-the-pinephone-first.md) stage 2 (the PMIC, the clock controller) · **Roadmap:** track H · **Constitution:** MC-1.1, MC-5.1, MC-5.3, MC-5.6, MC-6.3, MC-12.1, MC-12.3
 
-**Recorded by:** the kernel session, 2026-10-25, with main task 230, at the maintainer's request.
+**Recorded by:** the kernel session, 2026-10-25, with main task 100000, at the maintainer's request.
 
 ## Problem
 
@@ -36,4 +36,4 @@
 
 ## Related
 
-[230](230-a-phone-the-pinephone-first.md), [231](231-telephony-sms-and-calls-through-the-modem.md), [211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md) (the MacBook Pro's battery service).
+[100000](100000-a-phone-the-pinephone-first.md), [100001](100001-telephony-sms-and-calls-through-the-modem.md), [211-PRT-0008](211-PRT-0008-the-battery-behind-the-embedded-controller.md) (the MacBook Pro's battery service).
