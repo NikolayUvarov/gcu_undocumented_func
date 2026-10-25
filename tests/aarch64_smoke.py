@@ -157,6 +157,10 @@ def main():
     loaders = Path(tempfile.mkdtemp(prefix="mind-loaders-"))
     atexit.register(shutil.rmtree, loaders, True)
     boot_slots_check.own_loaders(lambda image, until: boot(args, image, until, raw=True), loaders, disk_with(), "aarch64")
+    # 351-UPD-0024: the version floor.
+    floor = Path(tempfile.mkdtemp(prefix="mind-floor-"))
+    atexit.register(shutil.rmtree, floor, True)
+    boot_slots_check.version_floor(lambda image, until: boot(args, image, until, raw=True), floor, disk_with(), "aarch64")
     # 351-KRN-0167: slot B's kernel refuses the loader on a trial and restarts the machine through PSCI.
     refused = Path(tempfile.mkdtemp(prefix="mind-refused-"))
     atexit.register(shutil.rmtree, refused, True)

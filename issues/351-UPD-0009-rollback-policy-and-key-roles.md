@@ -11,7 +11,7 @@ A signature alone lets an attacker replay an old, signed, vulnerable release (MC
 ## Plan
 
 - **The minimum version.**
-  - The highest confirmed version and the channel's minimum are kept in the boot records, and the bootloader refuses a slot below them.
+  - The channel's minimum is kept in the boot records, and the bootloader refuses a slot below it. The highest confirmed version is not a floor: a rollback to an earlier release at or above the minimum stays allowed (the maintainer, 2026-10-25).
   - The profile states the limit plainly: without a hardware counter (TPM NV index, authenticated UEFI variable), someone with the disk can roll back.
   - The hardware floor is [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md), with Secure Boot under our own keys, [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).
 - **Expiry.** Channel metadata past its expiry is refused. The policy for a device that has been offline longer than the expiry is defined: it keeps running, and refuses to update until fresh metadata comes.

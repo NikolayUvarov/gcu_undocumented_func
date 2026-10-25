@@ -848,7 +848,7 @@ impl Init {
         if let Some((badge, dir)) = private_dir_of(name) {
             if let Err(error) = self.make_dir(badge, dir) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, dir, error); }
         }
-        let (mut scopes, mut taken) = ([0usize; 2], 0);
+        let (mut scopes, mut taken) = ([0usize; 3], 0);
         for &(child, badge, dir, writable) in scopes_of(name) {
             if grants.count >= SPAWN_GRANTS_MAX { break; }
             match self.scope(badge, dir, writable) {
@@ -865,6 +865,15 @@ impl Init {
                     Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                     Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
                 }
+            }
+        }
+        // Where the gateway installs signed application packages: a writable scope of data/apps/ in a slot of its own
+        // (750-KRN-0169); the loader checks what it finds there before a run.
+        if name == "effector_gw" && grants.count < SPAWN_GRANTS_MAX {
+            if let Err(error) = self.make_dir(mind::fs::BADGE_USER, mind::effector::APPS_DIR) { mind::println!("[INIT] {}: {} NOT MADE ({:?})", name, mind::effector::APPS_DIR, error); }
+            match self.scope(mind::fs::BADGE_USER, mind::effector::APPS_DIR, true) {
+                Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_APPS, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
+                Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, mind::effector::APPS_DIR, error),
             }
         }
         // `name\0arguments` where the plan has arguments.

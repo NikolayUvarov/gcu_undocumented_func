@@ -91,6 +91,21 @@ unsafe fn child(mb: *mut SyscallMailbox) {
             call(mb, abi::SYSCALL_FREE, page, 0);
             if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, if late { 13 } else { 11 }, 0]) != 0 { fail(); }
         }
+        // Mode 20 (000-KRN-0104): mints from the endpoint it got, dropping each, until its owner's revocation removes it;
+        // then sends how many it made and how many were refused while the revocation ran.
+        20 => {
+            if got_cap != 1 || ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 6, 0]) != 0 { fail(); }
+            let (mut made, mut refused) = (0usize, 0usize);
+            loop {
+                (*mb).msg = [0; 4];
+                match call(mb, abi::SYSCALL_CAP_MINT, 2, abi::CAP_WRITE as usize) {
+                    abi::ERR_REVOKING => refused += 1,
+                    error if error >= abi::ERR_FIRST => break,
+                    copy => { made += 1; call(mb, abi::SYSCALL_CAP_DROP, copy, 0); }
+                }
+            }
+            if ipc(mb, abi::SYSCALL_IPC_SEND, abi::SLOT_INIT, 0, [0, 0, 10, made << 32 | refused]) != 0 { fail(); }
+        }
         _ => fail(),
     }
 }
@@ -101,6 +116,12 @@ unsafe fn greet(mb: *mut SyscallMailbox, endpoint: usize, mode: usize, cap: usiz
 }
 unsafe fn print(mb: *mut SyscallMailbox, message: &[u8]) {
     call(mb, 3, message.as_ptr() as usize, message.len());
+}
+// `value` in decimal.
+unsafe fn print_number(mb: *mut SyscallMailbox, mut value: usize) {
+    let (mut digits, mut at) = ([0u8; 20], 20);
+    loop { at -= 1; digits[at] = b'0' + (value % 10) as u8; value /= 10; if value == 0 { break; } }
+    print(mb, &digits[at..]);
 }
 
 // The request note `mind::request!` writes: a block store client that may only get (REQUEST_BLOCKSTORE_READ, 300-KRN-0024)
@@ -578,6 +599,27 @@ pub extern "sysv64" fn _start(info: &abi::BootInfo, mb: *mut SyscallMailbox) {
                 if call(mb, abi::SYSCALL_CAP_REVOKE, endpoint, 0) != 2 { fail(); }
                 if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 | 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 5 || (*mb).msg[0] != 0 { fail(); }
                 print(mb, b"REVOKE PENDING OK\r\n");
+                return;
+            }
+            b'R' => {
+                // 000-KRN-0104: a child mints from its copy of an endpoint while the owner revokes the endpoint's 3001
+                // children. The walk goes in steps with the lock let go between them; a mint the child makes meanwhile
+                // is refused with ERR_REVOKING, and once its copy is gone a mint finds nothing.
+                let root = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                let endpoint = call(mb, abi::SYSCALL_ENDPOINT_CREATE, 0, 0);
+                spawn_child(mb, endpoint);
+                greet(mb, endpoint, 20, root, abi::CAP_WRITE as usize); // the root's first child: the walk removes it last
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 6 { fail(); }
+                for _ in 0..3000 {
+                    (*mb).msg = [0; 4];
+                    if call(mb, abi::SYSCALL_CAP_MINT, root, abi::CAP_WRITE as usize) >= abi::ERR_FIRST { fail(); }
+                }
+                if call(mb, abi::SYSCALL_CAP_REVOKE, root, 0) != 3001 { fail(); }
+                let steps = (*mb).arg2;
+                if ipc(mb, abi::SYSCALL_IPC_RECV, endpoint, 3 * SECONDS, [0; 4]) != 0 || (*mb).msg[2] != 10 { fail(); }
+                let (made, refused) = ((*mb).msg[3] >> 32, (*mb).msg[3] & 0xFFFF_FFFF);
+                print(mb, b"REVOKED 3001 IN "); print_number(mb, steps); print(mb, b" STEPS; THE CHILD MADE ");
+                print_number(mb, made); print(mb, b" MINTS AND WAS REFUSED "); print_number(mb, refused); print(mb, b" WHILE THE WALK RAN\r\n");
                 return;
             }
             b'x' => {

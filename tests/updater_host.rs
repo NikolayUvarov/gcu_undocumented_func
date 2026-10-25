@@ -6,7 +6,7 @@ mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
 
-use plan::{confirm, expired, in_slot, kind, may_stage, newest, other, trial_of_other, Kind};
+use plan::{confirm, expired, floor_to, in_slot, manifest_version, kind, may_stage, newest, other, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
@@ -115,4 +115,23 @@ fn metadata_is_current_only_before_its_expiry_on_a_clock_that_reads() {
     assert!(expired(1_000, Some(1_000)));
     assert!(expired(1_000, Some(5_000)));
     assert!(expired(u64::MAX, None));
+}
+
+#[test]
+fn the_floor_rises_to_a_minimum_the_confirmed_slot_meets_and_never_falls() {
+    // 351-UPD-0024: the floor is the channel's minimum, not the version confirmed here.
+    assert_eq!(floor_to(0, 5, 7, true), Some(5));
+    assert_eq!(floor_to(5, 5, 7, true), None, "a confirmed trial alone raises nothing");
+    assert_eq!(floor_to(6, 5, 7, true), None, "never lowered");
+    assert_eq!(floor_to(0, 7, 6, true), None, "the running slot below the minimum keeps the floor");
+    assert_eq!(floor_to(0, 7, 7, false), None, "not before the running slot is confirmed");
+    // With the floor at 5, release 7 confirmed, release 6 stays at or above it: a rollback to it is allowed.
+    assert!(floor_to(0, 5, 7, true).is_some_and(|floor| 6 >= floor));
+}
+
+#[test]
+fn a_manifests_version_is_its_header_line() {
+    assert_eq!(manifest_version(b"MIND-MANIFEST 1\nkey ab\nversion 6\nfile kernel.elf 1 aa 0 0\n"), 6);
+    assert_eq!(manifest_version(b"MIND-MANIFEST 1\nkey ab\nfile kernel.elf 1 aa 0 0\n"), 0, "none: version 0");
+    assert_eq!(manifest_version(b"MIND-MANIFEST 1\nfile version 9 aa 0 0\nversion 6\n"), 0, "not after a file line");
 }

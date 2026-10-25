@@ -137,6 +137,7 @@ def slots(payloads, arch, channel=None):
     out.update({f"MIND/A/{name}": payloads[path] for path, name in boot_slots.LOADERS.items() if path in payloads})
     out["MIND/BOOT0"] = boot_slots.record(1, "A", confirmed=True)
     out["MIND/BOOT1"] = bytes(boot_slots.RECORD)
+    out[boot_slots.FLOOR_FILE] = boot_slots.floor(0)  # the version floor, raised by the updater (351-UPD-0024)
     if channel is not None:
         lines = channel.split(b"\n")
         if len(lines) != 3 or lines[2] or not lines[1].startswith(b"ed25519 "):

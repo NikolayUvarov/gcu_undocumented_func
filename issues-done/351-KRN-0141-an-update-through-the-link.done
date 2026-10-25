@@ -1,6 +1,6 @@
-# 351-KRN-0141 — An update through the link: a release put into `data/link/` installed by the updater
+# 351-KRN-0141 — An update through the link: a release put into `data/link/` installed by the updater — done
 
-**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** criteria 1 and 3 met (2026-10-21); the update track's word on the directory source left · **Blocked by:** — for the suite; the request in [requests-UPD.md](requests-UPD.md) ("An update through the link") and [351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md) for the rest · **Main task:** [351](351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
+**Type:** test (QEMU), coordination · **Owner:** kernel session · **Priority:** P1 · **Status:** done (2026-10-25) · **Blocked by:** — · **Main task:** [351](../issues/351-self-update.md) (the update track's) · **Constitution:** MC-9.2–9.4, MC-12.1, MC-12.9
 
 ## Problem
 
@@ -29,10 +29,10 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
      - `mindlink log` shows each step;
      - a release whose channel has a bad signature, put first, is refused, with no boot record written.
    - **The update suite's own helpers** (the release, the keys, the slot image) are reused as they are.
-2. **The update track** ([requests-UPD.md](requests-UPD.md)):
+2. **The update track** (its request, answered 2026-10-25; see the resolution):
    - the directory source's checks equal to the HTTPS source's, and a fix for whatever the suite finds;
    - a way for a holder of the updater's client to start a run now.
-3. **The link track** ([351-LNK-0013](351-LNK-0013-staging-a-release-through-the-link.md)):
+3. **The link track** ([351-LNK-0013](../issues/351-LNK-0013-staging-a-release-through-the-link.md)):
    - `mindlink put -r` of a directory tree in one command;
    - in `effector485`, an operation that stages a release and reports the updater's state from the log.
 4. **The maintainer's image for the Mac.** The image needs slots and an `update.txt` naming `data/link/rel`.
@@ -43,7 +43,7 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
 ## Acceptance criteria
 
 - [x] The `linkupdate` suite passes on x86 and aarch64, in the gate: release 6 put through the link boots on trial and is confirmed; a channel with a bad signature is refused first.
-- [ ] The directory source's checks are the HTTPS source's, said by the update track (or fixed).
+- [x] The directory source's checks are the HTTPS source's, said by the update track (or fixed).
 - [x] On the maintainer's MacBook Pro, a release put over RS-485 is installed and confirmed (the maintainer's run, recorded here with its configuration).
 
 ## Progress (2026-10-21)
@@ -99,8 +99,18 @@ On 2026-10-21 the maintainer asked whether the kernel can be updated now through
   - `scripts/link_update.py` ran from WSL against COM22, over RS-485, on `fast-test` with this branch;
   - it put 43 files in 274 s;
   - the Mac restarted into slot B on trial by itself, `[UPDATER] SLOT B CONFIRMED ON THE DISK`, and the script ended with 0.
-- **Left:** criterion 2, the update track's statement on the directory source's checks (`requests-UPD.md`).
+- **Left then:** criterion 2, the update track's statement on the directory source's checks.
+
+## Resolution
+
+The update track's word (the kernel session holds `UPD` since 2026-10-24), from `updater/src/source.rs` and `updater/src/main.rs` at `main` 69eac561:
+
+- **The same checks.** The source only supplies bytes; every check is the updater's, whichever source it reads. `stage` checks the channel's signature with the release key, its name and expiry, the manifest's SHA-256 against the channel and its signature with the boot key, and each file's size and SHA-256 once it is on the disk; `apply` checks the slot again as the bootloader will. A directory adds one refusal of its own: a file whose size is not the manifest's is refused before it is copied (a put still under way), and the next run takes it again.
+- **A cut resumed the same way.** A partial file in the slot is kept and the rest copied after it, as HTTPS asks for the rest with `Range`. What was there before and turns out not to be the file's start is fetched again whole, once, then refused: that code is shared.
+- **A path on the boot volume is a valid source:** `source data/link/rel`, with no volume prefix, is what the `linkupdate` check and the MacBook Pro's stick use. `docs/update/updater.md` names it now beside `usb:releases`.
+- **A run now:** not added. The automatic run every `every` seconds takes a release put through the link, and `scripts/link_update.py` follows the log; lending `link` the updater's client would give the link more authority than it needs (MC-3.7).
+- Nothing differed, so nothing was fixed. Criteria 1 and 3 were met on 2026-10-21 (above).
 
 ## Related
 
-[351](351-self-update.md), [351-UPD-0007](../issues-done/351-UPD-0007-updater-service.done) (the updater), [351-UPD-0016](../issues-done/351-UPD-0016-images-with-slots.done) (images with slots), [800-LNK-0010](800-LNK-0010-directories-in-data-link.md) (directories over the link), [800-LNK-0011](800-LNK-0011-effector485.md) (`effector485`).
+[351](../issues/351-self-update.md), [351-UPD-0007](351-UPD-0007-updater-service.done) (the updater), [351-UPD-0016](351-UPD-0016-images-with-slots.done) (images with slots), [800-LNK-0010](../issues/800-LNK-0010-directories-in-data-link.md) (directories over the link), [800-LNK-0011](../issues/800-LNK-0011-effector485.md) (`effector485`).

@@ -94,3 +94,26 @@ pub fn spent(written: (usize, Record)) -> (usize, Record) {
     let (file, record) = written;
     (1 - file, Record { sequence: record.sequence + 1, tries: 0, ..record })
 }
+
+/// The version floor (351-UPD-0024): `MIND/FLOOR`, one sector beside the records, which older loaders do not read. It
+/// holds the highest minimum a channel checked with the release key named; a slot whose manifest names a lower version
+/// is not booted. Written whole, in place, by the updater only upward.
+pub const FLOOR_MAGIC: &[u8; 8] = b"MINDFLOR";
+
+/// The floor in `data`, or None for anything but a floor of one sector, its magic, format 1, a good CRC and zeros.
+pub fn parse_floor(data: &[u8]) -> Option<u64> {
+    if data.len() != RECORD || &data[..8] != FLOOR_MAGIC || data[8..12] != FORMAT.to_le_bytes() { return None; }
+    if data[RECORD - 4..] != crc32(&data[..RECORD - 4]).to_le_bytes() || data[20..RECORD - 4].iter().any(|&b| b != 0) { return None; }
+    Some(u64::from_le_bytes(data[12..20].try_into().ok()?))
+}
+
+#[allow(dead_code)] // the updater writes it, the bootloader only reads
+pub fn encode_floor(floor: u64) -> [u8; RECORD] {
+    let mut data = [0u8; RECORD];
+    data[..8].copy_from_slice(FLOOR_MAGIC);
+    data[8..12].copy_from_slice(&FORMAT.to_le_bytes());
+    data[12..20].copy_from_slice(&floor.to_le_bytes());
+    let crc = crc32(&data[..RECORD - 4]);
+    data[RECORD - 4..].copy_from_slice(&crc.to_le_bytes());
+    data
+}

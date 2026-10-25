@@ -1,6 +1,6 @@
 # The updater
 
-**Version:** 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
+**Version:** 0.7 (2026-10-25): the version floor raised to the channel's minimum (351-UPD-0024); 0.6 (2026-10-24): the release's loader staged into its slot (351-UPD-0010); 0.5 (2026-10-23): metadata past its expiry, the policy and `metadata` (351-UPD-0025); 0.4 (2026-10-22): a fallback runs its slot's own applications (351-UPD-0023, 351-KRN-0151); 0.3 (2026-10-22): a release's applications staged in its slot (351-UPD-0023); 0.2 (2026-10-20): a trial confirmed once `init` says it confirmed it (351-UPD-0021); 0.1 (2026-10-10) · **Track:** `UPD`, task [351-UPD-0007](../../issues-done/351-UPD-0007-updater-service.done) · **Constitution:** MC-9.2–9.4, MC-3.11, MC-11.11 · Russian: [updater_RU.md](updater_RU.md)
 
 `updater` is the boot service that turns a published release ([publishing.md](publishing.md)) into a staged, verified slot ([slots.md](slots.md)), and does nothing more. It holds:
 - its own endpoint;
@@ -34,6 +34,7 @@ The public keys are built in: `$MIND_RELEASE_PUBLIC_KEY` and `$MIND_BOOT_PUBLIC_
 | `fetch` | `check`, then the newer release into the slot that did not boot. First it removes the slot's `CHANNEL`, `MANIFEST`, `MANIFEST.SIG`, and every file the new manifest does not list (the bootloader refuses a slot with a boot file its manifest does not list). Then it fetches every boot file, the loader and every application. An application the volume already holds as listed, in the running slot or at the root, is copied from there instead. A partial file is resumed where it ends, a cut connection is resumed with `Range`, and a file that is not as listed is fetched once more whole, then refused. Last come `MANIFEST`, `MANIFEST.SIG` and `CHANNEL`: a slot holds a channel only once all of it is there. |
 | `apply` | Checks the other slot as the bootloader will: the manifest's signature, every boot file it lists, no boot file it does not list, and its loader as listed if it holds one (a slot staged before 351-UPD-0010 holds none). A slot that holds applications must hold every one the manifest lists and none it does not. A slot staged before 351-UPD-0023 holds none, and the root's serve it. The channel kept there must show a version above the running one, and must not have expired (`expired`). Then it writes the record that boots that slot on trial with 1 to 9 tries, falling back to the running slot, and asks `init` to restart the machine. |
 | `rollback` | The same check of the other slot. The channel kept there must show a version not below the highest minimum the updater has seen (the running slot's channel, and the last check). Then it writes the record that boots that slot on trial, falling back to the running one, and asks `init` to restart. |
+| (the floor) | Not a request: once the running slot is confirmed, the updater raises `MIND/FLOOR` in place to the highest minimum a checked channel named, if the running slot's own manifest names that version or above; never down. The bootloader boots no slot below it ([slots.md](slots.md#the-version-floor-351-upd-0024)). A rollback to a release at or above the minimum stays allowed. |
 | `status` | The running slot, whether it is on trial, its version, the slot the newer record names and whether it is confirmed, the version staged in the other slot, and the last failure. |
 | `metadata` (1.1) | The channel the updater holds, checked with the release key: the one it last read from the source, or else the one kept in the running slot. Its name, version, minimum and expiry, whether the expiry has passed, and whether it came from the source. |
 
@@ -68,7 +69,7 @@ A device may go longer than its channel's expiry without a current one: offline,
 A file at the root of the boot volume. Nothing in the running system writes it: it is written with the image, or on another machine.
 
 ```
-source https://updates.example.org/mind   # or a directory on a mounted volume: usb:releases
+source https://updates.example.org/mind   # or a directory: usb:releases on a mounted volume, data/link/rel on the boot volume
 pin 3c5f…                                 # https: the SHA-256 of the server's public key; without it, tlsroots.pem
 channel stable
 automatic apply                           # none (the default), check, fetch or apply
@@ -76,6 +77,7 @@ every 21600                               # seconds between automatic runs; 0 (t
 tries 3                                   # tries of a trial boot for an automatic apply (1 to 9)
 ```
 
+- **A directory source** is checked as the HTTPS one: the source only supplies bytes, and every check above is the updater's. A file whose size is not the manifest's is refused before it is copied, and the next run takes it again (351-KRN-0141).
 - **Without the file** the updater has no source and acts only when asked.
 - **The automatic run** starts once the trial (if any) is confirmed. When the source does not answer, it is tried again after 30 s.
 - **The source** may be an HTTPS server or a directory with the layout of `scripts/release.py`. Both go through the same checks.

@@ -45,6 +45,12 @@ impl<'a> Manifest<'a> {
     /// Whether the manifest lists a file `name` (one it does not list may be absent: a service not built).
     pub fn names(&self, name: &str) -> bool { self.lines().any(|l| field(l, 0) == Some(b"file") && field(l, 1) == Some(name.as_bytes())) }
 
+    /// The release version the manifest's `version` line names, 0 without one (351-UPD-0024).
+    pub fn version(&self) -> u64 {
+        let line = self.lines().take_while(|l| field(l, 0) != Some(b"file")).find(|l| field(l, 0) == Some(b"version"));
+        line.and_then(|l| field(l, 1)).and_then(|v| core::str::from_utf8(v).ok()).and_then(|v| v.parse().ok()).unwrap_or(0)
+    }
+
     /// The signing key's identity as the manifest names it.
     pub fn key(&self) -> &'a str {
         self.lines().find(|l| field(l, 0) == Some(b"key")).and_then(|l| field(l, 1)).and_then(|k| core::str::from_utf8(k).ok()).unwrap_or("?")
