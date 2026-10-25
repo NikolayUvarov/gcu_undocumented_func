@@ -1747,7 +1747,8 @@ def speak_check(vm):
 # kbench's rows (176-KRN-0062), by group; `check` and `bench` follow the same table.
 KBENCH_ROWS = {"syscall": ["uptime (empty call)", "monotonic clock read", "task alive?"],
                "ipc": ["call and reply", "… with a lent page"],
-               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop"],
+               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop",
+                        "revoke 10 nodes", "revoke 100 nodes", "revoke 1000 nodes", "revoke 10000 nodes"],
                "memory": ["a page: take and free", "1 MiB take+touch+free"],
                "timer": ["sleep 1 ms", "sleep 10 ms"],
                "process": ["start (the loader)", "start to running", "exit to gone"]}
@@ -2606,6 +2607,35 @@ def smp_suite(vm):
         vm.serial()
     kept, idle = ("register", "WFI") if vm.arch == "aarch64" else ("SIMD", "HLT")
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
+    revocation_steps_check(vm)
+
+
+def revocation_steps_check(vm):
+    """000-KRN-0104: kbench revokes subtrees of 10 to 10 000 nodes over four tasks while memtest sleeps 10 ms at a time.
+    The walk visits only the nodes it removes, at most 256 in a step with the lock let go between steps: 10 000 nodes take
+    at least 40 steps, as the kernel counts them, and the sleeps still end on time. A step's time is printed, not checked:
+    under QEMU a host thread can be preempted in the middle of one. With more than one CPU: the bench suite's kbench run
+    measures the rows on one."""
+    if vm.cpus < 2:
+        return
+    sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 0 &"))[1])
+    vm.send("kbench caps --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="kbench caps --quick\n")
+    rows = bench_rows(output, KBENCH_ROWS["caps"])
+    require(output, f"kbench: {len(KBENCH_ROWS['caps'])} measurements, 0 failed")
+    notes = {int(n): (int(s), int(us)) for n, s, us in re.findall(r"revoke (\d+) nodes over 4 tasks: (\d+) steps, the longest (\d+) µs under the lock", output)}
+    assert set(notes) == {10, 100, 1000, 10_000}, output[-3000:]
+    steps, longest = notes[10_000]
+    whole = rows["revoke 10000 nodes"][0]
+    assert notes[10][0] == 1 and steps >= 10_000 // 256, (notes, whole)
+    time.sleep(1.5)
+    nap = max(int(n) for n in re.findall(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=40)))
+    require(vm.command(f"kill {sleeper}"), f"KILLED PID={sleeper}")
+    assert nap < 1000, f"a 10 ms sleep took {nap} ms while kbench revoked"
+    per = {n: rows[f"revoke {n} nodes"][0] for n in (10, 100, 1000, 10_000)}
+    print(f"PASS: revocation in steps (000-KRN-0104): {', '.join(f'{n} nodes {ns / 1000:.0f} µs' for n, ns in per.items())}; "
+          f"10 000 nodes in {steps} steps, the longest {longest} µs under the lock; the longest 10 ms sleep meanwhile {nap} ms "
+          f"({vm.cpus} CPUs, QEMU, not a machine's figure)", flush=True)
 
 
 def workers_check(vm):
@@ -2761,10 +2791,29 @@ def isolation_suite(vm):
         assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR=13 ", faults), faults
     else:
         require(output, "SGDT ALLOWED")
+    revoking = revocation_refusal_check(vm)
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; {revoking}; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+
+
+def revocation_refusal_check(vm):
+    """000-KRN-0104: app2's child mints from its copy of an endpoint while app2 revokes the endpoint's 3001 children in
+    steps: with more than one CPU some of those mints are refused with ERR_REVOKING while the walk runs, and once the
+    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends."""
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("R\n")
+    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
+    done = re.search(r"REVOKED 3001 IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
+    assert done, output[-2000:]
+    steps, made, refused = map(int, done.groups())
+    assert steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
+    faults = vm.command("faults")
+    assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
+    time.sleep(.1); vm.collect(); vm.output = ""
+    return f"a revocation of 3001 in {steps} steps refused {refused} mints from under it while it ran"
 
 
 def protection_check(vm):

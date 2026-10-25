@@ -50,7 +50,8 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // reads zeros and writes there instead of faulting (000-KRN-0152). ABI 18 adds workers: WORKER_START, SPAWN_WORKERS and
 // the info page's WORKER_OFFSET (262-KRN-0163). ABI 19: memory is mapped in 2 MiB and 1 GiB pages where both its
 // addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161). ABI 20 moves SLOT_DYNAMIC to 39 for SLOT_APPS,
-// the Effector gateway's writable scope of data/apps/ (750-KRN-0169).
+// the Effector gateway's writable scope of data/apps/ (750-KRN-0169), and CAP_REVOKE walks in steps, refusing a copy,
+// mint or transfer under its root with ERR_REVOKING meanwhile, a copy past DERIVE_DEPTH_MAX refused (000-KRN-0104).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
@@ -213,8 +214,12 @@ pub const SYSCALL_CLOCK: usize = 44;
 // capability never carries it.
 pub const BADGE_MAX: usize = 0xFFFF;
 // CAP_MINT: arg1 = handle, arg2 = rights mask (endpoints and memory), msg[0] = offset, msg[1] = length (0: to the end) for port and
-// memory ranges -> handle of a child with no more authority. CAP_REVOKE: arg1 = handle -> number of descendants removed
-// from all tasks; the capability itself stays (MC-3.4-3.6).
+// memory ranges -> handle of a child with no more authority; one more than DERIVE_DEPTH_MAX derivations from its root, or
+// of a capability a revocation in progress covers (ERR_REVOKING), is refused. CAP_REVOKE: arg1 = handle -> number of
+// descendants removed from all tasks; the capability itself stays (MC-3.4-3.6). The walk visits only the descendants,
+// in steps of at most 256 of them, the kernel letting go of its lock between steps; it returns after the last, with
+// arg2 = the steps and msg[0] = the longest step in nanoseconds (000-KRN-0104, MC-5.4). While it runs, a copy, mint or
+// transfer of anything under the handle is refused with ERR_REVOKING.
 pub const SYSCALL_CAP_MINT: usize = 45;
 pub const SYSCALL_CAP_REVOKE: usize = 46;
 // MEM_DETACH: arg1 = start of a heap block no one else refers to -> handle of a memory object (read/write, no grant).
@@ -285,6 +290,7 @@ pub const ERR_LIMIT: usize = usize::MAX - 7; // task limit reached
 pub const ERR_TIMEOUT: usize = usize::MAX - 8; // an IPC deadline passed; the operation left no trace
 pub const ERR_FOCUS: usize = usize::MAX - 9; // SPAWN_FOREGROUND from a task that does not have the focus (issue 160)
 pub const ERR_IO: usize = usize::MAX - 10; // services only: a drive did not answer or a medium could not be read (211-KRN-0050)
+pub const ERR_REVOKING: usize = usize::MAX - 11; // a copy, mint or transfer of a capability a revocation in progress covers (000-KRN-0104)
 pub const ERR_FIRST: usize = usize::MAX - 15;
 pub const RTC_UNAVAILABLE: usize = usize::MAX;
 
@@ -298,6 +304,8 @@ pub const CAP_BADGE: u8 = 1 << 4;
 // kernel heap a task's table takes (about 56 bytes a slot), not on what a handle can name (issue 172).
 pub const CAP_SLOTS: usize = 104;
 pub const CAP_SLOTS_MAX: usize = 4096;
+// Derivations from a root a capability may be (000-KRN-0104): a copy or mint deeper than this is refused with ERR_LIMIT.
+pub const DERIVE_DEPTH_MAX: usize = 64;
 
 // Application capability slots, filled by the spawner (loader) through the SPAWN grant list.
 pub const SLOT_INIT: usize = 1;

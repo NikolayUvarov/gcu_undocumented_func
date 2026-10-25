@@ -9,7 +9,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::child::{self, ECHO, EXIT};
+use bench::child::{self, ECHO, EXIT, MINTS};
 use bench::measure::{batches, now, Run};
 use bench::report;
 use core::hint::black_box;
@@ -99,6 +99,62 @@ fn caps(run: &mut Run) {
         if waits > 0 { run.note(format!("endpoint create+drop: the quota was reached {} times; dropped endpoints count until the kernel's idle pass reclaims them", waits)); }
     } else { run.fail("endpoint create+drop", &format!("{} of {} created, {} waits", samples.len(), n, waits)); }
     let _ = ipc::drop_cap(endpoint.0);
+    revocations(run);
+}
+
+// CAP_REVOKE of subtrees of 10 to 10 000 nodes over four tasks: a copy of the root in each of three echoes, which mint
+// the rest under it. The time grows with the nodes removed; each step of the walk holds the lock for at most 256 of
+// them, and the longest step is noted (000-KRN-0104, MC-5.4).
+fn revocations(run: &mut Run) {
+    const ECHOES: usize = 3;
+    // An endpoint for each echo, which receives on it. The endpoints the rows before dropped count until the kernel's
+    // idle pass reclaims them: at the limit, wait for it.
+    let create = || {
+        let mut endpoint = Endpoint::create();
+        for _ in 0..300 {
+            if !matches!(endpoint, Err(mind::Error::Other(ERR_LIMIT))) { break; }
+            mind::time::sleep(10); endpoint = Endpoint::create();
+        }
+        endpoint.ok()
+    };
+    let mut echoes: Vec<(Endpoint, u64)> = Vec::new();
+    for _ in 0..ECHOES {
+        let Some(endpoint) = create() else { run.fail("revoke a subtree", "no endpoint"); break };
+        match child::start("kbench", "--child", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)) {
+            Ok(pid) => echoes.push((endpoint, pid)),
+            Err(why) => { let _ = ipc::drop_cap(endpoint.0); run.fail("revoke a subtree", &why); break; }
+        }
+    }
+    let root = echoes.first().and_then(|&(endpoint, _)| ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0).ok());
+    if let Some(root) = root.filter(|_| echoes.len() == ECHOES) {
+        for nodes in [10usize, 100, 1000, 10_000] {
+            let name = format!("revoke {} nodes", nodes);
+            let n = run.reps(if nodes >= 1000 { 10 } else { 50 });
+            let (mut samples, mut longest, mut steps) = (Vec::with_capacity(n), 0u64, 0usize);
+            for _ in 0..n {
+                // Each echo gets a copy of the root and mints its share of the rest under it.
+                let mut made = 0;
+                for (k, &(endpoint, _)) in echoes.iter().enumerate() {
+                    let share = (nodes - ECHOES) / ECHOES + usize::from(k < (nodes - ECHOES) % ECHOES);
+                    let Ok(copy) = ipc::mint(root, CAP_WRITE | CAP_GRANT, 0, 0) else { break };
+                    if let Ok(reply) = endpoint.call_timeout(&Message::new(MINTS, share).with_cap_moved(copy, u8::MAX), 0, 10_000) { made += 1 + reply.data[1]; }
+                }
+                let t = now();
+                let revoked = ipc::revoke_measured(root);
+                let dt = now() - t;
+                match revoked {
+                    Ok((removed, s, ns)) if removed == made && made == nodes => { samples.push(dt); longest = longest.max(ns); steps = steps.max(s); }
+                    other => { run.fail(&name, &format!("made {}, revoke said {:?}", made, other)); break; }
+                }
+            }
+            if samples.len() == n {
+                run.row(&name, &mut samples, 1);
+                run.note(format!("{} over 4 tasks: {} steps, the longest {} µs under the lock", name, steps, longest / 1000));
+            }
+        }
+        let _ = ipc::drop_cap(root);
+    }
+    for (endpoint, pid) in echoes { child::stop(endpoint, pid); let _ = ipc::drop_cap(endpoint.0); }
 }
 
 fn memory(run: &mut Run) {
