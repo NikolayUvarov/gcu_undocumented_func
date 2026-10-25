@@ -14,10 +14,12 @@ Usage:
     boot_slots.py stage IMAGE SLOT [--tries N] the record that boots SLOT on trial, N tries (default 3), falling back
                                                to the slot now booted
     boot_slots.py confirm IMAGE                the record that confirms the slot of the newer record
-    boot_slots.py floor IMAGE [N]              the version floor (351-UPD-0024), or set it to N
+    boot_slots.py floor IMAGE [N]              the version floor the records hold (351-UPD-0024), or a record one past
+                                               the newer that sets it to N, as the recovery authority would
 
-The record is the one in bootloader/src/slots.rs: magic "MINDBOOT", format 1, sequence (u64), slot, fallback (or 0),
-tries left, flags (bit 0: confirmed), zeros, and a CRC-32 of the first 508 bytes; all little-endian. The manifest in a
+The record is the one in bootloader/src/slots.rs: magic "MINDBOOT", format 2, sequence (u64), slot, fallback (or 0),
+tries left, flags (bit 0: confirmed), the version floor (u64), zeros, and a CRC-32 of the first 508 bytes; all
+little-endian. A record of format 1 is not read: the disk is written again. The manifest in a
 slot is the build's own: the bootloader checks the slot's kernel and services against it by name.
 """
 import os
@@ -32,9 +34,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = 512
 MAGIC = b"MINDBOOT"
-FORMAT = 1
+FORMAT = 2  # format 2 adds the version floor (351-UPD-0024)
 FILES = ("MIND/BOOT0", "MIND/BOOT1")
-FLOOR_FILE, FLOOR_MAGIC = "MIND/FLOOR", b"MINDFLOR"  # the version floor, beside the records (351-UPD-0024)
 SEQUENCE_LAST = 2**64 - 3  # the largest sequence a record may hold, as bootloader/src/slots.rs
 # The kernel and the services the bootloader loads (BOOT_FILES in the ABI), and the manifest it checks them against.
 BOOT_FILES = re.findall(r'"([\w-]+\.elf)"', re.search(r"BOOT_FILES[^=]*=\s*\[(.*?)\];", (ROOT / "common/abi.rs").read_text(), re.S)[1])
@@ -44,36 +45,31 @@ LOADERS = {"EFI/BOOT/BOOTX64.EFI": "BOOTX64.EFI", "EFI/BOOT/BOOTAA64.EFI": "BOOT
 MTOOLS_ENV = dict(os.environ, MTOOLS_SKIP_CHECK="1")
 
 
-def record(sequence, slot, fallback=None, tries=0, confirmed=False):
-    data = struct.pack("<8sIQ4B", MAGIC, FORMAT, sequence, ord(slot), ord(fallback) if fallback else 0, tries, 1 if confirmed else 0)
+def record(sequence, slot, fallback=None, tries=0, confirmed=False, floor=0):
+    data = struct.pack("<8sIQ4BQ", MAGIC, FORMAT, sequence, ord(slot), ord(fallback) if fallback else 0, tries, 1 if confirmed else 0, floor)
     data = data.ljust(RECORD - 4, b"\0")
     return data + struct.pack("<I", zlib.crc32(data))
 
 
-def floor(value):
-    """MIND/FLOOR holding `value`: as bootloader/src/slots.rs encodes it."""
-    data = struct.pack("<8sIQ", FLOOR_MAGIC, FORMAT, value).ljust(RECORD - 4, b"\0")
-    return data + struct.pack("<I", zlib.crc32(data))
-
-
-def parse_floor(data):
-    """The floor in `data`, or None where the bootloader would ignore it."""
-    if data is None or len(data) != RECORD or data[:8] != FLOOR_MAGIC or struct.unpack_from("<I", data, RECORD - 4)[0] != zlib.crc32(data[:RECORD - 4]):
+def other_format(data):
+    """The format of a record of ours that is not format 2 (format 1), which nothing reads; None otherwise."""
+    if data is None or len(data) != RECORD or data[:8] != MAGIC:
         return None
-    _, version, value = struct.unpack_from("<8sIQ", data)
-    return value if version == FORMAT and not any(data[20:RECORD - 4]) else None
+    version = struct.unpack_from("<I", data, 8)[0]
+    return version if version != FORMAT else None
 
 
 def parse(data):
     """The record as a dict, or None where the bootloader would ignore it."""
     if len(data) != RECORD or data[:8] != MAGIC or struct.unpack_from("<I", data, RECORD - 4)[0] != zlib.crc32(data[:RECORD - 4]):
         return None
-    _, version, sequence, slot, fallback, tries, flags = struct.unpack_from("<8sIQ4B", data)
-    if version != FORMAT or chr(slot) not in "AB" or (fallback and chr(fallback) not in "AB") or flags & ~1 or any(data[24:RECORD - 4]):
+    _, version, sequence, slot, fallback, tries, flags, floor = struct.unpack_from("<8sIQ4BQ", data)
+    if version != FORMAT or chr(slot) not in "AB" or (fallback and chr(fallback) not in "AB") or flags & ~1 or any(data[32:RECORD - 4]):
         return None
     if sequence > SEQUENCE_LAST:  # a trial writes one more, and its failure one more again (351-UPD-0015)
         return None
-    return {"sequence": sequence, "slot": chr(slot), "fallback": chr(fallback) if fallback else None, "tries": tries, "confirmed": bool(flags & 1)}
+    return {"sequence": sequence, "slot": chr(slot), "fallback": chr(fallback) if fallback else None, "tries": tries, "confirmed": bool(flags & 1),
+            "floor": floor}
 
 
 def boot_set(volume):
@@ -91,10 +87,11 @@ def applications(volume):
     return sorted(p.name for p in Path(volume).glob("*.elf") if p.is_file() and p.name != "kernel.elf" and p.name not in BOOT_FILES)
 
 
-def layout(volume, out, both=False, with_applications=True, with_loader=True):
+def layout(volume, out, both=False, with_applications=True, with_loader=True, floor=0):
     """OUT: a copy of VOLUME with its boot set and its applications moved into slot A (and copied to B), and its loader
-    copied there, slot A confirmed; without `with_applications` they stay at the root, as in a slot an updater staged
-    before 351-UPD-0023; without `with_loader` the slot holds none, as one staged before 351-UPD-0010."""
+    copied there, slot A confirmed, the version floor `floor`; without `with_applications` they stay at the root, as in
+    a slot an updater staged before 351-UPD-0023; without `with_loader` the slot holds none, as one staged before
+    351-UPD-0010."""
     volume, out = Path(volume), Path(out)
     shutil.copytree(volume, out)
     moved = boot_set(volume) + (applications(volume) if with_applications else [])
@@ -106,10 +103,8 @@ def layout(volume, out, both=False, with_applications=True, with_loader=True):
             shutil.copyfile(volume / path, out / "MIND" / slot / name)
     for name in moved:
         (out / name).unlink()
-    (out / FILES[0]).write_bytes(record(1, "A", confirmed=True))
+    (out / FILES[0]).write_bytes(record(1, "A", confirmed=True, floor=floor))
     (out / FILES[1]).write_bytes(bytes(RECORD))
-    # The floor starts at 0; the updater raises it in place, and never makes the file (351-UPD-0024).
-    (out / FLOOR_FILE).write_bytes(floor(0))
     return out
 
 
@@ -151,13 +146,24 @@ class Image:
         temp.unlink()
 
 
-def records(volume):
-    """The two records of a directory or an image, each parsed or None."""
+def raw_records(volume):
+    """The two record files of a directory or an image, as bytes or None."""
     if Path(volume).is_dir():
         read = lambda name: (Path(volume) / name).read_bytes() if (Path(volume) / name).is_file() else None
     else:
         read = Image(volume).read
-    return [parse(data) if data is not None else None for data in map(read, FILES)]
+    return [read(name) for name in FILES]
+
+
+def records(volume):
+    """The two records of a directory or an image, each parsed or None."""
+    return [parse(data) if data is not None else None for data in raw_records(volume)]
+
+
+def floor_of(found):
+    """The version floor the records hold: the newer valid one's, as the bootloader reads it; 0 with none."""
+    chosen = newest(found)
+    return chosen[1]["floor"] if chosen else 0
 
 
 def newest(found):
@@ -167,9 +173,12 @@ def newest(found):
 
 
 def write_next(image, **fields):
-    """Writes a record one past the newer valid one into the other file, as the updater will; returns it."""
-    found = newest(records(image.path))
+    """Writes a record one past the newer valid one into the other file, as the updater will, carrying its floor
+    unless `floor` is given; returns it."""
+    found_all = records(image.path)
+    found = newest(found_all)
     k, sequence = (found[0], found[1]["sequence"]) if found else (1, 0)
+    fields.setdefault("floor", floor_of(found_all))
     image.write(FILES[1 - k], record(sequence + 1, **fields))
     return parse(image.read(FILES[1 - k]))
 
@@ -179,13 +188,13 @@ def main(argv):
         out = layout(argv[1], argv[2], argv[3:] == ["--both"])
         print(f"SLOTS IN {out}: {', '.join(sorted(p.name for p in (out / 'MIND').iterdir() if p.is_dir()))}; SLOT A CONFIRMED")
     elif argv[:1] == ["show"] and len(argv) == 2:
-        found = records(argv[1])
-        for name, r in zip(FILES, found):
-            print(f"{name}: {r if r else 'NONE OR DAMAGED'}")
+        raw = raw_records(argv[1])
+        found = [parse(data) if data is not None else None for data in raw]
+        for name, data, r in zip(FILES, raw, found):
+            print(f"{name}: {r if r else (f'FORMAT {other_format(data)}, NOT READ: WRITE THE DISK AGAIN' if other_format(data) else 'NONE OR DAMAGED')}")
         chosen = newest(found)
         print(f"NEWER: {FILES[chosen[0]]}" if chosen else "NO VALID RECORD")
-        data = (Path(argv[1]) / FLOOR_FILE).read_bytes() if Path(argv[1]).is_dir() and (Path(argv[1]) / FLOOR_FILE).is_file() else (None if Path(argv[1]).is_dir() else Image(argv[1]).read(FLOOR_FILE))
-        print(f"{FLOOR_FILE}: {parse_floor(data) if data is not None else 'NONE'}")
+        print(f"VERSION FLOOR: {floor_of(found)}")
     elif argv[:1] == ["stage"] and len(argv) in (3, 5) and argv[2] in ("A", "B") and argv[3:4] in ([], ["--tries"]):
         image = Image(argv[1])
         current = newest(records(image.path))
@@ -201,8 +210,13 @@ def main(argv):
     elif argv[:1] == ["floor"] and len(argv) in (2, 3):
         image = Image(argv[1])
         if len(argv) == 3:
-            image.write(FLOOR_FILE, floor(int(argv[2])))
-        print(f"{FLOOR_FILE}: {parse_floor(image.read(FLOOR_FILE))}")
+            current = newest(records(image.path))
+            if not current:
+                print("NO VALID RECORD")
+                return 1
+            r = current[1]
+            write_next(image, slot=r["slot"], fallback=r["fallback"], tries=r["tries"], confirmed=r["confirmed"], floor=int(argv[2]))
+        print(f"VERSION FLOOR: {floor_of(records(image.path))}")
     else:
         print(__doc__)
         return 2

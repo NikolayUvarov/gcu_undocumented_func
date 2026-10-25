@@ -30,8 +30,7 @@ impl Zone {
                 _ => Zone::Hidden,
             },
             Zone::Slots if inactive.is_some_and(|slot| same_name(name, slot)) => Zone::Writable,
-            // The version floor beside the records is written the same way (351-UPD-0024).
-            Zone::Slots if same_name(name, "BOOT0") || same_name(name, "BOOT1") || same_name(name, "FLOOR") => Zone::Record,
+            Zone::Slots if same_name(name, "BOOT0") || same_name(name, "BOOT1") => Zone::Record,
             Zone::Slots | Zone::Record => Zone::ReadOnly,
             zone => zone,
         }

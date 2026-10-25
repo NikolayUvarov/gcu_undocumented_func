@@ -6,11 +6,11 @@ mod slots;
 #[path = "../updater/src/plan.rs"]
 mod plan;
 
-use plan::{confirm, expired, floor_to, in_slot, manifest_version, kind, may_stage, newest, other, trial_of_other, Kind};
+use plan::{confirm, expired, floor, in_slot, manifest_version, kind, may_stage, newest, other, raise, trial_of_other, Kind};
 use slots::{Record, SEQUENCE_LAST};
 
 fn rec(sequence: u64, slot: u8, fallback: u8, tries: u8, confirmed: bool) -> Record {
-    Record { sequence, slot, fallback, tries, confirmed }
+    Record { sequence, slot, fallback, tries, confirmed, floor: 0 }
 }
 
 // The records after `write` lands in its file.
@@ -119,14 +119,27 @@ fn metadata_is_current_only_before_its_expiry_on_a_clock_that_reads() {
 
 #[test]
 fn the_floor_rises_to_a_minimum_the_confirmed_slot_meets_and_never_falls() {
-    // 351-UPD-0024: the floor is the channel's minimum, not the version confirmed here.
-    assert_eq!(floor_to(0, 5, 7, true), Some(5));
-    assert_eq!(floor_to(5, 5, 7, true), None, "a confirmed trial alone raises nothing");
-    assert_eq!(floor_to(6, 5, 7, true), None, "never lowered");
-    assert_eq!(floor_to(0, 7, 6, true), None, "the running slot below the minimum keeps the floor");
-    assert_eq!(floor_to(0, 7, 7, false), None, "not before the running slot is confirmed");
+    // 351-UPD-0024: the floor is the channel's minimum, not the version confirmed here, held in the records.
+    let at = |floor| [Some(Record { floor, ..rec(4, b'B', b'A', 0, true) }), Some(rec(3, b'B', b'A', 1, false))];
+    assert_eq!(raise(at(0), b'B', 5, 7), Some((1, Record { floor: 5, ..rec(5, b'B', b'A', 0, true) })), "the newer record again, one on");
+    assert_eq!(raise(at(5), b'B', 5, 7), None, "a confirmed trial alone raises nothing");
+    assert_eq!(raise(at(6), b'B', 5, 7), None, "never lowered");
+    assert_eq!(raise(at(0), b'B', 7, 6), None, "the running slot below the minimum keeps the floor");
+    assert_eq!(raise(at(0), b'A', 5, 7), None, "not for a slot the newer record does not confirm");
+    assert_eq!(raise([Some(rec(4, b'B', b'A', 2, false)), None], b'B', 5, 7), None, "not before the running slot is confirmed");
     // With the floor at 5, release 7 confirmed, release 6 stays at or above it: a rollback to it is allowed.
-    assert!(floor_to(0, 5, 7, true).is_some_and(|floor| 6 >= floor));
+    assert!(raise(at(0), b'B', 5, 7).is_some_and(|(_, r)| 6 >= r.floor));
+}
+
+#[test]
+fn no_write_lowers_the_floor() {
+    // Every record the updater writes carries the higher of the records' floors.
+    let records = [Some(Record { floor: 6, ..rec(4, b'A', 0, 0, true) }), Some(Record { floor: 2, ..rec(3, b'A', 0, 0, true) })];
+    assert_eq!(floor(records), 6);
+    assert_eq!(trial_of_other(records, b'A', 3).map(|(_, r)| r.floor), Some(6));
+    let trial = [Some(Record { floor: 6, ..rec(5, b'B', b'A', 2, false) }), Some(Record { floor: 6, ..rec(4, b'A', 0, 0, true) })];
+    assert_eq!(confirm(trial, b'B').map(|(_, r)| r.floor), Some(6), "confirming a trial leaves the floor where it was");
+    assert_eq!(floor([None, None]), 0);
 }
 
 #[test]

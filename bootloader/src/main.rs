@@ -323,17 +323,6 @@ fn write_record(root: &mut uefi::proto::media::file::Directory, name: &str, data
 }
 
 const RECORD_FILES: [&str; 2] = ["MIND\\BOOT0", "MIND\\BOOT1"];
-const FLOOR_FILE: &str = "MIND\\FLOOR";
-
-// The version floor (351-UPD-0024): 0 without the file; a damaged one is said and counts as 0.
-fn version_floor(root: &mut uefi::proto::media::file::Directory) -> u64 {
-    let mut data = [0u8; slots::RECORD + 1];
-    match read_file(root, "", FLOOR_FILE, &mut data) {
-        Err("file not found") => 0,
-        Ok(data) if slots::parse_floor(data).is_some() => slots::parse_floor(data).unwrap_or(0),
-        _ => { let _ = writeln!(Serial, "\r\nBOOT: {} DAMAGED, IGNORED\r", FLOOR_FILE); 0 }
-    }
-}
 
 // A slot whose signed manifest names a version below the floor is not booted (351-UPD-0024).
 fn at_or_above(root: &mut uefi::proto::media::file::Directory, dir: &str, floor: u64, manifest_buf: &mut [u8]) -> Result<(), (&'static str, &'static str)> {
@@ -509,6 +498,12 @@ fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uef
         let damaged = match read_file(root, "", name, &mut data) {
             Err("file not found") => continue,
             Err(_) => true,
+            // A record of another format is not read (351-UPD-0024): the disk is written again.
+            Ok(data) if slots::Record::other_format(data).is_some() => {
+                let format = slots::Record::other_format(data).unwrap_or(0);
+                let _ = writeln!(Serial, "\r\nBOOT: RECORD {} OF FORMAT {}, NOT READ: WRITE THE DISK AGAIN\r", name, format);
+                false
+            }
             // A record never written is all zeros: empty, not damaged.
             Ok(data) => { records[k] = slots::Record::parse(data); records[k].is_none() && data.iter().any(|&b| b != 0) }
         };
@@ -539,7 +534,7 @@ fn load_slots(services: &BootServices, image: Handle, safe: bool, root: &mut uef
         }
     }
     let own = own_digest(services, image, root, file_buf);
-    let floor = version_floor(root);
+    let floor = plan.floor;
     if floor > 0 { let _ = writeln!(Serial, "BOOT: VERSION FLOOR {}\r", floor); }
     let mut last = ("boot volume", "no slot to boot");
     for (k, &slot) in order.iter().enumerate() {
