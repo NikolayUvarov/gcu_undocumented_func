@@ -1,6 +1,6 @@
 # NRL block contract v5
 
-**Edition:** 5 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done), [900-NRL-0008](../../issues-done/900-NRL-0008-affine-bias-and-applicability.done), [900-NRL-0009](../../issues/900-NRL-0009-qsl-overlay-block-bridge.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 5 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done), [900-NRL-0008](../../issues-done/900-NRL-0008-affine-bias-and-applicability.done), [900-NRL-0009](../../issues-done/900-NRL-0009-qsl-overlay-block-bridge.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
