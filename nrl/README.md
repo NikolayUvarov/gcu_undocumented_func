@@ -86,3 +86,17 @@ Limits: 32 blocks, 512 tensors, 262144 imported values, 1 MiB JSON/header, 16 Mi
 ## Import bridge verified (2026-10-26)
 
 900-NRL-0009 passed **37 host tests**, both portable rlibs, the 12-case numerical profile and the five-representation QSL import/package/CLI cycle. Tensor bytes and outputs regenerate through the original writer; its environment record is kept separately from the core-manifest reproducibility check. [Current report](reports/qsl-block-bridge-2026-10-26.json), [raw log](reports/qsl-check-2026-10-26.txt). Next is a model/graph descriptor and complete overlay/standalone semantics, followed by the independent small model; the block bridge does not close T04.
+
+## Complete feed-forward models (900-NRL-0010)
+
+`nrl.model/0` adds an executable stateless graph with dense affine layers, gated blocks, SiLU/ReLU and addition, plus explicit shared object IDs and bounded batches/activations. A standalone package includes all graph weights. An overlay includes only changed objects and requires the exact explicitly supplied standalone base; export resolves it into a standalone package with licences/notices and change history retained. [Graph/package contract](specs/model-v0.md).
+
+```sh
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- pack-model nrl/tests/fixtures/model-v0/definition.json /tmp/nrl-model-base-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-overlay /tmp/nrl-model-base-new nrl/tests/fixtures/model-v0/replacements.json /tmp/nrl-model-overlay-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-model /tmp/nrl-model-overlay-new nrl/tests/fixtures/model-v0/input.json /tmp/nrl-model-output-new.json /tmp/nrl-model-base-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-standalone /tmp/nrl-model-overlay-new /tmp/nrl-model-flat-new /tmp/nrl-model-base-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-model /tmp/nrl-model-flat-new
+```
+
+Every output path above must be new. `model-v0/plain.json` is an independent ordinary affine/ReLU/affine model. The graph currently runs forward; full-model backward, training/validation/test evaluation, QSL whole-language-model import and native execution remain separate work. Parameter/file counts are reported with the required base dependency; they are not measured memory/performance or useful-compression claims.
