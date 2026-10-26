@@ -270,8 +270,8 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
-| [900-NRL-0019](900-NRL-0019-embedding-adapter-and-retrieval-profile.md) | Independent embedding family and retrieval metrics | `NRL` / Codex | P1 | — for host; native remains T11 | G / 900 T13 |
 | [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
+| [900-NRL-0019](../issues-done/900-NRL-0019-embedding-adapter-and-retrieval-profile.done) | Independent embedding family and retrieval profile | NRL branch; 82 tests, shared five-path projection, PyTorch vectors/rankings, standalone/CLI cycles; native remains open |
 | [900-NRL-0018](../issues-done/900-NRL-0018-prepared-decoder-experiment.done) | Measured immutable FFN preparation reuse | NRL branch; 77 tests, full forward quality preserved, accepted paired host gain; native work remains |
 | [900-NRL-0016](../issues-done/900-NRL-0016-student-activation-recovery.done) | Multiple replacements and student-activation recovery | NRL branch; 70 tests, matched control, exact pair/model replay; dense recommended; landing pending |
 | [900-NRL-0015](../issues-done/900-NRL-0015-mixed-plans-and-bounded-search.done) | Manual mixed plans and bounded measured search | NRL branch; 68 tests, six measured plans, Pareto and dense fallback; landing pending |
