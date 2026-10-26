@@ -4,7 +4,7 @@ use nrl_repr::{pruning, Activation, Block};
 use serde_json::Value;
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
 }
 fn vector(value: &Value) -> Vec<f64> {
     serde_json::from_value(value.clone()).unwrap()
@@ -122,7 +122,15 @@ fn nonfinite_scores_overflow_and_invalid_mappings_are_refused() {
     assert!(pruning::select(&[1.0], &mut []).is_err());
     assert!(pruning::select(&[1.0], &mut [0, 0]).is_err());
     let shape = Shape::new(1, 1, 1).unwrap();
-    let block = Block::new(shape, &[f64::MAX], &[1.0], &[0.0], Activation::Silu).unwrap();
+    let block = Block::new(
+        shape,
+        &[f64::MAX],
+        &[1.0],
+        &[0.0],
+        Activation::Silu,
+        nrl_repr::bias::Biases::default(),
+    )
+    .unwrap();
     assert_eq!(
         pruning::scores(&block, None, &mut [0.0], &mut [0.0; 3]),
         Err(Error::NonFinite)

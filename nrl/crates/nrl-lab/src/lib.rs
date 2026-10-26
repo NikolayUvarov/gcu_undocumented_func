@@ -4,7 +4,10 @@ use nrl_core::{finite, Shape, MAX_ELEMENTS};
 use nrl_repr::factor::{Factor, FactorGradients, SvdBlock, SvdGradients};
 use nrl_repr::{Activation, Block, Gradients, Spline};
 
+pub mod descriptor;
 pub mod svd;
+use descriptor::BlockDescriptor;
+use nrl_repr::bias::{BiasGradients, Biases};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -72,9 +75,41 @@ impl FactorData {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BiasData {
+    pub gate: Vec<f64>,
+    pub up: Vec<f64>,
+    pub down: Vec<f64>,
+}
+impl BiasData {
+    pub fn tensors(&self) -> [&[f64]; 3] {
+        [&self.gate, &self.up, &self.down]
+    }
+    pub fn tensors_mut(&mut self) -> [&mut [f64]; 3] {
+        [&mut self.gate, &mut self.up, &mut self.down]
+    }
+    fn zeros(&self) -> Self {
+        let mut result = self.clone();
+        for t in result.tensors_mut() {
+            t.fill(0.0);
+        }
+        result
+    }
+    fn view(&self) -> Biases<'_> {
+        Biases {
+            gate: &self.gate,
+            up: &self.up,
+            down: &self.down,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Artifact {
+    pub descriptor: BlockDescriptor,
+    pub bias: Option<BiasData>,
     pub schema: String,
     pub representation: String,
     pub shape: [usize; 3],
@@ -120,12 +155,19 @@ impl RuntimeBlock<'_> {
         gradients: &mut OwnedGradients,
         scratch: &mut [f64],
     ) -> nrl_core::Result<()> {
+        let mut empty_bias = BiasData::default();
+        let bias = gradients.bias.as_mut().unwrap_or(&mut empty_bias);
         match self {
             Self::Compact(b) => b.backward(
                 input,
                 dy,
                 dx,
                 &mut Gradients {
+                    biases: BiasGradients {
+                        gate: &mut bias.gate,
+                        up: &mut bias.up,
+                        down: &mut bias.down,
+                    },
                     gate: &mut gradients.gate,
                     up: &mut gradients.up,
                     down: &mut gradients.down,
@@ -141,14 +183,17 @@ impl RuntimeBlock<'_> {
                     dx,
                     &mut SvdGradients {
                         gate: FactorGradients {
+                            bias: &mut bias.gate,
                             left: &mut f.gate_left,
                             right: &mut f.gate_right,
                         },
                         up: FactorGradients {
+                            bias: &mut bias.up,
                             left: &mut f.up_left,
                             right: &mut f.up_right,
                         },
                         down: FactorGradients {
+                            bias: &mut bias.down,
                             left: &mut f.down_left,
                             right: &mut f.down_right,
                         },
@@ -162,9 +207,10 @@ impl RuntimeBlock<'_> {
 
 impl Artifact {
     pub fn block(&self) -> Result<RuntimeBlock<'_>> {
-        if self.schema != "nrl.block/3" {
+        if self.schema != "nrl.block/4" {
             return Err(format!("unsupported artifact schema: {}", self.schema));
         }
+        self.descriptor.check("cpu-scalar")?;
         let mut total = self
             .gate
             .len()
@@ -185,10 +231,19 @@ impl Artifact {
                     .ok_or("artifact value count overflow")?;
             }
         }
+        if let Some(bias) = &self.bias {
+            for tensor in bias.tensors() {
+                total = total
+                    .checked_add(tensor.len())
+                    .ok_or("artifact value count overflow")?;
+            }
+        }
         if total > MAX_ARTIFACT_VALUES {
             return Err("artifact value limit exceeded".into());
         }
         let shape = numeric(Shape::new(self.shape[0], self.shape[1], self.shape[2]))?;
+        let biases = self.bias.as_ref().map_or(Biases::default(), BiasData::view);
+        numeric(biases.validate(shape))?;
         if self.representation == "svd" {
             if self.spline.is_some()
                 || self.selection.is_some()
@@ -205,6 +260,7 @@ impl Artifact {
                 f.rank,
                 &f.gate_left,
                 &f.gate_right,
+                biases.gate,
             ))?;
             let up = numeric(Factor::new(
                 shape.input(),
@@ -212,6 +268,7 @@ impl Artifact {
                 f.rank,
                 &f.up_left,
                 &f.up_right,
+                biases.up,
             ))?;
             let down = numeric(Factor::new(
                 shape.channels(),
@@ -219,6 +276,7 @@ impl Artifact {
                 f.rank,
                 &f.down_left,
                 &f.down_right,
+                biases.down,
             ))?;
             return Ok(RuntimeBlock::Svd(numeric(SvdBlock::new(
                 shape, gate, up, down,
@@ -241,7 +299,7 @@ impl Artifact {
                 || selection.indices.windows(2).any(|pair| pair[0] >= pair[1])
                 || !matches!(
                     selection.method.as_str(),
-                    "weight-energy-f64/0" | "activation-energy-f64/0"
+                    "weight-energy-f64/1" | "activation-energy-f64/1"
                 )
                 || self.representation == "dense"
             {
@@ -269,9 +327,14 @@ impl Artifact {
             _ => return Err("unsupported representation or inconsistent spline data".into()),
         };
         numeric(Block::new(
-            shape, &self.gate, &self.up, &self.down, activation,
+            shape, &self.gate, &self.up, &self.down, activation, biases,
         ))
         .map(RuntimeBlock::Compact)
+    }
+
+    pub fn block_on(&self, device: &str) -> Result<RuntimeBlock<'_>> {
+        self.descriptor.check(device)?;
+        self.block()
     }
 
     pub fn compact_block(&self) -> Result<Block<'_>> {
@@ -336,6 +399,15 @@ impl Artifact {
             }
             _ => return Err("factor gradient mismatch".into()),
         }
+        match (&mut next.bias, &gradients.bias) {
+            (None, None) => (),
+            (Some(weights), Some(grads)) => {
+                for (w, g) in weights.tensors_mut().into_iter().zip(grads.tensors()) {
+                    update(w, g, rate)?;
+                }
+            }
+            _ => return Err("bias gradient mismatch".into()),
+        }
         next.validate()?;
         Ok(next)
     }
@@ -343,6 +415,7 @@ impl Artifact {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OwnedGradients {
+    pub bias: Option<BiasData>,
     pub factors: Option<FactorData>,
     pub gate: Vec<f64>,
     pub up: Vec<f64>,
@@ -373,6 +446,7 @@ pub fn evaluate(artifact: &Artifact, input: &[f64], target: &[f64]) -> Result<Ev
         / count;
     numeric(finite(&[loss]))?;
     let mut gradients = OwnedGradients {
+        bias: artifact.bias.as_ref().map(BiasData::zeros),
         gate: vec![0.0; artifact.gate.len()],
         up: vec![0.0; artifact.up.len()],
         down: vec![0.0; artifact.down.len()],
@@ -428,7 +502,22 @@ pub fn load(path: &Path) -> Result<Artifact> {
     if bytes.len() > MAX_ARTIFACT_BYTES {
         return Err("artifact byte limit exceeded".into());
     }
-    let artifact: Artifact = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+    parse(&bytes)
+}
+
+pub fn parse(bytes: &[u8]) -> Result<Artifact> {
+    if bytes.len() > MAX_ARTIFACT_BYTES {
+        return Err("artifact byte limit exceeded".into());
+    }
+    #[derive(Deserialize)]
+    struct Header {
+        schema: String,
+    }
+    let header: Header = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    if header.schema != "nrl.block/4" {
+        return Err(format!("unsupported artifact schema: {}", header.schema));
+    }
+    let artifact: Artifact = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     artifact.validate()?;
     Ok(artifact)
 }
@@ -499,6 +588,15 @@ pub fn check_case(case: &serde_json::Value) -> Result<serde_json::Value> {
         }
         _ => return Err("reference factor gradient mismatch".into()),
     }
+    match (&result.gradients.bias, &expected.bias) {
+        (None, None) => (),
+        (Some(actual), Some(expected)) => {
+            for (a, b) in actual.tensors().into_iter().zip(expected.tensors()) {
+                error = error.max(close(a, b)?);
+            }
+        }
+        _ => return Err("reference bias gradient mismatch".into()),
+    }
     close(
         &[result.loss],
         &[case["loss"].as_f64().ok_or("missing reference loss")?],
@@ -521,7 +619,7 @@ pub fn check_case(case: &serde_json::Value) -> Result<serde_json::Value> {
     }
     Ok(
         serde_json::json!({"representation": artifact.representation, "max_reference_error": error,
-        "loss_before": result.loss, "loss_after": after, "sample_count": vector(&case["input"])?.len() / artifact.shape[0]}),
+        "loss_before": result.loss, "loss_after": after, "bias_parameters": artifact.bias.as_ref().map_or(0, |b| b.tensors().iter().map(|t| t.len()).sum::<usize>()), "sample_count": vector(&case["input"])?.len() / artifact.shape[0]}),
     )
 }
 
@@ -555,8 +653,23 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
     let down = (0..m)
         .flat_map(|o| indices.iter().map(move |c| source.down[o * w + c]))
         .collect();
+    let bias = source.bias.as_ref().map(|b| BiasData {
+        gate: if b.gate.is_empty() {
+            vec![]
+        } else {
+            indices.iter().map(|c| b.gate[*c]).collect()
+        },
+        up: if b.up.is_empty() {
+            vec![]
+        } else {
+            indices.iter().map(|c| b.up[*c]).collect()
+        },
+        down: b.down.clone(),
+    });
     let result = Artifact {
-        schema: "nrl.block/3".into(),
+        descriptor: source.descriptor.clone(),
+        bias,
+        schema: "nrl.block/4".into(),
         representation: "pruned".into(),
         shape: [n, width, m],
         gate,
@@ -568,9 +681,9 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
             original_channels: w,
             indices,
             method: if calibration.is_some() {
-                "activation-energy-f64/0".into()
+                "activation-energy-f64/1".into()
             } else {
-                "weight-energy-f64/0".into()
+                "weight-energy-f64/1".into()
             },
         }),
     };

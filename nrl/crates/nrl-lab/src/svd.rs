@@ -169,14 +169,16 @@ pub fn with_sweep_limit(
 pub fn control(source: &Artifact, rank: usize) -> Result<Artifact> {
     source.validate()?;
     if source.representation != "dense" {
-        return Err("SVD conversion expects a dense bias-free SiLU source".into());
+        return Err("SVD conversion expects a dense SiLU source".into());
     }
     let [n, w, m] = source.shape;
     let gate = decompose(n, w, rank, &source.gate)?;
     let up = decompose(n, w, rank, &source.up)?;
     let down = decompose(w, m, rank, &source.down)?;
     let result = Artifact {
-        schema: "nrl.block/3".into(),
+        descriptor: source.descriptor.clone(),
+        bias: source.bias.clone(),
+        schema: "nrl.block/4".into(),
         representation: "svd".into(),
         shape: source.shape,
         gate: vec![],

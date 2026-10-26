@@ -3,7 +3,9 @@
 
 use nrl_core::{elements, finite, Error, Result, Shape};
 
+pub mod bias;
 pub mod factor;
+use bias::{BiasGradients, Biases};
 pub mod pruning;
 
 #[derive(Clone, Copy)]
@@ -181,9 +183,11 @@ pub struct Block<'a> {
     up: &'a [f64],
     down: &'a [f64],
     activation: Activation<'a>,
+    biases: Biases<'a>,
 }
 
 pub struct Gradients<'a> {
+    pub biases: BiasGradients<'a>,
     pub gate: &'a mut [f64],
     pub up: &'a mut [f64],
     pub down: &'a mut [f64],
@@ -197,6 +201,7 @@ impl<'a> Block<'a> {
         up: &'a [f64],
         down: &'a [f64],
         activation: Activation<'a>,
+        biases: Biases<'a>,
     ) -> Result<Self> {
         if gate.len() != shape.gate_len()
             || up.len() != shape.gate_len()
@@ -209,6 +214,7 @@ impl<'a> Block<'a> {
                 return Err(Error::Shape);
             }
         }
+        biases.validate(shape)?;
         finite(gate)?;
         finite(up)?;
         finite(down)?;
@@ -218,6 +224,7 @@ impl<'a> Block<'a> {
             up,
             down,
             activation,
+            biases,
         })
     }
 
@@ -233,8 +240,8 @@ impl<'a> Block<'a> {
         let n = self.shape.input();
         let w = self.shape.channels();
         for c in 0..w {
-            let mut gate = 0.0;
-            let mut up = 0.0;
+            let mut gate = bias::value(self.biases.gate, c);
+            let mut up = bias::value(self.biases.up, c);
             for (i, x) in input.iter().enumerate() {
                 gate += self.gate[c * n + i] * x;
                 up += self.up[c * n + i] * x;
@@ -259,7 +266,8 @@ impl<'a> Block<'a> {
         for (o, y) in output.iter_mut().enumerate() {
             *y = (0..w)
                 .map(|c| self.down[o * w + c] * scratch[w + c] * scratch[2 * w + c])
-                .sum();
+                .sum::<f64>()
+                + bias::value(self.biases.down, o);
         }
         finite(output)
     }
@@ -288,12 +296,16 @@ impl<'a> Block<'a> {
         {
             return Err(Error::Shape);
         }
+        gradients.biases.validate(self.biases)?;
         finite(output_gradient)?;
         finite(gradients.gate)?;
         finite(gradients.up)?;
         finite(gradients.down)?;
         finite(gradients.values)?;
         self.features(input, scratch)?;
+        for (bias, dy) in gradients.biases.down.iter_mut().zip(output_gradient) {
+            *bias += dy;
+        }
         input_gradient.fill(0.0);
         for c in 0..w {
             let mut feature_gradient = 0.0;
@@ -310,6 +322,13 @@ impl<'a> Block<'a> {
             };
             let dz = feature_gradient * scratch[w + c] * activation_gradient;
             let du = feature_gradient * scratch[2 * w + c];
+            if !gradients.biases.gate.is_empty() {
+                gradients.biases.gate[c] += dz;
+            }
+            if !gradients.biases.up.is_empty() {
+                gradients.biases.up[c] += du;
+            }
+
             for i in 0..n {
                 gradients.gate[c * n + i] += dz * input[i];
                 gradients.up[c * n + i] += du * input[i];
@@ -326,7 +345,8 @@ impl<'a> Block<'a> {
         finite(gradients.gate)?;
         finite(gradients.up)?;
         finite(gradients.down)?;
-        finite(gradients.values)
+        finite(gradients.values)?;
+        gradients.biases.validate(self.biases)
     }
 }
 
@@ -369,7 +389,15 @@ mod tests {
     #[test]
     fn caller_buffer_mismatches_and_arithmetic_overflow_are_errors() {
         let shape = Shape::new(1, 1, 1).unwrap();
-        let block = Block::new(shape, &[1.0], &[1.0], &[1.0], Activation::Silu).unwrap();
+        let block = Block::new(
+            shape,
+            &[1.0],
+            &[1.0],
+            &[1.0],
+            Activation::Silu,
+            Biases::default(),
+        )
+        .unwrap();
         assert_eq!(
             block.forward(&[0.5], &mut [0.0], &mut []),
             Err(Error::Shape)
@@ -383,6 +411,7 @@ mod tests {
         let mut d = [0.0];
         let mut values = [];
         let mut gradients = Gradients {
+            biases: BiasGradients::default(),
             gate: &mut g,
             up: &mut u,
             down: &mut d,
@@ -392,7 +421,15 @@ mod tests {
             block.backward(&[0.5], &[], &mut [0.0], &mut gradients, &mut [0.0; 3]),
             Err(Error::Shape)
         );
-        let huge = Block::new(shape, &[f64::MAX], &[1.0], &[1.0], Activation::Silu).unwrap();
+        let huge = Block::new(
+            shape,
+            &[f64::MAX],
+            &[1.0],
+            &[1.0],
+            Activation::Silu,
+            Biases::default(),
+        )
+        .unwrap();
         assert_eq!(
             huge.forward(&[2.0], &mut [0.0], &mut [0.0; 3]),
             Err(Error::NonFinite)

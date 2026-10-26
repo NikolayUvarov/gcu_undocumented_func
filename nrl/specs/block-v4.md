@@ -1,6 +1,6 @@
-# NRL block contract v3
+# NRL block contract v4
 
-**Edition:** 3 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 4 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done), [900-NRL-0008](../../issues/900-NRL-0008-affine-bias-and-applicability.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
@@ -12,13 +12,13 @@ A block has positive dimensions `input = n`, `channels = w`, `output = m`. Its t
 | up U | w × n | U[c*n+i] |
 | down D | m × w | D[o*w+c] |
 
-There are no biases in v3. On one input row x:
+Each projection has an optional independent output bias: bg/bu have w entries and bd has m. An absent projection bias is zero. On one input row x:
 
 ```text
-z[c] = sum_i G[c,i] * x[i]
-u[c] = sum_i U[c,i] * x[i]
+z[c] = sum_i G[c,i] * x[i] + bg[c]
+u[c] = sum_i U[c,i] * x[i] + bu[c]
 a[c] = activation(c, z[c])
-y[o] = sum_c D[o,c] * a[c] * u[c]
+y[o] = sum_c D[o,c] * a[c] * u[c] + bd[o]
 ```
 
 `dense` and `pruned` use SiLU: `activation(z) = z * sigmoid(z)`. The derivative is `sigmoid(z) * (1 + z * (1 - sigmoid(z)))`. A sign-stable sigmoid avoids exponentiating a large positive number.
@@ -29,7 +29,7 @@ y[o] = sum_c D[o,c] * a[c] * u[c]
 
 ## Uniform linear splines
 
-Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v3. Let:
+Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v4. Let:
 
 ```text
 u = (x-low)/(high-low) * (k-1)
@@ -63,36 +63,36 @@ This is the reference's Hermite interpolation, not a B-spline. Task 262's B-spli
 
 ## Pruning and shared channel selection
 
-The portable scorer accepts a checked bias-free SiLU block, fixed f64 weights and either no calibration or a nonempty batch of matching input rows. Both methods return nonnegative f64 scores:
+The portable scorer accepts a checked SiLU gated block with optional projection biases, fixed f64 weights and either no calibration or a nonempty batch of matching input rows. Both methods return nonnegative f64 scores:
 
 ```text
-weight-energy-f64/0: ||G[c,:]||² * ||U[c,:]||² * ||D[:,c]||²
-activation-energy-f64/0: mean_train((SiLU(Gx)[c] * Ux[c])²) * ||D[:,c]||²
+weight-energy-f64/1: (||G[c,:]||² + bg[c]²) * (||U[c,:]||² + bu[c]²) * ||D[:,c]||²
+activation-energy-f64/1: mean_train((SiLU(Gx+bg)[c] * (Ux+bu)[c])²) * ||D[:,c]||²
 ```
 
 Only the first 4096 supplied rows contribute to activation ranking. The entire input length must be a valid batch within MAX_ELEMENTS; ignored rows do not contribute to scores. Empty calibration is refused instead of silently becoming weight-only ranking. The caller is responsible for supplying training/calibration data rather than validation or test data. Dataset identity/split manifests are later T04/T07 work.
 
 The top `width` scores are selected, with equal scores preferring the lower source index, and the retained mapping is then sorted by original index. Selection uses a bounded in-place heap over the caller's index buffer, O(channels*log(width)) selection plus sorting; full width returns the identity mapping. No randomness is used. Negative/nonfinite scores, arithmetic overflow, malformed buffers and out-of-range widths are errors. Low-level score buffers can be partially written on failure.
 
-The Python reference forcibly casts weights/calibration to f32 for ranking; this profile deliberately uses f64, names that in its method ID, and does not promise identical choices near numerical ties. Fixtures check original reference indices on unambiguous cases and independent PyTorch f64 scores. Stable exact ties are separately checked.
+The original Python reference only converts bias-free blocks and forcibly casts weights/calibration to f32 for ranking; this profile deliberately uses f64, names that in its method ID, and does not promise identical choices near numerical ties. Fixtures check original reference indices on unambiguous cases and independent PyTorch f64 scores. Stable exact ties are separately checked. The /1 scoring IDs explicitly extend the heuristic to affine projections, using augmented gate/up row energies or actual biased activations. The shared down bias is constant across channel choices and is excluded from ranking; it is preserved during packing. The affine score is a declared heuristic, not a guarantee of optimal channel selection.
 
-Packing copies exactly the selected rows of G/U and columns of D, with no refit of D. A spline control starts from this same pruned block, preserving its mapping and projections. Its initial coefficients are SiLU samples on an explicitly supplied per-channel grid; choosing grid quantiles and refitting D remain calibration tasks. The current transform accepts only a dense SiLU source. It never silently treats a spline or an unsupported biased block as that source.
+Packing copies exactly the selected rows of G/U and columns of D, the selected gate/up biases and the entire down bias, with no refit of D. A spline control starts from this same pruned block, preserving its mapping and projections. Its initial coefficients are SiLU samples on an explicitly supplied per-channel grid; choosing grid quantiles and refitting D remain calibration tasks. The current transform accepts only a dense SiLU source. It never silently treats a spline or another source activation as that source.
 
 `selection` records `original_channels`, an ascending, unique in-range `indices` array of length `w`, and one of the two method IDs above. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
 
-**Transition:** schema 3 adds explicit factor tensors and replaces schemas 0, 1 and 2. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
+**Transition:** schema 4 adds affine biases and the explicit semantic descriptor, replacing schemas 0, 1, 2 and 3. A bounded schema-header read refuses older versions by name before parsing fields that only the new version requires. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
 
 ## Low-rank SiLU blocks
 
-`svd` retains the original channel width and replaces each G/U/D with L*R. L is row-major `[outputs, rank]`, R is row-major `[rank, inputs]`; apply R first, then L. The host profile requires a common positive rank no greater than min(n,w,m). Numerical projections may have independent valid ranks. No transpose is implicit.
+`svd` retains the original channel width and replaces each G/U/D with L*R. L is row-major `[outputs, rank]`, R is row-major `[rank, inputs]`; apply R first, then L, then add the projection bias. No hidden rank-space bias is inserted. The host profile requires a common positive rank no greater than min(n,w,m). Numerical projections may have independent valid ranks. No transpose is implicit.
 
-All weights remain factored during forward/backward. Parameter gradients are dL += dy*(Rx)^T, dR += (L^T*dy)*x^T, and dx += R^T*(L^T*dy). The low-level projection accumulates dx; the gated block resets dx and accumulates its gate/up paths, matching the compact block's public behaviour. Reconstruction is an explicit diagnostic into a separate caller-provided buffer, never a hidden execution step. Gradients, input/output and scratch sizes and finite values are checked.
+All weights remain factored during forward/backward. Parameter gradients are dL += dy*(Rx)^T, dR += (L^T*dy)*x^T, db += dy, and dx += R^T*(L^T*dy). The low-level projection accumulates dx; the gated block resets dx and accumulates its gate/up paths, matching the compact block's public behaviour. Reconstruction is an explicit diagnostic into a separate caller-provided buffer, never a hidden execution step. Gradients, input/output and scratch sizes and finite values are checked.
 
 The host initializer `svd::decompose` uses one-sided Jacobi rotations on a scaled f64 matrix, transposing wide matrices so the working matrix is tall. Singular values are sorted descending; factors split each retained singular value's square root between L/R. Signs and bases of degenerate singular subspaces need not match another SVD implementation; reconstruction and truncation residuals are compared instead. This is plain truncated SVD, not SVD-LLM or activation-aware factorization.
 
 Initialization is deliberately bounded: each dimension is 1..=64, at most 128 sweeps, relative column-correlation stopping threshold 1e-14. A caller can lower the sweep limit within 1..=128. Nonconvergence, invalid shapes/rank, nonfinite input and numerical overflow are errors. This is a small CPU initializer, not a solver for a large model. The original Python initializer casts to f32; the Rust initializer and its independent singular-value oracle are f64. Stored block forward/backward fixtures use the unchanged reference in f64, separately from initialization.
 
-Both projection forms are **bias-free** in this profile, as the original gated-block reference requires. Unknown bias fields are refused, not discarded. Supporting affine projections, other activations and their conversion rules remains T01/T03 work; these five bias-free representations do not complete those general contracts.
+Both compact and factored forms preserve independent optional gate/up/down output biases. Full-rank SVD preserves those biases exactly; truncation changes the matrix only. Bias gradients accumulate with the other trainable parameters. A missing bias parameter has an empty gradient, not a newly trainable zero. The original QSL conversion still refuses biases; the new affine support is an explicitly checked Rust extension, with its own PyTorch oracle.
 
 A rank can cost more parameters than a small dense matrix: a factored matrix stores rank*(inputs+outputs) values. The small fixture's rank is for numerical checking, not a compression result. Full-model size, quality and speed need separate measurements.
 
@@ -106,6 +106,9 @@ dz[c] = dh[c] * u[c] * activation'(c,z[c])
 du[c] = dh[c] * a[c]
 dG[c,i] += dz[c] * x[i]
 dU[c,i] += du[c] * x[i]
+dbg[c] += dz[c]
+dbu[c] += du[c]
+dbd[o] += dy[o]
 dx[i] = sum_c (dz[c]*G[c,i] + du[c]*U[c,i])
 ```
 
@@ -123,13 +126,15 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 - After a low-level computation returns an error, output, gradient and scratch buffers may be partially written and must be discarded or reinitialized. It changes no weights. The host owns any transient allocations; this is not a tested native budget implementation.
 - No file, network, thread, OS clock or device access belongs to the numerical layer.
 
-## Data-only artifact `nrl.block/3`
+## Data-only artifact `nrl.block/4`
 
 The host artifact is a UTF-8 JSON object:
 
 | Field | Meaning |
 |---|---|
-| schema | Exactly `nrl.block/3`; any other version is refused with its name |
+| schema | Exactly `nrl.block/4`; any other version is refused with its name |
+| descriptor | Required semantic descriptor; fields and applicability below |
+| bias | Null/absent for no biases; otherwise gate/up/down f64 arrays, each empty or exact projection output length |
 | representation | Exactly `dense`, `pruned`, `spline-linear`, `spline-cubic` or `svd` |
 | shape | `[n,w,m]`, positive dimensions checked before indexing |
 | gate, up, down | Compact: flat f64 arrays with the exact matrix lengths. SVD: empty arrays |
@@ -144,7 +149,7 @@ The host artifact is a UTF-8 JSON object:
 | spline.low, high | One fixed finite bound per channel |
 | spline.values | Channel-major w × k coefficients |
 
-Unknown or duplicate fields are refused. Nonfinite JSON numbers, inconsistent arrays, invalid grids and unknown representations are refused. The file is at most 1,048,576 bytes, enforced by a bounded read rather than trusting its metadata. The total number of matrix, factor, grid and coefficient values is at most 16,384. JSON parsing has serde_json's default recursion limit as well as the byte bound.
+Unknown or duplicate fields are refused. Nonfinite JSON numbers, inconsistent arrays, invalid grids and unknown representations are refused. The file is at most 1,048,576 bytes, enforced by a bounded read rather than trusting its metadata. The total number of matrix, factor, bias, grid and coefficient values is at most 16,384. JSON parsing has serde_json's default recursion limit as well as the byte bound.
 
 Saving uses a new file and refuses an existing path. Validation and serialization happen before file creation. An I/O error can leave an incomplete new file; the caller treats the operation as failed, and a later loader must validate it again. A collection of output files is not an atomic transaction.
 
@@ -158,6 +163,26 @@ This format stores every parameter needed for this one block. It is not a QSL ov
 - Save/load preserves every f64 parameter and the forward outputs exactly on the tested host through round-trip float parsing.
 - A fixture step must match the reference's new loss and lower this fixed synthetic loss. That establishes no gain on a real model or held-out task.
 - These checks are not proofs; results apply to the recorded host/backend/dtype. There is no bitwise cross-backend or hardware guarantee (MC-12.1, 12.2).
+
+## Descriptor and capability matrix
+
+The required descriptor declares `kind`, `source_activation`, `dtype`, `layout`, `state` and `parameter_sharing`. It describes the source block's semantics; the representation explicitly chooses whether that source activation is retained or replaced by a declared spline. No family-specific name is embedded here.
+
+| Dimension | This profile accepts | Other requests |
+|---|---|---|
+| Block kind | gated-feed-forward/0 | Refused by name; not inferred from shapes |
+| Source activation | silu | Refused; no silent activation replacement |
+| Dtype / layout | f64 / row-major | Refused; no hidden cast or transpose |
+| State | stateless | Refused; no implied KV or recurrent state support |
+| Parameter sharing | independent | Refused; tied parameters need a separate aliasing contract |
+| Device requested through block_on | cpu-scalar | Refused; no hidden device fallback |
+| Projection biases | absent or independent gate/up/down output vectors | Wrong lengths or nonfinite values refused |
+| Representations | dense, pruned, spline-linear, spline-cubic, svd | Refused |
+| Backward | All five with explicit gradient buffers | No general autodiff or other operator coverage claimed |
+
+`block()` explicitly constructs this CPU profile; `block_on(device)` checks a caller's requested device first. The descriptor is checked data, not evidence that a future importer correctly identified a graph or that a native device is authorized. Model graph validation, operator registries and native budgets remain their own work.
+
+The host demo emits `nrl.demo-report/1`: each case includes the count of trainable bias values alongside its reference error, before/after loss and row count. Elapsed time is fixture checking, not a model benchmark. Five unmodified QSL cases and seven explicitly marked affine/rectangular PyTorch extension cases have separate provenance tags in the fixture.
 
 ## Service boundary
 

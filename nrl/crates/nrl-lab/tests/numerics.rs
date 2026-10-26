@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
 }
 
 fn vector(value: &Value) -> Vec<f64> {
@@ -97,6 +97,22 @@ fn every_input_and_trainable_parameter_has_an_independent_numerical_gradient() {
                 }
             }
         }
+        if let Some(bias) = &analytical.gradients.bias {
+            for (tensor, gradient) in bias.tensors().iter().enumerate() {
+                for (i, expected) in gradient.iter().enumerate() {
+                    let mut plus = artifact.clone();
+                    let mut minus = artifact.clone();
+                    plus.bias.as_mut().unwrap().tensors_mut()[tensor][i] += epsilon;
+                    minus.bias.as_mut().unwrap().tensors_mut()[tensor][i] -= epsilon;
+                    difference(
+                        (evaluate(&plus, &input, &target).unwrap().loss
+                            - evaluate(&minus, &input, &target).unwrap().loss)
+                            / (2.0 * epsilon),
+                        *expected,
+                    );
+                }
+            }
+        }
         for parameter in 0..4 {
             let gradients = match parameter {
                 0 => &analytical.gradients.gate,
@@ -154,12 +170,12 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     value["schema"] = Value::String("nrl.block/99".into());
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).unwrap_err().contains("nrl.block/99"));
-    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2"] {
+    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2", "nrl.block/3"] {
         value["schema"] = Value::String(version.into());
         fs::write(&path, value.to_string()).unwrap();
         assert!(load(&path).unwrap_err().contains(version));
     }
-    value["schema"] = Value::String("nrl.block/3".into());
+    value["schema"] = Value::String("nrl.block/4".into());
     value["unknown"] = Value::Bool(true);
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).is_err());
@@ -169,6 +185,10 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     )
     .unwrap();
     assert!(load(&path).is_err());
+    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2", "nrl.block/3"] {
+        fs::write(&path, format!("{{\"schema\":\"{version}\"}}")).unwrap();
+        assert!(load(&path).unwrap_err().contains(version));
+    }
     fs::write(&path, vec![b' '; MAX_ARTIFACT_BYTES + 1]).unwrap();
     assert!(load(&path).unwrap_err().contains("byte limit"));
     fs::remove_dir_all(dir).unwrap();
