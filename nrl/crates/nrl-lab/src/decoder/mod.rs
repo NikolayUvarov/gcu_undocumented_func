@@ -514,7 +514,7 @@ impl Decoder {
         Ok((output, traces))
     }
     pub fn forward(&self, tokens: &[usize]) -> Result<Vec<f64>> {
-        self.forward_reference(tokens)
+        self.forward_prepared(tokens)
     }
     pub fn trace(&self, tokens: &[usize]) -> Result<Trace> {
         self.run(tokens, true, MAX_TRACE_VALUES, false)
