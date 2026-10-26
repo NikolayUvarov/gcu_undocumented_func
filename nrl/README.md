@@ -141,3 +141,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-
 ```
 
 All output paths must be new. Primary assets and licence notices are in `reference/tinyllamas-260k/`; the optional `tools/generate_decoder_fixtures.py --output tests/fixtures/decoder-v0.json --check` generator uses independent PyTorch and original C calculations. Normal checks need no network, C or Python. Smaller replacement counts do not imply smaller packages: this first profile retains the original dense blob. T07–T10 supply calibration/training/evaluation/plans; native and other families remain separate.
+
+T06 passed **57 host tests** and both portable rlibs; [dated baseline](reports/decoder-baseline-2026-10-26.json), [raw log](reports/decoder-check-2026-10-26.txt), [saved probe](reports/decoder-probes-2026-10-26/0.json). All actual-weight f64 logits/FFN traces and original C tokenizer/f32 checks passed; the oracle regenerates byte-identically. T07–T10 are next.
