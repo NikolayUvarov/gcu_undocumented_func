@@ -84,14 +84,15 @@ fn prepared_sessions_roll_back_numerical_failures_and_keep_sessions_independent(
     block.gate.fill(0.0);
     block.up.fill(0.0);
     block.down.fill(0.0);
-    block.gate[0] = 1.0;
     block.up[0] = 1e200;
     block.down[0] = f64::MAX;
     let mut bias = vec![0.0; block.shape[1]];
-    bias[0] = -first;
+    bias[0] = 1.0;
+    let mut up_bias = vec![0.0; block.shape[1]];
+    up_bias[0] = -1e200 * first;
     block.bias = Some(nrl_lab::BiasData {
         gate: bias,
-        up: Vec::new(),
+        up: up_bias,
         down: Vec::new(),
     });
     let late = m.with_patches(late, &[]).unwrap();
