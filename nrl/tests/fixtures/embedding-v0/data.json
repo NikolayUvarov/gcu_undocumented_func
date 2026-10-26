@@ -1,0 +1,100 @@
+{
+  "documents": [
+    {
+      "id": "animal-fox",
+      "text": "red fox"
+    },
+    {
+      "id": "animal-dog",
+      "text": "small dog"
+    },
+    {
+      "id": "weather-rain",
+      "text": "cold rain"
+    },
+    {
+      "id": "weather-snow",
+      "text": "white snow"
+    },
+    {
+      "id": "space-star",
+      "text": "bright star"
+    },
+    {
+      "id": "space-moon",
+      "text": "moon sky"
+    }
+  ],
+  "queries": [
+    {
+      "group": "animals",
+      "id": "query-fox",
+      "relevance": {
+        "animal-dog": 1,
+        "animal-fox": 3
+      },
+      "split": "train",
+      "text": "fox"
+    },
+    {
+      "group": "animals",
+      "id": "query-dog",
+      "relevance": {
+        "animal-dog": 3,
+        "animal-fox": 1
+      },
+      "split": "train",
+      "text": "dog"
+    },
+    {
+      "group": "weather",
+      "id": "query-rain",
+      "relevance": {
+        "weather-rain": 3,
+        "weather-snow": 1
+      },
+      "split": "validation",
+      "text": "rain"
+    },
+    {
+      "group": "weather",
+      "id": "query-snow",
+      "relevance": {
+        "weather-rain": 1,
+        "weather-snow": 3
+      },
+      "split": "validation",
+      "text": "snow"
+    },
+    {
+      "group": "space",
+      "id": "query-star",
+      "relevance": {
+        "space-moon": 1,
+        "space-star": 3
+      },
+      "split": "test",
+      "text": "star"
+    },
+    {
+      "group": "space",
+      "id": "query-sky",
+      "relevance": {
+        "space-moon": 3,
+        "space-star": 1
+      },
+      "split": "test",
+      "text": "sky"
+    }
+  ],
+  "schema": "nrl.retrieval-data/0",
+  "source": {
+    "identifier": "synthetic://nrl-original-retrieval-data-v0",
+    "licence": "MIT OR Apache-2.0; original NRL fixture",
+    "notices": [
+      "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+    ],
+    "sha256": null
+  },
+  "top_k": 2
+}

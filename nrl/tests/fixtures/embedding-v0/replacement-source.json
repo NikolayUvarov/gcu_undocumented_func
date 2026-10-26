@@ -1,0 +1,8 @@
+{
+  "identifier": "synthetic://nrl-embedding-projection-replacement-v0",
+  "licence": "MIT OR Apache-2.0; original NRL fixture",
+  "notices": [
+    "Original synthetic numerical/retrieval fixture; no pretrained or representative embedding-quality claim."
+  ],
+  "sha256": null
+}

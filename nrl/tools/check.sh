@@ -55,3 +55,11 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-budgeted-model "$nrl_check_dir/model-base" nrl/tests/fixtures/model-v0/input.json nrl/tests/fixtures/runtime-v0/policy.json "$nrl_check_dir/runtime-report.json"
 
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- profile-decoder "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/optimization-v0/study.json "$nrl_check_dir/optimization-report.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- import-embedding nrl/tests/fixtures/embedding-v0/definition.json "$nrl_check_dir/embedding"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-embedding "$nrl_check_dir/embedding"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- encode-embedding "$nrl_check_dir/embedding" 'moon sky' "$nrl_check_dir/embedding-vector.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- prune-embedding "$nrl_check_dir/embedding" body 2 nrl/tests/fixtures/embedding-v0/replacement-source.json "$nrl_check_dir/embedding-pruned"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-base-report.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding-pruned" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-pruned-report.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compare-reports "$nrl_check_dir/embedding-base-report.json" "$nrl_check_dir/embedding-pruned-report.json" "$nrl_check_dir/embedding-comparison.json"

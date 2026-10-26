@@ -6,6 +6,7 @@ use nrl_repr::{Activation, Block, Gradients, Spline};
 
 pub mod decoder;
 pub mod descriptor;
+pub mod embedding;
 pub mod experiment;
 mod import_json;
 pub mod model;

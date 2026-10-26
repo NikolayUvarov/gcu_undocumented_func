@@ -7,6 +7,7 @@ pub mod local;
 pub mod optimize;
 pub mod plan;
 pub mod recovery;
+pub mod retrieval;
 pub use data::{Calibration, Corpus, Document};
 pub use local::{LocalConfig, LocalState, Transform};
 pub(crate) const MAX_BYTES: usize = 16 << 20;

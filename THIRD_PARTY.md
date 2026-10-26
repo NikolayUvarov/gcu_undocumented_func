@@ -119,3 +119,5 @@ RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` 
 - Optional: a Vosk speech model for the `tts` test (`--asr-model`).
 
 The optional NRL `nrl/tools/generate_evaluation_fixture.py` uses the same pinned PyTorch environment and decoder-oracle provenance to generate original next-token metric checks in `nrl/tests/fixtures/evaluate-v0.json`; no additional model, corpus or third-party implementation is imported.
+
+NRL `nrl/tests/fixtures/embedding-v0/` contains original synthetic vocabulary/vectors, projection, retrieval documents/queries/relevance and reference outputs, dual-licensed MIT OR Apache-2.0. `nrl/tools/generate_embedding_fixture.py` derives the small projection from the existing original numerical fixture and uses the already recorded optional PyTorch environment for independent golden vectors/rankings/metrics. No new third-party weights, corpus, runtime implementation or dependency is introduced.
