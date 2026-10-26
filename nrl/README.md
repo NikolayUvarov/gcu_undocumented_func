@@ -1,23 +1,26 @@
 # Neural Representation Lab: Rust model research workspace
 
-NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). Host adapters cover bounded feed-forward graphs, a real trained TinyStories decoder and a mean-token embedding family. Five gated SiLU block representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`) share checked affine/gradient mathematics. Model packages, calibration/training, three task profiles, measured plan/recovery experiments and a portable graph/session boundary are implemented. Native MIND Core service integration remains T11.
+NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). Host adapters cover bounded feed-forward graphs, a real trained TinyStories decoder and a mean-token embedding family. Five gated SiLU block representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`) share checked affine/gradient mathematics. Model packages, calibration/training, regression, language and two explicit retrieval profiles, measured plan/recovery experiments and a portable graph/session boundary are implemented. Native MIND Core service integration remains T11.
 
 ## Current branch status (2026-10-26)
 
-T06–T10 are complete for the declared bounded host profiles. The latest branch has **82 host tests**, four bare-metal rlib builds (`nrl-repr` and `nrl-runtime`, both targets) and all CLI cycles passing. Run `bash nrl/tools/check.sh` from the repository root to repeat them. Code landing/full repository gating remains pending.
+T06–T10 are complete for the declared bounded host profiles. Five requested autonomous extensions, 900-NRL-0020–0024, add optimizer recovery, incremental generation, full embedding training, a complete supported-model QSL bridge and a larger licensed study. The complete `bash nrl/tools/check.sh --expanded` run passes on `b44fbc0d`: **95 host tests**, zero failures/skips, four portable release builds and all CLI cycles including the larger study. New independent fixtures regenerate exactly under the pinned reference environments. [Final evidence](reports/five-extensions-2026-10-26.json), [raw check log](reports/five-extensions-check-2026-10-26.txt). Native service integration and the full repository landing gate remain pending.
 
 | Work | Current scope and outcome | Evidence |
 |---|---|---|
-| T06–T10 | Real trained decoder/tokenizer, resumable calibration/local training, two-task metrics, mixed-plan search and student-input recovery | [Recovery and previous work](reports/recovery-2026-10-26.json) |
-| T11 — partial | Portable no_std/no_alloc graph executor, owner/model-bound session state, cumulative budgets, cooperative deadline/cancel controls and verified host bridge | [Host preparation](reports/native-boundary-2026-10-26.json) |
-| T12 — first host experiment | Immutable FFN views/scratch reused per document; full forward promoted after fixed paired measurements; no numerical/quality change | [Pre/post measurements](reports/optimization-2026-10-26.json), [final build](reports/optimization-final-build-2026-10-26.json) |
-| T13 — first host extension | Independent mean-token embedding family, shared five-path projection, standalone export/pruning, Recall/MRR/NDCG and shared evaluation/benchmark/compare | [Independent reference and example](reports/embedding-2026-10-26.json) |
+| T06–T10 | Real trained decoder, resumable local fitting, shared metrics, measured mixed-plan search and student-input recovery | [Previous recovery](reports/recovery-2026-10-26.json) |
+| T11 — partial | Portable owner/model-bound graph sessions and budgets; native nnd/IDL/target integration awaits APP | [Native boundary](specs/native-boundary-v0.md) |
+| T07/T10 extension | Shared AdamW, complete moments and exact checkpoint continuation; matched refreshed-input SGD comparison; dense fallback | [Saved optimizer comparison](reports/adamw-example-2026-10-26/summary.json) |
+| T12 host | Prepared full forward and incremental sessions; exact logits/tokens and rollback, including a late numerical failure | [Generation contract](specs/prepared-generation-v0.md), [paired study](reports/generation-before-promotion-2026-10-26.json) |
+| T13 extension | Analytic lookup/mean/projection/L2 backward, graded contrastive AdamW, validation selection, standalone export and explicit trained-table retrieval profile | [Saved training and metrics](reports/embedding-training-example-2026-10-26/summary.json) |
+| T04 supported base | QSL overlay verified against exact Tinyllamas base/layers; complete decoder execution and self-contained export | [Binding and limitations](specs/qsl-complete-model-v0.md) |
+| Larger study | 48 attributed TinyStories prefixes, 24/12/12 splits, eight plans and two recovery arms, frozen before evaluation | [Complete study](reports/expanded-study-final-2026-10-26/summary.json) |
 
-The prepared decoder's recorded paired medians are about 5.8–5.9 ms for the original path and 4.1 ms for preparation (about 30% less elapsed time), with zero observed logit/argmax differences and fixed quality limits met. Each report records its executable/host/workload; these are scalar host observations, not native/device/generation guarantees. Source weights and numerical policy are unchanged. The original checked path remains available.
+Prepared generation was promoted after an accepted fixed paired host run: 96 generated tokens per pass, median request time 12.543 ms reference versus 9.401 ms prepared, identical IDs and candidate p95 below reference minimum. An intermediate repeat had overlapping timing ranges and is preserved. The final executable again meets the fixed criterion: 14.248 ms reference versus 9.985 ms prepared (about 29.9% less elapsed time), with identical IDs. These observed results do not promise future timing. The original reference and transactional externally supplied-state step remain available.
 
-The compression study still recommends dense: recovered-student held-out perplexity is about 105.05 versus dense 9.36 on the miniature corpus. T12 improves execution of the same model without changing its weights. The embedding/retrieval fixture is original synthetic data and does not establish representative semantic quality, pretrained quality or accepted compression benefit.
+AdamW improves local recovery over same-rate SGD, but the compressed models still fail the fixed quality budget. The larger study retains **dense**: held-out perplexity is about **4.077** dense, **7.000** for the width-64 pruned control and **16.840** for recovered mixed AdamW. Actual packages retain original source weights. The original embedding fixture's train/validation contrastive loss improves while held-out NDCG stays unchanged; it is numerical training evidence, not representative semantic quality.
 
-**T11 remains open.** APP owns the absent `nnd`/`idl/nn.wit`; the [request](../issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11) records native parser/client authentication/memory/time/worker/cancellation and named-target test requirements. The portable graph profile does not cover native decoder KV or native embedding execution. Cross-builds and logical host sessions are not OS isolation/native execution evidence. Further T12 SIMD/parallel/device work needs its target measurements; broader T13 families and full embedding lookup/pooling/normalization training remain separate extensions. Parent 900 stays open; deferred landing does not block independent host work.
+**Still open:** native T11 through APP's nnd/nn.wit; general HF/Qwen architectures and the external QSL HF standalone format; CPU SIMD/tiling/parallel and device-specific optimization; LoRA/QLoRA, mixed precision and broader model/data profiles. The portable runtime still covers bounded feed-forward graphs, not native decoder KV or native embedding execution. No host test or cross-build adds an OS profile guarantee. Parent 900 remains open; deferred landing does not block independent host development.
 
 ## Run from the repository root
 
@@ -41,7 +44,7 @@ The project's pinned nightly builds the code. If that toolchain lacks rustfmt, `
 | `crates/nrl-core` | no_std shapes, limits, errors |
 | `crates/nrl-repr` | no_std, allocation-free math over explicit borrowed buffers; libm exponential |
 | `crates/nrl-runtime` | no_std/no_alloc graph/session executor, caller-owned buffers, cumulative budgets and cooperative controls; native service glue remains pending |
-| `crates/nrl-lab` | std files, a bounded block artifact, batch loss, a single SGD step, demo/report |
+| `crates/nrl-lab` | checked model/decoder/embedding packages, full gradients, SGD/AdamW and checkpoints, data/evaluation/benchmark/search/recovery, QSL bridges and host CLI |
 | `specs/block-v5.md` | numerical, format, ownership and refusal contracts |
 | `tests/fixtures/f64-v5.json` | externally generated reference tensors, no trained weights |
 | `tools/` | explicit reference validation, fixture generation and Rust checking |
@@ -56,9 +59,11 @@ The recorded Python run is **64 passed, zero skipped**, including a random tiny 
 
 A cross-compiled library is not a native application run. APP owns issue 262's `nnd`, its IDL and model sessions; the first Rust workspace changes none of those. KRN/DRV own the platform and accelerator changes. No OS profile guarantee is added by these host tests.
 
-Remaining: full-model contracts, QSL import, full-model artifacts, independent model families, full calibration/training/evaluation/search, CPU optimization, native integration and GPU work. The first block round trip is only a small part of T04. No compression or speed benefit on a real trained network is established.
+Remaining broader work is listed in the current status above. Complete bounded host models, training and measured scalar execution gains now exist; accepted compression, universal imports, native integration and accelerators remain unestablished.
 
 CI scripts do not yet invoke this new workspace; the owning KRN track has a request to add the explicit checks. Until it lands, run them manually and include their result in the landing request.
+
+The numbered implementation sections below preserve the state at each milestone; their historical next steps are superseded by the current status above.
 
 ## Pruned control (900-NRL-0005)
 
@@ -76,7 +81,7 @@ CI scripts do not yet invoke this new workspace; the owning KRN track has a requ
 
 900-NRL-0005 through 0007 are complete on the NRL branch: **25 host tests**, release rlibs for both portable targets, and differential forward/backward, one SGD step and exact round trips for all five representations. The nine small initializer cases also compare singular values/reconstruction/truncation with an external f64 SVD oracle. [Current report](reports/svd-f64-2026-10-26.json), [raw check log](reports/svd-check-2026-10-26.txt). This is source-commit-specific host evidence; no native run or real-model benefit is established.
 
-Next: general QSL/model artifact contracts and import/export (T04), then an independent small feed-forward model (T05). Landing is asynchronous integration, not a host-development prerequisite.
+Historical milestone: this preceded complete model/graph packages and the independent regression adapter. Current scope is summarized above; landing remains asynchronous integration.
 
 ## Affine extension and applicability (900-NRL-0008)
 
@@ -211,7 +216,7 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchm
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compare-reports /tmp/nrl-embedding-baseline-new.json /tmp/nrl-embedding-candidate-new.json /tmp/nrl-embedding-comparison-new.json
 ```
 
-Output paths must be new. The saved standalone baseline/pruned encoders, original index/query data, policy and reports are in `reports/embedding-example-2026-10-26/`. Optional PyTorch reference regeneration is `tools/generate_embedding_fixture.py --output-dir tests/fixtures/embedding-v0 --check` in the pinned environment; normal Rust use requires no Python/download. Projection transforms reuse the previous model API; lookup/pooling/L2 backward and native execution are unsupported and never silently delegated to another backend.
+Output paths must be new. The saved standalone baseline/pruned encoders, original index/query data, policy and reports are in `reports/embedding-example-2026-10-26/`. Optional PyTorch reference regeneration is `tools/generate_embedding_fixture.py --output-dir tests/fixtures/embedding-v0 --check` in the pinned environment; normal Rust use requires no Python/download. Projection transforms reuse the previous model API; End-to-end lookup/pooling/L2 training is added below under its own explicit task profile; native execution remains unsupported.
 
 ## AdamW and refreshed recovery (900-NRL-0020)
 

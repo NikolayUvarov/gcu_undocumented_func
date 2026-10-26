@@ -1,0 +1,6 @@
+{
+  "max_forward_rows": 65536,
+  "repeats": 3,
+  "schema": "nrl.measurement/0",
+  "warmups": 1
+}
