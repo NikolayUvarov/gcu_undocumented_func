@@ -6,6 +6,36 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 6 && args[1] == "import-decoder" {
+        let model = nrl_lab::decoder::import(
+            Path::new(&args[2]),
+            Path::new(&args[3]),
+            Path::new(&args[4]),
+        )?;
+        model.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "probe-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let result = model.probe_to_file(&args[3], Path::new(&args[4]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 6 && args[1] == "train-regression" {
         let initial = nrl_lab::model::load(Path::new(&args[2]), None)?;
         let data = nrl_lab::experiment::Dataset::load(Path::new(&args[3]))?;
@@ -108,7 +138,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {

@@ -4,6 +4,7 @@ use nrl_core::{finite, Shape, MAX_ELEMENTS};
 use nrl_repr::factor::{Factor, FactorGradients, SvdBlock, SvdGradients};
 use nrl_repr::{Activation, Block, Gradients, Spline};
 
+pub mod decoder;
 pub mod descriptor;
 pub mod experiment;
 mod import_json;
