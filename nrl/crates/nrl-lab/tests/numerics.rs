@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v5.json")).unwrap()
 }
 
 fn vector(value: &Value) -> Vec<f64> {
@@ -170,12 +170,18 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     value["schema"] = Value::String("nrl.block/99".into());
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).unwrap_err().contains("nrl.block/99"));
-    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2", "nrl.block/3"] {
+    for version in [
+        "nrl.block/0",
+        "nrl.block/1",
+        "nrl.block/2",
+        "nrl.block/3",
+        "nrl.block/4",
+    ] {
         value["schema"] = Value::String(version.into());
         fs::write(&path, value.to_string()).unwrap();
         assert!(load(&path).unwrap_err().contains(version));
     }
-    value["schema"] = Value::String("nrl.block/4".into());
+    value["schema"] = Value::String("nrl.block/5".into());
     value["unknown"] = Value::Bool(true);
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).is_err());
@@ -185,7 +191,13 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     )
     .unwrap();
     assert!(load(&path).is_err());
-    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2", "nrl.block/3"] {
+    for version in [
+        "nrl.block/0",
+        "nrl.block/1",
+        "nrl.block/2",
+        "nrl.block/3",
+        "nrl.block/4",
+    ] {
         fs::write(&path, format!("{{\"schema\":\"{version}\"}}")).unwrap();
         assert!(load(&path).unwrap_err().contains(version));
     }

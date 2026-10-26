@@ -5,6 +5,9 @@ use nrl_repr::factor::{Factor, FactorGradients, SvdBlock, SvdGradients};
 use nrl_repr::{Activation, Block, Gradients, Spline};
 
 pub mod descriptor;
+mod import_json;
+pub mod qsl;
+pub mod safetensors;
 pub mod svd;
 use descriptor::BlockDescriptor;
 use nrl_repr::bias::{BiasGradients, Biases};
@@ -29,6 +32,7 @@ pub struct SplineData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelectionData {
+    pub mapping: String,
     pub original_channels: usize,
     pub indices: Vec<usize>,
     pub method: String,
@@ -207,7 +211,7 @@ impl RuntimeBlock<'_> {
 
 impl Artifact {
     pub fn block(&self) -> Result<RuntimeBlock<'_>> {
-        if self.schema != "nrl.block/4" {
+        if self.schema != "nrl.block/5" {
             return Err(format!("unsupported artifact schema: {}", self.schema));
         }
         self.descriptor.check("cpu-scalar")?;
@@ -291,16 +295,26 @@ impl Artifact {
                 selection.original_channels,
                 shape.output(),
             ))?;
-            if selection.indices.len() != shape.channels()
-                || selection
-                    .indices
-                    .iter()
-                    .any(|i| *i >= selection.original_channels)
-                || selection.indices.windows(2).any(|pair| pair[0] >= pair[1])
-                || !matches!(
-                    selection.method.as_str(),
-                    "weight-energy-f64/1" | "activation-energy-f64/1"
-                )
+            let valid = match selection.mapping.as_str() {
+                "known" => {
+                    selection.indices.len() == shape.channels()
+                        && selection
+                            .indices
+                            .iter()
+                            .all(|i| *i < selection.original_channels)
+                        && selection.indices.windows(2).all(|p| p[0] < p[1])
+                        && matches!(
+                            selection.method.as_str(),
+                            "weight-energy-f64/1" | "activation-energy-f64/1"
+                        )
+                }
+                "unrecorded" => {
+                    selection.indices.is_empty() && selection.method == "qsl-unrecorded/0"
+                }
+                _ => false,
+            };
+            if !valid
+                || selection.original_channels < shape.channels()
                 || self.representation == "dense"
             {
                 return Err("invalid retained-channel mapping".into());
@@ -514,7 +528,7 @@ pub fn parse(bytes: &[u8]) -> Result<Artifact> {
         schema: String,
     }
     let header: Header = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
-    if header.schema != "nrl.block/4" {
+    if header.schema != "nrl.block/5" {
         return Err(format!("unsupported artifact schema: {}", header.schema));
     }
     let artifact: Artifact = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -669,7 +683,7 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
     let result = Artifact {
         descriptor: source.descriptor.clone(),
         bias,
-        schema: "nrl.block/4".into(),
+        schema: "nrl.block/5".into(),
         representation: "pruned".into(),
         shape: [n, width, m],
         gate,
@@ -678,6 +692,7 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
         spline: None,
         factors: None,
         selection: Some(SelectionData {
+            mapping: "known".into(),
             original_channels: w,
             indices,
             method: if calibration.is_some() {

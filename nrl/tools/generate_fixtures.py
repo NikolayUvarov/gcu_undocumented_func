@@ -44,7 +44,7 @@ def main():
             shape = [block.gate_proj.right.weight.shape[1], block.gate_proj.left.weight.shape[0], block.down_proj.left.weight.shape[0]]
         else:
             shape = [block.gate_proj.weight.shape[1], block.gate_proj.weight.shape[0], block.down_proj.weight.shape[0]]
-        result = {"schema": "nrl.block/4", "descriptor": DESCRIPTOR, "representation": kind,
+        result = {"schema": "nrl.block/5", "descriptor": DESCRIPTOR, "representation": kind,
                   "shape": shape,
                   "gate": [], "up": [], "down": [], "spline": None, "factors": None,
                   "selection": selection, "bias": None}
@@ -167,7 +167,7 @@ def main():
                         [-0.1, 0.1, 0.6, 1.3], [0.0, 0.2, 0.7, 1.4]], dtype=torch.float64))
             x = torch.tensor([[0.2, -0.7, 1.1], [4.2, -3.1, 2.3], [-2.5, 0.4, -1.2]], dtype=torch.float64, requires_grad=True)
             target = torch.tensor([[0.1, 0.2, -0.1], [0.2, -0.3, 0.4], [-0.1, 0.3, 0.2]], dtype=torch.float64)
-            selection = {"original_channels": 4, "indices": indices, "method": "activation-energy-f64/1"} if kind == "pruned" else None
+            selection = {"mapping": "known", "original_channels": 4, "indices": indices, "method": "activation-energy-f64/1"} if kind == "pruned" else None
             cases.append(capture(block, kind, x, target, selection, 1e-6 if kind == "pruned" else 0.05,
                                  "pytorch-affine-extension/0" if biased else "qsl-unmodified/0"))
 
@@ -219,7 +219,7 @@ def main():
     for matrix in matrices:
         singular = torch.linalg.svdvals(matrix)
         svd_cases.append({"inputs": matrix.shape[1], "outputs": matrix.shape[0], "weights": flat(matrix), "singular_values": flat(singular)})
-    result = {"schema": "nrl.fixture/4", "archive_sha256": ARCHIVE_SHA256, "torch": torch.__version__,
+    result = {"schema": "nrl.fixture/5", "archive_sha256": ARCHIVE_SHA256, "torch": torch.__version__,
               "seed": 42, "dtype": "f64", "cases": cases, "svd_initialization": svd_cases,
               "channel_selection": selection_fixtures[0], "affine_channel_selection": selection_fixtures[1],
               "affine_oracle": "Test-only output biases added to nn.Linear module instances; archive sources unchanged. Original QSL conversion rejects biases; this fixture independently checks the new Rust extension.", **standalone}
