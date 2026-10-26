@@ -266,12 +266,12 @@ fn data(len: usize, seed: u64) -> Vec<u8> {
 
 fn sha(bytes: &[u8]) -> [u8; 32] { let mut s = Sha256::new(); s.update(bytes); s.finish() }
 
-fn put(c: &mut Client<MasterEnd>, name: &str, bytes: &[u8]) -> Result<[u8; 32], Error> {
+fn put<L: Line>(c: &mut Client<L>, name: &str, bytes: &[u8]) -> Result<[u8; 32], Error> {
     c.put(name, bytes.len() as u64, |off, out| { let rest = &bytes[off as usize..]; let n = rest.len().min(out.len()); out[..n].copy_from_slice(&rest[..n]); n })
         .map(|(digest, _)| digest)
 }
 
-fn get(c: &mut Client<MasterEnd>, name: &str) -> Result<Vec<u8>, Error> {
+fn get<L: Line>(c: &mut Client<L>, name: &str) -> Result<Vec<u8>, Error> {
     let mut got = Vec::new();
     c.get(name, |off, chunk| { assert_eq!(off as usize, got.len()); got.extend_from_slice(chunk); true })?;
     Ok(got)
@@ -304,7 +304,7 @@ fn cobs_round_trip() {
 
 #[test]
 fn frame_round_trip_and_damage() {
-    let h = Header { channel: channel::FILES, kind: kind::PUT_DATA, flags: 0, seq: 0xBEEF };
+    let h = Header { address: 0, channel: channel::FILES, kind: kind::PUT_DATA, flags: 0, seq: 0xBEEF };
     let payload = data(MAX_PAYLOAD, 7);
     let mut wire = [0u8; MAX_WIRE];
     let n = frame::encode(&h, &payload, &mut wire).unwrap();
@@ -334,7 +334,7 @@ fn decoder_survives_noise() {
     // A run longer than any frame, then a good frame.
     for _ in 0..MAX_WIRE * 3 { d.push(0x55); }
     let mut wire = [0u8; MAX_WIRE];
-    let h = Header { channel: 1, kind: 2, flags: 0, seq: 3 };
+    let h = Header { address: 0, channel: 1, kind: 2, flags: 0, seq: 3 };
     let n = frame::encode(&h, b"after the noise", &mut wire).unwrap();
     assert_eq!(wire[..n].iter().filter_map(|&b| d.push(b)).last(), None, "the overlong run ends with the frame's zero");
     let got: Vec<Header> = wire[..n].iter().filter_map(|&b| d.push(b)).collect();
@@ -654,7 +654,7 @@ fn fuzz_decoder_and_service() {
     for i in 0..100_000u32 {
         let len = (rng.next() % 300) as usize;
         let payload: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
-        let h = Header { channel: rng.next() as u8, kind: rng.next() as u8, flags: 0, seq: i as u16 };
+        let h = Header { address: 0, channel: rng.next() as u8, kind: rng.next() as u8, flags: 0, seq: i as u16 };
         let n = frame::encode(&h, &payload, &mut wire).unwrap();
         let mut bytes = wire[..n].to_vec();
         match rng.next() % 4 {
@@ -687,4 +687,101 @@ fn fuzz_decoder_and_service() {
         if p.len() >= 8 && rng.chance(700_000) { p[..8].copy_from_slice(&(rng.next() % 64).to_le_bytes()); }
         let _ = service.handle(ch, k, &p, &mut reply);
     }
+}
+
+// 800-LNK-0026: several slaves on one line. Every byte one end sends reaches every other end, as on an RS-485 pair.
+struct Bus { queues: Vec<VecDeque<u8>>, clock: u64 }
+type SharedBus = Rc<RefCell<Bus>>;
+fn hear_all(bus: &SharedBus, from: usize, bytes: &[u8]) {
+    let b = &mut *bus.borrow_mut();
+    for (i, q) in b.queues.iter_mut().enumerate() { if i != from { q.extend(bytes); } }
+}
+struct BusSlaveEnd(SharedBus, usize);
+impl Line for BusSlaveEnd {
+    fn write(&mut self, bytes: &[u8]) -> bool { hear_all(&self.0, self.1, bytes); true }
+    fn read(&mut self, out: &mut [u8], _timeout_ms: u32) -> usize { take(&mut self.0.borrow_mut().queues[self.1], out) }
+    fn now_ms(&mut self) -> u64 { self.0.borrow().clock }
+}
+/// The master is end 0; the slaves are served whenever it waits, until none has bytes left to read.
+struct BusMasterEnd { bus: SharedBus, slaves: Vec<(Slave<BusSlaveEnd>, FileService<Disk>)> }
+impl Line for BusMasterEnd {
+    fn write(&mut self, bytes: &[u8]) -> bool { hear_all(&self.bus, 0, bytes); true }
+    fn read(&mut self, out: &mut [u8], timeout_ms: u32) -> usize {
+        while self.slaves.iter().any(|(s, _)| !self.bus.borrow().queues[s.line.1].is_empty()) {
+            for (slave, service) in self.slaves.iter_mut() { slave.serve(service, 0).unwrap(); }
+        }
+        let n = take(&mut self.bus.borrow_mut().queues[0], out);
+        self.bus.borrow_mut().clock += if n == 0 { timeout_ms as u64 } else { 1 };
+        n
+    }
+    fn now_ms(&mut self) -> u64 { self.bus.borrow().clock }
+}
+
+/// A master on a line with slaves of these addresses (0 is a slave from before addresses), each named `s<address>`.
+fn bus(addresses: &[u8]) -> Client<BusMasterEnd> {
+    let bus = Rc::new(RefCell::new(Bus { queues: vec![VecDeque::new(); addresses.len() + 1], clock: 0 }));
+    let slaves = addresses.iter().enumerate().map(|(i, &a)| {
+        let mut slave = Slave::new(BusSlaveEnd(bus.clone(), i + 1));
+        slave.address = a;
+        let mut service = FileService::new(Disk::default());
+        service.set_name(&format!("s{a}"));
+        (slave, service)
+    }).collect();
+    Client::new(BusMasterEnd { bus, slaves })
+}
+
+#[test]
+fn a_shared_line_with_three_addressed_slaves_and_an_old_one() {
+    let mut c = bus(&[1, 2, 3, 0]);
+    c.master.timeout_ms = 50;
+    c.master.tries = 2;
+    let mut theirs = [0u8; 64];
+    // Each address is answered by its slave alone; files go to it and nowhere else.
+    for a in [1u8, 2, 3] {
+        c.master.address = a;
+        let (_, n) = c.hello("master", &mut theirs).unwrap();
+        assert_eq!(&theirs[..n], format!("s{a}").as_bytes());
+        let bytes = data(3 * c.chunk + a as usize, a as u64);
+        assert_eq!(put(&mut c, &format!("for{a}"), &bytes).unwrap(), sha(&bytes));
+        assert_eq!(get(&mut c, &format!("for{a}")).unwrap(), bytes);
+    }
+    for (i, a) in [1u8, 2, 3].iter().enumerate() {
+        let files = &c.master.line.slaves[i].1.files.files;
+        assert_eq!(files.keys().cloned().collect::<Vec<_>>(), vec![format!("for{a}")]);
+    }
+    // The old slave heard every version 2 frame and dropped it: it answered nothing, and holds nothing.
+    let old = &c.master.line.slaves[3];
+    assert_eq!(old.0.stats.requests, 0);
+    assert!(old.1.files.files.is_empty());
+    // Without an address the master speaks version 1, and only the old slave answers it.
+    c.master.address = 0;
+    let (_, n) = c.hello("master", &mut theirs).unwrap();
+    assert_eq!(&theirs[..n], b"s0");
+    assert_eq!(c.master.line.slaves.iter().map(|(s, _)| s.stats.requests).collect::<Vec<_>>(), vec![
+        c.master.line.slaves[0].0.stats.requests, c.master.line.slaves[1].0.stats.requests, c.master.line.slaves[2].0.stats.requests, 1]);
+    // An address nobody has: no answer, and no slave answered in its place.
+    c.master.address = 9;
+    assert_eq!(c.hello("master", &mut theirs).err(), Some(Error::Timeout));
+    assert_eq!(c.master.stats.retries, 1);
+}
+
+#[test]
+fn an_addressed_frame_round_trip_and_its_limits() {
+    let h = Header { address: 5, channel: channel::FILES, kind: kind::PUT_DATA, flags: 0, seq: 0x1234 };
+    let mut wire = [0u8; MAX_WIRE];
+    let n = frame::encode(&h, b"to five", &mut wire).unwrap();
+    let mut d = Decoder::new();
+    assert_eq!(wire[..n].iter().filter_map(|&b| d.push(b)).collect::<Vec<_>>(), vec![h]);
+    assert_eq!(d.payload(), b"to five");
+    // Beyond the last address, nothing is framed.
+    assert_eq!(frame::encode(&Header { address: frame::ADDRESS_MAX + 1, ..h }, b"", &mut wire), None);
+    // A version 2 frame whose address byte is 0 is dropped, even with a good CRC.
+    let mut raw = vec![frame::VERSION_ADDRESSED, 0, h.channel, h.kind, 0, 0x34, 0x12, 0, 0];
+    raw.extend_from_slice(&crc::crc32c(&raw).to_le_bytes());
+    let mut coded = vec![0u8; MAX_WIRE];
+    let m = cobs::encode(&raw, &mut coded).unwrap();
+    coded[m] = 0;
+    let before = d.dropped;
+    assert!(coded[..=m].iter().filter_map(|&b| d.push(b)).next().is_none());
+    assert_eq!(d.dropped, before + 1);
 }

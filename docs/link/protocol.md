@@ -1,4 +1,4 @@
-# The MIND Link protocol, version 1
+# The MIND Link protocol, versions 1 and 2
 
 Russian: [protocol_RU.md](protocol_RU.md).
 
@@ -8,6 +8,8 @@ Russian: [protocol_RU.md](protocol_RU.md).
 - two refusal codes.
 
 A slave from before them refuses the new requests with UNSUPPORTED, and a name with `/` with DENIED, so a master can tell. The frame and its version are unchanged.
+
+**Version 2, of 2026-10-26** (800-LNK-0026): a frame with the slave's address, so several slaves share one RS-485 line (section 3a). Only the frame's header changes; the channels, requests and answers are version 1's. A line with one slave still uses version 1 frames.
 
 MIND Link connects a development machine to a machine under test over any byte stream (task [800](../../issues/800-mind-link.md)):
 - a serial line through USB–RS-485 converters;
@@ -45,6 +47,16 @@ A frame is:
 | len | payload | |
 | 4 | crc | CRC-32C of everything before it, little-endian |
 
+**A version 2 frame** has one byte more, the slave's address, after the version:
+
+| Bytes | Field | Meaning |
+|---|---|---|
+| 1 | version | 2 |
+| 1 | address | the slave's, 1 to 247 (section 3a) |
+| 7 | channel, kind, flags, seq, len | as in version 1 |
+| len | payload | |
+| 4 | crc | CRC-32C of everything before it, the address included |
+
 **CRC-32C** is the Castagnoli CRC: reflected polynomial 0x82F63B78, initial value 0xFFFFFFFF, final XOR 0xFFFFFFFF. The CRC of the ASCII string `123456789` is 0xE3069283.
 
 **On the line**, the whole frame is COBS-encoded (Consistent Overhead Byte Stuffing), so it holds no zero byte, and a single zero byte follows it.
@@ -53,11 +65,12 @@ A receiver:
 - collects bytes up to a zero byte, then decodes them;
 - drops the frame, counting it, when any of these hold:
   - the bytes do not decode;
-  - the frame is shorter than 12 bytes;
-  - the version is not 1;
+  - the frame is shorter than 12 bytes (13 in version 2);
+  - the version is not 1 or 2;
+  - in version 2, the address is not 1 to 247;
   - `len` is over 1024 or does not match the frame's length;
   - the CRC does not match;
-- drops everything up to the next zero byte when more than 1 042 bytes come without one (a frame of at most 1 036 bytes takes at most 1 041 once COBS-encoded);
+- drops everything up to the next zero byte when more than 1 043 bytes come without one (a frame of at most 1 037 bytes takes at most 1 042 once COBS-encoded). A receiver of version 1 alone may drop after 1 042: it drops a version 2 frame anyway;
 - treats a zero byte with nothing before it as nothing, so a sender may send a zero byte first to end any noise on the line.
 
 ## 3. Exchanges
@@ -81,6 +94,18 @@ A receiver:
 4. may wait a moment before it answers, so that a half-duplex converter turns its line round.
 
 Each request is answered before the next is sent: stop and wait. A transfer's speed is therefore a payload of 1 024 bytes per round trip.
+
+## 3a. Several slaves on one line (version 2)
+
+On a shared line, such as two-wire RS-485 with several machines on its pair, each slave has an **address**, 1 to 247, that its owner gives it: `address=<n>` in MIND Core's `link.conf`, `--address <n>` for `mindlink serve`. No two slaves on a line share one.
+
+- **The master** sends a version 2 request with the slave's address. It takes as the answer only a frame from that address (step 3 above, the address added). It asks one slave at a time: stop and wait holds for the whole line, so there is never more than one sender.
+- **A slave with an address** answers only version 2 requests to its own address, with version 2 frames from it. It ignores every other frame: requests to other slaves, and the other slaves' answers.
+- **A slave without one,** as every slave before version 2, answers only version 1 frames. It never hears a version 2 frame, so a master that addresses others never wakes it.
+  - At most one such slave may be on a shared line, and a master reaches it with version 1 frames.
+  - An old master on a line with addressed slaves reaches only that one.
+- **A repeated request is per slave.** Each slave keeps its own last answer for a repeated request (step 2), and sees only the requests to it.
+- **A slave heard in nothing** (a missing address, a cable cut at it) is a timeout, as on a line of one. It does not stop the others.
 
 ## 4. Channels
 
@@ -246,5 +271,6 @@ The protocol makes no claims beyond these:
   - A slave serves files only in its own directory: no name leaves it.
   - On MIND Core, the link service decides what a master may do (800-LNK-0003). `vfs_server` keeps its files inside `data/link/` whatever it checks.
   - Starting programs is a power the slave's owner gives: `run` in `link.conf`, or `--run` for `mindlink serve`. Whoever holds the cable then runs programs as that end allows: on MIND Core with an application's grants, under `mindlink serve` as the user who serves.
+- **An address is no identity:** any machine on the pair may answer for any address, and hears every frame on it. The address only keeps honest slaves from talking over each other.
 - **No integrity against an attacker:** the CRC and SHA-256 catch noise on the line, not an end that lies.
 - **No guarantees from tests:** the host tests exercise a simulated line that loses, damages, repeats and echoes bytes. They are evidence for that line, not for a real one. A real line's evidence is recorded in the task that tests it.

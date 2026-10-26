@@ -708,6 +708,16 @@ fn baud() -> u32 {
     mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("baud=")?.parse().ok()).unwrap_or(FIRST_BAUD)
 }
 
+/// This machine's address on a line shared by several (800-LNK-0026): `address=<1..247>` in link.conf. None, or one out
+/// of range (said once), is a line with one slave, answered in version 1 frames as before.
+fn address() -> u8 {
+    let Some(word) = mind::process::args_str().split_ascii_whitespace().find_map(|w| w.strip_prefix("address=")) else { return 0 };
+    match word.parse::<u8>() {
+        Ok(a) if (1..=linkproto::frame::ADDRESS_MAX).contains(&a) => a,
+        _ => { mind::println!("[LINK] address={} IS NOT 1 TO {}: SERVING A LINE OF ONE", word, linkproto::frame::ADDRESS_MAX); 0 }
+    }
+}
+
 /// Programs may be started only with the word `run` in link.conf; their output comes to an endpoint of link's.
 fn prepare_programs() {
     let p = programs();
@@ -752,6 +762,8 @@ fn main(_info: &'static BootInfo) {
     let mut service = Logged(FileService::new(store));
     service.0.set_name("MIND Core link");
     let mut slave = Slave::new(Port { endpoint, pending: [0; 4096], at: 0, len: 0 });
+    slave.address = address();
+    if slave.address != 0 { mind::println!("[LINK] ADDRESS {} ON A SHARED LINE: ONLY FRAMES TO IT ARE ANSWERED", slave.address); }
     let mut dropped = 0;
     let mut mark = Mark { requests: 0, heard: 0, next: 0, on: holds(SLOT_DISPLAY), said: None };
     loop {
