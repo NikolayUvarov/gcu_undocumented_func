@@ -6,6 +6,70 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 4 && args[1] == "import-embedding" {
+        let d = nrl_lab::embedding::Definition::load(Path::new(&args[2]))?;
+        let e = nrl_lab::embedding::Encoder::from_definition(d)?;
+        e.save(Path::new(&args[3]))?;
+        println!("{}", e.info()?);
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-embedding" {
+        println!("{}", nrl_lab::embedding::load(Path::new(&args[2]))?.info()?);
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "encode-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        println!("{}", e.encode_to_file(&args[3], Path::new(&args[4]))?);
+        return Ok(());
+    }
+    if args.len() == 7 && args[1] == "prune-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let width = args[4].parse().map_err(|_| "invalid embedding width")?;
+        let source =
+            serde_json::from_value(read_json(Path::new(&args[5]))?).map_err(|e| e.to_string())?;
+        let candidate = e.prune_projection(&args[3], width, source)?;
+        candidate.save(Path::new(&args[6]))?;
+        println!("{}", candidate.info()?);
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "replace-embedding-projection" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let p = nrl_lab::model::load(Path::new(&args[3]), None)?;
+        let source =
+            serde_json::from_value(read_json(Path::new(&args[4]))?).map_err(|e| e.to_string())?;
+        let candidate = e.replace_projection(p, source)?;
+        candidate.save(Path::new(&args[5]))?;
+        println!("{}", candidate.info()?);
+        return Ok(());
+    }
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-retrieval" | "benchmark-retrieval"
+        )
+    {
+        let measured = args[1] == "benchmark-retrieval";
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE ENCODER DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let a = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let b = nrl_lab::embedding::load(Path::new(&args[3]))?;
+        let data = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[4]))?;
+        let spec = if measured {
+            Some(nrl_lab::research::evaluate::Measurement::load(Path::new(
+                &args[6],
+            ))?)
+        } else {
+            None
+        };
+        let r = nrl_lab::research::retrieval::evaluate(&a, &b, &data, &args[5], spec)?;
+        r.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 6 && args[1] == "profile-decoder" {
         let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
         let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
@@ -319,7 +383,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | profile-decoder MODEL CORPUS STUDY NEW_REPORT | run-budgeted-model MODEL INPUT POLICY NEW_REPORT | recover-plan TEACHER INITIAL_STUDENT CORPUS STUDY NEW_BUNDLE | check-recovery TEACHER BUNDLE | replay-recovery TEACHER BUNDLE NEW_BUNDLE | apply-plan TEACHER CORPUS STUDY PLAN_ID NEW_BUNDLE | search-plans TEACHER CORPUS STUDY NEW_BUNDLE | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | import-embedding DEFINITION NEW_PACKAGE | check-embedding PACKAGE | encode-embedding PACKAGE TEXT NEW_VECTOR | prune-embedding ENCODER OBJECT WIDTH SOURCE NEW_PACKAGE | replace-embedding-projection ENCODER PROJECTION SOURCE NEW_PACKAGE | evaluate-retrieval BASELINE ENCODER DATA SPLIT NEW_REPORT | benchmark-retrieval BASELINE ENCODER DATA SPLIT MEASUREMENT NEW_REPORT | profile-decoder MODEL CORPUS STUDY NEW_REPORT | run-budgeted-model MODEL INPUT POLICY NEW_REPORT | recover-plan TEACHER INITIAL_STUDENT CORPUS STUDY NEW_BUNDLE | check-recovery TEACHER BUNDLE | replay-recovery TEACHER BUNDLE NEW_BUNDLE | apply-plan TEACHER CORPUS STUDY PLAN_ID NEW_BUNDLE | search-plans TEACHER CORPUS STUDY NEW_BUNDLE | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {

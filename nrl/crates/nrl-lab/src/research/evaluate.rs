@@ -180,12 +180,23 @@ impl Report {
             {
                 ()
             }
+            "embedding-retrieval/0"
+                if self.quality.metric == "ndcg-loss-at-k"
+                    && self.profile.preprocessing == "exact-ascii-mean-projection-l2/0"
+                    && self.profile.geometry[0] <= 128
+                    && self.profile.geometry[1] <= 128 =>
+            {
+                ()
+            }
             _ => return Err("unsupported evaluation task/metric/preprocessing".into()),
         }
         if let Some(spec) = &self.profile.measurement {
             spec.validate()?;
             let t = self.timing.as_ref().ok_or("missing measured times")?;
-            let expected = timing(t.seconds.clone())?;
+            let mut expected = timing(t.seconds.clone())?;
+            if self.profile.task == "embedding-retrieval/0" {
+                expected.scope = RETRIEVAL_TIMING_SCOPE.into();
+            }
             if t.seconds.len() != spec.repeats
                 || t.minimum_seconds != expected.minimum_seconds
                 || t.median_seconds != expected.median_seconds
@@ -224,7 +235,7 @@ impl Report {
         id(self)
     }
 }
-fn benchmark<F: FnMut() -> Result<()>>(
+pub(crate) fn benchmark<F: FnMut() -> Result<()>>(
     spec: &Option<Measurement>,
     rows: usize,
     mut forward: F,
@@ -248,7 +259,7 @@ fn benchmark<F: FnMut() -> Result<()>>(
         Ok(None)
     }
 }
-fn profile(
+pub(crate) fn profile(
     task: &str,
     data_id: String,
     split: &str,
@@ -277,7 +288,7 @@ fn profile(
         measurement: spec,
     })
 }
-fn report(
+pub(crate) fn report(
     profile: Profile,
     model_id: &str,
     env: Environment,
@@ -505,3 +516,5 @@ pub fn compare(baseline: &Report, candidate: &Report) -> Result<serde_json::Valu
 pub fn save_comparison(path: &Path, baseline: &Report, candidate: &Report) -> Result<()> {
     save(path, &compare(baseline, candidate)?)
 }
+
+pub(crate) const RETRIEVAL_TIMING_SCOPE:&str="pretokenized stateless encoder forward only; pooling/projection/normalization included; ranking/quality/hash/load excluded";
