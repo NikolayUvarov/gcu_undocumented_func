@@ -330,6 +330,13 @@ fn check_run(model: &Model, dataset: &Dataset, config: &Run) -> Result<usize> {
     {
         return Err("experiment requires a compatible standalone regression model".into());
     }
+    let mut sources = model.manifest().sources.clone();
+    if !sources.contains(&dataset.source) {
+        sources.push(dataset.source.clone());
+    }
+    if sources.len() >= 32 {
+        return Err("experiment needs one free training-record source slot".into());
+    }
     model.with_sources(&[
         dataset.source.clone(),
         record_source(config, &"0".repeat(64)),
