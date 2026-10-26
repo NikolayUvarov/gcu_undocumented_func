@@ -19,6 +19,12 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 
 | № | Task | Type / owner | Priority | Blocked by | Roadmap |
 |---|---|---|---|---|---|
+| [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
+| [900-NRL-0024](900-NRL-0024-expanded-representation-study.md) | Expanded held-out representation study | `NRL` / Codex | P1 | — | G / 900 T08, T09, T10 |
+| [900-NRL-0023](900-NRL-0023-qsl-complete-model-bridge.md) | Executable QSL overlays bound to a complete supported model | `NRL` / Codex | P1 | — | G / 900 T04 |
+| [900-NRL-0022](900-NRL-0022-embedding-end-to-end-training.md) | End-to-end embedding training and checkpoints | `NRL` / Codex | P1 | — | G / 900 T07, T13 |
+| [900-NRL-0021](900-NRL-0021-incremental-generation-optimization.md) | Measured prepared incremental generation | `NRL` / Codex | P1 | — | G / 900 T12 |
+| [900-NRL-0020](900-NRL-0020-adamw-and-recovery.md) | Reusable AdamW and resumable decoder recovery | `NRL` / Codex | P1 | — | G / 900 T07, T10 |
 | [213-KRN-0114](213-KRN-0114-realtek-driver-startup.md) | Realtek boot images, non-mastering BAR grants and retained-DMA firmware diagnostic | `KRN` / ASTRA auditor-fixer | P1 | x86 and hardware checks | H / 213 |
 | [000-ASR-0010](000-ASR-0010-owned-tcp-refusal-fixture.md) | Reserve a non-listening TCP endpoint for the exact QEMU connection-refused assertion | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
 | [000-ASR-0011](000-ASR-0011-monotonic-tsc-reference.md) | Compare guest elapsed time against the host monotonic clock | `ASR` / ASTRA auditor-fixer | P1 | Full gate | Assurance |
@@ -270,7 +276,6 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
-| [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
 | [900-NRL-0019](../issues-done/900-NRL-0019-embedding-adapter-and-retrieval-profile.done) | Independent embedding family and retrieval profile | NRL branch; 82 tests, shared five-path projection, PyTorch vectors/rankings, standalone/CLI cycles; native remains open |
 | [900-NRL-0018](../issues-done/900-NRL-0018-prepared-decoder-experiment.done) | Measured immutable FFN preparation reuse | NRL branch; 77 tests, full forward quality preserved, accepted paired host gain; native work remains |
 | [900-NRL-0016](../issues-done/900-NRL-0016-student-activation-recovery.done) | Multiple replacements and student-activation recovery | NRL branch; 70 tests, matched control, exact pair/model replay; dense recommended; landing pending |
