@@ -6,6 +6,33 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 7 && args[1] == "recover-plan" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let study = nrl_lab::research::plan::Study::load(Path::new(&args[5]))?;
+        let run = nrl_lab::research::recovery::run(&teacher, &initial, corpus, study)?;
+        run.save(Path::new(&args[6]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&run.summary()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if (args.len() == 4 && args[1] == "check-recovery")
+        || (args.len() == 5 && args[1] == "replay-recovery")
+    {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let run = nrl_lab::research::recovery::replay(&teacher, Path::new(&args[3]))?;
+        if args.len() == 5 {
+            run.save(Path::new(&args[4]))?;
+        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&run.summary()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 7 && args[1] == "apply-plan" {
         let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
         let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
@@ -263,7 +290,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | apply-plan TEACHER CORPUS STUDY PLAN_ID NEW_BUNDLE | search-plans TEACHER CORPUS STUDY NEW_BUNDLE | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | recover-plan TEACHER INITIAL_STUDENT CORPUS STUDY NEW_BUNDLE | check-recovery TEACHER BUNDLE | replay-recovery TEACHER BUNDLE NEW_BUNDLE | apply-plan TEACHER CORPUS STUDY PLAN_ID NEW_BUNDLE | search-plans TEACHER CORPUS STUDY NEW_BUNDLE | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {
