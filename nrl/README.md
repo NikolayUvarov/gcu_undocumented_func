@@ -220,3 +220,7 @@ A shared bounded named-tensor AdamW implements bias correction, decoupled decay 
 ```bash
 nrl/target/release/nrl-lab compare-adaptation BASE INITIAL CORPUS nrl/tests/fixtures/adaptation-v0/config.json NEW_DIRECTORY
 ```
+
+## Prepared incremental generation (900-NRL-0021)
+
+Checked FFN preparation and scratch can be reused throughout a greedy generation request. A prepared session rolls back appended KV tails on a failed step; the public externally supplied-state step retains its existing semantics. The reference path remains available. [Generation contract and paired measurement](specs/prepared-generation-v0.md).

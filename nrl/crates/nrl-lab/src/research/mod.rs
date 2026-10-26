@@ -4,6 +4,7 @@ use std::path::Path;
 pub mod adaptation;
 pub mod data;
 pub mod evaluate;
+pub mod generation;
 pub mod local;
 pub mod optimize;
 pub mod plan;

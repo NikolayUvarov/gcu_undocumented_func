@@ -31,7 +31,7 @@ impl Study {
         Ok(s)
     }
 }
-fn paired<F: FnMut(bool) -> Result<()>>(
+pub(crate) fn paired<F: FnMut(bool) -> Result<()>>(
     spec: &Measurement,
     mut run: F,
 ) -> Result<(Timing, Timing)> {
