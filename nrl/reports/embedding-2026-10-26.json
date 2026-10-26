@@ -506,5 +506,11 @@
     "No full lookup/pooling/normalization backward or native embedding adapter.",
     "No accepted retrieval compression/speed/memory gain claimed; measurements are recorded observations."
   ],
-  "gate": "All NRL checks pass on own branch; full repository gate remains with LANDING"
+  "gate": "All NRL checks pass on own branch; full repository gate remains with LANDING",
+  "validation_followup": {
+    "tested_commit": "28c5b0b0853049ac4e20053ac02769649e6e0553",
+    "host_tests": 82,
+    "report": "final-host-check-2026-10-26.json",
+    "change": "Reject normalized retrieval loss outside [0,1]; all numerical semantics and prior reports retained."
+  }
 }

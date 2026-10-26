@@ -1,0 +1,152 @@
+{
+  "schema": "nrl.final-host-check/0",
+  "date": "2026-10-26",
+  "tested_commit": "28c5b0b0853049ac4e20053ac02769649e6e0553",
+  "toolchain": "rustc 1.101.0-nightly (c36f14571 2026-10-01)",
+  "host_tests": 82,
+  "portable_builds": [
+    "nrl-repr/x86_64-unknown-none",
+    "nrl-repr/aarch64-unknown-none-softfloat",
+    "nrl-runtime/x86_64-unknown-none",
+    "nrl-runtime/aarch64-unknown-none-softfloat"
+  ],
+  "checked_pipelines": [
+    "all previous numerical/decoder/training/checkpoint/search/recovery/replay controls",
+    "owner/model-bound runtime budgets/cancel/deadline/clock/failure and buffer clearing",
+    "paired reference/prepared decoder profiling and complete-model quality",
+    "embedding import/check/encode/prune and compatible retrieval benchmark/compare",
+    "normalized retrieval-loss range refusal"
+  ],
+  "optimization_profile": {
+    "accepted_host_experiment": true,
+    "calibration_forward_rows": 110,
+    "candidate_implementation": "same operations with immutable borrowed FFN views/scratch once per document; preparation included in full timing",
+    "component_forward_rows": 1152,
+    "component_prepared": {
+      "median_seconds": 0.000711069,
+      "minimum_seconds": 0.000706404,
+      "p95_seconds": 0.000731538,
+      "scope": "isolated original FFN on actual train inputs; reference validates/allocates per row, prepared reuses checked view and scratch; not a whole-model speed claim",
+      "seconds": [
+        0.000708615,
+        0.000731538,
+        0.000721455,
+        0.000706404,
+        0.000712188,
+        0.000711069,
+        0.000708989
+      ]
+    },
+    "component_reference": {
+      "median_seconds": 0.001160301,
+      "minimum_seconds": 0.001142622,
+      "p95_seconds": 0.001672244,
+      "scope": "isolated original FFN on actual train inputs; reference validates/allocates per row, prepared reuses checked view and scratch; not a whole-model speed claim",
+      "seconds": [
+        0.001672244,
+        0.00118757,
+        0.00116994,
+        0.001159873,
+        0.001142821,
+        0.001160301,
+        0.001142622
+      ]
+    },
+    "decoder_forward_rows": 1332,
+    "default_path": "per-document prepared after accepted paired host measurement",
+    "environment": {
+      "architecture": "x86_64",
+      "backend": "host-cpu-scalar-f64/0",
+      "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+      "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+      "debug_assertions": false,
+      "executable_sha256": "d78cf05ae7feca7a6c046c214db0922a3cddeeb00cd3418482f72686dfa63f63",
+      "logical_cpus": 24,
+      "os": "linux",
+      "runtime_threads": 1
+    },
+    "limits": "same scalar f64 host and current workload only; no native/accelerator/generation/memory/compression guarantee",
+    "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+    "native_execution": false,
+    "observed_nonoverlapping_timing_pass": true,
+    "paired_order": "alternate reference/prepared and prepared/reference per repetition",
+    "prepared": {
+      "median_seconds": 0.004189853,
+      "minimum_seconds": 0.004026837,
+      "p95_seconds": 0.004501081,
+      "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+      "seconds": [
+        0.004189853,
+        0.00407946,
+        0.004073389,
+        0.004026837,
+        0.004501081,
+        0.004351134,
+        0.004233332
+      ]
+    },
+    "quality": [
+      {
+        "argmax_changes": 0,
+        "maximum_absolute_logit_difference": 0.0,
+        "predicted_tokens": 97,
+        "prepared_mean_nll": 2.3328857186339365,
+        "reference_mean_nll": 2.3328857186339365,
+        "split": "train"
+      },
+      {
+        "argmax_changes": 0,
+        "maximum_absolute_logit_difference": 0.0,
+        "predicted_tokens": 46,
+        "prepared_mean_nll": 2.792273884144422,
+        "reference_mean_nll": 2.792273884144422,
+        "split": "validation"
+      },
+      {
+        "argmax_changes": 0,
+        "maximum_absolute_logit_difference": 0.0,
+        "predicted_tokens": 54,
+        "prepared_mean_nll": 2.236362886478458,
+        "reference_mean_nll": 2.236362886478458,
+        "split": "test"
+      }
+    ],
+    "quality_pass": true,
+    "reference": {
+      "median_seconds": 0.005668752,
+      "minimum_seconds": 0.005525416,
+      "p95_seconds": 0.006093749,
+      "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded",
+      "seconds": [
+        0.005686201,
+        0.005668752,
+        0.006093749,
+        0.005755208,
+        0.005540104,
+        0.005525416,
+        0.005560568
+      ]
+    },
+    "reference_implementation": "checked FFN view and scratch per token/layer",
+    "schema": "nrl.optimization-report/0",
+    "study": {
+      "acceptance": "all split numerics/quality within fixed limits and prepared p95 strictly below reference minimum",
+      "calibration_rows": 64,
+      "corpus_id": "554f2f80333471c51ac0c3c860529a2967a5e8b29d1cc3bcab5f837e84af5b8c",
+      "maximum_absolute_logit_difference": 1e-12,
+      "maximum_absolute_nll_difference": 1e-12,
+      "measurement": {
+        "max_forward_rows": 65536,
+        "repeats": 7,
+        "schema": "nrl.measurement/0",
+        "warmups": 2
+      },
+      "model_id": "fde147c5be67eb480c825cc7c01cafc6998d95a0c494072554f61b5b6c3fd1fa",
+      "schema": "nrl.optimization-study/0"
+    },
+    "study_id": "b69d71ea04eab2216123086ffdaf8374d643a5aaa32b819981fc72c559a5a508"
+  },
+  "native_execution": false,
+  "t11_complete": false,
+  "gate": "Own-branch NRL checks passed; full repository gate remains LANDING work"
+}
