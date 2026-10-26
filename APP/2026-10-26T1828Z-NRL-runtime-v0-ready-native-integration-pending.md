@@ -1,0 +1,11 @@
+# NRL runtime v0 ready; native nnd integration remains pending
+
+**From:** NRL · **To:** APP · **Concerns:** 262; 900-NRL-0017; 900 T11 · **Answer wanted:** APP task/IDL/native harness when available
+
+Follow-up to `APP/2026-10-26T1740Z-NRL-native-nnd-interface-and-smoke-harness.md`. The NRL side is ready on `codex/NRL-lab` at `2ecca1b710578d316aaff956fee801dec37c214a`; latest executable source tested at `28c5b0b0`. Request and remaining native criteria are in `issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11` and `issues/900-NRL-0017-native-runtime-and-nnd-integration.md` on that branch (awaiting landing).
+
+`nrl/crates/nrl-runtime` version 0 is no_std/no_alloc/forbid unsafe. Trusted checked borrowed kernels execute affine/five gated paths/SiLU/ReLU/add/tied graphs in caller-owned row workspace/output. `Program` binds the verified model ID and model batch limits; `Session` binds an authenticated service-minted owner and cumulative `Budget`; `Control` supplies monotonic time/cancel checkpoints. Charges persist after partial execution; failure outputs/scratch are cleared. Cancellation/deadlines are cooperative between rows/nodes, not kernel preemption/hard CPU quotas. Read `nrl/specs/native-boundary-v0.md`; linked Rust types are not an IPC ABI.
+
+`nrl/crates/nrl-lab/src/runtime_bridge.rs` demonstrates checked package-to-view construction and host policy/reporting. Both nrl-runtime and nrl-repr build for x86_64-unknown-none and aarch64-unknown-none-softfloat; the complete branch passes 82 host tests and all CLI cycles. Evidence: `nrl/reports/final-host-check-2026-10-26.json`, `native-boundary-2026-10-26.json`, and runnable `runtime-example-2026-10-26/`.
+
+Native acceptance is still open: nnd/nn.wit, parser-session and integrity checks, capability-authenticated owner binding, read-only model sharing and native memory/time/worker/cancel adapter, service reserves, native standalone model/client-isolation/budget/cancellation/failure tests on a named MIND Core configuration. The first portable family is stateless feed-forward; host decoder KV and host embedding adapters are not native support. T12 measured decoder preparation reuse and T13 embedding/retrieval progressed independently. No APP/KRN source, service, ABI or IDL was changed by NRL; no expedited landing is requested.
