@@ -1,6 +1,6 @@
 # Small trained decoder profile v0
 
-**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0012](../../issues/900-NRL-0012-trained-decoder-and-tokenizer.md) · **Scope:** host scalar f64 inference of bounded llama2.c-v0 float32 data. This adds `nrl.decoder/0` independently of the earlier feed-forward graph and block file formats; their limits are unchanged.
+**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0012](../../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done) · **Scope:** host scalar f64 inference of bounded llama2.c-v0 float32 data. This adds `nrl.decoder/0` independently of the earlier feed-forward graph and block file formats; their limits are unchanged.
 
 ## Declared semantics
 

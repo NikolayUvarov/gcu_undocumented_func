@@ -339,6 +339,9 @@ impl Decoder {
     pub fn model_id(&self) -> &str {
         &self.id
     }
+    pub fn base_content_id(&self) -> Result<String> {
+        Ok(storage::hash(import_json::canonical_compact(&serde_json::json!({"adapter":self.manifest.adapter,"policy":self.manifest.numerical_policy,"weights":self.manifest.weights,"tokenizer":self.manifest.tokenizer,"config":self.config})).as_bytes()))
+    }
     pub fn config(&self) -> &Config {
         &self.config
     }

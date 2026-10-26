@@ -10,6 +10,7 @@ pub mod experiment;
 mod import_json;
 pub mod model;
 pub mod qsl;
+pub mod research;
 pub mod safetensors;
 mod storage;
 pub mod svd;
