@@ -25,6 +25,10 @@ header h1 { font-size: 16px; margin: 0; font-family: var(--mono); }
 .dot.on { background: var(--ok); } .dot.off { background: var(--bad); } .dot.wait { background: var(--warn); }
 #traffic b { color: var(--text); font-weight: 600; } #traffic.moving b { color: var(--run); }
 #lease { color: var(--warn); } #lease[hidden] { display: none; }
+#machines { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+.machine { border: 1px solid transparent; border-radius: 5px; padding: 1px 6px; overflow-wrap: anywhere; }
+#machines.several .machine { cursor: pointer; } #machines.several .machine.sel { border-color: var(--accent); color: var(--text); }
+table.one .m { display: none; }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
 .cmds { overflow: auto; }
 section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
@@ -62,7 +66,7 @@ small { color: var(--dim); }
 <body>
 <header>
   <h1>effector485</h1>
-  <span class="pill" title="the cable's other end"><span id="linkdot" class="dot"></span><span id="linktext">…</span></span>
+  <span id="machines" title="the machines on the cable: the operations and buttons are for the one selected"><span class="pill">…</span></span>
   <span class="pill" id="queue"></span>
   <span class="pill" id="lease" hidden><span class="dot wait"></span><span id="leasetext"></span></span>
   <span class="pill" id="seen"></span>
@@ -120,7 +124,7 @@ small { color: var(--dim); }
     <section>
       <h2>Operations <small id="opcount"></small></h2>
       <div class="tablewrap"><table>
-        <thead><tr><th>time</th><th>id</th><th>kind</th><th>what</th><th>status</th><th>reason</th><th></th></tr></thead>
+        <thead><tr><th>time</th><th>id</th><th class="m">machine</th><th>kind</th><th>what</th><th>status</th><th>reason</th><th></th></tr></thead>
         <tbody id="ops"></tbody>
       </table></div>
     </section>
@@ -138,7 +142,9 @@ small { color: var(--dim); }
 // The page reads the daemon's state through its WebSocket feed and acts through the same JSON API the command line uses.
 const $ = s => document.querySelector(s);
 const OUT_KEPT = 1 << 20;
-let ws = null, key = "", ops = [], link = null, lease = null, following = null, outAt = 0, outText = "", lastLogNext = null, samples = [];
+// links: the machines on the cable (800-LNK-0026); agent: the one selected, for which the buttons act.
+let ws = null, key = "", ops = [], links = [], agent = null, link = null, lease = null, following = null, outAt = 0, outText = "", lastLogNext = null, samples = [];
+try { agent = sessionStorage.getItem("effector485-agent"); } catch (e) {}
 try { key = sessionStorage.getItem("effector485-key") || ""; } catch (e) {}
 
 function toast(text) {
@@ -169,14 +175,7 @@ const on = {
     if (following) ws.send(JSON.stringify({ follow: following, from: outAt }));
   },
   error(m) { toast(m.error); $("#keybox").style.display = "block"; key = ""; },
-  link(m) {
-    link = m;
-    $("#linkdot").className = "dot " + (m.online ? "on" : "off");
-    $("#linktext").textContent = `${m.port}: ${m.online ? m.name : "offline" + (m.error ? " — " + m.error : "")}`;
-    $("#queue").textContent = `queued ${m.queued} · running ${m.running}`;
-    lease = m.reservation || null;
-    showSeen(); showLease();
-  },
+  links(m) { links = m.links || []; showLinks(); },
   ops(m) { ops = m.ops; render(); },
   traffic(m) {
     // The speed over the last few seconds of the daemon's own clock; a restarted daemon starts the samples again.
@@ -203,6 +202,28 @@ const on = {
     showOutState();
   },
 };
+// One pill a machine: its state, and with several on the cable, a click selects the one the buttons act for.
+function showLinks() {
+  if (!links.some(l => l.agent_id === agent)) agent = links.length ? links[0].agent_id : null;
+  const box = $("#machines"), several = links.length > 1;
+  box.className = several ? "several" : "";
+  box.replaceChildren();
+  for (const l of links) {
+    const p = document.createElement("span");
+    p.className = "pill machine" + (l.agent_id === agent ? " sel" : "");
+    const dot = document.createElement("span"); dot.className = "dot " + (l.online ? "on" : "off");
+    const who = several ? `${l.agent_id} ` : "";
+    p.append(dot, `${who}${l.port}: ${l.online ? l.name : "offline" + (l.error ? " — " + l.error : "")}`);
+    p.title = several ? `${l.agent_id}, address ${l.address}: queued ${l.queued}, running ${l.running}` : "the cable's other end";
+    if (several) p.onclick = () => { agent = l.agent_id; try { sessionStorage.setItem("effector485-agent", agent); } catch (e) {} showLinks(); render(); };
+    box.append(p);
+  }
+  link = links.find(l => l.agent_id === agent) || null;
+  lease = link ? link.reservation || null : null;
+  $("#queue").textContent = link ? `${several ? agent + ": " : ""}queued ${link.queued} · running ${link.running}` : "";
+  $("#ops").closest("table").classList.toggle("one", !several);
+  showSeen(); showLease();
+}
 function showSeen() {
   if (!link || !link.last_seen) { $("#seen").textContent = ""; return; }
   const age = Math.max(0, Math.round(Date.now() / 1000 - link.last_seen));
@@ -215,7 +236,7 @@ function showLease() {
   if (!lease) return;
   const left = Math.max(0, Math.ceil((lease.expires_at - Date.now() / 1000) / 60));
   const until = new Date(lease.expires_at * 1000).toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit" });
-  $("#leasetext").textContent = `reserved by ${lease.owner || "a session"}: ${lease.reason}, until ${until} (${left} min left)`;
+  $("#leasetext").textContent = `${links.length > 1 ? agent + " " : ""}reserved by ${lease.owner || "a session"}: ${lease.reason}, until ${until} (${left} min left)`;
   el.title = `${lease.session_id}: other sessions' operations that change the machine wait; reads pass`;
 }
 setInterval(() => { showSeen(); showLease(); }, 1000);
@@ -248,7 +269,7 @@ function render() {
     tr.className = "op" + (o.id === following ? " sel" : "");
     tr.onclick = () => follow(o.id);
     const cell = (text, cls) => { const td = document.createElement("td"); td.textContent = text ?? ""; if (cls) td.className = cls; tr.append(td); return td; };
-    cell(clock(o.created_at)); cell(o.id); cell(o.kind);
+    cell(clock(o.created_at)); cell(o.id); cell(o.agent_id, "m"); cell(o.kind);
     const w = what(o) || ""; const wt = cell(w.length > 120 ? w.slice(0, 117) + "…" : w, "what");
     if (o.waiting) { const n = document.createElement("div"); n.className = "note"; n.textContent = "waits: " + o.waiting.message; wt.append(n); }
     const st = cell(""); const chip = document.createElement("span"); chip.className = "st " + o.status;
@@ -262,7 +283,7 @@ function render() {
     body.append(tr);
   }
   $("#opcount").textContent = `(${ops.length}, the newest first)`;
-  const logs = ops.filter(o => o.kind === "log" && o.status === "completed" && o.result && o.result.next !== undefined);
+  const logs = ops.filter(o => o.kind === "log" && o.agent_id === agent && o.status === "completed" && o.result && o.result.next !== undefined);
   lastLogNext = logs.length ? logs[logs.length - 1].result.next : null;
   showOutState();
 }
@@ -289,9 +310,10 @@ async function post(path, body) {
   } catch (e) { toast(String(e)); return null; }
 }
 async function submit(kind, fields = {}, ask = null) {
-  if (ask && !confirm(ask)) return;
+  if (ask && !confirm(links.length > 1 ? `${agent}: ${ask}` : ask)) return;
   const reason = $("#reason").value.trim() || `${kind} from the effector485 page`;
-  const v = await post("/api/v1/operations", { kind, ...fields, idempotency_key: newKey(kind), reason });
+  const to = links.length > 1 ? { agent_id: agent } : {};
+  const v = await post("/api/v1/operations", { kind, ...to, ...fields, idempotency_key: newKey(kind), reason });
   if (v) follow(v.id);
 }
 async function cancel(id) {

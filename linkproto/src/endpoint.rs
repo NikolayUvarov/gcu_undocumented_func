@@ -77,6 +77,11 @@ pub trait Line {
     /// Before the slave answers: time for a half-duplex line to turn round (RS-485 converters switch direction after
     /// the last byte). Nothing by default.
     fn turnaround(&mut self) {}
+    /// Before a master's exchange: a line that several masters share, each in its own thread, is taken for the whole
+    /// exchange, so that their requests and answers never interleave (800-LNK-0026). Nothing by default.
+    fn claim(&mut self) {}
+    /// After a master's exchange: the line given back.
+    fn release(&mut self) {}
 }
 
 /// What counts of an end's traffic.
@@ -107,6 +112,13 @@ impl<L: Line> Master<L> {
 
     /// Sends a request and waits for its answer: the answer's payload in `reply`, and its length.
     pub fn call(&mut self, channel: u8, kind: u8, payload: &[u8], reply: &mut [u8]) -> Result<usize, Error> {
+        self.line.claim();
+        let r = self.exchange(channel, kind, payload, reply);
+        self.line.release();
+        r
+    }
+
+    fn exchange(&mut self, channel: u8, kind: u8, payload: &[u8], reply: &mut [u8]) -> Result<usize, Error> {
         self.seq = self.seq.wrapping_add(1);
         let seq = self.seq;
         let n = frame::encode(&Header { address: self.address, channel, kind, flags: 0, seq }, payload, &mut self.wire).ok_or(Error::TooBig)?;
