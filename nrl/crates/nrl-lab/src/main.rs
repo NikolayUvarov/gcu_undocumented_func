@@ -6,6 +6,55 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-language"
+                | "benchmark-language"
+                | "evaluate-regression"
+                | "benchmark-regression"
+        )
+    {
+        use nrl_lab::research::evaluate::{self, Measurement};
+        let measured = args[1].starts_with("benchmark");
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE MODEL DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let spec = if measured {
+            Some(Measurement::load(Path::new(&args[6]))?)
+        } else {
+            None
+        };
+        let report = if args[1].ends_with("language") {
+            let baseline = nrl_lab::decoder::load(Path::new(&args[2]))?;
+            let model = nrl_lab::decoder::load(Path::new(&args[3]))?;
+            let data = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+            evaluate::evaluate_language(&baseline, &model, &data, &args[5], spec)?
+        } else {
+            let baseline = nrl_lab::model::load(Path::new(&args[2]), None)?;
+            let model = nrl_lab::model::load(Path::new(&args[3]), None)?;
+            let data = nrl_lab::experiment::Dataset::load(Path::new(&args[4]))?;
+            evaluate::evaluate_regression(&baseline, &model, &data, &args[5], spec)?
+        };
+        report.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "compare-reports" {
+        use nrl_lab::research::evaluate::{self, Report};
+        let baseline = Report::load(Path::new(&args[2]))?;
+        let candidate = Report::load(Path::new(&args[3]))?;
+        let comparison = evaluate::compare(&baseline, &candidate)?;
+        evaluate::save_comparison(Path::new(&args[4]), &baseline, &candidate)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&comparison).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 7 && args[1] == "calibrate-decoder" {
         let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
         let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
@@ -190,7 +239,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | evaluate-language BASELINE MODEL CORPUS SPLIT NEW_REPORT | benchmark-language BASELINE MODEL CORPUS SPLIT MEASUREMENT NEW_REPORT | evaluate-regression BASELINE MODEL DATA SPLIT NEW_REPORT | benchmark-regression BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT | compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {

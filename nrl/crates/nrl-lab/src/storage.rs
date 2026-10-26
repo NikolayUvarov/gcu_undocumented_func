@@ -47,3 +47,28 @@ pub(crate) fn read_regular(path: &Path, limit: usize) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+
+pub(crate) fn hash_file(path: &Path, limit: usize) -> Result<String> {
+    if !fs::symlink_metadata(path)
+        .map_err(|e| e.to_string())?
+        .is_file()
+    {
+        return Err("hash input is not a regular file".into());
+    }
+    let mut file = File::open(path).map_err(|e| e.to_string())?;
+    let mut hash = sha256::Sha256::new();
+    let mut total = 0usize;
+    let mut buffer = [0u8; 16384];
+    loop {
+        let count = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if count == 0 {
+            break;
+        }
+        total = total
+            .checked_add(count)
+            .filter(|n| *n <= limit)
+            .ok_or("hash file byte limit")?;
+        hash.update(&buffer[..count]);
+    }
+    Ok(hash.finish().iter().map(|b| format!("{b:02x}")).collect())
+}

@@ -1,0 +1,15 @@
+# Shared host evaluation profile v0
+
+Serves 900 T08; MC-5.1, MC-8.5, MC-9.1, MC-12.1–12.3, MC-12.9. Schemas `nrl.evaluation/0`, `nrl.measurement/0`, `nrl.comparison/0` are initial explicit interfaces.
+
+Two independent tasks share the reporting/comparison contract. `regression-vector/0` measures per-output MSE/MAE, target-energy NMSE (epsilon 1e-12), and maximum error. `language-next-token/0` measures mean full-vocabulary NLL, perplexity, top-1 and per-token error distribution. Each document has a fresh causal cache; BOS input predicts text tokens; no added EOS. No token truncation. All corpus split/token leakage checks precede computation. These miniature tasks do not establish general language quality.
+
+Quality and benchmarking are independent CLI operations. Benchmarking adds one to three warmups and three to nine measured preprocessed forward passes; the single quality pass and all warmups/repeats count against the supplied forward-row budget, at most 65536. Loading, tokenization, hashing, compilation, quality calculation and serialization are outside the measured interval. Allocations inside forward are included; outputs are consumed through `black_box`. Raw monotonic seconds, minimum, median (middle sorted sample), nearest-rank p95, row/logit counts and environment are saved. This profile has no accelerator/asynchronous work.
+
+Comparison requires identical task, baseline, data, split, preprocessing, geometry, measurement, numerical backend, OS, architecture, CPU description, logical CPU count, executable SHA-256, boot identity hash and debug/release mode. It refuses missing boot identity for timing comparisons. Hashes describe recorded inputs; they do not authenticate reports or eliminate scheduler/thermal noise. Ratios are observations for that run.
+
+Model information distinguishes trainable/effective numeric values, retained values and actual standalone package bytes. Linux VmHWM is a whole-process high-water mark and can include models loaded earlier; it is never attributed to a candidate or presented as memory savings. Persistent KV and temporary allocations remain those of the bounded scalar decoder; this is not a per-allocation native memory profiler. Retained dense weights plus patch files can make packages larger despite fewer active parameters.
+
+CLI forms: `evaluate-{language,regression} BASELINE MODEL DATA SPLIT NEW_REPORT`; `benchmark-{language,regression} BASELINE MODEL DATA SPLIT MEASUREMENT NEW_REPORT`; `compare-reports BASELINE_REPORT CANDIDATE_REPORT NEW_COMPARISON`. Reports use new paths and reject unknown versions/fields, invalid shapes, non-finite metrics, inconsistent timing statistics/work and oversized files. Optional PyTorch oracle regeneration uses `tools/generate_evaluation_fixture.py --output tests/fixtures/evaluate-v0.json --check`; normal execution requires no Python.
+
+The six-plan study and recovery settings in `tests/fixtures/study-v0/profile.json` were committed before evaluation. Candidate construction and selection use train/validation only. T09/T10 evaluate a selected candidate on test after selection and do not tune those settings on test.
