@@ -11,7 +11,7 @@ The original `embedding-retrieval/0` evaluation deliberately freezes table weigh
 CLI:
 
 - `train-embedding ENCODER DATA CONFIG NEW_DIRECTORY`: train, checkpoint, standalone selected model, six train/validation/test retrieval reports and summary.
-- `resume-embedding CHECKPOINT NEW_CHECKPOINT UNTIL`; `export-trained-embedding CHECKPOINT NEW_MODEL`.
+- `start-embedding ENCODER DATA CONFIG NEW_CHECKPOINT UNTIL` writes a deliberately partial state; `resume-embedding CHECKPOINT NEW_CHECKPOINT UNTIL`; `export-trained-embedding CHECKPOINT NEW_MODEL`.
 - `evaluate-trained-retrieval BASELINE ENCODER DATA SPLIT NEW_REPORT`; `benchmark-trained-retrieval BASELINE ENCODER DATA SPLIT MEASUREMENT NEW_REPORT`.
 
 PyTorch 2.10.0 float64 autograd independently checks the complete lookup/projection/L2 gradient with repeated tokens, all graded contrastive gradients, two AdamW steps and validation losses. Rust checks exact interrupted continuation, standalone reload, explicit profile separation, invalid adjoints/budgets and unchanged selection when only test queries change. The original synthetic fixture remains numerical evidence, not a representative retrieval benchmark.
