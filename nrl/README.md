@@ -100,3 +100,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-
 ```
 
 Every output path above must be new. `model-v0/plain.json` is an independent ordinary affine/ReLU/affine model. The graph currently runs forward; full-model backward, training/validation/test evaluation, QSL whole-language-model import and native execution remain separate work. Parameter/file counts are reported with the required base dependency; they are not measured memory/performance or useful-compression claims.
+
+900-NRL-0010 passed **44 host tests**, both portable rlibs, complete external graph/affine-gradient checks and the base/overlay/standalone CLI cycle. All six model fixtures regenerate byte-identically. [Dated model report](reports/model-graph-2026-10-26.json), [raw log](reports/model-check-2026-10-26.txt). The exported standalone runs without its base files; CLI metadata identifies the written artifact. Next is T05's task/data/training pipeline; these synthetic fixtures establish no model quality or optimization result.

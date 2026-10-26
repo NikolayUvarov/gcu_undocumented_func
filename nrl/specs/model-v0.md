@@ -1,6 +1,6 @@
 # Executable feed-forward model packages v0
 
-**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0010](../../issues/900-NRL-0010-model-graph-and-packages.md) · **Scope:** a complete, bounded, stateless feed-forward model on the host scalar CPU f64 profile.
+**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0010](../../issues-done/900-NRL-0010-model-graph-and-packages.done) · **Scope:** a complete, bounded, stateless feed-forward model on the host scalar CPU f64 profile.
 
 ## Model and adapter contract
 
