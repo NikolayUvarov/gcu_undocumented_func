@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v0.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v1.json")).unwrap()
 }
 
 fn vector(value: &Value) -> Vec<f64> {
@@ -25,7 +25,7 @@ fn directory() -> PathBuf {
 }
 
 #[test]
-fn dense_and_linear_blocks_match_torch_forward_backward_and_one_step() {
+fn supported_blocks_match_torch_forward_backward_and_one_step() {
     for case in fixtures()["cases"].as_array().unwrap() {
         check_case(case).unwrap();
     }
@@ -138,7 +138,7 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     value["schema"] = Value::String("nrl.block/99".into());
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).unwrap_err().contains("nrl.block/99"));
-    value["schema"] = Value::String("nrl.block/0".into());
+    value["schema"] = Value::String("nrl.block/1".into());
     value["unknown"] = Value::Bool(true);
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).is_err());

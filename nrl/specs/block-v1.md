@@ -1,6 +1,6 @@
-# NRL block contract v0
+# NRL block contract v1
 
-**Edition:** 0 (2026-10-25) · **Task:** [900-NRL-0002](../../issues-done/900-NRL-0002-initial-contracts.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 1 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues/900-NRL-0005-pruning-and-shared-channel-selection.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
@@ -12,7 +12,7 @@ A block has positive dimensions `input = n`, `channels = w`, `output = m`. Its t
 | up U | w × n | U[c*n+i] |
 | down D | m × w | D[o*w+c] |
 
-There are no biases in v0. On one input row x:
+There are no biases in v1. On one input row x:
 
 ```text
 z[c] = sum_i G[c,i] * x[i]
@@ -21,15 +21,15 @@ a[c] = activation(c, z[c])
 y[o] = sum_c D[o,c] * a[c] * u[c]
 ```
 
-`dense` uses SiLU: `activation(z) = z * sigmoid(z)`. The derivative is `sigmoid(z) * (1 + z * (1 - sigmoid(z)))`. A sign-stable sigmoid avoids exponentiating a large positive number.
+`dense` and `pruned` use SiLU: `activation(z) = z * sigmoid(z)`. The derivative is `sigmoid(z) * (1 + z * (1 - sigmoid(z)))`. A sign-stable sigmoid avoids exponentiating a large positive number.
 
-`spline-linear` replaces SiLU with the channel's interpolant below. It still executes the projections; conversion does not remove all matrix products. The first fixture uses the same width for both blocks and makes no compression claim. Channel selection/pruning is later T03 work.
+`spline-linear` replaces SiLU with the channel's interpolant below. It still executes the projections; conversion does not remove all matrix products. The first fixture uses the same width for both blocks and makes no compression claim. Pruned and spline controls share the retained-channel mapping below.
 
 `output` may differ from `input`. No shared block contract contains a Qwen layer number, tokenizer, attention layout or family-specific name.
 
 ## Uniform linear splines
 
-Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v0. Let:
+Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v1. Let:
 
 ```text
 u = (x-low)/(high-low) * (k-1)
@@ -43,7 +43,28 @@ The index clamps; t does not. Both tails extend the nearest segment linearly. At
 
 Coefficient derivatives are `1-t` and `t` for the selected adjacent coefficients, including tails. The stored coefficient index is `channel*k + j`. Grid span and scale must be finite and positive; nonfinite slopes or intermediate values are refused.
 
-**Separate future representations.** In 900 T03, `spline-cubic` means the reference's cubic Hermite interpolation with finite-difference slopes. Task 262 additionally describes B-spline edge functions. Those require a distinct representation ID, mathematical contract and tests; Hermite results do not discharge the B-spline requirement. Neither cubic form is implemented by this v0 path.
+**Separate future representations.** In 900 T03, `spline-cubic` means the reference's cubic Hermite interpolation with finite-difference slopes. Task 262 additionally describes B-spline edge functions. Those require a distinct representation ID, mathematical contract and tests; Hermite results do not discharge the B-spline requirement. Neither cubic form is implemented by this v1 path.
+
+## Pruning and shared channel selection
+
+The portable scorer accepts a checked bias-free SiLU block, fixed f64 weights and either no calibration or a nonempty batch of matching input rows. Both methods return nonnegative f64 scores:
+
+```text
+weight-energy-f64/0: ||G[c,:]||² * ||U[c,:]||² * ||D[:,c]||²
+activation-energy-f64/0: mean_train((SiLU(Gx)[c] * Ux[c])²) * ||D[:,c]||²
+```
+
+Only the first 4096 supplied rows contribute to activation ranking. The entire input length must be a valid batch within MAX_ELEMENTS; ignored rows do not contribute to scores. Empty calibration is refused instead of silently becoming weight-only ranking. The caller is responsible for supplying training/calibration data rather than validation or test data. Dataset identity/split manifests are later T04/T07 work.
+
+The top `width` scores are selected, with equal scores preferring the lower source index, and the retained mapping is then sorted by original index. Selection uses a bounded in-place heap over the caller's index buffer, O(channels*log(width)) selection plus sorting; full width returns the identity mapping. No randomness is used. Negative/nonfinite scores, arithmetic overflow, malformed buffers and out-of-range widths are errors. Low-level score buffers can be partially written on failure.
+
+The Python reference forcibly casts weights/calibration to f32 for ranking; this profile deliberately uses f64, names that in its method ID, and does not promise identical choices near numerical ties. Fixtures check original reference indices on unambiguous cases and independent PyTorch f64 scores. Stable exact ties are separately checked.
+
+Packing copies exactly the selected rows of G/U and columns of D, with no refit of D. A spline control starts from this same pruned block, preserving its mapping and projections. Its initial coefficients are SiLU samples on an explicitly supplied per-channel grid; choosing grid quantiles and refitting D remain calibration tasks. The current transform accepts only a dense SiLU source. It never silently treats a spline or an unsupported biased block as that source.
+
+`selection` records `original_channels`, an ascending, unique in-range `indices` array of length `w`, and one of the two method IDs above. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
+
+**Transition:** v1 replaces the initial `nrl.block/0` reader because retained-channel semantics are now explicit. Version 0 is refused with its name; regenerate prototype artifacts from their source. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports record the old fixture and remain historical.
 
 ## Backward and one training step
 
@@ -72,17 +93,18 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 - After a low-level computation returns an error, output, gradient and scratch buffers may be partially written and must be discarded or reinitialized. It changes no weights. The host owns any transient allocations; this is not a tested native budget implementation.
 - No file, network, thread, OS clock or device access belongs to the numerical layer.
 
-## Data-only artifact `nrl.block/0`
+## Data-only artifact `nrl.block/1`
 
 The host artifact is a UTF-8 JSON object:
 
 | Field | Meaning |
 |---|---|
-| schema | Exactly `nrl.block/0`; any other version is refused with its name |
-| representation | Exactly `dense` or `spline-linear` |
+| schema | Exactly `nrl.block/1`; any other version is refused with its name |
+| representation | Exactly `dense`, `pruned` or `spline-linear` |
 | shape | `[n,w,m]`, positive dimensions checked before indexing |
 | gate, up, down | Flat f64 arrays with the exact matrix lengths |
-| spline | For dense: null or absent. For spline-linear: the object below |
+| spline | For dense/pruned: null or absent. For spline-linear: the object below |
+| selection | Required for pruned, optional for spline, absent/null for dense; original_channels, ascending unique indices, method |
 | spline.knots | Integer k >= 2 |
 | spline.low, high | One fixed finite bound per channel |
 | spline.values | Channel-major w × k coefficients |

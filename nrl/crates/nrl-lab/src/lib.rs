@@ -22,6 +22,14 @@ pub struct SplineData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SelectionData {
+    pub original_channels: usize,
+    pub indices: Vec<usize>,
+    pub method: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub schema: String,
     pub representation: String,
@@ -30,6 +38,7 @@ pub struct Artifact {
     pub up: Vec<f64>,
     pub down: Vec<f64>,
     pub spline: Option<SplineData>,
+    pub selection: Option<SelectionData>,
 }
 
 fn numeric<T>(value: nrl_core::Result<T>) -> Result<T> {
@@ -38,7 +47,7 @@ fn numeric<T>(value: nrl_core::Result<T>) -> Result<T> {
 
 impl Artifact {
     pub fn block(&self) -> Result<Block<'_>> {
-        if self.schema != "nrl.block/0" {
+        if self.schema != "nrl.block/1" {
             return Err(format!("unsupported artifact schema: {}", self.schema));
         }
         let mut total = self
@@ -58,8 +67,31 @@ impl Artifact {
             return Err("artifact value limit exceeded".into());
         }
         let shape = numeric(Shape::new(self.shape[0], self.shape[1], self.shape[2]))?;
+        if let Some(selection) = &self.selection {
+            numeric(Shape::new(
+                shape.input(),
+                selection.original_channels,
+                shape.output(),
+            ))?;
+            if selection.indices.len() != shape.channels()
+                || selection
+                    .indices
+                    .iter()
+                    .any(|i| *i >= selection.original_channels)
+                || selection.indices.windows(2).any(|pair| pair[0] >= pair[1])
+                || !matches!(
+                    selection.method.as_str(),
+                    "weight-energy-f64/0" | "activation-energy-f64/0"
+                )
+                || self.representation == "dense"
+            {
+                return Err("invalid retained-channel mapping".into());
+            }
+        } else if self.representation == "pruned" {
+            return Err("pruned block requires a retained-channel mapping".into());
+        }
         let activation = match (self.representation.as_str(), &self.spline) {
-            ("dense", None) => Activation::Silu,
+            ("dense" | "pruned", None) => Activation::Silu,
             ("spline-linear", Some(s)) => Activation::Linear(numeric(Spline::new(
                 shape.channels(),
                 s.knots,
@@ -300,4 +332,94 @@ pub fn check_case(case: &serde_json::Value) -> Result<serde_json::Value> {
         serde_json::json!({"representation": artifact.representation, "max_reference_error": error,
         "loss_before": result.loss, "loss_after": after, "sample_count": vector(&case["input"])?.len() / artifact.shape[0]}),
     )
+}
+
+pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Result<Artifact> {
+    let block = source.block()?;
+    if source.representation != "dense" {
+        return Err("pruning expects a dense SiLU source block".into());
+    }
+    if width == 0 || width > source.shape[1] {
+        return Err("retained width is outside the source channels".into());
+    }
+    let [n, w, m] = source.shape;
+    let mut scores = vec![0.0; w];
+    let mut scratch = vec![0.0; w * 3];
+    numeric(nrl_repr::pruning::scores(
+        &block,
+        calibration,
+        &mut scores,
+        &mut scratch,
+    ))?;
+    let mut indices = vec![0; width];
+    numeric(nrl_repr::pruning::select(&scores, &mut indices))?;
+    let gate = indices
+        .iter()
+        .flat_map(|c| source.gate[c * n..(c + 1) * n].iter().copied())
+        .collect();
+    let up = indices
+        .iter()
+        .flat_map(|c| source.up[c * n..(c + 1) * n].iter().copied())
+        .collect();
+    let down = (0..m)
+        .flat_map(|o| indices.iter().map(move |c| source.down[o * w + c]))
+        .collect();
+    let result = Artifact {
+        schema: "nrl.block/1".into(),
+        representation: "pruned".into(),
+        shape: [n, width, m],
+        gate,
+        up,
+        down,
+        spline: None,
+        selection: Some(SelectionData {
+            original_channels: w,
+            indices,
+            method: if calibration.is_some() {
+                "activation-energy-f64/0".into()
+            } else {
+                "weight-energy-f64/0".into()
+            },
+        }),
+    };
+    result.validate()?;
+    Ok(result)
+}
+
+// Grid selection and down-projection refitting are separate calibration decisions.
+pub fn linear_spline_control(
+    pruned: &Artifact,
+    knots: usize,
+    low: Vec<f64>,
+    high: Vec<f64>,
+) -> Result<Artifact> {
+    pruned.validate()?;
+    if pruned.representation != "pruned"
+        || knots < 2
+        || low.len() != pruned.shape[1]
+        || high.len() != low.len()
+    {
+        return Err("spline control expects a pruned block and a matching grid".into());
+    }
+    let count = numeric(nrl_core::elements(low.len(), knots))?;
+    if count > MAX_ARTIFACT_VALUES {
+        return Err("spline coefficient limit exceeded".into());
+    }
+    let mut values = Vec::with_capacity(count);
+    for c in 0..low.len() {
+        for k in 0..knots {
+            let x = low[c] + (high[c] - low[c]) * (k as f64 / (knots - 1) as f64);
+            values.push(nrl_repr::silu(x).0);
+        }
+    }
+    let mut result = pruned.clone();
+    result.representation = "spline-linear".into();
+    result.spline = Some(SplineData {
+        knots,
+        low,
+        high,
+        values,
+    });
+    result.validate()?;
+    Ok(result)
 }

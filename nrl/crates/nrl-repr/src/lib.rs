@@ -3,6 +3,8 @@
 
 use nrl_core::{elements, finite, Error, Result, Shape};
 
+pub mod pruning;
+
 #[derive(Clone, Copy)]
 pub struct Spline<'a> {
     channels: usize,
@@ -93,7 +95,7 @@ pub enum Activation<'a> {
     Linear(Spline<'a>),
 }
 
-fn silu(x: f64) -> (f64, f64) {
+pub fn silu(x: f64) -> (f64, f64) {
     let sigmoid = if x >= 0.0 {
         1.0 / (1.0 + libm::exp(-x))
     } else {
