@@ -3,6 +3,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
 pub mod adaptation;
 pub mod data;
+pub mod embedding_train;
 pub mod evaluate;
 pub mod generation;
 pub mod local;

@@ -69,3 +69,8 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/adaptation-complete.json" "$nrl_check_dir/adaptation-selected"
 
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- profile-generation "$nrl_check_dir/decoder" nrl/tests/fixtures/generation-v0/study.json "$nrl_check_dir/generation-report.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-embedding "$nrl_check_dir/embedding" nrl/tests/fixtures/embedding-v0/data.json nrl/tests/fixtures/embedding-training-v0/config.json "$nrl_check_dir/embedding-training"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-embedding "$nrl_check_dir/embedding-training/checkpoint.json" "$nrl_check_dir/embedding-training-resumed.json" 16
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-trained-embedding "$nrl_check_dir/embedding-training-resumed.json" "$nrl_check_dir/embedding-trained-export"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-trained-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding-trained-export" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-trained-benchmark.json"

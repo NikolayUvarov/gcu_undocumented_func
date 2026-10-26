@@ -224,3 +224,7 @@ nrl/target/release/nrl-lab compare-adaptation BASE INITIAL CORPUS nrl/tests/fixt
 ## Prepared incremental generation (900-NRL-0021)
 
 Checked FFN preparation and scratch can be reused throughout a greedy generation request. A prepared session rolls back appended KV tails on a failed step; the public externally supplied-state step retains its existing semantics. The reference path remains available. [Generation contract and paired measurement](specs/prepared-generation-v0.md).
+
+## End-to-end embedding training (900-NRL-0022)
+
+Lookup, mean pooling, shared projection and L2 normalization now have an analytic backward path. A bounded graded contrastive objective trains all table/projection weights with the shared AdamW; complete checkpoints resume exactly and validation loss selects the standalone export. Retrieval of trained tables uses the distinct `embedding-trained-retrieval/0` task; the original projection-only task still freezes the table. All index documents participate in training, while query splits remain separate. [Contract, independent oracle and CLI](specs/embedding-training-v0.md).

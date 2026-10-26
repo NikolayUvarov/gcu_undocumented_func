@@ -134,11 +134,31 @@ pub fn evaluate(
     split: &str,
     spec: Option<Measurement>,
 ) -> Result<Report> {
-    if baseline.input_content_id()? != encoder.input_content_id()? {
-        return Err(
-            "retrieval candidate input vocabulary/table/preprocessing/output boundary differs"
-                .into(),
-        );
+    evaluate_inner(baseline, encoder, data, split, spec, false)
+}
+pub fn evaluate_trained(
+    baseline: &Encoder,
+    encoder: &Encoder,
+    data: &Dataset,
+    split: &str,
+    spec: Option<Measurement>,
+) -> Result<Report> {
+    evaluate_inner(baseline, encoder, data, split, spec, true)
+}
+fn evaluate_inner(
+    baseline: &Encoder,
+    encoder: &Encoder,
+    data: &Dataset,
+    split: &str,
+    spec: Option<Measurement>,
+    trained: bool,
+) -> Result<Report> {
+    if if trained {
+        baseline.input_contract_id()? != encoder.input_contract_id()?
+    } else {
+        baseline.input_content_id()? != encoder.input_content_id()?
+    } {
+        return Err("retrieval candidate input contract differs; projection-only profile also freezes table weights".into());
     }
     let (docs, queries) = data.tokenize(encoder)?;
     let selected: Vec<_> = data
@@ -153,7 +173,11 @@ pub fn evaluate(
     let rows = docs.len() + selected.len();
     let width = encoder.output_width()?;
     let profile = evaluate::profile(
-        "embedding-retrieval/0",
+        if trained {
+            "embedding-trained-retrieval/0"
+        } else {
+            "embedding-retrieval/0"
+        },
         data.data_id()?,
         split,
         baseline.model_id().into(),

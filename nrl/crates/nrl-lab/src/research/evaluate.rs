@@ -180,7 +180,7 @@ impl Report {
             {
                 ()
             }
-            "embedding-retrieval/0"
+            "embedding-retrieval/0" | "embedding-trained-retrieval/0"
                 if self.quality.metric == "ndcg-loss-at-k"
                     && self.quality.value <= 1.0
                     && self.profile.preprocessing == "exact-ascii-mean-projection-l2/0"
@@ -195,7 +195,10 @@ impl Report {
             spec.validate()?;
             let t = self.timing.as_ref().ok_or("missing measured times")?;
             let mut expected = timing(t.seconds.clone())?;
-            if self.profile.task == "embedding-retrieval/0" {
+            if matches!(
+                self.profile.task.as_str(),
+                "embedding-retrieval/0" | "embedding-trained-retrieval/0"
+            ) {
                 expected.scope = RETRIEVAL_TIMING_SCOPE.into();
             }
             if t.seconds.len() != spec.repeats

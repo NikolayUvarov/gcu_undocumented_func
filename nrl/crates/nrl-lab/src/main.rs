@@ -6,6 +6,29 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 6 && args[1] == "train-embedding" {
+        let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let d = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[3]))?;
+        let c = nrl_lab::research::embedding_train::Config::load(Path::new(&args[4]))?;
+        let report = nrl_lab::research::embedding_train::run(&e, d, c, Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "resume-embedding" {
+        let mut state = nrl_lab::research::embedding_train::State::load(Path::new(&args[2]))?;
+        state.advance(args[4].parse().map_err(|_| "invalid continuation step")?)?;
+        state.save(Path::new(&args[3]))?;
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "export-trained-embedding" {
+        nrl_lab::research::embedding_train::State::load(Path::new(&args[2]))?
+            .export()?
+            .save(Path::new(&args[3]))?;
+        return Ok(());
+    }
     if args.len() == 5 && args[1] == "profile-generation" {
         let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
         let study = nrl_lab::research::generation::Study::load(Path::new(&args[3]))?;
@@ -99,6 +122,30 @@ fn run() -> Result<(), String> {
         let candidate = e.replace_projection(p, source)?;
         candidate.save(Path::new(&args[5]))?;
         println!("{}", candidate.info()?);
+        return Ok(());
+    }
+    if args.len() >= 2
+        && matches!(
+            args[1].as_str(),
+            "evaluate-trained-retrieval" | "benchmark-trained-retrieval"
+        )
+    {
+        let measured = args[1] == "benchmark-trained-retrieval";
+        if args.len() != if measured { 8 } else { 7 } {
+            return Err("expected BASELINE ENCODER DATA SPLIT [MEASUREMENT] NEW_REPORT".into());
+        }
+        let a = nrl_lab::embedding::load(Path::new(&args[2]))?;
+        let b = nrl_lab::embedding::load(Path::new(&args[3]))?;
+        let data = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[4]))?;
+        let spec = if measured {
+            Some(nrl_lab::research::evaluate::Measurement::load(Path::new(
+                &args[6],
+            ))?)
+        } else {
+            None
+        };
+        let report = nrl_lab::research::retrieval::evaluate_trained(&a, &b, &data, &args[5], spec)?;
+        report.save(Path::new(&args[if measured { 7 } else { 6 }]))?;
         return Ok(());
     }
     if args.len() >= 2

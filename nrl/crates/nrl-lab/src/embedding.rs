@@ -181,6 +181,99 @@ impl Encoder {
             &serde_json::json!({"table":self.manifest.table,"max_input_tokens":self.manifest.max_input_tokens,"preprocessor":self.manifest.preprocessor,"pooling":self.manifest.pooling,"normalization":self.manifest.normalization,"input_width":self.table.dimension,"output_width":self.output_width()?}),
         )
     }
+    pub fn input_contract_id(&self) -> Result<String> {
+        research::id(
+            &serde_json::json!({"tokens":self.table.tokens,"lookup_width":self.table.dimension,"max_input_tokens":self.max_input_tokens(),"preprocessor":self.manifest.preprocessor,"pooling":self.manifest.pooling,"normalization":self.manifest.normalization,"output_width":self.output_width()?}),
+        )
+    }
+    pub fn definition(&self) -> Definition {
+        let m = self.projection.manifest();
+        Definition {
+            schema: "nrl.embedding-definition/0".into(),
+            table: self.table.clone(),
+            projection: GraphDefinition {
+                schema: "nrl.model-definition/0".into(),
+                descriptor: m.descriptor.clone(),
+                execution: m.execution.clone(),
+                sources: m.sources.clone(),
+                objects: m
+                    .objects
+                    .keys()
+                    .map(|k| (k.clone(), self.projection.object(k).unwrap().clone()))
+                    .collect(),
+            },
+            max_input_tokens: self.max_input_tokens(),
+            sources: self.manifest.sources.clone(),
+        }
+    }
+    pub fn parameters(&self) -> Result<crate::optimizer::Tensors> {
+        let mut p = crate::optimizer::model_parameters(&self.projection)?;
+        p.insert("table".into(), self.table.values.clone());
+        Ok(p)
+    }
+    pub fn with_training_parameters(
+        &self,
+        p: &crate::optimizer::Tensors,
+        sources: &[Source],
+    ) -> Result<Self> {
+        if p.keys().ne(self.parameters()?.keys()) {
+            return Err("embedding parameter inventory mismatch".into());
+        }
+        let mut table = self.table.clone();
+        table.values = p.get("table").ok_or("missing lookup table")?.clone();
+        let projection = crate::optimizer::replace_model(&self.projection, p)?;
+        let raw = table_bytes(&table)?;
+        let mut manifest = self.manifest.clone();
+        manifest.table = FileRecord {
+            bytes: raw.len(),
+            sha256: storage::hash(&raw),
+        };
+        manifest.projection_model_id = projection.model_id().into();
+        append(&mut manifest.sources, sources)?;
+        Self::checked(table, projection, manifest)
+    }
+    pub fn backward_tokens(
+        &self,
+        tokens: &[usize],
+        dy: &[f64],
+        max_training_values: usize,
+    ) -> Result<Backward> {
+        let output = self.encode_tokens(tokens)?;
+        if dy.len() != output.len() {
+            return Err("embedding output adjoint shape".into());
+        }
+        research::finite(dy)?;
+        let mut mean = vec![0.0; self.table.dimension];
+        for t in tokens {
+            for (j, x) in mean.iter_mut().enumerate() {
+                *x += self.table.values[t * self.table.dimension + j];
+            }
+        }
+        for x in &mut mean {
+            *x /= tokens.len() as f64;
+        }
+        let raw = self.projection.forward(&mean)?;
+        let norm = raw.iter().map(|x| x * x).sum::<f64>().sqrt();
+        let dot = dy.iter().zip(&output).map(|(a, b)| a * b).sum::<f64>();
+        let gradient: Vec<_> = dy
+            .iter()
+            .zip(&output)
+            .map(|(d, y)| (d - y * dot) / norm)
+            .collect();
+        let backward = self
+            .projection
+            .backward(&mean, &gradient, max_training_values)?;
+        let mut table = vec![0.0; self.table.values.len()];
+        for t in tokens {
+            for (j, g) in backward.input_gradient.iter().enumerate() {
+                table[t * self.table.dimension + j] += g / tokens.len() as f64;
+            }
+        }
+        research::finite(&table)?;
+        let mut gradients = crate::optimizer::model_gradients(&backward.gradients);
+        gradients.insert("table".into(), table);
+        Ok(Backward { output, gradients })
+    }
     pub fn tokenize(&self, text: &str) -> Result<Vec<usize>> {
         if text.is_empty() || text.len() > 4096 || !text.is_ascii() {
             return Err("embedding text must be bounded ASCII".into());
@@ -288,7 +381,7 @@ impl Encoder {
                 .sum::<usize>();
         let package_bytes = manifest.len() + self.manifest.table.bytes + projection_bytes;
         Ok(
-            serde_json::json!({"schema":"nrl.embedding-info/0","model_id":self.id,"family":self.manifest.family,"adapter_version":0,"vocabulary_size":self.table.tokens.len(),"lookup_width":self.table.dimension,"output_width":self.output_width()?,"max_input_tokens":self.max_input_tokens(),"preprocessor":self.manifest.preprocessor,"pooling":self.manifest.pooling,"normalization":self.manifest.normalization,"state":"stateless","supported_tasks":["embedding-retrieval/0"],"projection":p,"numeric_values":self.table.values.len()+p["numeric_values"].as_u64().unwrap_or(0) as usize,"package_bytes":package_bytes,"transform_scope":"existing checked projection objects only; lookup/pooling/normalization remain unchanged","training_scope":"projection graph gradients exist; end-to-end lookup/pooling/normalization backward is unsupported","native_execution":false}),
+            serde_json::json!({"schema":"nrl.embedding-info/0","model_id":self.id,"family":self.manifest.family,"adapter_version":0,"vocabulary_size":self.table.tokens.len(),"lookup_width":self.table.dimension,"output_width":self.output_width()?,"max_input_tokens":self.max_input_tokens(),"preprocessor":self.manifest.preprocessor,"pooling":self.manifest.pooling,"normalization":self.manifest.normalization,"state":"stateless","supported_tasks":["embedding-retrieval/0"],"projection":p,"numeric_values":self.table.values.len()+p["numeric_values"].as_u64().unwrap_or(0) as usize,"package_bytes":package_bytes,"transform_scope":"existing checked projection objects only; lookup/pooling/normalization remain unchanged","training_scope":"analytic lookup/mean/projection/L2 backward; bounded full-batch contrastive AdamW; query-split validation selection","native_execution":false}),
         )
     }
     pub fn save(&self, path: &Path) -> Result<()> {
@@ -298,6 +391,10 @@ impl Encoder {
         storage::write_new(&path.join("table.json"), &table_bytes(&self.table)?)?;
         research::save(&path.join("manifest.json"), &self.manifest)
     }
+}
+pub struct Backward {
+    pub output: Vec<f64>,
+    pub gradients: crate::optimizer::Tensors,
 }
 pub fn load(path: &Path) -> Result<Encoder> {
     let raw = storage::read_regular(&path.join("manifest.json"), MAX_FILE)?;
