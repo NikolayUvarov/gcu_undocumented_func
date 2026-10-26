@@ -63,3 +63,7 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- prune-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-base-report.json"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding-pruned" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-pruned-report.json"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compare-reports "$nrl_check_dir/embedding-base-report.json" "$nrl_check_dir/embedding-pruned-report.json" "$nrl_check_dir/embedding-comparison.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/manual-plan/model" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/adaptation-v0/config.json "$nrl_check_dir/adaptation-partial.json" 1
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/adaptation-partial.json" "$nrl_check_dir/adaptation-complete.json" 8
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/adaptation-complete.json" "$nrl_check_dir/adaptation-selected"

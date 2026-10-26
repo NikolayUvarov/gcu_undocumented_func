@@ -1,6 +1,7 @@
 use crate::{import_json, storage, Result};
 use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
+pub mod adaptation;
 pub mod data;
 pub mod evaluate;
 pub mod local;

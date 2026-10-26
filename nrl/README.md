@@ -212,3 +212,11 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compar
 ```
 
 Output paths must be new. The saved standalone baseline/pruned encoders, original index/query data, policy and reports are in `reports/embedding-example-2026-10-26/`. Optional PyTorch reference regeneration is `tools/generate_embedding_fixture.py --output-dir tests/fixtures/embedding-v0 --check` in the pinned environment; normal Rust use requires no Python/download. Projection transforms reuse the previous model API; lookup/pooling/L2 backward and native execution are unsupported and never silently delegated to another backend.
+
+## AdamW and refreshed recovery (900-NRL-0020)
+
+A shared bounded named-tensor AdamW implements bias correction, decoupled decay and parameter-bound moments. Local multi-layer recovery refreshes teacher targets on student train activations; validation NLL selects checkpoints. It does not train attention or backpropagate the full decoder loss. The paired optimizer command writes complete checkpoints, selected models and held-out reports with a dense fallback. [Contract and CLI](specs/adamw-recovery-v0.md).
+
+```bash
+nrl/target/release/nrl-lab compare-adaptation BASE INITIAL CORPUS nrl/tests/fixtures/adaptation-v0/config.json NEW_DIRECTORY
+```
