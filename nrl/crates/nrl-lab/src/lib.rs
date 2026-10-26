@@ -12,6 +12,7 @@ mod import_json;
 pub mod model;
 pub mod optimizer;
 pub mod qsl;
+pub mod qsl_model;
 pub mod research;
 pub mod runtime_bridge;
 pub mod safetensors;

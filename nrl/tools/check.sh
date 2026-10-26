@@ -74,3 +74,9 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-embedding "$nrl_check_dir/embedding-training/checkpoint.json" "$nrl_check_dir/embedding-training-resumed.json" 16
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-trained-embedding "$nrl_check_dir/embedding-training-resumed.json" "$nrl_check_dir/embedding-trained-export"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-trained-retrieval "$nrl_check_dir/embedding" "$nrl_check_dir/embedding-trained-export" nrl/tests/fixtures/embedding-v0/data.json test nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/embedding-trained-benchmark.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- bind-qsl-decoder "$nrl_check_dir/decoder" nrl/tests/fixtures/qsl-model-v0 nrl/tests/fixtures/qsl-model-v0/binding.json MIT "$nrl_check_dir/qsl-decoder-overlay"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay" 'Once upon a time' "$nrl_check_dir/qsl-decoder-probe.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay" "$nrl_check_dir/qsl-decoder-standalone"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder "$nrl_check_dir/qsl-decoder-standalone" 'Once upon a time' "$nrl_check_dir/qsl-standalone-probe.json"
