@@ -1,0 +1,87 @@
+{
+  "schema": "nrl.evaluation/0",
+  "profile": {
+    "task": "regression-vector/0",
+    "data_id": "9df2970cca84d6229cf229b13f2fd2a14067afb493d3572462ca5de951eea1f4",
+    "split": "test",
+    "baseline_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+    "preprocessing": "identity-f64/0",
+    "geometry": [
+      2,
+      1
+    ],
+    "measurement": {
+      "schema": "nrl.measurement/0",
+      "warmups": 1,
+      "repeats": 3,
+      "max_forward_rows": 65536
+    }
+  },
+  "model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+  "environment": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "cpu": "Intel(R) Core(TM) Ultra 9 275HX",
+    "logical_cpus": 24,
+    "executable_sha256": "67d40b4470acae38e0f0cabf80df6aebc8f92a3f5bd55b7f74c42704d79d7fb4",
+    "boot_sha256": "afeb6a1885fa0e07f45f90abe3a338e01fbdfbef9efeeb7b2c63e2ce1879fba6",
+    "backend": "host-cpu-scalar-f64/0",
+    "runtime_threads": 1,
+    "debug_assertions": false
+  },
+  "work": {
+    "documents_or_batches": 1,
+    "rows_per_pass": 8,
+    "output_values_per_pass": 8,
+    "quality_passes": 1,
+    "warmup_passes": 1,
+    "timed_passes": 3,
+    "total_forward_rows": 40
+  },
+  "quality": {
+    "metric": "mse",
+    "value": 0.7019184889255535,
+    "details": {
+      "mae": 0.6972513262599469,
+      "maximum_absolute_error": 1.4716843501326262,
+      "near_zero_target_energy": false,
+      "nmse": 0.8794066712855594,
+      "output_values": 8,
+      "target_mean_energy": 0.7981728042834324
+    }
+  },
+  "timing": {
+    "seconds": [
+      2.238e-6,
+      1.551e-6,
+      1.507e-6
+    ],
+    "minimum_seconds": 1.507e-6,
+    "median_seconds": 1.551e-6,
+    "p95_seconds": 2.238e-6,
+    "scope": "preprocessed forward only, fresh per-document cache; allocations included; quality/hash/load excluded"
+  },
+  "model_information": {
+    "activation_values_per_row": 11,
+    "dependency_bytes": 0,
+    "family": "feed-forward",
+    "input_width": 2,
+    "kind": "standalone",
+    "local_objects": 2,
+    "model_id": "4635032138292d508a0f8acc4c6fa6c7cb2659c21b30387da77271b3712cbf49",
+    "native_execution": false,
+    "nodes": 3,
+    "numeric_bytes": 136,
+    "numeric_values": 17,
+    "objects": 2,
+    "output_width": 1,
+    "package_bytes": 2993,
+    "schema": "nrl.model-info/0",
+    "tied_objects": [],
+    "total_required_package_bytes": 2993,
+    "trainable_values": 17
+  },
+  "process_peak_rss_bytes": 4128768,
+  "memory_scope": "whole-process Linux VmHWM, including previously loaded models/work; not per-model allocation or savings",
+  "native_execution": false
+}

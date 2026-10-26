@@ -16,14 +16,18 @@ Local block MSE and fewer parameters do not establish model quality or speed. T0
 
 ## Acceptance criteria
 
-- [ ] Regression and language task metrics match independent references on the supported profiles; all output/work counts and policies are explicit.
-- [ ] Benchmark warmups/repeats/work limits are checked; measured distribution includes min/median/p95 and environment/executable identity.
-- [ ] Memory/disk/parameter fields distinguish effective, retained, package and whole-process peak counts without claiming unmeasured savings.
-- [ ] Compatible reports compare correctly; incompatible task/data/split/source/policy/executable/host/budget records and malformed versions/metrics fail clearly.
-- [ ] Independent evaluation/benchmark/comparison tools preserve machine-readable evidence without overwrites, and the frozen next-stage study profile remains unchanged.
-- [ ] Full host checks and portable rlibs pass; saved real language/regression baseline/student reports show actual outcomes without claiming general optimization/native support.
+- [x] Regression and language task metrics match independent references on the supported profiles; all output/work counts and policies are explicit.
+- [x] Benchmark warmups/repeats/work limits are checked; measured distribution includes min/median/p95 and environment/executable identity.
+- [x] Memory/disk/parameter fields distinguish effective, retained, package and whole-process peak counts without claiming unmeasured savings.
+- [x] Compatible reports compare correctly; incompatible task/data/split/source/policy/executable/host/budget records and malformed versions/metrics fail clearly.
+- [x] Independent evaluation/benchmark/comparison tools preserve machine-readable evidence without overwrites, and the frozen next-stage study profile remains unchanged.
+- [x] Full host checks and portable rlibs pass; saved real language/regression baseline/student reports show actual outcomes without claiming general optimization/native support.
 
 ## Related
 
 - [900](900-neural-representation-lab.md), T08 and section 13.
 - [0011](../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done), [0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done), [0013](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done).
+
+## Resolution
+
+Implemented `research/evaluate.rs`, independent evaluation/benchmark/comparison CLI operations, two complete task metrics, bounded work/timing and strict compatibility. Independent PyTorch NLL/perplexity/top-1 and established regression test errors agree. All 65 host tests, two portable rlibs and CLI cycles passed on `8793e106` (source `3817e79d`). [Evidence](../nrl/reports/evaluation-2026-10-26.json), [saved reports](../nrl/reports/evaluation-example-2026-10-26/language-comparison.json), [contract](../nrl/specs/evaluation-v0.md). The language student worsens validation NLL; no quality/speed/memory gain is inferred. The frozen study profile is unchanged. Full repository landing gate remains pending.
