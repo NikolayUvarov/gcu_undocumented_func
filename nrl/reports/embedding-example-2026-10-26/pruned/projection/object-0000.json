@@ -1,0 +1,70 @@
+{
+  "kind": "gated",
+  "data": {
+    "descriptor": {
+      "kind": "gated-feed-forward/0",
+      "source_activation": "silu",
+      "dtype": "f64",
+      "layout": "row-major",
+      "state": "stateless",
+      "parameter_sharing": "independent"
+    },
+    "bias": {
+      "gate": [
+        -0.1,
+        0.1727272727272727
+      ],
+      "up": [
+        -0.1,
+        0.15
+      ],
+      "down": [
+        -0.005,
+        -0.001153846153846154,
+        0.0026923076923076926
+      ]
+    },
+    "schema": "nrl.block/5",
+    "representation": "pruned",
+    "shape": [
+      3,
+      2,
+      3
+    ],
+    "gate": [
+      -0.4,
+      -0.3230769230769231,
+      -0.24615384615384617,
+      0.29230769230769227,
+      0.36923076923076925,
+      0.4461538461538461
+    ],
+    "up": [
+      -0.4,
+      -0.3375,
+      -0.275,
+      0.16249999999999998,
+      0.22499999999999998,
+      0.2875
+    ],
+    "down": [
+      -0.02,
+      -0.012105263157894739,
+      -0.009473684210526318,
+      -0.0015789473684210548,
+      0.0010526315789473662,
+      0.008947368421052631
+    ],
+    "spline": null,
+    "selection": {
+      "mapping": "known",
+      "original_channels": 4,
+      "indices": [
+        0,
+        3
+      ],
+      "method": "weight-energy-f64/1"
+    },
+    "factors": null
+  }
+}

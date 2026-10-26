@@ -182,6 +182,7 @@ impl Report {
             }
             "embedding-retrieval/0"
                 if self.quality.metric == "ndcg-loss-at-k"
+                    && self.quality.value <= 1.0
                     && self.profile.preprocessing == "exact-ascii-mean-projection-l2/0"
                     && self.profile.geometry[0] <= 128
                     && self.profile.geometry[1] <= 128 =>

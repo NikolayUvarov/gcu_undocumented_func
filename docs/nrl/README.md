@@ -6,19 +6,20 @@ An extensible Rust system that inspects, converts, fine-tunes and runs trained n
 
 ## Current branch status (2026-10-26)
 
-T06–T10 are complete for the declared bounded **host** profiles on `codex/NRL-lab`; landing is pending. **70 host tests**, portable `nrl-repr` rlibs for both targets and all CLI cycles pass. The complete check is `bash nrl/tools/check.sh`; normal Rust operation requires neither Python nor model downloads.
+T06–T10 are complete for the declared bounded host profiles. The latest branch has **82 host tests**, four bare-metal rlib builds (`nrl-repr` and `nrl-runtime`, both targets) and all CLI cycles passing. Run `bash nrl/tools/check.sh` from the repository root to repeat them. Code landing/full repository gating remains pending.
 
-| Stage | Implemented and measured | Evidence |
+| Work | Current scope and outcome | Evidence |
 |---|---|---|
-| T06 | Actual trained TinyStories-260K decoder, custom byte-BPE, GQA/RoPE/RMSNorm/tied head and KV state; independent PyTorch/C checks | [Dense baseline](../../nrl/reports/decoder-baseline-2026-10-26.json) |
-| T07 | Train-only calibration and four compressed controls, local validation selection, complete resumable state and exact continuation | [Local training](../../nrl/reports/local-training-2026-10-26.json) |
-| T08 | Regression and shifted next-token metrics, repeated same-backend forward timing, resource scope and strict report compatibility | [Two-task measurements](../../nrl/reports/evaluation-2026-10-26.json) |
-| T09 | Manual mixed plans, six fixed measured candidates, Pareto/rejection records and dense fallback; test after selection | [Bounded search](../../nrl/reports/plans-2026-10-26.json) |
-| T10 | Two replacements, original teacher FFNs on actual student inputs, simultaneous SGD, matched original-input control, whole-model selection/error and exact saved-run replay | [Recovery](../../nrl/reports/recovery-2026-10-26.json) |
+| T06–T10 | Real trained decoder/tokenizer, resumable calibration/local training, two-task metrics, mixed-plan search and student-input recovery | [Recovery and previous work](../../nrl/reports/recovery-2026-10-26.json) |
+| T11 — partial | Portable no_std/no_alloc graph executor, owner/model-bound session state, cumulative budgets, cooperative deadline/cancel controls and verified host bridge | [Host preparation](../../nrl/reports/native-boundary-2026-10-26.json) |
+| T12 — first host experiment | Immutable FFN views/scratch reused per document; full forward promoted after fixed paired measurements; no numerical/quality change | [Pre/post measurements](../../nrl/reports/optimization-2026-10-26.json), [final build](../../nrl/reports/optimization-final-build-2026-10-26.json) |
+| T13 — first host extension | Independent mean-token embedding family, shared five-path projection, standalone export/pruning, Recall/MRR/NDCG and shared evaluation/benchmark/compare | [Independent reference and example](../../nrl/reports/embedding-2026-10-26.json) |
 
-The fixed search and recovery do **not** produce an accepted compression result. Recovery changes validation NLL from 4.010611 to 4.010566, while dense gives 2.792274. Held-out perplexity is about 105.05 versus dense 9.36. The recommendation remains dense. Original dense storage is retained alongside patches; lower observed scalar forward time or fewer active parameters do not establish quality, disk/memory savings or target performance. These eight original documents form a reproducibility fixture, not a representative benchmark.
+The prepared decoder's recorded paired medians are about 5.8–5.9 ms for the original path and 4.1 ms for preparation (about 30% less elapsed time), with zero observed logit/argmax differences and fixed quality limits met. Each report records its executable/host/workload; these are scalar host observations, not native/device/generation guarantees. Source weights and numerical policy are unchanged. The original checked path remains available.
 
-Next: **T11**, the native adapter inside APP's `nnd` and its budget/cancellation/isolation/failure contracts; **T12**, optimization of measured bottlenecks; **T13**, more model families and representations. Existing host work does not establish those native guarantees. The main task stays open. Full repository gating belongs to LANDING; NRL host development did not wait for landing.
+The compression study still recommends dense: recovered-student held-out perplexity is about 105.05 versus dense 9.36 on the miniature corpus. T12 improves execution of the same model without changing its weights. The embedding/retrieval fixture is original synthetic data and does not establish representative semantic quality, pretrained quality or accepted compression benefit.
+
+**T11 remains open.** APP owns the absent `nnd`/`idl/nn.wit`; the [request](../../issues/requests-APP.md#nrl-native-nnd-integration-for-900-t11) records native parser/client authentication/memory/time/worker/cancellation and named-target test requirements. The portable graph profile does not cover native decoder KV or native embedding execution. Cross-builds and logical host sessions are not OS isolation/native execution evidence. Further T12 SIMD/parallel/device work needs its target measurements; broader T13 families and full embedding lookup/pooling/normalization training remain separate extensions. Parent 900 stays open; deferred landing does not block independent host work.
 
 ## Execution started (2026-10-25)
 
