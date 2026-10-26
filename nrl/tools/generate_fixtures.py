@@ -24,7 +24,7 @@ def main():
                 parser.error("Reference source mismatch: " + relative)
     sys.path.insert(0, str(args.reference_root / "src"))
     import torch
-    from qwen_spline_lab.representations import BlockSpec, ChannelSpline, CompactGatedMLP, select_channels
+    from qwen_spline_lab.representations import BlockSpec, ChannelSpline, CompactGatedMLP, SVDGatedMLP, select_channels
     torch.set_num_threads(1)
     torch.manual_seed(42)
     source = CompactGatedMLP(BlockSpec("dense", 3, 4, width=4)).double()
@@ -35,19 +35,24 @@ def main():
     calibration = torch.tensor([[1., 0, 0], [-1., 0, 0], [2., 0, 0]], dtype=torch.float64)
     indices = select_channels(source, 2, calibration).tolist()
     weight_indices = select_channels(source, 2, None).tolist()
-    source_artifact = {"schema": "nrl.block/2", "representation": "dense", "shape": [3, 4, 3],
+    source_artifact = {"schema": "nrl.block/3", "representation": "dense", "shape": [3, 4, 3],
                        "gate": source.gate_proj.weight.detach().flatten().tolist(),
                        "up": source.up_proj.weight.detach().flatten().tolist(),
-                       "down": source.down_proj.weight.detach().flatten().tolist(), "spline": None, "selection": None}
+                       "down": source.down_proj.weight.detach().flatten().tolist(), "spline": None, "selection": None, "factors": None}
     energy = source.down_proj.weight.detach().square().sum(0)
     weight_scores = source.gate_proj.weight.detach().square().sum(1) * source.up_proj.weight.detach().square().sum(1) * energy
     calibrated_scores = source.features(calibration).detach().square().mean(0) * energy
     cases = []
-    for kind in ("dense", "spline-linear", "pruned", "spline-cubic"):
-        block = CompactGatedMLP(BlockSpec(kind, 3, 4, width=2 if kind == "pruned" else 4, knots=4)).double()
+    for kind in ("dense", "spline-linear", "pruned", "spline-cubic", "svd"):
+        block = (SVDGatedMLP(BlockSpec(kind, 3, 4, rank=2)) if kind == "svd" else
+                 CompactGatedMLP(BlockSpec(kind, 3, 4, width=2 if kind == "pruned" else 4, knots=4))).double()
         with torch.no_grad():
             for index, layer in enumerate((block.gate_proj, block.up_proj, block.down_proj)):
-                if kind == "pruned":
+                if kind == "svd":
+                    for side_index, factor in enumerate((layer.left, layer.right)):
+                        factor.weight.copy_(torch.arange(factor.weight.numel(), dtype=torch.float64).reshape(factor.weight.shape)
+                                            / (11 + index * 3 + side_index * 2) - 0.3)
+                elif kind == "pruned":
                     original = (source.gate_proj, source.up_proj, source.down_proj)[index].weight
                     layer.weight.copy_(original[:, indices] if index == 2 else original[indices])
                 else:
@@ -65,13 +70,23 @@ def main():
         output = block(x)
         loss = (output - target).square().mean()
         loss.backward()
-        artifact = {"schema": "nrl.block/2", "representation": kind, "shape": [3, block.spec.width, 3],
-                    "gate": block.gate_proj.weight.detach().flatten().tolist(),
-                    "up": block.up_proj.weight.detach().flatten().tolist(),
-                    "down": block.down_proj.weight.detach().flatten().tolist(), "spline": None,
+        artifact = {"schema": "nrl.block/3", "representation": kind,
+                    "shape": [3, 4 if kind == "svd" else block.spec.width, 3],
+                    "gate": [], "up": [], "down": [], "spline": None, "factors": None,
                     "selection": {"original_channels": 4, "indices": indices, "method": "activation-energy-f64/0"} if kind == "pruned" else None}
-        grads = {name: layer.weight.grad.flatten().tolist() for name, layer in
-                 (("gate", block.gate_proj), ("up", block.up_proj), ("down", block.down_proj))}
+        grads = {"gate": [], "up": [], "down": [], "factors": None}
+        for name, layer in (("gate", block.gate_proj), ("up", block.up_proj), ("down", block.down_proj)):
+            if kind == "svd":
+                if artifact["factors"] is None:
+                    artifact["factors"] = {"rank": 2}
+                    grads["factors"] = {"rank": 2}
+                for side in ("left", "right"):
+                    parameter = getattr(layer, side).weight
+                    artifact["factors"][name + "_" + side] = parameter.detach().flatten().tolist()
+                    grads["factors"][name + "_" + side] = parameter.grad.flatten().tolist()
+            else:
+                artifact[name] = layer.weight.detach().flatten().tolist()
+                grads[name] = layer.weight.grad.flatten().tolist()
         grads["values"] = []
         if kind.startswith("spline-"):
             activation = block.activation
@@ -105,9 +120,22 @@ def main():
     cx = x.detach().clone().requires_grad_(True)
     cout = cubic(cx)
     cout.sum().backward()
-    result = {"schema": "nrl.fixture/2", "archive_sha256":
+    svd_cases = []
+    matrices = [torch.tensor([[3., 1., 0.], [0., 2., 1.], [1., 0., 1.]], dtype=torch.float64),
+                torch.tensor([[1., 2., 3.], [4., -1., 2.], [2., 3., 0.], [-1., 1., 4.]], dtype=torch.float64),
+                torch.tensor([[1., 2., 3., 4.], [0., 2., -1., 1.], [2., 0., 1., -2.]], dtype=torch.float64),
+                torch.tensor([[1., 2., 3.], [2., 4., 6.], [0., 0., 0.]], dtype=torch.float64),
+                torch.zeros(2, 3, dtype=torch.float64), torch.eye(3, dtype=torch.float64) * 2,
+                torch.tensor([[1., 2.], [3., 4.], [-1., 0.]], dtype=torch.float64) * 1e150,
+                torch.tensor([[1., 2.], [3., 4.], [-1., 0.]], dtype=torch.float64) * 1e-150,
+                torch.randn(6, 5, dtype=torch.float64)]
+    for matrix in matrices:
+        u, singular, vh = torch.linalg.svd(matrix, full_matrices=False)
+        svd_cases.append({"inputs": matrix.shape[1], "outputs": matrix.shape[0],
+                          "weights": matrix.flatten().tolist(), "singular_values": singular.tolist()})
+    result = {"schema": "nrl.fixture/3", "archive_sha256":
               "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
-              "torch": torch.__version__, "seed": 42, "dtype": "f64", "cases": cases,
+              "torch": torch.__version__, "seed": 42, "dtype": "f64", "cases": cases, "svd_initialization": svd_cases,
               "channel_selection": {"source": source_artifact, "input": calibration.flatten().tolist(),
                                     "weight_indices": weight_indices, "calibration_indices": indices,
                                     "weight_scores_f64": weight_scores.tolist(), "calibration_scores_f64": calibrated_scores.tolist(),

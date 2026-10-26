@@ -6,7 +6,7 @@ An extensible Rust system that inspects, converts, fine-tunes and runs trained n
 
 ## Execution started (2026-10-25)
 
-The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v2.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression. Tasks 900-NRL-0001 to 0004 are complete on the NRL branch (64 Python reference tests, 11 Rust tests, two portable release builds); code landing and KRN CI wiring are pending. Remaining representations and full-model work stay in 900.
+The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v3.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression. Tasks 900-NRL-0001 to 0004 are complete on the NRL branch (64 Python reference tests, 11 Rust tests, two portable release builds); code landing and KRN CI wiring are pending. Remaining representations and full-model work stay in 900.
 
 ## What is here
 

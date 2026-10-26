@@ -40,3 +40,7 @@ The narrow implementation costs NRL maintenance of its backward passes and matri
 Only dense and spline-linear bias-free blocks are present. Pruned, cubic Hermite, SVD, other operators/dtypes, model adapters, optimizer state/resume and the native service remain open. Host use of std files and clocks is explicit; it grants no native capability or budget enforcement.
 
 CI wiring belongs to KRN's scripts and is requested separately. Until that request lands, NRL's commands must be run explicitly; the existing full gate does not automatically discover this workspace. Code is submitted through the project's landing queue.
+
+## Subsequent profile growth (2026-10-26)
+
+900-NRL-0005/0006/0007 add pruned, Hermite and direct low-rank SiLU block execution to the same scalar f64 path. A host-only Jacobi initializer is restricted to dimensions at most 64 and refuses nonconvergence. It adds no numerical dependency or native FFI; nrl-repr remains no_std and allocation-free. This does not resolve the large-model backend choice, affine/bias contracts, native integration or model-level performance.

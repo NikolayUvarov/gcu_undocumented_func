@@ -27,7 +27,7 @@ Issue [900](../issues/900-neural-representation-lab.md) needs a reproducible, na
 
 ## Resolution
 
-- `nrl/specs/block-v2.md` defines bias-free gated block semantics, row-major f64 layouts, fixed-grid linear interpolation, tails, knot derivatives, all trainable gradients, MSE and a single SGD step.
+- `nrl/specs/block-v3.md` defines bias-free gated block semantics, row-major f64 layouts, fixed-grid linear interpolation, tails, knot derivatives, all trainable gradients, MSE and a single SGD step.
 - It defines bounded artifact schema `nrl.block/0`, explicit errors and buffer ownership, version refusal, parser limits and the host/service boundary.
 - Hermite and B-spline requirements remain distinct; this first contract does not close either future cubic representation or full model contracts.
 - Reviewed against the verified Python source and 900/262. This is a narrow specification, not evidence of native execution or model optimization. The remaining T01 contracts for full models are still part of issue 900.

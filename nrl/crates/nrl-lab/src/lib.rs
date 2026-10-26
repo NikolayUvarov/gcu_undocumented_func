@@ -1,7 +1,10 @@
 #![forbid(unsafe_code)]
 
 use nrl_core::{finite, Shape, MAX_ELEMENTS};
+use nrl_repr::factor::{Factor, FactorGradients, SvdBlock, SvdGradients};
 use nrl_repr::{Activation, Block, Gradients, Spline};
+
+pub mod svd;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -30,6 +33,47 @@ pub struct SelectionData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FactorData {
+    pub rank: usize,
+    pub gate_left: Vec<f64>,
+    pub gate_right: Vec<f64>,
+    pub up_left: Vec<f64>,
+    pub up_right: Vec<f64>,
+    pub down_left: Vec<f64>,
+    pub down_right: Vec<f64>,
+}
+impl FactorData {
+    pub fn tensors(&self) -> [&[f64]; 6] {
+        [
+            &self.gate_left,
+            &self.gate_right,
+            &self.up_left,
+            &self.up_right,
+            &self.down_left,
+            &self.down_right,
+        ]
+    }
+    pub fn tensors_mut(&mut self) -> [&mut [f64]; 6] {
+        [
+            &mut self.gate_left,
+            &mut self.gate_right,
+            &mut self.up_left,
+            &mut self.up_right,
+            &mut self.down_left,
+            &mut self.down_right,
+        ]
+    }
+    fn zeros(&self) -> Self {
+        let mut result = self.clone();
+        for tensor in result.tensors_mut() {
+            tensor.fill(0.0);
+        }
+        result
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Artifact {
     pub schema: String,
     pub representation: String,
@@ -39,15 +83,86 @@ pub struct Artifact {
     pub down: Vec<f64>,
     pub spline: Option<SplineData>,
     pub selection: Option<SelectionData>,
+    pub factors: Option<FactorData>,
 }
 
 fn numeric<T>(value: nrl_core::Result<T>) -> Result<T> {
     value.map_err(|e| format!("numerical contract: {e:?}"))
 }
 
+pub enum RuntimeBlock<'a> {
+    Compact(Block<'a>),
+    Svd(SvdBlock<'a>),
+}
+impl RuntimeBlock<'_> {
+    pub fn scratch_len(&self) -> usize {
+        match self {
+            Self::Compact(b) => b.scratch_len(),
+            Self::Svd(b) => b.scratch_len(),
+        }
+    }
+    pub fn forward(
+        &self,
+        input: &[f64],
+        output: &mut [f64],
+        scratch: &mut [f64],
+    ) -> nrl_core::Result<()> {
+        match self {
+            Self::Compact(b) => b.forward(input, output, scratch),
+            Self::Svd(b) => b.forward(input, output, scratch),
+        }
+    }
+    fn backward(
+        &self,
+        input: &[f64],
+        dy: &[f64],
+        dx: &mut [f64],
+        gradients: &mut OwnedGradients,
+        scratch: &mut [f64],
+    ) -> nrl_core::Result<()> {
+        match self {
+            Self::Compact(b) => b.backward(
+                input,
+                dy,
+                dx,
+                &mut Gradients {
+                    gate: &mut gradients.gate,
+                    up: &mut gradients.up,
+                    down: &mut gradients.down,
+                    values: &mut gradients.values,
+                },
+                scratch,
+            ),
+            Self::Svd(b) => {
+                let f = gradients.factors.as_mut().ok_or(nrl_core::Error::Shape)?;
+                b.backward(
+                    input,
+                    dy,
+                    dx,
+                    &mut SvdGradients {
+                        gate: FactorGradients {
+                            left: &mut f.gate_left,
+                            right: &mut f.gate_right,
+                        },
+                        up: FactorGradients {
+                            left: &mut f.up_left,
+                            right: &mut f.up_right,
+                        },
+                        down: FactorGradients {
+                            left: &mut f.down_left,
+                            right: &mut f.down_right,
+                        },
+                    },
+                    scratch,
+                )
+            }
+        }
+    }
+}
+
 impl Artifact {
-    pub fn block(&self) -> Result<Block<'_>> {
-        if self.schema != "nrl.block/2" {
+    pub fn block(&self) -> Result<RuntimeBlock<'_>> {
+        if self.schema != "nrl.block/3" {
             return Err(format!("unsupported artifact schema: {}", self.schema));
         }
         let mut total = self
@@ -63,10 +178,55 @@ impl Artifact {
                     .ok_or("artifact value count overflow")?;
             }
         }
+        if let Some(factors) = &self.factors {
+            for tensor in factors.tensors() {
+                total = total
+                    .checked_add(tensor.len())
+                    .ok_or("artifact value count overflow")?;
+            }
+        }
         if total > MAX_ARTIFACT_VALUES {
             return Err("artifact value limit exceeded".into());
         }
         let shape = numeric(Shape::new(self.shape[0], self.shape[1], self.shape[2]))?;
+        if self.representation == "svd" {
+            if self.spline.is_some()
+                || self.selection.is_some()
+                || !self.gate.is_empty()
+                || !self.up.is_empty()
+                || !self.down.is_empty()
+            {
+                return Err("factor block has inconsistent dense, spline or selection data".into());
+            }
+            let f = self.factors.as_ref().ok_or("SVD block requires factors")?;
+            let gate = numeric(Factor::new(
+                shape.input(),
+                shape.channels(),
+                f.rank,
+                &f.gate_left,
+                &f.gate_right,
+            ))?;
+            let up = numeric(Factor::new(
+                shape.input(),
+                shape.channels(),
+                f.rank,
+                &f.up_left,
+                &f.up_right,
+            ))?;
+            let down = numeric(Factor::new(
+                shape.channels(),
+                shape.output(),
+                f.rank,
+                &f.down_left,
+                &f.down_right,
+            ))?;
+            return Ok(RuntimeBlock::Svd(numeric(SvdBlock::new(
+                shape, gate, up, down,
+            ))?));
+        }
+        if self.factors.is_some() {
+            return Err("compact block cannot carry SVD factors".into());
+        }
         if let Some(selection) = &self.selection {
             numeric(Shape::new(
                 shape.input(),
@@ -111,6 +271,14 @@ impl Artifact {
         numeric(Block::new(
             shape, &self.gate, &self.up, &self.down, activation,
         ))
+        .map(RuntimeBlock::Compact)
+    }
+
+    pub fn compact_block(&self) -> Result<Block<'_>> {
+        match self.block()? {
+            RuntimeBlock::Compact(block) => Ok(block),
+            _ => Err("expected a compact block".into()),
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -125,7 +293,7 @@ impl Artifact {
         let rows = input.len() / self.shape[0];
         let count = numeric(nrl_core::elements(rows, self.shape[2]))?;
         let mut output = vec![0.0; count];
-        let mut scratch = vec![0.0; self.shape[1] * 3];
+        let mut scratch = vec![0.0; block.scratch_len()];
         for (x, y) in input
             .chunks_exact(self.shape[0])
             .zip(output.chunks_exact_mut(self.shape[2]))
@@ -159,6 +327,15 @@ impl Artifact {
         } else if !gradients.values.is_empty() {
             return Err("dense block has no spline gradient".into());
         }
+        match (&mut next.factors, &gradients.factors) {
+            (None, None) => (),
+            (Some(weights), Some(grads)) if weights.rank == grads.rank => {
+                for (w, g) in weights.tensors_mut().into_iter().zip(grads.tensors()) {
+                    update(w, g, rate)?;
+                }
+            }
+            _ => return Err("factor gradient mismatch".into()),
+        }
         next.validate()?;
         Ok(next)
     }
@@ -166,6 +343,7 @@ impl Artifact {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OwnedGradients {
+    pub factors: Option<FactorData>,
     pub gate: Vec<f64>,
     pub up: Vec<f64>,
     pub down: Vec<f64>,
@@ -199,9 +377,10 @@ pub fn evaluate(artifact: &Artifact, input: &[f64], target: &[f64]) -> Result<Ev
         up: vec![0.0; artifact.up.len()],
         down: vec![0.0; artifact.down.len()],
         values: vec![0.0; artifact.spline.as_ref().map_or(0, |s| s.values.len())],
+        factors: artifact.factors.as_ref().map(FactorData::zeros),
     };
     let mut input_gradient = vec![0.0; input.len()];
-    let mut scratch = vec![0.0; artifact.shape[1] * 3];
+    let mut scratch = vec![0.0; artifact.block()?.scratch_len()];
     let mut dy = vec![0.0; artifact.shape[2]];
     let block = artifact.block()?;
     for row in 0..input.len() / artifact.shape[0] {
@@ -214,12 +393,7 @@ pub fn evaluate(artifact: &Artifact, input: &[f64], target: &[f64]) -> Result<Ev
             &input[xs..xs + artifact.shape[0]],
             &dy,
             &mut input_gradient[xs..xs + artifact.shape[0]],
-            &mut Gradients {
-                gate: &mut gradients.gate,
-                up: &mut gradients.up,
-                down: &mut gradients.down,
-                values: &mut gradients.values,
-            },
+            &mut gradients,
             &mut scratch,
         ))?;
     }
@@ -315,6 +489,16 @@ pub fn check_case(case: &serde_json::Value) -> Result<serde_json::Value> {
     ]
     .into_iter()
     .fold(0.0_f64, f64::max);
+    let mut error = error;
+    match (&result.gradients.factors, &expected.factors) {
+        (None, None) => (),
+        (Some(actual), Some(expected)) if actual.rank == expected.rank => {
+            for (a, b) in actual.tensors().into_iter().zip(expected.tensors()) {
+                error = error.max(close(a, b)?);
+            }
+        }
+        _ => return Err("reference factor gradient mismatch".into()),
+    }
     close(
         &[result.loss],
         &[case["loss"].as_f64().ok_or("missing reference loss")?],
@@ -342,7 +526,7 @@ pub fn check_case(case: &serde_json::Value) -> Result<serde_json::Value> {
 }
 
 pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Result<Artifact> {
-    let block = source.block()?;
+    let block = source.compact_block()?;
     if source.representation != "dense" {
         return Err("pruning expects a dense SiLU source block".into());
     }
@@ -372,13 +556,14 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
         .flat_map(|o| indices.iter().map(move |c| source.down[o * w + c]))
         .collect();
     let result = Artifact {
-        schema: "nrl.block/2".into(),
+        schema: "nrl.block/3".into(),
         representation: "pruned".into(),
         shape: [n, width, m],
         gate,
         up,
         down,
         spline: None,
+        factors: None,
         selection: Some(SelectionData {
             original_channels: w,
             indices,

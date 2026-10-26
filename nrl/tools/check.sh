@@ -7,4 +7,4 @@ cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --targ
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target aarch64-unknown-none-softfloat
 nrl_check_dir=$(mktemp -d "${TMPDIR:-/tmp}/nrl-check.XXXXXX")
 trap 'rm -rf -- "$nrl_check_dir"' EXIT
-cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v2.json "$nrl_check_dir/demo"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v3.json "$nrl_check_dir/demo"

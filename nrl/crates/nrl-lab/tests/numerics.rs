@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v2.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap()
 }
 
 fn vector(value: &Value) -> Vec<f64> {
@@ -81,6 +81,22 @@ fn every_input_and_trainable_parameter_has_an_independent_numerical_gradient() {
                 analytical.input_gradient[i],
             );
         }
+        if let Some(factors) = &analytical.gradients.factors {
+            for (tensor, gradient) in factors.tensors().iter().enumerate() {
+                for (i, expected) in gradient.iter().enumerate() {
+                    let mut plus = artifact.clone();
+                    let mut minus = artifact.clone();
+                    plus.factors.as_mut().unwrap().tensors_mut()[tensor][i] += epsilon;
+                    minus.factors.as_mut().unwrap().tensors_mut()[tensor][i] -= epsilon;
+                    difference(
+                        (evaluate(&plus, &input, &target).unwrap().loss
+                            - evaluate(&minus, &input, &target).unwrap().loss)
+                            / (2.0 * epsilon),
+                        *expected,
+                    );
+                }
+            }
+        }
         for parameter in 0..4 {
             let gradients = match parameter {
                 0 => &analytical.gradients.gate,
@@ -138,12 +154,12 @@ fn loader_refuses_versions_unknown_fields_duplicates_and_oversized_files() {
     value["schema"] = Value::String("nrl.block/99".into());
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).unwrap_err().contains("nrl.block/99"));
-    for version in ["nrl.block/0", "nrl.block/1"] {
+    for version in ["nrl.block/0", "nrl.block/1", "nrl.block/2"] {
         value["schema"] = Value::String(version.into());
         fs::write(&path, value.to_string()).unwrap();
         assert!(load(&path).unwrap_err().contains(version));
     }
-    value["schema"] = Value::String("nrl.block/2".into());
+    value["schema"] = Value::String("nrl.block/3".into());
     value["unknown"] = Value::Bool(true);
     fs::write(&path, value.to_string()).unwrap();
     assert!(load(&path).is_err());
