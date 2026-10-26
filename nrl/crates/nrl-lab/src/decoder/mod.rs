@@ -1,4 +1,7 @@
-use crate::{descriptor::BlockDescriptor, import_json, model::Source, storage, Artifact, Result};
+use crate::{
+    descriptor::BlockDescriptor, import_json, model::Source, storage, Artifact, Result,
+    RuntimeBlock,
+};
 use nrl_repr::{Activation, Block};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -411,7 +414,7 @@ impl Decoder {
     }
     pub fn step(&self, state: &mut State, token: usize) -> Result<Vec<f64>> {
         let mut next = state.clone();
-        let (logits, _) = self.step_inner(&mut next, token, false)?;
+        let (logits, _) = self.step_inner(&mut next, token, false, None)?;
         *state = next;
         Ok(logits)
     }
@@ -420,6 +423,7 @@ impl Decoder {
         state: &mut State,
         token: usize,
         trace: bool,
+        mut prepared: Option<&mut [(RuntimeBlock<'_>, Vec<f64>)]>,
     ) -> Result<(Vec<f64>, Vec<LayerTrace>)> {
         let c = &self.config;
         if state.model_id != self.id || state.position >= c.context || token >= c.vocab {
@@ -487,7 +491,12 @@ impl Decoder {
             }
             finite(&x)?;
             let input = norm(&x, &layer.norm_ff)?;
-            let output = if let Some(a) = self.patches.get(&index) {
+            let output = if let Some(prepared) = prepared.as_deref_mut() {
+                let (block, scratch) = &mut prepared[index];
+                let mut output = vec![0.0; c.dim];
+                numerical(block.forward(&input, &mut output, scratch))?;
+                output
+            } else if let Some(a) = self.patches.get(&index) {
                 a.forward(&input)?
             } else {
                 layer.mlp.forward(&input)?
@@ -505,15 +514,26 @@ impl Decoder {
         Ok((output, traces))
     }
     pub fn forward(&self, tokens: &[usize]) -> Result<Vec<f64>> {
-        self.run(tokens, false, MAX_TRACE_VALUES).map(|t| t.logits)
+        self.forward_reference(tokens)
     }
     pub fn trace(&self, tokens: &[usize]) -> Result<Trace> {
-        self.run(tokens, true, MAX_TRACE_VALUES)
+        self.run(tokens, true, MAX_TRACE_VALUES, false)
     }
     pub fn trace_with_limit(&self, tokens: &[usize], limit: usize) -> Result<Trace> {
-        self.run(tokens, true, limit)
+        self.run(tokens, true, limit, false)
     }
-    fn run(&self, tokens: &[usize], capture: bool, limit: usize) -> Result<Trace> {
+    pub fn forward_reference(&self, tokens: &[usize]) -> Result<Vec<f64>> {
+        self.run(tokens, false, MAX_TRACE_VALUES, false)
+            .map(|t| t.logits)
+    }
+    pub fn forward_prepared(&self, tokens: &[usize]) -> Result<Vec<f64>> {
+        self.run(tokens, false, MAX_TRACE_VALUES, true)
+            .map(|t| t.logits)
+    }
+    pub fn trace_prepared(&self, tokens: &[usize]) -> Result<Trace> {
+        self.run(tokens, true, MAX_TRACE_VALUES, true)
+    }
+    fn run(&self, tokens: &[usize], capture: bool, limit: usize, prepare: bool) -> Result<Trace> {
         let c = &self.config;
         if limit == 0
             || limit > MAX_TRACE_VALUES
@@ -524,6 +544,25 @@ impl Decoder {
         {
             return Err("decoder input/context/trace budget".into());
         }
+        let mut prepared = if prepare {
+            Some(
+                self.layers
+                    .iter()
+                    .enumerate()
+                    .map(|(i, layer)| -> Result<_> {
+                        let block = if let Some(a) = self.patches.get(&i) {
+                            a.block()?
+                        } else {
+                            RuntimeBlock::Compact(layer.mlp.block()?)
+                        };
+                        let scratch = vec![0.0; block.scratch_len()];
+                        Ok((block, scratch))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+        } else {
+            None
+        };
         let mut state = self.state();
         let mut logits = Vec::new();
         let mut layers: Vec<_> = (0..if capture { c.layers } else { 0 })
@@ -533,7 +572,8 @@ impl Decoder {
             })
             .collect();
         for token in tokens {
-            let (out, traces) = self.step_inner(&mut state, *token, capture)?;
+            let (out, traces) =
+                self.step_inner(&mut state, *token, capture, prepared.as_deref_mut())?;
             logits.extend(out);
             for (total, row) in layers.iter_mut().zip(traces) {
                 total.input.extend(row.input);
@@ -687,7 +727,7 @@ impl Decoder {
         let mut state = self.state();
         let mut logits = Vec::new();
         for token in prompt {
-            logits = self.step_inner(&mut state, *token, false)?.0;
+            logits = self.step_inner(&mut state, *token, false, None)?.0;
         }
         let mut generated = Vec::new();
         for _ in 0..maximum {
@@ -701,7 +741,7 @@ impl Decoder {
             if best == 1 || best == 2 {
                 break;
             }
-            logits = self.step_inner(&mut state, best, false)?.0;
+            logits = self.step_inner(&mut state, best, false, None)?.0;
         }
         Ok(generated)
     }

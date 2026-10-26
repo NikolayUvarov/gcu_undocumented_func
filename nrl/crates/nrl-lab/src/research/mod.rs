@@ -4,6 +4,7 @@ use std::path::Path;
 pub mod data;
 pub mod evaluate;
 pub mod local;
+pub mod optimize;
 pub mod plan;
 pub mod recovery;
 pub use data::{Calibration, Corpus, Document};
