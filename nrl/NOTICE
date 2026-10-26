@@ -26,3 +26,9 @@ SOFTWARE.
 
 This license covers the project code and authored demonstration texts, NOT
 third-party model weights or libraries, which retain their own licenses.
+
+TinyStories evaluation data and its modified selection in
+nrl/tests/fixtures/expanded-v0/corpus.json are CDLA-Sharing-1.0,
+provided by Ronen Eldan and Yuanzhi Li, not licensed by the code notice above.
+Source attribution and modification notices are inside that corpus;
+the full agreement is nrl/tests/fixtures/expanded-v0/LICENSE-CDLA-Sharing-1.0.txt.
