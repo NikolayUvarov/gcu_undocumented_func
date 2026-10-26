@@ -65,3 +65,7 @@ Next: general QSL/model artifact contracts and import/export (T04), then an inde
 All five paths support optional independent output biases on gate/up/down, including mixed absent/present biases and analytic gradients. Packing selects gate/up biases and preserves the down bias; SVD leaves each output bias after L*R. The /1 ranking IDs specify affine energy heuristics. Schema 4 requires an explicit semantic descriptor. Only stateless, independent-parameter, row-major f64 gated SiLU sources on the scalar CPU profile are accepted; `block_on` refuses other devices without fallback. [Capability matrix](specs/block-v4.md#descriptor-and-capability-matrix).
 
 The fixture includes five unchanged QSL graph cases, five affine extensions and two rectangular affine cases checked through PyTorch. Those extensions are not capabilities of the original archive. Schema 0–3 files are refused by name before reading the new required fields; regenerate them rather than adding a compatibility reader.
+
+## Affine profile verified (2026-10-26)
+
+900-NRL-0008 passed **31 host tests**, both portable release rlibs and **12 differential/train/round-trip cases**, including every bias/factor gradient and rectangular blocks. [Report](reports/affine-f64-2026-10-26.json), [raw log](reports/affine-check-2026-10-26.txt). The five-representation gated SiLU numerical profile is complete at these bounds; full-model contracts and T04 onward remain open. This is host evidence only.
