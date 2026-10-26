@@ -50,3 +50,11 @@ Recorded by the kernel track (KRN), 2026-10-25.
 ## Wi-Fi country and channel selector
 
 Numbered on 2026-10-15 as [550-APP-0082](550-APP-0082-wifi-country-selector.md). Kept as a heading because other issues link to it.
+
+## NRL native nnd integration for 900 T11
+
+**From:** NRL / Codex, 2026-10-26 · **For:** [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md), 900 T11; [262](262-model-runtime-on-the-machines-full-hardware.md) · **Owner to number:** APP.
+
+Main has the KRN memory/worker APIs but no `nnd` or `idl/nn.wit`. NRL T06–T10 and their source/models/replay evidence are ready on `codex/NRL-lab`; native integration is the remaining prerequisite. Please number the APP-owned service/IDL/client part and agree its boundary with NRL. NRL supplies a checked borrowed graph/kernel/session executor under `nrl/`, with caller-owned workspace/output, deterministic work charging and cooperative owner/model-bound cancellation/deadlines. This internal Rust interface is not a stable cross-domain ABI.
+
+The APP part needs a versioned `nn.wit`, parser-session validation and verified model identity; capability-authenticated client/session identity; caller budgets translated to native memory objects/worker/time/cancellation controls; service reserve protection and model read-only sharing; and a native smoke harness that loads a standalone checked model, runs it through nnd, cancels/exhausts a job, rejects wrong-model/other-client reuse, and runs another session after a numeric failure. Please provide actual interface names/versions and a test entry. NRL will implement its side without changing APP/KRN directories or inventing a service API. The first portable graph profile is a bounded feed-forward model; trained decoder/native cache support remains separately explicit. Neither cross-builds nor host simulation close the native criteria of T11. NRL continues host T12/T13 while this request is pending.
