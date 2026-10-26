@@ -10,7 +10,7 @@ fn run() -> Result<(), String> {
         return Err("usage: nrl-lab demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
-    if fixture["schema"] != "nrl.fixture/1" {
+    if fixture["schema"] != "nrl.fixture/2" {
         return Err("unsupported fixture schema".into());
     }
     let cases = fixture["cases"].as_array().ok_or("missing fixture cases")?;
@@ -35,7 +35,7 @@ fn run() -> Result<(), String> {
         "archive_sha256": fixture["archive_sha256"], "seed": fixture["seed"], "checks": checks,
         "fixture_round_trips": cases.len(), "elapsed_seconds": started.elapsed().as_secs_f64(),
         "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
-        "native_execution": false, "unimplemented": ["spline-cubic", "svd", "model adapters", "nnd integration"]});
+        "native_execution": false, "unimplemented": ["svd", "model adapters", "nnd integration"]});
     OpenOptions::new()
         .create_new(true)
         .write(true)

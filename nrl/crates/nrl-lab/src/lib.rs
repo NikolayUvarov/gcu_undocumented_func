@@ -47,7 +47,7 @@ fn numeric<T>(value: nrl_core::Result<T>) -> Result<T> {
 
 impl Artifact {
     pub fn block(&self) -> Result<Block<'_>> {
-        if self.schema != "nrl.block/1" {
+        if self.schema != "nrl.block/2" {
             return Err(format!("unsupported artifact schema: {}", self.schema));
         }
         let mut total = self
@@ -92,7 +92,14 @@ impl Artifact {
         }
         let activation = match (self.representation.as_str(), &self.spline) {
             ("dense" | "pruned", None) => Activation::Silu,
-            ("spline-linear", Some(s)) => Activation::Linear(numeric(Spline::new(
+            ("spline-linear", Some(s)) => Activation::Spline(numeric(Spline::new(
+                shape.channels(),
+                s.knots,
+                &s.low,
+                &s.high,
+                &s.values,
+            ))?),
+            ("spline-cubic", Some(s)) => Activation::Spline(numeric(Spline::hermite(
                 shape.channels(),
                 s.knots,
                 &s.low,
@@ -365,7 +372,7 @@ pub fn prune(source: &Artifact, width: usize, calibration: Option<&[f64]>) -> Re
         .flat_map(|o| indices.iter().map(move |c| source.down[o * w + c]))
         .collect();
     let result = Artifact {
-        schema: "nrl.block/1".into(),
+        schema: "nrl.block/2".into(),
         representation: "pruned".into(),
         shape: [n, width, m],
         gate,
@@ -420,6 +427,18 @@ pub fn linear_spline_control(
         high,
         values,
     });
+    result.validate()?;
+    Ok(result)
+}
+
+pub fn cubic_spline_control(
+    pruned: &Artifact,
+    knots: usize,
+    low: Vec<f64>,
+    high: Vec<f64>,
+) -> Result<Artifact> {
+    let mut result = linear_spline_control(pruned, knots, low, high)?;
+    result.representation = "spline-cubic".into();
     result.validate()?;
     Ok(result)
 }

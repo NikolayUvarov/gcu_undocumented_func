@@ -1,6 +1,6 @@
 # Neural Representation Lab: initial Rust numerical path
 
-NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). This workspace implements a **small host CPU f64 block profile**: dense and pruned SiLU blocks, shared deterministic channel selection, linear-spline interpolation, their bias-free gated MLPs and analytic gradients. It is not yet a full model runtime or native model service.
+NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). This workspace implements a **small host CPU f64 block profile**: dense and pruned SiLU blocks, shared deterministic channel selection, linear and cubic Hermite spline interpolation, their bias-free gated MLPs and analytic gradients. It is not yet a full model runtime or native model service.
 
 ## Run from the repository root
 
@@ -8,10 +8,10 @@ NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). Thi
 cargo test --manifest-path nrl/Cargo.toml --locked
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target aarch64-unknown-none-softfloat
-cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v1.json /tmp/nrl-demo-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v2.json /tmp/nrl-demo-new
 ```
 
-The output directory must not exist. The demo checks reference outputs and gradients, takes one SGD step in each fixture and checks a block-file round trip. It writes three block files and a JSON report. Errors use a nonzero exit status; existing files are never overwritten. A failed I/O operation can leave incomplete new outputs.
+The output directory must not exist. The demo checks reference outputs and gradients, takes one SGD step in each fixture and checks a block-file round trip. It writes four block files and a JSON report. Errors use a nonzero exit status; existing files are never overwritten. A failed I/O operation can leave incomplete new outputs.
 
 Use `--offline` as well when the locked dependencies are already cached. `nrl/tools/check.sh` runs the Rust checks and a fresh demonstration. Python is not required to run the Rust tests or demonstration.
 
@@ -24,13 +24,13 @@ The project's pinned nightly builds the code. If that toolchain lacks rustfmt, `
 | `crates/nrl-core` | no_std shapes, limits, errors |
 | `crates/nrl-repr` | no_std, allocation-free math over explicit borrowed buffers; libm exponential |
 | `crates/nrl-lab` | std files, a bounded block artifact, batch loss, a single SGD step, demo/report |
-| `specs/block-v1.md` | numerical, format, ownership and refusal contracts |
-| `tests/fixtures/f64-v1.json` | externally generated reference tensors, no trained weights |
+| `specs/block-v2.md` | numerical, format, ownership and refusal contracts |
+| `tests/fixtures/f64-v2.json` | externally generated reference tensors, no trained weights |
 | `tools/` | explicit reference validation, fixture generation and Rust checking |
 | `reports/` | dated evidence with its environment and limits |
 | `reference/` | unchanged original prototype and a pinned reproduction environment |
 
-[Inventory and Python reproduction](../docs/nrl/reference-inventory.md), [backend ADR](../docs/nrl/ADR-0001-cpu-backend.md), [block contract](specs/block-v1.md), [source attribution](NOTICE).
+[Inventory and Python reproduction](../docs/nrl/reference-inventory.md), [backend ADR](../docs/nrl/ADR-0001-cpu-backend.md), [block contract](specs/block-v2.md), [source attribution](NOTICE).
 
 ## Evidence and boundaries
 
@@ -38,10 +38,14 @@ The recorded Python run is **64 passed, zero skipped**, including a random tiny 
 
 A cross-compiled library is not a native application run. APP owns issue 262's `nnd`, its IDL and model sessions; the first Rust workspace changes none of those. KRN/DRV own the platform and accelerator changes. No OS profile guarantee is added by these host tests.
 
-Remaining: cubic Hermite and SVD representations, QSL import, full-model artifacts, independent model families, full calibration/training/evaluation/search, CPU optimization, native integration and GPU work. The first block round trip is only a small part of T04. No compression or speed benefit on a real trained network is established.
+Remaining: SVD representation, QSL import, full-model artifacts, independent model families, full calibration/training/evaluation/search, CPU optimization, native integration and GPU work. The first block round trip is only a small part of T04. No compression or speed benefit on a real trained network is established.
 
 CI scripts do not yet invoke this new workspace; the owning KRN track has a request to add the explicit checks. Until it lands, run them manually and include their result in the landing request.
 
 ## Pruned control (900-NRL-0005)
 
-`nrl_lab::prune` ranks source channels by weight energy or by training/calibration activations, with stable ties, and records the retained indices. `linear_spline_control` uses exactly those indices and projection weights. Scoring is explicitly f64; Python's ranking uses f32. This is a block transform, not a full-model conversion or a quality result. Artifact `nrl.block/1` replaces `/0`, which is refused by name. Recreate older prototype files; there is no compatibility reader.
+`nrl_lab::prune` ranks source channels by weight energy or by training/calibration activations, with stable ties, and records the retained indices. `linear_spline_control` uses exactly those indices and projection weights. Scoring is explicitly f64; Python's ranking uses f32. This is a block transform, not a full-model conversion or a quality result. Artifact `nrl.block/2` replaces `/0` and `/1`, which are refused by name. Recreate older prototype files; there is no compatibility reader.
+
+## Cubic Hermite (900-NRL-0006)
+
+`spline-cubic` ports the reference's Hermite segments, neighbour-dependent coefficient gradients and linear tails. It is C1 at the knots and reduces to linear interpolation for two knots. It is not a B-spline and can overshoot. `cubic_spline_control` retains the pruned control's exact projection weights and channel mapping. All external fixtures now use block schema 2.
