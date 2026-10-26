@@ -6,6 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+mod training;
+pub use training::{Backward, ObjectGradients};
+
 pub const MAX_MODEL_BYTES: usize = 16 << 20;
 pub const MAX_MANIFEST_BYTES: usize = 1 << 20;
 pub const MAX_NODES: usize = 64;
@@ -251,7 +254,7 @@ pub struct Source {
     pub licence: String,
     pub notices: Vec<String>,
 }
-fn validate_sources(sources: &[Source]) -> Result<()> {
+pub(crate) fn validate_sources(sources: &[Source]) -> Result<()> {
     if sources.is_empty() || sources.len() > 32 {
         return Err("model source count limit".into());
     }
@@ -653,6 +656,11 @@ impl Model {
         self.objects.get(key).map(|o| &o.data)
     }
     pub fn forward(&self, input: &[f64]) -> Result<Vec<f64>> {
+        self.forward_values(input)?
+            .remove(&self.manifest.descriptor.configuration.output)
+            .ok_or("missing computed graph output".into())
+    }
+    fn forward_values(&self, input: &[f64]) -> Result<BTreeMap<String, Vec<f64>>> {
         let checked = check_graph(
             &self.manifest.descriptor,
             &self.manifest.execution,
@@ -690,9 +698,7 @@ impl Model {
             numeric(nrl_core::finite(&output))?;
             values.insert(node.id.clone(), output);
         }
-        values
-            .remove(&graph.output)
-            .ok_or("missing computed graph output".into())
+        Ok(values)
     }
     pub fn overlay(&self, replacements: Replacements) -> Result<Self> {
         if self.manifest.kind != "standalone" {

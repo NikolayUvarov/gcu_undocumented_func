@@ -99,6 +99,26 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-model /tmp/nrl-model-flat-new
 ```
 
-Every output path above must be new. `model-v0/plain.json` is an independent ordinary affine/ReLU/affine model. The graph currently runs forward; full-model backward, training/validation/test evaluation, QSL whole-language-model import and native execution remain separate work. Parameter/file counts are reported with the required base dependency; they are not measured memory/performance or useful-compression claims.
+Every output path above must be new. `model-v0/plain.json` is an independent ordinary affine/ReLU/affine model. The graph supports the separate full-graph regression training/evaluation profile below; classification, QSL whole-language-model import and native execution remain separate work. Parameter/file counts are reported with the required base dependency; they are not measured memory/performance or useful-compression claims.
 
 900-NRL-0010 passed **44 host tests**, both portable rlibs, complete external graph/affine-gradient checks and the base/overlay/standalone CLI cycle. All six model fixtures regenerate byte-identically. [Dated model report](reports/model-graph-2026-10-26.json), [raw log](reports/model-check-2026-10-26.txt). The exported standalone runs without its base files; CLI metadata identifies the written artifact. Next is T05's task/data/training pipeline; these synthetic fixtures establish no model quality or optimization result.
+
+
+## Full-graph regression experiments (900-NRL-0011)
+
+The independent `nrl.feed-forward` adapter now supports full-graph gradients and deterministic full-batch SGD, including shared objects, all five gated representations, affine/activation/add operators and explicit logical training-buffer/work limits. [Data, selection, provenance and limits](specs/regression-v0.md).
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- pack-model nrl/tests/fixtures/model-v0/plain.json /tmp/nrl-regression-initial-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-regression /tmp/nrl-regression-initial-new nrl/tests/fixtures/training-v0/data.json nrl/tests/fixtures/training-v0/run.json /tmp/nrl-regression-run-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-experiment /tmp/nrl-regression-run-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-regression /tmp/nrl-regression-run-new /tmp/nrl-regression-replay-new
+```
+
+All output paths must be new. Data/config specify their sources, split membership, fixed row order and budgets. Train supplies gradients; validation chooses the earliest best MSE checkpoint, including epoch zero; test metrics are computed only after selection. The selected standalone model binds the saved training record and retains source licences/notices and existing history. Replay restarts the full experiment from the saved initial model/data/config; it is not optimizer resume. Reproducibility is checked on the recorded host configuration, not promised across arbitrary platforms or toolchains. The synthetic regression fixture is a numerical/task experiment, not a pretrained-model quality or optimization result.
+
+Optional oracle regeneration uses the pinned reference environment (Rust checks and runtime need no Python):
+
+```bash
+/path/to/reference-venv/bin/python nrl/tools/generate_training_fixtures.py --reference-root /path/to/qwen-spline-lab --output nrl/tests/fixtures/training-v0 --check
+```
