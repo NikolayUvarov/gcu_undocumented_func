@@ -6,6 +6,40 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 6 && args[1] == "train-regression" {
+        let initial = nrl_lab::model::load(Path::new(&args[2]), None)?;
+        let data = nrl_lab::experiment::Dataset::load(Path::new(&args[3]))?;
+        let config = nrl_lab::experiment::Run::load(Path::new(&args[4]))?;
+        let experiment = nrl_lab::experiment::execute(&initial, data, config)?;
+        experiment.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&experiment.report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-experiment" {
+        let report = nrl_lab::experiment::check_saved(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "replay-regression" {
+        let source = Path::new(&args[2]);
+        nrl_lab::experiment::check_saved(source)?;
+        let initial = nrl_lab::model::load(&source.join("initial-model"), None)?;
+        let data = nrl_lab::experiment::Dataset::load(&source.join("data.json"))?;
+        let config = nrl_lab::experiment::Run::load(&source.join("run.json"))?;
+        let experiment = nrl_lab::experiment::execute(&initial, data, config)?;
+        experiment.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&experiment.report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 4 && args[1] == "pack-model" {
         let definition = nrl_lab::model::Definition::load(Path::new(&args[2]))?;
         let model = nrl_lab::model::Model::from_definition(definition)?;
@@ -74,7 +108,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {
@@ -102,7 +136,7 @@ fn run() -> Result<(), String> {
         "archive_sha256": fixture["archive_sha256"], "seed": fixture["seed"], "checks": checks,
         "fixture_round_trips": cases.len(), "elapsed_seconds": started.elapsed().as_secs_f64(),
         "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
-        "native_execution": false, "unimplemented": ["language model adapter", "full-graph training", "nnd integration"]});
+        "native_execution": false, "unimplemented": ["language model adapter", "classification training", "language training", "nnd integration"]});
     OpenOptions::new()
         .create_new(true)
         .write(true)

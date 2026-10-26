@@ -5,6 +5,7 @@ use nrl_repr::factor::{Factor, FactorGradients, SvdBlock, SvdGradients};
 use nrl_repr::{Activation, Block, Gradients, Spline};
 
 pub mod descriptor;
+pub mod experiment;
 mod import_json;
 pub mod model;
 pub mod qsl;
@@ -153,7 +154,7 @@ impl RuntimeBlock<'_> {
             Self::Svd(b) => b.forward(input, output, scratch),
         }
     }
-    fn backward(
+    pub(crate) fn backward(
         &self,
         input: &[f64],
         dy: &[f64],
@@ -429,7 +430,8 @@ impl Artifact {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OwnedGradients {
     pub bias: Option<BiasData>,
     pub factors: Option<FactorData>,
@@ -437,6 +439,29 @@ pub struct OwnedGradients {
     pub up: Vec<f64>,
     pub down: Vec<f64>,
     pub values: Vec<f64>,
+}
+
+impl OwnedGradients {
+    pub(crate) fn zeros(artifact: &Artifact) -> Self {
+        Self {
+            bias: artifact.bias.as_ref().map(BiasData::zeros),
+            gate: vec![0.0; artifact.gate.len()],
+            up: vec![0.0; artifact.up.len()],
+            down: vec![0.0; artifact.down.len()],
+            values: vec![0.0; artifact.spline.as_ref().map_or(0, |s| s.values.len())],
+            factors: artifact.factors.as_ref().map(FactorData::zeros),
+        }
+    }
+    pub fn tensors(&self) -> Vec<&[f64]> {
+        let mut tensors: Vec<&[f64]> = vec![&self.gate, &self.up, &self.down, &self.values];
+        if let Some(f) = &self.factors {
+            tensors.extend(f.tensors());
+        }
+        if let Some(b) = &self.bias {
+            tensors.extend(b.tensors());
+        }
+        tensors
+    }
 }
 
 #[derive(Debug)]
@@ -461,14 +486,7 @@ pub fn evaluate(artifact: &Artifact, input: &[f64], target: &[f64]) -> Result<Ev
         .sum::<f64>()
         / count;
     numeric(finite(&[loss]))?;
-    let mut gradients = OwnedGradients {
-        bias: artifact.bias.as_ref().map(BiasData::zeros),
-        gate: vec![0.0; artifact.gate.len()],
-        up: vec![0.0; artifact.up.len()],
-        down: vec![0.0; artifact.down.len()],
-        values: vec![0.0; artifact.spline.as_ref().map_or(0, |s| s.values.len())],
-        factors: artifact.factors.as_ref().map(FactorData::zeros),
-    };
+    let mut gradients = OwnedGradients::zeros(artifact);
     let mut input_gradient = vec![0.0; input.len()];
     let mut scratch = vec![0.0; artifact.block()?.scratch_len()];
     let mut dy = vec![0.0; artifact.shape[2]];

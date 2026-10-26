@@ -18,3 +18,9 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-model "$nrl_check_dir/model-overlay" nrl/tests/fixtures/model-v0/input.json "$nrl_check_dir/overlay-output.json" "$nrl_check_dir/model-base"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-standalone "$nrl_check_dir/model-overlay" "$nrl_check_dir/model-flat" "$nrl_check_dir/model-base"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-model "$nrl_check_dir/model-flat" nrl/tests/fixtures/model-v0/input.json "$nrl_check_dir/flat-output.json"
+
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- pack-model nrl/tests/fixtures/model-v0/plain.json "$nrl_check_dir/regression-input"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-regression "$nrl_check_dir/regression-input" nrl/tests/fixtures/training-v0/data.json nrl/tests/fixtures/training-v0/run.json "$nrl_check_dir/regression"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-experiment "$nrl_check_dir/regression"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-regression "$nrl_check_dir/regression" "$nrl_check_dir/regression-replay"

@@ -22,7 +22,7 @@ A graph declares a positive fixed input width, a bounded ordered list of uniquel
 
 Every computed output is checked for finite values. Add and affine overflow are refusals, not clipping. Rectangular projections are supported. The standalone affine primitive is no_std and allocation-free, with caller-owned output/gradient buffers. Its parameter gradients accumulate and input gradient is replaced; affine data uses `nrl.affine/0`, shape `[inputs,outputs]`, row-major weights and an empty or outputs-length bias vector.
 
-The complete graph currently has a forward executor. A full graph backward/training cycle is not claimed by the affine primitive's backward or by the existing single-block SGD spike.
+The model package format describes forward execution. The separate [regression experiment contract](regression-v0.md) now supplies a checked host full-graph backward pass and full-batch SGD; this does not change the model file schema or imply native training.
 
 ## Objects, sharing and identity
 
@@ -80,4 +80,4 @@ The host commands are `pack-model`, `check-model`, `run-model`, `export-overlay`
 
 Fixtures include an explicitly composed PyTorch graph with shared affine weights, SiLU/ReLU, addition, all five gated representations and a rectangular readout; a second ordinary affine/ReLU/affine network; and separate affine forward/backward tensors. They are synthetic numerical checks, not pretrained-model quality or compression results.
 
-This implements full overlay/standalone semantics for the stated feed-forward profile. T04 still has QSL standalone language models, original-model/tokenizer fingerprint verification and other family contracts; those depend on appropriate model adapters. T05's dataset/task evaluation and training pipeline, T06's language graph and T11's native service remain separate work. The host graph executor does not implement APP's `nnd` or its IDL/authority/session contracts.
+This implements full overlay/standalone semantics for the stated feed-forward profile. T04 still has QSL standalone language models, original-model/tokenizer fingerprint verification and other family contracts; those depend on appropriate model adapters. T05's first regression dataset/task/training pipeline is specified separately in [regression-v0.md](regression-v0.md); classification, T06's language graph and T11's native service remain separate work. The host graph executor does not implement APP's `nnd` or its IDL/authority/session contracts.
