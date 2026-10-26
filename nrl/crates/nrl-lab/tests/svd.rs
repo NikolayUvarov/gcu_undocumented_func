@@ -4,7 +4,7 @@ use nrl_repr::factor::{Factor, FactorGradients, SvdBlock};
 use serde_json::Value;
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v5.json")).unwrap()
 }
 fn vector(value: &Value) -> Vec<f64> {
     serde_json::from_value(value.clone()).unwrap()
@@ -209,6 +209,7 @@ fn malformed_factor_artifacts_and_training_errors_leave_the_source_unchanged() {
     assert!(bad.validate().is_err());
     let mut bad = artifact.clone();
     bad.selection = Some(nrl_lab::SelectionData {
+        mapping: "known".into(),
         original_channels: 4,
         indices: vec![0, 1, 2, 3],
         method: "weight-energy-f64/1".into(),

@@ -6,7 +6,7 @@ use nrl_repr::{Activation, Block, Gradients};
 use serde_json::Value;
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v5.json")).unwrap()
 }
 fn vector(value: &Value) -> Vec<f64> {
     serde_json::from_value(value.clone()).unwrap()

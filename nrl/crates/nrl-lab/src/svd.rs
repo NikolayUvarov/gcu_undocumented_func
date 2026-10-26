@@ -178,7 +178,7 @@ pub fn control(source: &Artifact, rank: usize) -> Result<Artifact> {
     let result = Artifact {
         descriptor: source.descriptor.clone(),
         bias: source.bias.clone(),
-        schema: "nrl.block/4".into(),
+        schema: "nrl.block/5".into(),
         representation: "svd".into(),
         shape: source.shape,
         gate: vec![],

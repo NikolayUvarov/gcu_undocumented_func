@@ -6,11 +6,28 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 5 && args[1] == "import-qsl" {
+        let imported = nrl_lab::qsl::import_directory(Path::new(&args[2]), &args[4])?;
+        imported.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(imported.manifest()).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 3 && args[1] == "check-block-set" {
+        let set = nrl_lab::qsl::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(set.manifest()).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY".into());
+        return Err("usage: nrl-lab demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
-    if fixture["schema"] != "nrl.fixture/4" {
+    if fixture["schema"] != "nrl.fixture/5" {
         return Err("unsupported fixture schema".into());
     }
     let cases = fixture["cases"].as_array().ok_or("missing fixture cases")?;

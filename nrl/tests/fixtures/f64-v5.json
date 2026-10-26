@@ -81,7 +81,7 @@
         1.0
       ],
       "representation": "dense",
-      "schema": "nrl.block/4",
+      "schema": "nrl.block/5",
       "selection": null,
       "shape": [
         3,
@@ -159,7 +159,7 @@
           0.4461538461538461
         ],
         "representation": "dense",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -319,7 +319,7 @@
           0.4461538461538461
         ],
         "representation": "spline-linear",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -516,12 +516,13 @@
           1.0
         ],
         "representation": "pruned",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": {
           "indices": [
             0,
             3
           ],
+          "mapping": "known",
           "method": "activation-energy-f64/1",
           "original_channels": 4
         },
@@ -659,7 +660,7 @@
           0.4461538461538461
         ],
         "representation": "spline-cubic",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -898,7 +899,7 @@
         },
         "gate": [],
         "representation": "svd",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -1080,7 +1081,7 @@
           0.4461538461538461
         ],
         "representation": "dense",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -1276,7 +1277,7 @@
           0.4461538461538461
         ],
         "representation": "spline-linear",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -1505,12 +1506,13 @@
           1.0
         ],
         "representation": "pruned",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": {
           "indices": [
             0,
             3
           ],
+          "mapping": "known",
           "method": "activation-energy-f64/1",
           "original_channels": 4
         },
@@ -1680,7 +1682,7 @@
           0.4461538461538461
         ],
         "representation": "spline-cubic",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -1955,7 +1957,7 @@
         },
         "gate": [],
         "representation": "svd",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           3,
@@ -2148,7 +2150,7 @@
           0.06315789473684208
         ],
         "representation": "dense",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           2,
@@ -2334,7 +2336,7 @@
         },
         "gate": [],
         "representation": "svd",
-        "schema": "nrl.block/4",
+        "schema": "nrl.block/5",
         "selection": null,
         "shape": [
           2,
@@ -2519,7 +2521,7 @@
         1.0
       ],
       "representation": "dense",
-      "schema": "nrl.block/4",
+      "schema": "nrl.block/5",
       "selection": null,
       "shape": [
         3,
@@ -2634,7 +2636,7 @@
     ]
   },
   "dtype": "f64",
-  "schema": "nrl.fixture/4",
+  "schema": "nrl.fixture/5",
   "seed": 42,
   "spline": {
     "channels": 2,

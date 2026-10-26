@@ -1,6 +1,6 @@
-# NRL block contract v4
+# NRL block contract v5
 
-**Edition:** 4 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done), [900-NRL-0008](../../issues/900-NRL-0008-affine-bias-and-applicability.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 5 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues-done/900-NRL-0007-factorized-svd-blocks.done), [900-NRL-0008](../../issues-done/900-NRL-0008-affine-bias-and-applicability.done), [900-NRL-0009](../../issues/900-NRL-0009-qsl-overlay-block-bridge.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
@@ -29,7 +29,7 @@ y[o] = sum_c D[o,c] * a[c] * u[c] + bd[o]
 
 ## Uniform linear splines
 
-Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v4. Let:
+Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v5. Let:
 
 ```text
 u = (x-low)/(high-low) * (k-1)
@@ -78,9 +78,9 @@ The original Python reference only converts bias-free blocks and forcibly casts 
 
 Packing copies exactly the selected rows of G/U and columns of D, the selected gate/up biases and the entire down bias, with no refit of D. A spline control starts from this same pruned block, preserving its mapping and projections. Its initial coefficients are SiLU samples on an explicitly supplied per-channel grid; choosing grid quantiles and refitting D remain calibration tasks. The current transform accepts only a dense SiLU source. It never silently treats a spline or another source activation as that source.
 
-`selection` records `original_channels`, an ascending, unique in-range `indices` array of length `w`, and one of the two method IDs above. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
+`selection` records `mapping`, `original_channels`, `indices` and `method`. For `mapping=known`, indices are ascending, unique, in range and have length w, and the method is one of the two /1 scoring IDs above. For `mapping=unrecorded`, indices must be empty and the method must be `qsl-unrecorded/0`; the original channel width must still be at least w. This explicitly represents metadata absent from a QSL import, without inventing source indices. The packed numerical block can execute either way. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
 
-**Transition:** schema 4 adds affine biases and the explicit semantic descriptor, replacing schemas 0, 1, 2 and 3. A bounded schema-header read refuses older versions by name before parsing fields that only the new version requires. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
+**Transition:** schema 5 adds the explicit known/unrecorded channel-mapping state, replacing schemas 0, 1, 2, 3 and 4. A bounded schema-header read refuses older versions by name before parsing fields that only the new version requires. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
 
 ## Low-rank SiLU blocks
 
@@ -126,20 +126,20 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 - After a low-level computation returns an error, output, gradient and scratch buffers may be partially written and must be discarded or reinitialized. It changes no weights. The host owns any transient allocations; this is not a tested native budget implementation.
 - No file, network, thread, OS clock or device access belongs to the numerical layer.
 
-## Data-only artifact `nrl.block/4`
+## Data-only artifact `nrl.block/5`
 
 The host artifact is a UTF-8 JSON object:
 
 | Field | Meaning |
 |---|---|
-| schema | Exactly `nrl.block/4`; any other version is refused with its name |
+| schema | Exactly `nrl.block/5`; any other version is refused with its name |
 | descriptor | Required semantic descriptor; fields and applicability below |
 | bias | Null/absent for no biases; otherwise gate/up/down f64 arrays, each empty or exact projection output length |
 | representation | Exactly `dense`, `pruned`, `spline-linear`, `spline-cubic` or `svd` |
 | shape | `[n,w,m]`, positive dimensions checked before indexing |
 | gate, up, down | Compact: flat f64 arrays with the exact matrix lengths. SVD: empty arrays |
 | spline | For dense/pruned/SVD: null or absent. For either spline: the object below |
-| selection | Required for pruned, optional for spline, absent/null for dense and SVD; original_channels, ascending unique indices, method |
+| selection | Required for pruned, optional for spline, absent/null for dense and SVD; mapping, original_channels, indices, method (known or explicitly unrecorded) |
 | factors | SVD only: required rank and gate_left/right, up_left/right, down_left/right arrays; null/absent for compact blocks |
 | factors.gate_left, up_left | w × rank |
 | factors.gate_right, up_right | rank × n |
