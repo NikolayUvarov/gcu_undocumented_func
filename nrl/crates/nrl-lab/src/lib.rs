@@ -11,6 +11,7 @@ mod import_json;
 pub mod model;
 pub mod qsl;
 pub mod research;
+pub mod runtime_bridge;
 pub mod safetensors;
 mod storage;
 pub mod svd;
