@@ -281,6 +281,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [900-NRL-0018](900-NRL-0018-prepared-decoder-experiment.md) | Measured reuse of immutable decoder FFN views/scratch | `NRL` / Codex | P1 | — for host profile; native numbers await T11 | G / 900 T12 |
 | [900-NRL-0017](900-NRL-0017-native-runtime-and-nnd-integration.md) | Portable session executor and native nnd integration | `NRL` / Codex | P1 | APP nnd/IDL request for native part | G / 900 T11 |
 | [900-NRL-0016](../issues-done/900-NRL-0016-student-activation-recovery.done) | Multiple replacements and student-activation recovery | NRL branch; 70 tests, matched control, exact pair/model replay; dense recommended; landing pending |
 | [900-NRL-0015](../issues-done/900-NRL-0015-mixed-plans-and-bounded-search.done) | Manual mixed plans and bounded measured search | NRL branch; 68 tests, six measured plans, Pareto and dense fallback; landing pending |

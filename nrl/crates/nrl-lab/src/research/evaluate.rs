@@ -41,7 +41,7 @@ pub struct Environment {
     pub runtime_threads: usize,
     pub debug_assertions: bool,
 }
-fn environment() -> Result<Environment> {
+pub(crate) fn environment() -> Result<Environment> {
     static ENV: OnceLock<Result<Environment>> = OnceLock::new();
     ENV.get_or_init(|| {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -109,7 +109,7 @@ pub struct Timing {
     pub p95_seconds: f64,
     pub scope: String,
 }
-fn timing(seconds: Vec<f64>) -> Result<Timing> {
+pub(crate) fn timing(seconds: Vec<f64>) -> Result<Timing> {
     finite(&seconds)?;
     if seconds.is_empty() || seconds.iter().any(|v| *v < 0.0) {
         return Err("invalid timing samples".into());

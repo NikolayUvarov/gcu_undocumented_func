@@ -53,3 +53,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-recovery "$nrl_check_dir/decoder" "$nrl_check_dir/recovery" "$nrl_check_dir/recovery-replay"
 
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-budgeted-model "$nrl_check_dir/model-base" nrl/tests/fixtures/model-v0/input.json nrl/tests/fixtures/runtime-v0/policy.json "$nrl_check_dir/runtime-report.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- profile-decoder "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/optimization-v0/study.json "$nrl_check_dir/optimization-report.json"
