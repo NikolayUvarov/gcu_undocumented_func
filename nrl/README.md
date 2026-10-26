@@ -53,3 +53,9 @@ CI scripts do not yet invoke this new workspace; the owning KRN track has a requ
 ## SVD factors (900-NRL-0007)
 
 `svd` runs six factor matrices directly, with analytic gradients and caller-owned scratch. Diagnostic reconstruction is separate. `nrl_lab::svd::control` initializes a dense bias-free block with a small f64 Jacobi solver; each matrix dimension is limited to 64 and nonconvergence is refused. It is not a large-model solver, SVD-LLM or a measured optimization. The current five representations remain bias-free; affine support is still open.
+
+## Latest verified branch slice (2026-10-26)
+
+900-NRL-0005 through 0007 are complete on the NRL branch: **25 host tests**, release rlibs for both portable targets, and differential forward/backward, one SGD step and exact round trips for all five representations. The nine small initializer cases also compare singular values/reconstruction/truncation with an external f64 SVD oracle. [Current report](reports/svd-f64-2026-10-26.json), [raw check log](reports/svd-check-2026-10-26.txt). This is source-commit-specific host evidence; no native run or real-model benefit is established.
+
+Next: affine/bias and capability contracts (remaining T01/T03), general QSL/model artifact import/export (T04), then an independent small feed-forward model (T05). Landing is asynchronous integration, not a host-development prerequisite.
