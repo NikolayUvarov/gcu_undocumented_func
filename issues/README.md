@@ -270,7 +270,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
-| [900-NRL-0015](900-NRL-0015-mixed-plans-and-bounded-search.md) | Manual mixed plans and bounded measured search | `NRL` / Codex | P1 | — (T07/T08 complete on branch) | G / 900 T09 |
+| [900-NRL-0015](../issues-done/900-NRL-0015-mixed-plans-and-bounded-search.done) | Manual mixed plans and bounded measured search | NRL branch; 68 tests, six measured plans, Pareto and dense fallback; landing pending |
 | [900-NRL-0014](../issues-done/900-NRL-0014-evaluate-benchmark-and-compare.done) | Comparable regression/language evaluation and repeated host benchmarks | NRL branch; 65 tests, independent metrics, two rlibs, measured CLI cycles; landing pending |
 | [900-NRL-0013](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done) | Language calibration and resumable local Rust training | NRL branch; 62 tests, actual-model PyTorch SGD and exact checkpoint continuation; landing pending |
 | [900-NRL-0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done) | Real trained decoder, tokenizer and dense language baseline | NRL branch; 57 tests, actual-weight PyTorch/C oracles, portable rlibs; landing pending |
