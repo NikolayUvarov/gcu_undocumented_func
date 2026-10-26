@@ -418,3 +418,36 @@ fn replacements_and_output_files_refuse_overwrites_and_boundary_changes() {
     assert_eq!(fs::read(output).unwrap(), before);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn standalone_export_cli_reports_the_written_package_identity() {
+    let root = directory();
+    let base_dir = root.join("base");
+    let overlay_dir = root.join("overlay");
+    let flat_dir = root.join("flat");
+    let source = base();
+    source.save(&base_dir).unwrap();
+    source
+        .overlay(replacements())
+        .unwrap()
+        .save(&overlay_dir)
+        .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_nrl-lab"))
+        .arg("export-standalone")
+        .arg(&overlay_dir)
+        .arg(&flat_dir)
+        .arg(&base_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reported: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let saved = model::load(&flat_dir, None).unwrap();
+    assert_eq!(reported, saved.info().unwrap());
+    assert_eq!(reported["kind"], "standalone");
+    assert_eq!(reported["dependency_bytes"], 0);
+    fs::remove_dir_all(root).unwrap();
+}
