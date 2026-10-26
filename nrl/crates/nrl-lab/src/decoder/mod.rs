@@ -756,7 +756,7 @@ pub fn import(weights: &Path, tokenizer: &Path, source: &Path) -> Result<Decoder
 
 impl Decoder {
     pub fn generate(&self, prompt: &[usize], maximum: usize) -> Result<Vec<usize>> {
-        self.generate_reference(prompt, maximum)
+        self.generate_prepared(prompt, maximum)
     }
     pub fn generate_prepared(&self, prompt: &[usize], maximum: usize) -> Result<Vec<usize>> {
         if maximum > 64
