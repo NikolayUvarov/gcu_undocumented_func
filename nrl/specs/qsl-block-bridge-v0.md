@@ -1,6 +1,6 @@
 # QSL block bridge and block-set package v0
 
-**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0009](../../issues/900-NRL-0009-qsl-overlay-block-bridge.md) · **Scope:** numerical blocks, not a whole-model format or executor.
+**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0009](../../issues-done/900-NRL-0009-qsl-overlay-block-bridge.done) · **Scope:** numerical blocks, not a whole-model format or executor.
 
 ## Source contract
 

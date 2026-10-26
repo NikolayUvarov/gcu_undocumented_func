@@ -82,3 +82,7 @@ The first command verifies and imports all five QSL overlay block representation
 Limits: 32 blocks, 512 tensors, 262144 imported values, 1 MiB JSON/header, 16 MiB source weights and covered package files; individual block limits still apply. There is no hidden Python, download, dtype fallback or source-path traversal. Fixed regular-file names are used; this host filesystem check is not a tested adversarial-filesystem or native capability boundary. Failed output writes can leave an incomplete new directory; the manifest is written last.
 
 `tools/generate_qsl_fixture.py` replays the verified original QSL writer for the tiny synthetic overlay. With `--check`, tensor bytes, external f64 outputs and the core manifest must match; the recorded writer environment is excluded from cross-host regeneration comparison. No pretrained weights are included.
+
+## Import bridge verified (2026-10-26)
+
+900-NRL-0009 passed **37 host tests**, both portable rlibs, the 12-case numerical profile and the five-representation QSL import/package/CLI cycle. Tensor bytes and outputs regenerate through the original writer; its environment record is kept separately from the core-manifest reproducibility check. [Current report](reports/qsl-block-bridge-2026-10-26.json), [raw log](reports/qsl-check-2026-10-26.txt). Next is a model/graph descriptor and complete overlay/standalone semantics, followed by the independent small model; the block bridge does not close T04.
