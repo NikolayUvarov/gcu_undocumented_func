@@ -1,6 +1,6 @@
 # Language calibration and resumable local training v0
 
-**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0013](../../issues/900-NRL-0013-calibration-and-resumable-local-training.md) · **Scope:** scalar f64 replacement fitting for the bounded trained decoder. Existing decoder/block formats and mathematical bounds are unchanged.
+**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0013](../../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done) · **Scope:** scalar f64 replacement fitting for the bounded trained decoder. Existing decoder/block formats and mathematical bounds are unchanged.
 
 `nrl.language-data/0` declares a source/licence/notices record, at most 64 documents, unique stable document/group IDs, explicit nonempty train/validation/test splits and a token limit (2..512) no larger than the decoder context. IDs are 1..128 ASCII alphanumeric or `_.-`. Each UTF-8 document has 1..4096 bytes and no NUL. Related groups, exact text and equal token sequences never cross splits. All documents are validated/tokenized before activations. The supplied relationships are declarations, not an automatic statistical-independence detector. Byte-BPE uses BOS, no added EOS or truncation; language targets are shifted text tokens, and only the preceding prefix is executed. This policy becomes a comparability key in T08.
 

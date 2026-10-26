@@ -55,7 +55,6 @@ Tracks work in parallel; open tracks can be taken now. Their codes, ranges, owne
 | [262-KRN-0161](262-KRN-0161-large-pages.md) | 2 MiB and 1 GiB pages for a program's large blocks (APP's request, for 262) | `KRN` | P2 | — | A |
 | [263](263-self-diagnosis-and-self-optimization.md) | Self-diagnosis and self-optimization: problems found, reported to the update server or the repository with the owner's leave, fixed through a pull request where the machine has the tools, and the answer followed (the maintainer's request) | main task, `APP` | P2 | stage by stage: 260, 650, `UPD`'s report endpoint | tracks G, C |
 | [900](900-neural-representation-lab.md) | Neural Representation Lab: an extensible Rust system that inspects, converts, fine-tunes and runs trained networks; five representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`) ported from the Python reference and measured against each other; a ModelAdapter per family, a task profile per metric (the maintainer's handoff) | main task, `NRL` / Codex | P1 | — for T00–T10 on the host; T11: 262's service and native adapter | track G; Article 8 |
-| [900-NRL-0013](900-NRL-0013-calibration-and-resumable-local-training.md) | Language calibration, Rust local training and exact checkpoint continuation | `NRL` / Codex | P1 | — (T06 is on this branch) | G / 900 T07 |
 | [u015](u015-pins.md) | `pins`: the pins of an ARM board — list, every function of a pin with the active one marked, levels and changes through `gpio` (done except the board run) | tools | P2 | 205 | track H |
 | [u017](u017-pins-view.md) | `pinmap`: the board's header on a screen, changes by keys after one confirmation; `pins` and `pinmap` from `wm` and `console` (done except the board run) | tools | P3 | 205 | track H |
 | [205](205-aarch64-boards.md) | aarch64 on boards with UEFI: Raspberry Pi 4/5 (EDK2), servers with ACPI | porting | P2 | — (201–204 done) | track H |
@@ -271,6 +270,7 @@ Requests that wait for a track to number them: [requests-EFF.md](requests-EFF.md
 
 | № | Task | Result |
 |---|---|---|
+| [900-NRL-0013](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done) | Language calibration and resumable local Rust training | NRL branch; 62 tests, actual-model PyTorch SGD and exact checkpoint continuation; landing pending |
 | [900-NRL-0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done) | Real trained decoder, tokenizer and dense language baseline | NRL branch; 57 tests, actual-weight PyTorch/C oracles, portable rlibs; landing pending |
 | [900-NRL-0011](../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done) | Full-graph training and split-aware regression experiments | NRL branch; 52 host tests, external gradients/history and replayable example; landing pending |
 | [900-NRL-0010](../issues-done/900-NRL-0010-model-graph-and-packages.done) | Executable feed-forward graphs and complete overlay/standalone model packages | NRL branch; 44 host tests, external graph oracles and portable builds; landing pending |

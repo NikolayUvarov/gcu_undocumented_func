@@ -157,3 +157,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export
 ```
 
 Only train initializes/trains; validation selects; test activations are not collected. Source/corpus/order and initial/current/best parameters are saved, with stateless SGD and explicit no-RNG state. Resume continues the exact saved full-batch run rather than restarting it. Four compressed controls share the train-only source-channel selection; SVD explicitly follows that reduction. Export retains licence/provenance and existing dense storage. Outputs require new paths. Optional independent regeneration: `tools/generate_local_fixture.py --output tests/fixtures/local-v0/expected.json --check` in the pinned reference environment. T08–T10 continue with whole-model metrics, comparison, plans and student-input adaptation.
+
+T07 passed **62 host tests** and both portable rlibs; [dated evidence](reports/local-training-2026-10-26.json), [raw log](reports/local-check-2026-10-26.txt), [saved calibration/checkpoints](reports/local-example-2026-10-26/report.json). Exact continuation and real-model PyTorch local checks passed. T08–T10 use the already frozen study profile.
