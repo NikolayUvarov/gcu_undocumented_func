@@ -78,6 +78,35 @@ fn prepared_sessions_roll_back_numerical_failures_and_keep_sessions_independent(
         assert!(session.step(1).is_err());
         assert_eq!(session.position(), 0);
     }
+    let first = m.trace(&[1]).unwrap().layers[0].input[0];
+    let mut late = decoder::load(&root).unwrap().patches();
+    let block = late.get_mut(&0).unwrap();
+    block.gate.fill(0.0);
+    block.up.fill(0.0);
+    block.down.fill(0.0);
+    block.gate[0] = 1.0;
+    block.up[0] = 1e200;
+    block.down[0] = f64::MAX;
+    let mut bias = vec![0.0; block.shape[1]];
+    bias[0] = -first;
+    block.bias = Some(nrl_lab::BiasData {
+        gate: bias,
+        up: Vec::new(),
+        down: Vec::new(),
+    });
+    let late = m.with_patches(late, &[]).unwrap();
+    let mut reference = late.state();
+    let mut prepared = late.prepared_session().unwrap();
+    assert_eq!(
+        late.step(&mut reference, 1).unwrap(),
+        prepared.step(1).unwrap()
+    );
+    for _ in 0..2 {
+        assert!(late.step(&mut reference, 259).is_err());
+        assert!(prepared.step(259).is_err());
+        assert_eq!(prepared.position(), 1);
+        assert_eq!(reference.position(), 1);
+    }
     let mut a = m.prepared_session().unwrap();
     let mut b = m.prepared_session().unwrap();
     assert_eq!(a.step(1).unwrap(), b.step(1).unwrap());
