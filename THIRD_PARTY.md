@@ -127,3 +127,10 @@ NRL AdamW differential data (`nrl/tests/fixtures/adaptation-v0/optimizer-oracle.
 NRL end-to-end embedding gradients and AdamW steps (`nrl/tests/fixtures/embedding-training-v0/oracle.json`) are original data, MIT OR Apache-2.0. `nrl/tools/generate_embedding_training_fixture.py` uses the same optional pinned PyTorch CPU environment; no downloaded model/data or new Rust dependency is added.
 
 NRL's complete-model QSL fixture (`nrl/tests/fixtures/qsl-model-v0`) derives four FFN replacements from the pinned MIT TinyStories 260K source weights through the unchanged archived QSL writer. It retains that model's source/licence declarations and QSL attribution already recorded above. `nrl/tools/generate_qsl_model_fixture.py` verifies the archive and source weights, uses the existing optional PyTorch environment, and writes an independent full-decoder numerical oracle. No new third-party implementation is copied into Rust.
+
+### TinyStories larger NRL evaluation corpus
+
+- Source: [roneneldan/TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories/tree/f54c09fd23315a6f9c86f9dc80f725de7d8f9c64), Ronen Eldan and Yuanzhi Li, source `TinyStories-valid.txt`, SHA-256 `94e431816c4cce81ff71e4408ff8d3bda9a42e8d2663986697c3954288cb38b4`.
+- Licence: **CDLA-Sharing-1.0**, as declared in the pinned dataset card. Data and modified selection in `nrl/tests/fixtures/expanded-v0/corpus.json` carry that agreement, rather than the repository's code licence. Full text: `nrl/tests/fixtures/expanded-v0/LICENSE-CDLA-Sharing-1.0.txt`; source card and hashes accompany it.
+- Modifications: deterministic selection of 48 distinct story prefixes, cropping to 384 UTF-8 bytes at character boundaries, source-story groups and 24/12/12 experiment splits. Prominent change/source notices are inside the corpus. The complete source file is not committed.
+- Reproduction: `nrl/tools/prepare_expanded_corpus.py`; optional explicit download into a new local path verifies exact bytes/hash. `nrl/tools/run_expanded_study.py` uses the ordinary Rust CLI; no third-party training code is imported. Dataset similarity/pretraining overlap beyond exact-prefix/story checks is unknown.
