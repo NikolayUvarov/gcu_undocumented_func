@@ -95,6 +95,9 @@ fn new_family_vectors_scores_rankings_and_metrics_match_pytorch() {
         }
         close(&[r.quality.value], &[1.0 - sum / selected.len() as f64]).unwrap();
         assert_eq!(r.profile.task, "embedding-retrieval/0");
+        let mut bad = r.clone();
+        bad.quality.value = 1.01;
+        assert!(bad.validate().is_err());
         assert_eq!(r.work.rows_per_pass, 8);
         assert!(!r.native_execution);
     }
