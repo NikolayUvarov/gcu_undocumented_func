@@ -24,16 +24,35 @@ def main():
                 parser.error("Reference source mismatch: " + relative)
     sys.path.insert(0, str(args.reference_root / "src"))
     import torch
-    from qwen_spline_lab.representations import BlockSpec, ChannelSpline, CompactGatedMLP
+    from qwen_spline_lab.representations import BlockSpec, ChannelSpline, CompactGatedMLP, select_channels
     torch.set_num_threads(1)
     torch.manual_seed(42)
+    source = CompactGatedMLP(BlockSpec("dense", 3, 4, width=4)).double()
+    with torch.no_grad():
+        source.gate_proj.weight.copy_(torch.tensor([[1, 0, 0], [0, 2, 0], [0, 0, 3], [1, 1, 1]]))
+        source.up_proj.weight.copy_(source.gate_proj.weight)
+        source.down_proj.weight.copy_(torch.tensor([[1, 1, 1, 1], [1, -1, 1, -1], [.5, -.5, .5, -.5]]))
+    calibration = torch.tensor([[1., 0, 0], [-1., 0, 0], [2., 0, 0]], dtype=torch.float64)
+    indices = select_channels(source, 2, calibration).tolist()
+    weight_indices = select_channels(source, 2, None).tolist()
+    source_artifact = {"schema": "nrl.block/1", "representation": "dense", "shape": [3, 4, 3],
+                       "gate": source.gate_proj.weight.detach().flatten().tolist(),
+                       "up": source.up_proj.weight.detach().flatten().tolist(),
+                       "down": source.down_proj.weight.detach().flatten().tolist(), "spline": None, "selection": None}
+    energy = source.down_proj.weight.detach().square().sum(0)
+    weight_scores = source.gate_proj.weight.detach().square().sum(1) * source.up_proj.weight.detach().square().sum(1) * energy
+    calibrated_scores = source.features(calibration).detach().square().mean(0) * energy
     cases = []
-    for kind in ("dense", "spline-linear"):
-        block = CompactGatedMLP(BlockSpec(kind, 3, 4, width=4, knots=4)).double()
+    for kind in ("dense", "spline-linear", "pruned"):
+        block = CompactGatedMLP(BlockSpec(kind, 3, 4, width=2 if kind == "pruned" else 4, knots=4)).double()
         with torch.no_grad():
             for index, layer in enumerate((block.gate_proj, block.up_proj, block.down_proj)):
-                layer.weight.copy_(torch.arange(12, dtype=torch.float64).reshape(layer.weight.shape)
-                                   / (13 + index * 3) - 0.4)
+                if kind == "pruned":
+                    original = (source.gate_proj, source.up_proj, source.down_proj)[index].weight
+                    layer.weight.copy_(original[:, indices] if index == 2 else original[indices])
+                else:
+                    layer.weight.copy_(torch.arange(12, dtype=torch.float64).reshape(layer.weight.shape)
+                                       / (13 + index * 3) - 0.4)
             if kind == "spline-linear":
                 block.activation.low.fill_(-1.0)
                 block.activation.high.fill_(1.0)
@@ -46,10 +65,11 @@ def main():
         output = block(x)
         loss = (output - target).square().mean()
         loss.backward()
-        artifact = {"schema": "nrl.block/0", "representation": kind, "shape": [3, 4, 3],
+        artifact = {"schema": "nrl.block/1", "representation": kind, "shape": [3, block.spec.width, 3],
                     "gate": block.gate_proj.weight.detach().flatten().tolist(),
                     "up": block.up_proj.weight.detach().flatten().tolist(),
-                    "down": block.down_proj.weight.detach().flatten().tolist(), "spline": None}
+                    "down": block.down_proj.weight.detach().flatten().tolist(), "spline": None,
+                    "selection": {"original_channels": 4, "indices": indices, "method": "activation-energy-f64/0"} if kind == "pruned" else None}
         grads = {name: layer.weight.grad.flatten().tolist() for name, layer in
                  (("gate", block.gate_proj), ("up", block.up_proj), ("down", block.down_proj))}
         grads["values"] = []
@@ -58,15 +78,16 @@ def main():
             artifact["spline"] = {"knots": 4, "low": activation.low.tolist(), "high": activation.high.tolist(),
                                   "values": activation.values.detach().flatten().tolist()}
             grads["values"] = activation.values.grad.flatten().tolist()
+        rate = 1e-6 if kind == "pruned" else 0.05
         initial_loss = loss.item()
         with torch.no_grad():
             for parameter in block.parameters():
-                parameter.add_(parameter.grad, alpha=-0.05)
+                parameter.add_(parameter.grad, alpha=-rate)
             trained_loss = (block(x) - target).square().mean().item()
         cases.append({"artifact": artifact, "input": x.detach().flatten().tolist(),
                       "target": target.flatten().tolist(), "output": output.detach().flatten().tolist(),
                       "input_gradient": x.grad.flatten().tolist(), "gradients": grads,
-                      "loss": initial_loss, "learning_rate": 0.05, "trained_loss": trained_loss})
+                      "loss": initial_loss, "learning_rate": rate, "trained_loss": trained_loss})
     spline = ChannelSpline(2, 4, "linear").double()
     with torch.no_grad():
         spline.low.copy_(torch.tensor([-1.0, -2.0]))
@@ -76,9 +97,13 @@ def main():
                       [2.0, 1.0], [3.0, 2.0], [0.4, -0.3]], dtype=torch.float64, requires_grad=True)
     out = spline(x)
     out.sum().backward()
-    result = {"schema": "nrl.fixture/0", "archive_sha256":
+    result = {"schema": "nrl.fixture/1", "archive_sha256":
               "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
               "torch": torch.__version__, "seed": 42, "dtype": "f64", "cases": cases,
+              "channel_selection": {"source": source_artifact, "input": calibration.flatten().tolist(),
+                                    "weight_indices": weight_indices, "calibration_indices": indices,
+                                    "weight_scores_f64": weight_scores.tolist(), "calibration_scores_f64": calibrated_scores.tolist(),
+                                    "reference_ranking_dtype": "f32", "rust_ranking_dtype": "f64"},
               "spline": {"channels": 2, "knots": 4, "low": spline.low.tolist(), "high": spline.high.tolist(),
                          "values": spline.values.detach().flatten().tolist(), "input": x.detach().flatten().tolist(),
                          "output": out.detach().flatten().tolist(), "input_gradient": x.grad.flatten().tolist(),
