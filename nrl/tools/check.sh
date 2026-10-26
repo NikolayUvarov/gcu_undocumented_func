@@ -42,3 +42,6 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compar
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-language "$nrl_check_dir/decoder" "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json validation nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/language-base-evaluation.json"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- benchmark-language "$nrl_check_dir/decoder" "$nrl_check_dir/local-selected" nrl/tests/fixtures/local-v0/corpus.json validation nrl/tests/fixtures/study-v0/measurement.json "$nrl_check_dir/language-selected-evaluation.json"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compare-reports "$nrl_check_dir/language-base-evaluation.json" "$nrl_check_dir/language-selected-evaluation.json" "$nrl_check_dir/language-comparison.json"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- apply-plan "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json mixed-linear-pruned "$nrl_check_dir/manual-plan"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- search-plans "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json "$nrl_check_dir/plan-search"
