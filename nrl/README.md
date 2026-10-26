@@ -143,3 +143,17 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-
 All output paths must be new. Primary assets and licence notices are in `reference/tinyllamas-260k/`; the optional `tools/generate_decoder_fixtures.py --output tests/fixtures/decoder-v0.json --check` generator uses independent PyTorch and original C calculations. Normal checks need no network, C or Python. Smaller replacement counts do not imply smaller packages: this first profile retains the original dense blob. T07–T10 supply calibration/training/evaluation/plans; native and other families remain separate.
 
 T06 passed **57 host tests** and both portable rlibs; [dated baseline](reports/decoder-baseline-2026-10-26.json), [raw log](reports/decoder-check-2026-10-26.txt), [saved probe](reports/decoder-probes-2026-10-26/0.json). All actual-weight f64 logits/FFN traces and original C tokenizer/f32 checks passed; the oracle regenerates byte-identically. T07–T10 are next.
+
+
+## Calibration and exact local continuation (900-NRL-0013)
+
+[Language calibration/local-training contract](specs/calibration-local-v0.md). On an imported decoder, the independent operations are:
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- calibrate-decoder /tmp/nrl-decoder-new nrl/tests/fixtures/local-v0/corpus.json 0 64 /tmp/nrl-calibration-new.json
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-local /tmp/nrl-decoder-new /tmp/nrl-calibration-new.json nrl/tests/fixtures/local-v0/config.json /tmp/nrl-local-partial-new.json 2
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-local /tmp/nrl-local-partial-new.json /tmp/nrl-local-complete-new.json 8
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-local /tmp/nrl-decoder-new /tmp/nrl-local-complete-new.json /tmp/nrl-local-decoder-new
+```
+
+Only train initializes/trains; validation selects; test activations are not collected. Source/corpus/order and initial/current/best parameters are saved, with stateless SGD and explicit no-RNG state. Resume continues the exact saved full-batch run rather than restarting it. Four compressed controls share the train-only source-channel selection; SVD explicitly follows that reduction. Export retains licence/provenance and existing dense storage. Outputs require new paths. Optional independent regeneration: `tools/generate_local_fixture.py --output tests/fixtures/local-v0/expected.json --check` in the pinned reference environment. T08–T10 continue with whole-model metrics, comparison, plans and student-input adaptation.

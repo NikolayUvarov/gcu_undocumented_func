@@ -1,0 +1,21 @@
+{
+  "learning_rate": 0.002,
+  "max_steps": 8,
+  "output_source": {
+    "identifier": "nrl://local-training-v0",
+    "licence": "MIT (derived from publisher-declared MIT TinyStories weights); original corpus MIT OR Apache-2.0",
+    "notices": [
+      "Source model and corpus declarations remain attached.",
+      "Rust scalar f64 local SGD; checkpoint payload identity is not authenticity."
+    ],
+    "sha256": null
+  },
+  "schema": "nrl.local-config/0",
+  "transform": {
+    "knots": 8,
+    "rank": 0,
+    "representation": "spline-linear",
+    "schema": "nrl.transform/0",
+    "width": 32
+  }
+}

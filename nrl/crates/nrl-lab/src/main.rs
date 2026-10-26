@@ -6,6 +6,58 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 7 && args[1] == "calibrate-decoder" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[3]))?;
+        let layer = args[4].parse().map_err(|_| "invalid layer")?;
+        let rows = args[5].parse().map_err(|_| "invalid row cap")?;
+        let cal = nrl_lab::research::Calibration::collect(&model, corpus, layer, rows)?;
+        cal.save(Path::new(&args[6]))?;
+        println!(
+            "{}",
+            serde_json::json!({"schema":"nrl.calibration-info/0","calibration_id":cal.calibration_id()?,"teacher_model_id":cal.teacher_model_id,"layer":cal.layer,"train_rows":cal.batch("train")?.0.len()/cal.dim,"validation_rows":cal.batch("validation")?.0.len()/cal.dim,"test_activations":0})
+        );
+        return Ok(());
+    }
+    if (args.len() == 6 || args.len() == 7) && args[1] == "train-local" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let cal = nrl_lab::research::Calibration::load(Path::new(&args[3]))?;
+        let config = nrl_lab::research::LocalConfig::load(Path::new(&args[4]))?;
+        let until = if args.len() == 7 {
+            args[6].parse().map_err(|_| "invalid stop step")?
+        } else {
+            config.max_steps
+        };
+        let mut state = nrl_lab::research::LocalState::start(&model, cal, config)?;
+        state.advance(until)?;
+        state.save(Path::new(&args[5]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&state.report()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "resume-local" {
+        let mut state = nrl_lab::research::LocalState::load(Path::new(&args[2]))?;
+        state.advance(args[4].parse().map_err(|_| "invalid continuation step")?)?;
+        state.save(Path::new(&args[3]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&state.report()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-local" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let state = nrl_lab::research::LocalState::load(Path::new(&args[3]))?;
+        let model = state.export(&teacher)?;
+        model.save(Path::new(&args[4]))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&model.info()?).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 6 && args[1] == "import-decoder" {
         let model = nrl_lab::decoder::import(
             Path::new(&args[2]),
@@ -138,7 +190,7 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
     if args.len() != 4 || args[1] != "demo" {
-        return Err("usage: nrl-lab import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
+        return Err("usage: nrl-lab calibrate-decoder MODEL CORPUS LAYER ROW_CAP NEW_CAL | train-local MODEL CAL CONFIG NEW_CHECKPOINT [UNTIL] | resume-local CHECKPOINT NEW_CHECKPOINT UNTIL | export-local MODEL CHECKPOINT NEW_DIRECTORY | import-decoder WEIGHTS TOKENIZER SOURCE NEW_DIRECTORY | check-decoder DIRECTORY | probe-decoder DIRECTORY TEXT NEW_OUTPUT | train-regression MODEL DATA RUN NEW_DIRECTORY | check-experiment DIRECTORY | replay-regression DIRECTORY NEW_DIRECTORY | demo FIXTURE_JSON NEW_OUTPUT_DIRECTORY | import-qsl OVERLAY_DIRECTORY NEW_OUTPUT_DIRECTORY WEIGHT_LICENCE | check-block-set DIRECTORY | pack-model DEFINITION NEW_DIRECTORY | export-overlay BASE REPLACEMENTS NEW_DIRECTORY | check-model MODEL [BASE] | run-model MODEL INPUT NEW_OUTPUT [BASE] | export-standalone MODEL NEW_DIRECTORY [BASE]".into());
     }
     let fixture = read_json(Path::new(&args[2]))?;
     if fixture["schema"] != "nrl.fixture/5" {

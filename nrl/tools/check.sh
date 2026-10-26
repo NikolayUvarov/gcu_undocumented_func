@@ -29,3 +29,9 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- import-decoder nrl/reference/tinyllamas-260k/stories260K.bin nrl/reference/tinyllamas-260k/tok512.bin nrl/reference/tinyllamas-260k/decoder-source.json "$nrl_check_dir/decoder"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-decoder "$nrl_check_dir/decoder"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder "$nrl_check_dir/decoder" 'Once upon a time' "$nrl_check_dir/decoder-output.json"
+
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- calibrate-decoder "$nrl_check_dir/decoder" nrl/tests/fixtures/local-v0/corpus.json 0 64 "$nrl_check_dir/calibration.json"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-local "$nrl_check_dir/decoder" "$nrl_check_dir/calibration.json" nrl/tests/fixtures/local-v0/config.json "$nrl_check_dir/local-partial.json" 2
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-local "$nrl_check_dir/local-partial.json" "$nrl_check_dir/local-complete.json" 8
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-local "$nrl_check_dir/decoder" "$nrl_check_dir/local-complete.json" "$nrl_check_dir/local-selected"
