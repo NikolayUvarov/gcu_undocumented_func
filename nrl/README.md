@@ -228,3 +228,7 @@ Checked FFN preparation and scratch can be reused throughout a greedy generation
 ## End-to-end embedding training (900-NRL-0022)
 
 Lookup, mean pooling, shared projection and L2 normalization now have an analytic backward path. A bounded graded contrastive objective trains all table/projection weights with the shared AdamW; complete checkpoints resume exactly and validation loss selects the standalone export. Retrieval of trained tables uses the distinct `embedding-trained-retrieval/0` task; the original projection-only task still freezes the table. All index documents participate in training, while query splits remain separate. [Contract, independent oracle and CLI](specs/embedding-training-v0.md).
+
+## Complete supported-model QSL binding (900-NRL-0023)
+
+QSL overlays can now bind to the exact supported Tinyllamas decoder, run the complete model, and export a standalone package containing unchanged weights/tokenizer plus all replacements and provenance. The original QSL writer/loader and independent PyTorch full logits/tokens check four transformed layers. This narrow base-fingerprint policy is explicit; Hugging Face/Qwen architectures and the external HF standalone format remain unsupported. [Binding, overlay, export and commands](specs/qsl-complete-model-v0.md).

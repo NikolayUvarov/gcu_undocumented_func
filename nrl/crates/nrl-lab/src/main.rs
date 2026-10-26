@@ -6,6 +6,36 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 7 && args[1] == "bind-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let binding = nrl_lab::qsl_model::Binding::load(Path::new(&args[4]))?;
+        let imported = nrl_lab::qsl_model::import(&base, Path::new(&args[3]), binding, &args[5])?;
+        imported.save_overlay(Path::new(&args[6]))?;
+        println!("{}", imported.info()?);
+        return Ok(());
+    }
+    if args.len() == 4 && args[1] == "check-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        println!(
+            "{}",
+            nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?.info()?
+        );
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?
+            .model
+            .save(Path::new(&args[4]))?;
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "run-qsl-decoder" {
+        let base = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        nrl_lab::qsl_model::load(&base, Path::new(&args[3]))?
+            .model
+            .probe_to_file(&args[4], Path::new(&args[5]))?;
+        return Ok(());
+    }
     if args.len() == 6 && args[1] == "train-embedding" {
         let e = nrl_lab::embedding::load(Path::new(&args[2]))?;
         let d = nrl_lab::research::retrieval::Dataset::load(Path::new(&args[3]))?;
