@@ -1,9 +1,10 @@
-//! The cable's one master: queued operations carried out one at a time, and between them the programs they started
-//! followed: their output read, their end seen, a cancel or a time limit turned into STOP. While a lease is held, only
-//! its holder's operations and reads start; the programs started before it are still followed.
+//! The cable's one master, with a worker for each machine on it (800-LNK-0026): each carries out its machine's queued
+//! operations one at a time, and between them follows the programs they started: their output read, their end seen,
+//! a cancel or a time limit turned into STOP. While a lease is held, only its holder's operations and reads start; the
+//! programs started before it are still followed. The workers take the line in turn, one exchange each (bus.rs).
+use crate::bus::{Bus, BusLine};
 use crate::json::{s, Value};
 use crate::ops::{now, State, RUN_TIMEOUT};
-use crate::port::Port;
 use linkproto::app::{Client, EXIT_UNKNOWN, RUN_FAULTED, RUN_RUNNING, RUN_STOPPED};
 use linkproto::endpoint::{channel, code, kind};
 use linkproto::frame::{MAX_PAYLOAD, MAX_WIRE};
@@ -19,6 +20,7 @@ pub type Shared = Arc<Mutex<State>>;
 /// The state, even when a thread panicked holding it: one failed request must not stop the daemon (800-LNK-0022).
 pub fn lock(state: &Shared) -> std::sync::MutexGuard<'_, State> { state.lock().unwrap_or_else(|e| e.into_inner()) }
 
+#[derive(Clone, Copy)]
 pub struct Options { pub baud: u32, pub timeout: Option<u32>, pub tries: u32, pub payload: usize }
 
 pub fn explain(e: Error) -> String {
@@ -49,21 +51,28 @@ const KEEP_WARM: Duration = Duration::from_secs(2);
 /// The line is gone or silent: the daemon says hello again before the next request.
 fn line_lost(e: Error) -> bool { matches!(e, Error::Timeout | Error::Line) }
 
-fn connect(spec: &str, o: &Options) -> Result<(Client<Port>, String), String> {
-    let mut port = Port::open(spec, o.baud)?;
-    port.turnaround = Duration::ZERO;
-    let serial = !spec.contains(':');
-    if let Some(l) = port.latency_ms().filter(|&l| serial && l > 2) {
-        eprintln!("effector485: {}: the FTDI latency timer is {l} ms, which slows every answer (mindlink hello says how to lower it)", port.name);
-    }
-    let wait = o.timeout.unwrap_or(if serial { 200 + (4 * MAX_WIRE as u64 * 10 * 1000 / o.baud as u64) as u32 } else { 2000 });
-    let mut c = Client::new(port);
+/// A client for the machine at `address`, its wait for an answer from the line's rate.
+fn client(bus: &Arc<Bus>, address: u8, o: &Options) -> Client<BusLine> {
+    let wait = o.timeout.unwrap_or(if bus.serial() { 200 + (4 * MAX_WIRE as u64 * 10 * 1000 / o.baud as u64) as u32 } else { 2000 });
+    let mut c = Client::new(bus.line());
     c.master.timeout_ms = wait;
     c.master.tries = o.tries;
+    c.master.address = address;
     c.max_payload = o.payload;
+    c
+}
+
+/// A hello to the machine, with `tries`: its name and protocol, or why it did not answer.
+fn connect(c: &mut Client<BusLine>, bus: &Bus, tries: u32) -> Result<String, String> {
+    let all = std::mem::replace(&mut c.master.tries, tries);
     let mut theirs = [0u8; 64];
-    let (hello, n) = c.hello("effector485", &mut theirs).map_err(explain)?;
-    Ok((c, format!("{}, protocol {}", String::from_utf8_lossy(&theirs[..n]), hello.version)))
+    let r = c.hello("effector485", &mut theirs);
+    c.master.tries = all;
+    match r {
+        Ok((hello, n)) => Ok(format!("{}, protocol {}", String::from_utf8_lossy(&theirs[..n]), hello.version)),
+        Err(Error::Line) if !bus.error().is_empty() => Err(bus.error()),
+        Err(e) => Err(explain(e)),
+    }
 }
 
 /// Runs `f` on operation `id`, if it is still kept.
@@ -75,24 +84,34 @@ fn with<T>(state: &Shared, id: &str, f: impl FnOnce(&mut crate::ops::Op) -> T) -
     Some(r)
 }
 
-pub fn work(state: Shared, spec: String, o: Options) {
-    let mut link: Option<Client<Port>> = None;
+/// The worker of machine `index` in the state's links: on a cable of one, the only one.
+pub fn work(state: Shared, index: usize, bus: Arc<Bus>, o: Options) {
+    let (agent, address, shared) = { let st = lock(&state); (st.links[index].agent.clone(), st.links[index].address, st.links.len() > 1) };
+    // The log names the machine when the cable has several.
+    let spec = if shared { format!("{} {agent}", bus.spec()) } else { bus.spec().to_string() };
+    let mut c = client(&bus, address, &o);
+    let mut online = false;
     let mut spoke = Instant::now();
     loop {
-        if link.is_none() {
-            match connect(&spec, &o) {
-                Ok((c, name)) => {
+        if !online {
+            // On a shared cable a machine that is not there is asked once each time, so it takes little of the others' line.
+            match connect(&mut c, &bus, if shared { 1 } else { o.tries }) {
+                Ok(name) => {
                     eprintln!("effector485: {spec}: {name}");
                     let mut st = lock(&state);
-                    (st.link.online, st.link.name, st.link.last_seen, st.link.error) = (true, name, now(), String::new());
+                    let l = &mut st.links[index];
+                    (l.online, l.name, l.last_seen, l.error) = (true, name, now(), String::new());
                     st.changed();
-                    link = Some(c);
+                    online = true;
+                    spoke = Instant::now();
                 }
                 Err(e) => {
                     let mut st = lock(&state);
-                    if st.link.error != e { eprintln!("effector485: {spec}: {e}"); }
-                    if st.link.error != e || st.link.online { st.changed(); }
-                    (st.link.online, st.link.error) = (false, e);
+                    let l = &mut st.links[index];
+                    let news = l.error != e || l.online;
+                    if l.error != e { eprintln!("effector485: {spec}: {e}"); }
+                    (l.online, l.error) = (false, e);
+                    if news { st.changed(); }
                     st.expire(now());
                     drop(st);
                     std::thread::sleep(Duration::from_secs(3));
@@ -100,9 +119,9 @@ pub fn work(state: Shared, spec: String, o: Options) {
                 }
             }
         }
-        let c = link.as_mut().unwrap();
+        let c = &mut c;
         let mut lost = None;
-        let runs: Vec<String> = lock(&state).ops.iter().filter(|o| o.status == "running" && o.run.is_some()).map(|o| o.id.clone()).collect();
+        let runs: Vec<String> = lock(&state).ops.iter().filter(|o| o.agent == agent && o.status == "running" && o.run.is_some()).map(|o| o.id.clone()).collect();
         for id in &runs {
             spoke = Instant::now();
             if let Err(e) = follow(c, &state, id) { if line_lost(e) { lost = Some(e); break; } }
@@ -112,7 +131,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
                 let mut st = lock(&state);
                 // The first queued that a lease lets through: its holder's and reads overtake the others', which wait.
                 let at = now();
-                let first = (0..st.ops.len()).find(|&i| st.ops[i].status == "queued" && st.may_run(&st.ops[i], at));
+                let first = (0..st.ops.len()).find(|&i| st.ops[i].status == "queued" && st.ops[i].agent == agent && st.may_run(&st.ops[i], at));
                 let next = first.map(|i| {
                     let op = &mut st.ops[i];
                     (op.status, op.started) = ("running".into(), Some(now()));
@@ -143,12 +162,13 @@ pub fn work(state: Shared, spec: String, o: Options) {
         }
         let mut st = lock(&state);
         if let Some(e) = lost {
-            eprintln!("effector485: {spec}: {}", explain(e));
-            (st.link.online, st.link.error) = (false, explain(e));
+            let why = if c.master.line.failed() && !bus.error().is_empty() { bus.error() } else { explain(e) };
+            eprintln!("effector485: {spec}: {why}");
+            (st.links[index].online, st.links[index].error) = (false, why);
             st.changed();
-            link = None;
+            online = false;
         } else {
-            st.link.last_seen = now();
+            st.links[index].last_seen = now();
         }
         st.expire(now());
         st.prune();
@@ -157,7 +177,7 @@ pub fn work(state: Shared, spec: String, o: Options) {
 }
 
 /// A started program's new output, and its end; a cancel or the time limit stops it.
-fn follow(c: &mut Client<Port>, state: &Shared, id: &str) -> Result<(), Error> {
+fn follow(c: &mut Client<BusLine>, state: &Shared, id: &str) -> Result<(), Error> {
     let Some((run, cursor, cancel, late)) = with(state, id, |op| (op.run.unwrap(), op.cursor, op.cancel.is_some(), op.deadline.is_some_and(|d| now() >= d))) else { return Ok(()) };
     if cancel || late {
         let why = if cancel { "cancel" } else { "timeout" };
@@ -206,7 +226,7 @@ fn follow(c: &mut Client<Port>, state: &Shared, id: &str) -> Result<(), Error> {
 fn cancelled(state: &Shared, id: &str) -> bool { with(state, id, |op| op.cancel.is_some()).unwrap_or(true) }
 
 /// A put; skipped when the other end holds the same bytes, unless forced. Inside, this machine's own failure.
-fn put(c: &mut Client<Port>, state: &Shared, id: &str, file: &Path, name: &str, force: bool) -> Result<Result<(), String>, Error> {
+fn put(c: &mut Client<BusLine>, state: &Shared, id: &str, file: &Path, name: &str, force: bool) -> Result<Result<(), String>, Error> {
     let mut f = match File::open(file) { Ok(f) => f, Err(e) => return Ok(Err(format!("{}: {e}", file.display()))) };
     let size = f.metadata().map(|m| m.len()).unwrap_or(0);
     let mut sha = linkproto::sha256::Sha256::new();
@@ -239,7 +259,7 @@ fn put(c: &mut Client<Port>, state: &Shared, id: &str, file: &Path, name: &str, 
     Ok(Ok(()))
 }
 
-fn execute(c: &mut Client<Port>, state: &Shared, id: &str, kind: &str, p: &Value) -> Result<(), Error> {
+fn execute(c: &mut Client<BusLine>, state: &Shared, id: &str, kind: &str, p: &Value) -> Result<(), Error> {
     let name = p.str("name").unwrap_or("");
     let file = p.str("file").map(PathBuf::from);
     let note = |text: String| with(state, id, |op| op.print(text.as_bytes()));

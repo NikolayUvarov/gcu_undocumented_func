@@ -1,7 +1,8 @@
 //! effector485's operations, as on Effector (docs/effector.md): each with an id, an idempotency key and a reason; queued,
 //! run one at a time over the cable, read for their status and output, cancelled by id. They are kept in a state file,
 //! so a restarted daemon finds its queue and follows the programs it had started. A lease (800-LNK-0021) holds the
-//! machine for one session: the others' operations that change it wait, reads pass.
+//! machine for one session: the others' operations that change it wait, reads pass. Several machines may share the
+//! cable, each at its address (800-LNK-0026): an operation and a lease are for one of them, named by its `agent_id`.
 use crate::json::{obj, s, Value};
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
@@ -32,8 +33,14 @@ pub const LEASE_MINUTES_MAX: u64 = 60;
 
 pub fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
 
+/// The machine at `address` as the API names it: `link` for the one without an address (a cable of one, as before
+/// 800-LNK-0026), `link-<n>` for the others.
+pub fn agent_name(address: u8) -> String { if address == 0 { "link".into() } else { format!("link-{address}") } }
+
 pub struct Op {
     pub id: String,
+    /// The machine it is for.
+    pub agent: String,
     pub kind: String,
     /// The request as submitted.
     pub params: Value,
@@ -89,7 +96,7 @@ impl Op {
         result.set("stdout", s(shown));
         result.set("output_bytes", Value::Num(self.output_bytes as f64));
         let mut v = obj(vec![
-            ("id", s(&self.id)), ("kind", s(&self.kind)), ("status", s(&self.status)), ("idempotency_key", s(&self.key)),
+            ("id", s(&self.id)), ("agent_id", s(&self.agent)), ("kind", s(&self.kind)), ("status", s(&self.status)), ("idempotency_key", s(&self.key)),
             ("reason", s(&self.reason)), ("params", self.params.clone()), ("created_at", Value::Num(self.created as f64)),
             ("started_at", time(self.started)), ("finished_at", time(self.finished)), ("result", result),
         ]);
@@ -110,7 +117,8 @@ impl Op {
         let bytes = result.num("output_bytes").unwrap_or(stdout.len() as f64) as u64;
         if let Value::Obj(fields) = &mut result { fields.retain(|(k, _)| k != "stdout" && k != "output_bytes"); }
         Some(Op {
-            id: v.str("id")?.to_string(), kind: v.str("kind")?.to_string(), params: v.get("params")?.clone(),
+            id: v.str("id")?.to_string(), agent: v.str("agent_id").unwrap_or("link").to_string(), kind: v.str("kind")?.to_string(),
+            params: v.get("params")?.clone(),
             key: v.str("idempotency_key")?.to_string(), reason: v.str("reason").unwrap_or("").to_string(),
             status: v.str("status")?.to_string(), created: num("created_at").unwrap_or(0), started: num("started_at"),
             finished: num("finished_at"), output: stdout, output_bytes: bytes, result,
@@ -176,13 +184,13 @@ pub fn utc(t: u64) -> String { format!("{:02}:{:02}:{:02}", t / 3600 % 24, t / 6
 /// A lease on the machine (800-LNK-0021), as on the Effector server's terminal reservations, but for two things: the
 /// others' operations wait rather than being refused, and the lease has a reason everyone sees.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Lease { pub session: String, pub pin: String, pub owner: String, pub reason: String, pub created: u64, pub expires: u64, pub minutes: u64, pub renewals: u64 }
+pub struct Lease { pub agent: String, pub session: String, pub pin: String, pub owner: String, pub reason: String, pub created: u64, pub expires: u64, pub minutes: u64, pub renewals: u64 }
 
 impl Lease {
     /// As the API answers it: never with its PIN.
     pub fn json(&self, now: u64) -> Value {
         obj(vec![
-            ("session_id", s(&self.session)), ("owner", s(&self.owner)), ("reason", s(&self.reason)),
+            ("session_id", s(&self.session)), ("agent_id", s(&self.agent)), ("owner", s(&self.owner)), ("reason", s(&self.reason)),
             ("created_at", Value::Num(self.created as f64)), ("expires_at", Value::Num(self.expires as f64)),
             ("remaining_seconds", Value::Num(self.expires.saturating_sub(now) as f64)),
             ("duration_minutes", Value::Num(self.minutes as f64)), ("renewal_attempts", Value::Num(self.renewals as f64)),
@@ -192,7 +200,7 @@ impl Lease {
     fn from_json(v: &Value) -> Option<Lease> {
         let num = |k: &str| v.num(k).map(|n| n as u64);
         Some(Lease {
-            session: v.str("session_id")?.to_string(), pin: v.str("pin")?.to_string(), owner: v.str("owner").unwrap_or("").to_string(),
+            agent: v.str("agent_id").unwrap_or("link").to_string(), session: v.str("session_id")?.to_string(), pin: v.str("pin")?.to_string(), owner: v.str("owner").unwrap_or("").to_string(),
             reason: v.str("reason").unwrap_or("").to_string(), created: num("created_at")?, expires: num("expires_at")?,
             minutes: num("duration_minutes").unwrap_or(LEASE_MINUTES_MAX), renewals: num("renewal_attempts").unwrap_or(0),
         })
@@ -202,25 +210,34 @@ impl Lease {
 
     /// Why another session's operation waits, and why another lease is refused.
     pub fn waiting(&self) -> Value {
-        let message = format!("the machine is reserved by {} ({}) until {} UTC ({})", self.holder(), self.reason, utc(self.expires), self.session);
+        let what = if self.agent == "link" { "the machine" } else { &self.agent };
+        let message = format!("{what} is reserved by {} ({}) until {} UTC ({})", self.holder(), self.reason, utc(self.expires), self.session);
         obj(vec![("code", s("terminal_reserved")), ("message", s(&message))])
     }
 }
 
-/// What the daemon knows of the cable's other end.
+/// What the daemon knows of a machine on the cable: its name in the API, its address, and whether it answers.
 #[derive(Default)]
-pub struct Link { pub port: String, pub online: bool, pub name: String, pub last_seen: u64, pub error: String }
+pub struct Link { pub agent: String, pub address: u8, pub port: String, pub online: bool, pub name: String, pub last_seen: u64, pub error: String }
 
-/// `changes` counts the changes, so that the page's feeds see one without taking the lock.
-/// `lease` is kept in reservation.json beside the operations.
-pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub link: Link, dirty: bool, pub changes: Arc<AtomicU64>, pub lease: Option<Lease> }
+/// `changes` counts the changes, so that the page's feeds see one without taking the lock. `links` are the machines
+/// on the cable, one for each address the daemon serves; `leases` at most one for each, kept in reservation.json (the
+/// machine `link`'s) or reservation-<agent>.json beside the operations.
+pub struct State { pub ops: Vec<Op>, next: u64, file: PathBuf, pub links: Vec<Link>, dirty: bool, pub changes: Arc<AtomicU64>, pub leases: Vec<Lease> }
 
+/// Where a machine's lease is kept.
+fn lease_file(dir: &Path, agent: &str) -> PathBuf {
+    dir.join(if agent == "link" { "reservation.json".to_string() } else { format!("reservation-{agent}.json") })
+}
+
+#[derive(Debug)]
 pub enum Submitted { New(usize), Again(usize) }
 
 impl State {
-    /// The state kept in `dir`: queued operations wait again; a program being followed is followed again; anything
-    /// else that was running when the daemon stopped is lost.
-    pub fn load(dir: &Path, port: &str) -> Result<State, String> {
+    /// The state kept in `dir`, for the machines at `addresses` on `port`: queued operations wait again; a program being
+    /// followed is followed again; anything else that was running when the daemon stopped is lost, and so is what was
+    /// for a machine the daemon no longer serves.
+    pub fn load(dir: &Path, port: &str, addresses: &[u8]) -> Result<State, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let file = dir.join("operations.json");
         let mut ops = Vec::new();
@@ -233,15 +250,25 @@ impl State {
             op.fail("the daemon stopped while this ran; whether it finished on the other end is not known");
             op.status = "lost".into();
         }
+        let links: Vec<Link> = addresses.iter().map(|&a| Link { agent: agent_name(a), address: a, port: port.to_string(), ..Link::default() }).collect();
+        let served = links.iter().map(|l| l.agent.as_str()).collect::<Vec<_>>().join(", ");
+        for op in ops.iter_mut().filter(|o| !o.ended() && !links.iter().any(|l| l.agent == o.agent)) {
+            op.fail(&format!("the daemon no longer serves {} (it serves {served})", op.agent));
+            op.status = "lost".into();
+        }
         let next = ops.iter().filter_map(|o| o.id.rsplit('-').next()?.parse::<u64>().ok()).max().unwrap_or(0) + 1;
         // A lease outlives a restart; one whose time is up ends at the first look.
-        let leased = dir.join("reservation.json");
-        let lease = if leased.exists() {
+        let mut leases = Vec::new();
+        for link in &links {
+            let leased = lease_file(dir, &link.agent);
+            if !leased.exists() { continue; }
             let text = std::fs::read_to_string(&leased).map_err(|e| format!("{}: {e}", leased.display()))?;
             let v = crate::json::parse(&text).map_err(|e| format!("{}: {e}", leased.display()))?;
-            Some(Lease::from_json(&v).ok_or_else(|| format!("{}: not a reservation", leased.display()))?)
-        } else { None };
-        Ok(State { ops, next, file, link: Link { port: port.to_string(), ..Link::default() }, dirty: false, changes: Arc::default(), lease })
+            let mut l = Lease::from_json(&v).ok_or_else(|| format!("{}: not a reservation", leased.display()))?;
+            l.agent = link.agent.clone();
+            leases.push(l);
+        }
+        Ok(State { ops, next, file, links, dirty: false, changes: Arc::default(), leases })
     }
 
     /// Writes the state file when something changed: a new file renamed over the old, so a crash leaves one whole.
@@ -283,6 +310,19 @@ impl State {
         v
     }
 
+    /// The machines' names, for a message.
+    pub fn agents(&self) -> String { self.links.iter().map(|l| l.agent.as_str()).collect::<Vec<_>>().join(", ") }
+
+    /// The machine a request names by `agent_id`; on a cable of one, that one when it names none.
+    pub fn agent_of(&self, request: &Value) -> Result<String, String> {
+        match request.str("agent_id") {
+            Some(a) if self.links.iter().any(|l| l.agent == a) => Ok(a.to_string()),
+            Some(a) => Err(format!("no machine {a:?} on this cable: {}", self.agents())),
+            None if self.links.len() == 1 => Ok(self.links[0].agent.clone()),
+            None => Err(format!("this cable has several machines: name one with \"agent_id\" ({})", self.agents())),
+        }
+    }
+
     /// A new operation from a request, or the one its idempotency key already made; `session` is the lease the request
     /// holds.
     pub fn submit(&mut self, request: &Value, session: Option<String>) -> Result<Submitted, String> {
@@ -291,8 +331,10 @@ impl State {
         let reason = request.str("reason").filter(|r| !r.is_empty()).ok_or("\"reason\" is missing")?;
         if let Some(i) = self.ops.iter().position(|o| o.key == key) {
             if self.ops[i].kind != kind { return Err(format!("the idempotency key {key} was used for a {} operation", self.ops[i].kind)); }
+            if request.str("agent_id").is_some_and(|a| a != self.ops[i].agent) { return Err(format!("the idempotency key {key} was used for {}", self.ops[i].agent)); }
             return Ok(Submitted::Again(i));
         }
+        let agent = self.agent_of(request)?;
         let needs = KINDS.iter().find(|(k, _)| *k == kind).ok_or_else(|| format!("no kind {kind:?}: {}", KINDS.map(|k| k.0).join(", ")))?.1;
         for field in needs { if request.str(field).is_none_or(str::is_empty) { return Err(format!("a {kind} needs \"{field}\"")); } }
         for field in ["file"] {
@@ -300,11 +342,11 @@ impl State {
         }
         if let Some(t) = request.num("timeout_seconds") { if t < 1.0 || t > RUN_TIMEOUT_MAX as f64 { return Err(format!("\"timeout_seconds\" is 1 to {RUN_TIMEOUT_MAX}")); } }
         let mut params = request.clone();
-        if let Value::Obj(fields) = &mut params { fields.retain(|(k, _)| !matches!(k.as_str(), "kind" | "idempotency_key" | "reason")); }
+        if let Value::Obj(fields) = &mut params { fields.retain(|(k, _)| !matches!(k.as_str(), "kind" | "idempotency_key" | "reason" | "agent_id")); }
         let id = format!("e485-{:x}-{}", now(), self.next);
         self.next += 1;
         self.ops.push(Op {
-            id, kind: kind.into(), params, key: key.into(), reason: reason.into(), status: "queued".into(), created: now(),
+            id, agent, kind: kind.into(), params, key: key.into(), reason: reason.into(), status: "queued".into(), created: now(),
             started: None, finished: None, output: Vec::new(), output_bytes: 0, result: Value::Obj(Vec::new()), cancel: None,
             run: None, cursor: 0, deadline: None, session,
         });
@@ -327,76 +369,97 @@ impl State {
         Ok(i)
     }
 
-    pub fn queued(&self) -> usize { self.ops.iter().filter(|o| o.status == "queued").count() }
-    pub fn running(&self) -> usize { self.ops.iter().filter(|o| o.status == "running").count() }
+    pub fn queued(&self, agent: &str) -> usize { self.ops.iter().filter(|o| o.status == "queued" && o.agent == agent).count() }
+    pub fn running(&self, agent: &str) -> usize { self.ops.iter().filter(|o| o.status == "running" && o.agent == agent).count() }
 
-    /// The lease, while its time lasts.
-    pub fn lease_at(&self, now: u64) -> Option<&Lease> { self.lease.as_ref().filter(|l| l.expires > now) }
+    /// A machine's lease, while its time lasts.
+    pub fn lease_at(&self, agent: &str, now: u64) -> Option<&Lease> { self.leases.iter().find(|l| l.agent == agent && l.expires > now) }
 
-    /// Whether `op` may start now: no lease, the holder's own, or a read.
-    pub fn may_run(&self, op: &Op, now: u64) -> bool {
-        self.lease_at(now).is_none_or(|l| READS.contains(&op.kind.as_str()) || op.session.as_deref() == Some(l.session.as_str()))
+    /// The machines as the API and the page show them: whether each answers, its queue and its lease.
+    pub fn endpoints(&self, now: u64) -> Vec<Value> {
+        self.links.iter().map(|l| obj(vec![
+            ("agent_id", s(&l.agent)), ("address", Value::Num(l.address as f64)), ("port", s(&l.port)), ("online", Value::Bool(l.online)),
+            ("name", s(&l.name)), ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
+            ("queued", Value::Num(self.queued(&l.agent) as f64)), ("running", Value::Num(self.running(&l.agent) as f64)),
+            ("reservation", self.lease_at(&l.agent, now).map_or(Value::Null, |lease| lease.json(now))),
+        ])).collect()
     }
 
-    /// Why a queued operation waits, when a lease that is not its own holds it back.
+    /// Whether `op` may start now: no lease on its machine, the holder's own, or a read.
+    pub fn may_run(&self, op: &Op, now: u64) -> bool {
+        self.lease_at(&op.agent, now).is_none_or(|l| READS.contains(&op.kind.as_str()) || op.session.as_deref() == Some(l.session.as_str()))
+    }
+
+    /// Why a queued operation waits, when a lease that is not its own holds its machine.
     pub fn waiting(&self, op: &Op, now: u64) -> Option<Value> {
         if op.status != "queued" || self.may_run(op, now) { return None; }
-        self.lease_at(now).map(Lease::waiting)
+        self.lease_at(&op.agent, now).map(Lease::waiting)
     }
 
-    /// A new lease of `minutes`, or the one held already.
-    pub fn reserve(&mut self, minutes: u64, reason: &str, owner: &str, now: u64) -> Result<Lease, Lease> {
+    /// A new lease of `minutes` on `agent`, or the one held there already.
+    pub fn reserve(&mut self, agent: &str, minutes: u64, reason: &str, owner: &str, now: u64) -> Result<Lease, Lease> {
         self.expire(now);
-        if let Some(l) = &self.lease { return Err(l.clone()); }
-        let l = Lease { session: format!("R-{}", random(8)), pin: random(12), owner: owner.into(), reason: reason.into(), created: now,
-                        expires: now + minutes * 60, minutes, renewals: 0 };
-        eprintln!("effector485: the reservation {} of {} began, until {} UTC: {}", l.session, l.holder(), utc(l.expires), l.reason);
-        self.lease = Some(l.clone());
-        self.lease_changed();
+        if let Some(l) = self.leases.iter().find(|l| l.agent == agent) { return Err(l.clone()); }
+        let l = Lease { agent: agent.into(), session: format!("R-{}", random(8)), pin: random(12), owner: owner.into(), reason: reason.into(),
+                        created: now, expires: now + minutes * 60, minutes, renewals: 0 };
+        eprintln!("effector485: the reservation {} of {}{} began, until {} UTC: {}", l.session, l.holder(), self.on(agent), utc(l.expires), l.reason);
+        self.leases.push(l.clone());
+        self.lease_changed(agent);
         Ok(l)
     }
 
-    /// Whether the lease `session` is held, with `pin`.
-    pub fn holds(&self, session: &str, pin: &str, now: u64) -> Result<(), String> {
-        match self.lease_at(now) {
-            Some(l) if l.session == session && same(&l.pin, pin) => Ok(()),
-            Some(l) if l.session == session => Err(format!("the PIN of the reservation {session} is wrong")),
-            _ => Err(format!("the reservation {session} is not held (expired or released)")),
+    /// " on <agent>" in the log when the cable has several machines.
+    fn on(&self, agent: &str) -> String { if self.links.len() > 1 { format!(" on {agent}") } else { String::new() } }
+
+    /// Which lease `session` is, when it is held with `pin`.
+    fn held(&self, session: &str, pin: &str, now: u64) -> Result<usize, String> {
+        match self.leases.iter().position(|l| l.session == session && l.expires > now) {
+            Some(i) if same(&self.leases[i].pin, pin) => Ok(i),
+            Some(_) => Err(format!("the PIN of the reservation {session} is wrong")),
+            None => Err(format!("the reservation {session} is not held (expired or released)")),
         }
+    }
+
+    /// Whether the lease `session` is held on `agent`, with `pin`.
+    pub fn holds(&self, agent: &str, session: &str, pin: &str, now: u64) -> Result<(), String> {
+        let i = self.held(session, pin, now)?;
+        if self.leases[i].agent != agent { return Err(format!("the reservation {session} holds {}, not {agent}", self.leases[i].agent)); }
+        Ok(())
     }
 
     /// The lease made to last `minutes` (its own term when none) from now.
     pub fn renew(&mut self, session: &str, pin: &str, minutes: Option<u64>, now: u64) -> Result<Lease, String> {
-        self.holds(session, pin, now)?;
-        let l = self.lease.as_mut().unwrap();
+        let i = self.held(session, pin, now)?;
+        let l = &mut self.leases[i];
         l.minutes = minutes.unwrap_or(l.minutes);
         (l.expires, l.renewals) = (now + l.minutes * 60, l.renewals + 1);
         let l = l.clone();
-        self.lease_changed();
+        self.lease_changed(&l.agent);
         Ok(l)
     }
 
     pub fn release(&mut self, session: &str, pin: &str, now: u64) -> Result<Lease, String> {
-        self.holds(session, pin, now)?;
-        Ok(self.end("released").unwrap())
+        let i = self.held(session, pin, now)?;
+        Ok(self.end(i, "released"))
     }
 
-    /// Ends a lease whose time is up.
+    /// Ends the leases whose time is up.
     pub fn expire(&mut self, now: u64) {
-        if self.lease.as_ref().is_some_and(|l| l.expires <= now) { self.end("expired"); }
+        while let Some(i) = self.leases.iter().position(|l| l.expires <= now) { self.end(i, "expired"); }
     }
 
-    fn end(&mut self, how: &str) -> Option<Lease> {
-        let l = self.lease.take()?;
-        eprintln!("effector485: the reservation {} of {} ended: {how}", l.session, l.holder());
-        self.lease_changed();
-        Some(l)
+    fn end(&mut self, i: usize, how: &str) -> Lease {
+        let l = self.leases.remove(i);
+        eprintln!("effector485: the reservation {} of {}{} ended: {how}", l.session, l.holder(), self.on(&l.agent));
+        self.lease_changed(&l.agent);
+        l
     }
 
-    /// Writes reservation.json as save() writes the operations, or removes it with the lease; the feeds see the change.
-    fn lease_changed(&mut self) {
-        let file = self.file.with_file_name("reservation.json");
-        let written = match &self.lease {
+    /// Writes the machine's reservation file as save() writes the operations, or removes it with the lease; the feeds
+    /// see the change.
+    fn lease_changed(&mut self, agent: &str) {
+        let file = lease_file(self.file.parent().unwrap_or(Path::new(".")), agent);
+        let written = match self.leases.iter().find(|l| l.agent == agent) {
             Some(l) => {
                 let mut v = l.json(l.created);
                 if let Value::Obj(fields) = &mut v { fields.retain(|(k, _)| k != "remaining_seconds"); }
@@ -420,15 +483,15 @@ mod tests {
     fn a_lease_holds_back_others_and_ends_at_its_time() {
         let dir = std::env::temp_dir().join(format!("effector485-lease-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
-        let mut st = State::load(&dir, "test").unwrap();
+        let mut st = State::load(&dir, "test", &[0]).unwrap();
         let t = 1_000_000;
-        let l = st.reserve(5, "test: a slot update", "EFF", t).unwrap();
+        let l = st.reserve("link", 5, "test: a slot update", "EFF", t).unwrap();
         assert!(l.session.starts_with("R-") && l.session.len() == 10 && l.pin.len() == 12, "{l:?}");
         assert!(l.session[2..].bytes().chain(l.pin.bytes()).all(|b| ALPHABET.contains(&b)), "{l:?}");
-        assert_eq!(st.reserve(5, "test: another", "DRV", t + 1).unwrap_err(), l);
+        assert_eq!(st.reserve("link", 5, "test: another", "DRV", t + 1).unwrap_err(), l);
         let held = l.session.clone();
         // reservation.json brings it back whole, PIN and all.
-        assert_eq!(State::load(&dir, "test").unwrap().lease, Some(l.clone()));
+        assert_eq!(State::load(&dir, "test", &[0]).unwrap().leases, vec![l.clone()]);
 
         let mut op = |kind: &str, key: &str, session: Option<String>| {
             let request = parse(&format!(r#"{{"kind":"{kind}","name":"x","idempotency_key":"{key}","reason":"test"}}"#)).unwrap();
@@ -441,30 +504,75 @@ mod tests {
         assert_eq!(waiting.str("code"), Some("terminal_reserved"));
         assert_eq!(waiting.str("message"), Some(&*format!("the machine is reserved by EFF (test: a slot update) until 13:51:40 UTC ({})", l.session)));
         assert!(st.view(read, t + 1).get("waiting").is_none() && st.view(mine, t + 1).get("waiting").is_none());
-        assert!(st.holds(&l.session, "WRONGWRONGWR", t + 1).unwrap_err().contains("PIN"));
-        assert!(st.holds("R-AAAAAAAA", &l.pin, t + 1).unwrap_err().contains("not held"));
+        assert!(st.holds("link", &l.session, "WRONGWRONGWR", t + 1).unwrap_err().contains("PIN"));
+        assert!(st.holds("link", "R-AAAAAAAA", &l.pin, t + 1).unwrap_err().contains("not held"));
 
         // A renewal counts from now; the lease ends at its time, and its file with it.
         let r = st.renew(&l.session, &l.pin, Some(1), t + 200).unwrap();
         assert_eq!((r.expires, r.minutes, r.renewals), (t + 260, 1, 1));
         st.expire(t + 259);
-        assert!(st.lease.is_some() && !st.may_run(&st.ops[theirs], t + 259));
+        assert!(!st.leases.is_empty() && !st.may_run(&st.ops[theirs], t + 259));
         assert!(st.may_run(&st.ops[theirs], t + 260) && st.renew(&l.session, &l.pin, None, t + 260).is_err());
         st.expire(t + 260);
-        assert!(st.lease.is_none() && !dir.join("reservation.json").exists());
-        assert_eq!(State::load(&dir, "test").unwrap().lease, None);
+        assert!(st.leases.is_empty() && !dir.join("reservation.json").exists());
+        assert!(State::load(&dir, "test", &[0]).unwrap().leases.is_empty());
 
-        let l = st.reserve(1, "test: released", "", t + 300).unwrap();
+        let l = st.reserve("link", 1, "test: released", "", t + 300).unwrap();
         assert!(st.view(theirs, t + 300).get("waiting").unwrap().str("message").unwrap().contains("reserved by a session (test: released)"));
-        assert!(st.release(&l.session, "WRONGWRONGWR", t + 301).is_err() && st.lease.is_some());
+        assert!(st.release(&l.session, "WRONGWRONGWR", t + 301).is_err() && !st.leases.is_empty());
         assert_eq!(st.release(&l.session, &l.pin, t + 301).unwrap(), l);
-        assert!(st.lease.is_none() && !dir.join("reservation.json").exists());
+        assert!(st.leases.is_empty() && !dir.join("reservation.json").exists());
 
         // An operation keeps its lease in the state file; one written before leases loads without one.
         assert_eq!(Op::from_json(&st.ops[mine].json(None, true)).unwrap().session, Some(held));
         let old = parse(r#"{"id":"e485-1-1","kind":"hello","params":{},"idempotency_key":"k","status":"completed"}"#).unwrap();
         assert_eq!(Op::from_json(&old).unwrap().session, None);
         assert_eq!(utc(t), "13:46:40");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // 800-LNK-0026: several machines on the cable; an operation and a lease are for one of them.
+    #[test]
+    fn several_machines_each_with_its_queue_and_lease() {
+        let dir = std::env::temp_dir().join(format!("effector485-machines-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
+        let mut st = State::load(&dir, "test", &[1, 2]).unwrap();
+        let t = 1_000_000;
+        let request = |agent: Option<&str>, key: &str| {
+            let a = agent.map_or(String::new(), |a| format!(r#""agent_id":"{a}","#));
+            parse(&format!(r#"{{{a}"kind":"mkdir","name":"x","idempotency_key":"{key}","reason":"test"}}"#)).unwrap()
+        };
+        assert!(st.submit(&request(None, "k0"), None).unwrap_err().contains("name one with \"agent_id\" (link-1, link-2)"));
+        assert!(st.submit(&request(Some("link"), "k0"), None).unwrap_err().contains("no machine \"link\""));
+        let Ok(Submitted::New(one)) = st.submit(&request(Some("link-1"), "k1"), None) else { panic!() };
+        let Ok(Submitted::New(two)) = st.submit(&request(Some("link-2"), "k2"), None) else { panic!() };
+        assert!(matches!(st.submit(&request(Some("link-1"), "k1"), None), Ok(Submitted::Again(i)) if i == one));
+        assert!(st.submit(&request(Some("link-2"), "k1"), None).unwrap_err().contains("was used for link-1"));
+        assert_eq!((st.ops[one].agent.as_str(), st.ops[two].agent.as_str()), ("link-1", "link-2"));
+        assert!(st.ops[one].params.get("agent_id").is_none());
+
+        // A lease on link-1 holds back link-1's operations alone, and is not a lease on link-2.
+        let l = st.reserve("link-1", 5, "test: an update", "EFF", t).unwrap();
+        assert!(!st.may_run(&st.ops[one], t + 1) && st.may_run(&st.ops[two], t + 1));
+        assert!(st.view(one, t + 1).get("waiting").unwrap().str("message").unwrap().starts_with("link-1 is reserved by EFF"));
+        assert!(st.holds("link-1", &l.session, &l.pin, t + 1).is_ok());
+        assert!(st.holds("link-2", &l.session, &l.pin, t + 1).unwrap_err().contains("holds link-1, not link-2"));
+        let other = st.reserve("link-2", 5, "test: another", "DRV", t + 2).unwrap();
+        assert_eq!(st.queued("link-1") + st.queued("link-2"), 2);
+        assert!(dir.join("reservation-link-1.json").exists() && dir.join("reservation-link-2.json").exists());
+        st.save();
+        let back = State::load(&dir, "test", &[1, 2]).unwrap();
+        assert_eq!(back.leases.len(), 2);
+        assert_eq!(back.ops[one].agent, "link-1");
+        st.release(&l.session, &l.pin, t + 3).unwrap();
+        assert!(st.may_run(&st.ops[one], t + 3) && !dir.join("reservation-link-1.json").exists());
+        assert_eq!(st.lease_at("link-2", t + 3).map(|l| l.session.clone()), Some(other.session));
+
+        // A daemon that no longer serves link-2 loses its queued operation, and keeps link-1's.
+        st.save();
+        let fewer = State::load(&dir, "test", &[1]).unwrap();
+        assert_eq!((fewer.ops[one].status.as_str(), fewer.ops[two].status.as_str()), ("queued", "lost"));
+        assert!(fewer.leases.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

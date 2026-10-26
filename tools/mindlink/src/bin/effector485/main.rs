@@ -1,8 +1,9 @@
 //! effector485 (800-LNK-0011): a small Effector over MIND Link, for local use. `effector485 daemon` holds the cable as
 //! its one master and serves Effector's operations on 127.0.0.1 (docs/effector.md, section 3): each with an id, an
 //! idempotency key and a reason; queued and carried out in order; read for status and output; cancelled by id. The
-//! other commands are its client. A lease holds the machine for one session (800-LNK-0021). docs/link/effector485.md
-//! says how to use it.
+//! other commands are its client. A lease holds the machine for one session (800-LNK-0021). Several machines may share
+//! the cable, each at its address (800-LNK-0026). docs/link/effector485.md says how to use it.
+mod bus;
 mod feed;
 mod http;
 mod json;
@@ -27,13 +28,18 @@ use std::time::Duration;
 const AT: &str = "127.0.0.1:8485";
 
 const USAGE: &str = "usage: effector485 daemon <port> [--baud <rate>] [--payload <bytes>] [--timeout <ms>] [--tries <n>]
-                          [--listen <host:port>] [--state <dir>] [--key-file <file>]
-       effector485 [--at <host:port>] [--key-file <file>] <command>
+                          [--addresses <n>[,<n>...]] [--listen <host:port>] [--state <dir>] [--key-file <file>]
+       effector485 [--at <host:port>] [--key-file <file>] [--agent <machine>] <command>
 
 The daemon holds the cable (<port> as for mindlink: COM22, /dev/ttyUSB0, tcp:HOST:PORT) and serves operations on
 --listen (default 127.0.0.1:8485). Its state, the queue and the results, is kept in --state (default: .effector485 in
 the home directory). With --key-file, every call must carry that file's text in the X-API-Key header.
 A browser on this machine shows the operations live and starts the usual ones at http://<listen>/.
+
+--addresses: the machines sharing one RS-485 cable, each at the address in its link.conf (address=<n>, 1 to 247), and
+0 for one machine without an address. They are the API's link-<n> (link for 0), each with its own queue and lease.
+Without it, one machine without an address: link. With several, every submit and reserve names one with --agent
+(or EFFECTOR485_AGENT): the API's agent_id.
 
 commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <reason> [--wait]
               kinds and their fields:
@@ -100,28 +106,45 @@ fn main() {
             tries: num(&mut args, "--tries").unwrap_or(8).max(1) as u32,
             payload: num(&mut args, "--payload").unwrap_or(linkproto::frame::MAX_PAYLOAD as u64) as usize,
         };
+        let addresses = take(&mut args, "--addresses").map_or(vec![0], |list| addresses(&list).unwrap_or_else(|e| die(e)));
         let listen = take(&mut args, "--listen").unwrap_or_else(|| AT.to_string());
         let dir = take(&mut args, "--state").map(PathBuf::from).unwrap_or_else(home_state);
         let [_, spec] = &args[..] else { die(USAGE) };
-        return daemon(spec.clone(), o, &listen, &dir, read_key(&key_file));
+        return daemon(spec.clone(), o, &addresses, &listen, &dir, read_key(&key_file));
     }
     let at = take(&mut args, "--at").or_else(|| std::env::var("EFFECTOR485_AT").ok()).unwrap_or_else(|| AT.to_string());
     let key = read_key(&key_file);
     client(&at, key.as_deref(), args);
 }
 
-fn daemon(spec: String, o: worker::Options, listen: &str, dir: &std::path::Path, key: Option<String>) {
-    let state = State::load(dir, &spec).unwrap_or_else(|e| die(e));
+/// `--addresses`: distinct addresses, 0 to ADDRESS_MAX, comma-separated.
+fn addresses(list: &str) -> Result<Vec<u8>, String> {
+    let mut v = Vec::new();
+    for word in list.split(',').map(str::trim) {
+        let a = word.parse::<u8>().ok().filter(|&a| a <= linkproto::frame::ADDRESS_MAX)
+            .ok_or_else(|| format!("--addresses: {word:?} is not 0 to {}", linkproto::frame::ADDRESS_MAX))?;
+        if v.contains(&a) { return Err(format!("--addresses: {a} twice")); }
+        v.push(a);
+    }
+    Ok(v)
+}
+
+fn daemon(spec: String, o: worker::Options, addresses: &[u8], listen: &str, dir: &std::path::Path, key: Option<String>) {
+    let state = State::load(dir, &spec, addresses).unwrap_or_else(|e| die(e));
     let listener = TcpListener::bind(listen).unwrap_or_else(|e| die(format!("{listen}: {e}")));
     let bound = listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| listen.to_string());
     if !bound.starts_with("127.") && !bound.starts_with("[::1]") && key.is_none() { die(format!("{bound} is reachable from other machines: give --key-file")); }
     // The first line says where it listens (the tests read it).
     println!("effector485 listening on {bound}, the cable on {spec}, the state in {}", dir.display());
+    if addresses.len() > 1 || addresses[0] != 0 { eprintln!("effector485: {spec}: the machines {}", state.agents()); }
     traffic::start(if spec.contains(':') { 0 } else { o.baud });
     let changes = state.changes.clone();
     let state = Arc::new(Mutex::new(state));
-    let worker_state = state.clone();
-    std::thread::spawn(move || worker::work(worker_state, spec, o));
+    let bus = bus::Bus::new(&spec, o.baud);
+    for index in 0..addresses.len() {
+        let (state, bus) = (state.clone(), bus.clone());
+        std::thread::spawn(move || worker::work(state, index, bus, o));
+    }
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let (state, key, changes) = (state.clone(), key.clone(), changes.clone());
@@ -192,23 +215,23 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
     match (r.method.as_str(), r.path.as_str()) {
         ("GET", "/api/v1/api-key") => (200, obj(vec![("valid", Value::Bool(true))])),
         ("GET", "/api/v1/endpoints") => {
-            let l = &st.link;
-            let link = obj(vec![
-                ("agent_id", s("link")), ("port", s(&l.port)), ("online", Value::Bool(l.online)), ("name", s(&l.name)),
-                ("last_seen", Value::Num(l.last_seen as f64)), ("error", s(&l.error)), ("parallel_limit", Value::Num(1.0)),
-                ("queued", Value::Num(st.queued() as f64)), ("running", Value::Num(st.running() as f64)),
-                ("sent_bytes", Value::Num(traffic::sample().sent as f64)), ("received_bytes", Value::Num(traffic::sample().received as f64)),
-                ("reservation", st.lease_at(t).map_or(Value::Null, |l| l.json(t))),
-            ]);
-            (200, Value::Arr(vec![link]))
+            // The cable's bytes are the port's, the same for every machine on it.
+            let traffic = traffic::sample();
+            let list = st.endpoints(t).into_iter().map(|mut v| {
+                v.set("sent_bytes", Value::Num(traffic.sent as f64));
+                v.set("received_bytes", Value::Num(traffic.received as f64));
+                v
+            }).collect();
+            (200, Value::Arr(list))
         }
         ("POST", "/api/v1/operations") => {
             let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
             // The lease the headers name; a key used already answers its operation, whatever became of that lease.
             let used = request.str("idempotency_key").is_some_and(|k| st.ops.iter().any(|o| o.key == k));
+            let agent = match st.agent_of(&request) { Ok(a) => a, Err(e) if !used => return (400, error(&e)), Err(_) => String::new() };
             let session = match credentials(r, &Value::Null) {
                 None => None,
-                Some((session, pin)) => match st.holds(&session, &pin, t) {
+                Some((session, pin)) => match st.holds(&agent, &session, &pin, t) {
                     Ok(()) => Some(session),
                     Err(e) if !used => return (409, not_held(&e)),
                     Err(_) => None,
@@ -225,7 +248,8 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
                 return match st.find(id) { Some(i) => (200, st.view(i, t)), None => (404, error(&format!("no operation {id}"))) };
             }
             let active = r.param("status") == Some("active");
-            let list = (0..st.ops.len()).filter(|&i| !active || !st.ops[i].ended()).map(|i| {
+            let agent = r.param("agent_id");
+            let list = (0..st.ops.len()).filter(|&i| (!active || !st.ops[i].ended()) && agent.is_none_or(|a| st.ops[i].agent == a)).map(|i| {
                 let mut v = st.view(i, t);
                 // A list is for finding operations: their output is read one by one.
                 if let Some(Value::Obj(result)) = match &mut v { Value::Obj(f) => f.iter_mut().find(|(k, _)| k == "result").map(|(_, v)| v), _ => None } {
@@ -251,7 +275,11 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             };
             match st.cancel(id, key, reason) { Ok(i) => { let v = st.view(i, t); st.save(); (200, v) } Err((code, e)) => (code, error(&e)) }
         }
-        ("GET", "/api/v1/terminal-reservations") => (200, obj(vec![("reservations", Value::Arr(st.lease_at(t).map(|l| l.json(t)).into_iter().collect()))])),
+        ("GET", "/api/v1/terminal-reservations") => {
+            let agent = r.param("agent_id");
+            let list = st.leases.iter().filter(|l| l.expires > t && agent.is_none_or(|a| l.agent == a)).map(|l| l.json(t)).collect();
+            (200, obj(vec![("reservations", Value::Arr(list))]))
+        }
         ("POST", "/api/v1/terminal-reservations") => {
             let request = match json::parse(&r.body) { Ok(v) => v, Err(e) => return (400, error(&e)) };
             let minutes = match minutes(&request) {
@@ -262,7 +290,8 @@ fn route(state: &Arc<Mutex<State>>, r: &http::Request) -> (u16, Value) {
             let Some(reason) = request.str("reason").map(str::trim).filter(|r| !r.is_empty()) else {
                 return (400, error("a reservation needs a \"reason\", which everyone sees"));
             };
-            match st.reserve(minutes, reason, request.str("owner").unwrap_or("").trim(), t) {
+            let agent = match st.agent_of(&request) { Ok(a) => a, Err(e) => return (400, error(&e)) };
+            match st.reserve(&agent, minutes, reason, request.str("owner").unwrap_or("").trim(), t) {
                 Ok(l) => (201, obj(vec![("reservation", l.json(t)), ("pin", s(&l.pin))])),
                 Err(l) => (409, obj(vec![("error", l.waiting().get("message").cloned().unwrap_or(Value::Null)), ("code", s("terminal_reserved")), ("reservation", l.json(t))])),
             }
@@ -316,6 +345,8 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
     let reason = take(&mut args, "--reason");
     let minutes = take(&mut args, "--minutes").map(|m| m.parse::<u64>().unwrap_or_else(|_| die("--minutes takes a number")));
     let owner = take(&mut args, "--owner");
+    // The machine, on a cable with several (800-LNK-0026).
+    let agent = take(&mut args, "--agent").or_else(|| std::env::var("EFFECTOR485_AGENT").ok()).filter(|a| !a.trim().is_empty());
     // The lease this call holds, as `reserve` printed it.
     let pair = |l: &str| l.trim().split_once(':').map(|(a, b)| (a.to_string(), b.to_string()))
         .unwrap_or_else(|| die(format!("{l}: a reservation is SESSION:PIN, as `effector485 reserve` prints it")));
@@ -326,6 +357,7 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
         ["submit", kind, fields @ ..] => {
             if !KINDS.iter().any(|(k, _)| k == kind) { die(format!("no kind {kind}: {}", KINDS.map(|k| k.0).join(", "))); }
             let mut request = obj(vec![("kind", s(kind))]);
+            if let Some(a) = &agent { request.set("agent_id", s(a)); }
             for f in fields {
                 let (name, value) = f.split_once('=').unwrap_or_else(|| die(format!("{f}: a field is <name>=<value>")));
                 request.set(name, field(name, value));
@@ -340,7 +372,9 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
         ["wait", id] => wait(at, key, id),
         ["output", id] => print!("{}", call(at, key, "GET", &format!("/api/v1/operations/output?id={}", http::escape(id)), None).str("text").unwrap_or("")),
         ["list"] => {
-            let list = call(at, key, "GET", if active { "/api/v1/operations?status=active" } else { "/api/v1/operations" }, None);
+            let mut path = format!("/api/v1/operations?status={}", if active { "active" } else { "all" });
+            if let Some(a) = &agent { path += &format!("&agent_id={}", http::escape(a)); }
+            let list = call(at, key, "GET", &path, None);
             let Value::Arr(ops) = list else { die("the daemon's answer is not a list") };
             for op in ops {
                 println!("{}\t{}\t{}\t{}", op.str("id").unwrap_or(""), op.str("status").unwrap_or(""), op.str("kind").unwrap_or(""), op.str("reason").unwrap_or(""));
@@ -356,6 +390,7 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
             let minutes = minutes.unwrap_or_else(|| die(format!("--minutes <1 to {LEASE_MINUTES_MAX}> is needed")));
             let mut request = obj(vec![("duration_minutes", Value::Num(minutes as f64)), ("reason", s(&reason.unwrap_or_else(|| die("--reason <reason> is needed"))))]);
             if let Some(o) = &owner { request.set("owner", s(o)); }
+            if let Some(a) = &agent { request.set("agent_id", s(a)); }
             let v = call(at, key, "POST", "/api/v1/terminal-reservations", Some(&request));
             let l = v.get("reservation").cloned().unwrap_or(Value::Null);
             // Alone on the first line, for a script to keep.
@@ -377,8 +412,8 @@ fn client(at: &str, key: Option<&str>, mut args: Vec<String>) {
             let Some(Value::Arr(list)) = v.get("reservations") else { die("the daemon's answer has no list") };
             if list.is_empty() { eprintln!("the machine is not reserved"); }
             for l in list {
-                println!("{}\t{}\t{}\tuntil {} UTC\t{} s left", l.str("session_id").unwrap_or(""), l.str("owner").unwrap_or(""), l.str("reason").unwrap_or(""),
-                         utc(l.num("expires_at").unwrap_or(0.0) as u64), l.num("remaining_seconds").unwrap_or(0.0));
+                println!("{}\t{}\t{}\tuntil {} UTC\t{} s left\t{}", l.str("session_id").unwrap_or(""), l.str("owner").unwrap_or(""), l.str("reason").unwrap_or(""),
+                         utc(l.num("expires_at").unwrap_or(0.0) as u64), l.num("remaining_seconds").unwrap_or(0.0), l.str("agent_id").unwrap_or(""));
             }
         }
         _ => { eprintln!("{USAGE}"); std::process::exit(2); }
@@ -430,7 +465,7 @@ mod tests {
     fn a_cancel_at_the_ended_limit() {
         let dir = std::env::temp_dir().join(format!("effector485-prune-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
-        let mut st = State::load(&dir, "test").unwrap();
+        let mut st = State::load(&dir, "test", &[0]).unwrap();
         for n in 0..=500 {
             let r = json::parse(&format!(r#"{{"kind":"hello","idempotency_key":"k{n}","reason":"r"}}"#)).unwrap();
             let Ok(Submitted::New(i)) = st.submit(&r, None) else { panic!("submit {n}") };
@@ -458,7 +493,7 @@ mod tests {
     fn a_poisoned_lock_is_taken_back() {
         let dir = std::env::temp_dir().join(format!("effector485-poison-{}", std::process::id()));
         std::fs::remove_dir_all(&dir).ok();
-        let state = Arc::new(Mutex::new(State::load(&dir, "test").unwrap()));
+        let state = Arc::new(Mutex::new(State::load(&dir, "test", &[0]).unwrap()));
         let s2 = state.clone();
         let _ = std::thread::spawn(move || { let _g = s2.lock().unwrap(); panic!("a failed request"); }).join();
         assert!(state.is_poisoned());

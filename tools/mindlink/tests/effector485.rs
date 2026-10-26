@@ -1,6 +1,9 @@
 //! effector485 against `mindlink serve --run` over a pseudo-terminal (800-LNK-0011): a batch of put, mkdir, move, list,
 //! run with output and log; an idempotency key that repeats does the work once; cancel stops a running program; the
-//! queue and the results outlive the daemon; a lease holds the machine for one session (800-LNK-0021).
+//! queue and the results outlive the daemon; a lease holds the machine for one session (800-LNK-0021); two machines
+//! share one cable, each with its own queue and lease (800-LNK-0026).
+mod common;
+
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -180,7 +183,7 @@ fn the_page_its_feed_and_other_sites() {
     let (mut s, head) = feed(&at, &own);
     assert!(head.starts_with("HTTP/1.1 101") && head.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo="), "{head}");
     assert!(feed_until(&mut s, "\"type\":\"hello\"").unwrap().contains("\"key_needed\":false"));
-    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains("\"online\":true"));
+    assert!(feed_until(&mut s, "\"type\":\"links\"").unwrap().contains("\"online\":true"));
     ok(&["submit", "install", &format!("file={}", d.join("cli/count.sh").display()), "--key", "P-install", "--reason", "test: install", "--wait"]);
     let run = ok(&["submit", "run", "name=apps/count.sh", "--key", "P-run", "--reason", "test: a run the page follows"]);
     let id = field(&run, "id").to_string();
@@ -239,11 +242,11 @@ fn the_page_its_feed_and_other_sites() {
     assert!(feed_until(&mut s, "\"type\":\"hello\"").unwrap().contains("\"key_needed\":true"));
     page_says(&mut s, "{\"key\":\"wrong\"}");
     assert!(feed_until(&mut s, "\"type\":\"error\"").is_some());
-    assert!(feed_until(&mut s, "\"type\":\"link\"").is_none());
+    assert!(feed_until(&mut s, "\"type\":\"links\"").is_none());
     let (mut s, _) = feed(&at2, &format!("http://{at2}"));
     feed_until(&mut s, "\"type\":\"hello\"").unwrap();
     page_says(&mut s, "{\"key\":\"sesame\"}");
-    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains("\"online\":false"));
+    assert!(feed_until(&mut s, "\"type\":\"links\"").unwrap().contains("\"online\":false"));
     std::fs::remove_dir_all(&d).ok();
 }
 
@@ -320,7 +323,7 @@ fn a_reservation_holds_the_machine() {
     let ok2 = |args: &[&str]| { let (code, out) = e485(&at2, args); assert_eq!(code, 0, "{args:?}: {out}"); out };
     assert!(ok2(&["status", &theirs]).contains("\"code\":\"terminal_reserved\""));
     let (mut s, _) = feed(&at2, &format!("http://{at2}"));
-    assert!(feed_until(&mut s, "\"type\":\"link\"").unwrap().contains(&format!("\"reservation\":{{\"session_id\":\"{session}\"")));
+    assert!(feed_until(&mut s, "\"type\":\"links\"").unwrap().contains(&format!("\"reservation\":{{\"session_id\":\"{session}\"")));
     assert!(feed_until(&mut s, "\"type\":\"ops\"").unwrap().contains("\"waiting\":{\"code\":\"terminal_reserved\""));
 
     // Released, the waiting mkdir runs.
@@ -335,5 +338,62 @@ fn a_reservation_holds_the_machine() {
     assert!(feed_until(&mut s, "\"reservation\":null").is_some());
     let (head, _) = send(&at2, "DELETE", leases, "", &format!(r#"{{"reservation_session_id":"{session}","reservation_pin":"{pin}"}}"#));
     assert!(head.starts_with("HTTP/1.1 409"), "{head}");
+    std::fs::remove_dir_all(&d).ok();
+}
+
+// 800-LNK-0026: two machines on one cable, at addresses 1 and 2: each operation reaches its own machine alone, and a
+// lease on one leaves the other free.
+#[test]
+fn two_machines_on_one_cable() {
+    let d = std::env::temp_dir().join(format!("effector485-bus-{}", std::process::id()));
+    std::fs::remove_dir_all(&d).ok();
+    for sub in ["srv1", "srv2", "cli", "state"] { std::fs::create_dir_all(d.join(sub)).unwrap(); }
+    std::fs::write(d.join("cli/a.bin"), vec![7u8; 50_000]).unwrap();
+    let line = common::hub();
+    let _one = common::serve(&line, &d.join("srv1"), Some(1));
+    let _two = common::serve(&line, &d.join("srv2"), Some(2));
+    let (_daemon, first) = start(EFFECTOR, &["daemon", &format!("tcp:{line}"), "--addresses", "1,2", "--listen", "127.0.0.1:0",
+                                              "--state", d.join("state").to_str().unwrap()]);
+    let at = first.split_whitespace().nth(3).unwrap().trim_end_matches(',').to_string();
+    let ok = |args: &[&str]| { let (code, out) = e485(&at, args); assert_eq!(code, 0, "{args:?}: {out}"); out };
+    let file = format!("file={}", d.join("cli/a.bin").display());
+
+    // Both answer their hellos.
+    let mut endpoints = String::new();
+    for _ in 0..100 {
+        endpoints = ok(&["endpoints"]);
+        if endpoints.matches("\"online\":true").count() == 2 { break; }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(endpoints.contains("\"agent_id\":\"link-1\"") && endpoints.contains("\"agent_id\":\"link-2\""), "{endpoints}");
+    assert_eq!(endpoints.matches("\"online\":true").count(), 2, "{endpoints}");
+
+    let (code, out) = e485(&at, &["submit", "hello", "--key", "B-none", "--reason", "test: no machine named"]);
+    assert!(code != 0 && out.contains("name one with \"agent_id\""), "{out}");
+    ok(&["--agent", "link-1", "submit", "put", &file, "name=one.bin", "--key", "B-put-1", "--reason", "test: put to 1", "--wait"]);
+    ok(&["--agent", "link-2", "submit", "put", &file, "name=two.bin", "--key", "B-put-2", "--reason", "test: put to 2", "--wait"]);
+    assert!(d.join("srv1/one.bin").exists() && !d.join("srv2/one.bin").exists());
+    assert!(d.join("srv2/two.bin").exists() && !d.join("srv1/two.bin").exists());
+    let listed = ok(&["--agent", "link-2", "submit", "list", "--key", "B-list-2", "--reason", "test: list 2", "--wait"]);
+    assert!(listed.contains("two.bin") && !listed.contains("one.bin"), "{listed}");
+
+    // A lease on link-1 holds back link-1's changes alone.
+    let lease = ok(&["--agent", "link-1", "reserve", "--minutes", "5", "--owner", "TEST", "--reason", "test: link-1 held"]);
+    let lease = lease.lines().next().unwrap().to_string();
+    let held = ok(&["--agent", "link-1", "submit", "mkdir", "name=held", "--key", "B-held", "--reason", "test: waits"]);
+    let id = field(&held, "id").to_string();
+    ok(&["--agent", "link-2", "submit", "mkdir", "name=free", "--key", "B-free", "--reason", "test: passes", "--wait"]);
+    assert!(d.join("srv2/free").is_dir());
+    let status = ok(&["status", &id]);
+    assert!(status.contains("\"status\":\"queued\"") && status.contains("link-1 is reserved by TEST"), "{status}");
+    let (code, out) = e485(&at, &["--agent", "link-2", "--reservation", &lease, "submit", "mkdir", "name=x", "--key", "B-wrong", "--reason", "test: wrong machine"]);
+    assert!(code != 0 && out.contains("holds link-1, not link-2"), "{out}");
+    assert!(ok(&["reservations"]).contains("\tlink-1"));
+    ok(&["release", &lease]);
+    let (code, out) = e485(&at, &["wait", &id]);
+    assert!(code == 0 && out.contains(": completed"), "{out}");
+    assert!(d.join("srv1/held").is_dir() && !d.join("srv2/held").exists());
+    let ones = ok(&["--agent", "link-1", "list"]);
+    assert!(ones.lines().count() == 2 && ones.contains("B-") == false && ones.contains("test: put to 1") && ones.contains("test: waits"), "{ones}");
     std::fs::remove_dir_all(&d).ok();
 }

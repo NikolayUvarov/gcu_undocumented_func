@@ -2,7 +2,7 @@
 # Pull a branch (or take one commit), build MIND Core, pack the USB image, then write it to a disk from an elevated
 # Windows PowerShell: the maintainer's one step from WSL to a written USB disk (docs/write-disk.md, section 5).
 # The clone it builds is the repository it lives in, also when it is started through a symbolic link from outside.
-# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number>   |   --list
+# Usage: scripts/build_and_write.sh [--commit <id> | --image <file>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number>   |   --list
 #   --commit <id>  build that commit (a short or full hash, a tag) instead of the branch's latest; the clone returns
 #                  to the branch when the script ends, so this script stays in it.
 #   --image <file> write that image instead of building one (a trial built elsewhere); the image's MANIFEST must lie
@@ -29,6 +29,9 @@
 #                  of 2026-10-21: link may also give the programs it starts the network and the Wi-Fi station, run the
 #                  built-in programs and restart the machine, once init grants it these (KRN). Whoever holds the cable
 #                  then debugs the machine as its user would. For the maintainer's own machines only.
+#   --link-address=<n>  as --link, with the word `address=<n>` (1 to 247) in link.conf: link then answers only frames
+#                  to that address, so several machines share one RS-485 line (800-LNK-0026; `mindlink --address`,
+#                  effector485's `addresses`). Without it, the machine must be alone on its line.
 #   --mode=<modes> after the write, put data/mode.conf on the boot volume with the modes, one line: `maintenance`,
 #                  `development`, or both comma-separated (`--mode=development,maintenance`). init reads it at start
 #                  and runs the Effector agent's services in them (750-KRN-0143, docs/effector/README.md); `mode`
@@ -85,7 +88,7 @@ WRITER_WIN="$(wslpath -w "$REPO/05_write_usb_windows.ps1")"
 # Runs PowerShell code passed as base64 UTF-16LE, so no quoting is lost between WSL and Windows.
 winps() { powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$(printf '%s' "$1" | iconv -t UTF-16LE | base64 -w0)"; }
 
-COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
+COMMIT=""; FLAGS=(); MODES=""; SLOTS=0; WIFIJOIN=0; LINK_BAUD=; LINK_RUN=0; LINK_DEV=0; LINK_ADDRESS=; KEEP_WIFI=0; KEEP_EFFECTOR=0; KEEP_SETTINGS=0; IMAGE_FILE=
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --commit) COMMIT="${2:?usage: $0 --commit <id> <disk number>}"; shift 2 ;;
@@ -100,6 +103,9 @@ while [[ $# -gt 0 ]]; do
         --link=*) LINK_BAUD="${1#--link=}"; [[ "$LINK_BAUD" =~ ^[0-9]+$ ]] || { echo "--link=<baud>: digits" >&2; exit 1; }; shift ;;
         --link-run) LINK_RUN=1; shift ;;
         --link-dev) LINK_RUN=1; LINK_DEV=1; shift ;;
+        --link-address=*) LINK_ADDRESS="${1#--link-address=}"
+                          [[ "$LINK_ADDRESS" =~ ^[0-9]+$ ]] && (( 10#$LINK_ADDRESS >= 1 && 10#$LINK_ADDRESS <= 247 )) || { echo "--link-address=<n>: 1 to 247" >&2; exit 1; }
+                          LINK_ADDRESS=$((10#$LINK_ADDRESS)); shift ;;
         --keep-wifi) KEEP_WIFI=1; shift ;;
         --keep-effector) KEEP_EFFECTOR=1; shift ;;
         --keep-settings) KEEP_SETTINGS=1; KEEP_WIFI=1; KEEP_EFFECTOR=1; shift ;;
@@ -190,7 +196,7 @@ if ((Get-Content $f) -eq '__CONF__') { Write-Output "link: $f written (__CONF__)
 PS
 put_link() {
     local script="${PS_LINK//__MANIFEST__/$(sha256sum "$MANIFEST_FILE" | cut -d' ' -f1)}"
-    local conf="baud=$1"; [[ $LINK_RUN == 1 ]] && conf+=" run"; [[ $LINK_DEV == 1 ]] && conf+=" dev"
+    local conf="baud=$1"; [[ $LINK_RUN == 1 ]] && conf+=" run"; [[ $LINK_DEV == 1 ]] && conf+=" dev"; [[ -n $LINK_ADDRESS ]] && conf+=" address=$LINK_ADDRESS"
     winps "${script//__CONF__/$conf}" | tr -d '\r'
 }
 
@@ -413,9 +419,9 @@ if [[ "${1:-}" == "--list" ]]; then
     winps "\$ProgressPreference = 'SilentlyContinue'; & '$WRITER_WIN' -List" | tr -d '\r'
     exit 0
 fi
-[[ ($LINK_RUN == 1 || $SLOTS == 1) && -z $LINK_BAUD ]] && LINK_BAUD=460800
+[[ ($LINK_RUN == 1 || $SLOTS == 1 || -n $LINK_ADDRESS) && -z $LINK_BAUD ]] && LINK_BAUD=460800
 [[ $SLOTS == 1 && -n $IMAGE_FILE ]] && { echo "--slots builds the image; it does not go with --image" >&2; exit 1; }
-DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number> | --list}"
+DISK="${1:?usage: build_and_write.sh [--commit <id>] [--slots] [--wifitest] [--wifi-ofdm[=<cores off>]] [--wifijoin] [--link[=<baud>]] [--link-run] [--link-dev] [--link-address=<n>] [--keep-wifi] [--keep-effector] [--keep-settings] [--mode=<modes>] <disk number> | --list}"
 [[ "$DISK" =~ ^[0-9]+$ ]] || { echo "Disk number must be digits: $DISK" >&2; exit 1; }
 
 cd "$REPO"
