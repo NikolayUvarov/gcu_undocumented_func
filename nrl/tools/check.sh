@@ -67,3 +67,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- compar
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/manual-plan/model" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/adaptation-v0/config.json "$nrl_check_dir/adaptation-partial.json" 1
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- resume-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/adaptation-partial.json" "$nrl_check_dir/adaptation-complete.json" 8
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-adaptation "$nrl_check_dir/decoder" "$nrl_check_dir/adaptation-complete.json" "$nrl_check_dir/adaptation-selected"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- profile-generation "$nrl_check_dir/decoder" nrl/tests/fixtures/generation-v0/study.json "$nrl_check_dir/generation-report.json"

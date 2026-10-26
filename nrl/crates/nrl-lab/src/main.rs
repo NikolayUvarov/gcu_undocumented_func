@@ -6,6 +6,17 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 5 && args[1] == "profile-generation" {
+        let model = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let study = nrl_lab::research::generation::Study::load(Path::new(&args[3]))?;
+        let report =
+            nrl_lab::research::generation::save_profile(Path::new(&args[4]), &model, &study)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
     if args.len() == 7 && args[1] == "compare-adaptation" {
         let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
         let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;

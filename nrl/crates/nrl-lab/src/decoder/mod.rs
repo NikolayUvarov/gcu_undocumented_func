@@ -162,6 +162,37 @@ pub struct State {
     position: usize,
     layers: Vec<LayerState>,
 }
+pub struct PreparedSession<'a> {
+    model: &'a Decoder,
+    state: State,
+    prepared: Vec<(RuntimeBlock<'a>, Vec<f64>)>,
+}
+impl PreparedSession<'_> {
+    pub fn position(&self) -> usize {
+        self.state.position
+    }
+    pub fn step(&mut self, token: usize) -> Result<Vec<f64>> {
+        let position = self.state.position;
+        let result = self
+            .model
+            .step_inner(&mut self.state, token, false, Some(&mut self.prepared));
+        match result {
+            Ok((logits, _)) => Ok(logits),
+            Err(e) => {
+                let len = position * self.model.config.kv_width();
+                for layer in &mut self.state.layers {
+                    layer.keys.truncate(len);
+                    layer.values.truncate(len);
+                }
+                self.state.position = position;
+                for (_, scratch) in &mut self.prepared {
+                    scratch.fill(0.0);
+                }
+                Err(e)
+            }
+        }
+    }
+}
 impl State {
     pub fn position(&self) -> usize {
         self.position
@@ -400,6 +431,28 @@ impl Decoder {
         next.id = manifest_id(&next.manifest)?;
         Ok(next)
     }
+    fn prepare(&self) -> Result<Vec<(RuntimeBlock<'_>, Vec<f64>)>> {
+        self.layers
+            .iter()
+            .enumerate()
+            .map(|(i, layer)| {
+                let block = if let Some(a) = self.patches.get(&i) {
+                    a.block()?
+                } else {
+                    RuntimeBlock::Compact(layer.mlp.block()?)
+                };
+                let scratch = vec![0.0; block.scratch_len()];
+                Ok((block, scratch))
+            })
+            .collect()
+    }
+    pub fn prepared_session(&self) -> Result<PreparedSession<'_>> {
+        Ok(PreparedSession {
+            model: self,
+            state: self.state(),
+            prepared: self.prepare()?,
+        })
+    }
     pub fn state(&self) -> State {
         State {
             model_id: self.id.clone(),
@@ -544,25 +597,7 @@ impl Decoder {
         {
             return Err("decoder input/context/trace budget".into());
         }
-        let mut prepared = if prepare {
-            Some(
-                self.layers
-                    .iter()
-                    .enumerate()
-                    .map(|(i, layer)| -> Result<_> {
-                        let block = if let Some(a) = self.patches.get(&i) {
-                            a.block()?
-                        } else {
-                            RuntimeBlock::Compact(layer.mlp.block()?)
-                        };
-                        let scratch = vec![0.0; block.scratch_len()];
-                        Ok((block, scratch))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            )
-        } else {
-            None
-        };
+        let mut prepared = if prepare { Some(self.prepare()?) } else { None };
         let mut state = self.state();
         let mut logits = Vec::new();
         let mut layers: Vec<_> = (0..if capture { c.layers } else { 0 })
@@ -721,6 +756,41 @@ pub fn import(weights: &Path, tokenizer: &Path, source: &Path) -> Result<Decoder
 
 impl Decoder {
     pub fn generate(&self, prompt: &[usize], maximum: usize) -> Result<Vec<usize>> {
+        self.generate_reference(prompt, maximum)
+    }
+    pub fn generate_prepared(&self, prompt: &[usize], maximum: usize) -> Result<Vec<usize>> {
+        if maximum > 64
+            || prompt.is_empty()
+            || prompt
+                .len()
+                .checked_add(maximum)
+                .is_none_or(|n| n > self.config.context)
+            || prompt.iter().any(|t| *t >= self.config.vocab)
+        {
+            return Err("generation context/work/token limit".into());
+        }
+        let mut session = self.prepared_session()?;
+        let mut logits = Vec::new();
+        for token in prompt {
+            logits = session.step(*token)?;
+        }
+        let mut generated = Vec::new();
+        for _ in 0..maximum {
+            let mut best = 0;
+            for (index, value) in logits.iter().enumerate().skip(1) {
+                if *value > logits[best] {
+                    best = index;
+                }
+            }
+            generated.push(best);
+            if best == 1 || best == 2 {
+                break;
+            }
+            logits = session.step(best)?;
+        }
+        Ok(generated)
+    }
+    pub fn generate_reference(&self, prompt: &[usize], maximum: usize) -> Result<Vec<usize>> {
         if maximum > 64 || prompt.is_empty() || prompt.len() + maximum > self.config.context {
             return Err("generation context/work limit".into());
         }
