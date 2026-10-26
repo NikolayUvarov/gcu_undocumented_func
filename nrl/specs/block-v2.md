@@ -1,6 +1,6 @@
 # NRL block contract v2
 
-**Edition:** 2 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues/900-NRL-0006-cubic-hermite-block.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 2 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
