@@ -484,3 +484,5 @@ T00 is complete. T01 has its initial block/artifact contract; full-model contrac
 ## Continued independently of landing (2026-10-26)
 
 At the maintainer's instruction, NRL continues on its own branch while landing is deferred. [900-NRL-0005](../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done) adds pruned controls and shared deterministic channel selection. Its 16 host tests, both portable rlibs and three external fixture cases passed; [dated evidence](../nrl/reports/pruning-f64-2026-10-26.json). Block schema 1 replaces schema 0, with explicit refusal and regeneration rather than a compatibility reader. Cubic Hermite and SVD are next; T03, T04 and native T11 are not closed by this slice.
+
+[900-NRL-0006](../issues-done/900-NRL-0006-cubic-hermite-block.done) adds cubic Hermite with linear tails and analytic coefficient gradients. Twenty host tests, both portable rlibs and four external fixture cases passed ([evidence](../nrl/reports/hermite-f64-2026-10-26.json)). Schema 2 replaces earlier prototypes. SVD, supported affine/bias contracts and full-model work remain; this is not B-spline or native support.

@@ -1,6 +1,6 @@
-# NRL block contract v2
+# NRL block contract v3
 
-**Edition:** 2 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues/900-NRL-0006-cubic-hermite-block.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 3 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues-done/900-NRL-0006-cubic-hermite-block.done), [900-NRL-0007](../../issues/900-NRL-0007-factorized-svd-blocks.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
@@ -12,7 +12,7 @@ A block has positive dimensions `input = n`, `channels = w`, `output = m`. Its t
 | up U | w × n | U[c*n+i] |
 | down D | m × w | D[o*w+c] |
 
-There are no biases in v2. On one input row x:
+There are no biases in v3. On one input row x:
 
 ```text
 z[c] = sum_i G[c,i] * x[i]
@@ -29,7 +29,7 @@ y[o] = sum_c D[o,c] * a[c] * u[c]
 
 ## Uniform linear splines
 
-Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v2. Let:
+Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v3. Let:
 
 ```text
 u = (x-low)/(high-low) * (k-1)
@@ -80,7 +80,21 @@ Packing copies exactly the selected rows of G/U and columns of D, with no refit 
 
 `selection` records `original_channels`, an ascending, unique in-range `indices` array of length `w`, and one of the two method IDs above. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
 
-**Transition:** schema 2 adds the cubic representation and replaces schemas 0 and 1. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
+**Transition:** schema 3 adds explicit factor tensors and replaces schemas 0, 1 and 2. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
+
+## Low-rank SiLU blocks
+
+`svd` retains the original channel width and replaces each G/U/D with L*R. L is row-major `[outputs, rank]`, R is row-major `[rank, inputs]`; apply R first, then L. The host profile requires a common positive rank no greater than min(n,w,m). Numerical projections may have independent valid ranks. No transpose is implicit.
+
+All weights remain factored during forward/backward. Parameter gradients are dL += dy*(Rx)^T, dR += (L^T*dy)*x^T, and dx += R^T*(L^T*dy). The low-level projection accumulates dx; the gated block resets dx and accumulates its gate/up paths, matching the compact block's public behaviour. Reconstruction is an explicit diagnostic into a separate caller-provided buffer, never a hidden execution step. Gradients, input/output and scratch sizes and finite values are checked.
+
+The host initializer `svd::decompose` uses one-sided Jacobi rotations on a scaled f64 matrix, transposing wide matrices so the working matrix is tall. Singular values are sorted descending; factors split each retained singular value's square root between L/R. Signs and bases of degenerate singular subspaces need not match another SVD implementation; reconstruction and truncation residuals are compared instead. This is plain truncated SVD, not SVD-LLM or activation-aware factorization.
+
+Initialization is deliberately bounded: each dimension is 1..=64, at most 128 sweeps, relative column-correlation stopping threshold 1e-14. A caller can lower the sweep limit within 1..=128. Nonconvergence, invalid shapes/rank, nonfinite input and numerical overflow are errors. This is a small CPU initializer, not a solver for a large model. The original Python initializer casts to f32; the Rust initializer and its independent singular-value oracle are f64. Stored block forward/backward fixtures use the unchanged reference in f64, separately from initialization.
+
+Both projection forms are **bias-free** in this profile, as the original gated-block reference requires. Unknown bias fields are refused, not discarded. Supporting affine projections, other activations and their conversion rules remains T01/T03 work; these five bias-free representations do not complete those general contracts.
+
+A rank can cost more parameters than a small dense matrix: a factored matrix stores rank*(inputs+outputs) values. The small fixture's rank is for numerical checking, not a compression result. Full-model size, quality and speed need separate measurements.
 
 ## Backward and one training step
 
@@ -101,7 +115,7 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 
 ## Bounds, ownership and errors
 
-- The portable crates are `no_std`, contain no unsafe code and allocate no memory. They receive borrowed weights, caller-owned output/gradient buffers and scratch of `3*w` f64 values.
+- The portable crates are `no_std`, contain no unsafe code and allocate no memory. They receive borrowed weights, caller-owned output/gradient buffers and scratch of `3*w` f64 values for compact blocks or `7*w + max_projection_rank` for SVD blocks. A single factored projection uses `rank` scratch values.
 - A shape is refused if multiplication overflows or any checked matrix/scratch count exceeds 1,048,576 elements. These are prototype computational limits, not an OS resource capability or deadline guarantee.
 - Host batch input and output counts each have the same element bound. The artifact's stronger bound below also applies.
 - Weights are immutable during a call. A future cross-domain adapter must establish stable checked data before constructing these borrowed views (MC-11.2); these Rust types alone do not establish that OS contract.
@@ -109,23 +123,28 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 - After a low-level computation returns an error, output, gradient and scratch buffers may be partially written and must be discarded or reinitialized. It changes no weights. The host owns any transient allocations; this is not a tested native budget implementation.
 - No file, network, thread, OS clock or device access belongs to the numerical layer.
 
-## Data-only artifact `nrl.block/2`
+## Data-only artifact `nrl.block/3`
 
 The host artifact is a UTF-8 JSON object:
 
 | Field | Meaning |
 |---|---|
-| schema | Exactly `nrl.block/2`; any other version is refused with its name |
-| representation | Exactly `dense`, `pruned`, `spline-linear` or `spline-cubic` |
+| schema | Exactly `nrl.block/3`; any other version is refused with its name |
+| representation | Exactly `dense`, `pruned`, `spline-linear`, `spline-cubic` or `svd` |
 | shape | `[n,w,m]`, positive dimensions checked before indexing |
-| gate, up, down | Flat f64 arrays with the exact matrix lengths |
-| spline | For dense/pruned: null or absent. For either spline: the object below |
-| selection | Required for pruned, optional for spline, absent/null for dense; original_channels, ascending unique indices, method |
+| gate, up, down | Compact: flat f64 arrays with the exact matrix lengths. SVD: empty arrays |
+| spline | For dense/pruned/SVD: null or absent. For either spline: the object below |
+| selection | Required for pruned, optional for spline, absent/null for dense and SVD; original_channels, ascending unique indices, method |
+| factors | SVD only: required rank and gate_left/right, up_left/right, down_left/right arrays; null/absent for compact blocks |
+| factors.gate_left, up_left | w × rank |
+| factors.gate_right, up_right | rank × n |
+| factors.down_left | m × rank |
+| factors.down_right | rank × w |
 | spline.knots | Integer k >= 2 |
 | spline.low, high | One fixed finite bound per channel |
 | spline.values | Channel-major w × k coefficients |
 
-Unknown or duplicate fields are refused. Nonfinite JSON numbers, inconsistent arrays, invalid grids and unknown representations are refused. The file is at most 1,048,576 bytes, enforced by a bounded read rather than trusting its metadata. The total number of matrix, grid and coefficient values is at most 16,384. JSON parsing has serde_json's default recursion limit as well as the byte bound.
+Unknown or duplicate fields are refused. Nonfinite JSON numbers, inconsistent arrays, invalid grids and unknown representations are refused. The file is at most 1,048,576 bytes, enforced by a bounded read rather than trusting its metadata. The total number of matrix, factor, grid and coefficient values is at most 16,384. JSON parsing has serde_json's default recursion limit as well as the byte bound.
 
 Saving uses a new file and refuses an existing path. Validation and serialization happen before file creation. An I/O error can leave an incomplete new file; the caller treats the operation as failed, and a later loader must validate it again. A collection of output files is not an atomic transaction.
 

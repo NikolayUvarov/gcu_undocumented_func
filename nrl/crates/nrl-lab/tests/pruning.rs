@@ -4,7 +4,7 @@ use nrl_repr::{pruning, Activation, Block};
 use serde_json::Value;
 
 fn fixture() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v2.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap()
 }
 fn vector(value: &Value) -> Vec<f64> {
     serde_json::from_value(value.clone()).unwrap()
@@ -26,7 +26,7 @@ fn ranking_and_packed_weights_match_external_reference_and_full_width_is_identit
     ] {
         let mut scores = vec![0.0; 4];
         pruning::scores(
-            &source.block().unwrap(),
+            &source.compact_block().unwrap(),
             calibration,
             &mut scores,
             &mut [0.0; 12],

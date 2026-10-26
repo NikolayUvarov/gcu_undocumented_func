@@ -3,6 +3,7 @@
 
 use nrl_core::{elements, finite, Error, Result, Shape};
 
+pub mod factor;
 pub mod pruning;
 
 #[derive(Clone, Copy)]
@@ -218,6 +219,10 @@ impl<'a> Block<'a> {
             down,
             activation,
         })
+    }
+
+    pub fn scratch_len(&self) -> usize {
+        self.shape.scratch_len()
     }
 
     fn features(&self, input: &[f64], scratch: &mut [f64]) -> Result<()> {

@@ -9,7 +9,7 @@ fn vector(value: &Value) -> Vec<f64> {
 #[test]
 fn hermite_matches_reference_at_knots_interior_and_linear_tails() {
     let fixture: Value =
-        serde_json::from_str(include_str!("../../../tests/fixtures/f64-v2.json")).unwrap();
+        serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap();
     let f = &fixture["cubic"];
     let low = vector(&f["low"]);
     let high = vector(&f["high"]);
@@ -95,7 +95,7 @@ fn cubic_is_c1_at_every_knot_and_coefficient_derivatives_match_finite_difference
 #[test]
 fn cubic_control_preserves_the_shared_channel_mapping_and_projections() {
     let f: Value =
-        serde_json::from_str(include_str!("../../../tests/fixtures/f64-v2.json")).unwrap();
+        serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap();
     let source: Artifact =
         serde_json::from_value(f["channel_selection"]["source"].clone()).unwrap();
     let pruned = prune(&source, 2, Some(&vector(&f["channel_selection"]["input"]))).unwrap();

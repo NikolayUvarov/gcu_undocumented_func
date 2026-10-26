@@ -6,7 +6,7 @@ An extensible Rust system that inspects, converts, fine-tunes and runs trained n
 
 ## Execution started (2026-10-25)
 
-The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v2.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression. Tasks 900-NRL-0001 to 0004 are complete on the NRL branch (64 Python reference tests, 11 Rust tests, two portable release builds); code landing and KRN CI wiring are pending. Remaining representations and full-model work stay in 900.
+The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v3.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression. Tasks 900-NRL-0001 to 0004 are complete on the NRL branch (64 Python reference tests, 11 Rust tests, two portable release builds); code landing and KRN CI wiring are pending. Remaining representations and full-model work stay in 900.
 
 ## What is here
 
@@ -27,3 +27,5 @@ The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../.
 ## Latest branch progress (2026-10-26)
 
 900-NRL-0005 adds the pruned control and shared f64 channel selection. The three block fixtures, 16 host tests and both portable builds passed ([report](../../nrl/reports/pruning-f64-2026-10-26.json)). Block schema 1 replaces schema 0; regenerate older prototype artifacts. NRL development continues without waiting for landing, as the maintainer instructed. Hermite/SVD and model work remain open.
+
+900-NRL-0006 adds cubic Hermite with linear tails, neighbour-dependent gradients and shared-channel controls: 20 host tests, two portable builds and four external cases ([report](../../nrl/reports/hermite-f64-2026-10-26.json)). Schema 2 replaces 0/1. SVD and full-model work remain.
