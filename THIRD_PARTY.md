@@ -117,3 +117,5 @@ RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` 
 - QEMU, Rust toolchain, Python.
 - The TLA+ tools (`tla2tools.jar` 1.7.4, MIT licence, [tlaplus/tlaplus](https://github.com/tlaplus/tlaplus)) to check the models of `docs/assurance`; `scripts/model_check.sh` fetches them and checks their SHA-256; Java.
 - Optional: a Vosk speech model for the `tts` test (`--asr-model`).
+
+The optional NRL `nrl/tools/generate_evaluation_fixture.py` uses the same pinned PyTorch environment and decoder-oracle provenance to generate original next-token metric checks in `nrl/tests/fixtures/evaluate-v0.json`; no additional model, corpus or third-party implementation is imported.
