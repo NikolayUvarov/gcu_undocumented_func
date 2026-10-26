@@ -4,6 +4,22 @@
 
 An extensible Rust system that inspects, converts, fine-tunes and runs trained neural networks on MIND Core and on a development host. Its first research question is whether spline representations make blocks smaller or faster than plain compression (`pruned`, `svd`) at a bounded loss of quality. A negative answer is a valid result.
 
+## Current branch status (2026-10-26)
+
+T06–T10 are complete for the declared bounded **host** profiles on `codex/NRL-lab`; landing is pending. **70 host tests**, portable `nrl-repr` rlibs for both targets and all CLI cycles pass. The complete check is `bash nrl/tools/check.sh`; normal Rust operation requires neither Python nor model downloads.
+
+| Stage | Implemented and measured | Evidence |
+|---|---|---|
+| T06 | Actual trained TinyStories-260K decoder, custom byte-BPE, GQA/RoPE/RMSNorm/tied head and KV state; independent PyTorch/C checks | [Dense baseline](../../nrl/reports/decoder-baseline-2026-10-26.json) |
+| T07 | Train-only calibration and four compressed controls, local validation selection, complete resumable state and exact continuation | [Local training](../../nrl/reports/local-training-2026-10-26.json) |
+| T08 | Regression and shifted next-token metrics, repeated same-backend forward timing, resource scope and strict report compatibility | [Two-task measurements](../../nrl/reports/evaluation-2026-10-26.json) |
+| T09 | Manual mixed plans, six fixed measured candidates, Pareto/rejection records and dense fallback; test after selection | [Bounded search](../../nrl/reports/plans-2026-10-26.json) |
+| T10 | Two replacements, original teacher FFNs on actual student inputs, simultaneous SGD, matched original-input control, whole-model selection/error and exact saved-run replay | [Recovery](../../nrl/reports/recovery-2026-10-26.json) |
+
+The fixed search and recovery do **not** produce an accepted compression result. Recovery changes validation NLL from 4.010611 to 4.010566, while dense gives 2.792274. Held-out perplexity is about 105.05 versus dense 9.36. The recommendation remains dense. Original dense storage is retained alongside patches; lower observed scalar forward time or fewer active parameters do not establish quality, disk/memory savings or target performance. These eight original documents form a reproducibility fixture, not a representative benchmark.
+
+Next: **T11**, the native adapter inside APP's `nnd` and its budget/cancellation/isolation/failure contracts; **T12**, optimization of measured bottlenecks; **T13**, more model families and representations. Existing host work does not establish those native guarantees. The main task stays open. Full repository gating belongs to LANDING; NRL host development did not wait for landing.
+
 ## Execution started (2026-10-25)
 
 The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../../nrl/README.md), [reference inventory](reference-inventory.md), [initial block contract](../../nrl/specs/block-v5.md), and [backend ADR](ADR-0001-cpu-backend.md). Initial host results do not imply native integration or model compression. Tasks 900-NRL-0001 to 0004 are complete on the NRL branch (64 Python reference tests, 11 Rust tests, two portable release builds); code landing and KRN CI wiring are pending. Remaining representations and full-model work stay in 900.

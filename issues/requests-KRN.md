@@ -65,3 +65,5 @@ The first independent workspace is under `nrl/`, with portable crates and a host
 - The corresponding portable build for `aarch64-unknown-none-softfloat`, in a suitable build group.
 
 `bash nrl/tools/check.sh` combines those checks and a fresh host demonstration. The workspace is not discovered by the existing host scripts. NRL changes none of the owning track's build/CI scripts itself. A cross-built rlib is not a native OS test; an nnd smoke test remains later work with APP. The recorded first checks are in `nrl/reports/cpu-f64-2026-10-25.json`.
+
+NRL update (2026-10-26, 900-NRL-0012–0016): the same explicit check entry now covers **70 host tests**, two portable rlibs and fresh decoder/calibration/continuation/two-task benchmarking/six-plan search/recovery/check/replay cycles. No network or Python is required after locked dependencies are cached; the pinned permissively licensed small model/tokenizer and oracles are committed. Please run `bash nrl/tools/check.sh` explicitly during landing until CI wiring is integrated. [Latest evidence](../nrl/reports/recovery-2026-10-26.json). No KRN-owned scripts were changed by NRL.

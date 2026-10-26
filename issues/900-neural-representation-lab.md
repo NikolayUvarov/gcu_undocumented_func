@@ -4,6 +4,22 @@
 
 **Recorded by:** the tools track, 2026-10-23, at the maintainer's request: "add this task as a separate track for neural networks". The source is the maintainer's handoff of 2026-10-23, version 1.0. It is kept as it was written, in Russian, in [docs/nrl/HANDOFF_RU.md](../docs/nrl/HANDOFF_RU.md). This issue is its statement in English, read against this repository: the Constitution of edition 1.6, the APIs that exist and the tasks that already plan the hardware.
 
+## Current branch status (2026-10-26)
+
+T06–T10 are complete for the declared bounded **host** profiles on `codex/NRL-lab`; landing is pending. **70 host tests**, portable `nrl-repr` rlibs for both targets and all CLI cycles pass. The complete check is `bash nrl/tools/check.sh`; normal Rust operation requires neither Python nor model downloads.
+
+| Stage | Implemented and measured | Evidence |
+|---|---|---|
+| T06 | Actual trained TinyStories-260K decoder, custom byte-BPE, GQA/RoPE/RMSNorm/tied head and KV state; independent PyTorch/C checks | [Dense baseline](../nrl/reports/decoder-baseline-2026-10-26.json) |
+| T07 | Train-only calibration and four compressed controls, local validation selection, complete resumable state and exact continuation | [Local training](../nrl/reports/local-training-2026-10-26.json) |
+| T08 | Regression and shifted next-token metrics, repeated same-backend forward timing, resource scope and strict report compatibility | [Two-task measurements](../nrl/reports/evaluation-2026-10-26.json) |
+| T09 | Manual mixed plans, six fixed measured candidates, Pareto/rejection records and dense fallback; test after selection | [Bounded search](../nrl/reports/plans-2026-10-26.json) |
+| T10 | Two replacements, original teacher FFNs on actual student inputs, simultaneous SGD, matched original-input control, whole-model selection/error and exact saved-run replay | [Recovery](../nrl/reports/recovery-2026-10-26.json) |
+
+The fixed search and recovery do **not** produce an accepted compression result. Recovery changes validation NLL from 4.010611 to 4.010566, while dense gives 2.792274. Held-out perplexity is about 105.05 versus dense 9.36. The recommendation remains dense. Original dense storage is retained alongside patches; lower observed scalar forward time or fewer active parameters do not establish quality, disk/memory savings or target performance. These eight original documents form a reproducibility fixture, not a representative benchmark.
+
+Next: **T11**, the native adapter inside APP's `nnd` and its budget/cancellation/isolation/failure contracts; **T12**, optimization of measured bottlenecks; **T13**, more model families and representations. Existing host work does not establish those native guarantees. The main task stays open. Full repository gating belongs to LANDING; NRL host development did not wait for landing.
+
 ## 1. Context and goal
 
 - **The user has or will have trained weights of many networks.** The research idea is to see the transformations of internal states as motion in a many-dimensional space, and to look for a more compact description of them. The candidates already considered:
@@ -516,3 +532,5 @@ T05 has its first complete non-language regression profile, with initial general
 T08 is complete on the NRL branch (900-NRL-0014): 65 host tests, both portable rlibs, two independent task metrics and compatible repeated timing reports. [Evidence](../nrl/reports/evaluation-2026-10-26.json). Original dense storage and whole-process RSS are reported honestly; the current linear student loses language validation quality. T09/T10 continue using the unchanged pre-frozen study.
 
 T09 is complete on the NRL branch (900-NRL-0015): 68 tests and both portable rlibs; manual mixed composition and six fixed candidates were checked whole. [Measured search](../nrl/reports/plans-2026-10-26.json) selected `dense` under the validation quality/time/package rules; negative cases are retained. Test follows selection. T10 student-input recovery continues independently.
+
+900-NRL-0016 closes T10 for the bounded trained host decoder: actual student-input/original-FFN targets, simultaneous two-layer local SGD, matched original-input control, complete-model validation/error and post-selection test, saved pair/model/record replay. **70 host tests**, both portable rlibs and every CLI cycle passed on `5edd9bc6`; [evidence](../nrl/reports/recovery-2026-10-26.json). The small improvement does not meet dense quality, so the deployment recommendation remains dense. T06–T10 are complete for these declared profiles; T11–T13 and full landing/native guarantees remain open.
