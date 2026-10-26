@@ -24,3 +24,8 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- pack-m
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- train-regression "$nrl_check_dir/regression-input" nrl/tests/fixtures/training-v0/data.json nrl/tests/fixtures/training-v0/run.json "$nrl_check_dir/regression"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-experiment "$nrl_check_dir/regression"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-regression "$nrl_check_dir/regression" "$nrl_check_dir/regression-replay"
+
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- import-decoder nrl/reference/tinyllamas-260k/stories260K.bin nrl/reference/tinyllamas-260k/tok512.bin nrl/reference/tinyllamas-260k/decoder-source.json "$nrl_check_dir/decoder"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-decoder "$nrl_check_dir/decoder"
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder "$nrl_check_dir/decoder" 'Once upon a time' "$nrl_check_dir/decoder-output.json"

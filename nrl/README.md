@@ -128,3 +128,16 @@ Optional oracle regeneration uses the pinned reference environment (Rust checks 
 ```bash
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-regression nrl/reports/regression-example-2026-10-26 /tmp/nrl-saved-regression-replay-new
 ```
+
+
+## Real trained small decoder (900-NRL-0012)
+
+The separate [decoder profile](specs/decoder-v0.md) runs the pinned real TinyStories-260K model and its custom byte-BPE tokenizer offline in Rust. Source float32 weights/tables widen to scalar f64; GQA, RMSNorm, tied head, RoPE, causal/cache state and exact package identity are explicit. This is not Qwen or arbitrary Llama support.
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- import-decoder nrl/reference/tinyllamas-260k/stories260K.bin nrl/reference/tinyllamas-260k/tok512.bin nrl/reference/tinyllamas-260k/decoder-source.json /tmp/nrl-decoder-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-decoder /tmp/nrl-decoder-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder /tmp/nrl-decoder-new 'Once upon a time' /tmp/nrl-decoder-output-new.json
+```
+
+All output paths must be new. Primary assets and licence notices are in `reference/tinyllamas-260k/`; the optional `tools/generate_decoder_fixtures.py --output tests/fixtures/decoder-v0.json --check` generator uses independent PyTorch and original C calculations. Normal checks need no network, C or Python. Smaller replacement counts do not imply smaller packages: this first profile retains the original dense blob. T07–T10 supply calibration/training/evaluation/plans; native and other families remain separate.
