@@ -41,13 +41,14 @@ fn run() -> Result<(), String> {
         } else {
             None
         };
-        let model = nrl_lab::model::load(Path::new(&args[2]), base.as_ref())?;
+        let mut model = nrl_lab::model::load(Path::new(&args[2]), base.as_ref())?;
         if args[1] == "run-model" {
             let input: Vec<f64> = serde_json::from_value(read_json(Path::new(&args[3]))?)
                 .map_err(|e| e.to_string())?;
             model.run_to_file(&input, Path::new(&args[4]))?;
         } else if args[1] == "export-standalone" {
-            model.standalone()?.save(Path::new(&args[3]))?;
+            model = model.standalone()?;
+            model.save(Path::new(&args[3]))?;
         }
         println!(
             "{}",
@@ -101,7 +102,7 @@ fn run() -> Result<(), String> {
         "archive_sha256": fixture["archive_sha256"], "seed": fixture["seed"], "checks": checks,
         "fixture_round_trips": cases.len(), "elapsed_seconds": started.elapsed().as_secs_f64(),
         "measurement": "One fixture check and one round trip per case; elapsed time is not a model benchmark",
-        "native_execution": false, "unimplemented": ["model adapters", "nnd integration"]});
+        "native_execution": false, "unimplemented": ["language model adapter", "full-graph training", "nnd integration"]});
     OpenOptions::new()
         .create_new(true)
         .write(true)
