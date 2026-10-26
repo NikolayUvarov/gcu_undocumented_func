@@ -1,6 +1,22 @@
-# Neural Representation Lab: initial Rust numerical path
+# Neural Representation Lab: Rust model research workspace
 
-NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). This workspace implements a **small host CPU f64 block profile**: dense and pruned SiLU blocks, shared deterministic channel selection, linear and cubic Hermite spline interpolation, direct SVD factor execution, their gated MLPs with optional gate/up/down output biases and analytic gradients. It is not yet a full model runtime or native model service.
+NRL is track `NRL`, issue [900](../issues/900-neural-representation-lab.md). The host workspace implements bounded feed-forward graphs and a real trained TinyStories decoder, five gated SiLU block representations (`dense`, `pruned`, `spline-linear`, `spline-cubic`, `svd`), affine biases/analytic gradients, model packages, calibration/training, two-task evaluation and measured plan/recovery experiments. Portable no_std block libraries are separate from the host model runner. Native MIND Core service integration remains T11.
+
+## Current branch status (2026-10-26)
+
+T06–T10 are complete for the declared bounded **host** profiles on `codex/NRL-lab`; landing is pending. **70 host tests**, portable `nrl-repr` rlibs for both targets and all CLI cycles pass. The complete check is `bash nrl/tools/check.sh`; normal Rust operation requires neither Python nor model downloads.
+
+| Stage | Implemented and measured | Evidence |
+|---|---|---|
+| T06 | Actual trained TinyStories-260K decoder, custom byte-BPE, GQA/RoPE/RMSNorm/tied head and KV state; independent PyTorch/C checks | [Dense baseline](reports/decoder-baseline-2026-10-26.json) |
+| T07 | Train-only calibration and four compressed controls, local validation selection, complete resumable state and exact continuation | [Local training](reports/local-training-2026-10-26.json) |
+| T08 | Regression and shifted next-token metrics, repeated same-backend forward timing, resource scope and strict report compatibility | [Two-task measurements](reports/evaluation-2026-10-26.json) |
+| T09 | Manual mixed plans, six fixed measured candidates, Pareto/rejection records and dense fallback; test after selection | [Bounded search](reports/plans-2026-10-26.json) |
+| T10 | Two replacements, original teacher FFNs on actual student inputs, simultaneous SGD, matched original-input control, whole-model selection/error and exact saved-run replay | [Recovery](reports/recovery-2026-10-26.json) |
+
+The fixed search and recovery do **not** produce an accepted compression result. Recovery changes validation NLL from 4.010611 to 4.010566, while dense gives 2.792274. Held-out perplexity is about 105.05 versus dense 9.36. The recommendation remains dense. Original dense storage is retained alongside patches; lower observed scalar forward time or fewer active parameters do not establish quality, disk/memory savings or target performance. These eight original documents form a reproducibility fixture, not a representative benchmark.
+
+Next: **T11**, the native adapter inside APP's `nnd` and its budget/cancellation/isolation/failure contracts; **T12**, optimization of measured bottlenecks; **T13**, more model families and representations. Existing host work does not establish those native guarantees. The main task stays open. Full repository gating belongs to LANDING; NRL host development did not wait for landing.
 
 ## Run from the repository root
 
@@ -13,7 +29,7 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo n
 
 The output directory must not exist. The demo checks reference outputs and gradients, takes one SGD step in each fixture and checks a block-file round trip. It writes twelve block files and a JSON report. Errors use a nonzero exit status; existing files are never overwritten. A failed I/O operation can leave incomplete new outputs.
 
-Use `--offline` as well when the locked dependencies are already cached. `nrl/tools/check.sh` runs the Rust checks and a fresh demonstration. Python is not required to run the Rust tests or demonstration.
+Use `--offline` as well when the locked dependencies are already cached. `nrl/tools/check.sh` runs all tests, portable builds and complete fresh import/train/measure/search/recovery/check/replay cycles. Python is not required to run the Rust tests or demonstration.
 
 The project's pinned nightly builds the code. If that toolchain lacks rustfmt, `cargo +stable fmt --manifest-path nrl/Cargo.toml --all --check` checks formatting with an installed stable formatter; it does not select the compiler used by the tests.
 
@@ -163,3 +179,17 @@ T07 passed **62 host tests** and both portable rlibs; [dated evidence](reports/l
 T08 is complete on the NRL branch (900-NRL-0014): 65 host tests, both portable rlibs, two independent task metrics and compatible repeated timing reports. [Evidence](reports/evaluation-2026-10-26.json). Original dense storage and whole-process RSS are reported honestly; the current linear student loses language validation quality. T09/T10 continue using the unchanged pre-frozen study.
 
 T09 is complete on the NRL branch (900-NRL-0015): 68 tests and both portable rlibs; manual mixed composition and six fixed candidates were checked whole. [Measured search](reports/plans-2026-10-26.json) selected `dense` under the validation quality/time/package rules; negative cases are retained. Test follows selection. T10 student-input recovery continues independently.
+
+## Mixed plans and recovery commands
+
+With a new imported teacher package at `/tmp/nrl-decoder-new`, run from the repository root (all output paths must be new):
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- apply-plan /tmp/nrl-decoder-new nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json mixed-linear-pruned /tmp/nrl-manual-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- search-plans /tmp/nrl-decoder-new nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json /tmp/nrl-search-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- recover-plan /tmp/nrl-decoder-new /tmp/nrl-manual-new/model nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json /tmp/nrl-recovery-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-recovery /tmp/nrl-decoder-new /tmp/nrl-recovery-new
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-recovery /tmp/nrl-decoder-new /tmp/nrl-recovery-new /tmp/nrl-recovery-replay-new
+```
+
+[Measurement contract](specs/evaluation-v0.md), [mixed-plan contract](specs/mixed-plans-v0.md), [student-recovery contract](specs/student-recovery-v0.md). Saved inputs and standalone packages are under `reports/plan-example-2026-10-26` and `reports/recovery-example-2026-10-26`; `complete.json` is written last. A fresh run preserves the previous evidence. Repeated timings can change the deployment recommendation; deterministic recovery parameters/validation histories must replay on the declared execution profile.
