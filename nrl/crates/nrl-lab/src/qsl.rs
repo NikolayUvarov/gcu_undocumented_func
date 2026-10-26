@@ -5,34 +5,20 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
 use std::path::Path;
 
-#[rustfmt::skip]
-#[path = "../../../../libmind/src/sha256.rs"]
-mod sha256;
+pub use crate::storage::hash;
+use crate::storage::{read_regular, valid_hash, write_new};
 
 pub const MAX_BLOCKS: usize = 32;
 pub const MAX_MANIFEST_BYTES: usize = 1 << 20;
 pub const MAX_PACKAGE_BYTES: usize = 16 << 20;
 pub const QSL_FORMAT: &str = "qwen-spline-lab-overlay-v1";
 
-pub fn hash(bytes: &[u8]) -> String {
-    sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
 pub fn artifact_id(fingerprint: &str, blocks: &Value, weights_sha256: &str) -> String {
     let value = json!({"base": fingerprint, "blocks": blocks, "weights": weights_sha256});
     hash(import_json::qsl_canonical(&value).as_bytes())
-}
-
-fn valid_hash(s: &str) -> bool {
-    s.len() == 64
-        && s.bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[derive(Deserialize)]
@@ -149,34 +135,6 @@ impl BlockSet {
     }
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| e.to_string())?
-        .write_all(bytes)
-        .map_err(|e| e.to_string())
-}
-fn read_regular(path: &Path, limit: usize) -> Result<Vec<u8>> {
-    if !fs::symlink_metadata(path)
-        .map_err(|e| e.to_string())?
-        .file_type()
-        .is_file()
-    {
-        return Err("input must be a regular file, not a symlink".into());
-    }
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(|e| e.to_string())?
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > limit {
-        return Err("file byte limit exceeded".into());
-    }
-    Ok(bytes)
-}
 fn overlay(bytes: &[u8]) -> Result<(Overlay, Value)> {
     let value = import_json::parse(bytes, MAX_MANIFEST_BYTES)?;
     let format = value["format"].as_str().ok_or("missing QSL format")?;

@@ -91,3 +91,32 @@ pub fn qsl_canonical(value: &Value) -> String {
         _ => serde_json::to_string(value).unwrap(),
     }
 }
+
+// Model identities sort every object key and omit insignificant whitespace.
+pub fn canonical_compact(value: &Value) -> String {
+    match value {
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter()
+                .map(canonical_compact)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(map) => {
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort_unstable();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|k| format!(
+                        "{}:{}",
+                        serde_json::to_string(k).unwrap(),
+                        canonical_compact(&map[k])
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        _ => serde_json::to_string(value).unwrap(),
+    }
+}

@@ -3,6 +3,7 @@
 
 use nrl_core::{elements, finite, Error, Result, Shape};
 
+pub mod affine;
 pub mod bias;
 pub mod factor;
 use bias::{BiasGradients, Biases};

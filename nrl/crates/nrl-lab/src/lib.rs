@@ -6,8 +6,10 @@ use nrl_repr::{Activation, Block, Gradients, Spline};
 
 pub mod descriptor;
 mod import_json;
+pub mod model;
 pub mod qsl;
 pub mod safetensors;
+mod storage;
 pub mod svd;
 use descriptor::BlockDescriptor;
 use nrl_repr::bias::{BiasGradients, Biases};
