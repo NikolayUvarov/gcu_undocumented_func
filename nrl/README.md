@@ -122,3 +122,9 @@ Optional oracle regeneration uses the pinned reference environment (Rust checks 
 ```bash
 /path/to/reference-venv/bin/python nrl/tools/generate_training_fixtures.py --reference-root /path/to/qwen-spline-lab --output nrl/tests/fixtures/training-v0 --check
 ```
+
+900-NRL-0011 passed **52 host tests**, both portable rlibs, external full-graph gradients/SGD/history checks and complete train/check/replay CLI cycles. [Dated evidence](reports/regression-training-2026-10-26.json), [raw log](reports/training-check-2026-10-26.txt), [saved experiment](reports/regression-example-2026-10-26/report.json). Its actual Rust history selects epoch 91 of 128. The example retains both standalone models and complete data/config/records; replay it with:
+
+```bash
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-regression nrl/reports/regression-example-2026-10-26 /tmp/nrl-saved-regression-replay-new
+```

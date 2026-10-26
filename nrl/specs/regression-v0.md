@@ -1,6 +1,6 @@
 # Full-graph regression experiments v0
 
-**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0011](../../issues/900-NRL-0011-feed-forward-training-and-evaluation.md) · **Scope:** independent stateless feed-forward regression on the host scalar CPU f64 profile. This introduces experiment/data/run/record/report schemas; `nrl.model/0`, `nrl.graph/0` and `nrl.block/5` are unchanged.
+**Edition:** 0 (2026-10-26) · **Task:** [900-NRL-0011](../../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done) · **Scope:** independent stateless feed-forward regression on the host scalar CPU f64 profile. This introduces experiment/data/run/record/report schemas; `nrl.model/0`, `nrl.graph/0` and `nrl.block/5` are unchanged.
 
 ## Differentiation and parameter updates
 
@@ -28,7 +28,7 @@ There is no RNG, shuffle, dropout, momentum, weight decay or minibatching. Train
 
 Epoch zero is evaluated on train and validation. Each epoch computes train gradients, updates all parameters transactionally, then evaluates train and validation. A strictly smaller validation MSE selects that checkpoint; ties keep the earlier one. All configured epochs complete; selecting epoch zero is valid. Test metrics for the initial and selected models are computed only after the choice is complete. No test metric chooses a step count, parameter or checkpoint.
 
-Before computing activations, the run checks training/batch limits and the forward-row work budget:
+One additional model-source slot is reserved for the derived training record before computing activations, even if a placeholder hash would match an existing declaration. Before computing activations, the run checks training/batch limits and the forward-row work budget:
 
 `train_rows + validation_rows + epochs * (2*train_rows + validation_rows) + 2*test_rows`.
 
