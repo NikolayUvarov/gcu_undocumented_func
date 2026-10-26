@@ -1,6 +1,6 @@
-# 900-NRL-0014 — Comparable regression/language evaluation and measured host benchmarks
+# 900-NRL-0014 — Comparable regression/language evaluation and measured host benchmarks — done
 
-**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** in progress · **Blocked by:** — (T05–T07 are on this branch) · **Roadmap:** G; 900 T08 · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-12.1, MC-12.2, MC-12.3, MC-12.9
+**Type:** research and implementation, `NRL` · **Owner:** Codex session (`codex/NRL-lab`) · **Priority:** P1 · **Status:** done (2026-10-26) · **Blocked by:** — (T05–T07 are on this branch) · **Roadmap:** G; 900 T08 · **Constitution:** MC-5.1, MC-8.5, MC-9.1, MC-12.1, MC-12.2, MC-12.3, MC-12.9
 
 ## Problem
 
@@ -25,7 +25,7 @@ Local block MSE and fewer parameters do not establish model quality or speed. T0
 
 ## Related
 
-- [900](900-neural-representation-lab.md), T08 and section 13.
+- [900](../issues/900-neural-representation-lab.md), T08 and section 13.
 - [0011](../issues-done/900-NRL-0011-feed-forward-training-and-evaluation.done), [0012](../issues-done/900-NRL-0012-trained-decoder-and-tokenizer.done), [0013](../issues-done/900-NRL-0013-calibration-and-resumable-local-training.done).
 
 ## Resolution

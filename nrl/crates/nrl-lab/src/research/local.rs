@@ -463,14 +463,18 @@ impl LocalState {
         saved.payload.validate()?;
         Ok(saved.payload)
     }
-    pub fn export(&self, teacher: &Decoder) -> Result<Decoder> {
+    pub fn source_record(&self) -> Result<Source> {
         self.validate()?;
-        self.calibration.verify_teacher(teacher)?;
         let hash = self.checkpoint_id()?;
         let mut source = self.config.output_source.clone();
         source.identifier.push('#');
         source.identifier.push_str(&hash);
         source.sha256 = Some(hash);
+        Ok(source)
+    }
+    pub fn export(&self, teacher: &Decoder) -> Result<Decoder> {
+        self.calibration.verify_teacher(teacher)?;
+        let source = self.source_record()?;
         let mut patches = teacher.patches();
         patches.insert(self.calibration.layer, self.best.clone());
         teacher.with_patches(patches, &[self.calibration.corpus.source.clone(), source])
