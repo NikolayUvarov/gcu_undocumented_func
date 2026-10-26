@@ -8,9 +8,11 @@ pub struct Factor<'a> {
     rank: usize,
     left: &'a [f64],
     right: &'a [f64],
+    bias: &'a [f64],
 }
 
 pub struct FactorGradients<'a> {
+    pub bias: &'a mut [f64],
     pub left: &'a mut [f64],
     pub right: &'a mut [f64],
 }
@@ -22,6 +24,7 @@ impl<'a> Factor<'a> {
         rank: usize,
         left: &'a [f64],
         right: &'a [f64],
+        bias: &'a [f64],
     ) -> Result<Self> {
         if rank == 0
             || rank > inputs.min(outputs)
@@ -30,6 +33,7 @@ impl<'a> Factor<'a> {
         {
             return Err(Error::Shape);
         }
+        crate::bias::validate(bias, outputs)?;
         finite(left)?;
         finite(right)?;
         Ok(Self {
@@ -38,6 +42,7 @@ impl<'a> Factor<'a> {
             rank,
             left,
             right,
+            bias,
         })
     }
     pub fn rank(self) -> usize {
@@ -71,7 +76,8 @@ impl<'a> Factor<'a> {
         for (o, value) in output.iter_mut().enumerate() {
             *value = (0..self.rank)
                 .map(|r| self.left[o * self.rank + r] * scratch[r])
-                .sum();
+                .sum::<f64>()
+                + crate::bias::value(self.bias, o);
         }
         finite(output)
     }
@@ -88,11 +94,13 @@ impl<'a> Factor<'a> {
             || dy.len() != self.outputs
             || dx.len() != self.inputs
             || gradients.left.len() != self.left.len()
+            || gradients.bias.len() != self.bias.len()
             || gradients.right.len() != self.right.len()
             || scratch.len() != self.rank
         {
             return Err(Error::Shape);
         }
+        finite(gradients.bias)?;
         finite(input)?;
         finite(dy)?;
         finite(dx)?;
@@ -104,6 +112,9 @@ impl<'a> Factor<'a> {
                 .sum();
         }
         finite(scratch)?;
+        for (bias, dy) in gradients.bias.iter_mut().zip(dy) {
+            *bias += dy;
+        }
         for r in 0..self.rank {
             let mut dh = 0.0;
             for (o, d) in dy.iter().enumerate() {
@@ -117,7 +128,8 @@ impl<'a> Factor<'a> {
         }
         finite(dx)?;
         finite(gradients.left)?;
-        finite(gradients.right)
+        finite(gradients.right)?;
+        finite(gradients.bias)
     }
 }
 

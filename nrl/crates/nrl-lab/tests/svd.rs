@@ -4,7 +4,7 @@ use nrl_repr::factor::{Factor, FactorGradients, SvdBlock};
 use serde_json::Value;
 
 fn fixtures() -> Value {
-    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v3.json")).unwrap()
+    serde_json::from_str(include_str!("../../../tests/fixtures/f64-v4.json")).unwrap()
 }
 fn vector(value: &Value) -> Vec<f64> {
     serde_json::from_value(value.clone()).unwrap()
@@ -33,7 +33,8 @@ fn jacobi_singular_values_reconstruction_and_truncation_match_external_f64_oracl
                 &singular.iter().map(|s| s / scale).collect::<Vec<_>>(),
             )
             .unwrap();
-            let factor = Factor::new(inputs, outputs, rank, &result.left, &result.right).unwrap();
+            let factor =
+                Factor::new(inputs, outputs, rank, &result.left, &result.right, &[]).unwrap();
             let mut reconstructed = vec![0.0; weights.len()];
             factor.reconstruct(&mut reconstructed).unwrap();
             let residual: f64 = reconstructed
@@ -97,6 +98,7 @@ fn factor_backward_accumulates_and_explicit_buffer_shapes_are_checked() {
         2,
         &[1.0, 2.0, -1.0, 0.5, 0.0, 3.0],
         &[0.2, -0.1, 0.5, 0.4],
+        &[],
     )
     .unwrap();
     let x = [0.3, -0.7];
@@ -110,6 +112,7 @@ fn factor_backward_accumulates_and_explicit_buffer_shapes_are_checked() {
             &dy,
             &mut dx,
             &mut FactorGradients {
+                bias: &mut [],
                 left: &mut left,
                 right: &mut right,
             },
@@ -123,6 +126,7 @@ fn factor_backward_accumulates_and_explicit_buffer_shapes_are_checked() {
             &dy,
             &mut dx,
             &mut FactorGradients {
+                bias: &mut [],
                 left: &mut left,
                 right: &mut right,
             },
@@ -142,6 +146,7 @@ fn factor_backward_accumulates_and_explicit_buffer_shapes_are_checked() {
             &dy,
             &mut dx,
             &mut FactorGradients {
+                bias: &mut [],
                 left: &mut [],
                 right: &mut right
             },
@@ -149,10 +154,10 @@ fn factor_backward_accumulates_and_explicit_buffer_shapes_are_checked() {
         ),
         Err(Error::Shape)
     );
-    assert!(Factor::new(2, 3, 0, &[], &[]).is_err());
-    assert!(Factor::new(2, 3, 3, &[0.0; 9], &[0.0; 6]).is_err());
-    assert!(Factor::new(1, 1, 1, &[f64::NAN], &[1.0]).is_err());
-    assert!(Factor::new(1, 1, 1, &[f64::MAX], &[2.0])
+    assert!(Factor::new(2, 3, 0, &[], &[], &[]).is_err());
+    assert!(Factor::new(2, 3, 3, &[0.0; 9], &[0.0; 6], &[]).is_err());
+    assert!(Factor::new(1, 1, 1, &[f64::NAN], &[1.0], &[]).is_err());
+    assert!(Factor::new(1, 1, 1, &[f64::MAX], &[2.0], &[])
         .unwrap()
         .reconstruct(&mut [0.0])
         .is_err());
@@ -206,7 +211,7 @@ fn malformed_factor_artifacts_and_training_errors_leave_the_source_unchanged() {
     bad.selection = Some(nrl_lab::SelectionData {
         original_channels: 4,
         indices: vec![0, 1, 2, 3],
-        method: "weight-energy-f64/0".into(),
+        method: "weight-energy-f64/1".into(),
     });
     assert!(bad.validate().is_err());
     let before = artifact.forward(&input).unwrap();

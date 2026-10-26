@@ -38,8 +38,12 @@ pub fn scores(
         }
     } else {
         for (c, score) in output.iter_mut().enumerate() {
-            let g: f64 = source.gate[c * n..(c + 1) * n].iter().map(|v| v * v).sum();
-            let u: f64 = source.up[c * n..(c + 1) * n].iter().map(|v| v * v).sum();
+            let mut g: f64 = source.gate[c * n..(c + 1) * n].iter().map(|v| v * v).sum();
+            let mut u: f64 = source.up[c * n..(c + 1) * n].iter().map(|v| v * v).sum();
+            let bg = crate::bias::value(source.biases.gate, c);
+            let bu = crate::bias::value(source.biases.up, c);
+            g += bg * bg;
+            u += bu * bu;
             finite(&[g, u])?;
             *score = g * u;
         }
