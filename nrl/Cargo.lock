@@ -30,6 +30,7 @@ version = "0.1.0"
 dependencies = [
  "nrl-core",
  "nrl-repr",
+ "nrl-runtime",
  "serde",
  "serde_json",
 ]
@@ -40,6 +41,14 @@ version = "0.1.0"
 dependencies = [
  "libm",
  "nrl-core",
+]
+
+[[package]]
+name = "nrl-runtime"
+version = "0.1.0"
+dependencies = [
+ "nrl-core",
+ "nrl-repr",
 ]
 
 [[package]]

@@ -5,6 +5,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 cargo test --manifest-path nrl/Cargo.toml --locked
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target aarch64-unknown-none-softfloat
+cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-runtime --target x86_64-unknown-none
+cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-runtime --target aarch64-unknown-none-softfloat
 nrl_check_dir=$(mktemp -d "${TMPDIR:-/tmp}/nrl-check.XXXXXX")
 trap 'rm -rf -- "$nrl_check_dir"' EXIT
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- demo nrl/tests/fixtures/f64-v5.json "$nrl_check_dir/demo"
@@ -49,3 +51,5 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- search
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- recover-plan "$nrl_check_dir/decoder" "$nrl_check_dir/manual-plan/model" nrl/tests/fixtures/local-v0/corpus.json nrl/tests/fixtures/study-v0/profile.json "$nrl_check_dir/recovery"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-recovery "$nrl_check_dir/decoder" "$nrl_check_dir/recovery"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- replay-recovery "$nrl_check_dir/decoder" "$nrl_check_dir/recovery" "$nrl_check_dir/recovery-replay"
+
+cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-budgeted-model "$nrl_check_dir/model-base" nrl/tests/fixtures/model-v0/input.json nrl/tests/fixtures/runtime-v0/policy.json "$nrl_check_dir/runtime-report.json"
