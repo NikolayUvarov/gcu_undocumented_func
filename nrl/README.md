@@ -232,3 +232,7 @@ Lookup, mean pooling, shared projection and L2 normalization now have an analyti
 ## Complete supported-model QSL binding (900-NRL-0023)
 
 QSL overlays can now bind to the exact supported Tinyllamas decoder, run the complete model, and export a standalone package containing unchanged weights/tokenizer plus all replacements and provenance. The original QSL writer/loader and independent PyTorch full logits/tokens check four transformed layers. This narrow base-fingerprint policy is explicit; Hugging Face/Qwen architectures and the external HF standalone format remain unsupported. [Binding, overlay, export and commands](specs/qsl-complete-model-v0.md).
+
+## Larger licensed study (900-NRL-0024)
+
+A frozen 48-story TinyStories prefix corpus (24/12/12), eight representation plans and paired refreshed AdamW/SGD recovery extend the miniature experiment. Data, selection method, licence, source revision and checksums are explicit. The runner saves validation measurements, independent held-out reports and a dense fallback without using test metrics for selection. [Data boundaries, licence and repeatable commands](specs/expanded-study-v0.md).

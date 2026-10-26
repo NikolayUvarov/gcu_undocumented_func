@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the initial NRL host profile and build the portable libraries, never an OS image.
 set -euo pipefail
+case "${1:-}" in ""|--expanded) ;; *) echo "usage: check.sh [--expanded]" >&2; exit 2 ;; esac
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 cargo test --manifest-path nrl/Cargo.toml --locked
 cargo build --manifest-path nrl/Cargo.toml --locked --release -p nrl-repr --target x86_64-unknown-none
@@ -80,3 +81,7 @@ cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- check-
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- run-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay" 'Once upon a time' "$nrl_check_dir/qsl-decoder-probe.json"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- export-qsl-decoder "$nrl_check_dir/decoder" "$nrl_check_dir/qsl-decoder-overlay" "$nrl_check_dir/qsl-decoder-standalone"
 cargo run --manifest-path nrl/Cargo.toml --locked --release -p nrl-lab -- probe-decoder "$nrl_check_dir/qsl-decoder-standalone" 'Once upon a time' "$nrl_check_dir/qsl-standalone-probe.json"
+
+if [[ "${1:-}" == "--expanded" ]]; then
+    python3 nrl/tools/run_expanded_study.py --executable nrl/target/release/nrl-lab --output "$nrl_check_dir/expanded"
+fi
