@@ -9,6 +9,7 @@
 # USER: who builds (default: the user who ran sudo). TREE: a clone whose rust-toolchain.toml is installed for USER
 # (default: the clone this script is in, if it is in one).
 set -euo pipefail
+export LC_ALL=C   # apt's and the tools' output is parsed: a localized one ("Кандидат:") would read as no candidate
 
 PACKAGES=(
     build-essential pkg-config ca-certificates curl git python3 openssl iproute2   # building, fetching, the netbench tap
