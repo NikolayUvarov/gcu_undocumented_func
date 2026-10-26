@@ -7,6 +7,11 @@ repository = "https://github.com/NikolayUvarov/gcu_undocumented_func"
 
 # Signed application packages (750-UPD-0019): one check of a package's MANIFEST and MANIFEST.SIG, for the Effector
 # gateway and the loader. No libmind, so `cargo test` runs it on the host.
+[features]
+# `verify` with a heap; `verify_prefixed` needs none (the loader, 750-KRN-0169).
+default = ["alloc"]
+alloc = []
+
 [dependencies]
 ed25519-dalek = { version = "2", default-features = false }
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] } # no SHA-NI: the targets have no SSE in their ABI

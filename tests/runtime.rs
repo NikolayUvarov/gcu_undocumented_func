@@ -379,19 +379,20 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
         SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
         SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
-        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS];
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS];
     let mut seen = std::collections::BTreeSet::new();
     for slot in named {
         assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_DYNAMIC, ABI_VERSION),
-        (30, 31, 32, 33, 34, 35, 36, 37, 38, 19));
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_DYNAMIC, ABI_VERSION),
+        (30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 20));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_COMMANDS), "the shell's own command endpoint is no program's");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_APPS), "the gateway's scope of data/apps/ is no program's (750-KRN-0169)");
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));
     assert!(CAP_SLOTS - SLOT_DYNAMIC >= 64, "dynamic slots left in the initial capability space");

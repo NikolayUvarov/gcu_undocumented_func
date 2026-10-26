@@ -10,7 +10,7 @@
 - the update zone of `vfs_server` ([351-UPD-0008](351-UPD-0008-update-zone-in-vfs.done));
 - a network grant;
 - restarting the machine through `init`;
-- the firmware variable privilege (`SLOT_FIRMWARE`, [351-KRN-0027](351-KRN-0027-uefi-variables.done)), for `BootNext` and `BootOrder` ([351-UPD-0010](../issues/351-UPD-0010-updating-the-bootloader.md)).
+- the firmware variable privilege (`SLOT_FIRMWARE`, [351-KRN-0027](351-KRN-0027-uefi-variables.done)), for `BootNext` and `BootOrder` ([351-UPD-0010](351-UPD-0010-updating-the-bootloader.done)).
 
 ## Plan
 

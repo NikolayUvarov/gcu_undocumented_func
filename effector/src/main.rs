@@ -188,6 +188,7 @@ struct Agent {
     reconnect_ms: usize,
     body: Vec<u8>,
     activation_noted: bool,
+    activated: bool, // the last poll said the server's owner activated this agent
     telemetry_at: usize,
     last: Option<telemetry::Counters>,
     telemetry_said: Option<u16>,
@@ -467,6 +468,7 @@ impl Agent {
             Some(200) => match self.answer(|v| wire::commands(v).map(|c| (c.count, c.activation_required, c.list.map(|d| d.map(|d| (String::from(d.command.id), String::from(d.command.agent_id), String::from(d.command.action), String::from(d.command.program), String::from(d.command.payload), d.command.expires_unix, String::from(d.initiator), String::from(d.reason))))))) {
                 Ok((count, activation, list)) => {
                     if activation && !self.activation_noted { mind::println!("EFFECTOR: THE SERVER WAITS FOR THE OWNER TO ACTIVATE THIS AGENT"); self.activation_noted = true; }
+                    self.activated = !activation;
                     took_command = count > 0;
                     for (id, agent_id, action, program, payload, expires_unix, initiator, reason) in list.iter().take(count).flatten() {
                         let command = session::Command { id, agent_id, action, program, payload, expires_unix: *expires_unix };
@@ -870,7 +872,7 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
         None => fail(format_args!("CANNOT READ {}", conf)),
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
-    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false,
+    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
@@ -933,6 +935,10 @@ fn main(_info: &'static BootInfo) {
             Ok(Some(attempt)) => {
                 let outcome = agent.heartbeat(session.stopping(), session.waiting());
                 let _ = session.heartbeat_done(attempt, outcome, now() as u64, jitter());
+                // The agent's mark on the screen follows this report (750-EFF-0015).
+                if mind::dev::cap_info(SLOT_GATEWAY).0 == CAP_KIND_ENDPOINT {
+                    let _ = gateway::connection(GATEWAY, agent.connection.is_some() && outcome == Outcome::Accepted, agent.activated && !session.stopping());
+                }
             }
             Ok(None) => {}
             Err(e) => fail(format_args!("HEARTBEAT SCHEDULE: {:?}", e)),

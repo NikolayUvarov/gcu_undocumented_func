@@ -34,7 +34,7 @@ MC-11.9 keeps access to key material apart from the right to ask for a signature
 ## Acceptance criteria
 
 - keys.md exists in English and Russian.
-- Each step names its command and its test from [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) to [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md).
+- Each step names its command and its test from [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done) to [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md).
 - The profile lines are updated.
 - The document has been checked against MC-9.4 to 9.6 and MC-11.9, clause by clause.
 

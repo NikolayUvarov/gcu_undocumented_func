@@ -1,6 +1,6 @@
-# 000-KRN-0104 — `CAP_REVOKE` bounded as MC-5.4 asks, and the profile says how
+# 000-KRN-0104 — `CAP_REVOKE` bounded as MC-5.4 asks, and the profile says how — done
 
-**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** open · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.5, MC-3.6, MC-5.4, MC-12.3
+**Type:** kernel · **Owner:** kernel session · **Priority:** P2 · **Status:** done (2026-10-25) · **Blocked by:** — · **Main task:** — · **Constitution:** MC-3.5, MC-3.6, MC-5.4, MC-12.3
 
 ## Problem
 
@@ -41,3 +41,18 @@ From the critique of 2026-10-14 ([issues-critica-done/01](../issues-critica-done
 ## Related
 
 000-KRN-0105 (the profile's interim line), [CapRevokeMove.tla](../docs/assurance/CapRevokeMove.tla), issue 171 (capability tables from memory).
+
+## Resolution
+
+Landed in round 34 (`main` 1c90f553, the gate on 1c90f553 green: every group of `scripts/ci_local.sh --list`), with ABI 20.
+
+- **Only the subtree** (`kernel/src/scheduler/tree.rs`): an index of the derivation tree. Each node with a parent or a child has an entry with its parent, depth, place, children and the tasks that mapped through it, kept where nodes are made, moved and dropped. Ghosts are entries too. Its size is set by the live entries at the reaper's pass, so the kernel heap returns to where it was.
+- **In steps** (`kernel/src/scheduler.rs`): `CAP_REVOKE` visits only the nodes it removes, at most 256 a step (`REVOKE_STEP`); between steps the CPU lets go of the lock and takes its interrupts. The call returns after the last step and after every CPU left a removed mapping, with the steps and the longest step (`ipc::revoke_measured`).
+- **The refusal:** until then a mint, copy or transfer of anything under the root is refused with `ERR_REVOKING`; a copy more than `DERIVE_DEPTH_MAX` (64) derivations from its root is refused with `ERR_LIMIT` (`common/abi.rs`, docs/api).
+- **The criteria:**
+  - *kbench:* the rows `revoke 10`, `100`, `1000` and `10000 nodes` over four tasks, on x86 and aarch64 (`tools` and `bench` suites). The time grows with the nodes removed, with the other tasks' slots the same in every row.
+  - *The step bound:* the `smp` suite (`revocation_steps_check`) checks that 10 000 nodes take at least 40 steps as the kernel counts them, while another task's 10 ms sleeps end on time. A step's time is printed, not checked: under QEMU the host can preempt a step (one aarch64 run's longest step took 4.3 ms).
+  - *The refusal, in the code:* the `isolation` suite (`revocation_refusal_check`, key `R`): a child's mints from under a revocation of 3001 nodes are refused while it runs, on four CPUs.
+  - *The refusal, in the model:* `CapRevokeMove` revokes in steps (`BeginRevoke`, `RevokeStep`, `EndRevoke`) with the invariants `NoGrowth` and `Completion`. It is checked with three tasks and one revoking (12,167,313 states) and with two tasks revoking at once (`CapRevokeMove_revokers.cfg`). `CapRevokeMove_unrefused.cfg`, without the refusals, must fail `NoGrowth` (`scripts/model_check.sh`). A model check within stated bounds, not a proof of the code (MC-12.2).
+  - *The profile:* the MC-3.4–3.6 and MC-5.1–5.5 rows state the bound in nodes, with the QEMU figures of 2026-10-25 and their configuration (MC-12.1).
+- **Not done here:** a step bounded in time rather than in nodes; measurements on a machine. The index is on the kernel heap and not charged to a task.

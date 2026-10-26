@@ -31,9 +31,12 @@ def test_release_files():
                 b"file init.elf 40 dd 0 0\nfile LICENSES/LICENSE-MIT 5 ee 0 0\nfile voice/model.bin 6 ff 0 0\n"
                 b"file EFI/BOOT/BOOTX64.EFI 7 ab 0 0\nfile app.elf 8 cd 0 0\nfile app2.elf 8 cd 0 0\n")
     files = lu.release_files(manifest, "x86_64", 7)
-    # The boot files first, then the applications (351-KRN-0151), a shared blob once; no licence, model or bootloader.
-    assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "blobs/cc", "blobs/cd", "releases/7/x86_64/MANIFEST",
+    # The boot files first, the loader (351-UPD-0010), then the applications (351-KRN-0151), a shared blob once; no
+    # licence or model.
+    assert files == ["blobs/aa", "blobs/bb", "blobs/dd", "blobs/ab", "blobs/cc", "blobs/cd", "releases/7/x86_64/MANIFEST",
                      "releases/7/x86_64/MANIFEST.SIG"], files
+    # Another processor's loader is not this one's.
+    assert "blobs/ab" not in lu.release_files(manifest, "aarch64", 7)
 
 
 def test_follow():

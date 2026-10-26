@@ -264,6 +264,12 @@ impl Policy {
     pub fn deliver(&self) -> Option<&str> { self.deliver.as_ref().map(|r| r.as_str()) }
     pub fn agent(&self) -> bool { self.agent }
     pub fn max_bytes(&self) -> u64 { self.max_bytes }
+    /// Whether the agent may change the machine, not only read it (its red mark, 750-EFF-0015): a service action, a
+    /// delivery, packages, an update beyond its check, a reboot or test scripts.
+    pub fn may_change(&self) -> bool {
+        self.agent && (self.services_len > 0 || self.deliver.is_some() || self.packages || matches!(self.update, Update::Fetch | Update::Apply)
+            || self.reboot || self.test.is_some())
+    }
     /// The keys trusted for an application's packages: those named for it and those for every name.
     pub fn keys_for<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a [u8; 32]> + 'a {
         self.keys[..self.keys_len].iter().filter(move |k| k.name().map_or(true, |n| n == name)).map(|k| &k.key)

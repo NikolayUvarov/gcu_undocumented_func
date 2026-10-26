@@ -1747,7 +1747,8 @@ def speak_check(vm):
 # kbench's rows (176-KRN-0062), by group; `check` and `bench` follow the same table.
 KBENCH_ROWS = {"syscall": ["uptime (empty call)", "monotonic clock read", "task alive?"],
                "ipc": ["call and reply", "… with a lent page"],
-               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop"],
+               "caps": ["mint and drop", "badged mint and drop", "mint and revoke", "endpoint create+drop",
+                        "revoke 10 nodes", "revoke 100 nodes", "revoke 1000 nodes", "revoke 10000 nodes"],
                "memory": ["a page: take and free", "1 MiB take+touch+free"],
                "timer": ["sleep 1 ms", "sleep 10 ms"],
                "process": ["start (the loader)", "start to running", "exit to gone"]}
@@ -2606,6 +2607,35 @@ def smp_suite(vm):
         vm.serial()
     kept, idle = ("register", "WFI") if vm.arch == "aarch64" else ("SIMD", "HLT")
     print(f"PASS: {vm.cpus} online CPUs, concurrent pinned tasks, {kept} preservation, supervisor reserve under load, remote kill, all CPUs {idle}", flush=True)
+    revocation_steps_check(vm)
+
+
+def revocation_steps_check(vm):
+    """000-KRN-0104: kbench revokes subtrees of 10 to 10 000 nodes over four tasks while memtest sleeps 10 ms at a time.
+    The walk visits only the nodes it removes, at most 256 in a step with the lock let go between steps: 10 000 nodes take
+    at least 40 steps, as the kernel counts them, and the sleeps still end on time. A step's time is printed, not checked:
+    under QEMU a host thread can be preempted in the middle of one. With more than one CPU: the bench suite's kbench run
+    measures the rows on one."""
+    if vm.cpus < 2:
+        return
+    sleeper = int(re.search(r"STARTED PID=(\d+)", vm.command("run memtest naps 0 &"))[1])
+    vm.send("kbench caps --quick\n")
+    output = vm.expect("MIND> ", timeout=600, after="kbench caps --quick\n")
+    rows = bench_rows(output, KBENCH_ROWS["caps"])
+    require(output, f"kbench: {len(KBENCH_ROWS['caps'])} measurements, 0 failed")
+    notes = {int(n): (int(s), int(us)) for n, s, us in re.findall(r"revoke (\d+) nodes over 4 tasks: (\d+) steps, the longest (\d+) µs under the lock", output)}
+    assert set(notes) == {10, 100, 1000, 10_000}, output[-3000:]
+    steps, longest = notes[10_000]
+    whole = rows["revoke 10000 nodes"][0]
+    assert notes[10][0] == 1 and steps >= 10_000 // 256, (notes, whole)
+    time.sleep(1.5)
+    nap = max(int(n) for n in re.findall(r"NAPS \d+ LONGEST (\d+) MS", vm.program_logs(sleeper, "LONGEST", tries=40)))
+    require(vm.command(f"kill {sleeper}"), f"KILLED PID={sleeper}")
+    assert nap < 1000, f"a 10 ms sleep took {nap} ms while kbench revoked"
+    per = {n: rows[f"revoke {n} nodes"][0] for n in (10, 100, 1000, 10_000)}
+    print(f"PASS: revocation in steps (000-KRN-0104): {', '.join(f'{n} nodes {ns / 1000:.0f} µs' for n, ns in per.items())}; "
+          f"10 000 nodes in {steps} steps, the longest {longest} µs under the lock; the longest 10 ms sleep meanwhile {nap} ms "
+          f"({vm.cpus} CPUs, QEMU, not a machine's figure)", flush=True)
 
 
 def workers_check(vm):
@@ -2761,10 +2791,30 @@ def isolation_suite(vm):
         assert re.search(fr"FAULT PID={pid} CPU=\d+ VECTOR=13 ", faults), faults
     else:
         require(output, "SGDT ALLOWED")
+    revoking = revocation_refusal_check(vm)
     vm.command("kill 1")
     assert heap_used(vm) == baseline, "fault teardown leaked task/page-table resources"
     require(vm.command("run app &"), "NAME=app BACKGROUND")
-    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+    print(f"PASS: CPL3/IOPL0; kernel read/write, RX code, NX stack, CLI/I/O, UD2, guard/bad stack; syscall pointers; capability checks and endpoint badges; a revoked lease leaves zeros of the borrower's own, never a fault; {revoking}; fault containment and reclaim; kernel protection {' '.join(names)}", flush=True)
+
+
+def revocation_refusal_check(vm):
+    """000-KRN-0104: app2's child mints from its copy of an endpoint while app2 revokes the endpoint's 3001 children in
+    steps: with more than one CPU some of those mints are refused with ERR_REVOKING while the walk runs, and once the
+    child's copy is gone a mint finds nothing. With one CPU the child runs only between the call's ends."""
+    vm.send("run app2\n")
+    pid = int(re.search(r"STARTED PID=(\d+) NAME=app2", vm.expect("RING3 IOPL0 READY"))[1])
+    vm.send("R\n")
+    output = vm.expect(f"PID={pid} EXITED. SHELL RESUMED.", timeout=60)
+    done = re.search(r"REVOKED (\d+) IN (\d+) STEPS; THE CHILD MADE (\d+) MINTS AND WAS REFUSED (\d+) WHILE THE WALK RAN", output)
+    assert done, output[-2000:]
+    removed, steps, made, refused = map(int, done.groups())
+    # 3002 when the walk began while the child held a copy it had just made and not yet dropped.
+    assert removed in (3001, 3002) and steps >= 3001 // 256 and made > 0 and (vm.cpus == 1 or refused > 0), done[0]
+    faults = vm.command("faults")
+    assert f"FAULT PID={pid} " not in faults and f"FAULT PID={pid + 1} " not in faults, faults
+    time.sleep(.1); vm.collect(); vm.output = ""
+    return f"a revocation of {removed} in {steps} steps refused {refused} mints from under it while it ran"
 
 
 def protection_check(vm):
@@ -4479,6 +4529,7 @@ def modes_suite(args):
                 vm.close()
                 (Path(tempfile.gettempdir()) / f"mind-core-modes-{args.cpus}cpu.log").write_text(vm.log)
     modes_lifecycle_check(args)
+    installed_apps_check(args)
     if args.gateway_elf:
         gateway_stub_check(args)
         services_config_check(args)
@@ -4577,6 +4628,7 @@ def gateway_stub_check(args):
             stub("[GATEWAY-STUB] RESTART sysmon OK; STOP sysmon DENIED; RUN sysmon DENIED; RESTART logd DENIED; RESTART init DENIED; "
                  "RESTART effector_gw DENIED; STOP-TASK DENIED")
             stub("[GATEWAY-STUB] SCOPE START 1: KEPT OK, WRITE OK, RENAME OK, READ BACK OK, OUTSIDE REFUSED, RENAME OUT REFUSED")
+            stub("[GATEWAY-STUB] APPS SCOPE: WRITE OK, READ BACK OK, REMOVE OK, OUTSIDE REFUSED")  # 750-KRN-0169
             stub("[GATEWAY-STUB] REBOOT DENIED")  # the policy has no `reboot on` (750-KRN-0154)
             stub("[GATEWAY-STUB] LINK CONSOLE OFF")  # no link.conf (800-KRN-0155)
             refusals = vm.command("dmesg -s init", raw=True)
@@ -4661,24 +4713,90 @@ def gateway_stub_check(args):
     print("PASS: the Effector gateway's grants (750-KRN-0120, 0121, 0154): its lifecycle client restarts what the owner's policy "
           "names and nothing else, each refusal logged (MC-3.4); its scope of the delivery root writes, renames and reads back and "
           "refuses what climbs out; restarted, it gets a new scope that finds the first one's files, and the first one ends; "
+          "its scope of data/apps/ writes and reads back there and refuses a name outside, the owner's policy too (750-KRN-0169); "
           "its reboot is refused without `reboot on` and served with it, the machine coming back in the same mode; init "
           "answers whether the link's console is on, which needs `dev` in link.conf, and keeps the word when a mode is set (800-KRN-0155); "
           "the gateway lights the Effector agent's mark red, yellow and grey, and it goes 3 s after the last call (800-KRN-0156)", flush=True)
+
+
+def installed_apps_check(args):
+    """750-KRN-0169: packages of the public test key laid out under data/apps/ as the gateway will (750-UPD-0019), and
+    the owner's policy trusting that key for some names. The version `current` names runs, by its short path and its
+    versioned one; the loader refuses, logging why, a program with one byte changed, a MANIFEST changed after it was
+    signed, a name the policy has no key line for, one whose line names another application, a program that asks for
+    more than its file line says, and a version `current` does not name. The names are one letter and the program `m`:
+    the shell's `run` takes 16 bytes. Not shown: an install by the gateway."""
+    import app_package
+    arch = "aarch64" if args.arch == "aarch64" else "x86_64"
+    program = (ROOT / IMAGE / "memtest.elf").read_bytes()
+    public = sign_manifest.public_key(app_package.TEST_SEED)
+    # a: trusted, two versions; b: one byte changed; c: MANIFEST changed; d: no key line; e: the line names z; f: more requests.
+    lines = "".join(f"package-key {n} {public.hex()}\n" for n in ("a", "b", "c", "f", "z"))
+    extra = {"data/effector/policy": f"effector-policy 1\nagent off\n{lines}".encode()}
+    with tempfile.TemporaryDirectory(prefix="smoke-apps-", dir=ROOT / IMAGE) as temp:
+        def package(name, version, change=None):
+            where = Path(temp) / "packages" / name / str(version)
+            where.mkdir(parents=True)
+            (where / "m").write_bytes(program)
+            text = app_package.manifest(where, name, version, arch, 0, public)
+            if change == "requests":  # one request fewer on its line than the program makes, signed so
+                flags, memory = sign_manifest.requests(program)
+                line = f"{flags:08x} {memory}\n".encode()
+                assert flags & 0x20 and text.count(line) == 1, (flags, text)
+                text = text.replace(line, f"{flags & ~0x20:08x} {memory}\n".encode())
+            (where / "MANIFEST").write_bytes(text)
+            (where / "MANIFEST.SIG").write_bytes(sign_manifest.sign(app_package.TEST_SEED, app_package.PREFIX + text))
+            if change == "byte":
+                data = bytearray(program); data[-1] ^= 1
+                (where / "m").write_bytes(bytes(data))
+            if change == "manifest":  # its memory field, after the signature
+                (where / "MANIFEST").write_bytes(text.replace(b" 160\n", b" 161\n"))
+            for path in where.iterdir():
+                extra[f"data/apps/{name}/{version}/{path.name}"] = path.read_bytes()
+            extra[f"data/apps/{name}/current"] = f"{version}\n".encode()
+        package("a", 1); package("a", 2)
+        for name, change in (("b", "byte"), ("c", "manifest"), ("d", None), ("e", None), ("f", "requests")):
+            package(name, 1, change)
+        image, _, _ = raw_fat_image(Path(temp), extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False)
+        try:
+            for path in ("data/apps/a/m", "data/apps/a/2/m"):
+                started = re.search(r"STARTED PID=(\d+)", vm.command(f"run {path} naps 300 &"))
+                assert started, (path, vm.command("dmesg -s loader", raw=True)[-1500:])
+                require(vm.program_logs(int(started[1]), "NAPS", tries=60), "[MEMTEST] NAPS")
+            refusals = {"data/apps/a/1/m": "NOT THE CURRENT VERSION", "data/apps/b/m": "NOT AS ITS MANIFEST LISTS IT",
+                        "data/apps/c/m": "MANIFEST REFUSED (Signature)", "data/apps/d/m": "MANIFEST REFUSED (Untrusted)",
+                        "data/apps/e/m": "MANIFEST REFUSED (Untrusted)", "data/apps/f/m": "ASKS FOR MORE THAN ITS MANIFEST LINE"}
+            for path in refusals:
+                output = vm.command(f"run {path} naps 300 &")
+                assert "STARTED PID=" not in output, (path, output)
+            log = vm.command("dmesg -s loader", raw=True)
+            for path, why in refusals.items():
+                require(log, f"[LOADER] {path}: NOT RUN: {why}")
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-apps-{args.cpus}cpu.log").write_text(vm.log)
+    print("PASS: installed applications (750-KRN-0169): the version data/apps/<name>/current names runs under a key the "
+          "owner's policy trusts for its name; one byte of the program changed, its MANIFEST changed after signing, no key "
+          "line for the name, a line naming another application, more requests than its file line, another version: not "
+          "run, the loader's log saying why", flush=True)
 
 
 def services_config_check(args):
     """173-KRN-0035: data/services.txt written on the host turns tts and video_gw off and starts windows after sysmon; init
     logs the plan, the services it leaves off are prepared and `svc start` starts one; init.wit's boot-plan (asked by the
     gateway's stand-in, run in the development mode) reports it. A file that turns off logd, names an unknown service and
-    has a malformed line boots as without it, the log naming the three lines."""
-    def plan_of(vm):
+    has a malformed line boots as without it, the log naming the three lines. 173-KRN-0036: with S typed at the
+    bootloader the file is not read, every service starts and `configuration` says `ignored`."""
+    def plan_of(vm, source="READ"):
         for _ in range(90):
             out = vm.command("dmesg -s effector_gw", raw=True)
             if "[GATEWAY-STUB] PLAN END" in out:
                 break
             time.sleep(1)
         rows = re.findall(r"\[GATEWAY-STUB\] PLAN (\d+) ([\w#-]+) (ENABLED|DISABLED) (ESSENTIAL|CONFIGURABLE) AFTER '([\w#-]*)' OFF '([^']*)'", out)
-        assert rows and "[GATEWAY-STUB] PLAN END" in out, out[-2000:]
+        assert rows and f"[GATEWAY-STUB] PLAN END, CONFIGURATION {source}" in out, out[-2000:]
         return {name: (int(place), state, kind, after, off) for place, name, state, kind, after, off in rows}
 
     text = b"# 173-KRN-0035: no speakers, no camera\ndisable tts\ndisable video_gw\nafter windows sysmon\n"
@@ -4734,9 +4852,32 @@ def services_config_check(args):
         finally:
             vm.close()
             (Path(tempfile.gettempdir()) / f"mind-core-services-bad-{args.cpus}cpu.log").write_text(vm.log)
+    # 173-KRN-0036: the first file again, with S typed once the bootloader runs (Esc would also do on a keyboard).
+    text = b"# 173-KRN-0035: no speakers, no camera\ndisable tts\ndisable video_gw\nafter windows sysmon\n"
+    with tempfile.TemporaryDirectory(prefix="smoke-services-safe-", dir=ROOT / IMAGE) as temp:
+        extra = {"data/mode.conf": b"development\n", "data/services.txt": text}
+        image, _, _ = raw_fat_image(Path(temp), replace={"effector_gw.elf": args.gateway_elf}, extra=extra)
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, snapshot=False, prompt=False, extra=["-cpu", "max" if args.arch == "aarch64" else "qemu64,+rdrand"])
+        try:
+            vm.expect("MIND CORE BOOT: STARTED", timeout=120)
+            vm.send_bytes(b"s")
+            vm.expect("MIND CORE BOOT: SAFE START ASKED: init WILL IGNORE data/services.txt", timeout=60)
+            vm.expect("MIND> ", timeout=120)
+            log = vm.command("dmesg -s init", raw=True)
+            require(log, "[INIT] SAFE START ASKED AT THE BOOTLOADER: THE SERVICE CONFIGURATION IS IGNORED (data/services.txt NOT READ)")
+            assert "data/services.txt:" not in log and "WAITS FOR" not in log and "OFF BY data/services.txt" not in log, log[-3000:]
+            assert log.index("[INIT] STARTED windows PID") < log.index("[INIT] STARTED sysmon PID"), log[-3000:]
+            plan = plan_of(vm, "IGNORED")
+            assert all(p[1] == "ENABLED" and p[3] == "" and p[4] in ("", "no device", "no image", "no link.conf") for p in plan.values()), plan
+            assert {"tts", "video_gw", "windows", "sysmon"} <= set(vm.services()), vm.services()
+            assert "PANIC" not in vm.log, vm.log[-2000:]
+        finally:
+            vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-services-safe-{args.cpus}cpu.log").write_text(vm.log)
     print("PASS: data/services.txt (173-KRN-0035): tts and video_gw off and prepared, windows after sysmon, boot-plan reports "
           "it, and `svc start tts` starts one; a file that turns off logd, names an unknown service and has a malformed line "
-          "boots as without it, each line named in the log", flush=True)
+          "boots as without it, each line named in the log; with S typed at the bootloader the file is ignored, every service "
+          "starts in its order, and init says so (173-KRN-0036)", flush=True)
 
 
 def effector_grants_check(vm):
@@ -4765,7 +4906,9 @@ def effector_grants_check(vm):
     # 750-KRN-0158: the session's memory quota, room for its benchmark beside its heap.
     quota = re.search(r"QUOTA TASKS=\d+/\d+ ENDPOINTS=\d+/\d+ MEMORY=\d+/(\d+)", vm.command(f"stat {pids['effector']}", raw=True))
     assert quota and int(quota[1]) == 48 << 20, quota and quota[0]
-    assert set(gw) == {3, 5, 7, 10, 11, 12, 15} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert set(gw) == {3, 5, 7, 10, 11, 12, 15, 38} and gw[3] == (7, "vfs_server") and gw[5] == (5, "vfs_server"), gw
+    assert gw[38][1] == "vfs_server" and gw[38][0] > 7, gw  # SLOT_APPS: a writable scope of data/apps/ (750-KRN-0169)
+    require(vm.command("dmesg -s vfs_server", raw=True), ":/apps (WRITABLE)")
     assert gw[10][1] == "sysmon" and gw[12] == (1, "logd") and gw[15] == (2, "compositor"), gw  # BADGE_REMOTE_EFFECTOR (800-KRN-0156)
     # 750-KRN-0121: init's lifecycle client badged BADGE_NAMED; 750-KRN-0120: a writable scope of the policy's delivery root.
     assert gw[11] == (6, "init") and gw[7][1] == "vfs_server" and gw[7][0] > 7, gw
@@ -5643,30 +5786,34 @@ def updater_parser_check(vm, https):
     print("PASS: update: a check's channel parsed in a helper of its own that holds only its endpoint (stat caps), gone with the check", flush=True)
 
 
-def update_releases(temp, arch, changed=None):
+def update_releases(temp, arch, changed=None, minimum6=None):
     """The build as release 5 and the same files signed again with other build inputs as release 6, both published into
-    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6. Returns the
-    volumes, the server, release 5's channel, release 6's and that one with its signature changed, release 6's manifest,
-    its boot files (name, digest) and a channel maker."""
+    TEMP/server as the release tool lays a server out; application `changed`, if named, differs in release 6, and so does
+    the loader, so that slot B boots through its own (351-UPD-0010). Returns the volumes, the server, release 5's channel,
+    release 6's and that one with its signature changed, release 6's manifest, its boot files (name, digest) with the
+    loader's last, and a channel maker."""
     volume = temp / "release5"
     (volume / "EFI/BOOT").mkdir(parents=True)
     for name in [*(p.name for p in (ROOT / IMAGE).glob("*.elf")), BOOT_EFI]:
         shutil.copyfile(ROOT / IMAGE / name, volume / name)
-    sign_manifest.sign_volume(volume)
+    sign_manifest.sign_volume(volume, version=5)  # the version under the boot key (351-UPD-0024)
     newer = temp / "release6"
     shutil.copytree(volume, newer)
     if changed:
         with open(newer / changed, "ab") as elf:  # bytes past the ELF's segments: another file, loaded the same
             elf.write(b"release 6 of the update suite\0")
+    with open(newer / BOOT_EFI, "ab") as loader:  # bytes past the PE's sections: another file, loaded the same
+        loader.write(b"release 6's loader\0")
     commit, toolchain, locks = sign_manifest.build_inputs()
-    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks))
+    sign_manifest.sign_volume(newer, inputs=("release-6-of-the-update-suite", toolchain, locks), version=6)
     server = temp / "server"
     release_tool.publish(release_tool.stage(5, temp / "staged5", {arch: volume}), server)
     kept = (server / "channels/stable").read_bytes()
-    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server)
+    release_tool.publish(release_tool.stage(6, temp / "staged6", {arch: newer}), server, minimum=minimum6)
     good = (server / "channels/stable").read_bytes()
     manifest6 = (newer / "MANIFEST").read_bytes()
     boot_files = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == "kernel.elf" or name in boot_slots.BOOT_FILES]
+    boot_files += [(boot_slots.LOADERS[name], digest) for name, size, digest in release_tool.manifest_files(manifest6) if name == BOOT_EFI]
 
     def channel(version, minimum, expires):
         body = release_tool.channel_bytes("stable", version, minimum, expires, {arch: hashlib.sha256(manifest6).hexdigest()})
@@ -5683,14 +5830,16 @@ def update_suite(args):
     an older version, then version 6 with one boot file changed are each refused, with no boot record written; then
     version 6 as published, its largest boot file cut midway, is fetched into slot B (the cut resumed), checked, and
     booted on trial through init's restart. Past the kernel's deadline the updater confirms slot B on the disk. The
-    records then hold exactly the three writes of an update: the trial, the bootloader's count, the confirmation."""
+    records then hold exactly the four writes of an update: the trial, the bootloader's count, the confirmation, and
+    the version floor raised to release 6's minimum (351-UPD-0024)."""
     if not raw_tools() or not shutil.which("openssl"):
         print("SKIP: update suite needs mkfs.fat, fsck.fat, mtools and openssl", flush=True)
         return
     temp = Path(tempfile.mkdtemp(prefix="mind-update-"))
     arch = args.arch
-    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf")
-    largest = max(boot_files, key=lambda f: (newer / f[0]).stat().st_size)
+    # Release 6 raises the minimum to 6, as for a fix: once it is confirmed the floor is 6 (351-UPD-0024).
+    volume, newer, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch, changed="uptime.elf", minimum6=6)
+    largest = max(boot_files[:-1], key=lambda f: (newer / f[0]).stat().st_size)
     # 351-UPD-0023: the applications go into the slot with the boot files; those the volume holds as listed are copied.
     applications = [(name, digest) for name, size, digest in release_tool.manifest_files(manifest6)
                     if name.endswith(".elf") and "/" not in name and name != "kernel.elf" and name not in boot_slots.BOOT_FILES]
@@ -5702,7 +5851,8 @@ def update_suite(args):
     port = https.server_address[1]
     # The image: release 5 in slot A, confirmed, with its channel; the policy's flow and update.txt at the root.
     layout = temp / "layout"
-    boot_slots.layout(volume, layout)
+    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
     (layout / "netpolicy.txt").write_text(f"# the updater may reach the release server\nupdater 10.0.2.2 tcp {port} 3600 {64 << 20}\n")
     (layout / "update.txt").write_text(f"# the test release server (351-UPD-0007)\nsource https://10.0.2.2:{port}\npin {_spki_pin(certificates / 'server.pem')}\n"
@@ -5794,8 +5944,9 @@ def update_suite(args):
         print(f"TIME: the updater staged {len(fetched)} files; the slowest: {slowest}", flush=True)
         for line in re.findall(r"\[UPDATER\] [^\n]*ASKED FOR THE REST FROM BYTE [1-9][^\n]*", attempt):
             print(f"TIME: the resume: {line}", flush=True)
-        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
-                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+        # 351-UPD-0010: release 6's loader, another file, staged into slot B with it and started for it.
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
+                     "BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/, ON TRIAL", f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
         blobs = [r for r in https.requests if r[0] == f"/blobs/{largest[1]}"]
         assert blobs[-2:] == [(f"/blobs/{largest[1]}", None), (f"/blobs/{largest[1]}", f"bytes={cut}-")], blobs
@@ -5803,6 +5954,7 @@ def update_suite(args):
         # well before the kernel's deadline of 120 s (351-UPD-0021). Then it finds nothing newer.
         log = logged("[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT", 90)
         require(log, "[UPDATER] SLOT B ON TRIAL, VERSION 6")
+        require(log, "[UPDATER] VERSION FLOOR 1 RAISED TO 6")  # 351-UPD-0024
         # 109-KRN-0133: booted from slot B, where both slots hold a channel, both are read through one parser of its own.
         assert "PARSER: THE SHARED SERVICE" not in log, log
         # 351-UPD-0023 with 351-KRN-0151: the trial runs release 6's applications from slot B, its changed uptime too.
@@ -5816,7 +5968,7 @@ def update_suite(args):
         (Path(tempfile.gettempdir()) / f"mind-core-update-{args.cpus}cpu.log").write_text(vm.log)
     records = boot_slots.records(image.path)
     assert first[0]["sequence"] == 1 and first[1] is None, first
-    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 5, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 6}, records
     for name, digest in boot_files + applications:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
@@ -5827,7 +5979,19 @@ def update_suite(args):
     # own applications, the uptime release 6 changed among them (351-UPD-0023). The clock is 60 days on, past the expiry
     # of the channel kept there, with no network: the system runs on and says the channel expired (351-UPD-0025).
     assert hashlib.sha256(image.read("MIND/A/uptime.elf")).hexdigest() != changed
-    boot_slots.write_next(image, slot="A", confirmed=True)
+    # 351-UPD-0024: release 6 raised the minimum to 6, so the floor is 6 and a record that boots slot A's release 5 is
+    # refused: slot B boots instead.
+    assert boot_slots.floor_of(boot_slots.records(image.path)) == 6, boot_slots.records(image.path)
+    boot_slots.write_next(image, slot="A", fallback="B", confirmed=True)
+    vm = VM(args, str(image.path), raw=True, snapshot=False, prompt=False, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
+    try:
+        out = vm.expect("MIND CORE KERNEL: INIT STARTED", timeout=120).replace("\r", "")
+        for line in ("BOOT: VERSION FLOOR 6", "VERSION 5 BELOW THE FLOOR 6", "BOOT: SLOT B LOADED"):
+            require(out, line)
+    finally:
+        vm.close()
+    # The floor lowered by hand, as the recovery authority would (351-UPD-0030), for the checks of release 5 that follow.
+    boot_slots.write_next(image, slot="A", confirmed=True, floor=1)
     import datetime
     later = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
     vm = VM(args, str(image.path), raw=True, snapshot=False, rtc=later, ahci=arch == "x86_64", extra=[*cpu, "-nic", "none"])
@@ -5845,8 +6009,10 @@ def update_suite(args):
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: update: an expired channel, a bad signature, an older version and a changed boot file are refused with no "
           "boot record written; version 6 is fetched over HTTPS with a cut resumed, checked, booted on trial through init's "
-          "restart and confirmed on the disk by the updater as soon as init confirmed it; its applications are in slot B, "
-          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; booted back in "
+          "restart and slot B's own loader, release 6's, and confirmed on the disk by the updater as soon as init confirmed it; "
+          "its applications are in slot B, "
+          "the one it changed fetched and the others copied from slot A, and the trial runs them from there; release 6's minimum "
+          "raises the version floor to 6, and a record booting slot A's release 5 boots slot B instead; booted back in "
           "slot A, release 5 runs its own, and with the clock past its channel's expiry says so and runs on; the file system "
           "is consistent", flush=True)
 
@@ -5875,7 +6041,8 @@ def linkupdate_suite(args):
     arch = args.arch
     volume, _, server, kept, good, forged, manifest6, boot_files, channel = update_releases(temp, arch)
     layout = temp / "layout"
-    boot_slots.layout(volume, layout)
+    # It starts at its channel's minimum, as make_usb_image.py lays an image out (351-UPD-0024).
+    boot_slots.layout(volume, layout, floor=json.loads(kept.split(b"\n")[0])["minimum"])
     (layout / "MIND/A/CHANNEL").write_bytes(kept)
     (layout / "link.conf").write_text("baud=115200\n")
     (layout / "update.txt").write_text("# a release put through the link (351-KRN-0141)\nsource data/link/rel\nchannel stable\n"
@@ -5924,8 +6091,9 @@ def linkupdate_suite(args):
         out = vm.expect("MIND CORE KERNEL: THE TRIAL BOOT IS CONFIRMED", timeout=900, after="BOOT: SLOT B LOADED ON TRIAL")
         vm.send("\n")
         vm.expect("MIND> ", timeout=60)
-        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT",
-                     f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
+        # 351-UPD-0010: release 6's loader, another file, staged into slot B with it and started for it.
+        for line in ["MIND CORE KERNEL: REBOOT VIA", "SEQUENCE 2: SLOT B, NOT CONFIRMED, 3 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER",
+                     "BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/, ON TRIAL", f"BOOT: MANIFEST {hashlib.sha256(manifest6).hexdigest()[:16]}"]:
             require(out, line)
         # After the restart link serves again on the same line: the script's follower reads the new boot's log.
         require(link_update.follow(link, 120, say=lambda line: None, before=before), "[UPDATER] SLOT B CONFIRMED ON THE DISK: INIT CONFIRMED THE TRIAL BOOT")
@@ -5935,15 +6103,16 @@ def linkupdate_suite(args):
         vm.close()
         (Path(tempfile.gettempdir()) / f"mind-core-linkupdate-{args.cpus}cpu.log").write_text(vm.log)
     records = boot_slots.records(image.path)
-    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True}, records
+    assert boot_slots.newest(records)[1] == {"sequence": 4, "slot": "B", "fallback": "A", "tries": 0, "confirmed": True, "floor": 1}, records
     for name, digest in boot_files:
         assert hashlib.sha256(image.read(f"MIND/B/{name}")).hexdigest() == digest, name
     assert image.read("MIND/B/MANIFEST") == manifest6 and image.read("MIND/B/CHANNEL") == good
     boot_slots_check.fsck(image)
     shutil.rmtree(temp, ignore_errors=True)
     print("PASS: linkupdate: release 6 put into data/link/rel/ through the link; an expired channel and one with a changed "
-          "signature are refused with no boot record written; the channel as published is taken from that directory into slot B, booted "
-          "on trial through init's restart and confirmed on the disk; mindlink's log shows each step", flush=True)
+          "signature are refused with no boot record written; the channel as published is taken from that directory into slot B with "
+          "release 6's loader, booted on trial through init's restart and that loader, and confirmed on the disk; mindlink's log "
+          "shows each step", flush=True)
 
 
 def slot_applications_check(args):
@@ -7495,12 +7664,15 @@ def net_suite(args, disk):
                 report = vm.service_logs("init", "LEGACY DEVICES FOUND")
                 require(report, "[INIT] LEGACY VIRTIO DEVICE WITH ONLY THE LEGACY INTERFACE: " + ("FOUND 1" if mode == "LEGACY INTX" else "NOT FOUND"))
                 assert ("VIRTIO TRANSITIONAL DEVICES" in report) is False, report
-            require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 10.0.2.15/24")
+            # 000-NET-0044: a card without a lease names its mode, and the stack's and the driver's lines.
+            stack = vm.service_logs("netstack", "[NETSTACK] DHCP")
+            assert "[NETSTACK] DHCP 10.0.2.15/24" in stack, (mode, stack[-2000:], vm.service_logs("virtio_net")[-1500:])
             require(vm.command("ping 10.0.2.2"), "PING: 3 SENT, 3 RECEIVED")
             if mode == "MODERN MSI-X":
                 _msix_only(vm)
         finally:
             vm.close()
+            (Path(tempfile.gettempdir()) / f"mind-core-net-cards-{mode.split()[0].lower()}-{args.cpus}cpu.log").write_text(vm.log)
     # QEMU's default e1000 (on x86; named on virt, whose default card is VirtIO) has the same PCI class: it is not taken
     # for a VirtIO card; the stack reports no network.
     # x86: RDRAND for the Wi-Fi join below, as wlan refuses WPA2 without it (issue 103); aarch64's -cpu max has RNDR.
@@ -7878,6 +8050,8 @@ def effector_suite(args, disk):
         loaded = [b["load"] for b in list(server.beats) if "load" in b]
         assert loaded and loaded[-1]["cpu_cores"] >= 1 and loaded[-1]["load_percent"] >= 0, list(server.beats)[-1]
         assert any("load_percent=" in r["path"] for r in list(server.requests) if "/api/commands/poll" in r["path"]), "no load on a poll"
+        # The agent's mark on the screen (750-EFF-0015): red, as the policy delivers files and restarts sysmon.
+        require(vm.command("dmesg -s compositor", raw=True), "[COMPOSITOR] REMOTE MARK Effector: Changing")
         gaps = [b - a for a, b in zip(beats, beats[1:])]
         assert len(beats) >= 12 and max(gaps) < 5.0, (len(beats), max(gaps, default=None))
         print(f"PASS: the Effector agent as init starts it in the development mode, against the fixture: {len(beats)} heartbeats, "
@@ -7922,8 +8096,18 @@ def effector_suite(args, disk):
             time.sleep(1)
         require(vm.command("dmesg -s tls", raw=True), "REFUSED: NOT A PINNED KEY OR CERTIFICATE")
         assert not any(r["path"].endswith("/api/heartbeat") for r in list(rogue.requests)), list(rogue.requests)
+        # Not connected now: the gateway keeps the mark lit, grey (750-EFF-0015).
+        deadline = time.monotonic() + 30
+        while not vm.command("dmesg -s compositor", raw=True).rstrip().endswith("[COMPOSITOR] REMOTE MARK Effector: Unconnected") and time.monotonic() < deadline:
+            marks = [l for l in vm.command("dmesg -s compositor", raw=True).splitlines() if "REMOTE MARK Effector" in l]
+            if marks and marks[-1].endswith("Unconnected"):
+                break
+            time.sleep(1)
+        marks = [l for l in vm.command("dmesg -s compositor", raw=True).splitlines() if "REMOTE MARK Effector" in l]
+        assert marks and marks[-1].endswith("Effector: Unconnected"), marks[-4:]
         assert token not in vm.log and token not in session(), "the token reached the log"
-        print("PASS: a server with another certificate refused before any request; the token never in the log", flush=True)
+        print("PASS: a server with another certificate refused before any request, the agent's mark grey meanwhile; the token "
+              "never in the log", flush=True)
     finally:
         stop_watch.set()
         vm.close()
@@ -10488,6 +10672,12 @@ def boot_suite(args, disk):
             vm.close()
     with tempfile.TemporaryDirectory(prefix="mind-slots-") as temp:
         boot_slots_check.run(boot_image, temp, disk, "x86", args.updater_elf)
+    # 351-UPD-0010: a slot's own loader, started by the loader at EFI/BOOT/.
+    with tempfile.TemporaryDirectory(prefix="mind-loaders-") as temp:
+        boot_slots_check.own_loaders(boot_image, temp, disk, "x86")
+    # 351-UPD-0024: the version floor.
+    with tempfile.TemporaryDirectory(prefix="mind-floor-") as temp:
+        boot_slots_check.version_floor(boot_image, temp, disk, "x86")
     # REBOOT resets the machine and the firmware boots the image again: on q35 through the FADT reset register; the
     # i440fx `pc` machine has a revision 1 FADT without one, so the kernel falls back to port 0xCF9.
     for machine, method in [((), "PORT 0xCF9"), (("-machine", "q35"), "ACPI RESET REGISTER")]:

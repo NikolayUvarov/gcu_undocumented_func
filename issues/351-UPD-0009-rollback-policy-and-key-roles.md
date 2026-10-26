@@ -1,6 +1,6 @@
 # 351-UPD-0009 — Rollback policy, metadata expiry, key roles and rotation
 
-**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open (split into 351-UPD-0024 to 0031) · **Blocked by:** its parts, [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
+**Type:** update (policy) · **Owner:** `UPD` track · **Priority:** P2 · **Status:** open (split into 351-UPD-0024 to 0031) · **Blocked by:** its parts, [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done), [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done), [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md), [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md), [351-UPD-0028](351-UPD-0028-a-short-lived-timestamp-key.md), [351-UPD-0029](351-UPD-0029-the-boot-key-under-the-root.md), [351-UPD-0030](351-UPD-0030-a-separate-recovery-authority.md), [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) · **Main task:** [351](351-self-update.md) · **Constitution:** MC-9.4, MC-9.5, MC-9.6, MC-11.9
 
 Numbered by the kernel session at the maintainer's request (2026-10-08), before the track had an owner.
 
@@ -11,7 +11,7 @@ A signature alone lets an attacker replay an old, signed, vulnerable release (MC
 ## Plan
 
 - **The minimum version.**
-  - The highest confirmed version and the channel's minimum are kept in the boot records, and the bootloader refuses a slot below them.
+  - The channel's minimum is kept in the boot records, and the bootloader refuses a slot below it. The highest confirmed version is not a floor: a rollback to an earlier release at or above the minimum stays allowed (the maintainer, 2026-10-25).
   - The profile states the limit plainly: without a hardware counter (TPM NV index, authenticated UEFI variable), someone with the disk can roll back.
   - The hardware floor is [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md), with Secure Boot under our own keys, [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md).
 - **Expiry.** Channel metadata past its expiry is refused. The policy for a device that has been offline longer than the expiry is defined: it keeps running, and refuses to update until fresh metadata comes.
@@ -47,7 +47,7 @@ What is done already (351-UPD-0007, 351-UPD-0013):
 
 | Part | Task | This task's criterion it meets |
 |---|---|---|
-| A version floor in the boot records, kept by the bootloader | [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) | a replayed older release |
+| A version floor in the boot records, kept by the bootloader | [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done) | a replayed older release |
 | Expiry of metadata and the offline policy, written down and shown | [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done) | expired metadata |
 | Root keys with a threshold, and a signed key file | [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | a key change not signed by the root threshold |
 | Key rotation and revocation | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | a release signed by a revoked key |

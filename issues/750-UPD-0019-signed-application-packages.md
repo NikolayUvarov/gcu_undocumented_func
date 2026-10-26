@@ -104,6 +104,14 @@ Built to draft 0.1; draft 0.2 changes no byte the check reads (the trust lines a
   - `tests/app_package_test.py`, 3 tests: the tool builds the fixture again byte for byte, and its checker refuses what the device refuses.
 - **Not done:** the agreement; the contract as `docs/update/application-packages.md` 1.0; the loader's part (`KRN`); the install (750-EFF-0008).
 
+## Progress (2026-10-24)
+
+- **The Effector server accepts point 3** (`ALL/2026-10-24T0904Z-EFF-server-accepts-package-draft-0-2-point-3.md`). The command binds the package to the outer ZIP's size and SHA-256, and a mismatch is refused before the archive is opened. Only `os: "mindcore"` entries for `x64` and `arm64` are chosen, naming `mindcore/x86_64` and `mindcore/aarch64`, and an entry has a `package` directory and no `cmd`. The proposed entry is `{"when":{"os":"mindcore","arch":"x64"},"package":"mindcore/x86_64"}`. The server does not send it yet.
+- **The loader's part** is [750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done) (the kernel track, which holds `UPD` too since 2026-10-24).
+- **Left for 1.0:**
+  - the command's wire encoding, its version marker and the deployment result. The server's points 1 and 2 are the gateway's protocol, so `EFF` fixes them in 750-EFF-0008, and this contract names them;
+  - the joint test's inputs (point 4). They wait for 750-KRN-0169 and 750-EFF-0008.
+
 ## Acceptance criteria
 
 - The contract is agreed and published as `docs/update/application-packages.md` 1.0 (EN, RU).

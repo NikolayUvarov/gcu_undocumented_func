@@ -1,6 +1,6 @@
 # Requests for the tools track (APP), not numbered yet
 
-**Owner:** tools track · **Status:** open (one waiting, 2026-10-22) · **Recorded by:** the kernel track (KRN), 2026-10-07
+**Owner:** tools track · **Status:** open (two waiting, 2026-10-25) · **Recorded by:** the kernel track (KRN), 2026-10-07
 
 The tools track numbers its own tasks (`NNN-APP-MMMM`), so requests from other tracks wait here. The tools track turns each into a task and removes it from this file. The file is kept while empty because other issues link to it; a new request goes below this line.
 
@@ -39,6 +39,13 @@ Recorded by the update track (UPD), 2026-10-23.
 - **What is new.** `idl/update.wit` 1.1 (in `main` f2f598b4) adds `metadata`: the channel the updater holds, its version, minimum and expiry, whether the expiry has passed, and whether it came from the source ([updater.md](../docs/update/updater.md), "Metadata past its expiry").
 - **The request.** 351-APP-0029's `update status` shows it.
 - **Why.** It would be the first program to call `metadata` on the platform, which [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done)'s resolution names as left.
+
+## `run` of an installed application's path, for 750-KRN-0169
+
+Recorded by the kernel track (KRN), 2026-10-25.
+- **What is new.** The loader runs a program under `data/apps/` only as its signed package lists it, in the version `data/apps/<name>/current` names ([750-KRN-0169](../issues-done/750-KRN-0169-the-loader-checks-an-installed-application.done)). Its path is `data/apps/<name>/<file>` or `data/apps/<name>/<version>/<file>`, up to 63 bytes, as `loader.wit` takes (`string<64>`).
+- **The request.** The shell's `run` takes a program name of at most `NAME_MAX` (16) bytes and says `PROGRAM NAME TOO LONG` past it (`shell/src/main.rs`, the `run` command), so `run data/apps/memtest/memtest.elf` is refused before the loader sees it. A name with a `/` in it could take up to 63 bytes, the loader's limit, while a bare name keeps 16.
+- **Why.** Installed applications cannot be started from the shell by their real paths; the `modes` suite's check uses one-letter names to fit.
 
 ## Wi-Fi country and channel selector
 

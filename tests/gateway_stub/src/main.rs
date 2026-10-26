@@ -2,7 +2,8 @@
 #![no_main]
 //! Test-only stand-in for the Effector gateway (QEMU `modes` suite, 750-KRN-0120, 0121, 0154): reports this boot's
 //! plan (173-KRN-0035), what init's lifecycle client badged BADGE_NAMED lets it do under the owner's policy, what its
-//! writable scope of the delivery root lets it write, at each start, and whether a reboot it asks is served. Never
+//! writable scope of the delivery root lets it write, at each start, what its scope of data/apps/ lets it write
+//! (750-KRN-0169), and whether a reboot it asks is served. Never
 //! packaged into the normal OS; the real gateway is 750-EFF-0007.
 use mind::abi::*;
 use mind::idl::{display, init, vfs};
@@ -64,6 +65,25 @@ fn scope() {
         ok(kept), ok(written), ok(renamed), ok(read), if outside { "REFUSED" } else { "ALLOWED" }, if out { "REFUSED" } else { "ALLOWED" });
 }
 
+// The scope of data/apps/ (750-KRN-0169): a file written there and read back, then removed; one outside refused, the
+// owner's policy beside it too.
+fn apps() {
+    let files = Endpoint(SLOT_APPS);
+    let Ok(Ok(root)) = vfs::root(files, "") else { mind::println!("[GATEWAY-STUB] NO APPS SCOPE"); return };
+    let written = write(files, root, "stub-probe", b"installed");
+    let mut back = [0u8; 16];
+    let read = match vfs::open(files, root, "stub-probe", 0) {
+        Ok(Ok(file)) => { let n = vfs::read(files, file, 0, 16, &mut back).ok().and_then(|r| r.ok()).unwrap_or(0); let _ = vfs::close(files, file); &back[..n] == b"installed" }
+        _ => false,
+    };
+    let removed = matches!(vfs::remove(files, root, "stub-probe"), Ok(Ok(())));
+    let outside = !write(files, root, "../escape.txt", b"x") && !write(files, root, "../effector/policy", b"x");
+    let _ = vfs::close(files, root);
+    let ok = |b: bool| if b { "OK" } else { "FAILED" };
+    mind::println!("[GATEWAY-STUB] APPS SCOPE: WRITE {}, READ BACK {}, REMOVE {}, OUTSIDE {}", ok(written), ok(read), ok(removed),
+        if outside { "REFUSED" } else { "ALLOWED" });
+}
+
 // A file made or replaced at `path` with `data`, flushed.
 fn write(files: Endpoint, root: u32, path: &str, data: &[u8]) -> bool {
     let Ok(Ok(file)) = vfs::open(files, root, path, mind::fs::MODE_CREATE | mind::fs::MODE_WRITE | mind::fs::MODE_TRUNCATE) else { return false };
@@ -84,7 +104,8 @@ fn remote_mark() {
     mind::println!("[GATEWAY-STUB] REMOTE MARK STOPPED");
 }
 
-// This boot's plan (173-KRN-0035): a line a service, in the order init tried them; any client of init may ask.
+// This boot's plan (173-KRN-0035): a line a service, in the order init tried them, then where it came from; any
+// client of init may ask.
 fn boot_plan() {
     match init::boot_plan(Endpoint(SLOT_LIFECYCLE)) {
         Ok(Ok(plan)) => for s in plan.as_slice() {
@@ -93,7 +114,12 @@ fn boot_plan() {
         },
         _ => mind::println!("[GATEWAY-STUB] PLAN FAILED"),
     }
-    mind::println!("[GATEWAY-STUB] PLAN END");
+    // Where the plan came from (173-KRN-0036).
+    let source = match init::configuration(Endpoint(SLOT_LIFECYCLE)) {
+        Ok(Ok(init::Configuration::Absent)) => "ABSENT", Ok(Ok(init::Configuration::Read)) => "READ",
+        Ok(Ok(init::Configuration::Ignored)) => "IGNORED", Ok(Ok(init::Configuration::Unreadable)) => "UNREADABLE", _ => "FAILED",
+    };
+    mind::println!("[GATEWAY-STUB] PLAN END, CONFIGURATION {}", source);
 }
 
 mind::entry!(main);
@@ -104,6 +130,7 @@ fn main(_info: &'static BootInfo) {
     mind::println!("[GATEWAY-STUB] LINK CONSOLE {}", console);
     lifecycle();
     scope();
+    apps();
     reboot();
     remote_mark();
     loop { mind::time::sleep(1000); }

@@ -72,7 +72,7 @@ Nothing of it exists (survey of 2026-10-08):
 | Task | Track | What |
 |---|---|---|
 | [351-UPD-0009](351-UPD-0009-rollback-policy-and-key-roles.md) | `UPD` | Minimum version, expiry, key roles, rotation and revocation, the compromise protocol (MC-9.4, 9.6): split into the eight tasks below |
-| [351-UPD-0024](351-UPD-0024-version-floor-in-the-boot-records.md) | `UPD`, with `KRN`/`PRT` | The manifest signs its version; boot records (format 2) keep the floor; the bootloader refuses a slot below it (MC-9.4) |
+| [351-UPD-0024](../issues-done/351-UPD-0024-version-floor-in-the-boot-records.done) | `UPD`, with `KRN`/`PRT` | The manifest signs its version; boot records (format 2) keep the floor; the bootloader refuses a slot below it (MC-9.4) |
 | [351-UPD-0025](../issues-done/351-UPD-0025-expiry-and-the-offline-policy.done) | `UPD` | A device past its metadata's expiry keeps running and refuses to update; `status` and `linkupdate` show it (MC-9.4) |
 | [351-UPD-0026](351-UPD-0026-root-keys-and-a-signed-key-file.md) | `UPD` | A key file naming each role's keys, signed by a root threshold built into the updater and the bootloader (MC-9.5, 9.6) |
 | [351-UPD-0027](351-UPD-0027-key-rotation-and-revocation.md) | `UPD` | The highest key-file version kept; root rotation by both thresholds; a revoked key's channels refused (MC-9.5, 9.6) |
@@ -82,7 +82,7 @@ Nothing of it exists (survey of 2026-10-08):
 | [351-UPD-0031](351-UPD-0031-key-lifecycle-and-compromise-protocol.md) | `UPD` | `docs/update/keys.md` (EN, RU): each role's lifecycle and the compromise protocol (MC-9.6, 11.9) |
 | [351-UPD-0011](351-UPD-0011-version-floor-in-the-tpm.md) | `UPD` with `PRT` | A version floor in a TPM 2.0 counter, read and raised by the bootloader through UEFI's TCG2 protocol: rollback stopped also for someone with the disk |
 | [351-UPD-0012](351-UPD-0012-secure-boot-with-our-own-keys.md) | `UPD` with `PRT` | Secure Boot with our own keys and old bootloaders revoked, so the floor cannot be bypassed by booting other code |
-| [351-UPD-0010](351-UPD-0010-updating-the-bootloader.md) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure (two UEFI boot entries, `BootNext`) |
+| [351-UPD-0010](../issues-done/351-UPD-0010-updating-the-bootloader.done) (done) | `UPD` with `PRT` | Updating `BOOTX64.EFI` itself without a single point of failure: each slot carries its loader, which the one at `EFI/BOOT/` checks and starts (not `BootNext`, which a Mac does not follow) |
 | [351-ASR-0006](351-ASR-0006-update-threat-model.md) | `ASR` (open) | The update threat model (rollback, freeze, mix-and-match, endless data, slow retrieval) and fuzzing of the metadata parser |
 | [351-STO-0006](351-STO-0006-releases-pinned-in-the-store.md): staging and pins | `STO` | Once the block store has a durable medium: releases staged as objects, with the last-known-good pinned against collection (MC-9.3) |
 
@@ -96,4 +96,4 @@ Apple Silicon: the same slots work behind U-Boot's UEFI. A first stage started b
 
 ## Related
 
-[350](350-signed-boot-images.md), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.
+[350](350-signed-boot-images.md), [110](110-our-own-web-server.md) (our own web server, to serve releases), [211-KRN-0012](../issues-done/211-KRN-0012-boot-volume-identity.done) (the boot volume the slots live on), Constitution Article 9 and Appendix B.5, ROADMAP track C.

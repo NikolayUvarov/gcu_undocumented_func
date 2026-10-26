@@ -10,14 +10,22 @@ On a raw disk image with both slots and the bootloader of the build:
 - with the updater's test stand-in on the volume, init's client of vfs_server badged for the update zone fills the slot
   that did not boot and writes a boot record whole in place, and nothing else (351-KRN-0022);
 - `refused_trial`: slot B on trial with a kernel that refuses the loader's handoff restarts the machine, and slot A
-  boots (351-KRN-0167).
+  boots (351-KRN-0167);
+- `own_loaders` (351-UPD-0010): slot B holding a loader other than the one at EFI/BOOT/ boots through it, on trial and
+  once confirmed; one reset while it runs, one that cannot load its slot and one that is not as the manifest lists it
+  leave the machine on slot A; a slot without a loader of its own boots as before. In `run` both slots hold the
+  build's loader, the same file, and none is started;
+- `version_floor` (351-UPD-0024): a slot whose signed manifest names a version below the newer record's floor is not
+  booted, the other slot boots instead; one at the floor boots on trial; records of format 1 are not read.
 
 `boot(image, until)` boots the image and returns the console output up to `until`; the volume has no keystore
 (`quiet_volume`). Init's confirmation is 351-KRN-0014: the host writes the confirmed record here, as the updater will.
 """
 import shutil
+import struct
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -66,7 +74,8 @@ def run(boot, temp, volume, label, updater=None):
         out = boot(image.path, until).replace("\r", "")
         for line in (f"BOOT: SLOT {slot} LOADED" + (" ON TRIAL" if trial else "\n"), *lines):
             assert line in out, (line, out[-3000:])
-        assert STARTED in out and "BOOT ERROR" not in out, out[-3000:]
+        # The slot's own loader is the same file as the one at EFI/BOOT/: not started (351-UPD-0010).
+        assert STARTED in out and "BOOT ERROR" not in out and "OWN LOADER" not in out, out[-3000:]
         return out
 
     def newer():
@@ -75,7 +84,7 @@ def run(boot, temp, volume, label, updater=None):
     # A trial of B with one try: it runs on trial, its try counted on the other record first; confirmed, it stays.
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
     booted("B", f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", trial=True)
-    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
+    assert newer()[1] == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
     boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
     zone = "[VFS] UPDATE ZONE: MIND/A AND THE BOOT RECORDS, FOR THE UPDATER'S BADGE"
     booted("B", "SLOT B, CONFIRMED", zone, until=zone)
@@ -95,7 +104,7 @@ def run(boot, temp, volume, label, updater=None):
     image.write("MIND/B/rtc.elf", rtc[:-1] + bytes([rtc[-1] ^ 1]))
     staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
     booted("A", "BOOT: SLOT B: rtc.elf: not as the manifest says")
-    assert newer()[1] == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False}, newer()
+    assert newer()[1] == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
     image.write("MIND/B/rtc.elf", rtc)
     print(f"PASS ({label}): slot B with a damaged service is not loaded; slot A boots and B has no tries left", flush=True)
 
@@ -158,3 +167,140 @@ def update_zone(boot, temp, volume, label, updater):
     print(f"PASS ({label}): the updater's client of vfs_server fills the slot that did not boot and writes a boot record "
           "whole in place; the running slot, EFI, a new file in MIND, part of a record and a record made afresh are "
           "refused", flush=True)
+
+
+def own_loaders(boot, temp, volume, label):
+    """351-UPD-0010: slot B holds the build's loader with bytes past its sections, another file that loads the same,
+    listed in B's manifest; slot A and EFI/BOOT/ hold the build's. data/pause.txt is there, 0 but for the reset."""
+    temp = Path(temp)
+    source = quiet_volume(volume, temp / "volume")
+    (source / "data").mkdir(exist_ok=True)
+    (source / "data/pause.txt").write_text("0\n")
+    sign_manifest.sign_volume(source)
+    [(path, name)] = boot_slots.loaders(source)
+    other = temp / "other"
+    shutil.copytree(source, other)
+    with open(other / path, "ab") as loader:
+        loader.write(b"slot B's own loader, another file\0")
+    sign_manifest.sign_volume(other)
+    slots = boot_slots.layout(source, temp / "slots", both=True)
+    for file in boot_slots.boot_set(other):
+        shutil.copyfile(other / file, slots / "MIND/B" / file)
+    shutil.copyfile(other / path, slots / "MIND/B" / name)
+    image = boot_slots.Image.create(temp / "loaders.img", slots)
+    for tree in (source, other, slots):
+        shutil.rmtree(tree)
+    started = f"BOOT: SLOT B'S OWN LOADER, STARTED BY THE LOADER AT EFI/BOOT/"
+
+    def booted(*lines, until=STARTED):
+        out = boot(image.path, until).replace("\r", "")
+        at = 0
+        for line in lines:
+            at = out.find(line, at)
+            assert at >= 0, (line, out[-3000:])
+        assert "BOOT ERROR" not in out and "BOOT PANIC" not in out, out[-3000:]
+        return out
+
+    def newer():
+        return boot_slots.newest(boot_slots.records(image.path))[1]
+
+    # On trial: its try counted once, by the loader at EFI/BOOT/, before the slot's own loader starts; confirmed, the same.
+    staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    booted(f"SEQUENCE {staged['sequence']}: SLOT B, NOT CONFIRMED, 1 TRIES LEFT", "BOOT: SLOT B: STARTING ITS OWN LOADER", started + ", ON TRIAL",
+           "BOOT: SLOT B LOADED ON TRIAL", STARTED)
+    assert newer() == {"sequence": staged["sequence"] + 1, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    boot_slots.write_next(image, slot="B", fallback="A", confirmed=True)
+    booted("SLOT B, CONFIRMED", "BOOT: SLOT B: STARTING ITS OWN LOADER", started + "\n", "BOOT: SLOT B LOADED\n", STARTED)
+    print(f"PASS ({label}): slot B holding a loader of its own boots through it on trial, its try counted once before, "
+          "and through it again once confirmed", flush=True)
+
+    # Reset while the slot's own loader waits (its pause for a photo): its try was spent, the next boot is slot A's.
+    image.write("data/pause.txt", b"2\n")
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    booted("BOOT: SLOT B: STARTING ITS OWN LOADER", started + ", ON TRIAL", "S FOR A PHOTO OF THESE LINES", until="S FOR A PHOTO OF THESE LINES")
+    image.write("data/pause.txt", b"0\n")
+    out = booted("BOOT: SLOT B NOT CONFIRMED, NO TRIES LEFT", "BOOT: SLOT A LOADED\n", STARTED)
+    assert "OWN LOADER" not in out, out[-3000:]
+    print(f"PASS ({label}): a reset while slot B's own loader runs leaves its trial spent; the next boot is slot A's", flush=True)
+
+    # Its own loader cannot load its slot (a service damaged): it returns, and slot A boots at once, B with no tries.
+    rtc = image.read("MIND/B/rtc.elf")
+    image.write("MIND/B/rtc.elf", rtc[:-1] + bytes([rtc[-1] ^ 1]))
+    staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
+    booted(started + ", ON TRIAL", "BOOT: SLOT B: rtc.elf: not as the manifest says", "; BACK TO THE LOADER AT EFI/BOOT/",
+           f"BOOT: SLOT B: {path}: it returned: it could not load its slot", "BOOT: SLOT A LOADED\n", STARTED)
+    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    image.write("MIND/B/rtc.elf", rtc)
+    print(f"PASS ({label}): slot B's own loader that cannot load its slot returns; slot A boots at once and B has no "
+          "tries left", flush=True)
+
+    # Not as B's manifest lists it: never started; slot A boots, B with no tries.
+    loader = image.read(f"MIND/B/{name}")
+    image.write(f"MIND/B/{name}", loader[:-1] + bytes([loader[-1] ^ 1]))
+    staged = boot_slots.write_next(image, slot="B", fallback="A", tries=3)
+    out = booted(f"BOOT: SLOT B: {path}: not as the manifest says", "BOOT: SLOT A LOADED\n", STARTED)
+    assert "OWN LOADER" not in out, out[-3000:]
+    assert newer() == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 0}, newer()
+    print(f"PASS ({label}): a slot's loader that is not as its manifest lists it is never started; slot A boots", flush=True)
+
+    # A slot without a loader of its own, as one staged before: the loader at EFI/BOOT/ loads it, as before.
+    image.remove(f"MIND/B/{name}")
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1)
+    out = booted("BOOT: SLOT B LOADED ON TRIAL", STARTED)
+    assert "OWN LOADER" not in out, out[-3000:]
+    fsck(image)
+    print(f"PASS ({label}): a slot without a loader of its own boots through the loader at EFI/BOOT/, as before; the "
+          "file system is consistent", flush=True)
+
+
+def version_floor(boot, temp, volume, label):
+    """351-UPD-0024: slot A holds release 6, slot B release 5, each manifest signed with its version."""
+    temp = Path(temp)
+    source = quiet_volume(volume, temp / "volume")
+    sign_manifest.sign_volume(source, version=6)
+    other = temp / "other"
+    shutil.copytree(source, other)
+    sign_manifest.sign_volume(other, version=5)
+    slots = boot_slots.layout(source, temp / "slots", both=True)
+    for file in boot_slots.boot_set(other):
+        shutil.copyfile(other / file, slots / "MIND/B" / file)
+    image = boot_slots.Image.create(temp / "floor.img", slots)
+    for tree in (source, other, slots):
+        shutil.rmtree(tree)
+
+    def booted(*lines):
+        out = boot(image.path, STARTED).replace("\r", "")
+        at = 0
+        for line in lines:
+            at = out.find(line, at)
+            assert at >= 0, (line, out[-3000:])
+        assert "BOOT ERROR" not in out, out[-3000:]
+        return out
+
+    # Under floor 6 slot B's release 5 is refused before anything of it is loaded; slot A boots, B has no tries left.
+    staged = boot_slots.write_next(image, slot="B", fallback="A", tries=1, floor=6)
+    booted("BOOT: VERSION FLOOR 6", "BOOT: MIND\\B\\: VERSION 5 BELOW THE FLOOR 6", "BOOT: SLOT B: MANIFEST: below the version floor",
+           "BOOT: SLOT A LOADED\n", STARTED)
+    found = boot_slots.newest(boot_slots.records(image.path))[1]
+    assert found == {"sequence": staged["sequence"] + 2, "slot": "B", "fallback": "A", "tries": 0, "confirmed": False, "floor": 6}, found
+    print(f"PASS ({label}): a slot whose manifest names a version below the floor is not booted; the other slot boots", flush=True)
+    # At the floor it boots: a rollback to a release at or above the minimum stays possible.
+    boot_slots.write_next(image, slot="B", fallback="A", tries=1, floor=5)
+    out = booted("BOOT: VERSION FLOOR 5", "BOOT: SLOT B LOADED ON TRIAL", STARTED)
+    assert "BELOW THE FLOOR" not in out, out[-3000:]
+    print(f"PASS ({label}): a slot at the floor boots: a rollback to a release at or above the minimum stays possible", flush=True)
+    # Records of format 1, before the floor, are not read (the maintainer, 2026-10-25): each is named, and the disk boots
+    # as one without a valid record, slot A first. Nothing reads or converts them; such a disk is written again.
+    for name in boot_slots.FILES:
+        image.write(name, format1(1, "B"))
+    booted("BOOT: RECORD MIND\\BOOT0 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN", "BOOT: RECORD MIND\\BOOT1 OF FORMAT 1, NOT READ: WRITE THE DISK AGAIN",
+           "BOOT: NO VALID BOOT RECORD; TRYING SLOT A, THEN B", "BOOT: SLOT A LOADED\n", STARTED)
+    assert boot_slots.records(image.path) == [None, None]
+    fsck(image)
+    print(f"PASS ({label}): records of format 1 are not read, each named; the disk boots as one without a valid record", flush=True)
+
+
+def format1(sequence, slot):
+    """A record of format 1, before the version floor (351-UPD-0024): made here only to show it is refused."""
+    data = struct.pack("<8sIQ4B", boot_slots.MAGIC, 1, sequence, ord(slot), 0, 0, 1).ljust(boot_slots.RECORD - 4, b"\0")
+    return data + struct.pack("<I", zlib.crc32(data))
