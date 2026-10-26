@@ -6,6 +6,54 @@ use std::time::Instant;
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
+    if args.len() == 7 && args[1] == "compare-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let config = nrl_lab::research::adaptation::Config::load(Path::new(&args[5]))?;
+        let report = nrl_lab::research::adaptation::compare(
+            &teacher,
+            &initial,
+            corpus,
+            config,
+            Path::new(&args[6]),
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?
+        );
+        return Ok(());
+    }
+    if args.len() == 8 && args[1] == "train-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let initial = nrl_lab::decoder::load(Path::new(&args[3]))?;
+        let corpus = nrl_lab::research::Corpus::load(Path::new(&args[4]))?;
+        let config = nrl_lab::research::adaptation::Config::load(Path::new(&args[5]))?;
+        let mut state =
+            nrl_lab::research::adaptation::State::start(&teacher, &initial, corpus, config)?;
+        state.advance(
+            &teacher,
+            args[7].parse().map_err(|_| "invalid continuation step")?,
+        )?;
+        state.save(&teacher, Path::new(&args[6]))?;
+        return Ok(());
+    }
+    if args.len() == 6 && args[1] == "resume-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let mut state = nrl_lab::research::adaptation::State::load(&teacher, Path::new(&args[3]))?;
+        state.advance(
+            &teacher,
+            args[5].parse().map_err(|_| "invalid continuation step")?,
+        )?;
+        state.save(&teacher, Path::new(&args[4]))?;
+        return Ok(());
+    }
+    if args.len() == 5 && args[1] == "export-adaptation" {
+        let teacher = nrl_lab::decoder::load(Path::new(&args[2]))?;
+        let state = nrl_lab::research::adaptation::State::load(&teacher, Path::new(&args[3]))?;
+        state.export(&teacher)?.save(Path::new(&args[4]))?;
+        return Ok(());
+    }
     if args.len() == 4 && args[1] == "import-embedding" {
         let d = nrl_lab::embedding::Definition::load(Path::new(&args[2]))?;
         let e = nrl_lab::embedding::Encoder::from_definition(d)?;

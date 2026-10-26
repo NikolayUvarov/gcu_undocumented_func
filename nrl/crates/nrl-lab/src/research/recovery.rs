@@ -95,7 +95,7 @@ impl Pairs {
         }
         Ok(())
     }
-    fn batch(&self, layer: usize) -> Result<(Vec<f64>, Vec<f64>)> {
+    pub(crate) fn batch(&self, layer: usize) -> Result<(Vec<f64>, Vec<f64>)> {
         self.validate()?;
         let docs = self.layers.get(&layer).ok_or("missing recovery layer")?;
         Ok((
