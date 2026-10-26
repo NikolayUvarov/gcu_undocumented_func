@@ -77,10 +77,13 @@ if [[ $VERSION_ID == 22.04 ]]; then
         grep -qE "^\[GNUPG:\] VALIDSIG .*$QEMU_SIGNER" <<<"$verified" ||
             { echo "!!! qemu-$QEMU_VERSION.tar.xz is not signed by $QEMU_SIGNER: not built" >&2; exit 3; }
         tar -xJf "$work/qemu.tar.xz" -C "$work"
-        (cd "$work/qemu-$QEMU_VERSION" &&
-         ./configure --prefix="$QEMU_PREFIX" --target-list=x86_64-softmmu,aarch64-softmmu --enable-slirp --enable-fdt=system \
-                     --disable-docs --disable-werror >/dev/null &&
-         make -j"$(nproc)" >/dev/null && make install >/dev/null)
+        # Out of the source tree; nothing fetched beyond the verified tarball (a missing library stops configure).
+        mkdir "$work/build"
+        (cd "$work/build" &&
+         "$work/qemu-$QEMU_VERSION/configure" --prefix="$QEMU_PREFIX" --target-list=x86_64-softmmu,aarch64-softmmu \
+             --enable-slirp --enable-fdt=system --disable-download --disable-docs --disable-werror >/dev/null &&
+         make -j"$(nproc)" >/dev/null && make install >/dev/null) ||
+            { echo "!!! QEMU $QEMU_VERSION did not build (the messages above); nothing was installed in $QEMU_PREFIX" >&2; exit 4; }
         echo ">>> QEMU $QEMU_VERSION installed in $QEMU_PREFIX"
     fi
     for binary in "$QEMU_PREFIX"/bin/*; do ln -sfn "$binary" "/usr/local/bin/$(basename "$binary")"; done
