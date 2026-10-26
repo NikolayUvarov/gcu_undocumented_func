@@ -460,6 +460,36 @@ fn dataset_leakage_versions_shapes_sources_and_work_limits_are_refused_before_tr
     assert!(Run::parse(br#"{"schema":"nrl.regression-run/100"}"#)
         .unwrap_err()
         .contains("unsupported"));
+    let (_, dataset, mut config) = toy();
+    config.learning_rate = f64::MAX;
+    let mut sources = vec![dataset.source.clone()];
+    let mut placeholder = config.output_source.clone();
+    placeholder.identifier.push('#');
+    placeholder.identifier.push_str(&"0".repeat(64));
+    placeholder.sha256 = Some("0".repeat(64));
+    sources.push(placeholder);
+    for i in 0..30 {
+        let mut source = dataset.source.clone();
+        source.identifier = format!("synthetic://source-{i}");
+        sources.push(source);
+    }
+    let crowded = Model::from_definition(Definition {
+        schema: "nrl.model-definition/0".into(),
+        descriptor: model.manifest().descriptor.clone(),
+        execution: model.manifest().execution.clone(),
+        sources,
+        objects: model
+            .manifest()
+            .objects
+            .keys()
+            .map(|k| (k.clone(), model.object(k).unwrap().clone()))
+            .collect(),
+    })
+    .unwrap();
+    let error = experiment::execute(&crowded, dataset, config)
+        .err()
+        .unwrap();
+    assert!(error.contains("source slot"), "{error}");
     let mut unknown = serde_json::to_value(data()).unwrap();
     unknown["unexpected"] = json!(true);
     assert!(Dataset::parse(&serde_json::to_vec(&unknown).unwrap()).is_err());
