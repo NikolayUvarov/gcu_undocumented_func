@@ -23,3 +23,7 @@ The Codex session works on `codex/NRL-lab`. [Workspace and repeat commands](../.
 
 - [262](../../issues/262-model-runtime-on-the-machines-full-hardware.md): the system's model service, in which NRL's runtime and artifacts run. NRL carries out 262's fine-tuning and spline stages.
 - [178](../../issues/178-models-on-every-accelerator.md): the accelerators (`KRN`, `DRV`).
+
+## Latest branch progress (2026-10-26)
+
+900-NRL-0005 adds the pruned control and shared f64 channel selection. The three block fixtures, 16 host tests and both portable builds passed ([report](../../nrl/reports/pruning-f64-2026-10-26.json)). Block schema 1 replaces schema 0; regenerate older prototype artifacts. NRL development continues without waiting for landing, as the maintainer instructed. Hermite/SVD and model work remain open.

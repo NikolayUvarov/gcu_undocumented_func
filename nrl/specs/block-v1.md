@@ -1,6 +1,6 @@
 # NRL block contract v1
 
-**Edition:** 1 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues/900-NRL-0005-pruning-and-shared-channel-selection.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 1 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
