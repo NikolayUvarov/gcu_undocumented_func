@@ -35,7 +35,7 @@ def main():
     calibration = torch.tensor([[1., 0, 0], [-1., 0, 0], [2., 0, 0]], dtype=torch.float64)
     indices = select_channels(source, 2, calibration).tolist()
     weight_indices = select_channels(source, 2, None).tolist()
-    source_artifact = {"schema": "nrl.block/1", "representation": "dense", "shape": [3, 4, 3],
+    source_artifact = {"schema": "nrl.block/2", "representation": "dense", "shape": [3, 4, 3],
                        "gate": source.gate_proj.weight.detach().flatten().tolist(),
                        "up": source.up_proj.weight.detach().flatten().tolist(),
                        "down": source.down_proj.weight.detach().flatten().tolist(), "spline": None, "selection": None}
@@ -43,7 +43,7 @@ def main():
     weight_scores = source.gate_proj.weight.detach().square().sum(1) * source.up_proj.weight.detach().square().sum(1) * energy
     calibrated_scores = source.features(calibration).detach().square().mean(0) * energy
     cases = []
-    for kind in ("dense", "spline-linear", "pruned"):
+    for kind in ("dense", "spline-linear", "pruned", "spline-cubic"):
         block = CompactGatedMLP(BlockSpec(kind, 3, 4, width=2 if kind == "pruned" else 4, knots=4)).double()
         with torch.no_grad():
             for index, layer in enumerate((block.gate_proj, block.up_proj, block.down_proj)):
@@ -53,7 +53,7 @@ def main():
                 else:
                     layer.weight.copy_(torch.arange(12, dtype=torch.float64).reshape(layer.weight.shape)
                                        / (13 + index * 3) - 0.4)
-            if kind == "spline-linear":
+            if kind.startswith("spline-"):
                 block.activation.low.fill_(-1.0)
                 block.activation.high.fill_(1.0)
                 block.activation.values.copy_(torch.tensor([
@@ -65,7 +65,7 @@ def main():
         output = block(x)
         loss = (output - target).square().mean()
         loss.backward()
-        artifact = {"schema": "nrl.block/1", "representation": kind, "shape": [3, block.spec.width, 3],
+        artifact = {"schema": "nrl.block/2", "representation": kind, "shape": [3, block.spec.width, 3],
                     "gate": block.gate_proj.weight.detach().flatten().tolist(),
                     "up": block.up_proj.weight.detach().flatten().tolist(),
                     "down": block.down_proj.weight.detach().flatten().tolist(), "spline": None,
@@ -73,7 +73,7 @@ def main():
         grads = {name: layer.weight.grad.flatten().tolist() for name, layer in
                  (("gate", block.gate_proj), ("up", block.up_proj), ("down", block.down_proj))}
         grads["values"] = []
-        if kind == "spline-linear":
+        if kind.startswith("spline-"):
             activation = block.activation
             artifact["spline"] = {"knots": 4, "low": activation.low.tolist(), "high": activation.high.tolist(),
                                   "values": activation.values.detach().flatten().tolist()}
@@ -97,13 +97,25 @@ def main():
                       [2.0, 1.0], [3.0, 2.0], [0.4, -0.3]], dtype=torch.float64, requires_grad=True)
     out = spline(x)
     out.sum().backward()
-    result = {"schema": "nrl.fixture/1", "archive_sha256":
+    cubic = ChannelSpline(2, 4, "cubic").double()
+    with torch.no_grad():
+        cubic.low.copy_(spline.low)
+        cubic.high.copy_(spline.high)
+        cubic.values.copy_(spline.values)
+    cx = x.detach().clone().requires_grad_(True)
+    cout = cubic(cx)
+    cout.sum().backward()
+    result = {"schema": "nrl.fixture/2", "archive_sha256":
               "5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25",
               "torch": torch.__version__, "seed": 42, "dtype": "f64", "cases": cases,
               "channel_selection": {"source": source_artifact, "input": calibration.flatten().tolist(),
                                     "weight_indices": weight_indices, "calibration_indices": indices,
                                     "weight_scores_f64": weight_scores.tolist(), "calibration_scores_f64": calibrated_scores.tolist(),
                                     "reference_ranking_dtype": "f32", "rust_ranking_dtype": "f64"},
+              "cubic": {"channels": 2, "knots": 4, "low": cubic.low.tolist(), "high": cubic.high.tolist(),
+                        "values": cubic.values.detach().flatten().tolist(), "input": cx.detach().flatten().tolist(),
+                        "output": cout.detach().flatten().tolist(), "input_gradient": cx.grad.flatten().tolist(),
+                        "values_gradient": cubic.values.grad.flatten().tolist()},
               "spline": {"channels": 2, "knots": 4, "low": spline.low.tolist(), "high": spline.high.tolist(),
                          "values": spline.values.detach().flatten().tolist(), "input": x.detach().flatten().tolist(),
                          "output": out.detach().flatten().tolist(), "input_gradient": x.grad.flatten().tolist(),

@@ -1,6 +1,6 @@
-# NRL block contract v1
+# NRL block contract v2
 
-**Edition:** 1 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
+**Edition:** 2 (2026-10-26) · **Tasks:** 900-NRL-0002, [900-NRL-0005](../../issues-done/900-NRL-0005-pruning-and-shared-channel-selection.done), [900-NRL-0006](../../issues/900-NRL-0006-cubic-hermite-block.md) · **Scope:** a small CPU float64 numerical path, not a model service or full-model format.
 
 ## Block semantics
 
@@ -12,7 +12,7 @@ A block has positive dimensions `input = n`, `channels = w`, `output = m`. Its t
 | up U | w × n | U[c*n+i] |
 | down D | m × w | D[o*w+c] |
 
-There are no biases in v1. On one input row x:
+There are no biases in v2. On one input row x:
 
 ```text
 z[c] = sum_i G[c,i] * x[i]
@@ -29,7 +29,7 @@ y[o] = sum_c D[o,c] * a[c] * u[c]
 
 ## Uniform linear splines
 
-Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v1. Let:
+Each channel has fixed finite `low < high`, a common integer knot count `k >= 2`, and `k` trainable finite values. Grids do not train in v2. Let:
 
 ```text
 u = (x-low)/(high-low) * (k-1)
@@ -43,7 +43,23 @@ The index clamps; t does not. Both tails extend the nearest segment linearly. At
 
 Coefficient derivatives are `1-t` and `t` for the selected adjacent coefficients, including tails. The stored coefficient index is `channel*k + j`. Grid span and scale must be finite and positive; nonfinite slopes or intermediate values are refused.
 
-**Separate future representations.** In 900 T03, `spline-cubic` means the reference's cubic Hermite interpolation with finite-difference slopes. Task 262 additionally describes B-spline edge functions. Those require a distinct representation ID, mathematical contract and tests; Hermite results do not discharge the B-spline requirement. Neither cubic form is implemented by this v1 path.
+## Cubic Hermite splines
+
+`spline-cubic` uses the same grid, interval and trainable values as the linear variant. For an interior point in interval j, define y0=v[j], y1=v[j+1], m0=(y1-v[j-1])/2 and m1=(v[j+2]-y0)/2. At the first interval use m0=y1-y0; at the last use m1=y1-y0. Then:
+
+```text
+H00 = 2*t³ - 3*t² + 1
+H10 = t³ - 2*t² + t
+H01 = -2*t³ + 3*t²
+H11 = t³ - t²
+s = H00*y0 + H10*m0 + H01*y1 + H11*m1
+```
+
+The slopes are in interval coordinates; the input derivative includes `(k-1)/(high-low)`. Coefficient derivatives include the dependence of both slopes on neighbouring trainable values, up to four distinct coefficients. The sample returns their indices and weights; repeated indices at endpoints accumulate. With two knots it reduces to a linear segment.
+
+For u < 0 or u > k-1, use the nearest **linear** segment and its linear coefficient/input derivatives. Do not evaluate an unused cubic polynomial in the tails. Values and first derivatives agree across all knots, including the transition to the tails. No monotonicity or absence of overshoot is promised.
+
+This is the reference's Hermite interpolation, not a B-spline. Task 262's B-spline edge functions need their own representation, contract and tests; these results do not discharge that requirement.
 
 ## Pruning and shared channel selection
 
@@ -64,7 +80,7 @@ Packing copies exactly the selected rows of G/U and columns of D, with no refit 
 
 `selection` records `original_channels`, an ascending, unique in-range `indices` array of length `w`, and one of the two method IDs above. It is a declared mapping, not cryptographic source identity or a full provenance manifest. The standalone block still stores all retained weights. Training preserves the mapping.
 
-**Transition:** v1 replaces the initial `nrl.block/0` reader because retained-channel semantics are now explicit. Version 0 is refused with its name; regenerate prototype artifacts from their source. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports record the old fixture and remain historical.
+**Transition:** schema 2 adds the cubic representation and replaces schemas 0 and 1. Older versions are refused with their names; regenerate prototype artifacts. No compatibility reader or automatic reinterpretation is supplied before the first release. Historical reports retain their original source commits and fixture hashes.
 
 ## Backward and one training step
 
@@ -93,17 +109,17 @@ The host training spike uses `mean((prediction-target)^2)` across every output o
 - After a low-level computation returns an error, output, gradient and scratch buffers may be partially written and must be discarded or reinitialized. It changes no weights. The host owns any transient allocations; this is not a tested native budget implementation.
 - No file, network, thread, OS clock or device access belongs to the numerical layer.
 
-## Data-only artifact `nrl.block/1`
+## Data-only artifact `nrl.block/2`
 
 The host artifact is a UTF-8 JSON object:
 
 | Field | Meaning |
 |---|---|
-| schema | Exactly `nrl.block/1`; any other version is refused with its name |
-| representation | Exactly `dense`, `pruned` or `spline-linear` |
+| schema | Exactly `nrl.block/2`; any other version is refused with its name |
+| representation | Exactly `dense`, `pruned`, `spline-linear` or `spline-cubic` |
 | shape | `[n,w,m]`, positive dimensions checked before indexing |
 | gate, up, down | Flat f64 arrays with the exact matrix lengths |
-| spline | For dense/pruned: null or absent. For spline-linear: the object below |
+| spline | For dense/pruned: null or absent. For either spline: the object below |
 | selection | Required for pruned, optional for spline, absent/null for dense; original_channels, ascending unique indices, method |
 | spline.knots | Integer k >= 2 |
 | spline.low, high | One fixed finite bound per channel |

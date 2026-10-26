@@ -7,6 +7,7 @@ pub mod pruning;
 
 #[derive(Clone, Copy)]
 pub struct Spline<'a> {
+    cubic: bool,
     channels: usize,
     knots: usize,
     low: &'a [f64],
@@ -20,6 +21,8 @@ pub struct Sample {
     pub derivative: f64,
     pub left: usize,
     pub fraction: f64,
+    pub indices: [usize; 4],
+    pub weights: [f64; 4],
 }
 
 impl<'a> Spline<'a> {
@@ -53,12 +56,25 @@ impl<'a> Spline<'a> {
             }
         }
         Ok(Self {
+            cubic: false,
             channels,
             knots,
             low,
             high,
             values,
         })
+    }
+
+    pub fn hermite(
+        channels: usize,
+        knots: usize,
+        low: &'a [f64],
+        high: &'a [f64],
+        values: &'a [f64],
+    ) -> Result<Self> {
+        let mut spline = Self::new(channels, knots, low, high, values)?;
+        spline.cubic = true;
+        Ok(spline)
     }
 
     pub fn sample(&self, channel: usize, x: f64) -> Result<Sample> {
@@ -74,14 +90,67 @@ impl<'a> Spline<'a> {
         let left = channel * self.knots + segment;
         let fraction = u - segment as f64;
         let delta = self.values[left + 1] - self.values[left];
-        let value = self.values[left] + delta * fraction;
-        let derivative = delta * scale;
+        let mut value = self.values[left] + delta * fraction;
+        let mut derivative = delta * scale;
+        let mut indices = [left, left + 1, left, left];
+        let mut weights = [1.0 - fraction, fraction, 0.0, 0.0];
+        if self.cubic && u >= 0.0 && u <= (self.knots - 1) as f64 {
+            let t = fraction;
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let h = [
+                2.0 * t3 - 3.0 * t2 + 1.0,
+                t3 - 2.0 * t2 + t,
+                -2.0 * t3 + 3.0 * t2,
+                t3 - t2,
+            ];
+            let dh = [
+                6.0 * t2 - 6.0 * t,
+                3.0 * t2 - 4.0 * t + 1.0,
+                -6.0 * t2 + 6.0 * t,
+                3.0 * t2 - 2.0 * t,
+            ];
+            let basis = |h: [f64; 4]| {
+                let mut b = [0.0, h[0], h[2], 0.0];
+                if segment == 0 {
+                    b[1] -= h[1];
+                    b[2] += h[1];
+                } else {
+                    b[0] -= h[1] * 0.5;
+                    b[2] += h[1] * 0.5;
+                }
+                if segment == self.knots - 2 {
+                    b[1] -= h[3];
+                    b[2] += h[3];
+                } else {
+                    b[1] -= h[3] * 0.5;
+                    b[3] += h[3] * 0.5;
+                }
+                b
+            };
+            indices = [
+                channel * self.knots + segment.saturating_sub(1),
+                left,
+                left + 1,
+                channel * self.knots + (segment + 2).min(self.knots - 1),
+            ];
+            weights = basis(h);
+            let derivatives = basis(dh);
+            value = (0..4).map(|i| weights[i] * self.values[indices[i]]).sum();
+            derivative = (0..4)
+                .map(|i| derivatives[i] * self.values[indices[i]])
+                .sum::<f64>()
+                * scale;
+        }
         finite(&[value, derivative])?;
+        finite(&weights)?;
         Ok(Sample {
             value,
             derivative,
             left,
             fraction,
+            indices,
+            weights,
         })
     }
     pub fn coefficients(&self) -> usize {
@@ -92,7 +161,7 @@ impl<'a> Spline<'a> {
 #[derive(Clone, Copy)]
 pub enum Activation<'a> {
     Silu,
-    Linear(Spline<'a>),
+    Spline(Spline<'a>),
 }
 
 pub fn silu(x: f64) -> (f64, f64) {
@@ -134,7 +203,7 @@ impl<'a> Block<'a> {
         {
             return Err(Error::Shape);
         }
-        if let Activation::Linear(spline) = activation {
+        if let Activation::Spline(spline) = activation {
             if spline.channels != shape.channels() {
                 return Err(Error::Shape);
             }
@@ -170,7 +239,7 @@ impl<'a> Block<'a> {
             scratch[w + c] = up;
             scratch[2 * w + c] = match self.activation {
                 Activation::Silu => silu(gate).0,
-                Activation::Linear(spline) => spline.sample(c, gate)?.value,
+                Activation::Spline(spline) => spline.sample(c, gate)?.value,
             };
         }
         finite(scratch)
@@ -203,7 +272,7 @@ impl<'a> Block<'a> {
         let w = self.shape.channels();
         let count = match self.activation {
             Activation::Silu => 0,
-            Activation::Linear(s) => s.coefficients(),
+            Activation::Spline(s) => s.coefficients(),
         };
         if input_gradient.len() != n
             || output_gradient.len() != self.shape.output()
@@ -229,7 +298,7 @@ impl<'a> Block<'a> {
             }
             let (activation_gradient, sample) = match self.activation {
                 Activation::Silu => (silu(scratch[c]).1, None),
-                Activation::Linear(spline) => {
+                Activation::Spline(spline) => {
                     let sample = spline.sample(c, scratch[c])?;
                     (sample.derivative, Some(sample))
                 }
@@ -243,8 +312,9 @@ impl<'a> Block<'a> {
             }
             if let Some(sample) = sample {
                 let dv = feature_gradient * scratch[w + c];
-                gradients.values[sample.left] += dv * (1.0 - sample.fraction);
-                gradients.values[sample.left + 1] += dv * sample.fraction;
+                for i in 0..4 {
+                    gradients.values[sample.indices[i]] += dv * sample.weights[i];
+                }
             }
         }
         finite(input_gradient)?;
