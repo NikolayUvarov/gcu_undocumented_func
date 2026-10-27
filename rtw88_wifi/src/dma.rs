@@ -137,6 +137,9 @@ pub fn post_beacon<R: Regs>(r: &mut R, region: &mut Region, bytes: usize) {
     region.w16(BCN_BD, TX_DESC as u16);
     region.w16(BCN_BD + 2, bytes.div_ceil(128) as u16 | 1 << 15);
     region.w32(BCN_BD + 4, region.phys(BCN_BUF));
+    // The second segment, the chunk itself: without it the chip fetches no data and the page never turns valid.
+    region.w16(BCN_BD + 8, (bytes - TX_DESC) as u16);
+    region.w32(BCN_BD + 12, region.phys(BCN_BUF + TX_DESC));
     fence(Ordering::SeqCst);
     let v = r.r8(0x383);
     r.w8(0x383, v | 1 << 4);
