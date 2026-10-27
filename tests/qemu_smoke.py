@@ -4309,12 +4309,16 @@ def link_suite(args):
             own = {ep for slot, ep in caps_held if servers.get(ep) == pids["link"]}
             count = int(re.search(r"COUNT=(\d+)", caps)[1])
             # With `dev` (800-LNK-0012), what init grants for the developer mode, each from its service: the system monitor,
-            # init's reboot client, the policy broker, the Wi-Fi station and the shell's commands (800-KRN-0148).
+            # init's reboot client, the policy broker, the Wi-Fi station, the shell's commands (800-KRN-0148) and a writable
+            # scope of data/firmware/ in slot 7 (800-KRN-0173).
             base = [(2, pids["usb_serial"]), (3, pids["vfs_server"]), (5, pids["loader"]), (12, pids["logd"]), (15, pids["compositor"])]
             developer = {(10, pids.get("sysmon")), (11, 1), (19, pids.get("netpolicy")), (33, pids.get("wlan", 0)),  # 0: no station runs
-                         (30, pids.get("shell"))}
+                         (30, pids.get("shell")), (7, pids["vfs_server"])}
             assert count == len(held) and count - len(granted) <= 3 and len(own) <= 1, caps
             assert [g for g in granted if g in base] == base and all(g in developer for g in granted if g not in base), (granted, developer, caps)
+            assert (7, pids["vfs_server"]) in granted, caps
+            require(vm.command("dmesg -s init", raw=True), "[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; data/firmware/ TO WRITE")
+            assert re.search(r"\bfirmware\b", vm.command("ls data", raw=True)), "init made data/firmware/"
             # 800-KRN-0148: link's slot 30 is a client badged BADGE_SHELL_LINK (1) of the endpoint the shell serves in slot 37.
             commands = re.search(r"^SLOT=37 GEN=0 KIND=1 .*EP=(\d+)", vm.command(f"stat caps {pids['shell']}", raw=True), re.M)
             shell_client = re.search(r"^SLOT=30 GEN=0 KIND=1 .*BADGE=(\d+) EP=(\d+)", caps, re.M)
@@ -6098,7 +6102,7 @@ def linkupdate_suite(args):
         port = next(c["filename"][len("pty:"):] for c in vm.qmp("query-chardev") if c["label"] == "link")
         link = link_update.Link(mindlink, port, ("--tries", "10", "--timeout", "2000", "--payload", "256"))
         require(link.run("hello").stdout, '"MIND Core link"')
-        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (10, 11, 19, 33); slot 15
+        # 800-KRN-0139: without `dev` in link.conf, link holds none of the developer mode's grants (7, 10, 11, 19, 30, 33); slot 15
         # is the compositor's client for its mark (800-KRN-0156).
         pids = vm.services()
         caps = vm.command(f"stat caps {pids['link']}", raw=True)

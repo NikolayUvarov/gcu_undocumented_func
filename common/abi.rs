@@ -3,11 +3,11 @@
 
 // The UEFI bootloader passes the kernel only system service images; the loader service reads applications from disk.
 // The kernel starts only image 0 (`init`); init decides which of the others to start and what each one receives.
-pub const BOOT_IMAGES: usize = 43;
+pub const BOOT_IMAGES: usize = 44;
 // ABI 10's image array stays in the fixed prefix; later images are appended after all ABI 10 fields.
 pub const BOOT_PREFIX_IMAGES: usize = 36;
-pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell"];
-pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
+pub const BOOT_SERVICES: [&str; BOOT_IMAGES] = ["init", "logd", "rtc", "ps2_kbd", "virtio_input", "compositor", "ata", "ahci", "usb_host", "usb_storage", "usb_hid", "virtio_blk", "nvme", "ramdisk", "vfs_server", "usb_serial", "link", "blockstore", "gpio", "battery", "loader", "audio_gw", "tts", "video_gw", "virtio_net", "rtl8168", "rtw89_wifi", "rtw88_wifi", "bcm_wifi", "tpm", "keystore", "wlansim", "wlan", "netstack", "netpolicy", "parse", "tls", "ssh", "windows", "sysmon", "updater", "effector_gw", "effector", "shell"];
+pub const BOOT_FILES: [&str; BOOT_IMAGES] = ["init.elf", "logd.elf", "rtc.elf", "ps2_kbd.elf", "virtio_input.elf", "compositor.elf", "ata.elf", "ahci.elf", "usb_host.elf", "usb_storage.elf", "usb_hid.elf", "virtio_blk.elf", "nvme.elf", "ramdisk.elf", "vfs_server.elf", "usb_serial.elf", "link.elf", "blockstore.elf", "gpio.elf", "battery.elf", "loader.elf", "audio_gw.elf", "tts.elf", "video_gw.elf", "virtio_net.elf", "rtl8168.elf", "rtw89_wifi.elf", "rtw88_wifi.elf", "bcm_wifi.elf", "tpm.elf", "keystore.elf", "wlansim.elf", "wlan.elf", "netstack.elf", "netpolicy.elf", "parse.elf", "tls.elf", "ssh.elf", "windows.elf", "sysmon.elf", "updater.elf", "effector_gw.elf", "effector.elf", "shell.elf"];
 // Further instances of a boot image, one per device (issue 105): `<image>#<n>` runs image `<image>` for its n-th device.
 // init starts each right after the image's first instance; netstack holds the network card drivers in slots 2 and 3.
 pub const SERVICE_INSTANCES: [&str; 4] = ["virtio_net#1", "ramdisk#1", "virtio_blk#1", "virtio_blk#2"]; // ramdisk#1: the block store's disk without one of its own (300-KRN-0001); virtio_blk#1, #2: the second and third VirtIO disks (300-KRN-0025, 251-KRN-0031: boot, models and store on aarch64)
@@ -52,25 +52,25 @@ const fn channel(value: u32, mask: u32) -> u32 {
 // addresses allow, and ALLOC's arg2 takes ALLOC_SMALL_PAGES (262-KRN-0161). ABI 20 moves SLOT_DYNAMIC to 39 for SLOT_APPS,
 // the Effector gateway's writable scope of data/apps/ (750-KRN-0169), and CAP_REVOKE walks in steps, refusing a copy,
 // mint or transfer under its root with ERR_REVOKING meanwhile, a copy past DERIVE_DEPTH_MAX refused (000-KRN-0104).
+// ABI 21 adds the boot image `rtw88_wifi`, the RTL8821CE's driver, after `rtw89_wifi`, so that init starts it before
+// `wlan` (550-KRN-0172, for 550-DRV-0042).
 // The kernel writes it into every task's BootInfo, and libmind refuses to run a program built for another one; the
 // bootloader writes the handoff version below instead (351-KRN-0166). ABI 11 preserves ABI 10's prefix and checks its
 // version before dereferencing the full record.
 // This transition does not promise detection of ABI 9 or older layouts.
-pub const ABI_VERSION: u32 = 20;
+pub const ABI_VERSION: u32 = 21;
 // The loader's handoff (351-KRN-0166): BootInfo's layout and meaning, and which boot image each index is, versioned apart
-// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes any version from
-// BOOT_HANDOFF_OLDEST on, since earlier loaders wrote their ABI there and BootInfo has not changed since ABI 16's images
-// (750-KRN-0119). A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far (MC-12.4);
-// a field added at the end that the kernel reads only from the version that brought it raises BOOT_HANDOFF_VERSION alone.
-// Handoff 20 adds boot_flags (173-KRN-0036): the kernel zeroes it for an older loader.
+// from the system calls. The loader writes BOOT_HANDOFF_VERSION where ABI 10 put the ABI; the kernel takes the versions from
+// BOOT_HANDOFF_OLDEST to it. A change to BootInfo or BOOT_FILES sets both to one number above every ABI_VERSION so far
+// (MC-12.4). Handoff 21 (550-KRN-0172): a 44th image renumbers the images after it and moves every field after
+// extra_programs, so an older loader is refused by name; before the first release no older handoff is read (AGENTS.md, section 3).
 // Every handoff keeps ABI 10's record in front (the screen, acpi_rsdp, abi_version, boot_slot), so that a kernel that
 // refuses one still says why and, on a trial, restarts into the fallback (351-KRN-0167).
-pub const BOOT_HANDOFF_VERSION: u32 = 20;
-pub const BOOT_HANDOFF_OLDEST: u32 = 16;
+pub const BOOT_HANDOFF_VERSION: u32 = 21;
+pub const BOOT_HANDOFF_OLDEST: u32 = 21;
 pub const fn handoff_accepted(version: u32) -> bool { version >= BOOT_HANDOFF_OLDEST && version <= BOOT_HANDOFF_VERSION }
-// BootInfo.boot_flags, from handoff 20 on: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init
-// ignores data/services.txt (173-KRN-0036).
-pub const BOOT_FLAGS_SINCE: u32 = 20;
+// BootInfo.boot_flags: BOOT_SAFE, a safe start asked at the bootloader (a key held), in which init ignores
+// data/services.txt (173-KRN-0036).
 pub const BOOT_SAFE: u32 = 1;
 #[derive(Clone, Copy)] #[repr(C)] pub struct BootInfo { pub fb_ptr: *mut u32, pub width: usize, pub height: usize, pub stride: usize, pub programs: [ProgramImage; BOOT_PREFIX_IMAGES], pub heap_ptr: *mut u8, pub heap_len: usize, pub ap_trampoline: usize, pub cpu_count: usize, pub apic_ids: [u32; 8], pub memory_map: *const StatPhys, pub memory_map_len: usize, pub pixel_format: u32, pub pixel_masks: [u32; 3], pub acpi_rsdp: u64, pub cpu_features: u64, pub abi_version: u32,
     pub boot_volume: BootVolume, pub boot_slot: BootSlot, pub launch: LaunchRecord, pub efi_runtime: u64, pub device_tree: u64, pub photo_pause_s: u32,
@@ -90,10 +90,6 @@ impl BootInfo {
     /// the caller supplies an ABI 10 or later record.
     pub unsafe fn read_refused(info: *const Self) -> (bool, u64) {
         (core::ptr::addr_of!((*info).boot_slot.trial).read() != 0, core::ptr::addr_of!((*info).acpi_rsdp).read())
-    }
-    /// The fields a loader of an older handoff did not write, zeroed (173-KRN-0036): boot_flags before handoff 20.
-    pub unsafe fn clear_unwritten(info: *mut Self, version: u32) {
-        if version < BOOT_FLAGS_SINCE { core::ptr::addr_of_mut!((*info).boot_flags).write(0); }
     }
 }
 // Both supported architectures have 64-bit pointers; changing this offset breaks the ABI 10 rejection path.
