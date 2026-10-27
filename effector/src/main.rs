@@ -182,6 +182,7 @@ struct Agent {
     config: config::Config,
     token: String,
     agent_id: String,
+    hostname: String, // the configuration's, or this machine's own while that was written for another (750-EFF-0017)
     dir: String,
     connection: Option<Box<Connection<Link>>>,
     reconnect_at: usize,
@@ -342,7 +343,7 @@ impl Agent {
             _ => "",
         };
         let busy = waiting.as_ref().zip(self.busy_since.as_deref()).map(|(w, since)| wire::Busy { since, command: w.as_str(), action });
-        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: self.config.hostname(), arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load };
+        let h = wire::Heartbeat { agent_id: &self.agent_id, hostname: &self.hostname, arch: wire::arch(), agent_version: env!("CARGO_PKG_VERSION"), stopping, agent_time, busy, load: self.load };
         let Ok(body) = wire::heartbeat(&mut buf, &h) else { return Outcome::Permanent };
         let body: Vec<u8> = body.to_vec();
         let Some(status) = self.request(Method::Post, "/api/heartbeat", "", Some(&body)) else { return Outcome::Retry };
@@ -818,6 +819,52 @@ fn read_file(path: &str, max: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The machine record beside the kept identity (750-EFF-0017): an identity recorded on another machine was copied here
+/// with the disk's settings, so its agent ID, journal and count are set aside and the record is this machine's. The
+/// configuration's hostname, written for that machine, gives way to one of this machine's own until the owner names it.
+/// Returns the set-aside agent ID. Without a print (no gateway sample) the identity is kept as it is.
+#[inline(never)]
+fn machine(agent: &mut Agent) -> Option<String> {
+    let Ok(sample) = gateway::sample(GATEWAY) else { mind::println!("EFFECTOR: NO MACHINE PRINT (NO GATEWAY SAMPLE): THE IDENTITY KEPT AS IT IS"); return None };
+    if agent.cpu_model.is_empty() && sample.memory_total == 0 { mind::println!("EFFECTOR: NO MACHINE PRINT: THE IDENTITY KEPT AS IT IS"); return None; }
+    let mut buf = [0u8; config::PRINT_MAX];
+    let print = String::from(config::print(&agent.cpu_model, sample.memory_total, &mut buf));
+    let path = agent.path("machine");
+    let recorded = read_file(&path, config::RECORD_MAX + 2);
+    let write = |foreign: &str| {
+        let mut out = [0u8; config::RECORD_MAX];
+        let bytes = config::record(&print, foreign, &mut out);
+        let _ = fs::remove(&path);
+        File::open_mode(&path, MODE_WRITE | MODE_CREATE).and_then(|mut f| { f.write_at(0, bytes)?; f.flush() })
+    };
+    let (foreign_id, foreign_host) = match config::machine(recorded.as_deref(), &print) {
+        config::Machine::This { foreign } => (None, String::from(foreign)),
+        config::Machine::Unrecorded => {
+            if write("").is_err() { fail(format_args!("CANNOT WRITE {}", path)); }
+            mind::println!("EFFECTOR: MACHINE {} RECORDED FOR THE KEPT IDENTITY", print);
+            (None, String::new())
+        }
+        config::Machine::Other { print: there } => {
+            let old = read_file(&agent.path("agent_id"), 80).and_then(|b| config::agent_id(&b).map(String::from));
+            let (journal, aside) = (agent.path("journal"), agent.path("journal.foreign"));
+            let _ = fs::remove(&aside);
+            let _ = fs::rename(&journal, &aside);
+            for name in ["agent_id", "executed", "journal.new"] { let _ = fs::remove(&agent.path(name)); }
+            let host = String::from(agent.config.hostname());
+            if write(&host).is_err() { fail(format_args!("CANNOT WRITE {}", path)); }
+            mind::println!("EFFECTOR: THE KEPT IDENTITY {} IS ANOTHER MACHINE'S ({}), NOT THIS ONE'S ({}): A NEW AGENT ID; ITS JOURNAL SET ASIDE AS {}",
+                           old.as_deref().unwrap_or("(none)"), there, print, aside);
+            (old, host)
+        }
+    };
+    if !foreign_host.is_empty() && foreign_host == agent.config.hostname() {
+        let mut out = [0u8; config::NAME_MAX];
+        agent.hostname = String::from(config::own_hostname(&agent.cpu_model, &mut out));
+        mind::println!("EFFECTOR: HOSTNAME {}: {}/effector.conf NAMES {}, ANOTHER MACHINE; THE OWNER MAY NAME THIS ONE THERE", agent.hostname, OWNER_DIR, foreign_host);
+    }
+    foreign_id
+}
+
 #[inline(never)]
 fn recover(agent: &Agent) -> (Vec<session::Record>, Vec<bool>) {
     // A rewrite cut between removing the journal and renaming its new form: the new form is whole (it was flushed).
@@ -872,7 +919,8 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
         None => fail(format_args!("CANNOT READ {}", conf)),
     };
     let dir = if service { fs::use_scope(Endpoint(SLOT_VFS), ""); String::from(SESSION_DIR) } else { dir };
-    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
+    let hostname = String::from(config.hostname());
+    let mut agent = Box::new(Agent { config, token: String::new(), agent_id: String::new(), hostname, dir, connection: None, reconnect_at: 0, reconnect_ms: 1000, body: Vec::new(), activation_noted: false, activated: false,
         telemetry_at: 0, last: None, telemetry_said: None, executed: 0, executed_total: 0, cpu_model: cpu_model(),
         load: None, load_at: 0, busy_since: None, held: None, running: None });
     let kept = if service && !agent.config.no_token() { read_file(&agent.path("token"), config::TOKEN_MAX + 2) } else { None };
@@ -887,6 +935,9 @@ fn start() -> (Box<Agent>, Box<Session>, Option<usize>) {
         mind::println!("EFFECTOR: THE TOKEN IS KEPT IN {}; THE OWNER MAY REMOVE {}/token", SESSION_DIR, OWNER_DIR);
     }
     let id_path = agent.path("agent_id");
+    // An identity copied from another machine is set aside, and the owner's agent_id with it (750-EFF-0017).
+    let foreign_id = if service { machine(&mut agent) } else { None };
+    let owner_id = owner_id.filter(|o| foreign_id.is_none() || config::agent_id(o) != foreign_id.as_deref());
     match read_file(&id_path, 80) {
         Some(bytes) => match config::agent_id(&bytes) { Some(id) => agent.agent_id = String::from(id), None => fail(format_args!("agent_id IS MALFORMED")) },
         None if service && owner_id.is_some() => {
