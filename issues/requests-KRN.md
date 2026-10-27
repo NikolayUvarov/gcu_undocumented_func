@@ -69,3 +69,14 @@ The first independent workspace is under `nrl/`, with portable crates and a host
 NRL update (2026-10-26, 900-NRL-0012–0016): the same explicit check entry now covers **70 host tests**, two portable rlibs and fresh decoder/calibration/continuation/two-task benchmarking/six-plan search/recovery/check/replay cycles. No network or Python is required after locked dependencies are cached; the pinned permissively licensed small model/tokenizer and oracles are committed. Please run `bash nrl/tools/check.sh` explicitly during landing until CI wiring is integrated. [Latest evidence](../nrl/reports/recovery-2026-10-26.json). No KRN-owned scripts were changed by NRL.
 
 NRL T11–T13 host update (2026-10-26): `bash nrl/tools/check.sh` now passes **82 tests**, builds both `nrl-repr` and no_std/no_alloc `nrl-runtime` for both bare-metal targets, and runs the prior pipelines plus budgeted graph execution, fixed paired decoder profiling and embedding/retrieval import/prune/benchmark/compare. Please keep this explicit candidate check until CI wiring is integrated. No KRN-owned source or script was changed. Latest [evidence](../nrl/reports/embedding-2026-10-26.json). Native nnd/IDL and named-target acceptance remain an APP integration request.
+
+## The store's own partition: media classified and a bounded grant (for 307)
+
+Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-partition.md). `blockstore` then waits for the task number this request gets.
+
+- **What is asked:**
+  - `init` classifies the media of every block driver (`nvme`, `ahci`, `usb_storage`, `virtio_blk`), and finds a partition labelled `MIND STORE` of the store's own type, or the one the owner names in the configuration;
+  - it gives `blockstore` a client bounded to that partition's sectors, and `vfs_server` none of it.
+- **The rule:** on a real machine `init` never gives the store a disk because it is blank. A blank disk may be someone's new disk, and another system's disk is never written (the Ryzen's Windows disk, 213). The VirtIO rule of 300-KRN-0025 stays for QEMU.
+- **The client bounded to a range** is the drivers track's part (`requests-DRV.md`, same date). The grant and its wiring are yours.
+- **Also for [308](308-encryption-at-rest.md), later:** the TPM's registers for sealing (`PLATFORM_TPM`, 351-KRN-0043), which 351-NET-0006 waits for.
