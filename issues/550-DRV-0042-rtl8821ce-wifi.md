@@ -55,9 +55,40 @@ A new boot service, `rtw88_wifi`, ported from Linux v6.12's `rtw88` (`adc218676e
    - a scan hears the networks;
    - `wlan` joins the kept network, DHCP gives an address, the Effector agent connects.
 
+## Progress
+
+- **2026-10-27, the driver is written** (`rtw88_wifi`, about 1,300 lines besides the tables):
+  - [hwdocs/rtl8821ce.md](../hwdocs/rtl8821ce.md) holds the specification it follows: rtw88's code paths resolved for the 8821C on PCIe, with their `file:line`.
+  - **The bring-up**, in rtw88's order:
+    - the PCIe PHY's parameter, the rings, bus mastering;
+    - the MAC's power, cycled when a firmware is found running;
+    - the firmware through the beacon ring and the chip's DMA engine, with its ready pattern `0xC078`;
+    - the eFuse: RFE type, crystal, 2.4 GHz power, MAC address. Linux's RFE types 0, 2, 4 and 6 alone are taken;
+    - the MAC and the PHY with their tables;
+    - GENERAL_INFO and PHYDM_INFO;
+    - the antenna to Wi-Fi alone (coexistence);
+    - channel 1, then the firmware's IQK.
+  - **TX:** a frame at the station's fixed rate, its tries as the descriptor's retry limit. The firmware's report gives the acknowledgement. The retry limit and the report's retry count are from Realtek's halmac headers, not rtw88: to be checked on the chip.
+  - **RX:**
+    - the ring polled;
+    - frames filtered as `bcm_wifi` filters them;
+    - the signal from the PHY status;
+    - firmware messages told apart.
+  - **2.4 GHz only:** channels 1 to 13, 802.11b/g. TX power is the eFuse's base plus power by rate, under the world-wide 20 MHz limits.
+  - **Host tests** (`tests/rtw88_driver_host.rs`, 8):
+    - the eFuse's decoding and fields;
+    - the power indices;
+    - the firmware's header, the real file's too when fetched;
+    - the TX and RX descriptors;
+    - both report formats;
+    - the filter;
+    - the power sequences' writes and waits;
+    - the rings' buffer descriptors.
+- **Blocked by `KRN`:** the boot image and `init`'s grant. Nothing runs on the DEXP until then (asked on `internal-dev-messages`).
+
 ## Acceptance criteria
 
-- [ ] Host tests: the tables and their conditions, the eFuse decoding, the firmware header, the descriptors.
+- [x] Host tests: the tables and their conditions, the eFuse decoding, the firmware header, the descriptors (`tests/rtw88_tables_host.rs`, `tests/rtw88_driver_host.rs`).
 - [ ] On the DEXP:
   - the driver logs the chip, its MAC address and the firmware's version;
   - `wifi scan` lists the networks around;
