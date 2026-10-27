@@ -110,8 +110,6 @@ pub extern "C" fn _start(raw_info: *const BootInfo) -> ! {
             if trial { let _ = core::fmt::Write::write_str(&mut out, "TRIAL: RESTARTING INTO THE FALLBACK\n"); acpi::reset(); }
             cpu::halt_here();
         }
-        // What an older loader did not write reads as nothing asked (173-KRN-0036).
-        BootInfo::clear_unwritten(raw_info.cast_mut(), version);
         let info = &*raw_info;
         acpi::init(info.acpi_rsdp);
         ALLOCATOR.lock().init(info.heap_ptr, info.heap_len);
