@@ -48,7 +48,7 @@ fn version_read_needs_only_the_old_record() {
     assert_eq!(unsafe { BootInfo::read_abi_version(1usize as *const BootInfo) }, None);
 }
 
-// 351-KRN-0166: the loader's handoff apart from the system calls. Handoff 21 (550-KRN-0172) appends a 44th image, which
+// 351-KRN-0166: the loader's handoff apart from the system calls. Handoff 21 (550-KRN-0172) adds a 44th image, which
 // moves every field after extra_programs: only a loader of this handoff is read, an older one refused by name.
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
@@ -57,7 +57,9 @@ fn the_handoff_takes_only_its_own_loader() {
     assert!(!handoff_accepted(20) && !handoff_accepted(16) && !handoff_accepted(22) && !handoff_accepted(10));
     assert_eq!(BOOT_IMAGES, 44, "a change of the boot images is a change of the handoff");
     assert_eq!(size_of::<BootInfo>(), 1064, "a change of BootInfo is a change of the handoff");
-    assert_eq!((BOOT_SERVICES[BOOT_IMAGES - 1], BOOT_FILES[BOOT_IMAGES - 1]), ("rtw88_wifi", "rtw88_wifi.elf"));
+    let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();
+    assert_eq!((BOOT_SERVICES[at - 1], BOOT_FILES[at]), ("rtw89_wifi", "rtw88_wifi.elf"));
+    assert!(at < BOOT_SERVICES.iter().position(|&name| name == "wlan").unwrap(), "init starts the radio before wlan");
 }
 
 // 173-KRN-0036: boot_flags stays the last field.
