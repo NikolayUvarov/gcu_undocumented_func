@@ -39,7 +39,10 @@ pub enum Error { WrongDevice, UnknownXid(u16), Mmio, Mac, Phy(u32), Reset, Mdio,
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State { Stopped, Prepared, Armed, Running, Failed }
 
-/// Only the observed RTL8168G XID is selected; a timeout never authorizes releasing its DMA region.
+/// The observed XIDs that FreeBSD's re treats alike (RL_FLAG_8168G_PLUS): the Ryzen's RTL8168G (0x4c0) and the DEXP's
+/// RTL8168H (0x541, 211-DRV-0041). A timeout never authorizes releasing the DMA region.
+pub const XIDS: [u16; 2] = [0x4c0, 0x541];
+/// Only the XIDS are selected.
 pub struct Controller<R> { io: R, pub identity: Identity, pub mac: u64, pub phy: u32, state: State, started: u64, last: u64 }
 
 impl<R: Registers> Controller<R> {
@@ -48,7 +51,7 @@ impl<R: Registers> Controller<R> {
         if pci_id != PCI_ID { return Err(Error::WrongDevice); }
         if io.len() < REGISTER_BYTES { return Err(Error::Mmio); }
         let identity = Identity::decode(pci_id, io.read32(TX_CONFIG)).map_err(|_| Error::Gone)?;
-        if identity.xid != 0x4c0 { return Err(Error::UnknownXid(identity.xid)); }
+        if !XIDS.contains(&identity.xid) { return Err(Error::UnknownXid(identity.xid)); }
         let mut mac = 0u64;
         for offset in 0..6 { mac = (mac << 8) | io.read8(offset) as u64; }
         if mac == 0 || mac >> 40 & 1 != 0 { return Err(Error::Mac); }
