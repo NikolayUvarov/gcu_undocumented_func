@@ -4369,6 +4369,23 @@ def link_suite(args):
             for bad in ("../x", "a/../../x", "/x"):
                 require(link(port, "mkdir", bad, ok=False), "not allowed")
 
+            # 800-LNK-0027 (init's 800-KRN-0173): with `dev`, `firmware/` is data/firmware/. A put lands there, `ls` names
+            # the place, and a move between the two places, or of the place itself, is refused.
+            link(port, "mkdir", "firmware/test")
+            link(port, "put", str(sent), "firmware/test/fw.bin")
+            require(link(port, "ls"), "-  firmware/")
+            require(link(port, "ls", "firmware/test"), "65536  fw.bin")
+            require(link(port, "stat", "firmware/test/fw.bin"), hashlib.sha256(sent.read_bytes()).hexdigest())
+            require(vm.command("ls data/firmware/test", raw=True), "fw.bin")
+            require(link(port, "get", "firmware/test/fw.bin", str(back)), "got firmware/test/fw.bin")
+            assert back.read_bytes() == sent.read_bytes(), "the firmware file came back changed"
+            require(link(port, "mv", "firmware/test/fw.bin", "fw.bin", ok=False), "not allowed")
+            require(link(port, "rmdir", "firmware", "-r", ok=False), "not allowed")
+            require(link(port, "run", "firmware/test/fw.bin", ok=False), "not allowed")
+            link(port, "rm", "firmware/test/fw.bin")
+            link(port, "rmdir", "firmware/test")
+            require(vm.command("dmesg -s link", raw=True), "[LINK] RECEIVED firmware/test/fw.bin")
+
             # 800-LNK-0009: a program from data/link/ started for the master, its output read to its end.
             program = Path(temp) / "mt.elf"
             shutil.copyfile(ROOT / IMAGE / "memtest.elf", program)

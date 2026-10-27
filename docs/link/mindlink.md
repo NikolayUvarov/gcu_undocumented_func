@@ -30,6 +30,14 @@ Options come before the command; what follows the command is its own, a program'
 
 **Names** on the other end are paths below its directory, their parts joined by `/` (`apps/test/x.elf`), none of them `.` or `..` ([protocol, section 5](protocol.md#5-requests)). An older end takes one part only.
 
+**Firmware on MIND Core** (800-LNK-0027). With `dev` in `link.conf`, init lets `link` write `data/firmware/` too (800-KRN-0173). There it is the name `firmware/`:
+- `put`, `get`, `stat`, `ls`, `mkdir`, `rm` and `rmdir` work there;
+- the top's `ls` lists `firmware/` last;
+- a move between `firmware/` and the rest is refused, as are a change of `firmware` itself and `run` or `replace` of a name there;
+- without `dev` such names are unsupported.
+
+A driver's proprietary file thus goes to a running machine with no disk written again: `scripts/proprietary.sh link PORT`, or `scripts/proprietary.sh link effector485` through the daemon. The driver checks the file by its SHA-256 and reads it at its next start (a restart, or `replace <unit> --back`).
+
 **Ports:**
 
 | Port | What it is |
