@@ -1,6 +1,6 @@
 # 109-KRN-0133 — The loader starts its helpers from the booted slot's copy
 
-**Type:** `loader` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (8def173, 2026-10-21); slot A shown; slot B waits for the parser sessions' race · **Blocked by:** [requests-NET.md](requests-NET.md) and [requests-UPD.md](requests-UPD.md) ("A parser session ends before its helper does") · **Main task:** 109 (parsers) · **Constitution:** MC-3.11, MC-11.11, Appendix B.6
+**Type:** `loader` · **Owner:** kernel session · **Priority:** P2 · **Status:** in `main` (8def173, 2026-10-21); slot A shown; slot B waits for the parser sessions' race · **Blocked by:** [requests-NET.md](requests-NET.md) ("A parser session ends before its helper does"; the update track's half became [109-UPD-0022](../issues-done/109-UPD-0022-the-slots-channels-through-one-parser.done)) · **Main task:** 109 (parsers) · **Constitution:** MC-3.11, MC-11.11, Appendix B.6
 
 ## Problem
 

@@ -23,6 +23,7 @@ struct Fake {
     controlled: Vec<(String, policy::Action)>,
     screen: Vec<u8>,
     screens: usize,
+    reboots: usize,
 }
 
 impl Machine for Fake {
@@ -63,6 +64,8 @@ impl Machine for Fake {
         self.screens += 1;
         if self.screen.len() as u64 > max { Err(Fail::Bounds) } else { Ok(self.screen.clone()) }
     }
+    fn load(&mut self) -> u32 { 150 }
+    fn reboot(&mut self) -> Result<(), Fail> { self.reboots += 1; Ok(()) }
     fn sample(&mut self) -> Sample {
         Sample { cpus: 2, busy_ns: 5, idle_ns: 7, uptime_ms: self.now, memory_total: 1000, memory_free: 900,
                  services: vec![Load { name: "sysmon".into(), state: Some(ServiceState::Running), pid: 9, run_ns: 1, started_ns: 2, memory: 3 }],
@@ -227,18 +230,53 @@ fn the_screen_leaves_within_the_policy() {
 }
 
 #[test]
+fn a_reboot_only_under_reboot_on_after_its_answer() {
+    let (mut g, mut m) = ready();
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c1"), 10_000), Err(Fail::Denied), "the policy has no `reboot on`");
+    assert!(m.audit.last().unwrap().contains(" c1 reboot?in?10000?ms denied refused "), "{:?}", m.audit);
+    m.policy = Some(format!("{}reboot on\n", POLICY).into_bytes());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    assert_eq!(g.reboot(&mut m, Badge::Other, &origin("c2"), 10_000), Err(Fail::Denied));
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c3"), 600_001), Err(Fail::Bounds));
+    assert_eq!(g.reboot(&mut m, Badge::Session, &origin("c4"), 10_000), Ok(10_000));
+    assert_eq!(m.reboots, 0, "admitted, not yet asked of init: the answer goes first");
+    g.restart(&mut m, "c4").unwrap();
+    assert_eq!(m.reboots, 1);
+    assert!(m.audit.last().unwrap().contains(" c4 reboot done restarting "), "{:?}", m.audit);
+}
+
+#[test]
+fn the_mark_follows_the_sessions_reports_and_the_policy() {
+    let (mut g, mut m) = ready();
+    assert_eq!(g.mark(m.now), Mark::Unconnected, "no report yet");
+    g.connection(&mut m, Badge::Session, true, false);
+    assert_eq!(g.mark(m.now), Mark::Unconnected, "connected, not activated");
+    g.connection(&mut m, Badge::Session, true, true);
+    assert_eq!(g.mark(m.now), Mark::Changing, "the policy delivers and restarts sysmon");
+    assert_eq!(g.mark(m.now + CONNECTION_MS), Mark::Unconnected, "no report for 3 s: the session stopped or hung");
+    g.connection(&mut m, Badge::Other, false, false);
+    assert_eq!(g.mark(m.now), Mark::Changing, "another client's report is ignored");
+    m.policy = Some(b"effector-policy 1\nagent on\ncollect data/reports/\nscreen on\nlog ring\nupdate check\n".to_vec());
+    g.reload_policy(&mut m, Badge::Owner).unwrap();
+    assert_eq!(g.mark(m.now), Mark::Reading, "reading only: files, the screen, the log, an update's check");
+    g.connection(&mut m, Badge::Session, false, true);
+    assert_eq!(g.mark(m.now), Mark::Unconnected);
+}
+
+#[test]
 fn the_sample_is_for_the_session_and_the_owner() {
     let (mut g, mut m) = ready();
     let s = g.sample(&mut m, Badge::Session);
     assert_eq!((s.cpus, s.memory_free, s.services.len(), s.volumes.len()), (2, 900, 1, 1));
     assert_eq!(g.sample(&mut m, Badge::Owner), s);
     assert_eq!(g.sample(&mut m, Badge::Other), Sample::default());
+    assert_eq!((g.load(&mut m, Badge::Session), g.load(&mut m, Badge::Owner), g.load(&mut m, Badge::Other)), (150, 150, 0));
 }
 
 #[test]
 fn not_yet_cancel_and_status() {
     let (mut g, mut m) = ready();
-    assert_eq!(g.not_yet(&mut m, Badge::Session, &origin("c2"), "reboot", policy::Ask::Reboot), Fail::Denied);
+    assert_eq!(g.not_yet(&mut m, Badge::Session, &origin("c2"), "update-check", policy::Ask::Update(policy::Update::Check)), Fail::Denied);
     m.files.insert("data/reports/r.bin".into(), vec![1; 10]);
     let t = g.open_file(&mut m, Badge::Session, &origin("c3"), "data/reports/r.bin").unwrap();
     assert!(g.status(&mut m).busy);

@@ -152,7 +152,8 @@ its private `system/effector`:
 | `effector.conf` | the owner | `effector-config 1`, then `server https://HOST[:PORT][/PATH]`, one or two `pin leaf:HEX` or `pin spki:HEX` (current, next), and optionally `name` (the certificate's name, default the host), `address A.B.C.D` (needed when the host is a name), `hostname` (default `mindcore`), and `token none` for a server that asks no agent token. Any other line refuses the file (`effector/src/config.rs`) |
 | `token` | the owner | the native AgentToken, one line; never printed. An operator API key is not a token. Not read when `effector.conf` says `token none` (contract 1.1: a server with `security.mode=disabled`) |
 | `token` → `system/effector/token` | the agent | moved from `data/effector/token` at the first start; the owner may then remove the copy |
-| `agent_id` | the agent, once, in `system/effector` | `mind_` and 16 hex digits from the random source, or the owner's own (1–64 of `[A-Za-z0-9_-]`) |
+| `agent_id` | the owner (optional), in `data/effector` | the agent's ID the server knows (1–64 of `[A-Za-z0-9_-]`): taken at a start that finds none in `system/effector`, so a disk written afresh keeps it |
+| `agent_id` | the agent, once, in `system/effector` | the owner's, or `mind_` and 16 hex digits from the random source |
 | `journal` | the agent, in `system/effector` | `effector-journal 1`, then one line per answer, appended and flushed before its ACK, and a `done` line once it needs no more ACK (`effector/src/journal.rs`); compacted at each start through `journal.new` |
 | `artifact` | the agent, in `system/effector` | the screenshot or log of the answer waiting for its ACK, after a line naming its command, size and SHA-256; removed once acknowledged |
 | `executed` | the agent, in `system/effector` | the count of commands answered, kept across restarts for telemetry |
@@ -176,8 +177,10 @@ is not in CI.
 **How it behaves:**
 
 - One HTTPS connection to the pinned server (`tls.wit` 1.2 `connect-pins`),
-  reconnected with back-off from 1 to 30 s. Every request is bounded by 3 s
-  of silence, so a stalled server delays a heartbeat by at most that.
+  reconnected with back-off from 1 to 30 s. Every request is bounded by 10 s
+  of silence: long enough for TCP to resend a segment lost twice on a lossy
+  Wi-Fi (1 + 2 + 4 s), so a burst of loss slows a heartbeat instead of costing
+  a new connection; a stalled server delays a heartbeat by at most that.
 - Heartbeat every 1.5 s, before anything else in the loop; poll at least every
   10 s, at once again after a command or an accepted ACK (the server hands one
   command a poll), with `at_capacity=1` while an answer waits for its ACK, so
@@ -239,9 +242,31 @@ every request (MC-10.6).
 - **`collect_logs`** (`log ring`, or a `collect` root): the system log or a file, inline as text the same way.
 - **`deliver_file`** (`deliver ROOT`): downloaded from the server straight into the gateway, which checks the size and
   SHA-256 before the file takes its name under the root (750-KRN-0120's scope).
+- **`exec` of `reboot`** (`reboot on`): the gateway admits it, answers, and 10 s later asks `init`, which checks the policy
+  again (750-KRN-0154); meanwhile the session keeps and sends its answer, or sends it after the restart. Any other
+  command is denied: MIND runs none.
 - **`start_service`, `stop_service`, `restart_service`** (`service NAME ACTION`): the program the server names is the boot
   service; `init` checks the owner's policy again (750-KRN-0121).
+- **`performance_measure`** (no policy line: it reads and changes nothing): the Effector agents' fixed benchmarks
+  (`effector/src/bench.rs`) run 200 ms at a time between heartbeats, so the agent stays online and busy with it; the
+  result is kept in `system/effector/result` and journaled `reported` before its ACK. A task's 16 MiB of memory makes
+  the copy move 4 MiB buffers (8 MiB on Linux) and leaves the pointer chase out; the parallel CPU phase needs threads.
+  The conditions go with it (the server's `load`): the machine's busy share a second before, over the run, and over
+  the run less the agent's own.
 - **An action runs once**, for a new command that has not expired and whose answer the journal has room for.
+- **Its budget** is the command's `timeout_seconds`, apart from its term in the server's queue; **its answer** is sent
+  until the server takes it, even after that term (the server keeps a late one); **meanwhile** the heartbeat says the
+  agent is busy with it, and every heartbeat and poll carries the load (contract 1.2, from the server's `ahelp`).
+
+**The agent's mark on the screen** (750-EFF-0015): `effector_gw` calls the compositor's `remote` (`display.wit` 1.2)
+each second, so a filled circle beside the link's ring shows who can reach the machine through the agent:
+- grey while the session is not connected, not activated, or has not reported for 3 s;
+- red when the owner's policy lets it change the machine (a delivery, services, packages, an update past its check, a
+  reboot, tests);
+- yellow when it may only read.
+
+The session reports its connection each heartbeat (`effector.wit` 1.3 `connection`). The mark goes 3 s after the
+gateway stops.
 
 **Telemetry** (750-EFF-0014): every 30 s, a schema 1 sample to `/api/telemetry` (`effector/src/telemetry.rs`), from the
 gateway's `sample` (`effector.wit` 1.1) and the session's view of the network cards. Rates (processor load, each

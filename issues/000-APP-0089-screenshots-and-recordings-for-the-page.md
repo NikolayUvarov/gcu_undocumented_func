@@ -1,6 +1,6 @@
 # 000-APP-0089 — Screenshots and recordings for the project's page
 
-**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); PrintScreen (the kernel track's key code) and the MacBook Pro's run left · **Blocked by:** — (the key code is in `main` with ABI 15: [000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done), `KEY_PRINT_SCREEN`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
+**Type:** tools (`shell`, `screenshot`, `record`) · **Owner:** tools track (`APP`) · **Priority:** P2 · **Status:** open: in `main` since 835c31c8 (2026-10-20); the MacBook Pro's run left · **Blocked by:** — (the key code is in `main` with ABI 15: [000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done), `KEY_PRINT_SCREEN`) · **Main task:** — · **Roadmap:** track G · **Constitution:** MC-11.4
 
 **Recorded by:** the kernel track (KRN), 2026-10-12, in `requests-APP.md`, for [000-KRN-0093](000-KRN-0093-pictures-and-video-for-the-showcase.md), at the maintainer's request. Numbered by the tools track on 2026-10-20, at the maintainer's word.
 
@@ -43,7 +43,17 @@ The maintainer will shoot the interface on the MacBook Pro for the page on GitHu
 - **The `vfs` suite** (raw FAT disk): `screenshot` writes `data/media/screen-001.bmp`; `screenshot -d 1` writes `screen-002.bmp` later; Ctrl+Alt+F6 with clock in front writes `screen-003.bmp`, which matches QEMU's picture of clock's screen (at least 90% of the sampled pixels; no shell in it); `record -s 2` writes an AVI of half the screen's width and height; `record` alone writes `data/media/record-001.avi`.
 - **Docs:** the help line, `docs/tools` (EN, RU).
 - **In `main`** since 835c31c8 (2026-10-20). The gate: every x86 group on i9 and every aarch64 group on un-rizen-service (Effector); the host tests, TLC and the x86 groups boot, services, scheduling, files and keys locally. The batch's later commits changed only the suites, and each group ran on a commit that has the suites it runs. The `vfs` suite's checks ran in the files group locally.
-- **Left:** PrintScreen (the kernel track's key code); the MacBook Pro's picture and 30 s recording.
+- **Left:** the MacBook Pro's picture and 30 s recording.
+
+## Progress (2026-10-22): PrintScreen
+
+- **The key code** is in `main` with ABI 15 ([000-KRN-0149](../issues-done/000-KRN-0149-a-key-code-for-print-screen.done)): `KEY_PRINT_SCREEN`, decoded from PS/2's `E0 37`.
+- **The shell** listens for PrintScreen alone, as for Ctrl+Alt+F6, and takes the screen in front at once: `[SHELL] SCREENSHOT <file>: … (PRINTSCREEN)`.
+- **The `vfs` suite** on x86: PrintScreen writes `data/media/screen-004.bmp`.
+  - The shell in front writes the file before it reads the next line, so the suite waits for its line first (26a14215).
+  - Passed locally on 26a14215 ("x86: files and block writes"), and the x86 build and the host tests on 15d4025e.
+  - Not on aarch64: QEMU's VirtIO keyboard sends `KEY_SYSRQ` (99), which `virtio_input` does not pass.
+  - A USB keyboard's PrintScreen (usage 0x46) becomes `E0 37` too (`libmind/src/hid.rs`), untested here. The MacBook Pro's keyboard has none; it keeps Ctrl+Alt+F6.
 
 ## Related
 

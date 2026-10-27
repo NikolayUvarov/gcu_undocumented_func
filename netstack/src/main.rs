@@ -63,7 +63,10 @@ static RECEIVED_FRAMES: [AtomicU64; CARDS] = [const { AtomicU64::new(0) }; CARDS
 // `offload`: the driver completes TCP and UDP checksums (it offers it and OFFLOAD is on). `ring`: the frame ring shared
 // with the driver (net.wit 1.2, issue 107), the lent capability and whether frames were queued since the last kick;
 // without one, every frame is a call.
-struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64, deadline: Deadline }
+// `retry`: a ring to lend at the next kick, as the last attach had no time left to be sent; `silent`: a call had no
+// answer, said once until the driver answers again (000-NET-0044).
+struct Card { endpoint: Endpoint, index: usize, offers: bool, offload: bool, frame: [u8; FRAME_MAX], ring: Option<Shared>, queued: bool, kicked: u64, deadline: Deadline,
+              retry: bool, silent: bool }
 // `answered`: the driver said it has the ring (its `attach` or a later kick answered `Ok`).
 struct Shared { _pages: Pages, cap: usize, ring: Ring, answered: bool }
 struct Rx<'a>(&'a [u8]);
@@ -75,30 +78,57 @@ impl Card {
     // in time, and its next access to a revoked ring faults (000-KRN-0129).
     fn attach(&mut self) {
         if let Some(old) = self.ring.take() { let _ = ipc::revoke(old.cap); let _ = ipc::drop_cap(old.cap); }
+        // An attach never sent cannot be held: with no time left in this turn no ring is lent, and the next kick lends one.
+        let Some(left) = self.deadline.remaining(now_ms()) else {
+            self.retry = true;
+            self.unanswered(format_args!("NO TIME LEFT IN ITS TURN TO LEND THE FRAME RING, AT THE NEXT"));
+            return;
+        };
+        self.retry = false;
         let Some(pages) = Pages::new(netring::BYTES) else { return };
         let ring = unsafe { Ring::new(pages.address() as *mut u8) };
         ring.reset();
         let Ok(cap) = pages.share() else { return };
         match self.deadline.call(|| net::attach(self.endpoint, cap)) {
-            Ok(Ok(_)) => { self.ring = Some(Shared { _pages: pages, cap, ring, answered: true }); self.kicked = now_ms(); }
+            Ok(Ok(_)) => {
+                self.ring = Some(Shared { _pages: pages, cap, ring, answered: true }); self.kicked = now_ms(); self.silent = false;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING ATTACHED", self.index);
+            }
             // Refused: the driver holds no mapping of it.
-            Ok(Err(_)) => { let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); }
+            Ok(Err(error)) => {
+                let _ = ipc::revoke(cap); let _ = ipc::drop_cap(cap); self.silent = false;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING REFUSED ({:?}): A CALL A FRAME", self.index, error);
+            }
             // No answer in time: it stays lent, and the next kick (at once) says whether the driver has it.
-            Err(_) => { self.ring = Some(Shared { _pages: pages, cap, ring, answered: false }); self.kicked = 0; }
+            Err(_) => {
+                self.ring = Some(Shared { _pages: pages, cap, ring, answered: false }); self.kicked = 0;
+                mind::println!("[NETSTACK] CARD {}: FRAME RING LENT, NO ANSWER IN {} MS", self.index, left);
+            }
         }
+    }
+
+    // A call without an answer, said once until the driver answers again (000-NET-0044).
+    fn unanswered(&mut self, what: core::fmt::Arguments) {
+        if !self.silent { self.silent = true; mind::println!("[NETSTACK] CARD {}: {}", self.index, what); }
     }
 
     // Wakes the driver for queued frames, and at least every 300 ms so it keeps serving the ring.
     fn kick(&mut self) {
+        if self.ring.is_none() && self.retry { self.attach(); }
         let Some(shared) = self.ring.as_mut() else { return };
         let now = now_ms();
         if !self.queued && !shared.ring.sending() && now - self.kicked < 300 { return; }
         self.queued = false; self.kicked = now;
+        let left = self.deadline.remaining(now);
         match self.deadline.call(|| net::kick(self.endpoint)) {
-            Ok(Ok(())) if !shared.answered => { shared.answered = true; mind::println!("[NETSTACK] CARD {}: THE DRIVER HAS OUR RING (A LATE ANSWER)", self.index); }
-            Ok(Ok(())) => {}
-            Ok(Err(_)) => { mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
-            Err(_) => {} // the driver is restarting
+            Ok(Ok(())) if !shared.answered => { shared.answered = true; self.silent = false; mind::println!("[NETSTACK] CARD {}: THE DRIVER HAS OUR RING (A LATE ANSWER)", self.index); }
+            Ok(Ok(())) => self.silent = false,
+            Ok(Err(_)) => { self.silent = false; mind::println!("[NETSTACK] CARD {}: DRIVER WITHOUT OUR RING, ATTACHING AGAIN", self.index); self.attach(); }
+            // The driver busy or restarting, or no time left in this turn: the frames wait in the ring.
+            Err(_) => match left {
+                Some(ms) => self.unanswered(format_args!("A KICK HAD NO ANSWER IN {} MS", ms)),
+                None => self.unanswered(format_args!("NO TIME LEFT IN ITS TURN TO KICK THE DRIVER")),
+            },
         }
     }
 }
@@ -244,7 +274,7 @@ impl Link {
         let info = match deadline.call(|| net::info(endpoint)) { Ok(Ok(info)) => info, _ => return None };
         let bytes = info.mac.to_be_bytes();
         let offers = deadline.call(|| net::offloads(endpoint)).is_ok_and(|o| o & 1 != 0);
-        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0, deadline };
+        let mut card = Card { endpoint, index, offers, offload: offers && OFFLOAD.load(Ordering::Relaxed), frame: [0; FRAME_MAX], ring: None, queued: false, kicked: 0, deadline, retry: false, silent: false };
         card.attach();
         let mut config = Config::new(HardwareAddress::Ethernet(EthernetAddress([bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]])));
         config.random_seed = mind::time::rdtsc();

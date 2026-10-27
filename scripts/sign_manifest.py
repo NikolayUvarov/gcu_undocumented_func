@@ -6,7 +6,8 @@ the build's inputs; and VOLUME/MANIFEST.SIG, an Ed25519 signature (RFC 8032) ove
 bootloader checks the signature against the public key built into it, and each image it loads against the manifest.
 A manifest describes; it grants nothing (MC-3.11).
 
-Usage: sign_manifest.py VOLUME            sign with the key in $MIND_BOOT_SIGNING_KEY, or with the test key
+Usage: sign_manifest.py VOLUME [--version N]  sign with the key in $MIND_BOOT_SIGNING_KEY, or with the test key; with
+                                            --version, the release version the boot key vouches for (351-UPD-0024)
        sign_manifest.py --public [KEY]    print the public key (hex) of KEY or of the test key
        sign_manifest.py --verify VOLUME PUBLIC_HEX   check a volume as the bootloader does
 
@@ -182,9 +183,14 @@ def build_inputs():
     return commit, toolchain, locks.hexdigest()
 
 
-def manifest(volume, public, inputs=None):
+def manifest(volume, public, inputs=None, version=None):
     commit, toolchain, locks = inputs or build_inputs()
     lines = [f"MIND-MANIFEST {FORMAT}", f"key {hashlib.sha256(public).hexdigest()[:16]}", f"commit {commit}", f"toolchain {toolchain}", f"inputs {locks}"]
+    # The release's version under the boot key, for the bootloader's version floor (351-UPD-0024); none is version 0.
+    if version is not None:
+        if not 1 <= version < 2**64:
+            raise ValueError("a version is 1 to 2^64-1")
+        lines.append(f"version {version}")
     for name in shipped(volume):
         data = (volume / name).read_bytes()
         flags, memory = requests(data)
@@ -192,14 +198,24 @@ def manifest(volume, public, inputs=None):
     return ("\n".join(lines) + "\n").encode()
 
 
-def sign_volume(volume, seed=None, inputs=None):
+def sign_volume(volume, seed=None, inputs=None, version=None):
     """Writes the volume's manifest and signature; returns the manifest."""
     volume = Path(volume)
     seed = seed or signing_seed()
-    text = manifest(volume, public_key(seed), inputs)
+    text = manifest(volume, public_key(seed), inputs, version)
     (volume / "MANIFEST").write_bytes(text)
     (volume / "MANIFEST.SIG").write_bytes(sign(seed, text))
     return text
+
+
+def manifest_version(text):
+    """The version a manifest's `version` line names, or 0 without one (351-UPD-0024)."""
+    for line in text.decode().splitlines():
+        if line.startswith("version "):
+            return int(line[8:])
+        if line.startswith("file "):
+            break
+    return 0
 
 
 def verify_volume(volume, public):
@@ -208,7 +224,7 @@ def verify_volume(volume, public):
     text, signature = (volume / "MANIFEST").read_bytes(), (volume / "MANIFEST.SIG").read_bytes()
     if not verify(public, text, signature):
         return "MANIFEST: bad signature"
-    for line in text.decode().splitlines()[5:]:
+    for line in (l for l in text.decode().splitlines() if l.startswith("file ")):
         _, name, size, digest, _, _ = line.split(" ")
         data = (volume / name).read_bytes() if (volume / name).exists() else None
         if data is None or len(data) != int(size) or hashlib.sha256(data).hexdigest() != digest:
@@ -224,9 +240,9 @@ def main(argv):
         reason = verify_volume(argv[1], bytes.fromhex(argv[2]))
         print(reason or "VERIFIED")
         return 1 if reason else 0
-    elif len(argv) == 1:
+    elif len(argv) == 1 or (len(argv) == 3 and argv[1] == "--version" and argv[2].isdigit()):
         seed = signing_seed()
-        text = sign_volume(argv[0], seed)
+        text = sign_volume(argv[0], seed, version=int(argv[2]) if len(argv) == 3 else None)
         files = text.count(b"\nfile ")
         print(f"SIGNED {argv[0]}/MANIFEST: {files} FILES, KEY {hashlib.sha256(public_key(seed)).hexdigest()[:16]}" + (" (THE TEST KEY)" if seed == TEST_SEED else ""))
     else:

@@ -31,6 +31,7 @@ pub fn line(r: &Record, out: &mut [u8; LINE_MAX]) -> usize {
     match r.result {
         Final::Failed(f) => { put(b"failed-", &mut n); put(f.name().as_bytes(), &mut n); }
         Final::Captured(a) => { put(b"captured-", &mut n); put(a.name().as_bytes(), &mut n); }
+        Final::Reported => put(b"reported", &mut n),
         other => put(other.status().as_bytes(), &mut n),
     }
     put(b" ", &mut n);
@@ -108,7 +109,7 @@ pub fn read(text: &[u8], agent: &str) -> Result<([Option<Record>; RECORDS_MAX], 
             continue;
         }
         let result = match result {
-            Some("denied") => Final::Denied, Some("expired") => Final::Expired, Some("completed") => Final::Completed,
+            Some("denied") => Final::Denied, Some("expired") => Final::Expired, Some("completed") => Final::Completed, Some("reported") => Final::Reported,
             Some(w) if w.starts_with("captured-") => Final::Captured(Artifact::from_name(&w[9..]).ok_or(Error::Journal)?),
             Some(w) => Final::Failed(w.strip_prefix("failed-").and_then(Failure::from_name).ok_or(Error::Journal)?),
             None => return Err(Error::Journal),

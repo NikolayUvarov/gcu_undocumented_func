@@ -33,4 +33,4 @@ After a run that did not end as asked (a freeze the watchdog reset, a cut power)
 
 ## Related
 
-[000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md), [173-KRN-0036](../issues/173-KRN-0036-safe-start.md).
+[000-KRN-0076](../issues/000-KRN-0076-a-frozen-machine-restarts-and-starts-safely.md), [173-KRN-0036](173-KRN-0036-safe-start.done).

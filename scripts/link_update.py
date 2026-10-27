@@ -31,6 +31,7 @@ time ran out, 2 for a usage error.
 import argparse
 import datetime
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import boot_slots  # noqa: E402
 import release  # noqa: E402
+import sign_manifest  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DIR = "rel"  # below data/link/: update.txt's `source data/link/rel`
@@ -53,6 +55,11 @@ def boot_file(name):
     return name == "kernel.elf" or name in boot_slots.BOOT_FILES
 
 
+def loader(name, arch):
+    """The loader the manifest lists for `arch`: the updater stages it into the slot too (351-UPD-0010)."""
+    return boot_slots.LOADERS.get(name) == {"x86_64": "BOOTX64.EFI", "aarch64": "BOOTAA64.EFI"}[arch]
+
+
 def application(name):
     """A listed program at the volume's root that is no boot file: the updater stages it into the slot (351-UPD-0023).
     The licences, the voice model and data stay at the root."""
@@ -60,20 +67,25 @@ def application(name):
 
 
 def release_files(manifest, arch, version):
-    """What the updater reads of a release, in the order it is put: the boot files' blobs, the applications' (351-KRN-0151),
-    then the manifest and its signature. A blob two files share goes once. The channel, `channels/stable`, goes last and
-    is not in the list."""
+    """What the updater reads of a release, in the order it is put: the boot files' blobs, the loader's (351-UPD-0010),
+    the applications' (351-KRN-0151), then the manifest and its signature. A blob two files share goes once. The channel,
+    `channels/stable`, goes last and is not in the list."""
     files = release.manifest_files(manifest)
-    blobs = [digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if application(name)]
+    blobs = ([digest for name, _, digest in files if boot_file(name)] + [digest for name, _, digest in files if loader(name, arch)]
+             + [digest for name, _, digest in files if application(name)])
     return [f"blobs/{digest}" for digest in dict.fromkeys(blobs)] + [f"releases/{version}/{arch}/MANIFEST", f"releases/{version}/{arch}/MANIFEST.SIG"]
 
 
 def build(root, arch, version, temp):
     """The signed build at `root` staged and published as release `version` into a server tree under `temp`."""
     staged, server = Path(temp) / "staged", Path(temp) / "server"
-    release.stage(version, staged, {arch: root})
+    # A copy signed again with the release's version, which the bootloader's floor reads (351-UPD-0024).
+    volume = Path(temp) / "volume"
+    shutil.copytree(root, volume)
+    sign_manifest.sign_volume(volume, version=version)
+    release.stage(version, staged, {arch: volume})
     release.publish(staged, server)
-    return server, (Path(root) / "MANIFEST").read_bytes()
+    return server, (volume / "MANIFEST").read_bytes()
 
 
 class Link:

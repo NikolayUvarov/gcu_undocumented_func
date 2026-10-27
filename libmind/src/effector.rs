@@ -19,6 +19,9 @@ pub const GATEWAY_DIR: &str = "system/effector_gw";
 pub const OWNER_DIR: &str = "data/effector";
 /// The owner's policy, which the gateway and `init` both read (750-KRN-0121).
 pub const POLICY_FILE: &str = "data/effector/policy";
+/// Where the gateway installs signed application packages, `<name>/<version>/` and `<name>/current` (750-UPD-0019);
+/// its writable scope of it is SLOT_APPS, and the loader checks a program there before it runs it (750-KRN-0169).
+pub const APPS_DIR: &str = "data/apps";
 
 /// The owner's policy (750-EFF-0003): `effector_gw` decides each request with it, and `init` the gateway's lifecycle
 /// requests and its delivery scope (750-KRN-0120, 0121), so both read it with one parser.

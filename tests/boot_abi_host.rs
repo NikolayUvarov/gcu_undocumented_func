@@ -48,6 +48,42 @@ fn version_read_needs_only_the_old_record() {
     assert_eq!(unsafe { BootInfo::read_abi_version(1usize as *const BootInfo) }, None);
 }
 
+// 351-KRN-0166: the loader's handoff apart from the system calls. BootInfo has not changed since ABI 16's images but for
+// boot_flags at its end (handoff 20, 173-KRN-0036), so loaders that wrote their ABI there from 16 on hand over what this
+// kernel reads.
+#[test]
+fn the_handoff_takes_every_loader_since_abi_16_and_no_other() {
+    assert_eq!((BOOT_HANDOFF_OLDEST, BOOT_HANDOFF_VERSION, BOOT_FLAGS_SINCE), (16, 20, 20));
+    assert!((16..=20).all(handoff_accepted));
+    assert!(!handoff_accepted(15) && !handoff_accepted(21) && !handoff_accepted(10));
+    assert_eq!(BOOT_IMAGES, 43, "a change of the boot images is a change of the handoff");
+    assert_eq!(size_of::<BootInfo>(), 1048, "a change of BootInfo is a change of the handoff");
+}
+
+// 173-KRN-0036: boot_flags is the last field, and a loader before handoff 20 never wrote it: the kernel reads it as zero.
+#[test]
+fn boot_flags_from_an_older_loader_read_as_none() {
+    assert_eq!(offset_of!(BootInfo, boot_flags), offset_of!(BootInfo, link_words) + LINK_WORDS_MAX);
+    let mut info: BootInfo = unsafe { core::mem::zeroed() };
+    for (version, kept) in [(16, 0), (19, 0), (20, BOOT_SAFE)] {
+        info.boot_flags = BOOT_SAFE;
+        unsafe { BootInfo::clear_unwritten(&mut info, version) };
+        assert_eq!(info.boot_flags, kept, "handoff {version}");
+    }
+}
+
+// 351-KRN-0167: a kernel that refuses the handoff reads the trial and the ACPI root from ABI 10's record alone.
+#[test]
+fn a_refused_handoff_reads_the_trial_and_the_acpi_root_from_abi_10s_record() {
+    let mut old: Abi10BootInfo = unsafe { core::mem::zeroed() };
+    old.abi_version = 10;
+    old.acpi_rsdp = 0x1234_5000;
+    old.boot_slot.trial = 1;
+    assert_eq!(unsafe { BootInfo::read_refused(core::ptr::addr_of!(old).cast()) }, (true, 0x1234_5000));
+    old.boot_slot.trial = 0;
+    assert_eq!(unsafe { BootInfo::read_refused(core::ptr::addr_of!(old).cast()) }, (false, 0x1234_5000));
+}
+
 #[test]
 fn image_access_covers_both_arrays_in_order_and_rejects_out_of_range() {
     let mut info: BootInfo = unsafe { core::mem::zeroed() };

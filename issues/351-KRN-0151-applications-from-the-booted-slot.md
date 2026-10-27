@@ -39,4 +39,4 @@ From the update track's request in [requests-KRN.md](requests-KRN.md) (2026-10-2
 
 ## Related
 
-[351-UPD-0023](../issues-done/351-UPD-0023-applications-in-the-releases-slot.done), [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md), [351-KRN-0141](351-KRN-0141-an-update-through-the-link.md).
+[351-UPD-0023](../issues-done/351-UPD-0023-applications-in-the-releases-slot.done), [109-KRN-0133](109-KRN-0133-helpers-from-the-booted-slot.md), [351-KRN-0141](../issues-done/351-KRN-0141-an-update-through-the-link.done).

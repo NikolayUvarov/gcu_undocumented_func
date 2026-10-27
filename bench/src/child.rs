@@ -23,6 +23,9 @@ pub const READ: usize = 6;
 pub const HASH: usize = 7;
 /// The `--slots` child's answer: data[1] has bit i set when `LAUNCH_SLOTS[i]` holds an endpoint.
 pub const SLOTS: usize = 8;
+/// The echo mints data[1] copies of the endpoint the message carries and keeps them; its reply says how many it made
+/// (kbench's revocation rows, 000-KRN-0104).
+pub const MINTS: usize = 9;
 /// The input ended, and a read after its end ended it again.
 pub const READ_END: usize = 0;
 /// The input ended, but a read after its end did not answer 0.
@@ -168,11 +171,14 @@ pub fn serve() {
     if parent.send_timeout(&Message::new(HELLO, 0), 10_000).is_err() { return; }
     while let Ok(request) = parent.recv_timeout(RECEIVED, 30_000) {
         let mut word = request.data[1];
-        if request.cap_received {
+        if request.data[0] == MINTS {
+            // The copy stays in RECEIVED until the next one replaces it; the mints are its children.
+            word = if request.cap_received { (0..request.data[1]).take_while(|_| ipc::mint(RECEIVED, CAP_WRITE, 0, 0).is_ok()).count() } else { 0 };
+        } else if request.cap_received {
             if let Ok(page) = Mapping::new(RECEIVED) { word = black_box(unsafe { core::ptr::read_volatile(page.address() as *const usize) }); }
             let _ = ipc::drop_cap(RECEIVED);
         }
-        if request.is_call { let _ = ipc::reply(&Message::new(request.data[0], if request.data[0] == PEEK { word } else { request.data[1] })); }
+        if request.is_call { let _ = ipc::reply(&Message::new(request.data[0], if request.data[0] == PEEK || request.data[0] == MINTS { word } else { request.data[1] })); }
         if request.data[0] == EXIT { return; }
     }
 }

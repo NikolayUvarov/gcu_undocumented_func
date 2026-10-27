@@ -2,26 +2,28 @@
 #![no_main]
 // kbench [group …] [--quick]: the kernel's performance (176-KRN-0062). Each measurement is repeated; the screen shows
 // its median with a bar on a log scale, its minimum and its 99th percentile, and log:kbenchNNNN.txt every statistic
-// with a histogram. The IPC and process groups talk to copies of kbench it starts (`kbench --child`).
+// with a histogram. The IPC and process groups talk to copies of kbench it starts (`kbench --child`), the workers group
+// to workers of itself (262-KRN-0163), which it may start only when the owner names it in data/memory.conf; the pages group
+// takes a GiB, which it may only with that line too (262-KRN-0161).
 extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bench::child::{self, ECHO, EXIT};
+use bench::child::{self, ECHO, EXIT, MINTS};
 use bench::measure::{batches, now, Run};
 use bench::report;
 use core::hint::black_box;
-use mind::abi::{CAP_READ, CAP_WRITE, ERR_LIMIT};
+use mind::abi::{CAP_GRANT, CAP_READ, CAP_WRITE, ERR_LIMIT, SLOT_INIT};
 use mind::ipc::{self, Endpoint, Message};
 use mind::mem::Pages;
 
 mind::request!(REQUEST_CONSOLE | REQUEST_FILES | REQUEST_SYSINFO);
 
-const GROUPS: [(&str, &str); 6] = [
+const GROUPS: [(&str, &str); 8] = [
     ("syscall", "System calls"), ("ipc", "IPC, two processes"), ("caps", "Capabilities"),
-    ("memory", "Memory"), ("timer", "The timer"), ("process", "Processes"),
+    ("memory", "Memory"), ("pages", "Random reads in 1 GiB"), ("timer", "The timer"), ("process", "Processes"), ("workers", "Workers, other CPUs"),
 ];
-const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]";
+const USAGE: &str = "usage: kbench [syscall|ipc|caps|memory|pages|timer|process|workers …] [--quick]";
 const MIB: usize = 1024 * 1024;
 const PAGE: usize = 4096;
 
@@ -97,6 +99,62 @@ fn caps(run: &mut Run) {
         if waits > 0 { run.note(format!("endpoint create+drop: the quota was reached {} times; dropped endpoints count until the kernel's idle pass reclaims them", waits)); }
     } else { run.fail("endpoint create+drop", &format!("{} of {} created, {} waits", samples.len(), n, waits)); }
     let _ = ipc::drop_cap(endpoint.0);
+    revocations(run);
+}
+
+// CAP_REVOKE of subtrees of 10 to 10 000 nodes over four tasks: a copy of the root in each of three echoes, which mint
+// the rest under it. The time grows with the nodes removed; each step of the walk holds the lock for at most 256 of
+// them, and the longest step is noted (000-KRN-0104, MC-5.4).
+fn revocations(run: &mut Run) {
+    const ECHOES: usize = 3;
+    // An endpoint for each echo, which receives on it. The endpoints the rows before dropped count until the kernel's
+    // idle pass reclaims them: at the limit, wait for it.
+    let create = || {
+        let mut endpoint = Endpoint::create();
+        for _ in 0..300 {
+            if !matches!(endpoint, Err(mind::Error::Other(ERR_LIMIT))) { break; }
+            mind::time::sleep(10); endpoint = Endpoint::create();
+        }
+        endpoint.ok()
+    };
+    let mut echoes: Vec<(Endpoint, u64)> = Vec::new();
+    for _ in 0..ECHOES {
+        let Some(endpoint) = create() else { run.fail("revoke a subtree", "no endpoint"); break };
+        match child::start("kbench", "--child", endpoint).and_then(|pid| child::hello(endpoint).map(|()| pid)) {
+            Ok(pid) => echoes.push((endpoint, pid)),
+            Err(why) => { let _ = ipc::drop_cap(endpoint.0); run.fail("revoke a subtree", &why); break; }
+        }
+    }
+    let root = echoes.first().and_then(|&(endpoint, _)| ipc::mint(endpoint.0, CAP_WRITE | CAP_GRANT, 0, 0).ok());
+    if let Some(root) = root.filter(|_| echoes.len() == ECHOES) {
+        for nodes in [10usize, 100, 1000, 10_000] {
+            let name = format!("revoke {} nodes", nodes);
+            let n = run.reps(if nodes >= 1000 { 10 } else { 50 });
+            let (mut samples, mut longest, mut steps) = (Vec::with_capacity(n), 0u64, 0usize);
+            for _ in 0..n {
+                // Each echo gets a copy of the root and mints its share of the rest under it.
+                let mut made = 0;
+                for (k, &(endpoint, _)) in echoes.iter().enumerate() {
+                    let share = (nodes - ECHOES) / ECHOES + usize::from(k < (nodes - ECHOES) % ECHOES);
+                    let Ok(copy) = ipc::mint(root, CAP_WRITE | CAP_GRANT, 0, 0) else { break };
+                    if let Ok(reply) = endpoint.call_timeout(&Message::new(MINTS, share).with_cap_moved(copy, u8::MAX), 0, 10_000) { made += 1 + reply.data[1]; }
+                }
+                let t = now();
+                let revoked = ipc::revoke_measured(root);
+                let dt = now() - t;
+                match revoked {
+                    Ok((removed, s, ns)) if removed == made && made == nodes => { samples.push(dt); longest = longest.max(ns); steps = steps.max(s); }
+                    other => { run.fail(&name, &format!("made {}, revoke said {:?}", made, other)); break; }
+                }
+            }
+            if samples.len() == n {
+                run.row(&name, &mut samples, 1);
+                run.note(format!("{} over 4 tasks: {} steps, the longest {} µs under the lock", name, steps, longest / 1000));
+            }
+        }
+        let _ = ipc::drop_cap(root);
+    }
+    for (endpoint, pid) in echoes { child::stop(endpoint, pid); let _ = ipc::drop_cap(endpoint.0); }
 }
 
 fn memory(run: &mut Run) {
@@ -118,6 +176,30 @@ fn memory(run: &mut Run) {
     let rate = report::rate(MIB as u64, stats.median);
     run.log.detail(&format!("    1 MiB at {} (median)", rate));
     run.note(format!("1 MiB taken, touched and freed at {} (median)", rate));
+}
+
+// Reads at random places of a GiB, each place found from the word read before, so that no read overlaps the next: in
+// 2 MiB and 1 GiB pages, then in 4 KiB pages (ALLOC_SMALL_PAGES), the same memory touched beforehand (262-KRN-0161).
+fn pages(run: &mut Run) {
+    const SPAN: usize = 1 << 30;
+    let n = run.reps(200);
+    let mut medians = Vec::new();
+    for (name, small) in [("large pages", false), ("4 KiB pages", true)] {
+        let Some(mut block) = (if small { Pages::new_small(SPAN) } else { Pages::new(SPAN) }) else {
+            return run.note(String::from("pages: not measured, a GiB is beyond kbench's quota (name it in data/memory.conf)"));
+        };
+        for page in block.as_mut_slice().chunks_mut(PAGE) { unsafe { core::ptr::write_volatile(page.as_mut_ptr(), 1) }; }
+        let words = block.address() as *const u64;
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let mut samples = batches(n, 1024, || {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            x ^= unsafe { core::ptr::read_volatile(words.add((x as usize >> 3) % (SPAN / 8))) };
+        });
+        medians.push(run.row(name, &mut samples, 1024).median);
+    }
+    if let [large, small] = medians[..] {
+        run.note(format!("pages: a random read over 1 GiB takes {} in large pages and {} in 4 KiB pages (medians, this machine only)", report::duration(large), report::duration(small)));
+    }
 }
 
 fn timer(run: &mut Run) {
@@ -156,11 +238,47 @@ fn processes(run: &mut Run) {
     let _ = ipc::drop_cap(endpoint.0);
 }
 
+// A worker's start until it says hello, and a call answered by a worker on another CPU (262-KRN-0163).
+fn workers(run: &mut Run) {
+    let Ok(endpoint) = Endpoint::create() else { return run.fail("worker start", "no endpoint") };
+    let Ok(client) = ipc::mint(endpoint.0, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0) else { let _ = ipc::drop_cap(endpoint.0); return run.fail("worker start", "no client") };
+    let grants = [mind::process::grant(SLOT_INIT, client, u8::MAX)];
+    let n = run.reps(20);
+    let (mut start, mut worker) = (Vec::with_capacity(n), 0);
+    for k in 0..n {
+        let t = now();
+        let pid = match mind::process::start_worker(0, 0, &grants) {
+            Ok(pid) => pid,
+            Err(mind::Error::Rights) => { run.note(String::from("workers: not measured, kbench is not named in data/memory.conf")); break; }
+            Err(e) => { run.fail("worker start", &format!("start: {:?}", e)); break; }
+        };
+        if let Err(why) = child::hello(endpoint) { run.fail("worker start", &why); break; }
+        start.push(now() - t);
+        if k + 1 < n { if !child::stop(endpoint, pid) { run.fail("worker start", "a worker did not end"); break; } } else { worker = pid; }
+    }
+    if worker != 0 {
+        run.row("worker start", &mut start, 1);
+        let n = run.reps(1000);
+        let mut samples = Vec::with_capacity(n);
+        for k in 0..n {
+            let t = now();
+            let reply = endpoint.call_timeout(&Message::new(ECHO, k), 0, 5000);
+            let dt = now() - t;
+            if !matches!(reply, Ok(r) if r.data[1] == k) { run.fail("worker call and reply", &format!("call {}: {:?}", k, reply.map(|r| r.data))); break; }
+            samples.push(dt);
+        }
+        if samples.len() == n { run.row("worker call and reply", &mut samples, 1); }
+        child::stop(endpoint, worker);
+    }
+    let _ = ipc::drop_cap(client);
+    let _ = ipc::drop_cap(endpoint.0);
+}
+
 mind::entry!(main);
 fn main(info: &'static mind::BootInfo) {
-    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, the timer, processes.\nUsage: kbench [syscall|ipc|caps|memory|timer|process …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
+    mind::about!("kbench — the kernel's performance: system calls, IPC, capabilities, memory, large pages, the timer, processes, workers.\nUsage: kbench [syscall|ipc|caps|memory|pages|timer|process|workers …] [--quick]   (default: every group)\nA table on the screen (median with a log-scale bar, minimum, 99th percentile); every statistic and a histogram in log:kbenchNNNN.txt (ram: without the log volume). --quick: a tenth of the repetitions.");
     let args = mind::process::args_str().trim();
-    if args == "--child" { return child::serve(); }
+    if args == "--child" || mind::process::worker().is_some() { return child::serve(); }
     let words: Vec<&str> = args.split_whitespace().collect();
     let quick = words.contains(&"--quick");
     let chosen: Vec<&str> = words.iter().copied().filter(|w| *w != "--quick").collect();
@@ -174,7 +292,9 @@ fn main(info: &'static mind::BootInfo) {
             "ipc" => ipc(&mut run),
             "caps" => caps(&mut run),
             "memory" => memory(&mut run),
+            "pages" => pages(&mut run),
             "timer" => timer(&mut run),
+            "workers" => workers(&mut run),
             _ => processes(&mut run),
         }
     }

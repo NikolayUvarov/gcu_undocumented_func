@@ -39,6 +39,13 @@
 
 What runs over the link is evidence for the configurations tested only (MC-12.1). The shell decides what the link's client may run. This task claims nothing for a client that `init` does not mint (MC-12.3).
 
+## On the MacBook Pro (2026-10-22)
+
+- **The link's commands answer.** LNK reported it (`APP/2026-10-22T1555Z-…`, `ALL/2026-10-22T1552Z-…`): over the link, `sh ip`, `sh netstat -i` and `sh ps` answered.
+  - The release was b509a30, built from `fast-test`, which carried this task's shell.
+  - It is evidence for that machine and that release only (MC-12.1).
+- **Left:** the `link` suite's `sh` checks, which LNK keeps skipped until this task is in `main`.
+
 ## Related
 
 [800-LNK-0012](../issues-done/800-LNK-0012-the-developer-mode.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md), [211-APP-0044](../issues-done/211-APP-0044-console-joined-to-the-shell.done) (`run`), 800-LNK-0015 (on LNK's branch).

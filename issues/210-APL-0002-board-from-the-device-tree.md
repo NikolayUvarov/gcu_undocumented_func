@@ -15,6 +15,7 @@ The aarch64 kernel reads the board from ACPI (`arch/aarch64/acpi.rs` into `board
 - Host tests with device trees compiled from Linux's `arch/arm64/boot/dts/apple/` for t8103 (the M1 Mac mini and MacBook Air), whose files are marked `GPL-2.0+ OR MIT` and can be used under MIT (to be checked, and recorded in THIRD_PARTY.md); and with truncated and random blobs, which must not panic.
 - A test of the device tree path without a Mac: QEMU `virt` with `acpi=off`, where EDK2 is expected to hand over a device tree instead of ACPI (GIC, PL011, PSCI there).
 - The kernel's code is `PRT`'s directory: done with `PRT`.
+- **2026-10-25:** the generic reader (the GIC, the timer, CPUs through PSCI, the console, reserved memory) and the `virt,acpi=off` suite are [100000-PRT-0009](100000-PRT-0009-the-board-from-the-device-tree.md), for the phone track. What stays here is Apple's nodes.
 
 ## Acceptance criteria
 

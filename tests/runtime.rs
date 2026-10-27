@@ -29,6 +29,7 @@ mod context {
 mod frames {
     pub fn ready() -> bool { false }
     pub fn allocate(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
+    pub fn allocate_unzeroed(_: core::alloc::Layout) -> Option<core::ptr::NonNull<u8>> { None }
     pub unsafe fn free(_: core::ptr::NonNull<u8>, _: core::alloc::Layout) {}
     pub fn owns(_: *const u8) -> bool { false }
 }
@@ -241,6 +242,22 @@ fn rejects_corrupt_headers_segments_and_entries_without_panicking() {
 }
 
 #[test]
+fn the_stack_is_what_pt_gnu_stack_asks_within_its_bounds() {
+    // 262-KRN-0164: no PT_GNU_STACK gives the least; memstack asks 4 MiB; whole pages; more than the most is refused.
+    assert_eq!(elf::Image::parse(&std::fs::read("usb_root/app.elf").unwrap()).unwrap().stack, abi::STACK_MIN_BYTES);
+    let data = std::fs::read("usb_root/memstack.elf").unwrap();
+    assert_eq!(elf::Image::parse(&data).unwrap().stack, 4 << 20);
+    let (table, count) = (u64::from_le_bytes(data[32..40].try_into().unwrap()) as usize, u16::from_le_bytes([data[56], data[57]]) as usize);
+    let header = (0..count).map(|i| table + i * 56).find(|&at| data[at..at + 4] == 0x6474_e551u32.to_le_bytes()).unwrap();
+    for (asked, stack) in [(0, Some(abi::STACK_MIN_BYTES)), (5000, Some(abi::STACK_MIN_BYTES)), ((1 << 20) + 1, Some((1 << 20) + 4096)),
+                           (abi::STACK_MAX_BYTES, Some(abi::STACK_MAX_BYTES)), (abi::STACK_MAX_BYTES + 1, None), (usize::MAX, None)] {
+        let mut changed = data.clone();
+        changed[header + 40..header + 48].copy_from_slice(&(asked as u64).to_le_bytes());
+        assert_eq!(elf::Image::parse(&changed).ok().map(|image| image.stack), stack, "{asked}");
+    }
+}
+
+#[test]
 fn input_event_words_round_trip() {
     let word = abi::input_event(0x1E, abi::KEY_CHAR, abi::MOD_SHIFT | abi::MOD_CTRL, true, 'Ж' as u32);
     assert_eq!((abi::event_byte(word), abi::event_key(word), abi::event_mods(word), abi::event_pressed(word), abi::event_char(word)), (0x1E, abi::KEY_CHAR, 3, true, 'Ж' as u32));
@@ -362,19 +379,20 @@ fn application_slots_are_distinct_fixed_and_launchers_reach_the_new_ones() {
     let named = [SLOT_INIT, SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS, SLOT_FILE, SLOT_WINDOW, SLOT_CONSOLE,
         SLOT_SYSINFO, SLOT_LIFECYCLE, SLOT_LOG, SLOT_AUTHORITY, SLOT_KEYBOARD, SLOT_DISPLAY, SLOT_NET, SLOT_SOCKET,
         SLOT_NETWORK, SLOT_NETPOLICY, SLOT_TLS, SLOT_WINDOWS, SLOT_WINDOW_MANAGER, SLOT_GPIO, SLOT_CAMERA, SLOT_BLOCKSTORE,
-        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS];
+        SLOT_BLOCKSTORE_READ, SLOT_FIRMWARE, SLOT_PARSE, SLOT_TPM, SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS];
     let mut seen = std::collections::BTreeSet::new();
     for slot in named {
         assert!((1..SLOT_DYNAMIC).contains(&slot), "slot {} is not a fixed one", slot);
         assert!(seen.insert(slot), "slot {} is named twice", slot);
     }
     assert_eq!(seen.len(), SLOT_DYNAMIC - 1, "every fixed application slot has one name");
-    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_DYNAMIC, ABI_VERSION),
-        (30, 31, 32, 33, 34, 35, 36, 37, 38, 17));
+    assert_eq!((SLOT_SHELL, SLOT_CLIPBOARD, SLOT_BATTERY, SLOT_WIFI, SLOT_SSH, SLOT_UPDATE, SLOT_MODE, SLOT_COMMANDS, SLOT_APPS, SLOT_DYNAMIC, ABI_VERSION),
+        (30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 20));
     for slot in [SLOT_SHELL, SLOT_CLIPBOARD, SLOT_PARSE, SLOT_CAMERA, SLOT_WINDOW, SLOT_BATTERY, SLOT_WIFI, SLOT_NET, SLOT_SSH] { assert!(LAUNCH_SLOTS.contains(&slot), "a launcher may fill {}", slot); }
     assert!(!LAUNCH_SLOTS.contains(&SLOT_UPDATE), "the updater's client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_MODE), "the mode client is the shell's alone");
     assert!(!LAUNCH_SLOTS.contains(&SLOT_COMMANDS), "the shell's own command endpoint is no program's");
+    assert!(!LAUNCH_SLOTS.contains(&SLOT_APPS), "the gateway's scope of data/apps/ is no program's (750-KRN-0169)");
     for slot in [SLOT_RTC, SLOT_VFS, SLOT_AUDIO, SLOT_LOADER, SLOT_TTS] { assert!(!LAUNCH_SLOTS.contains(&slot), "{} stays the loader's", slot); }
     assert!(LAUNCH_SLOTS.iter().all(|&slot| slot < SLOT_DYNAMIC));
     assert!(CAP_SLOTS - SLOT_DYNAMIC >= 64, "dynamic slots left in the initial capability space");

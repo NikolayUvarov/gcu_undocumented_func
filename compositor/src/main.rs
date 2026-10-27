@@ -3,12 +3,14 @@
 // Ring 3 compositor: copies changed pixels of the active screen into the GOP framebuffer. Between frames it serves
 // idl/display.wit on its service endpoint: the mode, and a sealed copy of the screen in front (the shell's
 // `screenshot`, issue 086; `record`, issue 093). While the screen is being captured a red dot in its top right corner
-// says so (issue 165), and while a camera stream is open a green camera mark left of it (issue 158): drawn here, on the
+// says so (issue 165), and while a camera stream is open a green camera mark left of it (issue 158); left of that, the
+// marks of who can reach the machine from outside, the link and the Effector agent (800-KRN-0156): drawn here, on the
 // framebuffer only, so no capture holds them and no program can hide them. It logs the screen, each screen put in
 // front and its first seconds of frames (213-KRN-0098).
 use mind::abi::{pixel_to_device, BootInfo, ERR_TIMEOUT, PIXEL_BGR, PIXEL_BITMASK, PIXEL_RGB, SLOT_MEM};
 use mind::dev::{compositor_pull, compositor_pull_frame, compositor_release, Frame};
-use mind::idl::display::{self, Error, Mode, Request};
+use mind::display::{remote_center, remote_of, remote_pixel, Remote};
+use mind::idl::display::{self, Error, Mode, RemoteState, Request};
 use mind::idl::wire;
 use mind::ipc::Endpoint;
 use mind::mem::{Mapping, Pages};
@@ -20,6 +22,8 @@ const FORCE_MS: usize = 250;
 // The dot stays this long after a capture: a recording at one frame a second keeps it lit.
 const DOT_MS: usize = 1500;
 const DOT_RADIUS: usize = 6;
+// A remote mark stays this long after its last call: a service that stops or hangs loses it (800-KRN-0156).
+const REMOTE_MS: usize = 3000;
 
 // The pixels of the dot: a red disc in the top right corner of a `width`-wide screen.
 fn dot(width: usize, height: usize) -> impl Iterator<Item = (usize, usize, u32)> {
@@ -64,14 +68,32 @@ fn mark(info: &BootInfo, gop: *mut u32, shadow: *const u32, valid: bool, lit: bo
     }
 }
 
-// What a request lit: the capture dot or the camera mark.
-enum Lit { Capture, Camera }
+// A remote mark's pixels: grey, yellow or red for what its path may do, in its fixed place.
+fn remote(mark: Remote, state: RemoteState, width: usize, height: usize) -> impl Iterator<Item = (usize, usize, u32)> {
+    let ((cx, cy), r) = (remote_center(mark, width, DOT_RADIUS), DOT_RADIUS as isize);
+    let color = match state { RemoteState::Changing => 0x00E0_2020, RemoteState::Reading => 0x00E0_C020, RemoteState::Unconnected => 0x0080_8080 };
+    (cy - DOT_RADIUS..=cy + DOT_RADIUS).flat_map(move |y| (cx.saturating_sub(DOT_RADIUS)..=cx + DOT_RADIUS).map(move |x| (x, y)))
+        .filter(move |&(x, y)| x < width && y < height && remote_pixel(mark, x as isize - cx as isize, y as isize - cy as isize, r))
+        .map(move |(x, y)| (x, y, color))
+}
 
-// One display.wit request: the mode, a sealed read-only copy of what `source` shows, or the camera mark.
-fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire::Call) -> Option<Lit> {
-    let lit = match request { Request::Capture => Some(Lit::Capture), Request::Camera => Some(Lit::Camera), Request::Mode => None };
+// What a request lit: the capture dot, the camera mark or a remote mark.
+enum Lit { Capture, Camera, Remote(Remote, RemoteState) }
+
+// One display.wit request: the mode, a sealed read-only copy of what `source` shows, the camera mark, or the caller's
+// remote mark, which its badge from init names (MC-3.11).
+fn serve(info: &BootInfo, source: Option<&Mapping>, request: Request, call: wire::Call, badge: u16, sender: u64, lines: &mut u32) -> Option<Lit> {
+    let lit = match request {
+        Request::Capture => Some(Lit::Capture), Request::Camera => Some(Lit::Camera), Request::Mode => None,
+        Request::Remote { state } => remote_of(badge).map(|mark| Lit::Remote(mark, state)),
+    };
     let _ = match request {
         Request::Camera => display::reply_camera(call),
+        Request::Remote { .. } if lit.is_none() => {
+            say(lines, format_args!("[COMPOSITOR] REMOTE MARK REFUSED: PID {} (BADGE {}) HAS NO MARK (MC-3.11)", sender, badge));
+            display::reply_remote(call, Err(Error::Denied))
+        }
+        Request::Remote { .. } => display::reply_remote(call, Ok(())),
         Request::Mode => display::reply_mode(call, &Mode { width: info.width as u32, height: info.height as u32, stride: info.stride as u32 }),
         Request::Capture => {
             let bytes = info.stride * info.height * 4;
@@ -99,6 +121,8 @@ fn main(info: &'static BootInfo) {
     let native = info.pixel_format == PIXEL_BGR; // screens already hold the framebuffer's layout
     let mut captured = None::<usize>; // when the last capture was, while the dot is shown
     let mut filmed = None::<usize>; // when the video gateway last said a stream is open, while the mark is shown
+    let mut remotes = [None::<(usize, RemoteState)>; 2]; // the link's and the Effector's: the last call and its state
+    let mut remote_lines = 0u32; // the remote marks' changes and refusals logged, LOG_LINES at most
     let mut busy = None::<usize>; // since when the screen changed while its task ran
     let mut watch = Watch::default();
     let format = match info.pixel_format { PIXEL_BGR => "BGR", PIXEL_RGB => "RGB", PIXEL_BITMASK => "BIT MASKS", _ => "UNKNOWN" };
@@ -166,12 +190,24 @@ fn main(info: &'static BootInfo) {
             mark(info, gop, shadow, valid, streaming, camera(info.width, info.height));
             if !streaming { filmed = None; }
         }
+        for (slot, which) in [Remote::Link, Remote::Effector].into_iter().enumerate() {
+            if let Some((at, state)) = remotes[slot] {
+                let shown = mind::time::uptime_ms() - at < REMOTE_MS;
+                mark(info, gop, shadow, valid, shown, remote(which, state, info.width, info.height));
+                if !shown { remotes[slot] = None; say(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: OFF", which)); }
+            }
+        }
         // Wait for the next frame, answering requests meanwhile (without a service endpoint: just wait).
         match Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, if frame == Frame::Busy { 1 } else { FRAME_MS }) {
             Ok(request) => match display::decode(&request, RECEIVED_CAP) {
-                Ok((request, call)) => match serve(info, source.as_ref(), request, call) {
+                Ok((decoded, call)) => match serve(info, source.as_ref(), decoded, call, request.badge, request.sender, &mut remote_lines) {
                     Some(Lit::Capture) => captured = Some(mind::time::uptime_ms()),
                     Some(Lit::Camera) => filmed = Some(mind::time::uptime_ms()),
+                    Some(Lit::Remote(mark, state)) => {
+                        let slot = mark as usize;
+                        if remotes[slot].map(|(_, was)| was) != Some(state) { say(&mut remote_lines, format_args!("[COMPOSITOR] REMOTE MARK {:?}: {:?}", mark, state)); }
+                        remotes[slot] = Some((mind::time::uptime_ms(), state));
+                    }
                     None => {}
                 },
                 Err(reason) => if request.is_call { let _ = wire::reject(reason); },

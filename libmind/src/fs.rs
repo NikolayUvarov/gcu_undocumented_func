@@ -241,6 +241,17 @@ impl File {
         Ok(done)
     }
     pub fn read(&mut self, buffer: &mut [u8]) -> Result<usize> { let got = self.read_at(self.position, buffer)?; self.position += got; Ok(got) }
+    /// Reads from `offset` into the memory object `target` (a capability with the write and grant rights) in one call, as
+    /// much as fits or as the file has; returns the bytes. vfs_server gets a copy of a child of `target` (writable, so with
+    /// the grant right: a writable child without it may only be moved), revoked once it answers (`vfs.wit` 2.4 `fill`,
+    /// 262-KRN-0162).
+    pub fn fill(&self, offset: u64, target: usize) -> Result<u64> {
+        let lent = crate::ipc::mint(target, CAP_READ | CAP_WRITE | CAP_GRANT, 0, 0)?;
+        let result = call(vfs::fill(endpoint(), self.handle, offset, lent));
+        let _ = crate::ipc::revoke(lent);
+        let _ = crate::ipc::drop_cap(lent);
+        result
+    }
     /// Writes at `offset` without changing the current position; the file grows.
     pub fn write_at(&mut self, offset: usize, data: &[u8]) -> Result<usize> {
         let mut done = 0;

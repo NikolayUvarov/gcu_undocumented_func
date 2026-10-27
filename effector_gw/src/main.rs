@@ -13,7 +13,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use effector_gw::gateway::{self, Badge, Fail, Gateway, Load, Machine, Origin, Sample, ServiceState};
+use effector_gw::gateway::{self, Badge, Fail, Gateway, Load, Machine, Mark, Origin, Sample, ServiceState};
 use effector_gw::policy::{self, Ask};
 use effector_gw::png;
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_DISPLAY, SLOT_FILE, SLOT_LIFECYCLE, SLOT_LOG, SLOT_SYSINFO, SLOT_VFS};
@@ -27,6 +27,7 @@ use mind::mem::Mapping;
 const RECEIVED: usize = 9; // an unexpected capability lands here and is dropped; the screen's copy too, while encoded
 const PIECE: usize = 16384; // vfs reads and writes at most this much per call
 const AUDIT_MAX: u32 = 256 * 1024; // the audit file is renamed to `audit.old` beyond this
+const MARK_MS: usize = 1000; // the agent's mark is lit this often; the compositor keeps it 3 s (750-EFF-0015)
 const SCREEN_WIDTH: usize = 1280; // a larger screen is shrunk to fit, its proportions kept
 const SCREEN_HEIGHT: usize = 800;
 static mut SCRATCH: [u8; wit::REQUEST_MAX] = [0; wit::REQUEST_MAX];
@@ -296,6 +297,16 @@ impl Machine for Host {
         encoded
     }
 
+    fn reboot(&mut self) -> Result<(), Fail> {
+        if !present(SLOT_LIFECYCLE) { return Err(Fail::Unsupported); }
+        match init::reboot(Endpoint(SLOT_LIFECYCLE)) { Ok(Ok(())) => Ok(()), Ok(Err(init::Error::Denied)) => Err(Fail::Denied), _ => Err(Fail::Io) }
+    }
+
+    fn load(&mut self) -> u32 {
+        if !present(SLOT_SYSINFO) { return 0; }
+        match sysinfo::load(Endpoint(SLOT_SYSINFO)) { Ok(Ok(l)) => l.one, _ => 0 }
+    }
+
     fn sample(&mut self) -> Sample {
         let mut s = Sample { uptime_ms: mind::time::uptime_ms() as u64, ..Sample::default() };
         s.services = self.boot_services().into_iter().map(|(name, state, pid)| Load { name, state: Some(state), pid, ..Load::default() }).collect();
@@ -372,8 +383,17 @@ fn main(_info: &'static BootInfo) {
     if let Err(f) = gw.reload_policy(&mut host, Badge::Owner) { mind::println!("[EFFECTOR_GW] NO POLICY: {}", gateway::fail_name(f)); }
     let scratch = unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) };
     let out = unsafe { &mut *core::ptr::addr_of_mut!(OUT) };
+    let mut mark_at = 0;
     loop {
-        let Ok(request) = Endpoint::SERVICE.recv(RECEIVED) else { continue };
+        // The agent's mark each second, between requests: grey, yellow or red (750-EFF-0015); it goes when the gateway does.
+        if mind::time::uptime_ms() >= mark_at && present(SLOT_DISPLAY) {
+            let state = match gw.mark(mind::time::uptime_ms() as u64) {
+                Mark::Unconnected => display::RemoteState::Unconnected, Mark::Reading => display::RemoteState::Reading, Mark::Changing => display::RemoteState::Changing,
+            };
+            let _ = display::remote(Endpoint(SLOT_DISPLAY), state);
+            mark_at = mind::time::uptime_ms() + MARK_MS;
+        }
+        let Ok(request) = Endpoint::SERVICE.recv_timeout(RECEIVED, MARK_MS as u32) else { continue };
         if !request.is_call { continue; }
         let badge = match request.badge { BADGE_SESSION => Badge::Session, BADGE_OWNER => Badge::Owner, _ => Badge::Other };
         let (req, reply) = match wit::decode(&request, RECEIVED, scratch) {
@@ -405,6 +425,8 @@ fn main(_info: &'static BootInfo) {
                 let r = gw.open_screen(m, badge, &origin(&o)).map(|t| transfer(&t)).map_err(error);
                 wit::reply_open_screen(reply, r.as_ref().map_err(|e| *e))
             }
+            wit::Request::Load => wit::reply_load(reply, gw.load(m, badge)),
+            wit::Request::Connection { connected, active } => { gw.connection(m, badge, connected, active); wit::reply_connection(reply) }
             wit::Request::Sample => {
                 let s = gw.sample(m, badge);
                 let mut services = List::default();
@@ -432,7 +454,16 @@ fn main(_info: &'static BootInfo) {
                 let step = if apply { policy::Update::Apply } else { policy::Update::Check };
                 wit::reply_update_check(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "update-check", Ask::Update(step)))))
             }
-            wit::Request::Reboot { origin: o, .. } => wit::reply_reboot(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "reboot", Ask::Reboot)))),
+            wit::Request::Reboot { origin: o, delay_ms } => {
+                // Answered first, so the session keeps and sends its result; then init is asked, after the delay.
+                let admitted = gw.reboot(m, badge, &origin(&o), delay_ms);
+                let sent = wit::reply_reboot(reply, admitted.map(drop).map_err(error));
+                if let Ok(delay) = admitted {
+                    mind::time::sleep(delay as usize);
+                    if let Err(f) = gw.restart(m, o.command.as_str()) { mind::println!("[EFFECTOR_GW] THE RESTART WAS REFUSED: {}", gateway::fail_name(f)); }
+                }
+                sent
+            }
             wit::Request::TestRun { origin: o, .. } => wit::reply_test_run(reply, Err(error(gw.not_yet(m, badge, &origin(&o), "test-run", Ask::Test(&[]))))),
             wit::Request::Cancel { command } => wit::reply_cancel(reply, gw.cancel(m, badge, command.as_str()).map_err(error)),
             wit::Request::ReloadPolicy => {

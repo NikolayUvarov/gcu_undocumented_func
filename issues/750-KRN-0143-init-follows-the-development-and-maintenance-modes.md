@@ -10,7 +10,7 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
   - It runs **only in the development mode or the maintenance mode**, and in a mode it is a service that runs all the time.
   - A mode is turned on explicitly, by the operator, or by the Mind when it needs help from outside.
   - A mode is set by a word and by a command, and it holds across any number of reboots.
-- **What was planned.** [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md)), with no mode.
+- **What was planned.** [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done) item 2 started both services when the owner enabled them in `data/services.txt` ([173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done)), with no mode.
 - **What `init` does now.** It knows no mode. The only word it follows is the link's `dev` (800-KRN-0139), which the bootloader reads from `link.conf`.
 
 ## Plan
@@ -39,12 +39,12 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 
 ## Acceptance criteria
 
-- [ ] Without a mode word, neither service runs, and no process holds an Effector grant (`stat caps`).
-- [ ] With `development` written when the disk was written, both run from boot and are started again after they are killed; after three reboots the mode still holds.
+- [x] Without a mode word, neither service runs, and no process holds an Effector grant (`stat caps`).
+- [x] With `development` written when the disk was written, both run from boot and are started again after they are killed; after three reboots the mode still holds.
 - [ ] `set-mode` through `BADGE_MODE` starts and stops both with no reboot, and writes the file.
 - [ ] `BADGE_MIND` turns the maintenance mode on with a reason, and cannot turn a mode off or set the development mode; a holder without either badge is refused.
 - [ ] Every change is logged with its badge, PID and reason.
-- [ ] A safe start with the maintenance mode on starts both services.
+- [x] A safe start with the maintenance mode on starts both services.
 
 ## Progress (2026-10-21)
 
@@ -77,10 +77,21 @@ From the agent track's request of 2026-10-21 (`internal-dev-messages`, `ALL/2026
 - the three-reboot criterion;
 - the safe start's maintenance case.
 
+## Progress (2026-10-23)
+
+The `modes` suite checks the modes over a run (7bd55f4c), on x86 and aarch64 in this session's container (QEMU TCG):
+- **Without a mode,** no process but `init` holds an Effector grant: no `init` client badged `BADGE_NAMED`, no `vfs_server` client badged `BADGE_EFFECTOR` or `BADGE_EFFECTOR_GW` (`stat caps` of every service).
+- **In the development mode,** `init` starts each Effector service again after the shell's `kill`, and the mode holds over three reboots, both services running after each.
+- **A safe start.** A reset within the minute after `READY` leaves the run's mark, so the next boot is a safe start. With the maintenance mode on, it starts both services.
+
+**Left:**
+- `set-mode` through `BADGE_MODE` and its log line: APP's `mode` command (750-APP-0105) checks them in the same suite; it lands in round 16.
+- `BADGE_MIND`'s holder, the Mind.
+
 ## Settled
 
 - **A safe start** (000-KRN-0076) starts both services when the maintenance mode is on: help from outside is what a machine that failed to boot needs (the maintainer, 2026-10-21, through EFF). Whether a safe start keeps the development mode was not asked.
 
 ## Related
 
-[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](173-KRN-0035-init-reads-the-service-configuration.md), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).
+[750](750-effector-agent.md), 750-EFF-0013 (the design, on `claude/EFF-effector-agent`), [750-KRN-0119](../issues-done/750-KRN-0119-boot-images-and-grants-for-effector.done), [750-APP-0093](750-APP-0093-the-shells-effector-command.md) (the `mode` command instead), [173-KRN-0035](../issues-done/173-KRN-0035-init-reads-the-service-configuration.done), [800-KRN-0139](800-KRN-0139-the-links-developer-mode.md) (the link's `dev` word, the same pattern).

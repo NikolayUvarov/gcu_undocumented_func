@@ -46,6 +46,14 @@ pub fn user_readable(entry: u64) -> bool { entry & 3 == PAGE_DESC && entry & AP_
 pub fn user_writable(entry: u64) -> bool { user_readable(entry) && entry & AP_RO == 0 }
 /// (writable, executable, device) of a user page.
 pub fn attributes(entry: u64) -> (bool, bool, bool) { (entry & AP_RO == 0, entry & UXN == 0, entry & ATTR_MASK == ATTR_DEVICE) }
+/// Whether a valid entry at level 1 or 2 maps memory itself: a 1 GiB or 2 MiB block (262-KRN-0161).
+pub fn large(entry: u64) -> bool { entry & 3 == BLOCK }
+/// A user page's descriptor as a block with the same attributes.
+pub fn block(page: u64) -> u64 { page & !3 | BLOCK }
+/// A block's descriptor in a page's form, for the checks of its permissions.
+pub fn page(entry: u64) -> u64 { entry | PAGE_DESC }
+/// Level-1 blocks (1 GiB) exist with the 4 KiB granule.
+pub fn huge_pages() -> bool { true }
 pub fn kernel_entry(index: usize) -> u64 { KERNEL_L1[index].load(Ordering::Acquire) as u64 | TABLE }
 pub fn kernel_root() -> usize { KERNEL_ROOT.load(Ordering::Acquire) }
 

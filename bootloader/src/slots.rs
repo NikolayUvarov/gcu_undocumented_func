@@ -4,15 +4,18 @@
 /// A boot record's size: one sector.
 pub const RECORD: usize = 512;
 pub const MAGIC: &[u8; 8] = b"MINDBOOT";
-pub const FORMAT: u32 = 1;
+/// Format 2 adds the version floor (351-UPD-0024); a record of format 1 is not read.
+pub const FORMAT: u32 = 2;
 const CONFIRMED: u8 = 1;
 /// The largest sequence a record may hold (351-UPD-0015): a trial writes one more, and its failure one more again.
 pub const SEQUENCE_LAST: u64 = u64::MAX - 2;
 
-/// One boot record: which slot to boot, the slot to fall back to, the tries a trial has left, and whether the slot
-/// was confirmed. The record with the higher sequence number counts; a writer always overwrites the other one.
+/// One boot record: which slot to boot, the slot to fall back to, the tries a trial has left, whether the slot was
+/// confirmed, and the version floor (351-UPD-0024): a slot whose manifest names a lower version is not booted. The
+/// record with the higher sequence number counts, its floor too; a writer always overwrites the other one, so a torn
+/// write leaves the record it did not touch, floor and all.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Record { pub sequence: u64, pub slot: u8, pub fallback: u8, pub tries: u8, pub confirmed: bool }
+pub struct Record { pub sequence: u64, pub slot: u8, pub fallback: u8, pub tries: u8, pub confirmed: bool, pub floor: u64 }
 
 /// CRC-32 (IEEE 802.3, as zlib computes it).
 pub fn crc32(data: &[u8]) -> u32 {
@@ -33,10 +36,17 @@ impl Record {
         if data.len() != RECORD || &data[..8] != MAGIC || data[8..12] != FORMAT.to_le_bytes() { return None; }
         if data[RECORD - 4..] != crc32(&data[..RECORD - 4]).to_le_bytes() { return None; }
         let (slot, fallback, tries, flags) = (data[20], data[21], data[22], data[23]);
-        if !is_slot(slot) || !(fallback == 0 || is_slot(fallback)) || flags & !CONFIRMED != 0 || data[24..RECORD - 4].iter().any(|&b| b != 0) { return None; }
+        if !is_slot(slot) || !(fallback == 0 || is_slot(fallback)) || flags & !CONFIRMED != 0 || data[32..RECORD - 4].iter().any(|&b| b != 0) { return None; }
         let sequence = u64::from_le_bytes(data[12..20].try_into().ok()?);
         if sequence > SEQUENCE_LAST { return None; }
-        Some(Record { sequence, slot, fallback, tries, confirmed: flags & CONFIRMED != 0 })
+        let floor = u64::from_le_bytes(data[24..32].try_into().ok()?);
+        Some(Record { sequence, slot, fallback, tries, confirmed: flags & CONFIRMED != 0, floor })
+    }
+
+    /// The format of a record of ours that this one does not read (format 1), to name in the refusal.
+    pub fn other_format(data: &[u8]) -> Option<u32> {
+        let format = u32::from_le_bytes(data.get(8..12)?.try_into().ok()?);
+        (data.len() == RECORD && &data[..8] == MAGIC && format != FORMAT).then_some(format)
     }
 
     pub fn encode(&self) -> [u8; RECORD] {
@@ -45,6 +55,7 @@ impl Record {
         data[8..12].copy_from_slice(&FORMAT.to_le_bytes());
         data[12..20].copy_from_slice(&self.sequence.to_le_bytes());
         data[20..24].copy_from_slice(&[self.slot, self.fallback, self.tries, if self.confirmed { CONFIRMED } else { 0 }]);
+        data[24..32].copy_from_slice(&self.floor.to_le_bytes());
         let crc = crc32(&data[..RECORD - 4]);
         data[RECORD - 4..].copy_from_slice(&crc.to_le_bytes());
         data
@@ -62,6 +73,8 @@ pub struct Plan {
     pub trial: bool,
     /// A record to write before anything is loaded, and the record file it goes to.
     pub write: Option<(usize, Record)>,
+    /// The version floor: the chosen record's, 0 with none.
+    pub floor: u64,
 }
 
 pub fn plan(records: [Option<Record>; 2]) -> Plan {
@@ -72,9 +85,10 @@ pub fn plan(records: [Option<Record>; 2]) -> Plan {
         [Some(_), None] => 0,
         [None, Some(_)] => 1,
         // No record to follow: either slot that verifies.
-        [None, None] => return Plan { chosen: None, order: [b'A', b'B'], trial: false, write: None },
+        [None, None] => return Plan { chosen: None, order: [b'A', b'B'], trial: false, write: None, floor: 0 },
     };
     let record = records[chosen].unwrap();
+    let floor = record.floor;
     let fallback = if record.fallback != record.slot { record.fallback } else { 0 };
     let (order, trial, write) = if record.confirmed {
         ([record.slot, fallback], false, None)
@@ -86,7 +100,7 @@ pub fn plan(records: [Option<Record>; 2]) -> Plan {
     } else {
         ([record.slot, 0], false, None)
     };
-    Plan { chosen: Some(chosen), order, trial, write }
+    Plan { chosen: Some(chosen), order, trial, write, floor }
 }
 
 /// After a trial slot failed to load: the record that leaves it no tries, and the record file it goes to.
