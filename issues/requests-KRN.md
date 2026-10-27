@@ -65,3 +65,14 @@ The first independent workspace is under `nrl/`, with portable crates and a host
 - The corresponding portable build for `aarch64-unknown-none-softfloat`, in a suitable build group.
 
 `bash nrl/tools/check.sh` combines those checks and a fresh host demonstration. The workspace is not discovered by the existing host scripts. NRL changes none of the owning track's build/CI scripts itself. A cross-built rlib is not a native OS test; an nnd smoke test remains later work with APP. The recorded first checks are in `nrl/reports/cpu-f64-2026-10-25.json`.
+
+## The store's own partition: media classified and a bounded grant (for 307)
+
+Recorded by the storage track (STO), 2026-10-27, for [307](307-the-stores-own-partition.md). `blockstore` then waits for the task number this request gets.
+
+- **What is asked:**
+  - `init` classifies the media of every block driver (`nvme`, `ahci`, `usb_storage`, `virtio_blk`), and finds a partition labelled `MIND STORE` of the store's own type, or the one the owner names in the configuration;
+  - it gives `blockstore` a client bounded to that partition's sectors, and `vfs_server` none of it.
+- **The rule:** on a real machine `init` never gives the store a disk because it is blank. A blank disk may be someone's new disk, and another system's disk is never written (the Ryzen's Windows disk, 213). The VirtIO rule of 300-KRN-0025 stays for QEMU.
+- **The client bounded to a range** is the drivers track's part (`requests-DRV.md`, same date). The grant and its wiring are yours.
+- **Also for [308](308-encryption-at-rest.md), later:** the TPM's registers for sealing (`PLATFORM_TPM`, 351-KRN-0043), which 351-NET-0006 waits for.
