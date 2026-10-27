@@ -1,6 +1,6 @@
 # 800-LNK-0027 — Proprietary firmware onto the machine over the link, so that no disk is written again for it
 
-**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** open (2026-10-27) · **Blocked by:** `KRN`: in developer mode, `link` gets a writable scope of `data/firmware/` (asked on `internal-dev-messages`, 2026-10-27) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.3
+**Type:** service, tool · **Owner:** `LNK` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** — (`KRN`'s 800-KRN-0173, merged into this branch) · **Main task:** [800](800-mind-link.md) · **Constitution:** MC-2.3, MC-10.2, MC-12.3
 
 ## Problem
 
@@ -37,10 +37,29 @@ The maintainer (2026-10-27): `effector485` was built to close the question of wr
    AGENTS.md is the maintainer's text: only its change is proposed.
 5. **`effector485 help`** names `replace` and `shell`, which the daemon serves but its help leaves out.
 
+## Progress
+
+- **2026-10-27, `KRN`:** 800-KRN-0173 (85b39c18). With `dev`, init gives `link` a writable scope of `data/firmware/` in `SLOT_FILE` and names it in its line. This branch merges the kernel track's branch for it (c881d82f).
+- **2026-10-27, `link`** (660cbf0d):
+  - **The name rules** are in `link/src/names.rs`, host-tested in `tests/link_names_host.rs`. Names under `firmware/` go to that client; `Store` switches the client per request.
+  - **A put to `firmware/`** has its part file in `data/firmware/`, so the finished file is renamed within one client.
+  - **A get or a put** keeps its client, since a handle answers only through the client it was opened with.
+  - **The top's `ls`** lists `firmware/` last.
+  - **Refused:** a move between the places, a change of `firmware` itself, and `run` or `replace` of a name there. Without the grant such names are unsupported.
+  - **The developer mode's line** says `FIRMWARE (data/firmware/ AS firmware/)`.
+  - **The `link` QEMU suite** puts, reads, lists and removes a file in `firmware/test/`, sees it in `data/firmware/test/`, and checks the refusals.
+- **2026-10-27, the tools** (9b1cb0b3):
+  - `scripts/proprietary.sh link PORT` puts through `mindlink`, and `link effector485` through the daemon;
+  - `effector485 help` names `shell` and `replace`;
+  - `mindlink.md` (both languages) and THIRD_PARTY.md are updated.
+- **Not done:**
+  - `link_update.py --firmware` (plan, point 3): `proprietary.sh link` before `link_update.py` does the same;
+  - the change to AGENTS.md's rule, which is the maintainer's text: to be proposed.
+
 ## Acceptance criteria
 
-- [ ] `link`'s host tests: names under `firmware/` reach the second scope, are refused without it, and a move between the scopes is refused.
-- [ ] The `link` QEMU suite: `mindlink put` of a file into `firmware/rtw88/` lands in `data/firmware/rtw88/` with `dev`, and is refused without it.
+- [x] Host tests of the name rules: names under `firmware/` go to `data/firmware/`, a put finishes in its own place, a move between the places and a change of the place itself are refused (`tests/link_names_host.rs`). That such names are unsupported without the grant is in `Store::scope`, not host-tested.
+- [x] The `link` QEMU suite (x86, 2026-10-27, with `linkupdate`): `mindlink put` of a file into `firmware/test/` lands in `data/firmware/test/` with `dev`; it comes back by `get`, and a move out of the place is refused.
 - [ ] On the DEXP: `proprietary.sh link` puts `rtw8821c_fw.bin` over `effector485`; after a restart `rtw88_wifi` reads it. Evidence for the DEXP only (MC-12.1).
 
 ## Related
