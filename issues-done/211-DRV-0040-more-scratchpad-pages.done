@@ -1,6 +1,6 @@
-# 211-DRV-0040 — `usb_host` gives an xHCI controller more than 32 scratchpad pages: the DEXP's asks 34
+# 211-DRV-0040 — `usb_host` gives an xHCI controller more than 32 scratchpad pages: the DEXP's asks 34 — done
 
-**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** in progress (2026-10-27) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
+**Type:** driver · **Owner:** `DRV` · **Priority:** P1 · **Status:** done (2026-10-27) · **Blocked by:** — · **Main task:** [211](../issues/211-intel-pc-from-a-sata-ssd.md) · **Constitution:** MC-10.2, MC-12.1
 
 ## Problem
 
@@ -29,8 +29,24 @@ The maintainer booted a stick written from `fast-test` on a DEXP desktop (2026-1
 ## Acceptance criteria
 
 - [x] The QEMU `usb`, `tablet` and `link` suites pass (x86, 2026-10-27, on the merge of `main` 417a2f31 with this change).
-- [ ] On the DEXP, `usb_host` logs the 34 pages with 2 from the pool, the controller starts, and the keyboard, the mouse and `effector485` through the machine's converter work. Evidence for that machine only (MC-12.1).
+- [x] On the DEXP, `usb_host` logs the 34 pages with 2 from the pool, the controller starts, and the keyboard, the mouse and `effector485` through the machine's converter work. Evidence for that machine only (MC-12.1).
 
 ## Related
 
-[211-DRV-0035](211-DRV-0035-superspeed-hubs.md), [211-DRV-0008](211-DRV-0008-usb-mouse-on-real-hardware.md), 800-DRV-0034.
+[211-DRV-0035](../issues/211-DRV-0035-superspeed-hubs.md), [211-DRV-0008](../issues/211-DRV-0008-usb-mouse-on-real-hardware.md), [211-DRV-0041](../issues/211-DRV-0041-the-dexps-rtl8168h.md), 800-DRV-0034.
+
+## Resolution
+
+`usb_host/src/xhci.rs` (76c8525a) takes the scratchpad pages beyond 32 from its pool, at most half of it. The DEXP, written from `fast-test` 2886bd72, 2026-10-27:
+
+- **The controller started:**
+  - `[USB] 34 SCRATCHPAD PAGES, 2 OF THEM FROM THE POOL`;
+  - `[USB] XHCI: 16 PORTS, 16 SLOTS`.
+- **Its devices:**
+  - the Logitech receiver `046D:C534`, as a keyboard and a mouse; the maintainer confirmed both work;
+  - the CH340 converter, through which `effector485` on COM22 reads the machine's log;
+  - the stick, as mass storage;
+  - the Realtek Bluetooth `0BDA:C821` and a `0573:1573`, found and not yet driven.
+- **QEMU:** `usb`, `tablet` and `link` passed. QEMU's xHCI asks no scratchpad pages.
+
+Evidence for the DEXP's controller only (MC-12.1).
