@@ -52,6 +52,10 @@ The maintainer (2026-10-27): `effector485` was built to close the question of wr
   - `scripts/proprietary.sh link PORT` puts through `mindlink`, and `link effector485` through the daemon;
   - `effector485 help` names `shell` and `replace`;
   - `mindlink.md` (both languages) and THIRD_PARTY.md are updated.
+- **2026-10-27, on the DEXP:**
+  - a release with this branch's `link` and KRN's `init` went over the cable (slot B, version 202610272251, confirmed);
+  - `link` logs `FIRMWARE (data/firmware/ AS firmware/)`;
+  - through `effector485`, `list firmware` shows `b43/`, `rtw88/` and `rtw89/`, and `stat firmware/rtw88/rtw8821c_fw.bin` gives 139,472 bytes and the pinned SHA-256 `2ef409bc…f3f0`.
 - **Not done:**
   - `link_update.py --firmware` (plan, point 3): `proprietary.sh link` before `link_update.py` does the same;
   - the change to AGENTS.md's rule, which is the maintainer's text: to be proposed.
