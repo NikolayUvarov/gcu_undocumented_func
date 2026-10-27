@@ -71,6 +71,7 @@ const RECOVERY_RESERVE_MIB: usize = 32; // frame pool kept for services and thei
 const CALL_LIMIT_MS: u32 = 10_000; // every call init makes to a service ends within this, answered or not (000-KRN-0075)
 const MOUNT_LIMIT_MS: u32 = 60_000; // the mount and the flush before a restart: a slow USB stick takes seconds
 const LINK_DIR: &str = "data/link"; // the only files the link to another machine reaches (800-KRN-0128)
+const FIRMWARE_DIR: &str = "data/firmware"; // the drivers' proprietary files; link writes there in developer mode (800-KRN-0173)
 const REPLACE_MAX: usize = 16 << 20; // the largest image a service may be replaced with from data/link/ (800-KRN-0144)
 const MODE_FILE: &str = "data/mode.conf"; // the machine's modes, kept across restarts (750-KRN-0143)
 const MODE_SERVICES: [&str; 2] = ["effector_gw", "effector"]; // run only in a mode (750-EFF-0013), the gateway first
@@ -463,7 +464,7 @@ impl Init {
                     grants.add(SLOT_LIFECYCLE, minted.badged(SLOT_SERVICE, CLIENT, mind::process::BADGE_DEVELOPER)?, CLIENT);
                     // The shell's commands, badged so that the shell applies the link's rule to them (800-KRN-0148).
                     grants.add(SLOT_SHELL, self.badged(&mut minted, "shell", mind::process::BADGE_SHELL_LINK)?, CLIENT);
-                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS");
+                    mind::println!("[INIT] link: DEVELOPER MODE (link.conf: dev): SYSMON, LAUNCH-ONLY NETWORK POLICY, WI-FI, REBOOT AND SHELL CLIENTS; {}/ TO WRITE", FIRMWARE_DIR);
                 }
             }
             "virtio_blk" => {
@@ -872,6 +873,14 @@ impl Init {
             match self.scope(badge, dir, writable) {
                 Ok(slot) => { grants.list[grants.count] = grant_moved(child, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
                 Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, dir, error),
+            }
+        }
+        // In developer mode link also writes data/firmware/, made if missing, in SLOT_FILE: a driver's new proprietary file
+        // goes over the cable, not by writing the disk again (800-KRN-0173, for 800-LNK-0027). The user's badge writes there.
+        if name == "link" && self.link_dev() && grants.count < SPAWN_GRANTS_MAX {
+            match self.scope(mind::fs::BADGE_USER, FIRMWARE_DIR, true) {
+                Ok(slot) => { grants.list[grants.count] = grant_moved(SLOT_FILE, slot, CLIENT); grants.count += 1; scopes[taken] = slot; taken += 1; }
+                Err(error) => mind::println!("[INIT] {}: NO FILES IN {} ({:?})", name, FIRMWARE_DIR, error),
             }
         }
         // The Effector gateway's deliveries: a writable scope of the root the owner's policy names, read at each start
