@@ -200,8 +200,8 @@ The UEFI loader hands the kernel `BootInfo` with `BOOT_HANDOFF_VERSION` (21) in 
 takes the versions from `BOOT_HANDOFF_OLDEST` (21) to its own. A change of system calls alone needs no new loader; a change
 of `BootInfo` or `BOOT_FILES` sets both versions above every ABI so far, and the kernel then refuses older loaders with
 `KERNEL STOPPED: THE BOOTLOADER HANDS OVER VERSION n, THIS KERNEL TAKES a TO b`. Programs keep checking `ABI_VERSION`.
-Handoff 21 (550-KRN-0172) appends the 44th image, `rtw88_wifi`, which moves every field after `extra_programs`: a loader of
-handoff 20 or older is refused, as no compatibility with older versions is kept before the first release.
+Handoff 21 (550-KRN-0172) adds a 44th image, `rtw88_wifi`, after `rtw89_wifi`: it renumbers the images after it and moves
+every field after `extra_programs`, so a loader of handoff 20 or older is refused, as no compatibility with older versions is kept before the first release.
 
 `boot_flags` (173-KRN-0036) holds `BOOT_SAFE` when Esc or S was pressed at the loader, before or within the second it waits
 after `ESC OR S WITHIN 1 S`. init then ignores `data/services.txt`.

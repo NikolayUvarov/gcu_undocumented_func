@@ -15,7 +15,7 @@
 ## Plan
 
 1. **`common/abi.rs`:**
-   - `rtw88_wifi` is the 44th boot image, appended after the prefix.
+   - `rtw88_wifi` is the 44th boot image, placed right after `rtw89_wifi`, so that init starts it before `wlan`. `wlan` takes only a radio that already runs (`BEFORE`), and init starts the images in their order.
    - `ABI_VERSION` and `BOOT_HANDOFF_VERSION` become 21, and `BOOT_HANDOFF_OLDEST` becomes 21. The new image moves every field after `extra_programs`, so an older loader is refused by name.
    - Before the first release no older handoff is read (AGENTS.md, section 3). So the kernel's zeroing of `boot_flags` for a loader before handoff 20 goes, with `BOOT_FLAGS_SINCE`.
 2. **`02_build.sh`:** `rtw88_wifi:rtw88_wifi:rtw88_wifi.elf`.
@@ -35,7 +35,7 @@
 ## Acceptance criteria
 
 - **Builds:** x86 and aarch64.
-- **Host tests:** `tests/boot_abi_host.rs` (handoff 21 only, the 44th image, `BootInfo`'s size), `tests/runtime.rs` (ABI 21).
+- **Host tests:** `tests/boot_abi_host.rs` (handoff 21 only, the 44th image before `wlan`, `BootInfo`'s size), `tests/runtime.rs` (ABI 21), `tests/services_host.rs` (the rules name services in their boot order).
 - **QEMU, x86:** the boot and one-CPU groups pass. On a machine without the card, init does not start `rtw88_wifi`, and `wlan` takes `wlansim`.
 - **On the DEXP,** through `DRV`'s slot update by `effector485`:
   - init logs `[INIT] STARTED rtw88_wifi`;
