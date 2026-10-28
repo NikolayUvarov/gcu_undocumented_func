@@ -1,6 +1,6 @@
 # 800-KRN-0173 — With `dev`, `link` writes `data/firmware/`, so that a driver's proprietary file goes over the cable
 
-**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (made; landing left) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Roadmap:** track C (update and distribution) · **Constitution:** MC-2.3, MC-3.1, MC-10.2, MC-12.1, MC-12.3
+**Type:** `init` · **Owner:** `KRN` · **Priority:** P1 · **Status:** open (landed in round 37, `main` c8fe8d03, both architectures gated; the run on a machine left, LNK's) · **Blocked by:** — · **Main task:** [800](800-mind-link.md) (the link track's) · **Roadmap:** track C (update and distribution) · **Constitution:** MC-2.3, MC-3.1, MC-10.2, MC-12.1, MC-12.3
 
 **Asked by:** the link track (`LNK`) on 2026-10-27, for 800-LNK-0027 (`claude/LNK-link` 6696a1eb), in `KRN/2026-10-27T2156Z-LNK-a-scope-of-data-firmware-for-link.md` on `internal-dev-messages`.
 

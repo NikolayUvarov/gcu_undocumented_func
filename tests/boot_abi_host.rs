@@ -48,13 +48,11 @@ fn version_read_needs_only_the_old_record() {
     assert_eq!(unsafe { BootInfo::read_abi_version(1usize as *const BootInfo) }, None);
 }
 
-// 351-KRN-0166: the loader's handoff apart from the system calls. Handoff 21 (550-KRN-0172) adds a 44th image, which
-// moves every field after extra_programs: only a loader of this handoff is read, an older one refused by name.
+// 351-KRN-0166: the loader's handoff apart from the system calls, one version with no range (000-KRN-0175). Handoff 21
+// (550-KRN-0172) adds a 44th image, which moves every field after extra_programs.
 #[test]
 fn the_handoff_takes_only_its_own_loader() {
-    assert_eq!((BOOT_HANDOFF_OLDEST, BOOT_HANDOFF_VERSION), (21, 21));
-    assert!(handoff_accepted(21));
-    assert!(!handoff_accepted(20) && !handoff_accepted(16) && !handoff_accepted(22) && !handoff_accepted(10));
+    assert_eq!(BOOT_HANDOFF_VERSION, 21);
     assert_eq!(BOOT_IMAGES, 44, "a change of the boot images is a change of the handoff");
     assert_eq!(size_of::<BootInfo>(), 1064, "a change of BootInfo is a change of the handoff");
     let at = BOOT_SERVICES.iter().position(|&name| name == "rtw88_wifi").unwrap();

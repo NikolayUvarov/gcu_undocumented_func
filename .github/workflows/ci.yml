@@ -39,6 +39,17 @@ jobs:
       - name: TLC on the models
         run: scripts/model_check.sh
 
+  # The neural representation lab's host tests, portable builds and pipelines (900-KRN-0174, NRL's request).
+  nrl:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install && rustc -V
+      - name: NRL checks
+        run: bash nrl/tools/check.sh
+
   qemu:
     runs-on: ubuntu-24.04
     timeout-minutes: 60

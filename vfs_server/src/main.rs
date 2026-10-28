@@ -23,7 +23,7 @@ use fat::{Node, Volume};
 use journal::Journal;
 use zone::{Zone, PRIVATE, RECORD};
 use mind::abi::*;
-use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
+use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_OWNERS, BADGE_UPDATE, BADGE_USER, ENTRY_ARCHIVE, ENTRY_DIR, ENTRY_HIDDEN, ENTRY_READ_ONLY, ENTRY_SYSTEM, MODE_CREATE, MODE_NEW, MODE_TRUNCATE, MODE_WRITE};
 use mind::idl::codec::Text;
 use mind::idl::vfs::{self, Error, Request};
 use mind::idl::wire::Call;
@@ -39,13 +39,14 @@ struct Handle { owner: u64, badge: u16, volume: usize, node: Node, name: String,
 struct Mounted { name: &'static str, volume: Volume<Shared> }
 
 // A client confined to one directory (`scope`): the capability vfs_server minted with the scope's badge stays here, so
-// ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user.
-struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize }
+// ending the scope revokes every copy of it. The first task that opens a root with the badge is its only user, or the
+// task its maker names (`adopt`, 2.5).
+struct Scope { badge: u16, volume: usize, node: Node, name: String, zone: Zone, user: Option<u64>, made_ms: u64, cap: usize, maker: u64 }
 
 // `inactive`: the slot the updater may fill, None on a system booted from its volume's root.
 struct Server { volumes: Vec<Mounted>, handles: Vec<Option<Handle>>, scopes: Vec<Option<Scope>>, next_badge: u16, journal: Option<(usize, Journal)>, inactive: Option<&'static str> }
 
-const SCOPES: usize = 8;
+const SCOPES: usize = 64; // the loader's programs' own directories (000-KRN-0170) beside the launchers' scopes
 const FILL_WINDOW: usize = 64 << 20; // `fill` maps the lent object this much at a time, within the shared-mapping limit
 const SCOPE_UNUSED_MS: u64 = 60_000; // a scope nobody took up ends after a minute
 // Badges of scoped clients start here (below: applications 0, the user 1).
@@ -363,7 +364,7 @@ impl Server {
                     };
                     let cap = ipc::mint_badged(SLOT_SERVICE, CAP_WRITE | CAP_GRANT, badge).map_err(|_| Error::Handles)?;
                     mind::println!("[VFS] SCOPE {:#x} FOR {}:/{} ({})", badge, self.volumes[volume].name, name, if zone == Zone::Writable { "WRITABLE" } else { "READ-ONLY" });
-                    self.scopes[index] = Some(Scope { badge, volume, node, name, zone, user: None, made_ms: mind::time::uptime_ms() as u64, cap });
+                    self.scopes[index] = Some(Scope { badge, volume, node, name, zone, user: None, made_ms: mind::time::uptime_ms() as u64, cap, maker: sender });
                     Ok(cap)
                 })();
                 vfs::reply_scope(call, result)
@@ -389,6 +390,15 @@ impl Server {
                     Ok(())
                 })();
                 vfs::reply_format(call, result)
+            }
+            Request::Adopt { scope, task } => {
+                // The loader names the program it started with the scope (000-KRN-0170): only the scope's maker may.
+                let result = match self.scope_of(scope).and_then(|index| self.scopes[index].as_mut()) {
+                    Some(s) if s.maker == sender && s.user.is_none_or(|user| user == task) => { s.user = Some(task); Ok(()) }
+                    Some(_) => Err(Error::Denied),
+                    None => Err(Error::NotFound),
+                };
+                vfs::reply_adopt(call, result)
             }
             Request::Fill { file, offset, target } => {
                 // The lent object is mapped a window at a time (a child capability of each part), so vfs_server never

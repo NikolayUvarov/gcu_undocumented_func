@@ -193,3 +193,86 @@ pub fn new_agent_id(random: u64, out: &mut [u8; 21]) -> &str {
     for i in 0..16 { out[5 + i] = b"0123456789abcdef"[(random >> (60 - 4 * i)) as usize & 15]; }
     core::str::from_utf8(&out[..]).unwrap()
 }
+
+/// The longest machine print and record (750-EFF-0017).
+pub const PRINT_MAX: usize = 96;
+pub const RECORD_MAX: usize = PRINT_MAX + NAME_MAX + 2;
+
+/// What the machine record beside the kept agent ID says of it (750-EFF-0017).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Machine<'a> {
+    /// No record, or an unreadable one: an agent from before the record; this machine is taken as the identity's own.
+    Unrecorded,
+    /// Recorded on this machine; `foreign` is the hostname the owner's configuration gave the machine the identity was
+    /// copied from, empty if it was not copied.
+    This { foreign: &'a str },
+    /// Recorded on another machine: the identity, and the owner's files with it, were copied here.
+    Other { print: &'a str },
+}
+
+/// The machine's print: the processor's name and the memory in GiB rounded to a power of two, so that neither the
+/// kernel's reserve nor a build's moves it.
+pub fn print<'a>(cpu_model: &str, memory_bytes: u64, out: &'a mut [u8; PRINT_MAX]) -> &'a str {
+    let gib = (memory_bytes + (1 << 29)) >> 30;
+    let pow = if gib == 0 { 0 } else { let lo = 1u64 << (63 - gib.leading_zeros()); if gib - lo >= lo * 2 - gib { lo * 2 } else { lo } };
+    let model = cpu_model.get(..cpu_model.len().min(PRINT_MAX - 32)).unwrap_or("");
+    let mut at = 0;
+    for part in [model, if model.is_empty() { "" } else { ", " }] { out[at..at + part.len()].copy_from_slice(part.as_bytes()); at += part.len(); }
+    let mut digits = [0u8; 20];
+    let mut n = digits.len();
+    let mut v = pow;
+    loop { n -= 1; digits[n] = b'0' + (v % 10) as u8; v /= 10; if v == 0 { break; } }
+    for part in [&digits[n..], b" GiB"] { out[at..at + part.len()].copy_from_slice(part); at += part.len(); }
+    core::str::from_utf8(&out[..at]).unwrap_or("")
+}
+
+/// The record read against this machine's print: its first line the print, its second, if any, the foreign hostname.
+pub fn machine<'a>(record: Option<&'a [u8]>, print: &str) -> Machine<'a> {
+    let Some(text) = record.and_then(|r| core::str::from_utf8(r).ok()) else { return Machine::Unrecorded };
+    let mut lines = text.split('\n').map(|l| l.trim_end_matches('\r'));
+    let recorded = lines.next().unwrap_or("");
+    if recorded.is_empty() || recorded.len() > PRINT_MAX { return Machine::Unrecorded; }
+    if recorded != print { return Machine::Other { print: recorded }; }
+    let foreign = lines.next().filter(|h| hostname_ok(h)).unwrap_or("");
+    Machine::This { foreign }
+}
+
+/// The record for this machine, with the hostname written for the machine the identity came from.
+pub fn record<'a>(print: &str, foreign: &str, out: &'a mut [u8; RECORD_MAX]) -> &'a [u8] {
+    let foreign = if hostname_ok(foreign) { foreign } else { "" };
+    let mut at = 0;
+    for part in [print.get(..print.len().min(PRINT_MAX)).unwrap_or(""), "\n", foreign, if foreign.is_empty() { "" } else { "\n" }] {
+        out[at..at + part.len()].copy_from_slice(part.as_bytes());
+        at += part.len();
+    }
+    &out[..at]
+}
+
+/// A hostname of this machine's own while the configuration's was written for another: `mind-` and the processor's
+/// name without its maker, marks and clock (`Intel(R) N100` gives `mind-n100`), else `mindcore`.
+pub fn own_hostname<'a>(cpu_model: &str, out: &'a mut [u8; NAME_MAX]) -> &'a str {
+    const DROPPED: [&str; 6] = ["intel", "amd", "cpu", "processor", "apple", "with"];
+    out[..5].copy_from_slice(b"mind-");
+    let mut at = 5;
+    let model = cpu_model.split('@').next().unwrap_or("");
+    for word in model.split_whitespace() {
+        // The word in lower case without its marks, (R) and (TM), and without what a hostname cannot hold.
+        let (bytes, mut clean, mut n, mut i) = (word.as_bytes(), [0u8; 48], 0, 0);
+        while i < bytes.len() {
+            if let Some(m) = [&b"(r)"[..], b"(tm)"].iter().find(|m| bytes[i..].len() >= m.len() && bytes[i..i + m.len()].eq_ignore_ascii_case(m)) { i += m.len(); continue; }
+            let c = bytes[i].to_ascii_lowercase();
+            if (c.is_ascii_alphanumeric() || c == b'-') && n < clean.len() { clean[n] = c; n += 1; }
+            i += 1;
+        }
+        let w = &clean[..n];
+        let text = core::str::from_utf8(w).unwrap_or("");
+        if text.is_empty() || DROPPED.contains(&text) || at + 1 + w.len() > NAME_MAX { continue; }
+        if at > 5 { out[at] = b'-'; at += 1; }
+        out[at..at + w.len()].copy_from_slice(w);
+        at += w.len();
+    }
+    if at == 5 { return "mindcore"; }
+    core::str::from_utf8(&out[..at]).unwrap_or("mindcore")
+}
+
+fn hostname_ok(h: &str) -> bool { !h.is_empty() && h.len() <= NAME_MAX && h.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'.') }

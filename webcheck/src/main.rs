@@ -8,10 +8,14 @@
 // them and the TLS service still checks its certificate for NAME (default: the host) (tls.wit 1.2, 750-NET-0020).
 // Response heads go to the parser service, as download's do; with --json, a JSON body too, one line per value
 // (parse.wit 1.4, 750-NET-0021). With --client-cert, https asks the TLS service to present the device certificate, which a
-// client it lends without that right is refused (351-NET-0022). One line per step.
+// client it lends without that right is refused (351-NET-0022). With --api, the checks of HTTP for API clients against
+// tests/http_api_stub.py at URL (000-NET-0047): a JSON POST, a multipart upload, redirect chains, gzip and deflate
+// bodies and a bomb, 1000 Server-Sent Events, a chunked upload, Retry-After. One line per step.
 extern crate alloc;
 
 use mind::abi::{BootInfo, CAP_KIND_ENDPOINT, SLOT_NETWORK, SLOT_PARSE, SLOT_TLS};
+use alloc::string::String;
+use alloc::vec::Vec;
 use mind::http::{self, Connection, Method, Transport, Url};
 use mind::idl::{socket, tls};
 use mind::ipc::Endpoint;
@@ -115,13 +119,222 @@ fn show_json(text: &[u8]) {
     }
 }
 
+// A connection of its own for each API check, over a TLS session for https.
+fn open(url: &Url) -> Connection<Timed> {
+    let Some(address) = ipv4(url.host) else { fail(format_args!("A.B.C.D HOSTS ONLY")) };
+    let link = if url.https {
+        let session = match tls::attach(TLS, SLOT_NETWORK) { Ok(Ok(s)) => s, other => fail(format_args!("TLS: {:?}", other.map_err(|_| ()))) };
+        match tls::connect(TLS, session, url.host, address, url.port, false, 10_000) {
+            Ok(Ok(_)) => Link::Tls(session),
+            other => { let _ = tls::close(TLS, session); fail(format_args!("TLS CONNECT: {:?}", other.map_err(|_| ()))) }
+        }
+    } else {
+        match socket::tcp_connect(STACK, address, url.port, 10_000) { Ok(Ok(s)) => Link::Tcp(s), other => fail(format_args!("CONNECT: {:?}", other.map_err(|_| ()))) }
+    };
+    Connection::new(Timed { link, idle_ms: 15_000 })
+}
+
+fn hex(digest: &[u8]) -> String {
+    use core::fmt::Write;
+    let mut text = String::new();
+    for byte in digest { let _ = write!(text, "{:02x}", byte); }
+    text
+}
+
+// The whole body as text, up to 4 KiB.
+fn text<T: Transport>(response: &mut http::Response<'_, T>) -> String {
+    let mut first = [0u8; 4096];
+    let (_, kept) = body(response, &mut first).unwrap_or_else(|e| fail(format_args!("BODY: {:?}", e)));
+    String::from(core::str::from_utf8(&first[..kept]).unwrap_or("(not UTF-8)"))
+}
+
+// GET or POST `path` and follow its redirects within this host, a new connection for each: the status that ended it,
+// how many redirects were followed, and the last body.
+fn follow(base: &Url, method: Method, path: &str, parser: &mut mind::parse::Service) -> Result<(u16, u32, String), http::Error> {
+    let mut current = String::from(path);
+    let (mut method, mut followed) = (method, 0u32);
+    loop {
+        let url = if current.starts_with('/') { Url { path: &current, ..*base } } else { Url::parse(&current)? };
+        let mut connection = open(&url);
+        let mut empty: &[u8] = b"";
+        let body = (method == Method::Post).then_some((0u64, &mut empty as &mut dyn http::Source));
+        let mut response = connection.request(method, &url, &[], body, parser, false)?;
+        let head = response.head;
+        let answer = text(&mut response);
+        let mut next = [0u8; 2048];
+        match http::redirect(&url, method, &head, followed, &mut next)? {
+            None => return Ok((head.status, followed, answer)),
+            Some(r) => {
+                if !r.same_host { return Err(http::Error::Redirect); }
+                let to = core::str::from_utf8(&next[..r.length]).unwrap_or("");
+                let path = to.split_once("://").map_or(to, |(_, rest)| &rest[rest.find('/').unwrap_or(rest.len())..]);
+                mind::println!("WEBCHECK API REDIRECT {} {} TO {}", head.status, r.method.name(), path);
+                current = String::from(to);
+                method = r.method;
+                followed += 1;
+            }
+        }
+    }
+}
+
+// The checks of HTTP for API clients against tests/http_api_stub.py at `base` (000-NET-0047), each in a function of
+// its own so that their connections' buffers share the stack.
+fn api(base: &Url, parser: &mut mind::parse::Service) {
+    api_json(base, parser);
+    api_multipart(base, parser);
+    api_streamed(base, parser);
+    api_redirects(base, parser);
+    for path in ["/api/gzip", "/api/deflate"] { api_coded(base, path, parser); }
+    api_bomb(base, parser);
+    api_events(base, parser);
+    for path in ["/api/busy", "/api/limited"] { api_retry(base, path, parser); }
+}
+
+// A JSON POST, as a language model's API takes one.
+#[inline(never)]
+fn api_json(base: &Url, parser: &mut mind::parse::Service) {
+    let chat = "{\"model\":\"mind-test\",\"messages\":[{\"role\":\"user\",\"content\":\"hello from MIND\"}],\"max_tokens\":16}";
+    let url = Url { path: "/api/chat", ..*base };
+    let mut connection = open(&url);
+    let mut source = chat.as_bytes();
+    let mut response = connection.request(Method::Post, &url, &[("Content-Type", "application/json"), ("Accept", "application/json")], Some((chat.len() as u64, &mut source)), parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API JSON: {:?}", e)));
+    let (status, media) = (response.status, response.head.media);
+    mind::println!("WEBCHECK API JSON {} {} {}", status, media.as_str(), text(&mut response));
+}
+
+// A file's bytes made from their offsets, given in pieces of at most 1500.
+struct Pattern { at: usize, length: usize }
+impl http::Source for Pattern {
+    fn read(&mut self, buffer: &mut [u8]) -> Result<usize, http::Error> {
+        let n = buffer.len().min(self.length - self.at).min(1500);
+        for (i, b) in buffer[..n].iter_mut().enumerate() { *b = ((self.at + i) * 7 % 251) as u8; }
+        self.at += n;
+        Ok(n)
+    }
+}
+
+// A multipart upload: a field and a 100 000-byte file streamed in pieces.
+#[inline(never)]
+fn api_multipart(base: &Url, parser: &mut mind::parse::Service) {
+    let length = 100_000;
+    let data: Vec<u8> = (0..length).map(|i| (i * 7 % 251) as u8).collect();
+    mind::println!("WEBCHECK API FILE SHA256 {}", hex(&mind::sha256::digest(&data)));
+    let mut random = [0u8; 16];
+    if !mind::random::fill(&mut random) { random = (mind::time::monotonic_ns() as u128).to_le_bytes(); }
+    let mut file = Pattern { at: 0, length };
+    let mut parts = [
+        mind::multipart::Part::Field { name: "chat_id", value: b"42" },
+        mind::multipart::Part::File { name: "document", filename: "data.bin", media: "application/octet-stream", length: length as u64, source: &mut file },
+    ];
+    let mut multipart = mind::multipart::Multipart::new(&mut parts, random).unwrap_or_else(|e| fail(format_args!("API MULTIPART: {:?}", e)));
+    let mut kind = String::from("multipart/form-data; boundary=");
+    kind.push_str(multipart.boundary());
+    let url = Url { path: "/api/upload", ..*base };
+    let mut connection = open(&url);
+    let total = multipart.length();
+    let mut response = connection.request(Method::Post, &url, &[("Content-Type", &kind)], Some((total, &mut multipart)), parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API MULTIPART: {:?}", e)));
+    let status = response.status;
+    mind::println!("WEBCHECK API MULTIPART {} {} BYTES {}", status, total, text(&mut response));
+}
+
+// A body of unknown length, sent chunked.
+#[inline(never)]
+fn api_streamed(base: &Url, parser: &mut mind::parse::Service) {
+    let url = Url { path: "/api/stream", ..*base };
+    let mut connection = open(&url);
+    let mut file = Pattern { at: 0, length: 50_000 };
+    let mut response = connection.request_streamed(Method::Post, &url, &[("Content-Type", "application/octet-stream")], &mut file, parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API STREAMED: {:?}", e)));
+    let status = response.status;
+    mind::println!("WEBCHECK API STREAMED {} {}", status, text(&mut response));
+}
+
+// Redirects: a chain of four kinds, a 303 after a POST, a loop, and a way down to plain HTTP.
+#[inline(never)]
+fn api_redirects(base: &Url, parser: &mut mind::parse::Service) {
+    match follow(base, Method::Get, "/api/r/4", parser) {
+        Ok((status, n, answer)) => mind::println!("WEBCHECK API REDIRECTS {} THEN {} {}", n, status, answer),
+        Err(e) => mind::println!("WEBCHECK API REDIRECTS: {:?}", e),
+    }
+    match follow(base, Method::Post, "/api/see-other", parser) {
+        Ok((status, n, answer)) => mind::println!("WEBCHECK API SEE OTHER {} THEN {} {}", n, status, answer),
+        Err(e) => mind::println!("WEBCHECK API SEE OTHER: {:?}", e),
+    }
+    mind::println!("WEBCHECK API LOOP {:?}", follow(base, Method::Get, "/api/loop", parser).map(|r| r.0));
+    mind::println!("WEBCHECK API DOWN {:?}", follow(base, Method::Get, "/api/down", parser).map(|r| r.0));
+}
+
+// A coded body decoded as it arrives.
+#[inline(never)]
+fn api_coded(base: &Url, path: &'static str, parser: &mut mind::parse::Service) {
+    let url = Url { path, ..*base };
+    let mut connection = open(&url);
+    let mut response = connection.request(Method::Get, &url, &[("Accept-Encoding", "gzip, deflate")], None, parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API {}: {:?}", path, e)));
+    let (coded, encoding) = (response.length.unwrap_or(0), response.head.encoding);
+    let mut hasher = mind::sha256::Sha256::new();
+    let decoded = mind::http_coding::decode(&mut response, 1 << 20, &mut |piece| { hasher.update(piece); true });
+    mind::println!("WEBCHECK API {} {:?} {} BYTES DECODED {:?} SHA256 {}", &path[5..], encoding, coded, decoded, hex(&hasher.finish()));
+}
+
+// A bomb stopped at 1 MiB.
+#[inline(never)]
+fn api_bomb(base: &Url, parser: &mut mind::parse::Service) {
+    let url = Url { path: "/api/bomb", ..*base };
+    let mut connection = open(&url);
+    let mut response = connection.request(Method::Get, &url, &[("Accept-Encoding", "gzip")], None, parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API BOMB: {:?}", e)));
+    let mut seen = 0u64;
+    let decoded = mind::http_coding::decode(&mut response, 1 << 20, &mut |piece| { seen += piece.len() as u64; true });
+    mind::println!("WEBCHECK API BOMB {:?} AFTER {} BYTES", decoded, seen);
+}
+
+// Server-Sent Events: 1000 in order, then the last.
+#[inline(never)]
+fn api_events(base: &Url, parser: &mut mind::parse::Service) {
+    let url = Url { path: "/api/events", ..*base };
+    let mut connection = open(&url);
+    connection.transport().idle_ms = 60_000;
+    let mut response = connection.request(Method::Get, &url, &[("Accept", "text/event-stream")], None, parser, false)
+        .unwrap_or_else(|e| fail(format_args!("API EVENTS: {:?}", e)));
+    let media = response.head.media;
+    let mut stream = mind::sse::Stream::new(4096);
+    let (mut deltas, mut in_order, mut done) = (0usize, true, false);
+    let mut buffer = [0u8; 2048];
+    loop {
+        let n = response.read(&mut buffer).unwrap_or_else(|e| fail(format_args!("API EVENTS BODY: {:?}", e)));
+        if n == 0 { break; }
+        stream.feed(&buffer[..n], &mut |event| {
+            if event.kind == "delta" {
+                in_order &= event.data == alloc::format!("{{\"n\":{},\n\"text\":\"piece {}\"}}", deltas, deltas) && event.id == alloc::format!("{}", deltas);
+                deltas += 1;
+            } else if event.kind == "done" && event.data == "[DONE]" { done = true; }
+            true
+        }).unwrap_or_else(|e| fail(format_args!("API EVENTS: {:?}", e)));
+    }
+    mind::println!("WEBCHECK API EVENTS {} {} DELTAS IN ORDER {} DONE {} LAST ID {} RETRY {:?}", media.as_str(), deltas, in_order, done, stream.last_id(), stream.retry());
+}
+
+// Retry-After, in seconds or as a date: given to the caller, nothing repeated.
+#[inline(never)]
+fn api_retry(base: &Url, path: &'static str, parser: &mut mind::parse::Service) {
+    let url = Url { path, ..*base };
+    let mut connection = open(&url);
+    let mut response = connection.request(Method::Get, &url, &[], None, parser, false).unwrap_or_else(|e| fail(format_args!("API {}: {:?}", path, e)));
+    let (status, retry) = (response.status, response.head.retry_after);
+    let _ = text(&mut response);
+    mind::println!("WEBCHECK API {} {} RETRY-AFTER {:?}", &path[5..], status, retry);
+}
+
 mind::entry!(main);
 fn main(_info: &'static BootInfo) {
-    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json] [--client-cert]");
+    mind::about!("webcheck — the network track's check of HTTP for services: a POST, requests on one connection, a long stream, pinned servers.\nUsage: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS] [--pin leaf|spki:HEX]... [--name NAME] [--json] [--client-cert] [--api]");
     let mut words = mind::process::args_str().split_whitespace();
     let Some(url) = words.next() else { fail(format_args!("USAGE: webcheck URL [--post JSON] [--repeat N] [--stream] [--idle SECONDS]")) };
     let (mut post, mut repeat, mut stream, mut idle, mut as_json, mut client_certificate) = (None, 0u32, false, 15usize, false, false);
-    let (mut pins, mut name) = (mind::idl::codec::List::<tls::Pin, 2>::default(), None);
+    let (mut pins, mut name, mut api_checks) = (mind::idl::codec::List::<tls::Pin, 2>::default(), None, false);
     while let Some(word) = words.next() {
         match word {
             "--pin" => {
@@ -140,6 +353,7 @@ fn main(_info: &'static BootInfo) {
             "--stream" => stream = true,
             "--json" => as_json = true,
             "--client-cert" => client_certificate = true,
+            "--api" => api_checks = true,
             "--idle" => idle = words.next().and_then(|n| n.parse().ok()).unwrap_or(15),
             _ => fail(format_args!("UNKNOWN OPTION {}", word)),
         }
@@ -147,6 +361,11 @@ fn main(_info: &'static BootInfo) {
     let Ok(url) = Url::parse(url) else { fail(format_args!("NOT AN http:// OR https:// URL")) };
     if mind::dev::cap_info(SLOT_NETWORK).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO NETWORK GRANT")); }
     if mind::dev::cap_info(SLOT_PARSE).0 != CAP_KIND_ENDPOINT { fail(format_args!("NO PARSER SERVICE")); }
+    if api_checks {
+        api(&url, &mut mind::parse::Service(Endpoint(SLOT_PARSE)));
+        mind::println!("WEBCHECK DONE");
+        return;
+    }
     let Some(address) = ipv4(url.host) else { fail(format_args!("A.B.C.D HOSTS ONLY")) };
     let link = if url.https {
         let session = match tls::attach(TLS, SLOT_NETWORK) { Ok(Ok(s)) => s, other => fail(format_args!("TLS: {:?}", other.map_err(|_| ()))) };

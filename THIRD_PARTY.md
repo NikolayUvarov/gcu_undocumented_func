@@ -13,6 +13,7 @@ MIND Core is licensed under MIT OR Apache-2.0 (see [README](README.md#license)).
 | `hwdocs/socs/bcm2711.pins` | Transcribed from "BCM2711 ARM Peripherals" (Raspberry Pi Ltd, RP-008248-DS-1), section 5.3, table 94: the pins' alternate functions and pulls at reset | facts about the hardware; no text or figures copied | not in the system image; put on a disk with `make_usb_image.py --hwdocs` |
 | `hwdocs/boards/rpi4b.board` | Transcribed from "Raspberry Pi 4 Model B Reduced Schematics" (Raspberry Pi Ltd, RP-008345-DS-1), connector J8: which GPIO is at which header position | as above | as above |
 | `hwdocs/socs/pl061.pins` | Arm's "PrimeCell GPIO (PL061) Technical Reference Manual" (DDI 0190B): eight pins, no multiplexing | as above | as above |
+| `third_party/roots/cacert.pem`, shipped as `tlsroots.pem` | Mozilla's root certificates for TLS server authentication from NSS's `certdata.txt`, as curl extracts them ([curl.se/docs/caextract.html](https://curl.se/docs/caextract.html)); its date, size and SHA-256 are in `third_party/roots/SOURCE.md`, and `scripts/update_roots.py` fetches a newer one (000-NET-0046) | **MPL-2.0** ([text](LICENSES/MPL-2.0.txt)) | In the system image at the boot volume's root; `tls` verifies servers against it |
 | `wifi/src/countries.rs` | The two-letter codes and usual English names of tzdata 2026b's `iso3166.tab` (ISO 3166-1 alpha-2, as of ISO/TC 46 N1127), converted to a table | **public domain**, as the file says | Readable names for the station's country codes in `wifi` (550-APP-0082); embedded in `wifi.elf` |
 | `nrl/reference/qwen-spline-lab-v0.1.0.zip` | Qwen Spline Lab v0.1.0, a Python/PyTorch prototype of spline and low-rank representations of a Qwen3 model's MLP blocks, Copyright (c) 2026 Qwen Spline Lab contributors; given by the maintainer on 2026-10-23 as the reference of the track `NRL` ([900](issues/900-neural-representation-lab.md)) | **MIT** (its own `LICENSE` inside the archive) | Kept unchanged, SHA-256 `5e27aab03013e16ac447f12e7093b39ca36167fb20b9b74368661ea425a38b25`; no model weights and no third-party code inside (its `docs/SOURCES.md`); not built or copied into any image; explicitly reproduced by NRL's host tools (900-NRL-0001), with generated tensors and a numerical port attributed in `nrl/NOTICE` |
 
@@ -102,7 +103,7 @@ Any free model may be used (the maintainer, 2026-10-08), so these licences diffe
 
 ## Proprietary files (neither in this repository nor in any image)
 
-Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. It keeps them in `proprietary/`, the separate store for all such components in the working tree, which `.gitignore` excludes. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume. A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
+Their terms forbid redistribution. A script fetches each from the source named here and checks it by SHA-256 on the maintainer's machine. It keeps them in `proprietary/`, the separate store for all such components in the working tree, which `.gitignore` excludes. After the image is written, the script copies it onto the disk, under `data/firmware/` on the boot volume, or puts it there over MIND Link on a running machine in developer mode (`scripts/proprietary.sh link`, 800-LNK-0027). A disk that holds one is for the maintainer's own use (AGENTS.md, section 3).
 
 | Files | Needed by | Source | Script |
 |---|---|---|---|
@@ -111,6 +112,9 @@ Their terms forbid redistribution. A script fetches each from the source named h
 ### Realtek firmware kept in the same personal store
 
 RTL8852BE's `rtw89/rtw8852b_fw-1.bin` is fetched from official `linux-firmware` commit `599764611a8ac213c6aa6dad17c941c2f46b53cb` by [`scripts/firmware/rtl8852be.py`](scripts/firmware/rtl8852be.py), also invoked by the standard `scripts/proprietary.sh fetch` used by `build-and-write.sh`. [The source/size/hash record](hwdocs/rtl8852be.md#firmware-pin-and-personal-store) pins both firmware and `LICENCE.rtlwifi_firmware.txt`. Unlike the Broadcom files above, Realtek's terms permit unmodified binary redistribution with its notice and conditions; they prohibit reverse engineering, decompilation and disassembly. The project's personal-store workflow is nevertheless used: both downloads stay under ignored `proprietary/firmware/rtw89/`, outside built images and this repository, and `scripts/proprietary.sh copy` copies them together after a disk image is written. The binary is not a test fixture or part of the BSD-licensed helper code.
+
+
+The RTL8821C Bluetooth controller's `rtl_bt/rtl8821c_fw.bin` and `rtl_bt/rtl8821c_config.bin` (`bt_hci`, 700-BLT-0001) come from the same `linux-firmware` commit, fetched by [`scripts/firmware/rtl8821c_bt.py`](scripts/firmware/rtl8821c_bt.py) through `scripts/proprietary.sh fetch`, with the same `LICENCE.rtlwifi_firmware.txt` (WHENCE's `rtl_bt` section). They stay in ignored `proprietary/firmware/rtl_bt/` and reach a disk's `data/firmware/rtl_bt/` the same way; [their pins](hwdocs/rtl8821c-bt.md#the-patch). `bt_hci`'s loader is written from the patch file's layout, not from Linux's `btrtl.c`.
 
 ## Tools used at build or test time (not distributed)
 

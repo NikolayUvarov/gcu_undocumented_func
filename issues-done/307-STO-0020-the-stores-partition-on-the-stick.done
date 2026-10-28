@@ -1,0 +1,41 @@
+# 307-STO-0020 — The store's partition on the stick — done
+
+**Type:** image (storage) · **Owner:** `STO` track · **Priority:** P1 · **Status:** done (2026-10-28) · **Blocked by:** — · **Main task:** [307](../issues/307-the-stores-own-partition.md) · **Constitution:** MC-4.4, MC-12.1
+
+## Problem
+
+The stick `make_usb_image.py` writes has the boot partition and `MIND LOG`, and nowhere for the store. A blank disk must never be taken for it on a real machine ([307](../issues/307-the-stores-own-partition.md)), so the store needs a partition it can be known by.
+
+## Plan
+
+- **A third MBR entry after `MIND LOG`:** type `0x7F` (reserved for local and experimental use), 128 MiB, aligned to 1 MiB.
+- **Formatted as an empty store:** the store's superblock first (its magic, layout and sector size, and their SHA-256), the rest blank. A partition is the store's by that superblock, not by being blank. The script reads the layout from `blockstore/src/store.rs`, so the two cannot disagree.
+- **`check_image` checks it:** its type, its place after `MIND LOG`, its size and its superblock. It refuses a fourth entry.
+- **Nothing uses it yet.** `init` giving `blockstore` a client bounded to it is `KRN`'s and `DRV`'s part (the requests for 307). `vfs_server` mounts only FAT types, so it leaves the partition alone.
+
+## Acceptance criteria
+
+- A host test: a medium holding only that superblock mounts as an empty store with nothing written, and a blank medium the store formats holds the same bytes.
+- An image from `make_usb_image.py` passes `check_image` with the partition, and still boots (`tests/usb_image_smoke.py`, x86 and aarch64).
+- docs/write-disk.md and write-disk_RU.md list the partition.
+
+## Related
+
+[307](../issues/307-the-stores-own-partition.md), [211-PRT-0006](../issues/211-PRT-0006-log-partition-in-the-image.md) (`MIND LOG`), `requests-KRN.md`, `requests-DRV.md`.
+
+## Resolution
+
+Done in `main` 744b88c3 (landing round 37, candidate 8de9a52c, 2026-10-28), from `claude/relaxed-meitner-5bmhpz` affea6ad and 1267f6f8.
+
+- **The partition.** `make_usb_image.py` writes it as MBR entry 3 after `MIND LOG`:
+  - type `0x7F`, 128 MiB;
+  - its first sector the store's superblock, with the layout read from `blockstore/src/store.rs`;
+  - `check_image` checks its type, place, size and superblock, and refuses a fourth entry.
+- **The image** grows to about 696 MiB. `tests/usb_image_test.py` copies `store.rs` into its tree.
+
+The criteria:
+- **The host test** `a_partition_holding_only_the_superblock_mounts_as_an_empty_store` passed.
+- **`tests/usb_image_smoke.py`** passed on an image with the partition: x86 in this session's container, aarch64 on `i9_4e6882212251`.
+- **docs/write-disk.md and write-disk_RU.md** 1.5 list the partition.
+
+How `init` finds such a partition, and the owner's `store.txt`, are in [307](../issues/307-the-stores-own-partition.md) ("How the store's partition is found"), for 307-KRN-0177.

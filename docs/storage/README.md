@@ -1,6 +1,6 @@
 # Storage: content identifiers and the block store
 
-**Version:** 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
+**Version:** 0.12 (2026-10-28): how far a write reached, `blockstore.wit` 2.0, and the store's partition on the stick (307-STO-0019, 0020); 0.11 (2026-10-27): the next stage planned, 307–315; 0.10 (2026-10-10): a model disk imported on the platform, a 3 GiB object on the host; 0.9 (2026-10-09): speech models in the store · **Track:** `STO` ([TRACKS.md](../../TRACKS.md)), main tasks [300](../../issues-done/300-checksummed-block-store.done), [301](../../issues-done/301-objects-as-merkle-dags.done), [302](../../issues-done/302-names-and-current-roots.done), [303](../../issues-done/303-retention-and-collection.done), [304](../../issues-done/304-several-names-at-once.done), [305](../../issues-done/305-recovery-without-the-store.done), [306](../../issues-done/306-checkpoints-and-rebinding.done) · **Roadmap:** track B · **Constitution:** [v1.6](../../constitution/EN/MIND_CORE_Constitution_v1.6.md) Article 4
 
 This document describes the storage format of track B as it is built. Checkpoints of a component's state are in [checkpoints.md](checkpoints.md). Only the parts marked **implemented** exist; the rest is plan (MC-12.3). What the platform guarantees is stated in the profile ([docs/profile](../profile/README.md), row "Article 4"), not here.
 
@@ -287,6 +287,34 @@ A client's rights come from the badge `init` mints into its capability (`mind::b
 - **Deduplication (MC-4.7).** Bytes already held are not written again. A client with `BADGE_PUT` can therefore learn whether some bytes are already stored: `stat` does not change and the put is faster. The store treats all its clients as one confidentiality domain. Clients that must not learn of each other's data need separate stores (or a store without deduplication), and none exists yet.
 
 The rule is host-tested (`rights_come_from_the_badge` in `tests/blockstore_host.rs`). On the platform the shell holds two clients: one with every right (badge 7), lent for `REQUEST_BLOCKSTORE`, and one badged get alone (badge 1), lent for `REQUEST_BLOCKSTORE_READ` ([300-KRN-0024](../../issues-done/300-KRN-0024-read-only-blockstore-client.done)). The `store` suite runs `blocksro`, a copy of `blocks` that asks only to read. It reads a stored file, and its `put` and `publish` are refused and logged with badge 1. No client may only store, so a refused read is host-tested only ([300-STO-0011](../../issues/300-STO-0011-a-client-that-may-only-store.md)).
+
+## How far a write reached — run on the platform (307-STO-0019)
+
+`blockstore.wit` 2.0 says how far a write reached before its reply (MC-4.4):
+
+| Class | When | What it means |
+|---|---|---|
+| `volatile` | the store's medium is a RAM disk (`KIND_RAM`) | nothing outlives a reset |
+| `flushed` | any other medium | the medium's driver acknowledged a flush after the write. What that reaches depends on the driver and the device: `virtio_blk`, for one, answers a flush at once when the device offers none. That is asked of the drivers track for each driver ([requests-DRV.md](../../issues/requests-DRV.md)) |
+| `copied` | two media flushed | [309](../../issues/309-copies-scrub-and-repair.md); not reached yet |
+
+- `publish`, `unpublish`, `commit` and `pin` reply with the class, and `stat` gives the medium's.
+- A `put` reports none: until a name or a pin retains its object, a block is retained only by its lease (MC-4.11), and its class is the medium's.
+- The store's log says it once it mounts (`DURABILITY=VOLATILE`), and `blocks` prints it after each write.
+- A 1.x client is refused by the major version on the wire.
+
+On the platform today:
+- the store runs on its RAM disk, `volatile`, unless `init` gives it a VirtIO disk, `flushed` (300-KRN-0025);
+- on a real machine it is `volatile` until [307](../../issues/307-the-stores-own-partition.md) gives it a partition.
+
+## The store's partition on the stick — laid out, not yet used (307-STO-0020)
+
+`make_usb_image.py` puts a third partition after `MIND LOG`:
+- 128 MiB of MBR type `0x7F`;
+- formatted as an empty store: the store's superblock, then blank sectors;
+- the image check refuses it if its type, place, size or superblock differ.
+
+A partition is the store's by that superblock, never by being blank (307). Until `init` gives `blockstore` a client bounded to it (`KRN` and `DRV`, `requests-KRN.md` and `requests-DRV.md`), nothing uses it.
 
 ## The next stage: the store as a Mind's memory — planned, not built (307–315)
 

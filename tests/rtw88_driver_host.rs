@@ -239,6 +239,15 @@ fn a_frame_posted_on_a_ring_gets_its_two_buffer_descriptors() {
     assert_eq!(u16::from_le_bytes([bd[8], bd[9]]), 100);
     assert_eq!(u32::from_le_bytes(bd[12..16].try_into().unwrap()), dma0 + 48);
     assert_eq!(r.writes.last(), Some(&(0x3b0, 1, 2)), "the host's write index");
+    // The beacon ring (a firmware chunk): both segments, the owner bit, and the ring kicked.
+    dma::post_beacon(&mut r, &mut region, 48 + 4096);
+    let bd = region.bytes(0, 16).to_vec();
+    assert_eq!(u16::from_le_bytes([bd[0], bd[1]]), 48);
+    assert_eq!(u16::from_le_bytes([bd[2], bd[3]]), 33 | 1 << 15, "(48 + 4096) / 128 pages, rounded up, and the owner bit");
+    assert_eq!(u32::from_le_bytes(bd[4..8].try_into().unwrap()), 0x1000_1000);
+    assert_eq!(u16::from_le_bytes([bd[8], bd[9]]), 4096);
+    assert_eq!(u32::from_le_bytes(bd[12..16].try_into().unwrap()), 0x1000_1000 + 48);
+    assert_eq!(r.writes.last(), Some(&(0x383, 1 << 4, 1)), "the beacon queue's flag");
     // The RX ring: the chip's write index at 3 means three buffers to take.
     let mut rx = dma::Rx { next: 0 };
     r.fixed.insert(0x3b6, 3);

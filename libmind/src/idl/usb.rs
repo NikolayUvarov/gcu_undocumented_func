@@ -10,6 +10,11 @@
 //! that device as a whole: such a converter has no other interface. `reports` and `reports-up-to` also take a bulk IN
 //! endpoint of up to 64-byte packets (on xHCI), which is then polled a packet at a time, as an interrupt one is: a
 //! converter's received bytes wait in `usb_host` for the client. The wire is unchanged.
+//!
+//! 1.4 (700-DRV-0043): `mind::usb::BADGE_BLUETOOTH` names `bt_hci`, which claims a Bluetooth controller's HCI
+//! interfaces (class 0xE0, subclass 1, protocol 1). Its `control` may also send the HCI's commands, which go to the
+//! device as a whole as class requests (request type 0x20, request 0); its bulk IN endpoint is polled by `reports`, as
+//! a converter's is. The wire is unchanged.
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -19,7 +24,7 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:usb";
-pub const VERSION: (u8, u8, u8) = (1, 3, 0);
+pub const VERSION: (u8, u8, u8) = (1, 4, 0);
 const MAJOR: usize = 1;
 
 /// Lends the client's transfer buffer (at least `mind::usb::BUFFER` bytes) to this host driver instance. A restarted

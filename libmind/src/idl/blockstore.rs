@@ -7,7 +7,7 @@
 //! What no name retains and no lease protects is collected (303-STO-0001, 1.1). A name keeps its last 4 versions; it can be
 //! removed; an owner (the badge) pins objects; what an owner retains is bounded by its quota (303-STO-0002..0004, 1.2).
 //! Several names change at once, all or none, and are read at one point (304-STO-0007, 1.3). The current names are
-//! listed by prefix, page by page (300-STO-0018, 1.4).
+//! listed by prefix, page by page (300-STO-0018, 1.4). A write says how far it reached, and 1.x is refused (307-STO-0019, 2.0).
 #![allow(clippy::all, unused_imports, unused_mut, unused_variables)]
 use crate::abi::*;
 use crate::ipc::{Endpoint, Received};
@@ -17,8 +17,8 @@ use super::codec::{self, List, Reader, Text, Wire, Writer};
 use super::wire::{self, Call, Reject};
 
 pub const PACKAGE: &str = "mind:blockstore";
-pub const VERSION: (u8, u8, u8) = (1, 4, 0);
-const MAJOR: usize = 1;
+pub const VERSION: (u8, u8, u8) = (2, 0, 0);
+const MAJOR: usize = 2;
 
 /// Why a request failed. `rights`: the badge of the client's capability does not allow the request
 /// (`mind::blockstore`: put and collect need BADGE_PUT; get, has, resolve, history, snapshot and names BADGE_GET;
@@ -55,14 +55,31 @@ impl Wire for Codec {
     fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
 }
 
-/// Intact blocks and their bytes; sectors of the log and of the medium; records found corrupt and non-blank
-/// sectors outside every record; how many blocks the index can hold; names published.
+/// How far a write reached before its reply (MC-4.4): `volatile`, the store's medium is a RAM disk and nothing
+/// outlives a reset; `flushed`, the medium's driver acknowledged a flush after the write (what a flush reaches is the
+/// driver's to state, docs/storage); `copied`, two media flushed (309, not reached yet) (2.0).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Stats { pub blocks: u32, pub bytes: u64, pub used: u64, pub sectors: u64, pub corrupt: u32, pub damaged: u64, pub capacity: u32, pub names: u32 }
+#[repr(u8)]
+pub enum Durability { #[default] Volatile = 0, Flushed = 1, Copied = 2 }
+impl Durability {
+    /// The case with wire code `code`; None for a code the interface does not define.
+    pub fn from_code(code: usize) -> Option<Self> { match code { 0 => Some(Self::Volatile), 1 => Some(Self::Flushed), 2 => Some(Self::Copied), _ => None } }
+}
+impl Wire for Durability {
+    const MAX: usize = 1;
+    fn encode(&self, w: &mut Writer) -> Option<()> { (*self as u8).encode(w) }
+    fn decode(r: &mut Reader) -> Option<Self> { Self::from_code(u8::decode(r)? as usize) }
+}
+
+/// Intact blocks and their bytes; sectors of the log and of the medium; records found corrupt and non-blank
+/// sectors outside every record; how many blocks the index can hold; names published; how far every write reaches
+/// on this medium (2.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stats { pub blocks: u32, pub bytes: u64, pub used: u64, pub sectors: u64, pub corrupt: u32, pub damaged: u64, pub capacity: u32, pub names: u32, pub durability: Durability }
 impl Wire for Stats {
-    const MAX: usize = <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX;
-    fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.bytes.encode(w)?; self.used.encode(w)?; self.sectors.encode(w)?; self.corrupt.encode(w)?; self.damaged.encode(w)?; self.capacity.encode(w)?; self.names.encode(w)?; Some(()) }
-    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, bytes: Wire::decode(r)?, used: Wire::decode(r)?, sectors: Wire::decode(r)?, corrupt: Wire::decode(r)?, damaged: Wire::decode(r)?, capacity: Wire::decode(r)?, names: Wire::decode(r)? }) }
+    const MAX: usize = <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u64 as Wire>::MAX + <u32 as Wire>::MAX + <u32 as Wire>::MAX + <Durability as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.blocks.encode(w)?; self.bytes.encode(w)?; self.used.encode(w)?; self.sectors.encode(w)?; self.corrupt.encode(w)?; self.damaged.encode(w)?; self.capacity.encode(w)?; self.names.encode(w)?; self.durability.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { blocks: Wire::decode(r)?, bytes: Wire::decode(r)?, used: Wire::decode(r)?, sectors: Wire::decode(r)?, corrupt: Wire::decode(r)?, damaged: Wire::decode(r)?, capacity: Wire::decode(r)?, names: Wire::decode(r)?, durability: Wire::decode(r)? }) }
 }
 
 /// A name's current version (from 1) and the CID of the root it points at (36 bytes).
@@ -131,8 +148,37 @@ impl Wire for Named {
     fn decode(r: &mut Reader) -> Option<Self> { Some(Self { name: Wire::decode(r)?, version: Wire::decode(r)?, root: Wire::decode(r)? }) }
 }
 
+/// A publication or a removal: the name's new version, and how far it reached (2.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Published { pub version: u64, pub durability: Durability }
+impl Wire for Published {
+    const MAX: usize = <u64 as Wire>::MAX + <Durability as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.version.encode(w)?; self.durability.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { version: Wire::decode(r)?, durability: Wire::decode(r)? }) }
+}
+
+/// A pin: its id, and how far it reached (2.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PinTaken { pub id: u32, pub durability: Durability }
+impl Wire for PinTaken {
+    const MAX: usize = <u32 as Wire>::MAX + <Durability as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.id.encode(w)?; self.durability.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { id: Wire::decode(r)?, durability: Wire::decode(r)? }) }
+}
+
+/// A commit: the names' new versions, in order, and how far they reached (2.0).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Committed { pub versions: List<u64, 8>, pub durability: Durability }
+impl Wire for Committed {
+    const MAX: usize = <List<u64, 8> as Wire>::MAX + <Durability as Wire>::MAX;
+    fn encode(&self, w: &mut Writer) -> Option<()> { self.versions.encode(w)?; self.durability.encode(w)?; Some(()) }
+    fn decode(r: &mut Reader) -> Option<Self> { Some(Self { versions: Wire::decode(r)?, durability: Wire::decode(r)? }) }
+}
+
 /// Stores `data` as a block of type `codec` and returns its CID once the medium has flushed it; a block already
-/// stored is not written again. Errors: invalid (not a node), too-large, full (medium or index), read-only, device.
+/// stored is not written again. How far it reached is the medium's, in `stat`: a put is retained only by its lease
+/// until a name or a pin retains its object (MC-4.11). Errors: invalid (not a node), too-large, full (medium or
+/// index), read-only, device.
 pub fn put(endpoint: Endpoint, codec: Codec, data: &[u8], out: &mut [u8]) -> Result<core::result::Result<usize, Error>> {
     let mut buffer = Pages::new(20480).ok_or(SysError::NoMemory)?;
     let length = {
@@ -187,7 +233,7 @@ pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
     };
     let reply = wire::call_buffer(endpoint, 4 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 48, false, false)?;
+    let length = wire::buffer_reply(&reply, 49, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
     Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Stats as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
@@ -195,7 +241,7 @@ pub fn stat(endpoint: Endpoint) -> Result<core::result::Result<Stats, Error>> {
 /// Makes `root` the next version of `name` if `expected` is its current version (0: a new name), once every block
 /// of the object `root` names is stored; returns the new version after the medium has flushed it (MC-4.3, 4.4).
 /// Errors: conflict, incomplete, invalid, unsupported, corrupt, full, read-only, device.
-pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Result<core::result::Result<u64, Error>> {
+pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Result<core::result::Result<Published, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
@@ -206,9 +252,9 @@ pub fn publish(endpoint: Endpoint, name: &str, expected: u64, root: &[u8]) -> Re
     };
     let reply = wire::call_buffer(endpoint, 5 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 8, false, false)?;
+    let length = wire::buffer_reply(&reply, 9, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u64 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Published as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// The current version of `name` and its root. Errors: not-found, invalid.
@@ -245,7 +291,7 @@ pub fn collect(endpoint: Endpoint) -> Result<core::result::Result<Collected, Err
 /// Removes `name` if `expected` is its current version: a version without a root, which ends what the name retains
 /// (the objects go when nothing else retains them). Returns that version; publishing from it creates the name again.
 /// Errors: not-found (no such name, or removed), conflict, full, read-only, device (1.2).
-pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::result::Result<u64, Error>> {
+pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::result::Result<Published, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
@@ -255,9 +301,9 @@ pub fn unpublish(endpoint: Endpoint, name: &str, expected: u64) -> Result<core::
     };
     let reply = wire::call_buffer(endpoint, 8 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 8, false, false)?;
+    let length = wire::buffer_reply(&reply, 9, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u64 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Published as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// The versions `name` keeps, newest first: the current one and up to 3 before it, each retained (1.2).
@@ -277,7 +323,7 @@ pub fn history(endpoint: Endpoint, name: &str) -> Result<core::result::Result<Li
 
 /// Pins the object `root` for the caller's owner until it unpins it, once every block of it is stored and within
 /// the owner's quota; returns the pin's id. Errors: incomplete, quota, full, invalid, unsupported, read-only (1.2).
-pub fn pin(endpoint: Endpoint, root: &[u8]) -> Result<core::result::Result<u32, Error>> {
+pub fn pin(endpoint: Endpoint, root: &[u8]) -> Result<core::result::Result<PinTaken, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
@@ -286,9 +332,9 @@ pub fn pin(endpoint: Endpoint, root: &[u8]) -> Result<core::result::Result<u32, 
     };
     let reply = wire::call_buffer(endpoint, 10 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 4, false, false)?;
+    let length = wire::buffer_reply(&reply, 5, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <u32 as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <PinTaken as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// Ends a pin of the caller's owner. Errors: not-found, rights (another owner's pin) (1.2).
@@ -333,7 +379,7 @@ pub fn usage(endpoint: Endpoint) -> Result<core::result::Result<Usage, Error>> {
 /// reply; requests are served one at a time, so no reader sees part of a commit. Returns the new versions, in
 /// order. Errors: invalid (a name twice, or 0 or more than 8), conflict, incomplete, not-found (removing what is
 /// not there), quota, full, read-only, device; each changes nothing (1.3).
-pub fn commit(endpoint: Endpoint, updates: &[Update]) -> Result<core::result::Result<List<u64, 8>, Error>> {
+pub fn commit(endpoint: Endpoint, updates: &[Update]) -> Result<core::result::Result<Committed, Error>> {
     let mut buffer = Pages::new(4096).ok_or(SysError::NoMemory)?;
     let length = {
         let mut w = Writer::new(buffer.as_mut_slice());
@@ -342,9 +388,9 @@ pub fn commit(endpoint: Endpoint, updates: &[Update]) -> Result<core::result::Re
     };
     let reply = wire::call_buffer(endpoint, 14 | MAJOR << 8, &buffer, length)?;
     if let Some(code) = wire::enum_error(&reply)? { return Ok(Err(Error::from_code(code).ok_or(SysError::Invalid)?)); }
-    let length = wire::buffer_reply(&reply, 66, false, false)?;
+    let length = wire::buffer_reply(&reply, 67, false, false)?;
     let length = length.ok_or(SysError::Invalid)?;
-    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <List<u64, 8> as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
+    Ok(Ok({ let mut r = Reader::new(&buffer.as_slice()[..length]); <Committed as Wire>::decode(&mut r).filter(|_| r.done()).ok_or(SysError::Invalid)? }))
 }
 
 /// The current version and root of up to 8 names, read at one point between commits: version 0 and no root for
@@ -440,14 +486,14 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Has { cid }, call))
         }
         4 => {
-            let (call, length) = wire::take_buffer(request, cap, 48, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 49, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             if !r.done() { return Err(Reject::Invalid); }
             Ok((Request::Stat, call))
         }
         5 => {
-            let (call, length) = wire::take_buffer(request, cap, 8, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 9, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
@@ -472,7 +518,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Collect, call))
         }
         8 => {
-            let (call, length) = wire::take_buffer(request, cap, 8, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 9, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let name = <Text<64> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
@@ -489,7 +535,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::History { name }, call))
         }
         10 => {
-            let (call, length) = wire::take_buffer(request, cap, 4, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 5, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let root = codec::decode_bytes::<36>(&mut r).ok_or(Reject::Invalid)?;
@@ -515,7 +561,7 @@ pub fn decode<'a>(request: &Received, cap: usize, scratch: &'a mut [u8; REQUEST_
             Ok((Request::Usage, call))
         }
         14 => {
-            let (call, length) = wire::take_buffer(request, cap, 66, &mut *scratch)?;
+            let (call, length) = wire::take_buffer(request, cap, 67, &mut *scratch)?;
             let copy: &'a [u8; REQUEST_MAX] = scratch;
             let mut r = Reader::new(&copy[..length]);
             let updates = <List<Update, 8> as Wire>::decode(&mut r).ok_or(Reject::Invalid)?;
@@ -559,7 +605,7 @@ pub fn reply_stat(call: Call, value: core::result::Result<&Stats, Error>) -> Res
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_publish(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+pub fn reply_publish(call: Call, value: core::result::Result<&Published, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
@@ -571,7 +617,7 @@ pub fn reply_collect(call: Call, value: core::result::Result<&Collected, Error>)
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_unpublish(call: Call, value: core::result::Result<u64, Error>) -> Result<()> {
+pub fn reply_unpublish(call: Call, value: core::result::Result<&Published, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
@@ -579,7 +625,7 @@ pub fn reply_history(call: Call, value: core::result::Result<&[Kept], Error>) ->
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| codec::encode_slice::<Kept, 4>(value, w))
 }
-pub fn reply_pin(call: Call, value: core::result::Result<u32, Error>) -> Result<()> {
+pub fn reply_pin(call: Call, value: core::result::Result<&PinTaken, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
@@ -595,9 +641,9 @@ pub fn reply_usage(call: Call, value: core::result::Result<&Usage, Error>) -> Re
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
     wire::reply_buffer(call, |w| value.encode(w))
 }
-pub fn reply_commit(call: Call, value: core::result::Result<&[u64], Error>) -> Result<()> {
+pub fn reply_commit(call: Call, value: core::result::Result<&Committed, Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };
-    wire::reply_buffer(call, |w| codec::encode_slice::<u64, 8>(value, w))
+    wire::reply_buffer(call, |w| value.encode(w))
 }
 pub fn reply_snapshot(call: Call, value: core::result::Result<&[Head], Error>) -> Result<()> {
     let value = match value { Ok(value) => value, Err(error) => return wire::reply_code(call, error as usize) };

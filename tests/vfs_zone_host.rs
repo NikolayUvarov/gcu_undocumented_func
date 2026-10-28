@@ -18,11 +18,12 @@ mod mind {
         pub const BADGE_READER: u16 = 5;
         pub const BADGE_EFFECTOR: u16 = 6;
         pub const BADGE_EFFECTOR_GW: u16 = 7;
+        pub const BADGE_OWNERS: u16 = 8;
     }
 }
 
 use fat::{Error, Sectors, Volume, SECTOR};
-use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_READER, BADGE_UPDATE, BADGE_USER};
+use mind::fs::{BADGE_EFFECTOR, BADGE_EFFECTOR_GW, BADGE_KEYSTORE, BADGE_NETPOLICY, BADGE_OWNERS, BADGE_READER, BADGE_UPDATE, BADGE_USER};
 use zone::{Zone, RECORD};
 
 const STAMP: u32 = ((2026 - 1980) << 9 | 10 << 5 | 9) << 16 | (12 << 11 | 34 << 5 | 28);
@@ -53,7 +54,7 @@ fn zone(path: &str, badge: u16, inactive: Option<&str>) -> Zone {
 fn the_badges_are_libminds() {
     let source = include_str!("../libmind/src/fs.rs");
     for (name, value) in [("BADGE_USER", BADGE_USER), ("BADGE_KEYSTORE", BADGE_KEYSTORE), ("BADGE_NETPOLICY", BADGE_NETPOLICY), ("BADGE_UPDATE", BADGE_UPDATE), ("BADGE_READER", BADGE_READER),
-                          ("BADGE_EFFECTOR", BADGE_EFFECTOR), ("BADGE_EFFECTOR_GW", BADGE_EFFECTOR_GW)] {
+                          ("BADGE_EFFECTOR", BADGE_EFFECTOR), ("BADGE_EFFECTOR_GW", BADGE_EFFECTOR_GW), ("BADGE_OWNERS", BADGE_OWNERS)] {
         assert!(source.contains(&format!("pub const {}: u16 = {};", name, value)), "{} is not {} in libmind", name, value);
     }
 }
@@ -69,6 +70,23 @@ fn each_effector_service_writes_its_own_private_directory_alone() {
     }
     // The rest of the boot volume is only read, data/ included.
     assert_eq!(zone("data/effector", BADGE_EFFECTOR, None), Zone::ReadOnly);
+}
+
+// 000-KRN-0170: the programs' own directories under system/own/: the loader's badge alone opens them, to scope each into
+// its program; every other badge, the user's and the programs' included, finds them hidden.
+#[test]
+fn only_the_loaders_badge_opens_the_programs_own_directories() {
+    for path in ["system/own", "system/own/check", "system/own/check/runs.txt"] {
+        assert_eq!(zone(path, BADGE_OWNERS, None), Zone::Writable, "{path}");
+    }
+    for badge in [APP, BADGE_USER, BADGE_READER, BADGE_UPDATE, BADGE_KEYSTORE, BADGE_EFFECTOR, BADGE_EFFECTOR_GW, 0x100] {
+        for path in ["system/own", "system/own/check", "system/own/check/runs.txt"] {
+            assert_eq!(zone(path, badge, Some("B")), Zone::Hidden, "{path} for badge {badge}");
+        }
+    }
+    // The loader's badge reaches nothing else of system/ and writes nowhere else.
+    for path in ["system/keystore", "system/effector"] { assert_eq!(zone(path, BADGE_OWNERS, None), Zone::Hidden, "{path}"); }
+    for path in ["data", "data/x", "kernel.elf"] { assert_eq!(zone(path, BADGE_OWNERS, None), Zone::ReadOnly, "{path}"); }
 }
 
 #[test]

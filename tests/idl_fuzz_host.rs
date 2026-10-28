@@ -419,7 +419,7 @@ macro_rules! types {
 }
 types! {
     battery: Error Status;
-    blockstore: Error Codec Stats Head Collected Kept Pinned Usage Update Named;
+    blockstore: Error Codec Durability Stats Head Collected Kept Pinned Usage Update Named Published PinTaken Committed;
     display: Error Mode RemoteState;
     effector: Error Origin ServiceState Service Status ServiceAction Transfer PackageAction PackageReport UpdateReport RunReport PolicySummary Load Space Sample;
     gpio: Kind Pull Error Controller Pin;
@@ -430,7 +430,7 @@ types! {
     log: Error Entry State;
     net: Error Info Counters;
     netpolicy: Error Grant;
-    parse: Error HttpHead HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
+    parse: Error ContentCoding RetryKind HttpResponse Channel File Manifest ManifestRef Model ModelFile JsonKind JsonValue JsonPage;
     rtc: Error Offset;
     serial: Error Info;
     shell: Error CardCounters;

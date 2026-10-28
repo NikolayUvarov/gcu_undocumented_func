@@ -77,8 +77,9 @@ fn commit<'a>(mut words: impl Iterator<Item = &'a str>) {
         n += 1;
     }
     match blockstore::commit(STORE, &updates[..n]) {
-        Ok(Ok(versions)) => for (u, v) in updates.iter().zip(versions.as_slice()) {
-            if u.root.is_empty() { mind::println!("COMMITTED {} VERSION {} REMOVED", u.name, v) } else { mind::println!("COMMITTED {} VERSION {}", u.name, v) }
+        Ok(Ok(done)) => for (u, v) in updates.iter().zip(done.versions.as_slice()) {
+            let class = mind::blockstore::class(done.durability as u8);
+            if u.root.is_empty() { mind::println!("COMMITTED {} VERSION {} REMOVED ({})", u.name, v, class) } else { mind::println!("COMMITTED {} VERSION {} ({})", u.name, v, class) }
         },
         Ok(Err(e)) => mind::println!("blocks: commit: {:?}", e),
         Err(e) => store_silent(e),
@@ -151,7 +152,7 @@ fn main(_info: &'static BootInfo) {
     }
     match (words.next(), words.next(), words.next(), words.next()) {
         (Some("stat"), None, ..) => match blockstore::stat(STORE) {
-            Ok(Ok(s)) => mind::println!("BLOCKS={} NAMES={} BYTES={} SECTORS={}/{} CORRUPT={} DAMAGED={} CAPACITY={}", s.blocks, s.names, s.bytes, s.used, s.sectors, s.corrupt, s.damaged, s.capacity),
+            Ok(Ok(s)) => mind::println!("BLOCKS={} NAMES={} BYTES={} SECTORS={}/{} CORRUPT={} DAMAGED={} CAPACITY={} DURABILITY={}", s.blocks, s.names, s.bytes, s.used, s.sectors, s.corrupt, s.damaged, s.capacity, mind::blockstore::class(s.durability as u8)),
             Ok(Err(e)) => mind::println!("blocks: stat: {:?}", e),
             Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
         },
@@ -212,7 +213,7 @@ fn main(_info: &'static BootInfo) {
             let Some(root) = cid(text) else { return };
             let expected = match expected.map(|e| e.parse::<u64>()) { None => 0, Some(Ok(v)) => v, Some(Err(_)) => { mind::println!("blocks: not a version"); return } };
             match blockstore::publish(STORE, name, expected, &root.to_bytes()) {
-                Ok(Ok(version)) => mind::println!("PUBLISHED {} VERSION {}", name, version),
+                Ok(Ok(done)) => mind::println!("PUBLISHED {} VERSION {} ({})", name, done.version, mind::blockstore::class(done.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: publish {}: {:?}", name, e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
             }
@@ -238,7 +239,7 @@ fn main(_info: &'static BootInfo) {
         (Some("unpublish"), Some(name), Some(version), None) => {
             let Ok(expected) = version.parse::<u64>() else { mind::println!("blocks: not a version"); return };
             match blockstore::unpublish(STORE, name, expected) {
-                Ok(Ok(v)) => mind::println!("REMOVED {} VERSION {}", name, v),
+                Ok(Ok(done)) => mind::println!("REMOVED {} VERSION {} ({})", name, done.version, mind::blockstore::class(done.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: unpublish {}: {:?}", name, e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
             }
@@ -246,7 +247,7 @@ fn main(_info: &'static BootInfo) {
         (Some("pin"), Some(text), None, _) => {
             let Some(root) = cid(text) else { return };
             match blockstore::pin(STORE, &root.to_bytes()) {
-                Ok(Ok(id)) => mind::println!("PINNED {} AS {}", root, id),
+                Ok(Ok(pin)) => mind::println!("PINNED {} AS {} ({})", root, pin.id, mind::blockstore::class(pin.durability as u8)),
                 Ok(Err(e)) => mind::println!("blocks: pin: {:?}", e),
                 Err(e) => mind::println!("blocks: the store does not answer: {:?}", e),
             }

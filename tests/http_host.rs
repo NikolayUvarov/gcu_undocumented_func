@@ -6,7 +6,7 @@
 #[path = "../libmind/src/http.rs"]
 mod http;
 
-use http::{get, parse_head, Connection, Error, Got, Head, Local, Method, Parser, Range, Sink, Source, Transport, Url};
+use http::{get, http_date, parse_head, redirect, Connection, Encoding, Error, Field, Got, Head, Local, Method, Parser, Range, Redirected, RetryAfter, Sink, Source, Transport, Url, LOCATION_MAX, REDIRECTS_MAX};
 
 /// A server's response, handed out in pieces of `step` bytes, closed after `cut` bytes.
 struct Scripted { response: Vec<u8>, step: usize, cut: usize, given: usize, sent: Vec<u8>, fail: bool }
@@ -177,8 +177,8 @@ fn the_sink_can_refuse() {
 #[test]
 fn heads_parsed_on_their_own() {
     let head = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 5-19/20\r\nContent-Length: 15\r\nServer: x";
-    assert_eq!(parse_head(head), Ok(Head { status: 206, length: Some(15), range: Some(Range::Bytes { start: 5, end: 19, total: 20 }), chunked: false, close: false }));
-    assert_eq!(parse_head(b"HTTP/1.0 416 No\r\nContent-Range: bytes */20"), Ok(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 20 }), chunked: false, close: true }));
+    assert_eq!(parse_head(head), Ok(Head { status: 206, length: Some(15), range: Some(Range::Bytes { start: 5, end: 19, total: 20 }), chunked: false, close: false, ..Head::status(206) }));
+    assert_eq!(parse_head(b"HTTP/1.0 416 No\r\nContent-Range: bytes */20"), Ok(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 20 }), chunked: false, close: true, ..Head::status(416) }));
     assert_eq!(parse_head(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked").map(|h| h.chunked), Ok(true));
     assert_eq!(parse_head(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: identity").map(|h| h.chunked), Ok(false));
     for bad in [&b"HTTP/2 200 OK"[..], b"HTTP/1.1 20 OK", b"HTTP/1.1 200 OK\r\nno colon", b"HTTP/1.1 200 OK\r\nContent-Length: x", b"\xff\xfe", b""] {
@@ -196,14 +196,14 @@ fn get_checks_what_the_parser_says() {
     let url = Url::parse(URL).unwrap();
     let data = body(100);
     let lie = |head: Head, offset: u64| get(&mut Scripted::new(&partial(&data, 10)), &url, offset, &mut File { data: data[..10].to_vec(), ..Default::default() }, &mut Lying(head));
-    let bytes = |start, end, total, length| Head { status: 206, length, range: Some(Range::Bytes { start, end, total }), chunked: false, close: false };
+    let bytes = |start, end, total, length| Head { status: 206, length, range: Some(Range::Bytes { start, end, total }), chunked: false, close: false, ..Head::status(206) };
     assert_eq!(lie(bytes(0, 99, 100, None), 10), Err(Error::Range)); // not where it asked
     assert_eq!(lie(bytes(10, 9, 100, None), 10), Err(Error::Range)); // an end before the start
     assert_eq!(lie(bytes(10, 100, 100, None), 10), Err(Error::Range)); // past the total
     assert_eq!(lie(bytes(10, 99, 100, Some(5)), 10), Err(Error::Range)); // a length that disagrees
-    assert_eq!(lie(Head { status: 206, length: None, range: None, chunked: false, close: false }, 10), Err(Error::Range));
-    assert_eq!(lie(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 50 }), chunked: false, close: false }, 10), Err(Error::Status(416)));
-    assert_eq!(lie(Head { status: 200, length: Some(100), range: None, chunked: true, close: false }, 0), Err(Error::Chunked));
+    assert_eq!(lie(Head { status: 206, length: None, range: None, chunked: false, close: false, ..Head::status(206) }, 10), Err(Error::Range));
+    assert_eq!(lie(Head { status: 416, length: None, range: Some(Range::Unsatisfied { total: 50 }), chunked: false, close: false, ..Head::status(416) }, 10), Err(Error::Status(416)));
+    assert_eq!(lie(Head { status: 200, length: Some(100), range: None, chunked: true, close: false, ..Head::status(200) }, 0), Err(Error::Chunked));
     // What it says truthfully is taken.
     assert_eq!(lie(bytes(10, 99, 100, Some(90)), 10), Ok(Got { start: 10, end: 100, total: 100 }));
     // A parser that cannot be asked ends the GET with its error.
@@ -347,4 +347,110 @@ fn what_a_caller_cannot_send() {
     let mut short = Short(10);
     assert!(matches!(connection.request(Method::Post, &url, &[], Some((20, &mut short)), &mut Local, false), Err(Error::Body)));
     assert!(!connection.open());
+}
+
+// 000-NET-0047: what a head says for API clients.
+#[test]
+fn heads_say_coding_type_location_and_retry() {
+    let head = parse_head(b"HTTP/1.1 302 Found\r\nContent-Type: Text/Event-Stream; charset=utf-8\r\nContent-Encoding: GZIP\r\nLocation: /next?a=1\r\nRetry-After: 120").unwrap();
+    assert_eq!((head.encoding, head.media.as_str(), head.location.as_str(), head.retry_after), (Encoding::Gzip, "text/event-stream", "/next?a=1", Some(RetryAfter::Seconds(120))));
+    let coding = |value: &str| parse_head(format!("HTTP/1.1 200 OK\r\nContent-Encoding: {}", value).as_bytes()).unwrap().encoding;
+    assert_eq!([coding("identity"), coding("x-gzip"), coding("deflate"), coding("br"), coding("gzip, br"), coding("identity, deflate")],
+               [Encoding::Identity, Encoding::Gzip, Encoding::Deflate, Encoding::Other, Encoding::Other, Encoding::Deflate]);
+    let plain = parse_head(b"HTTP/1.1 200 OK").unwrap();
+    assert_eq!((plain.encoding, plain.media.is_empty(), plain.location.is_empty(), plain.retry_after), (Encoding::Identity, true, true, None));
+    // A Location or media type that is not visible ASCII within its bound refuses the head; a bad Retry-After is ignored.
+    assert_eq!(parse_head(format!("HTTP/1.1 301 M\r\nLocation: /{}", "a".repeat(LOCATION_MAX)).as_bytes()), Err(Error::Head));
+    assert_eq!(parse_head(b"HTTP/1.1 200 OK\r\nContent-Type: nonsense"), Err(Error::Head));
+    assert_eq!(parse_head(b"HTTP/1.1 503 Busy\r\nRetry-After: soon").unwrap().retry_after, None);
+    assert_eq!(parse_head(b"HTTP/1.1 429 Slow\r\nRetry-After: Wed, 21 Oct 2015 07:28:00 GMT").unwrap().retry_after, Some(RetryAfter::Date(1_445_412_480)));
+}
+
+#[test]
+fn http_dates_in_their_three_forms() {
+    // RFC 9110's example: 784111777 seconds.
+    for text in ["Sun, 06 Nov 1994 08:49:37 GMT", "Sunday, 06-Nov-94 08:49:37 GMT", "Sun Nov  6 08:49:37 1994"] { assert_eq!(http_date(text), Some(784_111_777), "{}", text); }
+    assert_eq!(http_date("Thu, 01 Jan 1970 00:00:00 GMT"), Some(0));
+    assert_eq!(http_date("Tue, 29 Feb 2028 23:59:59 GMT"), Some(1_835_481_599));
+    assert_eq!(http_date("Monday, 01-Jan-30 00:00:00 GMT"), Some(1_893_456_000));
+    for bad in ["", "Sun, 06 Nov 1994 08:49:37 UTC", "Sun, 6 Nov 1994 08:49:37 GMT", "Sun, 06 Foo 1994 08:49:37 GMT", "Sun, 06 Nov 1994 24:00:00 GMT",
+                "Sun, 06 Nov 1994 08:49 GMT", "06 Nov 1994", "Sun, 06 Nov 1960 08:49:37 GMT", "Sun, 32 Nov 1994 08:49:37 GMT"] {
+        assert_eq!(http_date(bad), None, "{:?}", bad);
+    }
+}
+
+#[test]
+fn redirects_follow_their_rules() {
+    let from = Url::parse("https://api.test/v1/chat/send?x=1").unwrap();
+    let mut out = [0u8; 2048];
+    let follow = |status: u16, location: &str, method: Method, followed: u32| -> Result<Option<(String, Method, bool, bool)>, Error> {
+        let mut out = [0u8; 2048];
+        let head = Head { location: Field::new(location).unwrap(), ..Head::status(status) };
+        let next = redirect(&from, method, &head, followed, &mut out)?;
+        Ok(next.map(|r| (String::from_utf8(out[..r.length].to_vec()).unwrap(), r.method, r.keep_body, r.same_host)))
+    };
+    // Each status's method rule.
+    assert_eq!(follow(301, "/a", Method::Post, 0), Ok(Some(("https://api.test/a".into(), Method::Get, false, true))));
+    assert_eq!(follow(302, "/a", Method::Put, 0), Ok(Some(("https://api.test/a".into(), Method::Put, true, true))));
+    assert_eq!(follow(303, "/a", Method::Put, 0), Ok(Some(("https://api.test/a".into(), Method::Get, false, true))));
+    assert_eq!(follow(307, "/a", Method::Post, 0), Ok(Some(("https://api.test/a".into(), Method::Post, true, true))));
+    assert_eq!(follow(308, "/a", Method::Post, 9), Ok(Some(("https://api.test/a".into(), Method::Post, true, true))));
+    // References: absolute, scheme-relative, absolute path, relative to the path's directory.
+    assert_eq!(follow(302, "https://cdn.test:8443/f", Method::Get, 0), Ok(Some(("https://cdn.test:8443/f".into(), Method::Get, true, false))));
+    assert_eq!(follow(302, "//cdn.test/f", Method::Get, 0), Ok(Some(("https://cdn.test/f".into(), Method::Get, true, false))));
+    assert_eq!(follow(302, "next?y=2", Method::Get, 0), Ok(Some(("https://api.test/v1/chat/next?y=2".into(), Method::Get, true, true))));
+    // Refused: down to HTTP, no Location, the eleventh, and a Location that is no URL once resolved.
+    assert_eq!(follow(302, "http://api.test/a", Method::Get, 0), Err(Error::Redirect));
+    assert_eq!(redirect(&from, Method::Get, &Head::status(302), 0, &mut out), Err(Error::Redirect));
+    assert_eq!(follow(302, "/a", Method::Get, REDIRECTS_MAX), Err(Error::Redirect));
+    assert_eq!(follow(302, "ftp://x/y", Method::Get, 0), Err(Error::Redirect));
+    assert_eq!(follow(302, "mailto:a@b", Method::Get, 0), Err(Error::Redirect));
+    assert_eq!(follow(302, "/a#part", Method::Get, 0), Ok(Some(("https://api.test/a".into(), Method::Get, true, true))));
+    // Not a redirect.
+    assert_eq!(follow(200, "/a", Method::Get, 0), Ok(None));
+    assert_eq!(follow(304, "/a", Method::Get, 0), Ok(None));
+    // Up from HTTP is followed; the result must fit the caller's buffer.
+    let plain = Url::parse("http://api.test/").unwrap();
+    let head = Head { location: Field::new("https://api.test/").unwrap(), ..Head::status(301) };
+    assert!(matches!(redirect(&plain, Method::Get, &head, 0, &mut out), Ok(Some(Redirected { same_host: false, .. }))));
+    assert_eq!(redirect(&plain, Method::Get, &head, 0, &mut [0u8; 8]), Err(Error::Redirect));
+}
+
+#[test]
+fn a_body_of_unknown_length_goes_chunked() {
+    let url = Url::parse("http://example.test/upload").unwrap();
+    // A source that gives its bytes in uneven pieces.
+    struct Pieces { data: Vec<u8>, at: usize, step: usize }
+    impl Source for Pieces {
+        fn read(&mut self, buffer: &mut [u8]) -> Result<usize, Error> {
+            let n = buffer.len().min(self.step).min(self.data.len() - self.at);
+            buffer[..n].copy_from_slice(&self.data[self.at..self.at + n]);
+            self.at += n;
+            self.step = self.step % 7000 + 3001;
+            Ok(n)
+        }
+    }
+    let data = body(10_000);
+    let mut source = Pieces { data: data.clone(), at: 0, step: 5000 };
+    let mut connection = Connection::new(Scripted::new(b"HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n"));
+    let response = connection.request_streamed(Method::Post, &url, &[("Content-Type", "application/json")], &mut source, &mut Local, false).unwrap();
+    assert_eq!(response.status, 201);
+    drop(response);
+    let sent = connection.transport().sent.clone();
+    let end = sent.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    let head = String::from_utf8(sent[..end].to_vec()).unwrap();
+    assert!(head.contains("Transfer-Encoding: chunked\r\n") && !head.contains("Content-Length"), "{}", head);
+    // Decode the chunks the client wrote.
+    let (mut at, mut decoded) = (end, Vec::new());
+    loop {
+        let line_end = at + sent[at..].windows(2).position(|w| w == b"\r\n").unwrap();
+        let size = usize::from_str_radix(std::str::from_utf8(&sent[at..line_end]).unwrap(), 16).unwrap();
+        at = line_end + 2;
+        if size == 0 { assert_eq!(&sent[at..], b"\r\n"); break; }
+        assert!(size <= 4096);
+        decoded.extend_from_slice(&sent[at..at + size]);
+        assert_eq!(&sent[at + size..at + size + 2], b"\r\n");
+        at += size + 2;
+    }
+    assert_eq!(decoded, data);
 }

@@ -20,7 +20,7 @@ impl<'a> Records<'a> {
     pub fn len(&self) -> usize { self.header.count as usize }
     pub fn is_empty(&self) -> bool { self.header.count == 0 }
     pub fn total(&self) -> usize { self.header.total as usize }
-    /// The records as `T` (the record type of the class); a record smaller than `T` (an older kernel) gives nothing.
+    /// The records as `T` (the record type of the class); a record smaller than `T` (not this class's) gives nothing.
     pub fn iter<T: Copy>(&self) -> impl Iterator<Item = T> + '_ {
         let size = self.header.record_size as usize;
         let usable = size >= core::mem::size_of::<T>();

@@ -38,6 +38,9 @@ pub const BADGE_UPDATE: u16 = 4;
 /// Badge of the read-only clients init lends services, and through `loader` its programs: set by init, so no holder can
 /// set another on them (a badge is set once, MC-3.4) and reach a private directory or the update zone.
 pub const BADGE_READER: u16 = 5;
+/// Badge of the loader's client that alone opens `system/own/`, where it makes each program's own directory and scopes
+/// it into the program's SLOT_OWN (000-KRN-0170); set by init.
+pub const BADGE_OWNERS: u16 = 8;
 
 /// Why a file operation failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -313,3 +316,81 @@ pub fn volume(name: &str) -> Result<VolumeInfo> { Dir::root(name)?.volume() }
 
 /// Checks volume `name` (`""`, `"ram"`, `"log"` or `"models"`) without changing it.
 pub fn check<T>(name: &str, visit: impl FnOnce(&vfs::Report) -> T) -> Result<T> { Dir::root(name)?.check(visit) }
+
+/// A program's own directory, `system/own/<name>/` (000-KRN-0170): the loader scopes it into SLOT_OWN for a program it
+/// runs by its name from the booted slot, the volume's root or data/apps/, and no other program reads it. These calls go
+/// there alone, apart from the program's other files; without one they fail with `NotFound`.
+pub mod own {
+    use super::{call, DirEntry, Error, Result, CHUNK, MODE_CREATE, MODE_TRUNCATE, MODE_WRITE};
+    use crate::abi::{CAP_KIND_ENDPOINT, SLOT_OWN};
+    use crate::idl::vfs;
+    use crate::ipc::Endpoint;
+
+    const OWN: Endpoint = Endpoint(SLOT_OWN);
+
+    /// Whether the loader gave this program its own directory.
+    pub fn given() -> bool { crate::dev::cap_info(SLOT_OWN).0 == CAP_KIND_ENDPOINT }
+
+    // `work` on the directory's root, closed after.
+    fn in_root<T>(work: impl FnOnce(u32) -> Result<T>) -> Result<T> {
+        if !given() { return Err(Error::NotFound); }
+        let root = call(vfs::root(OWN, ""))?;
+        let result = work(root);
+        let _ = vfs::close(OWN, root);
+        result
+    }
+
+    // `work` on file `name` opened with `mode`, closed after.
+    fn in_file<T>(name: &str, mode: u8, work: impl FnOnce(u32) -> Result<T>) -> Result<T> {
+        in_root(|root| {
+            let file = call(vfs::open(OWN, root, name, mode))?;
+            let result = work(file);
+            let _ = vfs::close(OWN, file);
+            result
+        })
+    }
+
+    /// File `name` into `buffer`, as much as fits; returns the bytes read.
+    pub fn read(name: &str, buffer: &mut [u8]) -> Result<usize> {
+        in_file(name, 0, |file| {
+            let mut done = 0;
+            while done < buffer.len() {
+                let want = (buffer.len() - done).min(CHUNK);
+                let got = call(vfs::read(OWN, file, done as u32, want as u32, &mut buffer[done..done + want]))?;
+                done += got;
+                if got < want { break; }
+            }
+            Ok(done)
+        })
+    }
+
+    /// File `name` made or replaced with `data`.
+    pub fn write(name: &str, data: &[u8]) -> Result<()> {
+        in_file(name, MODE_WRITE | MODE_CREATE | MODE_TRUNCATE, |file| {
+            let mut done = 0;
+            while done < data.len() {
+                let n = (data.len() - done).min(CHUNK);
+                let wrote = call(vfs::write(OWN, file, done as u32, &data[done..done + n]))? as usize;
+                if wrote == 0 { return Err(Error::NoSpace); }
+                done += wrote;
+            }
+            call(vfs::flush(OWN, file))
+        })
+    }
+
+    /// Calls `visit` for every entry of the directory; returns their number.
+    pub fn list(mut visit: impl FnMut(&DirEntry)) -> Result<usize> {
+        in_root(|root| {
+            let mut start = 0u32;
+            loop {
+                let entries = call(vfs::list(OWN, root, start))?;
+                if entries.is_empty() { return Ok(start as usize); }
+                for e in entries.as_slice() { visit(&DirEntry { name: e.name.as_str().as_bytes(), size: e.size, is_dir: e.directory, flags: e.attributes, modified: e.modified }); }
+                start += entries.len() as u32;
+            }
+        })
+    }
+
+    /// Removes file `name`, or an empty directory.
+    pub fn remove(name: &str) -> Result<()> { in_root(|root| call(vfs::remove(OWN, root, name))) }
+}

@@ -57,6 +57,10 @@ commands: submit <kind> [<field>=<value>...] --key <idempotency key> --reason <r
                 uninstall name=<file name>                     from apps/
                 log [from=<cursor>] [max_bytes=<n>]
                 reboot                                         restarts the other end (MIND Core: dev in link.conf)
+                shell line=<line> [timeout_seconds=<n>]        one line for the other end's shell (MIND Core: dev)
+                replace unit=<service> file=<path here> [name=<there>] | unit=<service> back=true
+                                                               starts a service from the file, unverified, until the
+                                                               next boot; back=true: from its boot image (MIND Core: dev)
           status <id>                    the operation as JSON
           wait <id>                      its output as it comes, until it ends; the exit code of a program
           output <id>                    its output so far
