@@ -26,9 +26,9 @@ def test_requests_and_answers():
 
 
 def test_text_only():
-    for path in ("AGENTS.md", "issues/README.md", "issues-done/x.done.md", "docs/effector.md", "issues-audit/a.md"):
+    for path in ("AGENTS.md", "issues/README.md", "issues-done/x.done.md", "issues-done/307-STO-0019-x.done", "docs/effector.md", "issues-audit/a.md"):
         assert land.text_only(path), path
-    for path in ("scripts/land.py", "issues-audit/repro/x.md", "THIRD_PARTY.md", "kernel/src/main.rs", "docs/figure.png", "LICENSE-MIT"):
+    for path in ("scripts/land.py", "issues-audit/repro/x.md", "issues-audit/repro/x.done", "THIRD_PARTY.md", "kernel/src/main.rs", "docs/figure.png", "LICENSE-MIT"):
         assert not land.text_only(path), path
 
 

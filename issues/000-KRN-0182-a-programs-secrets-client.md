@@ -7,7 +7,7 @@ Recorded by the kernel track on 2026-10-28, for the network track's [000-NET-004
 ## Problem
 
 - **A program has no identity at `keystore`.** A badge is set by whoever mints the client, and a program names itself however it likes.
-- **The loader already gives one grant by a name** ([000-KRN-0170](000-KRN-0170-a-programs-own-data-directory.md)): a program run by its name from the booted slot, the volume's root or `data/apps/` gets its own directory. A program run by any other path gets none.
+- **The loader already gives one grant by a name** ([000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done)): a program run by its name from the booted slot, the volume's root or `data/apps/` gets its own directory. A program run by any other path gets none.
 - **Secrets need the same rule,** through a client that `keystore` mints and the loader lends.
 
 ## What was done
@@ -39,4 +39,4 @@ Recorded by the kernel track on 2026-10-28, for the network track's [000-NET-004
 
 ## Related
 
-[000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [000-KRN-0170](000-KRN-0170-a-programs-own-data-directory.md), [700-KRN-0176](700-KRN-0176-bt-hci-boot-image-and-grant.md) (comes back after this with ABI 25 and handoff 25).
+[000-NET-0045](000-NET-0045-secrets-per-program-in-keystore.md), [000-KRN-0170](../issues-done/000-KRN-0170-a-programs-own-data-directory.done), [700-KRN-0176](700-KRN-0176-bt-hci-boot-image-and-grant.md) (comes back after this with ABI 25 and handoff 25).

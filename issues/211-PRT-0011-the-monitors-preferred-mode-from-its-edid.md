@@ -1,6 +1,6 @@
 # 211-PRT-0011 — The bootloader sets the monitor's preferred mode from its EDID
 
-**Type:** bootloader · **Owner:** `KRN` (`PRT`, `bootloader/`) · **Priority:** P1 · **Status:** open (made; a run on the DEXP left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track A (real hardware) · **Constitution:** MC-12.1, MC-12.3
+**Type:** bootloader · **Owner:** `KRN` (`PRT`, `bootloader/`) · **Priority:** P1 · **Status:** open (landed in round 39; a run on the DEXP left) · **Blocked by:** — · **Main task:** [211](211-intel-pc-from-a-sata-ssd.md) · **Roadmap:** track A (real hardware) · **Constitution:** MC-12.1, MC-12.3
 
 **Asked by:** the drivers track (`DRV`) for the maintainer, in `KRN/2026-10-27T1535Z-DRV-the-bootloader-keeps-800x600-on-the-dexp.md` and `KRN/2026-10-27T2155Z-DRV-the-dexps-screen-is-next.md` on `internal-dev-messages`. The maintainer: "the resolution does not match the monitor".
 
@@ -37,6 +37,10 @@ If the DEXP's run shows `NO EDID`, this is the place to revisit.
   - the lines show the EDID's source and the mode set.
 
   The machine and the build are named (MC-12.1).
+
+## Progress (2026-10-28)
+
+Landed in round 39 (`main` 8721ef86, the gate on its code 381d1e85, the gate green, the host test `edid` with it). Left: a boot on the DEXP that sets its panel's 800×1280 mode, with the build named (MC-12.1).
 
 ## Related
 
