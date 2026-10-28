@@ -1897,10 +1897,12 @@ def own_directory_check(vm):
     first, held = own_row()
     second, held = own_row()
     assert second == first + 1 and held == ["runs.txt"], (first, second, held)
+    # The user's files client is refused there, as for any private directory (the same as `ls system/keystore`).
     listing = vm.command("ls system/own")
+    require(listing, "DENIED")
     assert "runs.txt" not in listing and "bench.txt" not in listing, listing
     print(f"PASS: own directories: check's run {first} then {second} in system/own/check/, which holds only runs.txt after bench "
-          f"wrote its own; the shell's ls of system/own/: {listing.strip().splitlines()[-1] if listing.strip() else 'nothing'}", flush=True)
+          f"wrote its own; the shell's ls of system/own/ is refused (DENIED)", flush=True)
 
 
 def bench_suite(vm):
