@@ -15,6 +15,11 @@
 - **The pass bound.** The window ends after the second answer. The row passes for at least 1 s moved and at most the window's whole seconds rounded up, which is the most a seconds counter can move within it.
 - **The row's text** gives the moved seconds and the whole window.
 
+## Tested
+
+- **x86, 4 CPUs, QEMU under TCG.** The `bench` suite passed on 1e880d77, built in a worktree of its own. The row read `2 s in 1.21 s`: the window's whole seconds rounded up allow 2.
+- **aarch64:** the next gate's "aarch64: programs, shell and four CPUs" group runs `check` and `diag/quick.msh`.
+
 ## Acceptance criteria
 
 - The `bench` suite passes on x86 and on aarch64 with 4 CPUs.
