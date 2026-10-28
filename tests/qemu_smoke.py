@@ -4688,7 +4688,9 @@ def gateway_stub_check(args):
             vm.send("mode maintenance on the modes suite\n")
             require(vm.expect("(Y/N)", timeout=10), "TURN THE MAINTENANCE MODE ON?")
             vm.send_bytes(b"y")
-            require(vm.expect("MIND> ", timeout=30), "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            shown = vm.expect("MIND> ", timeout=30)
+            require(shown, "MODE: DEVELOPMENT AND MAINTENANCE, SET BY operator: the modes suite")
+            require(shown, "LINK CONSOLE: ON (DATA/MODE.CONF, DEV IN LINK.CONF)")  # the shell shows the link's console (800-APP-0108)
             kept = vm.command("cat data/mode.conf", raw=True)
             for word in ("development", "maintenance", "link-console"):
                 assert re.search(rf"^{word}$", kept.replace("\r", ""), re.M), (word, kept)

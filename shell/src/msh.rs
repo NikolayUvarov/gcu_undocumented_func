@@ -209,6 +209,12 @@ fn read(path: &str) -> Result<String, &'static str> {
 
 // Asks a yes/no question on the screen and the serial line; the answer is a key on either keyboard.
 pub(super) fn ask(shell: &mut Shell, question: &str) -> bool {
+    // A line of the link's console (800-APP-0108) is the console user's: its questions answered yes, each logged.
+    if shell.console_link {
+        let _ = writeln!(shell.term, "{} (Y/N) Y (THE LINK'S CONSOLE)", question);
+        mind::println!("[SHELL] THE LINK'S CONSOLE ANSWERED YES: {}", question);
+        return true;
+    }
     let _ = write!(shell.term, "{} (Y/N) ", question);
     shell.term.render(None);
     let until = mind::time::uptime_ms() + 60_000;

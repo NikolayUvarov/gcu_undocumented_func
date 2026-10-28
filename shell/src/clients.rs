@@ -5,8 +5,9 @@
 //! Enter, 000-APP-0067), which runs there; a command whose output goes into a file (`>`, 000-APP-0074). Nothing that acts on the shell's own screen, no code typed for `msh -c`, no
 //! statement and no program. The link's client in developer mode (800-APP-0102, for 800-LNK-0015) has no one at the
 //! shell's window to agree: it gets at once what reads and, by the maintainer's choice of 2026-10-22, what changes the
-//! machine, but never a change of the network policy (800-NET-0038), the machine's modes or a script. Host-tested in
-//! tests/shell_host.rs.
+//! machine, but never a change of the network policy (800-NET-0038), the machine's modes or a script. In the owner's
+//! `link-console` mode (`init.wit` 1.8, 800-APP-0108) the link's line is the console's: scripts by their file and the
+//! policy's changes run too, never `mode`. Host-tested in tests/shell_host.rs.
 
 /// Taken at once.
 pub const NOW: [&str; 16] = ["ps", "cpus", "free", "faults", "quotas", "heap", "devices", "irqs", "endpoints", "physmap", "time", "ip", "net", "netgrants", "sync", "battery"];
@@ -14,22 +15,23 @@ pub const NOW: [&str; 16] = ["ps", "cpus", "free", "faults", "quotas", "heap", "
 pub const ASKED: [&str; 20] = ["kill", "stop", "reboot", "poweroff", "shutdown", "budget", "netrevoke", "netpolicy", "date", "logs", "stat", "pmap", "caps", "logger",
     "ping", "nslookup", "fetch", "https", "tpm", "netstat"];
 
-/// Of `ASKED`, never taken from the link's client: the network policy's changes (800-NET-0038). `mode` and scripts are
-/// refused to it as to every client.
+/// Of `ASKED`, never taken from the link's client outside the `link-console` mode: the network policy's changes
+/// (800-NET-0038). `mode` is refused to every client, the link's console too.
 pub const NOT_OVER_THE_LINK: [&str; 2] = ["netrevoke", "netpolicy"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Taken { Refused, Now, Asked }
 
-/// Who calls: a program the shell lent its commands to, or `link` in developer mode (`mind::process::BADGE_SHELL_LINK`).
+/// Who calls: a program the shell lent its commands to, `link` in developer mode (`mind::process::BADGE_SHELL_LINK`), or
+/// `link` while init reports the owner's `link-console` mode (800-APP-0108).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Client { Program, Link }
+pub enum Client { Program, Link, LinkConsole }
 
 /// How the shell takes `line` from `client`: for the link, what a program's client is asked runs at once, but for the
-/// policy's changes and scripts, which are refused.
+/// policy's changes and scripts, which are refused; for the link's console those run at once too.
 pub fn taken_by(line: &str, client: Client) -> Taken {
     let line = line.trim();
-    let asked = if client == Client::Link { Taken::Now } else { Taken::Asked };
+    let asked = if client == Client::Program { Taken::Asked } else { Taken::Now };
     // `>` writes a file in the shell's name (000-APP-0074): asked, for a command taken at all.
     match crate::redirect::split(line) {
         Ok(Some(split)) => return if taken_by(split.command, client) == Taken::Refused { Taken::Refused } else { asked },
@@ -44,8 +46,9 @@ pub fn taken_by(line: &str, client: Client) -> Taken {
         "help" => Taken::Now, // what a command or program does: the shell's lines and the program's file, read only
         "date" if !args.starts_with("set") => Taken::Refused,
         "caps" if args.is_empty() => Taken::Refused, // the caps tool, a program
-        // A script by its file, in the shell's window once the user agrees (000-APP-0067); not `-c` code or options.
-        "msh" if client == Client::Program && !args.is_empty() && !args.starts_with('-') && args.split_whitespace().count() == 1 => Taken::Asked,
+        // A script by its file, in the shell's window once the user agrees (000-APP-0067), at once for the link's console;
+        // not `-c` code or options.
+        "msh" if client != Client::Link && !args.is_empty() && !args.starts_with('-') && args.split_whitespace().count() == 1 => asked,
         "msh" => Taken::Refused,
         _ if client == Client::Link && NOT_OVER_THE_LINK.contains(&word) => Taken::Refused,
         _ if ASKED.contains(&word) => asked,

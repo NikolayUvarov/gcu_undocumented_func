@@ -108,6 +108,7 @@ struct Shell {
     gave_up: u32, // the calls whose caller gave up before the shell's answer, which the shell did not write (caller_waits)
     managers: alloc::vec::Vec<u64>, // the window managers the shell started with its commands: they set the clock at once (000-APP-0060)
     unasked: bool, // while a line from the link's client runs (800-APP-0102): no question in the shell's window
+    console_link: bool, // while a line of the link's console runs (800-APP-0108): a script's questions answered yes
     owners: [(u64, u8); OWNERS], next_owner: usize, // which console started which program (for ps), the latest 32
     fronts: [Option<(u64, u8)>; 4], // programs a program in front started in its place, and their console (issue 160)
     serial: Option<Uart>, // the serial line, for notes that are not a console's
@@ -348,12 +349,15 @@ impl Shell {
                 commands::Request::Run { line } => {
                     // The link's client in developer mode (800-APP-0102) is told by its badge, which no lent client can set.
                     let link = message.badge == mind::process::BADGE_SHELL_LINK;
-                    let result = self.line_for(line.as_str(), message.sender, if link { clients::Client::Link } else { clients::Client::Program });
+                    // The owner's `link-console` mode (init.wit 1.8, 800-APP-0108) makes it the console's: asked at each line.
+                    let kind = if !link { clients::Client::Program } else if link_console() { clients::Client::LinkConsole } else { clients::Client::Link };
+                    let result = self.line_for(line.as_str(), message.sender, kind);
                     let verdict = match &result { Ok(_) => "RAN", Err(commands::Error::Refused) => "REFUSED", Err(commands::Error::Declined) => "DECLINED", Err(_) => "DID NOT RUN" };
                     if link {
                         // The command's word alone in the system log: its arguments may be the user's (as `link` logs it).
                         let word = line.as_str().split_whitespace().next().unwrap_or("");
-                        mind::println!("[SHELL] FOR THE LINK THE SHELL {} {}", verdict, word.to_ascii_uppercase());
+                        let whose = if kind == clients::Client::LinkConsole { "THE LINK'S CONSOLE" } else { "THE LINK" };
+                        mind::println!("[SHELL] FOR {} THE SHELL {} {}", whose, verdict, word.to_ascii_uppercase());
                     } else {
                         self.note(format_args!("FOR PID {} THE SHELL {} \"{}\"", message.sender, verdict, line.as_str()));
                     }
@@ -418,10 +422,11 @@ impl Shell {
         if taken == clients::Taken::Refused { return Err(commands::Error::Refused); }
         if taken == clients::Taken::Now {
             // The link's line runs with no question in the shell's window: no one is there to answer (800-APP-0102).
-            self.unasked = kind == clients::Client::Link;
+            self.unasked = kind != clients::Client::Program;
+            self.console_link = kind == clients::Client::LinkConsole;
             let outer = self.term.capture.replace(alloc::vec::Vec::new());
             self.command(line.as_bytes());
-            self.unasked = false;
+            (self.unasked, self.console_link) = (false, false);
             return Ok(core::mem::replace(&mut self.term.capture, outer).unwrap_or_default());
         }
         self.note(format_args!("FOR PID {} THE SHELL ASKS IN ITS WINDOW: \"{}\"", client, line));
@@ -1391,6 +1396,9 @@ fn given_commands() -> Option<Endpoint> {
     (kind == CAP_KIND_ENDPOINT && rights as u8 & CAP_READ != 0).then_some(Endpoint(SLOT_COMMANDS))
 }
 
+// Whether init reports the owner's `link-console` mode (init.wit 1.8, 800-APP-0108); an older init or an error is off.
+pub(crate) fn link_console() -> bool { matches!(mind::idl::init::link_console(Endpoint::INIT), Ok(Ok(true))) }
+
 // How many times init started the shell this boot (`init.wit` `starts`): more than once after a fault, a kill or `svc
 // restart`; 1 when init does not say.
 fn starts() -> u32 {
@@ -1406,7 +1414,7 @@ fn new_shell(term: Console, own: u64, room: (usize, usize)) -> alloc::boxed::Box
     alloc::boxed::Box::new(Shell { term, line: InputLine::new(), history: History::new(), prompt_at: Position { line: 0, col: 0 }, own, focused: None, line_start: true,
                             console: None,
                             names: [[0; NAME_MAX]; NAMES], name_lens: [0; NAMES], name_count: 0, voice: voicectl::Voice::default(),
-                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
+                            parked: [const { None }; SESSIONS], active: 0, shown: 0, windows: [const { None }; WINDOWS], room, windowed: None, commands: given_commands(), gave_up: 0, managers: alloc::vec::Vec::new(), unasked: false, console_link: false, owners: [(0, 0); OWNERS], next_owner: 0, fronts: [None; 4], serial: Uart::open(SLOT_SERIAL),
                             msh: Interpreter::default(), cwd: String::new(), script: None, log_next: None, beat: (0, u64::MAX), redirecting: false, piped: None, feed: None, safe: safe::Safe::default(), shot: None })
 }
 
