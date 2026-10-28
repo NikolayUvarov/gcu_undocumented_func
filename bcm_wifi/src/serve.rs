@@ -105,6 +105,7 @@ impl Tally {
                            seconds, f(0, 0), f(0, 1), f(0, 2), f(1, 0), f(1, 1), f(1, 2), f(2, 0), f(2, 1), f(2, 2),
                            k.queued.wrapping_sub(b.queued), k.filtered.wrapping_sub(b.filtered), k.bad.wrapping_sub(b.bad),
                            k.acks_cck.wrapping_sub(b.acks_cck), k.acks_ofdm.wrapping_sub(b.acks_ofdm), k.dma_errors.wrapping_sub(b.dma_errors));
+            beacon_line(seconds, (mind::time::uptime_ms() as u64 - self.start) as u32, &k, &b);
             if test { ofdm_lines(seconds, &k, &b); }
         }
         *self = Tally::new(radio);
@@ -133,6 +134,26 @@ fn ofdm_lines(seconds: u64, k: &Counts, b: &Counts) {
     mind::println!("[BCM] {} S OFDM BY BYTES (OK/BAD FCS): <=64 {}/{}, 65-256 {}/{}, MORE {}/{}; MEAN DBM BY CORE OK {}/{}/{}, BAD FCS {}/{}/{}; CLIPPED {}/{}",
                    seconds, l(0, 0), l(0, 1), l(1, 0), l(1, 1), l(2, 0), l(2, 1), g[0], g[1], g[2], x[0], x[1], x[2],
                    k.ofdm_clipped.wrapping_sub(b.ofdm_clipped), k.bad_fcs_clipped.wrapping_sub(b.bad_fcs_clipped));
+}
+
+/// The network's beacons over a period: heard against due by their interval, their mean signal, and those missed in runs;
+/// then every good CCK frame by signal, and those with no level. A strong sender's frames missed one by one are a receiver
+/// that missed them; no frame below some level is how weak a sender it still hears (550-DRV-0036). A beacon counts as
+/// heard whether or not its level was read; the mean is of those whose level was.
+fn beacon_line(seconds: u64, ms: u32, k: &Counts, b: &Counts) {
+    let d = |x: u32, y: u32| x.wrapping_sub(y);
+    let mean = |sum: i32, base: i32, n: u32| if n == 0 { 0 } else { sum.wrapping_sub(base) / n as i32 };
+    let heard = d(k.beacons, b.beacons);
+    let due = if k.beacon_tu == 0 { 0 } else { ms as u64 * 1000 / (k.beacon_tu as u64 * 1024) };
+    let runs = |i: usize| d(k.missed_runs[i], b.missed_runs[i]);
+    mind::println!("[BCM] {} S BEACONS OF THE NETWORK: {} OF {} DUE, MEAN {} DBM; MISSED {}, IN RUNS OF 1: {}, 2-4: {}, 5+: {}; RING FULL {}",
+                   seconds, heard, due, mean(k.beacon_power, b.beacon_power, d(k.beacons_level, b.beacons_level)), d(k.missed, b.missed), runs(0), runs(1), runs(2),
+                   d(k.ring_full, b.ring_full));
+    let bin = |i: usize| d(k.cck_bins[i], b.cck_bins[i]);
+    let raw = k.no_level_raw;
+    mind::println!("[BCM] {} S CCK FRAMES BY DBM: >=-50 {}, -60 {}, -70 {}, -80 {}, LESS {}; MEAN {} DBM; NO LEVEL {} (LAST {:02X} {:02X} {:02X})",
+                   seconds, bin(0), bin(1), bin(2), bin(3), bin(4), mean(k.cck_power, b.cck_power, d(k.cck_heard, b.cck_heard)),
+                   d(k.no_level, b.no_level), raw[0], raw[1], raw[2]);
 }
 
 /// A line built without a heap.
@@ -167,6 +188,7 @@ pub fn run(radio: &mut Radio) -> ! {
     let good = |r: &Radio| r.counts.frames.iter().map(|k| k[0]).fold(0u32, u32::wrapping_add);
     let mut last_good = (good(radio), mind::time::uptime_ms() as u64);
     let mut tally = Tally::new(radio);
+    let say_lna_at = mind::time::uptime_ms() as u64 + 2000;
     loop {
         let received = Endpoint::SERVICE.recv_timeout(RECEIVED_CAP, POLL_MS);
         radio.poll();
@@ -182,6 +204,7 @@ pub fn run(radio: &mut Radio) -> ! {
             }
         }
         tally.tick(radio);
+        if radio.lna_was.is_some() && mind::time::uptime_ms() as u64 >= say_lna_at { radio.say_lna(); }
         if radio.waiting() != 0 {
             for call in waiters.iter_mut().filter_map(Option::take) { let _ = wlanhw::reply_wait(call, radio.waiting() as u32); }
         }
