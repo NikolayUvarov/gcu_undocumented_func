@@ -16,7 +16,7 @@ mod checkpoint;
 
 use checkpoint::{rebind, restore, save, Error, Label, Manifest, Names, Outcome, Restored, MAX};
 use cid::{Cid, Codec};
-use store::{Device, Entry, Extent, Head, Pin, Update, BUFFER, SECTOR};
+use store::{hmac_sha256, Crypto, Device, Entry, Extent, Head, Pin, Update, BUFFER, SECTOR};
 
 struct Memory { data: Vec<u8> }
 impl Device for &mut Memory {
@@ -25,6 +25,15 @@ impl Device for &mut Memory {
     fn read(&mut self, lba: u64, out: &mut [u8]) -> bool { let at = lba as usize * SECTOR; out.copy_from_slice(&self.data[at..at + out.len()]); true }
     fn write(&mut self, lba: u64, data: &[u8]) -> bool { let at = lba as usize * SECTOR; self.data[at..at + data.len()].copy_from_slice(data); true }
     fn flush(&mut self) -> bool { true }
+}
+
+/// Records sealed by a tag alone (their bytes left plain): checkpoints need the store's logic, not its cipher, which
+/// tests/blockstore_host.rs covers.
+struct Tagged;
+impl Crypto for Tagged {
+    fn seal(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8]) -> [u8; 16] { hmac_sha256(key, &[nonce, aad, data])[..16].try_into().unwrap() }
+    fn open(&self, key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &mut [u8], tag: &[u8; 16]) -> bool { hmac_sha256(key, &[nonce, aad, data])[..16] == *tag }
+    fn random(&self, _: &mut [u8]) -> bool { false }
 }
 
 struct Room { index: Vec<Entry>, heads: Vec<Head>, pins: Vec<Pin>, holes: Vec<Extent>, buffer: Box<[u8; BUFFER]>, scratch: Box<[u8; dag::CHUNK]> }
@@ -49,7 +58,7 @@ impl checkpoint::Store for Local<'_> {
 }
 
 fn mount<'a>(medium: &'a mut Memory, room: &'a mut Room) -> Local<'a> {
-    Local(store::Store::mount(medium, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap())
+    Local(store::Store::mount(medium, &Tagged, &mut room.index, &mut room.heads, &mut room.pins, &mut room.holes, &mut room.buffer, &mut room.scratch, 0).unwrap())
 }
 
 // A state object of one block and a manifest for it, of contract "tally" 1, schema 1.
