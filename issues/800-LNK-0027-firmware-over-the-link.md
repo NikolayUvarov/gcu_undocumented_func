@@ -56,6 +56,11 @@ The maintainer (2026-10-27): `effector485` was built to close the question of wr
   - a release with this branch's `link` and KRN's `init` went over the cable (slot B, version 202610272251, confirmed);
   - `link` logs `FIRMWARE (data/firmware/ AS firmware/)`;
   - through `effector485`, `list firmware` shows `b43/`, `rtw88/` and `rtw89/`, and `stat firmware/rtw88/rtw8821c_fw.bin` gives 139,472 bytes and the pinned SHA-256 `2ef409bc…f3f0`.
+- **2026-10-28, the first proprietary files over the cable:**
+  - `scripts/proprietary.sh link effector485` (EFFECTOR485 the daemon's program) put the RTL8821C Bluetooth controller's files for 700-BLT-0001: `rtl8821c_fw.bin`, `rtl8821c_config.bin` and their licence;
+  - they went into `firmware/rtl_bt/`, one operation of the daemon each, under a reservation;
+  - `stat` reads back 54,636 and 10 bytes with their pinned SHA-256;
+  - no disk was written.
 - **Not done:**
   - `link_update.py --firmware` (plan, point 3): `proprietary.sh link` before `link_update.py` does the same;
   - the change to AGENTS.md's rule, which is the maintainer's text: to be proposed.
