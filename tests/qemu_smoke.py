@@ -7809,11 +7809,41 @@ def net_suite(args, disk):
         vm.close()
     late_attach_check(args)
     slow_radio_check(args)
+    browse_check(args)
     print("PASS: VirtIO network card and network stack in ring 3: DHCP, ping, DNS, TCP/HTTP, refused connection, "
           "flow grants of the policy broker (allowed, denied, no policy, dropped at exit, revoked, a host name resolved at the grant), two cards on two networks "
           "(a driver instance and an interface each, routes by network, one driver restarted with its own card), "
           "raw ARP through the driver, restarts of the stack and of the driver after device quiesce; modern interface with MSI-X "
           f"(transitional and modern-only cards){'' if args.arch == 'aarch64' else ', legacy interface'}; e1000 not taken", flush=True)
+
+
+def browse_check(args):
+    """000-NET-0049: a browsing grant (`browse netcheck public tcp 80`) reaches any public address on its port, each new
+    host logged once by the stack, and no private one. QEMU's user network runs on a public prefix (11.0.2.0/24) with
+    nothing routed out (restrict=on); two of its addresses are forwarded to a command that echoes, so the two "public"
+    hosts answer from inside the host."""
+    if not raw_tools():
+        print("SKIP: the browsing grant check needs mtools", flush=True)
+        return
+    policy = b"browse netcheck public tcp 80 600 1000000\n"
+    network = "user,id=n0,net=11.0.2.0/24,restrict=on,guestfwd=tcp:11.0.2.80:80-cmd:cat,guestfwd=tcp:11.0.2.81:80-cmd:cat"
+    with tempfile.TemporaryDirectory(prefix="smoke-browse-", dir=ROOT / IMAGE) as temp:
+        image, _, _ = raw_fat_image(Path(temp), extra={"netpolicy.txt": policy})
+        vm = VM(args, image.relative_to(ROOT).as_posix(), raw=True, extra=["-nic", "none", "-netdev", network, "-device", "virtio-net-pci,netdev=n0"])
+        try:
+            # Restricted, QEMU's DHCP names no gateway and no DNS server: the two hosts are on the guest's own network.
+            require(vm.service_logs("netstack", "[NETSTACK] DHCP"), "[NETSTACK] DHCP 11.0.2.15/24 GATEWAY 0.0.0.0")
+            out = vm.command("netcheck tcp:11.0.2.80:80 tcp:11.0.2.80:80 tcp:11.0.2.81:80 tcp:11.0.2.80:81 tcp:10.0.2.2:80 tcp:192.168.1.1:80", timeout=60)
+            require_all(out, "NETCHECK tcp:11.0.2.81:80 OK", "NETCHECK tcp:11.0.2.80:81 Denied", "NETCHECK tcp:10.0.2.2:80 Denied", "NETCHECK tcp:192.168.1.1:80 Denied")
+            assert out.count("NETCHECK tcp:11.0.2.80:80 OK") == 2, out
+            log = vm.service_logs("netstack", "11.0.2.81:80")
+            require_all(log, "[NETSTACK] GRANT ", " BROWSES A NEW PUBLIC HOST 11.0.2.80:80 (1 SO FAR)", " BROWSES A NEW PUBLIC HOST 11.0.2.81:80 (2 SO FAR)")
+            assert log.count("BROWSES A NEW PUBLIC HOST 11.0.2.80:80") == 1, log  # once per host
+            require(vm.service_logs("netpolicy", "TO netcheck"), "TO netcheck: 1 RULES, BROWSING ANY PUBLIC ADDRESS, 600 S, 1000000 BYTES")
+        finally:
+            vm.close()
+    print("PASS: a browsing grant (000-NET-0049): netcheck reached two public addresses on its port, each new host logged once "
+          "by the stack, and was refused another port and two private addresses", flush=True)
 
 
 def late_attach_check(args):

@@ -1,6 +1,6 @@
 # The network policy
 
-**Version:** 0.4 (2026-10-21: a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
+**Version:** 0.5 (2026-10-28: the browsing grant, 000-NET-0049; 0.4: 2026-10-21, a launcher's client, 800-NET-0038; 0.3: 2026-10-12; 0.1: 2026-10-09) · **Track:** `NET`, main task [108](../../issues-done/108-editable-network-policy.done), the bounds of a flow [750-NET-0014](../../issues-done/750-NET-0014-the-bounds-of-a-flow.done), the default card [550-NET-0025](../../issues-done/550-NET-0025-the-default-card.done) · **Roadmap:** track D ("names and editable policy") · **Constitution:** MC-11.6, MC-3.11, Appendix B.6
 
 A program reaches the network only through a flow grant. It asks for one with `REQUEST_NETWORK`, its launcher asks the policy broker `netpolicy`, and the broker makes it from the policy. This page describes the policy, its lines, and how it changes while the system runs.
 
@@ -20,6 +20,21 @@ One line per rule, `#` starts a comment:
 | `program dns` | `program` may ask the stack's DNS server (UDP port 53) |
 | `resolver A.B.C.D[:PORT]` | host names in this file are looked up at this server (default: the stack's DNS server) |
 | `default card N` | card `N` (0 or 1: the wired cards, 2: the Wi-Fi station) is the default while its link is up and it has an address and a gateway; the last such line counts (550-NET-0025) |
+| `browse program public tcp PORT[,PORT…] [seconds [bytes]]` | `program` may reach **any public address** over TCP on these ports (at most 4, none 0): a browsing grant (000-NET-0049, below) |
+
+### The browsing grant
+
+- **What it reaches.** Any public IPv4 address on its ports, and nothing else (`idl/socket.wit` 2.7, a rule of address 0, TCP only).
+- **Not public:**
+  - this network (0/8), the private ranges (10/8, 172.16/12, 192.168/16) and shared space (100.64/10);
+  - loopback (127/8) and link-local (169.254/16);
+  - the IETF's assignments (192.0.0/24), the documentation ranges (192.0.2/24, 198.51.100/24, 203.0.113/24) and benchmarking (198.18/15);
+  - multicast (224/4), and the reserved block with the broadcast address (240/4) (`mind::network::public`).
+- **A private host** is reached only through a line of its own that names it.
+- **The audit.** The stack logs each new host a grant reaches through its browsing rule, once per host: `[NETSTACK] GRANT n BROWSES A NEW PUBLIC HOST A.B.C.D:PORT (k SO FAR)`. It remembers the last 256 hosts of a grant, so past them a host can be logged again.
+- **The broker's line** for such a grant says so: `[NETPOLICY] GRANT n TO program: k RULES, BROWSING ANY PUBLIC ADDRESS, …`.
+- **Names.** A program that looks names up needs `program dns` too. The answer is plain DNS, as for any grant.
+- **Not done:** asking the user for a host at run time, the rest of 000-NET-0049.
 
 ### Term and volume
 

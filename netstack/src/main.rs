@@ -841,6 +841,7 @@ fn main(_info: &'static BootInfo) {
             Err(error) => { if matches!(error, Error::Denied) && matches!(policy::access(badge), Access::Grant(_)) { mind::println!("[NETSTACK] DENIED FOR GRANT {}", badge); } let _ = refuse(decoded, call, error); }
             Ok(()) => {
                 let grant = match policy::access(badge) { Access::Grant(grant) => Some(grant), _ => None };
+                if let (Some(grant), socket::Request::TcpConnect { address, port, .. }) = (grant, &decoded) { policy.audit(grant, *address, *port); }
                 let source = |address: u32, port: u16| grant.is_none_or(|g| policy.allows(g, Protocol::Udp, address, port, now).is_ok());
                 let (sent, received) = stack.handle(decoded, call, owner, &source);
                 if let Some(grant) = grant { policy.charge(grant, sent, received); }

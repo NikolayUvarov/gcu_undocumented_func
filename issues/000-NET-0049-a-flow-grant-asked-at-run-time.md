@@ -27,6 +27,30 @@ Recorded by the network track on 2026-10-25, for the plan [docs/communications-a
   - an audit line for each new host (MC-10.3).
 - **Refusals** are logged with the program, the host and who refused.
 
+## Progress (2026-10-28)
+
+**The browsing grant is made.** Asking at run time is left.
+
+- **`idl/socket.wit` 2.7:** a rule of address 0 reaches any public IPv4 address on its port, TCP only and never port 0.
+  - `mind::network::public` says which addresses are public: not 0/8, the private ranges, shared space, loopback, link-local, the IETF's, documentation and benchmarking ranges, multicast or the reserved block.
+  - An address a line names keeps reaching what it names.
+- **`netstack`:**
+  - refuses an address-0 rule for UDP, ICMP or port 0;
+  - logs each new host a grant reaches through such a rule, once per host: the last 256 kept, `[NETSTACK] GRANT n BROWSES A NEW PUBLIC HOST A.B.C.D:PORT (k SO FAR)`.
+- **`netpolicy`:**
+  - reads `browse <program> public tcp <port>[,<port>…] [<seconds> [<bytes>]]` (at most 4 ports; `mind::network::browse_line`), one rule per port;
+  - logs such a grant as `BROWSING ANY PUBLIC ADDRESS`;
+  - accepts the line in `netpolicy add`.
+- **Docs:** `docs/network/policy.md` 0.5, the profile's MC-11.6 row, `docs/idl`.
+- **Host tests** (`tests/netpolicy_host.rs`): which addresses are public, at every range's edges; the line read and refused.
+- **QEMU, x86, the `net` suite** (`browse_check`). The test network is QEMU's user network on 11.0.2.0/24 with `restrict=on`, so nothing leaves the host. Two of its addresses are forwarded to `cat`.
+  - `netcheck`, with only `browse netcheck public tcp 80`, reached both, and logged each host once.
+  - It was refused port 81, 10.0.2.2 and 192.168.1.1.
+
+**Left:**
+- `ask(host, port, why)` and the user's answers (no, once, this session, always). These need the shell's question path, `APP`'s part.
+- The browsing grant with the browser (255) itself.
+
 ## Acceptance criteria
 
 - **Host tests:** the policy's new line kinds, the private ranges a browsing grant refuses.
